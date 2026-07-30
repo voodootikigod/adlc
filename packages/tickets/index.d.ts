@@ -35,7 +35,7 @@ export class LegacyTicketStore { constructor(path?: string); path: string; exist
 export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot }
 export class GitTreeTicketStore { constructor(options: { cwd?: string; revision: string; storePath?: string }); load(): TicketSnapshot }
 export class TicketService {
-  constructor(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; protectedIds?: string[] });
+  constructor(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; protectedIds?: string[]; key?: string | null });
   snapshot(): TicketSnapshot;
   planCreate(input?: Partial<Ticket>): TicketPlan;
   planUpdate(id: string, input: Ticket, options?: { expect?: string; authorized?: boolean }): TicketPlan;
@@ -203,10 +203,10 @@ export function initializeTicketStores(root?: string): Record<string, unknown>;
 export function archiveTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; archived: Ticket };
 export function restoreTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; ticket: Ticket };
 export function migrationPlan(root?: string): Record<string, unknown>;
-export function migrateLegacyStore(root?: string, options?: { write?: boolean; yes?: boolean; requireClean?: boolean; faultInjector?: (step: string, context: unknown) => void }): Record<string, unknown>;
+export function migrateLegacyStore(root?: string, options?: { write?: boolean; yes?: boolean; requireClean?: boolean; faultInjector?: (step: string, context: unknown) => void; key?: string | null }): Record<string, unknown>;
 export function recoverMigration(root: string, id: string, options: { direction: 'complete' | 'rollback' }): TicketSnapshot;
 export function exportLegacyStore(store: LegacyTicketStore | DirectoryTicketStore, outputPath: string): TicketSnapshot;
-export function doctorTicketStore(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; archive?: boolean }): Record<string, unknown>;
+export function doctorTicketStore(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; archive?: boolean; key?: string | null }): Record<string, unknown>;
 export function recordTicketEvidence(root: string, options: Record<string, unknown>): Record<string, unknown>;
 export function withManifestLock<T>(path: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
 export function fsyncFile(path: string): void;
@@ -229,3 +229,13 @@ export const MANIFEST_BASENAMES: readonly string[];
 export function discoverManifests(root?: string): string[];
 export function coversManifest(glob: unknown, manifestPaths: readonly string[]): boolean;
 export function manifestCoveringRails(rails: unknown, manifestPaths: readonly string[]): string[];
+
+/**
+ * The manifest-key parameter contract (spec: manifest-key-hermeticity, Layer 2).
+ * A non-empty string is a key; null is "explicitly no key"; undefined, '' and
+ * non-strings THROW — library code never falls back to the environment. Every
+ * evidence-writing/verifying option bag above accepts `key: string | null`.
+ */
+export function validateKeyParam(key: string | null): string | null;
+/** Bin-side env resolution: the set, non-empty ADLC_MANIFEST_KEY, else null. */
+export function resolveKeyFromEnv(env?: Record<string, string | undefined>): string | null;

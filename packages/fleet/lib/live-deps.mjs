@@ -385,7 +385,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     // apply path the CLI uses, committing the add-only completed:true diff so it
     // rides the single PR. Idempotent and best-effort at the call site (§run.mjs).
     completeTicket: ({ ticket, integrationBranch }) =>
-      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit, key: resolveKeyFromEnv() }),
+      completeTicketOnIntegration({ repo: integrationPath, ticketId: ticket.id, integrationBranch, git: integrationGit, key: resolveKeyFromEnv(io.env) }),
 
     // Withdraw ONLY the completion commit when the gate re-run over it fails; the
     // shipped merge underneath is never touched.
