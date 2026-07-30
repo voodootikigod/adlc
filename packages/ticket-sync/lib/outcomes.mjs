@@ -20,7 +20,7 @@ const seqOf = (e) => (typeof e?.seq === 'number' ? e.seq : Date.parse(e?.ts ?? '
 
 function deriveStatus(gates, chainIndexOf) {
   let p5 = null;
-  let p5ChainIndex = null; // no numeric sentinel needed — `p5 === null` alone gates the first assignment
+  let p5ChainIndex = null; // no numeric sentinel needed — the p5-is-still-unset check alone gates the first assignment
   for (const g of P5_GATES) {
     const e = gates[g];
     if (!e) continue;

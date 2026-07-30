@@ -349,9 +349,17 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       }); // THIS checkout's own segment
 
       // A hand-built segment simulating a DIFFERENT branch/lineage's evidence —
-      // never opened via this checkout's .lineage token.
-      writeRevocationSegment(dir, 'foreign-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', { ticket: 'T1', revision: rev(BASE4) });
-      const foreignSeg = join(dir, 'manifest.d', 'foreign-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+      // never opened via this checkout's .lineage token. ULID is all-'Z' (the
+      // lexicographically LARGEST possible, since 'Z' outranks every other
+      // character in the segment-name grammar) so it sorts AFTER this
+      // checkout's own (timestamp-based, much smaller) ULID in
+      // readManifestForest's order — guaranteeing a broken root/own-segment
+      // filter would surface THIS foreign entry as "latest" instead of the
+      // real one, rather than merely happening to sort earlier and going
+      // unnoticed either way.
+      const foreignName = `foreign-${'Z'.repeat(26)}.jsonl`;
+      writeRevocationSegment(dir, foreignName, { ticket: 'T1', revision: rev(BASE4) });
+      const foreignSeg = join(dir, 'manifest.d', foreignName);
       const foreignEntry = JSON.parse(readFileSync(foreignSeg, 'utf8').trim());
       foreignEntry.data.verdict = 'approve'; // an approve, not a revocation, at a revision that looks newer
       writeFileSync(foreignSeg, JSON.stringify(foreignEntry) + '\n');
