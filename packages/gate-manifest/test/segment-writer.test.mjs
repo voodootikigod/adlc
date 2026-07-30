@@ -396,6 +396,43 @@ describe('appendManifestEntry routes to the segment writer once segmented (spec 
     } finally { clean(root); }
   });
 
+  // T-MANIFEST-FOREST, fourth round: the first (anchor-carrying) entry must
+  // also carry the EXACT minting branch, alongside `anchor` — this is what
+  // recoverOpenSegment now matches on instead of the lossy filename slug.
+  it('the anchor-carrying first entry also carries the exact minting branch; continuation entries never do', () => {
+    const { root, dir } = gitRepo('feat/branch-field');
+    try {
+      activate(dir);
+      const first = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+      const second = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+      assert.equal(first.branch, 'feat/branch-field');
+      assert.equal(Object.hasOwn(second, 'branch'), false);
+    } finally { clean(root); }
+  });
+
+  it('a detached-HEAD mint carries no branch field at all (not a null sentinel — there is no identity to record)', () => {
+    const { root, dir, g } = gitRepo();
+    try {
+      activate(dir);
+      g('checkout', '-q', '--detach', 'HEAD');
+      const entry = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+      assert.equal(Object.hasOwn(entry, 'branch'), false);
+    } finally { clean(root); }
+  });
+
+  it('the branch field is inside the signed byte range — tampering with it invalidates the v2 signature', () => {
+    const { root, dir } = gitRepo('feat/branch-signed');
+    try {
+      activate(dir);
+      withKey('branch-sig-key', () => {
+        const entry = appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+        assert.equal(entry.branch, 'feat/branch-signed');
+        const tampered = { ...entry, branch: 'feat/some-other-branch' };
+        assert.equal(verifyEntrySig('branch-sig-key', tampered), false, 'a forged branch claim must invalidate the signature');
+      });
+    } finally { clean(root); }
+  });
+
   it('a continuation entry (not the anchor-carrying first one) signs at the default v2, not some other version', () => {
     const { root, dir } = gitRepo();
     try {
@@ -623,7 +660,7 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  it('AC3: refuses to guess when more than one committed segment matches this branch\'s derived slug', () => {
+  it('AC3: refuses to guess when more than one committed segment declares this branch as its own', () => {
     const { root, dir, g } = gitRepo('feat/ambiguous');
     try {
       activate(dir);
@@ -631,15 +668,17 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       const { valid: before } = discoverSegments(dir);
       assert.equal(before.length, 1);
       const slug = deriveSlug('feat/ambiguous');
-      // A second, independently-minted segment for the SAME branch slug — legitimate
-      // per spec §7 point 1 (two branches forked from the same rootless state can
-      // each mint independently without coordinating); simulated here by hand-writing
-      // a second well-formed segment sharing the slug, then discarding the token so
-      // neither is preferred by the fast path.
+      // A second, independently-minted segment genuinely owned by the SAME branch —
+      // legitimate per spec §7 point 1 (two branches forked from the same rootless
+      // state can each mint independently without coordinating; the same branch can
+      // equally end up with two if a token was lost mid-stream and a second mint
+      // happened). Simulated here by hand-writing a second well-formed segment whose
+      // first entry declares the SAME `branch` field the real one does, then
+      // discarding the token so neither is preferred by the fast path.
       const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
       writeFileSync(
         segmentPath(dir, secondName),
-        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/ambiguous' })}\n`,
       );
       g('add', `.adlc/manifest.d/${secondName}`);
       g('commit', '-q', '-m', 'second ambiguous segment');
@@ -653,7 +692,7 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  it('a slug prefix match never cross-matches a DIFFERENT branch\'s segment (exact match only)', () => {
+  it('a branch whose derived filename slug is a PREFIX of another branch\'s never cross-matches (exact `branch`-field match only)', () => {
     const { root, dir, g } = gitRepo('feat');
     try {
       activate(dir);
@@ -661,7 +700,7 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       const { valid: onFeat } = discoverSegments(dir);
       assert.equal(onFeat.length, 1);
 
-      g('checkout', '-q', '-b', 'feat-x'); // slug "feat-x" — "feat-" is a PREFIX of "feat-x-<ULID>.jsonl" too
+      g('checkout', '-q', '-b', 'feat-x'); // filename slug "feat-x" — "feat-" is a PREFIX of "feat-x-<ULID>.jsonl" too
       appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
       const { valid: onFeatX } = discoverSegments(dir);
       assert.equal(onFeatX.length, 2);

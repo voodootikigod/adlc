@@ -147,7 +147,11 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
       };
       const entry = {
         seq: typeof previous?.seq === 'number' ? previous.seq + 1 : 1,
-        ...(resolved.isNew ? { anchor: resolved.anchor } : {}),
+        // `branch` (T-MANIFEST-FOREST, fourth round): the EXACT git branch
+        // that minted this segment, alongside `anchor` — the non-lossy
+        // identity recoverOpenSegment matches on. Mirrors
+        // @adlc/gate-manifest/lib/segment-writer.mjs's identical addition.
+        ...(resolved.isNew ? { anchor: resolved.anchor, ...(resolved.branch !== undefined ? { branch: resolved.branch } : {}) } : {}),
         gate: `ticket-${operation}`,
         ts: new Date().toISOString(),
         ...(ticketId ? { ticket: ticketId } : {}),

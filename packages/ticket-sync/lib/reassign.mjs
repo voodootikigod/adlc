@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
 import {
-  isSegmentedRepo, resolveOpenSegment, peekOpenSegment, recoverOpenSegment, readOwnChains, forestChainsIntact,
+  isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
   segmentPath, lineagePath, withManifestLock, canonicalJson, entrySigValid,
   validateKeyParam,
 } from '@adlc/tickets';
@@ -122,8 +122,9 @@ function signV2(key, entry) {
 
 // Build the re-attestation entries for one contiguous append (root OR one
 // segment). `firstAnchor`, when provided, marks this as a brand-new segment's
-// first entry: it carries `anchor` and is forced to sign at v2.
-function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev, firstAnchor }) {
+// first entry: it carries `anchor` (and `firstBranch`, when the mint had a
+// resolvable branch identity) and is forced to sign at v2.
+function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev, firstAnchor, firstBranch }) {
   let prev = startPrev;
   let seq = startSeq;
   const additions = [];
@@ -132,7 +133,11 @@ function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, 
     const carriesAnchor = index === 0 && firstAnchor !== undefined;
     const entry = {
       seq,
-      ...(carriesAnchor ? { anchor: firstAnchor } : {}),
+      // `branch` (T-MANIFEST-FOREST, fourth round): the EXACT git branch that
+      // minted this segment, alongside `anchor` — the non-lossy identity
+      // recoverOpenSegment matches on. Mirrors segment-writer.mjs/evidence.mjs's
+      // identical addition.
+      ...(carriesAnchor ? { anchor: firstAnchor, ...(firstBranch !== undefined ? { branch: firstBranch } : {}) } : {}),
       gate: src.gate,
       ts: now,
       ticket: newId,
@@ -169,51 +174,29 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     if (!forestChainsIntact(adlcDir, { key })) {
       throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken, or an entry is unsigned/forged');
     }
-    // readOwnChains's default (no allowRecovery: true) is deliberate here
-    // (distinct-provider adversarial-review finding, T-MANIFEST-FOREST, round 2):
-    // this re-signs whatever it finds as a FRESH, newly-signed re-attestation
-    // under the new id — recovering across a lost `.lineage` token via the lossy,
-    // caller-controlled derived slug could launder an unrelated lineage's
-    // evidence into a validly-signed entry nobody with the key actually approved
-    // for THIS ticket. No production consumer opts in to recovery (round 3
-    // extended the same reasoning to ticket-sync's status render too, once a
-    // reviewer pointed out that publishing a GitHub label/comment IS a remote
-    // trust-boundary mutation, not a harmless local display).
+    // readOwnChains's allowRecovery: true (T-MANIFEST-FOREST, fourth round —
+    // supersedes the round-2/round-3 strict-only reasoning below) lets this
+    // re-sign whatever it finds as a FRESH, newly-signed re-attestation under
+    // the new id even when this checkout's own `.lineage` token is lost
+    // (fresh clone, or a branch switch that overwrote it). Earlier rounds kept
+    // this strict because the OLD recoverOpenSegment matched on the derived
+    // filename slug — a LOSSY, caller-controlled identity that could launder
+    // an unrelated lineage's evidence into a validly-signed entry nobody with
+    // the key actually approved for THIS ticket. recoverOpenSegment now
+    // matches on the EXACT `branch` field every segment's first entry carries
+    // (spec §4.4) — non-lossy, and part of the signed content once a key is
+    // configured — so a caller cannot manufacture a colliding claim without
+    // the signing key; see readOwnChains's own doc. `planManifestMigration`
+    // below still only re-attests SPECIFIC entries whose own signature
+    // (entrySigValid) it independently trusts, so an unsigned/forged source
+    // in the recovered segment is never carried forward regardless.
     //
-    // But a lost token must not be silently treated as "nothing to migrate"
-    // either (round 3 finding): if this repo IS segmented and the token can't
-    // identify this branch's own segment, a REAL segment may exist that we simply
-    // cannot attribute — proceeding with the ID rewrite anyway would strand its
-    // evidence under the abandoned old id forever (nothing ever looks up oldId
-    // again once newId is committed). Refuse outright; the caller's existing
-    // catch-and-report handling (push.mjs) already surfaces this as an
-    // operational failure rather than a silent success.
-    //
-    // Only when a segment PLAUSIBLY belongs to this branch, though — a fresh
-    // branch that never had a segment open (nothing to strand) or a repo that
-    // only holds OTHER lineages' segments (nothing of ours to miss) must still
-    // proceed, or every first-time reassignment on a newly segmented repo would
-    // wrongly refuse, and unrelated lineages would never be ignorable. We reuse
-    // recoverOpenSegment's slug-based candidate scan ONLY as an existence check
-    // here — never to pick content to read or sign, so a crafted colliding
-    // branch name can at worst make an honest branch refuse its own
-    // reassignment (denial of service against itself), never launder foreign
-    // evidence into a signed artifact.
-    if (isSegmentedRepo(adlcDir) && !peekOpenSegment(adlcDir, { cwd })) {
-      let mightHaveOwnSegment;
-      try {
-        mightHaveOwnSegment = recoverOpenSegment(adlcDir, { cwd }) !== null;
-      } catch {
-        mightHaveOwnSegment = true; // ambiguous match — still refuse
-      }
-      if (mightHaveOwnSegment) {
-        throw new Error(
-          `cannot re-attest evidence: this checkout's own segment cannot be identified (no local .lineage token) — `
-          + `refusing to reassign ${oldId} without proof there is no evidence to carry forward`
-        );
-      }
-    }
-    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId, key);
+    // A genuinely AMBIGUOUS recovery (two committed segments both declaring
+    // this branch — e.g. a token lost mid-stream, then a second mint)
+    // propagates as a real thrown error here rather than silently treating it
+    // as "nothing to migrate" — proceeding with the ID rewrite anyway would
+    // strand real evidence under the abandoned old id forever.
+    const sources = planManifestMigration(readOwnChains(adlcDir, { cwd, allowRecovery: true }), oldId, newId, key);
     if (sources.length === 0) return [];
 
     const resolved = resolveOpenSegment(adlcDir, { cwd });
@@ -238,6 +221,7 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
         startSeq: previous ? previous.seq : 0,
         startPrev: prevRawLine === null ? null : sha256(prevRawLine),
         firstAnchor: resolved.isNew ? resolved.anchor : undefined,
+        firstBranch: resolved.isNew ? resolved.branch : undefined,
       });
       const lines = additions.map((entry) => `${JSON.stringify(entry)}\n`).join('');
       const fd = openSync(targetPath, 'a');

@@ -22,7 +22,7 @@ import { reduceTicketOutcomes } from './outcomes.mjs';
 import { renderStatus } from './status-render.mjs';
 import { reassignId, migrateManifestEvidence } from './reassign.mjs';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from './store.mjs';
-import { loadTicketSnapshot, readOwnChains, isSegmentedRepo, peekOpenSegment, recoverOpenSegment } from '@adlc/tickets';
+import { loadTicketSnapshot, readOwnChains } from '@adlc/tickets';
 
 const SYNCED_RE = /^gh:[^#]+#(\d+)$/;
 /**
@@ -94,45 +94,22 @@ export function orderLocalByDependency(tickets) {
 // Root + THIS checkout's own open segment (T-MANIFEST-FOREST), never any OTHER
 // lineage's — same scoping as reassign.mjs's planManifestMigration.
 //
-// STRICT — readOwnChains's default (no allowRecovery), never the slug-based
-// recovery (distinct-provider adversarial-review finding, T-MANIFEST-FOREST,
-// third round): publishing a GitHub label/comment IS a remote trust-boundary
-// mutation, not a harmless local display — recovering across a lost `.lineage`
-// token via the lossy, attacker-controllable derived slug could publish a
-// FOREIGN lineage's P5 clearance as this branch's own. No production consumer
-// opts into recovery; see readOwnChains's own doc.
-//
-// But a lost token must ALSO not be silently treated as "no evidence, render
-// accordingly" (the same round's other finding, first surfaced against
-// reassignment): if this repo IS segmented and the token can't identify this
-// branch's own segment, a real segment may hold real evidence this call simply
-// cannot see — proceeding to render a status computed from root alone could
-// remove a real, earned status label. Refuse outright instead, mirroring
-// migrateSegmentedSet's identical refusal in reassign.mjs.
-//
-// Only when a segment PLAUSIBLY belongs to this branch, though — a freshly
-// cutover repo that never had a segment open (nothing to miss) must still
-// push normally, or every first push after activation would wrongly refuse.
-// recoverOpenSegment's slug-based scan is used ONLY as an existence check here
-// — never to pick content to read — so a crafted colliding branch name can at
-// worst make an honest branch's push refuse (denial of service against
-// itself), never publish a foreign lineage's status as this branch's own.
+// allowRecovery: true (T-MANIFEST-FOREST, fourth round — supersedes the
+// round-2/round-3 strict-only reasoning) lets this find the segment even when
+// this checkout's own `.lineage` token is lost (fresh clone, or a branch
+// switch that overwrote it). Earlier rounds kept this strict because
+// publishing a GitHub label/comment is a remote trust-boundary mutation, and
+// the OLD recovery matched on the derived filename slug — a LOSSY,
+// attacker-controllable identity that could publish a FOREIGN lineage's
+// status as this branch's own. Recovery now matches on the EXACT `branch`
+// field every segment's first entry carries (spec §4.4) — non-lossy, and
+// part of the signed content once a key is configured; see readOwnChains's
+// own doc. A genuinely ambiguous recovery (two committed segments both
+// declaring this branch) propagates as a real thrown error rather than
+// silently rendering a status computed from root alone, which could remove a
+// real, earned status label.
 function readOwnChainsOrRefuse(adlcDir, cwd) {
-  if (isSegmentedRepo(adlcDir) && !peekOpenSegment(adlcDir, { cwd })) {
-    let mightHaveOwnSegment;
-    try {
-      mightHaveOwnSegment = recoverOpenSegment(adlcDir, { cwd }) !== null;
-    } catch {
-      mightHaveOwnSegment = true; // ambiguous match — still refuse
-    }
-    if (mightHaveOwnSegment) {
-      throw new Error(
-        'this checkout\'s own segment cannot be identified (no local .lineage token) — refusing to render '
-        + 'a gate status without proof there is no unseen evidence'
-      );
-    }
-  }
-  return readOwnChains(adlcDir, { cwd });
+  return readOwnChains(adlcDir, { cwd, allowRecovery: true });
 }
 
 /** Serialize a ticket's body: prose + canonical block (or prose-only when no block). */
@@ -187,9 +164,9 @@ export async function push({
   let expectedStoreAbsent = localState.absent;
   const sidecar = readSidecar(dir, { strict: write });
   // outcomes drives every label/comment this run publishes — see
-  // readOwnChainsOrRefuse's doc above for why this must be strict (no
-  // recovery) AND must refuse rather than silently render from root alone
-  // when this checkout's own segment can't be identified.
+  // readOwnChainsOrRefuse's doc above for why recovery is safe here now, and
+  // why a genuinely ambiguous recovery must still refuse rather than silently
+  // render from root alone.
   let outcomes;
   try {
     outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChainsOrRefuse(join(dir, '.adlc'), dir));
@@ -248,7 +225,7 @@ export async function push({
       if (recoveredEvidence && manifestEntries === undefined) {
         // Re-read for the same reason as the initial load above (a resumed
         // migration just re-attested evidence, possibly into a segment).
-        // Same strict, refuse-don't-guess rule as the initial load — see
+        // Same recover-or-refuse rule as the initial load — see
         // readOwnChainsOrRefuse's doc above.
         try {
           outcomes = reduceTicketOutcomes(readOwnChainsOrRefuse(join(dir, '.adlc'), dir));

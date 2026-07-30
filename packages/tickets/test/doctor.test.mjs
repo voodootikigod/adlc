@@ -406,22 +406,40 @@ test('doctor storehash-manifest-bind: binds to evidence recorded in a segment (s
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" by
-// recovering here (distinct-provider adversarial-review finding, third round):
-// storeHashBindingCheck stays on the strict, token-only peekOpenSegment, never
-// the slug-based recoverOpenSegment. The derived slug is a lossy, caller-
-// controlled identity; recovering across a lost token could report a FOREIGN
-// lineage's signed checkpoint as this branch's own "authenticated" binding — a
-// false reassurance an operator (or automated tooling) reading `authenticated`/
-// `signaturesVerified` would trust. A lost token degrades to "not bound yet"
-// (the pre-fix behavior), never a silently-recovered wrong one. See
-// readOwnChains's own doc — no production consumer opts into recovery.
-test('doctor storehash-manifest-bind: does NOT recover across a lost .lineage token — reports not-bound, never trusts an unverified lineage', () => {
+// T-MANIFEST-FOREST, fourth round: storeHashBindingCheck now recovers across
+// a lost `.lineage` token (recoverOpenSegment matches on the EXACT `branch`
+// field every segment's first entry carries, not the lossy filename slug —
+// see recoverOpenSegment's own doc), so a fresh clone or a branch switch no
+// longer reports a stale "not bound" when a real, committed checkpoint exists.
+test('doctor storehash-manifest-bind: recovers a real checkpoint across a lost .lineage token (fresh-clone/branch-switch case)', () => {
   const { root, store } = gitStoreWithSegmentedEvidence();
   try {
     rmSync(join(root, '.adlc', 'manifest.d', '.lineage'), { force: true });
     const check = bindCheck(doctorTicketStore(store, { root }));
-    assert.equal(check.bound, false, 'a lost token must not be silently recovered into a trusted binding');
+    assert.equal(check.ok, true, JSON.stringify(check));
+    assert.equal(check.bound, true, 'a lost token must not hide a real, committed checkpoint');
+    assert.equal(check.storeHash, check.boundStoreHash);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// A genuinely ambiguous recovery (two committed segments both declaring this
+// branch as their own — spec §7 point 1) must surface as a real check
+// failure, never a silent "not bound" or a guessed-at binding.
+test('doctor storehash-manifest-bind: a genuinely ambiguous recovery fails closed as SEGMENT_AMBIGUOUS, never guesses', () => {
+  const { root, store } = gitStoreWithSegmentedEvidence();
+  try {
+    const segDir = join(root, '.adlc', 'manifest.d');
+    const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+    const first = JSON.parse(readFileSync(join(segDir, segName), 'utf8').trim());
+    const secondName = segName.replace(/-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/, '-01ARZ3NDEKTSV4RRFFQ69G5FAX.jsonl');
+    writeFileSync(
+      join(segDir, secondName),
+      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: first.branch })}\n`,
+    );
+    rmSync(join(root, '.adlc', 'manifest.d', '.lineage'), { force: true });
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.code, 'SEGMENT_AMBIGUOUS');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

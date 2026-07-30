@@ -343,18 +343,18 @@ test('pull still deletes a block field the remote dropped', async () => {
   }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding (third round): push's own-segment
-// read (push.mjs's readOwnChainsOrRefuse) is STRICT — it never falls back to
-// recoverOpenSegment's lossy, attacker-controllable slug scan, because
-// publishing a GitHub label/comment is a remote trust-boundary mutation, not a
-// harmless local display. A lost `.lineage` token in a segmented repo must
-// therefore surface as a real push failure (exitCode 1) rather than either
-// guessing at a foreign segment or silently rendering a status computed from
-// root alone (which could wrongly remove a real, earned status label).
-test('push fails closed (exitCode 1), never recovers or silently renders from root alone, when this checkout\'s own segment cannot be identified', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-ambiguous-'));
+// T-MANIFEST-FOREST, fourth round: push now recovers real evidence across a
+// lost `.lineage` token (recoverOpenSegment matches on the EXACT `branch`
+// field every segment's first entry carries, not the lossy filename slug —
+// see recoverOpenSegment's own doc), so it no longer wrongly refuses (or,
+// pre-round-3, wrongly rendered a stale root-only status) when a real,
+// committed segment holds real evidence — the exact scenario the original
+// ticket named: a fresh CI checkout of a branch with committed segment
+// evidence.
+test('push recovers real evidence across a lost .lineage token (fresh-clone/branch-switch case) — succeeds, never refuses', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-recovery-'));
   try {
-    git(dir, ['init', '-q', '-b', 'feat/push-ambiguous']);
+    git(dir, ['init', '-q', '-b', 'feat/push-recovery']);
     git(dir, ['config', 'user.email', 'a@b.c']);
     git(dir, ['config', 'user.name', 'x']);
     mkdirSync(join(dir, '.adlc'), { recursive: true });
@@ -371,17 +371,15 @@ test('push fails closed (exitCode 1), never recovers or silently renders from ro
       transactionId: 'tx-1', operation: 'complete', ticketId: 'T1',
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
-    // Discard the token — this checkout can no longer identify its own segment,
-    // even though a real committed segment (with real evidence) exists on disk.
+    // Discard the token — this checkout can no longer identify its own segment
+    // by token, only by the exact `branch` field the segment's first entry
+    // carries, even though a real committed segment (with real evidence) exists
+    // on disk.
     rmSync(join(dir, '.adlc', 'manifest.d', '.lineage'), { force: true });
 
     const gh = fakeGitHub();
     const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
-    assert.equal(r.exitCode, 1, 'must fail closed, never crash uncaught or silently succeed with a wrong status');
-    assert.ok(
-      r.errors.some((e) => /cannot determine gate status/.test(e) && /cannot be identified/.test(e)),
-      `expected a segment-identification error, got: ${JSON.stringify(r.errors)}`,
-    );
+    assert.equal(r.exitCode, 0, `must recover and succeed, never refuse: ${JSON.stringify(r.errors)}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

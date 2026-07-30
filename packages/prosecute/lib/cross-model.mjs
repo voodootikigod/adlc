@@ -33,7 +33,7 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // makes "which chain an entry lives in" a non-issue for crossModelSatisfied below
 // (order does not matter to the terminal-revocation rule at all, by design).
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
-import { peekOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
+import { recoverOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
@@ -198,31 +198,33 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   // within one chain appends are strictly sequential), but there is no total
   // order across UNRELATED segments, so this deliberately never reads any other
   // lineage's segment (same scoping as doctor.mjs's storeHashBindingCheck and
-  // ticket-sync's planManifestMigration). peekOpenSegment (never mints) keeps
-  // this read-only check free of the write side effect resolveOpenSegment's
-  // minting branch carries.
+  // ticket-sync's planManifestMigration).
   //
-  // Deliberately STRICT — peekOpenSegment, NOT recoverOpenSegment (distinct-
-  // provider adversarial-review finding, second round): the local `.lineage`
-  // token proves this checkout genuinely wrote that segment; recoverOpenSegment's
-  // slug-based fallback is a LOSSY, caller-controlled identity (deriveSlug
-  // lowercases/collapses/truncates a branch name an attacker fully controls). A
-  // malicious PR could name its branch to derive the SAME slug as an unrelated,
-  // legitimate segment holding a real prior approve, and carry-forward would
-  // mint a FRESH SIGNED entry trusting that foreign lineage's verdict as its
-  // own chain head. Recovery is safe only for informational, non-signing reads
-  // (doctor's health check, ticket-sync's status render — see
-  // readOwnChains's own doc for why those two opt in and this does not). A
-  // fresh clone or branch switch here degrades to "no prior verdict" (a fresh
-  // review is required) rather than silently trusting a foreign lineage —
-  // tracked as a follow-up once a stronger, forgery-resistant lineage identity
-  // exists (T-MANIFEST-FOREST). The forest-wide revocation check below (after a
-  // genuine prior approve is confirmed) is the exception: it does not need a
-  // total order, only forest-wide membership, so it reads every segment.
+  // recoverOpenSegment (never mints), NOT peekOpenSegment (T-MANIFEST-FOREST,
+  // fourth round — supersedes the round-2 strict-only reasoning): finds this
+  // branch's segment even when the local `.lineage` token is lost (fresh
+  // clone, or a branch switch that overwrote it). Safe now because
+  // recoverOpenSegment matches on the EXACT `branch` field every segment's
+  // first entry carries (spec §4.4) — non-lossy, and part of the signed
+  // content since `key` is guaranteed non-null here (checked above) — not the
+  // old lossy filename slug that let a malicious branch derive the same slug
+  // as an unrelated segment; see recoverOpenSegment's own doc. `prior`'s own
+  // signature is independently verified below (verifyEntrySig) regardless of
+  // how it was found, so an attacker still cannot launder an unsigned/forged
+  // entry into a freshly-signed carry-forward. A genuinely ambiguous recovery
+  // (two committed segments both declaring this branch) is refused, not
+  // guessed at. The forest-wide revocation check below (after a genuine prior
+  // approve is confirmed) is a separate matter: it does not need a total
+  // order, only forest-wide membership, so it reads every segment regardless.
   const forest = readManifestForest(dir);
-  const peeked = peekOpenSegment(dir, { cwd: dirname(dir) });
-  const entries = peeked
-    ? forest.entries.filter((e) => e.segment === 'root' || e.segment === peeked.name)
+  let recovered;
+  try {
+    recovered = recoverOpenSegment(dir, { cwd: dirname(dir) });
+  } catch (error) {
+    throw new Error(`carry-forward refused: ${error.message}`);
+  }
+  const entries = recovered
+    ? forest.entries.filter((e) => e.segment === 'root' || e.segment === recovered.name)
     : forest.entries.filter((e) => e.segment === 'root');
   const prior = latestEntryForTicket(entries, ticket);
   if (!prior) {

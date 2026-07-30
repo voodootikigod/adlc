@@ -6,7 +6,7 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, peekOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
 /**
@@ -136,25 +136,35 @@ function storeHashBindingCheck(root, snapshot, key) {
   // state at mint time.
   const dir = join(root, '.adlc');
   if (isSegmentedRepo(dir)) {
-    // peekOpenSegment (never mints), NOT resolveOpenSegment — this is a
+    // recoverOpenSegment (never mints), NOT resolveOpenSegment — this is a
     // read-only doctor check with no writer lock held; resolveOpenSegment's
     // minting branch writes the .lineage token as a side effect, which could
     // race a genuine writer that already minted its own token but has not yet
     // created the segment file, splitting that writer's evidence across two
     // segments (adversarial-review finding).
     //
-    // Deliberately STRICT, not recoverOpenSegment (distinct-provider
-    // adversarial-review finding, T-MANIFEST-FOREST, third round): recovering
-    // across a lost `.lineage` token via the lossy, attacker-controllable
-    // derived slug could report a FOREIGN lineage's signed checkpoint as this
-    // branch's own "authenticated" binding — a false reassurance, not a
-    // harmless local display, once `check.authenticated`/`signaturesVerified`
-    // are read as meaning anything. A lost token degrades to "no evidence
-    // bound yet" (the pre-fix behavior) rather than trusting an unverified
-    // lineage. See readOwnChains's own doc — no production consumer opts into
-    // recovery; the primitive stays fully tested for a future consumer once a
-    // non-lossy, verifiable lineage identity exists.
-    const resolved = peekOpenSegment(dir, { cwd: root });
+    // recoverOpenSegment (T-MANIFEST-FOREST, fourth round — supersedes the
+    // round-3 strict-only reasoning): finds this branch's segment even when
+    // the local `.lineage` token is lost (fresh clone, or a branch switch
+    // that overwrote it), so doctor no longer reports a stale "not bound"
+    // when a real, committed checkpoint exists. Safe now because
+    // recoverOpenSegment matches on the EXACT `branch` field every segment's
+    // first entry carries (spec §4.4) — non-lossy, and part of the signed
+    // content once a key is configured — not the old lossy filename slug
+    // that could report a FOREIGN lineage's checkpoint as this branch's own;
+    // see recoverOpenSegment's own doc. walkChainForStoreHash below still
+    // independently verifies every signature in the recovered segment before
+    // trusting its storeHash, so an unsigned/forged recovered segment cannot
+    // report a false "authenticated" binding regardless.
+    //
+    // A genuinely ambiguous recovery (two committed segments both declaring
+    // this branch) is reported as a real check failure, not silently ignored.
+    let resolved;
+    try {
+      resolved = recoverOpenSegment(dir, { cwd: root });
+    } catch (error) {
+      return { ...check, ok: false, code: 'SEGMENT_AMBIGUOUS', message: error.message };
+    }
     if (resolved) {
       const segFile = segmentPath(dir, resolved.name);
       let segLines;
@@ -167,12 +177,9 @@ function storeHashBindingCheck(root, snapshot, key) {
       if (!segResult.ok) return { ...check, ok: false, code: segResult.code, reason: segResult.reason };
       if (segResult.boundStoreHash !== null) boundStoreHash = segResult.boundStoreHash;
     }
-    // resolved === null means either this branch never recorded evidence into
-    // a segment, or the local token is lost and a real segment exists that
-    // this read-only, non-signing check simply cannot see — root's own
-    // boundStoreHash (if any) still stands as the latest known checkpoint for
-    // this checkout, and an unresolved segment degrades to "not bound", never
-    // a false claim of binding (see the STRICT comment above).
+    // resolved === null means this branch genuinely has no committed segment
+    // (yet, or ever) — root's own boundStoreHash (if any) still stands as the
+    // latest known checkpoint for this checkout.
   }
 
   if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };

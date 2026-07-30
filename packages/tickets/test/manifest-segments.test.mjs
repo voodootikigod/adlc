@@ -116,6 +116,21 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
     } finally { clean(root); }
   });
 
+  // T-MANIFEST-FOREST, fourth round: the anchor-carrying first entry also
+  // carries the EXACT minting branch — what recoverOpenSegment now matches on
+  // instead of the lossy filename slug. Mirrors
+  // @adlc/gate-manifest/lib/segment-writer.mjs's identical coverage.
+  it('the anchor-carrying first entry also carries the exact minting branch; continuation entries never do', () => {
+    const { root, dir } = gitRepo('feat/branch-field');
+    try {
+      activate(dir);
+      const first = recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1' }));
+      const second = recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-2', operation: 'complete' }));
+      assert.equal(first.branch, 'feat/branch-field');
+      assert.equal(Object.hasOwn(second, 'branch'), false);
+    } finally { clean(root); }
+  });
+
   it('recognizes a segment whose slug contains digits 2-9 (full character-class range, not just 0-1)', () => {
     const { root, dir } = gitRepo('feat/t789-full-digit-range');
     try {
@@ -430,21 +445,23 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  it('AC3: refuses to guess when more than one committed segment matches this branch\'s derived slug', () => {
+  it('AC3: refuses to guess when more than one committed segment declares this branch as its own', () => {
     const { root, dir } = gitRepo('feat/ambiguous');
     try {
       activate(dir);
       recordTicketEvidence(root, baseEvidence());
       const slug = deriveSlug('feat/ambiguous');
-      // A second, independently-minted segment for the SAME branch slug — legitimate
-      // per spec §7 point 1 (two branches forked from the same rootless state can
-      // each mint independently without coordinating); simulated here by hand-writing
-      // a second well-formed segment sharing the slug, then discarding the token so
-      // neither is preferred by the fast path.
+      // A second, independently-minted segment genuinely owned by the SAME branch —
+      // legitimate per spec §7 point 1 (two branches forked from the same rootless
+      // state can each mint independently without coordinating; the same branch can
+      // equally end up with two if a token was lost mid-stream and a second mint
+      // happened). Simulated here by hand-writing a second well-formed segment whose
+      // first entry declares the SAME `branch` field the real one does, then
+      // discarding the token so neither is preferred by the fast path.
       const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
       writeFileSync(
         segmentPath(dir, secondName),
-        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/ambiguous' })}\n`,
       );
       execFileSync('git', ['add', `.adlc/manifest.d/${secondName}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       execFileSync('git', ['commit', '-q', '-m', 'second ambiguous segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -458,14 +475,14 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  it('a slug prefix match never cross-matches a DIFFERENT branch\'s segment (exact match only)', () => {
+  it('a branch whose derived filename slug is a PREFIX of another branch\'s never cross-matches (exact `branch`-field match only)', () => {
     const { root, dir } = gitRepo('feat');
     try {
       activate(dir);
       recordTicketEvidence(root, baseEvidence()); // mints "feat-<ULID>.jsonl"
       const featSegment = resolveOpenSegment(dir, { cwd: root }).name;
 
-      execFileSync('git', ['checkout', '-q', '-b', 'feat-x'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }); // slug "feat-x" — "feat-" is a PREFIX of "feat-x-<ULID>.jsonl" too
+      execFileSync('git', ['checkout', '-q', '-b', 'feat-x'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }); // filename slug "feat-x" — "feat-" is a PREFIX of "feat-x-<ULID>.jsonl" too
       recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-on-feat-x' }));
 
       execFileSync('git', ['checkout', '-q', 'feat'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -505,7 +522,7 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
     } finally { clean(root); }
   });
 
-  it('allowRecovery: true opts into the slug-based recovery scan', () => {
+  it('allowRecovery: true opts into the exact branch-field recovery scan', () => {
     const { root, dir } = gitRepo();
     try {
       activate(dir);

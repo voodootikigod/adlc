@@ -237,12 +237,12 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
 // an unrelated lineage's evidence into a validly-signed entry nobody actually
 // approved for this ticket.
 //
-// But a lost token must ALSO not be silently treated as "nothing to migrate"
-// (third round finding): this repo IS segmented, so a real segment holding real
-// evidence for T7 may exist that simply cannot be attributed without the token —
-// proceeding with the id rewrite anyway would strand it under the abandoned old
-// id forever. Refuses outright instead of guessing either way.
-test('migrateManifestEvidence refuses (does not silently proceed) when this segmented repo\'s own segment cannot be identified — never recovers, never strands evidence', () => {
+// T-MANIFEST-FOREST, fourth round: migrateManifestEvidence now recovers real
+// evidence across a lost `.lineage` token (recoverOpenSegment matches on the
+// EXACT `branch` field every segment's first entry carries, not the lossy
+// filename slug — see recoverOpenSegment's own doc), so this no longer
+// strands T7's real evidence under the abandoned old id.
+test('migrateManifestEvidence recovers real evidence across a lost .lineage token (fresh-clone/branch-switch case) — never strands it', () => {
   const { root, dir } = gitRepo();
   try {
     activate(dir);
@@ -251,11 +251,9 @@ test('migrateManifestEvidence refuses (does not silently proceed) when this segm
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
     rmSync(lineagePath(dir), { force: true });
-    assert.throws(
-      () => migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null }),
-      /cannot be identified/,
-      'must refuse rather than either recover an unverified lineage or silently strand real evidence',
-    );
+    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null });
+    assert.equal(result.migrated, 1, 'a lost token must not hide real, committed evidence');
+    assert.equal(result.entries[0].data.migratedFrom, 'T7');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

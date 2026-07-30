@@ -274,38 +274,31 @@ export function readForestEntries(dir) {
  *
  * `allowRecovery` (T-MANIFEST-FOREST lineage-durability finding, default
  * false — opt IN, not opt out): when true, falls back to recoverOpenSegment's
- * slug-based scan when peekOpenSegment's token doesn't resolve a segment, so
- * a fresh clone or a branch switch that overwrote `.lineage` does not
- * silently look like "this branch has no segment" when a real, committed one
- * exists on disk. Throws if the recovery scan finds more than one candidate
- * — a READ must fail closed rather than guess; callers should let that
- * propagate as a real failure, never swallow it into "no evidence".
+ * exact `branch`-field scan when peekOpenSegment's token doesn't resolve a
+ * segment, so a fresh clone or a branch switch that overwrote `.lineage` does
+ * not silently look like "this branch has no segment" when a real, committed
+ * one exists on disk. Throws if the recovery scan finds more than one
+ * candidate — a READ must fail closed rather than guess; callers should let
+ * that propagate as a real failure, never swallow it into "no evidence".
  *
- * NO production consumer currently opts in (distinct-provider
- * adversarial-review finding, third round, superseding the second round's
- * conclusion below). The derived slug is a LOSSY, CALLER-CONTROLLED identity
- * — `deriveSlug` lowercases, collapses, and truncates, and nothing stops an
- * attacker from naming a branch specifically to derive the same slug as an
- * EXISTING, unrelated committed segment. The second round judged this safe
- * for "informational, non-signing" consumers (doctor's health check,
- * ticket-sync's status render) on the theory that a wrong recovery there
- * means a stale display, not a forged trust artifact — but doctor's
- * "authenticated"/"signaturesVerified" fields ARE a trust assertion, and
- * ticket-sync's push publishes labels/comments to a REMOTE, third-party-
- * trusted surface, which is a real trust-boundary mutation, not a harmless
- * local display. Both were reverted to the strict default; each instead
- * detects "segmented + token missing" up front and REFUSES (throws) rather
- * than either recovering an unverified lineage or silently proceeding as if
- * there is no evidence — a wrongly-computed "no evidence" status is exactly
- * as dangerous as a wrongly-recovered one, since it can remove a real,
- * earned status label. reassignment's re-attestation and prosecute's
- * cross-model carry-forward were already strict (they mint a FRESH SIGNED
- * entry from what they read, so a slug-collision there could launder an
- * unrelated lineage's evidence into a newly-signed approval) and gained the
- * same refuse-on-ambiguity guard. `allowRecovery: true` remains available for
- * a future consumer that can independently verify the recovered segment's
- * identity (tracked as a follow-up — see T-MANIFEST-FOREST); do not opt a new
- * caller in without that verification.
+ * Every production consumer now opts in (T-MANIFEST-FOREST, fourth round —
+ * closes the ticket's original AC1/AC2, superseding the third round's
+ * "nobody opts in" conclusion below). The THIRD round correctly found that
+ * the OLD recoverOpenSegment matched on the derived filename slug — a LOSSY,
+ * CALLER-CONTROLLED identity (`deriveSlug` lowercases, collapses, and
+ * truncates, and nothing stops a branch from deriving the same slug as an
+ * unrelated committed segment's). That made recovery unsafe for EVERY
+ * consumer, informational or signing: doctor's "authenticated" field and
+ * push's published GitHub labels are trust assertions, not harmless local
+ * displays, and reassignment/carry-forward mint FRESH SIGNED entries from
+ * what they read. recoverOpenSegment's identity now matches the EXACT
+ * `branch` field every segment's first entry carries (spec §4.4) instead —
+ * non-lossy, and part of the entry's own signed content once a key is
+ * configured, so a caller cannot manufacture a colliding claim without the
+ * signing key. Every consumer that mints a FRESH signature from recovered
+ * content still independently verifies the SPECIFIC entries it trusts
+ * (entrySigValid/verifyEntrySig) before doing so — this function only
+ * answers "which segment FILE is mine", never "is its content trustworthy".
  */
 export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
@@ -484,16 +477,15 @@ export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   return null;
 }
 
-// spec §4.2: segment names are `${slug}-${ULID}.jsonl`; the ULID is a fixed
-// 26-char Crockford-base32 suffix using ONLY uppercase letters/digits (see
-// ULID_ALPHABET above), while a slug (deriveSlug) is restricted to lowercase
-// letters/digits/hyphen — the two character sets never overlap, so the split
-// point is unambiguous without needing SEGMENT_NAME_RE's full grammar here:
-// strip `.jsonl` (6 chars) and the ULID (26 chars) and the separating `-` (1
-// char), and whatever remains is exactly the slug that named it. Mirrors
-// @adlc/gate-manifest/lib/lineage.mjs's identical helper.
-function slugOf(segmentName) {
-  return segmentName.slice(0, segmentName.length - '.jsonl'.length - 26 - 1);
+// Read ONLY the first line of a segment (its anchor-carrying entry) — cheap
+// even when the segment has grown large, and all recoverOpenSegment needs:
+// the `branch` field (below) is written exclusively on a segment's first
+// entry, mirroring `anchor`. Mirrors @adlc/gate-manifest/lib/lineage.mjs's
+// identical helper.
+function firstEntryOf(dir, segmentName) {
+  const raw = readRawLines(segmentPath(dir, segmentName));
+  if (raw.length === 0) return null;
+  try { return JSON.parse(raw[0]); } catch { return null; }
 }
 
 /**
@@ -502,38 +494,59 @@ function slugOf(segmentName) {
  * `.lineage` (T-MANIFEST-FOREST lineage-durability finding): `.lineage` is
  * deliberately gitignored, so peekOpenSegment alone returns null in exactly
  * those cases even when a real, COMMITTED segment for this branch exists on
- * disk. Falls back to scanning discoverSegments() for a segment whose slug
- * (per slugOf, exact match — never a prefix match, which would wrongly match
- * e.g. branch "feat" against branch "feat-x"'s segment) equals this branch's
- * own deriveSlug output.
+ * disk.
+ *
+ * IDENTITY (T-MANIFEST-FOREST, fourth round — supersedes the original
+ * slug-based version of this function): matches on the EXACT `branch` field
+ * every segment's first entry now carries (spec §4.4), never the derived
+ * FILENAME slug. `deriveSlug` is lossy by design (lowercases, collapses,
+ * truncates at 40 chars) purely so it makes a legible filename component —
+ * branch `feat/x` and a literal branch named `feat-x` derive the identical
+ * slug, so slug-based matching could recover (or, worse for a signing
+ * consumer, launder) an unrelated branch's segment as this branch's own. The
+ * `branch` field is the exact Git ref string, part of the entry's own signed
+ * content once a key is configured (an anchor-carrying entry is always
+ * v2-signed — spec §4.4), so recovery here is bounded to the SAME trust tier
+ * the segment's content already carries: cryptographically exact when
+ * signed, best-effort hash-chain-only when not, same as every other read in
+ * this codebase (see doctor's `authenticated: key !== null`). A caller that
+ * needs the recovered content to feed a FRESH signature (reassignment,
+ * carry-forward) already independently verifies the specific entries it
+ * reads (entrySigValid/verifyEntrySig) before trusting them — this function
+ * only answers "which FILE is mine", not "is its content trustworthy".
+ *
+ * Segments minted BEFORE this change carry no `branch` field and are simply
+ * never matched here — they remain reachable only via a still-valid
+ * `.lineage` token (peekOpenSegment). This is a deliberate, honest scope
+ * boundary, not an oversight: recovery becomes reliable going forward without
+ * a disruptive rewrite of already-committed segments.
  *
  * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
  * candidates: a writer resolving where to APPEND must stay precise
  * (resolveOpenSegment, below, deliberately does not use this), but a reader
  * recovering "what's already there" must not silently guess either — two
  * branches forked from the same rootless state can legitimately mint
- * independent segments without coordinating (spec §7 point 1), so more than
- * one committed segment can share a derived slug, and picking one at random
- * could silently ignore genuine evidence in the other. Throws in that case;
- * callers must fail closed, never report "no evidence" when the truth is
- * "ambiguous". Mirrors @adlc/gate-manifest/lib/lineage.mjs's identical
- * function.
+ * independent segments without coordinating (spec §7 point 1), and the SAME
+ * branch can equally end up with two (a token lost mid-stream, then a second
+ * mint) — picking one at random could silently ignore genuine evidence in the
+ * other. Throws in that case; callers must fail closed, never report "no
+ * evidence" when the truth is "ambiguous". Mirrors
+ * @adlc/gate-manifest/lib/lineage.mjs's identical function.
  *
  * @returns {{ name: string, isNew: false }|null}
- * @throws {Error} when more than one committed segment matches this branch's
- *   derived slug and the local token does not disambiguate
+ * @throws {Error} when more than one committed segment's first entry declares
+ *   this branch and the local token does not disambiguate
  */
 export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
   if (branch === null) return null; // detached HEAD: no branch identity to recover by
-  const slug = deriveSlug(branch);
-  const candidates = discoverSegments(dir).valid.filter((name) => slugOf(name) === slug);
+  const candidates = discoverSegments(dir).valid.filter((name) => firstEntryOf(dir, name)?.branch === branch);
   if (candidates.length === 0) return null;
   if (candidates.length > 1) {
     throw new Error(
-      `ambiguous: ${candidates.length} committed segments match branch "${branch}"'s derived slug "${slug}" `
+      `ambiguous: ${candidates.length} committed segments declare branch "${branch}" as their own `
       + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess`
     );
   }
@@ -546,7 +559,7 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
  * §7.1) so both producers share the SAME open segment for one branch rather
  * than each minting their own.
  *
- * @returns {{ name: string, isNew: boolean, anchor?: object|null }}
+ * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  */
 export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
@@ -564,5 +577,8 @@ export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
-  return { name, isNew: true, anchor };
+  // branch is omitted (not `null`) on a detached-HEAD mint — see
+  // gate-manifest/lib/lineage.mjs's identical resolveOpenSegment for why no
+  // sentinel is needed the way anchor:null needs one.
+  return { name, isNew: true, anchor, ...(branch !== null ? { branch } : {}) };
 }

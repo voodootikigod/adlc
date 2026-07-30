@@ -10,7 +10,7 @@ import { lstatSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mk
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { git, sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
-import { segmentDirPath, discoverSegments, readRawLines, ulidOf } from './forest.mjs';
+import { segmentDirPath, segmentPath, discoverSegments, readRawLines, ulidOf } from './forest.mjs';
 
 const MARKER_NAME = '.store.json';
 const LINEAGE_NAME = '.lineage';
@@ -211,15 +211,14 @@ export function peekOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   return null;
 }
 
-// spec §4.2: segment names are `${slug}-${ULID}.jsonl`; the ULID is a fixed
-// 26-char Crockford-base32 suffix using ONLY uppercase letters/digits (see
-// ULID_ALPHABET above), while a slug (deriveSlug) is restricted to lowercase
-// letters/digits/hyphen — the two character sets never overlap, so the split
-// point is unambiguous without needing SEGMENT_NAME_RE's full grammar here:
-// strip `.jsonl` (6 chars) and the ULID (26 chars) and the separating `-` (1
-// char), and whatever remains is exactly the slug that named it.
-function slugOf(segmentName) {
-  return segmentName.slice(0, segmentName.length - '.jsonl'.length - 26 - 1);
+// Read ONLY the first line of a segment (its anchor-carrying entry) — cheap
+// even when the segment has grown large, and all `recoverOpenSegment` needs:
+// the `branch` field (below) is written exclusively on a segment's first
+// entry, mirroring `anchor`.
+function firstEntryOf(dir, segmentName) {
+  const raw = readRawLines(segmentPath(dir, segmentName));
+  if (raw.length === 0) return null;
+  try { return JSON.parse(raw[0].line); } catch { return null; }
 }
 
 /**
@@ -228,10 +227,32 @@ function slugOf(segmentName) {
  * `.lineage` (T-MANIFEST-FOREST lineage-durability finding): `.lineage` is
  * deliberately gitignored (spec §7 point 1), so peekOpenSegment alone returns
  * null in exactly those cases even when a real, COMMITTED segment for this
- * branch exists on disk. Falls back to scanning discoverSegments() for a
- * segment whose slug (per slugOf, exact match — never a prefix match, which
- * would wrongly match e.g. branch "feat" against branch "feat-x"'s segment)
- * equals this branch's own deriveSlug output.
+ * branch exists on disk.
+ *
+ * IDENTITY (T-MANIFEST-FOREST, fourth round — supersedes the original
+ * slug-based version of this function): matches on the EXACT `branch` field
+ * every segment's first entry now carries (spec §4.4), never the derived
+ * FILENAME slug. `deriveSlug` is lossy by design (lowercases, collapses,
+ * truncates at 40 chars) purely so it makes a legible filename component —
+ * branch `feat/x` and a literal branch named `feat-x` derive the identical
+ * slug, so slug-based matching could recover (or, worse for a signing
+ * consumer, launder) an unrelated branch's segment as this branch's own. The
+ * `branch` field is the exact Git ref string, part of the entry's own signed
+ * content once a key is configured (an anchor-carrying entry is always
+ * v2-signed — spec §4.4), so recovery here is bounded to the SAME trust tier
+ * the segment's content already carries: cryptographically exact when
+ * signed, best-effort hash-chain-only when not, same as every other read in
+ * this codebase (see doctor's `authenticated: key !== null`). A caller that
+ * needs the recovered content to feed a FRESH signature (reassignment,
+ * carry-forward) already independently verifies the specific entries it
+ * reads (entrySigValid/verifyEntrySig) before trusting them — this function
+ * only answers "which FILE is mine", not "is its content trustworthy".
+ *
+ * Segments minted BEFORE this change carry no `branch` field and are simply
+ * never matched here — they remain reachable only via a still-valid
+ * `.lineage` token (peekOpenSegment). This is a deliberate, honest scope
+ * boundary, not an oversight: recovery becomes reliable going forward without
+ * a disruptive rewrite of already-committed segments.
  *
  * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
  * candidates: a writer resolving where to APPEND must stay precise
@@ -239,26 +260,27 @@ function slugOf(segmentName) {
  * recovering "what's already there" must not silently guess either — spec's
  * own multiple-independent-segments-per-branch possibility (§7 point 1: two
  * branches forked from the same rootless state can legitimately mint
- * independent segments without coordinating) means more than one committed
- * segment can share a derived slug, and picking one at random could silently
- * ignore genuine evidence in the other. Throws in that case; callers must
- * fail closed, never report "no evidence" when the truth is "ambiguous".
+ * independent segments without coordinating) means the SAME branch can
+ * legitimately own more than one committed segment (e.g. a token was lost
+ * mid-stream and a second one was minted) — picking one at random could
+ * silently ignore genuine evidence in the other. Throws in that case;
+ * callers must fail closed, never report "no evidence" when the truth is
+ * "ambiguous".
  *
  * @returns {{ name: string, isNew: false }|null}
- * @throws {Error} when more than one committed segment matches this branch's
- *   derived slug and the local token does not disambiguate
+ * @throws {Error} when more than one committed segment's first entry declares
+ *   this branch and the local token does not disambiguate
  */
 export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
   if (branch === null) return null; // detached HEAD: no branch identity to recover by
-  const slug = deriveSlug(branch);
-  const candidates = discoverSegments(dir).valid.filter((name) => slugOf(name) === slug);
+  const candidates = discoverSegments(dir).valid.filter((name) => firstEntryOf(dir, name)?.branch === branch);
   if (candidates.length === 0) return null;
   if (candidates.length > 1) {
     throw new Error(
-      `ambiguous: ${candidates.length} committed segments match branch "${branch}"'s derived slug "${slug}" `
+      `ambiguous: ${candidates.length} committed segments declare branch "${branch}" as their own `
       + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess`
     );
   }
@@ -268,10 +290,10 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
 /**
  * Resolve which segment file the NEXT append should target (spec §7.1).
  *
- * @returns {{ name: string, isNew: boolean, anchor?: object|null }}
+ * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  *   `isNew: true` means this append is the segment's FIRST entry and must
- *   carry `anchor` (also returned); `isNew: false` means append as a plain
- *   continuation of the named, already-open segment.
+ *   carry `anchor` and `branch` (both also returned); `isNew: false` means
+ *   append as a plain continuation of the named, already-open segment.
  */
 export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
@@ -292,5 +314,10 @@ export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
-  return { name, isNew: true, anchor };
+  // branch is omitted (not `null`) when detached HEAD minted this segment —
+  // recoverOpenSegment's exact-match scan simply never matches an omitted
+  // field, the same as any other unset field, so no explicit sentinel is
+  // needed the way `anchor: null` needs one (anchor is spec-mandatory on
+  // every first entry; branch is not).
+  return { name, isNew: true, anchor, ...(branch !== null ? { branch } : {}) };
 }

@@ -340,28 +340,41 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
-  // T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" here
-  // (distinct-provider adversarial-review finding, second round): carry-forward
-  // stays on the strict, token-only peekOpenSegment, never the slug-based
-  // recoverOpenSegment. The derived slug is a lossy, caller-controlled identity —
-  // an attacker can name a branch specifically to derive the same slug as an
-  // unrelated, legitimate segment holding a real prior approve. Recovering across
-  // that boundary here would let a malicious branch mint a FRESH SIGNED carry
-  // trusting a foreign lineage's verdict as its own chain head. A lost token
-  // degrades to "no prior verdict, review again" — the safe failure mode for a
-  // signing decision — not silent recovery. See readOwnChains's own doc (the
-  // primitive doctor.mjs and ticket-sync DO opt into, since those never sign).
-  it('does NOT recover a prior approve across a lost .lineage token — refuses, does not trust an unverified lineage', () => {
+  // T-MANIFEST-FOREST, fourth round: carry-forward now recovers a prior approve
+  // across a lost `.lineage` token (recoverOpenSegment matches on the EXACT
+  // `branch` field every segment's first entry carries, not the lossy filename
+  // slug — see recoverOpenSegment's own doc), so a fresh clone or a branch
+  // switch no longer forces a redundant fresh review. `prior`'s own signature
+  // is independently re-verified regardless of how it was found (below), so
+  // this stays safe against an unsigned/forged segment.
+  it('recovers a prior approve across a lost .lineage token (fresh-clone/branch-switch case) — still verifies its signature', () => {
     const dir = gitLedger();
     try {
       activateSegments(dir);
       seed(dir, rev(BASE1)); // lands in the newly-opened segment, writes .lineage
       rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
 
+      const carried = carry(dir, rev(BASE1), rev(BASE2));
+      assert.equal(carried.data.revision, rev(BASE2));
+      assert.equal(carried.data.verdict, 'approve');
+      assert.equal(carried.data.carryDepth, 1);
+    } finally { clean(dir); }
+  });
+
+  // The signature check on the recovered entry is load-bearing, not incidental:
+  // an UNSIGNED segment (no key at record time) must still refuse, even though
+  // the branch field matches exactly — identity alone is not authenticity.
+  it('an exact branch match does NOT bypass signature verification — an unsigned recovered entry still refuses', () => {
+    const dir = gitLedger();
+    try {
+      activateSegments(dir);
+      withoutKey(() => seed(dir, rev(BASE1))); // lands in the segment, UNSIGNED
+      rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
+
       assert.throws(
         () => carry(dir, rev(BASE1), rev(BASE2)),
-        /no prior cross-model verdict recorded/,
-        'a lost token must refuse (require a fresh review), never silently recover an unverified segment',
+        /not signature-verified/,
+        'an exact branch-field match must not substitute for a real signature check',
       );
     } finally { clean(dir); }
   });

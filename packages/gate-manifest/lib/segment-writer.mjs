@@ -105,7 +105,13 @@ function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key)
   };
   const chained = {
     seq: previous ? previous.seq + 1 : 1,
-    ...(resolved.isNew ? { anchor: resolved.anchor } : {}),
+    // `branch` (T-MANIFEST-FOREST, fourth round): the EXACT git branch that
+    // minted this segment, recorded once on the first entry alongside
+    // `anchor` — a non-lossy identity recoverOpenSegment matches on, unlike
+    // the derived filename slug (see lineage.mjs's recoverOpenSegment doc).
+    // Omitted (not `anchor`-style `null`) when resolveOpenSegment minted
+    // this segment from a detached HEAD, which has no branch identity.
+    ...(resolved.isNew ? { anchor: resolved.anchor, ...(resolved.branch !== undefined ? { branch: resolved.branch } : {}) } : {}),
     ...normalized,
     prev: prevRawLine === null ? null : sha256(prevRawLine),
   };
