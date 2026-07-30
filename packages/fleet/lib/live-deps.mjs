@@ -14,6 +14,7 @@ import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
+import { usageEvidence } from './adapters/usage.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
 import { makeReviewRunner } from './review-runner.mjs';
 import { builderPrompt, fixPrompt } from './charters.mjs';
@@ -399,6 +400,42 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     // Best-effort evidence: never block the run on a recorder error (AC5).
+    /**
+     * §8a: ONE usage carrier per dispatch, written immediately after the call
+     * it accounts for and independent of any later verdict.
+     *
+     * Enriched from the quartermaster SEAT, because counters alone cannot be
+     * priced or filtered: two channels can run the same model over different
+     * transports (subscription vs metered API), and an operator auditing
+     * overflow needs to tell them apart (adversarial-review HIGH). The seat is
+     * the only place that knows, so the provenance is attached here rather
+     * than guessed downstream.
+     *
+     * `registryDigest` is deliberately ABSENT: nothing in the quartermaster
+     * produces one today, and §8a says record these siblings when supplied and
+     * omit them cleanly otherwise. Emitting a placeholder would be a fabricated
+     * provenance claim — the same failure the no-fabrication rule forbids for
+     * counters.
+     */
+    recordDispatchUsage: ({ ticket, result }) => {
+      const data = usageEvidence(result);
+      if (!data) return;
+      const entry = seats?.get(ticket?.id);
+      const seat = entry?.seat;
+      if (data.usage && seat) {
+        data.usage = {
+          ...data.usage,
+          ...(seat.provider ? { provider: seat.provider } : {}),
+          ...(seat.model ? { model: seat.model } : {}),
+          ...(entry?.assignment?.tier ? { tier: entry.assignment.tier } : {}),
+        };
+      }
+      if (entry?.route?.channel) data.channel = entry.route.channel;
+      if (seat?.transport) data.transport = seat.transport;
+      try { io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
+      catch { /* evidence is best-effort */ }
+    },
+
     recordGate: ({ ticket, phase, ok, data }) => {
       // §8a: `data` carries the dispatch's parsed usage (or just its
       // usageStatus when the harness reported nothing). Passed only when

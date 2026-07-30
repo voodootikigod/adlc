@@ -244,6 +244,37 @@ function sameUsage(a, b) {
  *    original carrier), so a retry aggregates to exactly one call.
  *  - already recorded, different spend → conflict; the caller fails closed.
  */
+/**
+ * Find the first usage conflict across the WHOLE packet, touching nothing.
+ *
+ * Runs before any manifest append so a rejected packet is side-effect-free.
+ * Checks both directions a contradiction can arrive from:
+ *   - against the LEDGER, for a replay of a callId already recorded;
+ *   - against EARLIER PASSES in this same packet, for two passes that claim
+ *     the same callId with different counters — a packet that is internally
+ *     inconsistent, which the per-pass check could never see because the first
+ *     of the two had not been recorded yet when it ran.
+ *
+ * Returns the error string, or null when the packet is clean.
+ */
+function firstUsageConflict(passes, { revision, packetHash, recorded }) {
+  const seen = new Map();
+  for (const [index, pass] of (Array.isArray(passes) ? passes : []).entries()) {
+    if (pass?.usage === undefined) continue;
+    const hasCallId = typeof pass.callId === 'string' && pass.callId.trim().length > 0;
+    if (!hasCallId) continue;
+    const callKey = usageCallKey(revision, packetHash, pass.callId);
+    const prior = seen.has(callKey) ? seen.get(callKey) : recorded.get(callKey);
+    if (prior !== undefined && !sameUsage(prior, pass.usage)) {
+      return `pass ${index + 1}: usage replay conflict for callId ${JSON.stringify(pass.callId)} — the ledger already `
+        + `records ${JSON.stringify(prior)} for this call but the packet now reports `
+        + `${JSON.stringify(pass.usage)}. Refusing to record contradictory spend for one model call.`;
+    }
+    if (prior === undefined) seen.set(callKey, pass.usage);
+  }
+  return null;
+}
+
 function usageCarrierFor({ pass, revision, packetHash, recorded }) {
   // Everything goes under `data`, because that is where the reader looks:
   // `aggregateSpend` reads `entry.data.usage`. A flat `usage` field would be
@@ -345,6 +376,23 @@ export function runProsecution(input, {
   // when it has one, so "the same call" means the same reviewed content.
   const usagePacketHash = input?.review_packet?.inputs_hash ?? null;
   const alreadyRecordedUsage = recordedUsageByCall(dir);
+
+  // A REJECTED RUN MUST LEAVE NO TRACE. The manifest is append-only, so an
+  // op-error returned from inside the pass loop cannot undo the pass-started,
+  // finding, and dry-pass entries already written — and a stray
+  // `p5-finding-killed` is not inert: seedOpenFindingsFromManifest consumes it
+  // on the NEXT run and drops a previously verified finding, so a rejected
+  // replay could retire a real finding and let a later dry pass approve.
+  // Every usage conflict is therefore resolved BEFORE the first append
+  // (adversarial-review CRITICAL, rollback).
+  const usageConflict = firstUsageConflict(input.passes, {
+    revision: resolvedRevision,
+    packetHash: usagePacketHash,
+    recorded: alreadyRecordedUsage,
+  });
+  if (usageConflict) {
+    return { status: 'op-error', exitCode: 1, errors: [usageConflict] };
+  }
 
   for (const [index, pass] of input.passes.entries()) {
     const passNo = index + 1;

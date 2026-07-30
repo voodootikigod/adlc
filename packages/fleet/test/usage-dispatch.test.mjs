@@ -221,70 +221,93 @@ const passProsecute = () => ({ verdict: 'pass' });
 const okMerge = () => ({ ok: true });
 const noFlail = () => ({ flail: false });
 
-function recorder() {
-  const calls = [];
-  return { calls, record: (phase, ok, data) => calls.push({ phase, ok, data }) };
+function spy() {
+  const calls = { usage: [], verdicts: [] };
+  return {
+    calls,
+    effects: {
+      gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail,
+      record: (phase, ok, data) => calls.verdicts.push({ phase, ok, data }),
+      recordDispatchUsage: (d) => { const e = usageEvidence(d); if (e) calls.usage.push(e); },
+    },
+  };
 }
 
-describe('P4 recording seam', () => {
-  it('carries the dispatch usage onto the P4 entry as reported', async () => {
-    const { calls, record } = recorder();
+
+describe('P4 recording seam — one carrier per DISPATCH, not per verdict', () => {
+  it('books the dispatch spend as reported', async () => {
+    const { calls, effects } = spy();
     const usage = { inputTokens: 53458, outputTokens: 3, cachedTokens: 0 };
     await advanceTicket(TICKET, {
+      ...effects,
       dispatch: () => ({ exitCode: 0, timedOut: false, output: 'done', usage, usageStatus: 'reported' }),
-      gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
     });
 
-    const p4 = calls.filter((c) => c.phase === 'p4');
-    assert.equal(p4.length, 1);
-    assert.deepEqual(p4[0].data, { usageStatus: 'reported', usage });
+    assert.equal(calls.usage.length, 1);
+    assert.deepEqual(calls.usage[0], { usageStatus: 'reported', usage });
   });
 
   it('records unreported WITHOUT a usage key when the harness said nothing', async () => {
-    const { calls, record } = recorder();
+    const { calls, effects } = spy();
     await advanceTicket(TICKET, {
+      ...effects,
       dispatch: () => ({ exitCode: 0, timedOut: false, output: 'done', usageStatus: 'unreported' }),
-      gate: okGate, prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
     });
-
-    const p4 = calls.find((c) => c.phase === 'p4');
-    assert.equal(p4.data.usageStatus, 'unreported');
-    assert.equal('usage' in p4.data, false, 'a zeroed object would book an unmeasured call as free');
+    assert.equal(calls.usage[0].usageStatus, 'unreported');
+    assert.equal('usage' in calls.usage[0], false);
   });
 
-  it('books each strike separately — a retried ticket really did make two calls', async () => {
-    const { calls, record } = recorder();
+  it('the gate-verdict entry no longer carries usage — one call is booked once', async () => {
+    const { calls, effects } = spy();
+    await advanceTicket(TICKET, {
+      ...effects,
+      dispatch: () => ({ exitCode: 0, timedOut: false, output: 'done', usage: { inputTokens: 5, outputTokens: 1, cachedTokens: 0 }, usageStatus: 'reported' }),
+    });
+    const carriers = calls.verdicts.filter((c) => c.data?.usage);
+    assert.equal(carriers.length, 0, 'usage on both entries would double-count the call');
+    assert.equal(calls.usage.length, 1);
+  });
+
+  // The regressions the adversarial review named: spend on paths that never
+  // reach a gate verdict used to vanish entirely.
+  it('books a FAILED strike as well as the repair strike (no hidden spend)', async () => {
+    const { calls, effects } = spy();
     let n = 0;
     await advanceTicket(TICKET, {
+      ...effects,
       dispatch: () => {
         n += 1;
-        return n === 1
-          ? { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: 10, outputTokens: 1, cachedTokens: 0 }, usageStatus: 'reported' }
-          : { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: 20, outputTokens: 2, cachedTokens: 0 }, usageStatus: 'reported' };
+        return { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: n === 1 ? 100_000 : 20_000, outputTokens: n, cachedTokens: 0 }, usageStatus: 'reported' };
       },
-      // Gate fails the first strike so a second dispatch happens.
       gate: () => (n === 1 ? { ok: false, output: 'gate boom' } : { ok: true }),
-      prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
     });
 
-    const p4 = calls.filter((c) => c.phase === 'p4' && c.data?.usage);
-    assert.equal(p4.length, 1, 'only the passing strike emits a p4 verdict entry');
-    assert.equal(p4[0].data.usage.inputTokens, 20, 'and it carries ITS OWN strike\'s spend, not the first\'s');
+    assert.equal(calls.usage.length, 2, 'two dispatches means two calls');
+    const total = calls.usage.reduce((s, d) => s + d.usage.inputTokens, 0);
+    assert.equal(total, 120_000, 'the 100k first strike must not be hidden by the 20k repair');
   });
 
-  it('books the last strike\'s spend when no strike ever cleared the gate', async () => {
-    const { calls, record } = recorder();
-    let n = 0;
-    await advanceTicket(TICKET, {
-      dispatch: () => { n += 1; return { exitCode: 0, timedOut: false, output: 'x', usage: { inputTokens: n * 10, outputTokens: n, cachedTokens: 0 }, usageStatus: 'reported' }; },
-      gate: () => ({ ok: false, output: 'always fails' }),
-      prosecute: passProsecute, merge: okMerge, flail: noFlail, record,
+  it('books a BLOCKED build, which returns before any verdict', async () => {
+    const { calls, effects } = spy();
+    const r = await advanceTicket(TICKET, {
+      ...effects,
+      dispatch: () => ({ exitCode: 0, timedOut: false, blocked: true, output: 'TICKET-BLOCKED', usage: { inputTokens: 7000, outputTokens: 5, cachedTokens: 0 }, usageStatus: 'reported' }),
     });
+    assert.equal(r.state, 'blocked');
+    assert.equal(calls.usage.length, 1, 'a blocked worker still spent real tokens');
+    assert.equal(calls.usage[0].usage.inputTokens, 7000);
+  });
 
-    const p4 = calls.filter((c) => c.phase === 'p4');
-    assert.equal(p4.length, 1);
-    assert.equal(p4[0].ok, false);
-    assert.equal(p4[0].data.usage.inputTokens, 20, 'the final strike\'s spend is recorded rather than none');
+  it('books a FLAIL-terminated strike, which also returns before any verdict', async () => {
+    const { calls, effects } = spy();
+    const r = await advanceTicket(TICKET, {
+      ...effects,
+      dispatch: () => ({ exitCode: 1, timedOut: false, output: 'boom', usage: { inputTokens: 9000, outputTokens: 3, cachedTokens: 0 }, usageStatus: 'reported' }),
+      flail: () => ({ flail: true }),
+    });
+    assert.equal(r.state, 'failed');
+    assert.equal(calls.usage.length, 1);
+    assert.equal(calls.usage[0].usage.inputTokens, 9000);
   });
 
   it('usageEvidence never invents a status for a dispatch that did not happen', () => {

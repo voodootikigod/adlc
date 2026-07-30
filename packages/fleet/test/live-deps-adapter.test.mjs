@@ -185,3 +185,107 @@ test('a recorder failure never escapes — evidence stays best-effort (AC5)', ()
   });
   assert.doesNotThrow(() => deps.recordGate({ ticket, phase: 'p4', ok: true, data: { usageStatus: 'unreported' } }));
 });
+
+// ---- §8a routing provenance on the dispatch usage carrier ----
+
+const SEAT_TICKET = { id: 'T900', title: 'T900', scope: ['packages/x/**'], body: 'do', edges: [] };
+
+function depsWithSeat(adlcCalls, seatEntry) {
+  return buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'opencode', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    seats: new Map([['T900', seatEntry]]),
+    io: ioCapturingAdlc(adlcCalls),
+  });
+}
+
+const REPORTED = { exitCode: 0, output: 'ok', usage: { inputTokens: 900, outputTokens: 150, cachedTokens: 40 }, usageStatus: 'reported' };
+
+test('the dispatch usage carrier records the seat model, provider, tier, channel and transport', () => {
+  // Counters alone cannot be priced or filtered: two channels can run the SAME
+  // model over different transports (subscription vs metered API), and an
+  // operator auditing overflow has to tell them apart. Only the seat knows.
+  const adlcCalls = [];
+  depsWithSeat(adlcCalls, {
+    route: { channel: 'frontier-metered' },
+    seat: { adapter: 'opencode', model: 'operator/frontier-model', provider: 'anthropic', transport: 'api:anthropic-batch' },
+    assignment: { tier: 'frontier' },
+  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  const data = JSON.parse(call[call.indexOf('--data') + 1]);
+  assert.equal(data.usage.model, 'operator/frontier-model');
+  assert.equal(data.usage.provider, 'anthropic');
+  assert.equal(data.usage.tier, 'frontier');
+  assert.equal(data.channel, 'frontier-metered');
+  assert.equal(data.transport, 'api:anthropic-batch');
+  // Counters survive the enrichment untouched.
+  assert.equal(data.usage.inputTokens, 900);
+  assert.equal(data.usage.outputTokens, 150);
+  assert.equal(data.usage.cachedTokens, 40);
+});
+
+test('two channels running the SAME model over different transports stay distinguishable', () => {
+  const seatFor = (channel, transport) => ({
+    route: { channel },
+    seat: { adapter: 'opencode', model: 'same/model', provider: 'anthropic', transport },
+    assignment: { tier: 'frontier' },
+  });
+  const read = (seatEntry) => {
+    const calls = [];
+    depsWithSeat(calls, seatEntry).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
+    const c = calls.find((a) => a[0] === 'gate-manifest');
+    return JSON.parse(c[c.indexOf('--data') + 1]);
+  };
+  const sub = read(seatFor('frontier', 'subscription:anthropic-max'));
+  const api = read(seatFor('frontier-metered', 'api:anthropic-batch'));
+  assert.notDeepEqual(sub, api, 'metered overflow must be separable from subscription traffic');
+  assert.equal(sub.transport, 'subscription:anthropic-max');
+  assert.equal(api.transport, 'api:anthropic-batch');
+});
+
+test('registryDigest is OMITTED, never fabricated, while nothing produces one', () => {
+  // §8a says record these siblings when supplied and omit cleanly otherwise.
+  // Emitting a placeholder would be a fabricated provenance claim — the same
+  // failure the no-fabrication rule forbids for counters.
+  const adlcCalls = [];
+  depsWithSeat(adlcCalls, {
+    route: { channel: 'mid' },
+    seat: { adapter: 'opencode', model: 'zai/glm-5.2', provider: 'zai', transport: 'gateway:opencode-go' },
+    assignment: { tier: 'mid' },
+  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  const data = JSON.parse(call[call.indexOf('--data') + 1]);
+  assert.equal('registryDigest' in data, false);
+});
+
+test('an unreported dispatch records status only — no usage, no invented provenance', () => {
+  const adlcCalls = [];
+  depsWithSeat(adlcCalls, {
+    route: { channel: 'mid' },
+    seat: { adapter: 'opencode', model: 'zai/glm-5.2', provider: 'zai', transport: 'gateway:opencode-go' },
+    assignment: { tier: 'mid' },
+  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: { exitCode: 0, output: 'x', usageStatus: 'unreported' } });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  const data = JSON.parse(call[call.indexOf('--data') + 1]);
+  assert.equal(data.usageStatus, 'unreported');
+  assert.equal('usage' in data, false, 'no counters to label, so no labels');
+});
+
+test('a legacy (seatless) dispatch still records its counters', () => {
+  const adlcCalls = [];
+  buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'codex', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io: ioCapturingAdlc(adlcCalls),
+  }).recordDispatchUsage({ ticket, result: REPORTED });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  const data = JSON.parse(call[call.indexOf('--data') + 1]);
+  assert.equal(data.usage.inputTokens, 900);
+  assert.equal('channel' in data, false, 'no seat means no routing claim');
+});

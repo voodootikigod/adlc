@@ -277,3 +277,102 @@ describe('P5 packet usage — validation and the claimed/reported boundary', () 
     }
   });
 });
+
+describe('P5 packet usage — a rejected packet is side-effect-free', () => {
+  // adversarial-review CRITICAL (rollback). The manifest is append-only, so an
+  // op-error returned from inside the pass loop cannot undo entries already
+  // written. A stray `p5-finding-killed` is NOT inert: seedOpenFindingsFromManifest
+  // consumes it on the next run and drops a previously verified finding, so a
+  // REJECTED replay could retire a real finding and let a later dry pass approve.
+  it('a conflicting replay appends NOTHING — no pass, finding, dry, or usage entry', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [finding({ id: 'F-KEEP' })], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+      // A VERIFIED finding leaves the gate blocking (exit 2) — that is the
+      // point: it leaves F-KEEP OPEN on the ledger, which is what the rejected
+      // replay would otherwise retire.
+      prosecute(dir, inputPath, repo, { expectFailure: true });
+      const before = entriesFor(dir);
+      assert.ok(
+        before.some((e) => e.type === 'p5-finding-verified' && e?.finding?.id === 'F-KEEP'),
+        'precondition: the first run recorded F-KEEP as verified'
+      );
+
+      // Same callId, contradictory counters — AND a kill for the finding the
+      // first run verified. If the kill lands despite the rejection, the next
+      // run's seeded open findings lose F-KEEP.
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding({ id: 'F-KEEP' })], callId: 'call-1', usage: { ...USAGE, outputTokens: 999 } },
+        ...DRY_TAIL,
+      ])));
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.equal(verdict.status, 'op-error');
+
+      const after = entriesFor(dir);
+      assert.equal(after.length, before.length, 'a rejected packet must append no entries at all');
+      assert.equal(
+        after.filter((e) => e.type === 'p5-finding-killed' && e?.finding?.id === 'F-KEEP').length,
+        0,
+        'the rejected kill must not reach the ledger — it would retire a verified finding on the next run'
+      );
+      assert.equal(aggregateSpend(after).byPhase.P5.outputTokens, 150, 'and no spend is re-banked');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a packet that contradicts ITSELF on one callId, before writing anything', () => {
+    // The per-pass check could never see this: the first of the two passes had
+    // not been recorded yet when it ran.
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'dup', usage: USAGE },
+        { lens: 'contract', findings: [killedFinding({ id: 'F2' })], callId: 'dup', usage: { ...USAGE, inputTokens: 1 } },
+        ...DRY_TAIL,
+      ])));
+
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.equal(verdict.status, 'op-error');
+      assert.match((verdict.errors ?? []).join('\n'), /dup/);
+      assert.equal(entriesFor(dir).length, 0, 'nothing was written before the contradiction was found');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('P5 packet usage — partial counters are unknown, not zero', () => {
+  // adversarial-review MEDIUM. aggregateSpend coerces an absent counter with
+  // `?? 0`, so accepting a partial block converts UNKNOWN spend into MEASURED
+  // ZERO — the same collapse the no-fabrication rule forbids, and the standard
+  // the P4 adapters already hold.
+  for (const missing of ['inputTokens', 'outputTokens', 'cachedTokens']) {
+    it(`rejects a usage block missing ${missing}`, () => {
+      const dir = tmpAdlc();
+      const repo = cleanRepo();
+      try {
+        const partial = { ...USAGE };
+        delete partial[missing];
+        const inputPath = join(dir, 'passes.json');
+        writeFileSync(inputPath, JSON.stringify(packet(dir, [
+          { lens: 'security', findings: [finding()], usage: partial },
+          ...DRY_TAIL,
+        ])));
+
+        const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+        assert.notEqual(verdict.exitCode, 0);
+        assert.match((verdict.errors ?? []).join('\n'), new RegExp(`${missing} is required`));
+      } finally {
+        rmSync(repo.dir, { recursive: true, force: true });
+      }
+    });
+  }
+});

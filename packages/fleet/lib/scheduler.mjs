@@ -7,7 +7,6 @@
 
 import { fence } from '@adlc/core';
 import { computeReady, selectDispatchable, unsatisfiableInSubset } from './plan.mjs';
-import { usageEvidence } from './adapters/usage.mjs';
 
 // issue #280: same cap as charters.mjs's re-fencing of these same deadEnds —
 // capping here (where the raw log first enters a deadEnd) is what actually
@@ -57,7 +56,6 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
   let strikes = 0;
   let gatePassed = false;      // did any strike clear the deterministic gate?
   let prosecution = null;      // last prosecution verdict, for evidence/status
-  let lastBuild = null;        // last dispatch result, for its §8a usage on the terminal record
   const canRetry = () => strikes < maxStrikes;
 
   const fail = (reason) => ({ state: 'failed', strikes, reason, deadEnds, gatePassed, prosecution });
@@ -84,7 +82,15 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     log(`${ticket.id} strike ${strikes}: building`);
 
     const build = await effects.dispatch({ ticket, strike: strikes, deadEnds });
-    lastBuild = build;
+    // §8a: usage belongs to the DISPATCH that incurred it, not to a downstream
+    // verdict. Emitted here — immediately after every completed dispatch and
+    // before any branch can return — so a blocked worker, a flail exit, or a
+    // strike that never clears the gate still books the tokens it really
+    // spent. Tying this to the gate verdict instead hid whole calls: a 100k
+    // first strike that failed its gate followed by a 20k repair reported only
+    // 20k (adversarial-review MEDIUM). This mirrors the P5 rule exactly —
+    // exactly one carrier entry per model call.
+    effects.recordDispatchUsage?.(build);
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the second strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };
@@ -108,10 +114,9 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
 
     gatePassed = true;
-    // §8a: the P4 entry carries THIS strike's dispatch spend. Usage belongs to
-    // the dispatch that incurred it, so each strike records its own — a retried
-    // ticket books two calls because it really made two.
-    effects.record?.('p4', true, usageEvidence(build));
+    // Verdict evidence ONLY — the spend rode its own entry at dispatch time.
+    // Carrying it here too would double-count the call.
+    effects.record?.('p4', true);
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
     const pros = await effects.prosecute({ ticket });
@@ -138,19 +143,10 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
     return { state: 'merged', strikes, deadEnds, gatePassed, prosecution };
   }
-  // No strike ever cleared the gate, so no P4 entry carried usage yet. This
-  // terminal record books the LAST strike's dispatch spend.
-  //
-  // KNOWN LIMITATION (deliberate, and under-reporting rather than inventing):
-  // a run that burned several strikes without ever passing the gate records
-  // only the final strike's tokens — the earlier dispatches' spend is lost,
-  // because the existing evidence shape emits one P4 entry per gate verdict,
-  // not one per dispatch. Summing the strikes into this entry would fix the
-  // token total but corrupt `calls`, since aggregateSpend counts one call per
-  // entry carrying usage. Fixing it properly means a per-dispatch entry, which
-  // is an evidence-shape change beyond this ticket. Under-reporting is the safe
-  // direction: it never books spend that did not happen.
-  if (!gatePassed) effects.record?.('p4', false, usageEvidence(lastBuild));
+  // Verdict evidence only; every strike already booked its own spend at
+  // dispatch time, so a run that never cleared the gate still has a complete
+  // per-call record rather than just its last attempt.
+  if (!gatePassed) effects.record?.('p4', false);
   return fail('two-strike cap reached');
 }
 

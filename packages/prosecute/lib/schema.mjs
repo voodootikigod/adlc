@@ -67,11 +67,17 @@ export function validateUsage(usage, prefix) {
     return [`${prefix}.usage must be an object when present`];
   }
   const errors = [];
-  if (!USAGE_COUNTERS.some((key) => usage[key] !== undefined)) {
-    errors.push(`${prefix}.usage must carry at least one of ${USAGE_COUNTERS.join(', ')}`);
-  }
+  // ALL THREE counters are required, not "at least one" (adversarial-review,
+  // no-fabrication). `aggregateSpend` coerces an absent counter with `?? 0`, so
+  // accepting a partial block silently converts UNKNOWN output/cache spend into
+  // MEASURED ZERO — the very collapse the no-fabrication rule exists to prevent,
+  // and the same standard the P4 adapters already hold (normalizeUsage rejects
+  // a usage block unless every counter is a clean count). A version-skewed
+  // serializer that drops a field must be rejected, not silently zeroed.
   for (const key of USAGE_COUNTERS) {
-    if (usage[key] !== undefined && !isTokenCount(usage[key])) {
+    if (usage[key] === undefined) {
+      errors.push(`${prefix}.usage.${key} is required — a partial usage block would record unknown spend as measured zero`);
+    } else if (!isTokenCount(usage[key])) {
       errors.push(`${prefix}.usage.${key} must be a non-negative integer`);
     }
   }
