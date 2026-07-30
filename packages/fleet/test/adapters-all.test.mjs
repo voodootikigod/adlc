@@ -10,7 +10,10 @@ const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 's
 const EXPECTED = {
   codex: { cmd: 'codex', args: ['exec', PROMPT], stdin: false },
   agy: { cmd: 'agy', args: ['--print'], stdin: true },
-  opencode: { cmd: 'opencode', args: ['run', PROMPT], stdin: false },
+  // `--format json` is load-bearing, not cosmetic: it is the only mode that
+  // emits the step_finish token events T152's usage parser reads. Dropping it
+  // silently downgrades every opencode dispatch to usageStatus 'unreported'.
+  opencode: { cmd: 'opencode', args: ['run', '--format', 'json', PROMPT], stdin: false },
   pi: { cmd: 'pi', args: ['run', PROMPT], stdin: false },
   cursor: { cmd: 'cursor-agent', args: ['-p', PROMPT], stdin: false },
   copilot: { cmd: 'copilot', args: ['-p', PROMPT, '--allow-tool', 'write', '--allow-tool', 'shell'], stdin: false },
@@ -92,10 +95,12 @@ test('agy: --model is added from the model option', async () => {
 const FORCED = {
   'claude-code': {
     model: 'claude-opus-5',
-    args: ['-p', PROMPT, '--permission-mode', 'acceptEdits', '--output-format', 'text', '--model', 'claude-opus-5'],
+    // `--output-format json` (not text) for the same reason opencode gets
+    // `--format json`: it is the mode that carries the usage block.
+    args: ['-p', PROMPT, '--permission-mode', 'acceptEdits', '--output-format', 'json', '--model', 'claude-opus-5'],
   },
   codex: { model: 'gpt-5.3-codex', args: ['exec', '-m', 'gpt-5.3-codex', PROMPT] },
-  opencode: { model: 'zai/glm-5.2', args: ['run', '-m', 'zai/glm-5.2', PROMPT] },
+  opencode: { model: 'zai/glm-5.2', args: ['run', '--format', 'json', '-m', 'zai/glm-5.2', PROMPT] },
 };
 
 for (const [adapterName, exp] of Object.entries(FORCED)) {
