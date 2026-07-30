@@ -314,4 +314,26 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
       });
     } finally { clean(root); }
   });
+
+  // P5 prosecution finding: this file's discoverSegmentNames used to silently
+  // SKIP a non-conforming filesystem object under manifest.d/ (a symlink, a
+  // nested directory, a bad-grammar name) instead of failing the whole forest
+  // closed the way gate-manifest's own discoverSegments does (spec §5 item 1;
+  // see packages/gate-manifest/test/forest-format.test.mjs's identical test).
+  // forestChainsIntact's own doc claims to mirror gate-manifest's precondition
+  // — a nested directory shadowing where a real segment (e.g. one holding a
+  // needs-attention revocation) should be must block a ticket transaction the
+  // same way it blocks gate-manifest's own segment-writer.mjs.
+  it('rejects a nested directory under manifest.d/ — forestChainsIntact must agree with gate-manifest verify()', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      mkdirSync(join(dir, 'manifest.d', 'needs-attention-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), { recursive: true });
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence()),
+        (error) => error.code === 'INVALID_MANIFEST',
+        'a nested directory anywhere under manifest.d/ must block evidence recording, not be silently skipped'
+      );
+    } finally { clean(root); }
+  });
 });

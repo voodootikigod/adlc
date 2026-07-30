@@ -62,35 +62,60 @@ export function lineagePath(dir) {
 }
 
 /** Real segment filenames only — structural files and anything not matching the grammar excluded. */
-function discoverSegmentNames(dir) {
+// Mirrors @adlc/gate-manifest/lib/forest.mjs's discoverSegments SHAPE
+// ({valid, invalid}), not just its valid-name list (adversarial-review
+// finding, P5 prosecution): a non-conforming filesystem object under
+// manifest.d/ (a symlink, a nested directory, a non-regular file, a bad-
+// grammar name) must be reported as INVALID, not silently skipped — spec
+// §5 item 1 requires the whole forest to fail closed on it, and this
+// package's own callers (forestChainsIntact) claim exactly that behavior
+// ("mirrors gate-manifest's own segment-writer.mjs precondition"). Silently
+// skipping let a directory shadow where a real segment (e.g. one holding a
+// needs-attention revocation) should be, while forestChainsIntact still
+// reported the forest valid. Case-collision detection and *.lock content-
+// awareness are still deliberately out of scope — see this file's header.
+function discoverSegments(dir) {
   const segDir = segmentDirPath(dir);
   let dirStat;
   try {
     dirStat = lstatSync(segDir); // lstatSync, never existsSync — never follow a symlinked manifest.d/
   } catch {
-    return [];
+    return { valid: [], invalid: [] };
   }
-  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return [];
+  if (dirStat.isSymbolicLink()) return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is a symlink' }] };
+  if (!dirStat.isDirectory()) return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is not a directory' }] };
   let names;
   try {
     names = readdirSync(segDir).sort();
-  } catch {
-    return [];
+  } catch (err) {
+    return { valid: [], invalid: [{ name: '.', reason: `cannot read manifest.d/: ${err.message}` }] };
   }
   const valid = [];
+  const invalid = [];
   for (const name of names) {
     if (RESERVED_NAMES.has(name)) continue;
     let st;
     try {
       st = lstatSync(join(segDir, name));
-    } catch {
+    } catch (err) {
+      invalid.push({ name, reason: `cannot stat: ${err.message}` });
       continue;
     }
-    if (st.isSymbolicLink() || st.isDirectory() || !st.isFile()) continue;
-    if (!SEGMENT_NAME_RE.test(name)) continue; // excludes *.lock too: it never ends in exactly `.jsonl`
+    if (st.isSymbolicLink()) { invalid.push({ name, reason: 'symlink' }); continue; }
+    if (st.isDirectory()) { invalid.push({ name, reason: 'nested directory' }); continue; }
+    if (!st.isFile()) { invalid.push({ name, reason: 'not a regular file' }); continue; }
+    if (!SEGMENT_NAME_RE.test(name)) {
+      // Both the .lineage token and any *.lock advisory-lock file are expected,
+      // legitimate non-segment objects here — never a segment by grammar alone
+      // (neither ends in exactly `.jsonl`), so they are excluded, not invalid.
+      // See this file's header for why *.lock content-awareness stays out of scope.
+      if (name === LINEAGE_NAME || name.endsWith('.lock')) continue;
+      invalid.push({ name, reason: 'bad filename grammar' });
+      continue;
+    }
     valid.push(name);
   }
-  return valid;
+  return { valid, invalid };
 }
 
 function readRawLines(filePath) {
@@ -192,7 +217,9 @@ function chainIsIntact(lines, key = null) {
  */
 export function forestChainsIntact(dir, { key = null } = {}) {
   if (!chainIsIntact(readRawLines(join(dir, 'manifest.jsonl')), key)) return false;
-  return discoverSegmentNames(dir).every((name) => chainIsIntact(readRawLines(segmentPath(dir, name)), key));
+  const { valid, invalid } = discoverSegments(dir);
+  if (invalid.length > 0) return false; // a non-conforming object anywhere invalidates the whole forest
+  return valid.every((name) => chainIsIntact(readRawLines(segmentPath(dir, name)), key));
 }
 
 /**
@@ -203,7 +230,7 @@ export function forestChainsIntact(dir, { key = null } = {}) {
  */
 export function readForestEntries(dir) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
-  const segments = discoverSegmentNames(dir).flatMap((name) => parseLines(readRawLines(segmentPath(dir, name))));
+  const segments = discoverSegments(dir).valid.flatMap((name) => parseLines(readRawLines(segmentPath(dir, name))));
   return [...root, ...segments];
 }
 
@@ -372,7 +399,7 @@ export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const branch = currentBranch(cwd);
   const token = readLineageToken(dir);
   if (branch !== null && token && token.branch === branch) {
-    if (discoverSegmentNames(dir).includes(token.segment) && ulidOf(token.segment) === token.ulid) {
+    if (discoverSegments(dir).valid.includes(token.segment) && ulidOf(token.segment) === token.ulid) {
       return { name: token.segment, isNew: false };
     }
   }

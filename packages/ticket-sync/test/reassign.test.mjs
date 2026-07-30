@@ -368,6 +368,28 @@ test('migrateManifestEvidence ignores an UNRELATED lineage\'s segment — no tot
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// P5 prosecution finding: forestChainsIntact must fail closed on a nested
+// directory anywhere under manifest.d/ (spec §5 item 1), matching
+// gate-manifest's own verify() — see manifest-segments.test.mjs's identical
+// test for the direct evidence-recording path.
+test('migrateManifestEvidence refuses to append when a nested directory shadows a segment name under manifest.d/', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64),
+    });
+    mkdirSync(join(dir, 'manifest.d', 'evil-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), { recursive: true });
+
+    assert.throws(
+      () => migrateManifestEvidence(root, 'T7', 'gh:r#6', { now: '2026-06-27T00:00:00Z', env: {} }),
+      /manifest forest is invalid/,
+      'a nested directory anywhere under manifest.d/ must block re-attestation, not be silently skipped'
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('migrateManifestEvidence refuses to append when a segment chain is broken', () => {
   const { root, dir } = gitRepo();
   try {
