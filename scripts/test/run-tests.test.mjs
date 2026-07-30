@@ -72,7 +72,9 @@ test('the runner PATH prepend is preserved by the helper', () => {
 // the full sentence — the notice is prose, and prose must stay reword-able.
 function runRunner(extraEnv) {
   const env = { ...process.env, ...extraEnv };
-  delete env.ADLC_MANIFEST_KEY; delete env.RAILS_BASE; delete env.BASE_REF;
+  // Start from a clean slate for EVERY scrubbed variable — this test file itself may
+  // be running under a deliberately leaked env (that is T1's whole premise).
+  for (const name of SCRUBBED_ENV_VARS) delete env[name];
   Object.assign(env, extraEnv);
   return execFileSync(process.execPath, ['scripts/run-tests.mjs', 'generated-reader'], {
     cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
