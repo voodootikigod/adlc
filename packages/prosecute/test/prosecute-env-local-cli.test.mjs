@@ -23,6 +23,11 @@ function cleanEnv(overrides = {}) {
   return { ...env, ...overrides };
 }
 
+// env-hermeticity: inherits ADLC_MANIFEST_KEY — every call site below passes
+// cleanEnv(...) (or a value already derived from it), which unconditionally deletes
+// ADLC_MANIFEST_KEY before returning; this env argument is verified hermetic by that
+// construction, not by this scanner (a bare function parameter cannot be resolved
+// statically without interprocedural analysis).
 function runBin(args, cwd, env) {
   try {
     const stdout = execFileSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });

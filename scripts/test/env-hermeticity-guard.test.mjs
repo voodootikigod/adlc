@@ -218,11 +218,16 @@ function spreadsProcessEnvDeep(objExpr, objectLiteralVars, seen = new Set()) {
 }
 
 /**
- * True iff `objExpr` contains a `VARNAME: <string literal>` property — directly, or
- * inside a `...NAME` spread resolved the same recursive way as `spreadsProcessEnvDeep`
- * — INCLUDING an empty string, but NOT `VARNAME: process.env.VARNAME` (a no-op
- * re-injection) and NOT any other dynamic expression (identifier alias, member
- * expression, call, template with interpolation): only a provable literal is trusted.
+ * True iff `objExpr` contains a `VARNAME: <string literal>` property that DOMINATES —
+ * i.e. no LATER property in the SAME object (source order, since object-literal
+ * evaluation is order-sensitive: a later spread can silently override an earlier
+ * literal) reintroduces the ambient value for `varName`. A spread is checked
+ * recursively via `objectLiteralVars`; if it cannot be resolved OR if it resolves and
+ * genuinely spreads ambient env for `varName` (i.e. would itself require but does not
+ * itself trust a literal), it is treated as an override, not skipped. INCLUDING an
+ * empty string for the literal itself, but NOT `VARNAME: process.env.VARNAME` (a no-op
+ * re-injection) and NOT any other dynamic expression: only a provable literal is
+ * trusted, and only when nothing after it in the SAME object undoes it.
  * @param {object} objExpr
  * @param {string} varName
  * @param {Map<string,object>} objectLiteralVars
@@ -232,60 +237,111 @@ function spreadsProcessEnvDeep(objExpr, objectLiteralVars, seen = new Set()) {
 function hasLiteralNeutralization(objExpr, varName, objectLiteralVars, seen = new Set()) {
   if (seen.has(objExpr)) return false;
   seen.add(objExpr);
-  return objExpr.properties.some((p) => {
+  let neutralized = false;
+  for (const p of objExpr.properties) {
     if (p.type === 'SpreadElement') {
-      return p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name) &&
-        hasLiteralNeutralization(objectLiteralVars.get(p.argument.name), varName, objectLiteralVars, seen);
+      if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
+        const resolved = objectLiteralVars.get(p.argument.name);
+        if (hasLiteralNeutralization(resolved, varName, objectLiteralVars, seen)) { neutralized = true; continue; }
+        if (spreadsProcessEnvDeep(resolved, objectLiteralVars, new Set())) neutralized = false; // a later ambient spread overrides
+        continue;
+      }
+      if (isProcessEnv(p.argument)) neutralized = false; // a later `...process.env` overrides any earlier literal
+      continue;
     }
-    if (p.type !== 'Property' && p.type !== 'ObjectProperty') return false;
+    if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
     const key = p.key;
     const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
-    if (keyName !== varName) return false;
-    return isStringLiteral(p.value); // isProcessEnvVar values are MemberExpressions, never Literal — excluded by construction.
-  });
+    if (keyName !== varName) continue;
+    neutralized = isStringLiteral(p.value); // a later property with the same key always wins outright
+  }
+  return neutralized;
 }
 
 /**
- * Resolve a spawn call's effective `env` OBJECT — the ObjectExpression the call's
- * `env:` property evaluates to, following ONE level of identifier indirection through
- * `objectLiteralVars` (the realistic `const AMBIENT_ENV = {...}; ...; env: AMBIENT_ENV`
- * shape). Returns null if there is no `env` property, or it isn't (an alias of) an
- * object literal — deliberately conservative: a fully-controlled/omitted env or a
- * form this detector cannot statically resolve is OUT OF SCOPE, matching the ticket's
- * literal wording ("with `...process.env` in its env argument").
+ * Resolve a spawn call's effective `env` argument into one of three OUTCOMES,
+ * distinguished on purpose (collapsing them was the round-3 review's core finding):
+ *   - {present: false}                — no `env` property at all: OUT OF SCOPE, matching
+ *     the ticket's literal wording ("with `...process.env` in its env argument") and the
+ *     codex-integration.test.mjs precedent (a fully-omitted env is full ambient inherit,
+ *     but not a literal SPREAD).
+ *   - {present: true, object: <node>} — the property resolves (directly, or through ONE
+ *     level of `objectLiteralVars` indirection) to an actual object literal: proceed with
+ *     the normal spread/neutralization analysis.
+ *   - {present: true, object: null}   — the property EXISTS but is an expression this
+ *     detector cannot statically resolve (a bare function PARAMETER being the common real
+ *     case — e.g. `function runBin(args, cwd, env) { execFileSync(..., { cwd, env }); }`,
+ *     where `env` is data flowing in from each CALLER's own `cleanEnv(overrides)` call,
+ *     invisible from here without interprocedural analysis). AMBIGUOUS, not clean: this
+ *     detector cannot verify hermeticity, so it must not report it as verified.
  * @param {object} optionsArg  the spawn call's options ObjectExpression argument
  * @param {Map<string,object>} objectLiteralVars
- * @returns {object|null}
+ * @returns {{present: boolean, object?: object|null}}
  */
-function resolveEnvObject(optionsArg, objectLiteralVars) {
-  if (!optionsArg || optionsArg.type !== 'ObjectExpression') return null;
+function resolveEnvArgument(optionsArg, objectLiteralVars) {
+  if (!optionsArg || optionsArg.type !== 'ObjectExpression') return { present: false };
   const envProp = optionsArg.properties.find(
     (p) => (p.type === 'Property' || p.type === 'ObjectProperty') &&
       (p.key?.name === 'env' || p.key?.value === 'env'),
   );
-  if (!envProp) return null;
+  if (!envProp) return { present: false };
   const value = envProp.value;
-  if (value.type === 'ObjectExpression') return value;
-  if (value.type === 'Identifier' && objectLiteralVars.has(value.name)) return objectLiteralVars.get(value.name);
-  return null;
-}
-
-/** Every top-level `process.env.VARNAME = <string literal>` assignment — legitimately
- * GLOBAL (it mutates the shared runtime env object every later unqualified spread
- * reads), unlike an inline object key, which is scoped to the object it appears in. */
-function fileTopPinsFor(ast, varName) {
-  let found = false;
-  walk(ast, (node) => {
-    if (node.type === 'AssignmentExpression' && node.operator === '=' &&
-      isProcessEnvVar(node.left, varName) && isStringLiteral(node.right)) found = true;
-  });
-  return found;
+  if (value.type === 'ObjectExpression') return { present: true, object: value };
+  if (value.type === 'Identifier' && objectLiteralVars.has(value.name)) {
+    return { present: true, object: objectLiteralVars.get(value.name) };
+  }
+  return { present: true, object: null };
 }
 
 /**
- * True iff a comment attached near `node` (within `comments`, ending on one of the
- * `WINDOW_LINES` lines immediately before `node`'s start line) suppresses `varName`
- * with a non-empty reason: `// env-hermeticity: inherits VARNAME — <reason>`.
+ * A `process.env.VARNAME = <string literal>` assignment is legitimately GLOBAL (it
+ * mutates the shared runtime env object every later unqualified spread reads), unlike
+ * an inline object key, which is scoped to the object it appears in — BUT only when it
+ * is a Program-level (module top) statement: one nested inside a function body may
+ * never execute (the function is never called, or only conditionally), so it must not
+ * be trusted as an unconditional pin. Scans only `ast.body` directly, not the full
+ * recursive walk, to enforce that restriction.
+ * @param {object} ast
+ * @param {string} varName
+ * @returns {boolean}
+ */
+function fileTopPinsFor(ast, varName) {
+  return ast.body.some((stmt) =>
+    stmt.type === 'ExpressionStatement' && stmt.expression.type === 'AssignmentExpression' &&
+    stmt.expression.operator === '=' &&
+    isProcessEnvVar(stmt.expression.left, varName) && isStringLiteral(stmt.expression.right));
+}
+
+/**
+ * Merge consecutive `//` line comments with no gap (each starting the line right after
+ * the previous one ends) into single logical blocks — acorn reports every `//` line as
+ * its OWN separate comment, so a human-readable multi-line explanation has its marker
+ * text on the FIRST line but its proximity-to-code measured from the LAST: without
+ * merging, a 5-line suppression comment's marker would read as 5 lines further from
+ * the spawn than it visually is.
+ * @param {{value: string, loc: object}[]} comments
+ * @returns {{value: string, loc: object}[]}
+ */
+function mergeAdjacentLineComments(comments) {
+  const sorted = [...comments].sort((a, b) => a.loc.start.line - b.loc.start.line);
+  const merged = [];
+  for (const c of sorted) {
+    const prev = merged.at(-1);
+    if (prev && c.loc.start.line === prev.loc.end.line + 1) {
+      prev.value += `\n${c.value}`;
+      prev.loc = { start: prev.loc.start, end: c.loc.end };
+    } else {
+      merged.push({ value: c.value, loc: { start: c.loc.start, end: c.loc.end } });
+    }
+  }
+  return merged;
+}
+
+/**
+ * True iff a comment BLOCK attached near `node` (within `comments`, ending on one of
+ * the `WINDOW_LINES` lines immediately before `node`'s start line) suppresses
+ * `varName` with a non-empty reason: `// env-hermeticity: inherits VARNAME — <reason>`
+ * — the marker may appear on any line of a merged multi-line block, not only its last.
  * @param {object} node
  * @param {{value: string, loc: object}[]} comments
  * @param {string} varName
@@ -295,7 +351,8 @@ const WINDOW_LINES = 6;
 function hasNearbySuppression(node, comments, varName) {
   const nodeLine = node.loc.start.line;
   const re = new RegExp(`env-hermeticity:\\s*inherits\\s+${varName}\\s*(?:—|--|-)\\s*\\S`);
-  return comments.some((c) => c.loc.end.line <= nodeLine && nodeLine - c.loc.end.line <= WINDOW_LINES && re.test(c.value));
+  return mergeAdjacentLineComments(comments)
+    .some((c) => c.loc.end.line <= nodeLine && nodeLine - c.loc.end.line <= WINDOW_LINES && re.test(c.value));
 }
 
 /**
@@ -338,18 +395,40 @@ function findViolationsInSource(filePath, source) {
     if (!required) return; // spawns something, but not a matched ADLC entrypoint
 
     const optionsArg = node.arguments.at(-1);
-    const envObj = resolveEnvObject(optionsArg, objectLiteralVars);
-    if (!envObj || !spreadsProcessEnvDeep(envObj, objectLiteralVars)) return; // no ambient spread reaches this call
+    const envArg = resolveEnvArgument(optionsArg, objectLiteralVars);
+    if (!envArg.present) return; // no `env` property at all — out of scope (matches the ticket's literal wording)
+
+    // env EXISTS but could not be resolved to an object literal (the common real case:
+    // a bare function parameter fed by each caller's own, invisible-from-here
+    // construction) — AMBIGUOUS. Flag every required var: "cannot verify" must not
+    // render as "verified".
+    if (!envArg.object) {
+      for (const varName of required) {
+        if (hasNearbySuppression(node, comments, varName) || fileTopPinsFor(ast, varName)) continue;
+        violations.push({
+          file: filePath,
+          variable: varName,
+          message: `${filePath}:${node.loc.start.line} spawns an ADLC entrypoint via an env argument this scanner cannot statically ` +
+            `resolve to an object literal (likely a function parameter constructed by each caller) — cannot verify ${varName} is ` +
+            `neutralized. Restructure so the env object is a literal at this call site, pin process.env.${varName} = '<literal>' at ` +
+            `module top, or suppress it (// env-hermeticity: inherits ${varName} — <reason>, within ${WINDOW_LINES} lines above the spawn).`,
+        });
+      }
+      return;
+    }
+
+    if (!spreadsProcessEnvDeep(envArg.object, objectLiteralVars)) return; // no ambient spread reaches this call
 
     for (const varName of required) {
-      const neutralized = hasLiteralNeutralization(envObj, varName, objectLiteralVars) || fileTopPinsFor(ast, varName);
+      const neutralized = hasLiteralNeutralization(envArg.object, varName, objectLiteralVars) || fileTopPinsFor(ast, varName);
       const suppressed = hasNearbySuppression(node, comments, varName);
       if (!neutralized && !suppressed) {
         violations.push({
           file: filePath,
           variable: varName,
           message: `${filePath}:${node.loc.start.line} spawns an ADLC entrypoint with an ambient env spread but never neutralizes ${varName} ` +
-            `(add a literal ${varName}: '' to the env object it actually uses, or pin process.env.${varName} = '<literal>') ` +
+            `(add a literal ${varName}: '' to the env object it actually uses, ordered AFTER any ambient spread, or pin ` +
+            `process.env.${varName} = '<literal>' at module top) ` +
             `nor suppresses it (// env-hermeticity: inherits ${varName} — <reason>, within ${WINDOW_LINES} lines above the spawn).`,
         });
       }
@@ -668,4 +747,133 @@ test('a shared ambient-env template that ALSO neutralizes inline (on the templat
 
 test('a file that fails to parse THROWS rather than reporting clean', () => {
   assert.throws(() => findViolationsInSource('fixtures/broken.test.mjs', 'this is not { valid js ('));
+});
+
+// ── an env argument this scanner cannot resolve is AMBIGUOUS, not clean ───────────
+
+test('a bare env PARAMETER (not resolvable to any object literal) at a matched entrypoint is flagged — cannot verify is not verified', () => {
+  // Mirrors packages/prosecute/test/prosecute-env-local-cli.test.mjs's runBin(args,
+  // cwd, env): `env` is data flowing in from each CALLER's own construction, invisible
+  // to a scanner with no interprocedural analysis. A same-named, UNRELATED object
+  // literal declared elsewhere in the file (cleanEnv's own local `env`) must not be
+  // mistaken for this parameter's value either — see the next test.
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args, cwd, env) {
+      return execFileSync(process.execPath, [BIN, ...args], { cwd, env });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/unresolvable-param.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'an unresolvable env must be flagged as ambiguous, not silently passed');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+  assert.match(violations[0].message, /cannot statically resolve/);
+});
+
+test('a same-named but UNRELATED object literal elsewhere in the file does not fool the unresolvable-param check (the real scope-confusion bug)', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function cleanEnv(overrides = {}) {
+      const env = { ...process.env };
+      delete env.ADLC_MANIFEST_KEY;
+      return { ...env, ...overrides };
+    }
+    function runBin(args, cwd, env) {
+      return execFileSync(process.execPath, [BIN, ...args], { cwd, env });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/scope-confusion.test.mjs', fixture);
+  assert.equal(violations.length, 1, "cleanEnv's local env must not be treated as the SAME binding as runBin's parameter");
+});
+
+test('a suppression on the unresolvable-env case documents verification by inspection', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    // env-hermeticity: inherits ADLC_MANIFEST_KEY — every caller passes cleanEnv(...),
+    // verified hermetic by inspection, not by this scanner.
+    function runBin(args, cwd, env) {
+      return execFileSync(process.execPath, [BIN, ...args], { cwd, env });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/suppressed-unresolvable.test.mjs', fixture), []);
+});
+
+test('a spawn whose env key is OMITTED ENTIRELY remains out of scope, distinct from an unresolvable env value', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args, cwd) {
+      return execFileSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/omitted-env.test.mjs', fixture), []);
+});
+
+// ── order sensitivity: a later spread can silently undo an earlier literal ────────
+
+test('a literal placed BEFORE the ambient spread is overridden by it and does NOT count as neutralization', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ADLC_MANIFEST_KEY: '', ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/reversed-order.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a later ...process.env spread overrides an earlier literal — order matters');
+});
+
+test('a literal placed AFTER the ambient spread correctly overrides it (the normal, safe order)', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env, ADLC_MANIFEST_KEY: '' } });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/correct-order.test.mjs', fixture), []);
+});
+
+test('a nested template spread (...HERMETIC_ENV) followed by a raw ...process.env re-spread is NOT neutralized (order-sensitive across levels too)', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const HERMETIC_ENV = { ADLC_MANIFEST_KEY: '' };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...HERMETIC_ENV, ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/template-then-reraw.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a raw ambient re-spread after a safe template still wins — order is checked across levels');
+});
+
+// ── module-top-only pins: a pin buried inside a function body is not trusted ──────
+
+test('a process.env.VARNAME = literal pin INSIDE a function body (not Program-level) does not count — it may never execute', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function maybeNeverCalled() {
+      process.env.ADLC_MANIFEST_KEY = 'test-key';
+    }
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/buried-pin.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a pin inside a function that might never run must not be trusted as unconditional');
+});
+
+test('a process.env.VARNAME = literal pin at Program (module) top level is trusted, as before', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    process.env.ADLC_MANIFEST_KEY = 'test-key';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/module-top-pin.test.mjs', fixture), []);
 });
