@@ -20,7 +20,7 @@
 // it is joined directly into a filesystem path.
 
 import { lstatSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { invalid } from './errors.mjs';
 
 export const ADOPTION_RECORD_KEY = 'signing';
@@ -79,6 +79,51 @@ export function resolveGenerationDir(dir, generation) {
 }
 
 /**
+ * Verify no path component between `dir` (exclusive) and `generationDir` (inclusive) is
+ * a symlink or other non-directory object — i.e. that `generationDir` is genuinely
+ * reached by descending real directories from `dir`, not redirected through a component
+ * a branch committed as a symlink (e.g. `.adlc/manifest-generations/g1` pointing at an
+ * attacker-controlled directory elsewhere in the checkout).
+ *
+ * resolveGenerationDir/resolveActiveGenerationPaths return PATH STRINGS ONLY and never
+ * touch the filesystem — this is deliberate (this module has no consumers yet, and a
+ * confinement check performed once at resolution time, then trusted later, is a TOCTOU
+ * race: the check and the actual file access are two different moments). Every future
+ * writer or verifier that performs REAL file I/O against a resolved generation path
+ * MUST call this immediately before that I/O — not once, cached, at an earlier point —
+ * exactly as this module's own readAdoptionRecord, @adlc/gate-manifest's forest.mjs, and
+ * @adlc/tickets's own manifest-segments.mjs already do lstatSync-immediately-before-open
+ * at their own point of access. A no-op for the legacy layout (generationDir === dir):
+ * there is nothing beneath dir to confine.
+ * @param {string} dir  the .adlc directory (trusted; never itself re-checked here)
+ * @param {string} generationDir  resolveGenerationDir's result
+ * @param {{mustExist?: boolean}} [options]  mustExist: throw on a not-yet-created
+ *   component too (default false — a component that does not exist yet has nothing to
+ *   redirect through, which is the normal case before a generation's first write)
+ */
+export function assertGenerationDirNotSymlinked(dir, generationDir, { mustExist = false } = {}) {
+  if (generationDir === dir) return;
+  const rel = relative(dir, generationDir);
+  let current = dir;
+  for (const part of rel.split(sep)) {
+    current = join(current, part);
+    let st;
+    try {
+      st = lstatSync(current);
+    } catch (err) {
+      if (err.code === 'ENOENT' && !mustExist) return;
+      throw invalid('GENERATION_DIR_UNSAFE', `cannot verify ${current} is safe: ${err.code ?? err.message}`);
+    }
+    if (st.isSymbolicLink()) {
+      throw invalid('GENERATION_DIR_UNSAFE', `${current} is a symlink; the generation tree must never be reached through one`);
+    }
+    if (!st.isDirectory()) {
+      throw invalid('GENERATION_DIR_UNSAFE', `${current} is not a directory`);
+    }
+  }
+}
+
+/**
  * Validate a parsed `signing` block against the adoption-record schema. Returns the
  * validated record, or throws describing exactly which field is malformed — callers
  * (verifiers) distinguish "malformed" from "absent" per the spec's verifier contract:
@@ -118,19 +163,31 @@ export function validateAdoptionRecord(raw) {
 // layer; @adlc/tickets/lib/manifest-segments.mjs hit this exact gap on Windows CI).
 // lstatSync + isFile() is a portable, OS-independent check; O_NOFOLLOW stays for its
 // atomicity where it IS honored. The byte cap closes the unbounded-read path.
+//
+// FAIL-CLOSED ON AMBIGUITY: record presence IS the required-signing bit (no separate
+// boolean), so "genuinely absent" and "exists but I couldn't safely read it" must never
+// collapse into the same `present: false` — that would let an EACCES, a symlink, or any
+// other read failure on an ADOPTED repo's config.json silently look identical to "never
+// adopted" to a future writer, which would then take the keyless legacy path exactly
+// the way a downgrade attack wants it to. Only a confirmed ENOENT means absent; every
+// other failure (non-regular object, open failure, read failure) is `present: true,
+// valid: false` — ambiguous-and-must-fail-closed, never silently clean.
 function readBoundedJsonNoFollow(path, maxBytes) {
   let st;
   try {
     st = lstatSync(path);
-  } catch {
-    return { present: false };
+  } catch (err) {
+    if (err.code === 'ENOENT') return { present: false };
+    return { present: true, valid: false, reason: `config.json could not be stat'd: ${err.code ?? err.message}` };
   }
-  if (!st.isFile()) return { present: false }; // a symlink, directory, or other non-regular object — never followed
+  if (!st.isFile()) {
+    return { present: true, valid: false, reason: 'config.json is not a regular file (symlink, directory, or other object)' };
+  }
   let fd;
   try {
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  } catch {
-    return { present: false };
+  } catch (err) {
+    return { present: true, valid: false, reason: `config.json could not be opened: ${err.code ?? err.message}` };
   }
   try {
     const buf = Buffer.alloc(maxBytes);
@@ -145,8 +202,8 @@ function readBoundedJsonNoFollow(path, maxBytes) {
       return { present: true, valid: false, reason: 'config.json is not valid JSON' };
     }
     return { present: true, valid: true, config: parsed };
-  } catch {
-    return { present: true, valid: false, reason: 'config.json could not be read' };
+  } catch (err) {
+    return { present: true, valid: false, reason: `config.json could not be read: ${err.code ?? err.message}` };
   } finally {
     closeSync(fd);
   }

@@ -14,6 +14,7 @@ import {
   isLegacyGeneration,
   validateGenerationId,
   resolveGenerationDir,
+  assertGenerationDirNotSymlinked,
   validateAdoptionRecord,
   readAdoptionRecord,
   resolveActiveGenerationPaths,
@@ -23,6 +24,12 @@ import {
 
 const FP_A = 'a'.repeat(64);
 const FP_B = 'b'.repeat(64);
+
+// A platform-native placeholder .adlc directory for path-resolution assertions that
+// need no real filesystem — built via join() (not a hardcoded POSIX literal) so the
+// expected values below use the SAME separator resolveGenerationDir's own join() calls
+// produce, on every platform including Windows.
+const DIR = join('repo', '.adlc');
 
 function makeAdlcDir() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
@@ -72,17 +79,17 @@ test('validateGenerationId rejects uppercase, empty, non-string, and over-length
 // ── resolveGenerationDir ────────────────────────────────────────────────────────────
 
 test('resolveGenerationDir returns dir unchanged for a legacy generation', () => {
-  assert.equal(resolveGenerationDir('/repo/.adlc', 0), '/repo/.adlc');
-  assert.equal(resolveGenerationDir('/repo/.adlc', undefined), '/repo/.adlc');
-  assert.equal(resolveGenerationDir('/repo/.adlc', '0'), '/repo/.adlc');
+  assert.equal(resolveGenerationDir(DIR, 0), DIR);
+  assert.equal(resolveGenerationDir(DIR, undefined), DIR);
+  assert.equal(resolveGenerationDir(DIR, '0'), DIR);
 });
 
 test('resolveGenerationDir resolves a real generation id under manifest-generations/', () => {
-  assert.equal(resolveGenerationDir('/repo/.adlc', 'a1b2c3'), '/repo/.adlc/manifest-generations/a1b2c3');
+  assert.equal(resolveGenerationDir(DIR, 'a1b2c3'), join(DIR, 'manifest-generations', 'a1b2c3'));
 });
 
 test('resolveGenerationDir rejects an unsafe generation id', () => {
-  assert.throws(() => resolveGenerationDir('/repo/.adlc', '../../etc'));
+  assert.throws(() => resolveGenerationDir(DIR, '../../etc'));
 });
 
 // ── validateAdoptionRecord ──────────────────────────────────────────────────────────
@@ -170,12 +177,28 @@ test('config.json that is not valid JSON is present but invalid', () => {
   assert.equal(result.valid, false);
 });
 
-test('config.json that is a SYMLINK is never followed, even to a well-formed record', () => {
+test('config.json that is a SYMLINK is never followed — reported present-but-invalid, NOT absent (fail closed, not silently unadopted)', () => {
   const { root, dir } = makeAdlcDir();
   const outside = join(root, 'outside-config.json');
   writeFileSync(outside, JSON.stringify({ signing: { schemaVersion: 1, keyFingerprint: FP_A } }));
   symlinkSync(outside, join(dir, CONFIG_FILENAME));
+  const result = readAdoptionRecord(dir);
+  assert.equal(result.present, true, 'a symlinked config.json exists — it must never be conflated with "never adopted"');
+  assert.equal(result.valid, false);
+  assert.match(result.reason, /symlink|regular file/);
+});
+
+test('config.json genuinely absent (no file at all) is the ONLY case reported as present:false', () => {
+  const { dir } = makeAdlcDir();
   assert.deepEqual(readAdoptionRecord(dir), { present: false });
+});
+
+test('config.json that is a DIRECTORY is present-but-invalid, not absent', () => {
+  const { dir } = makeAdlcDir();
+  mkdirSync(join(dir, CONFIG_FILENAME));
+  const result = readAdoptionRecord(dir);
+  assert.equal(result.present, true);
+  assert.equal(result.valid, false);
 });
 
 test('config.json exceeding the byte cap is present but invalid, not silently truncated', () => {
@@ -227,27 +250,78 @@ test('a config.json ONE BYTE under the cap is read and parsed normally', () => {
 // ── resolveActiveGenerationPaths ────────────────────────────────────────────────────
 
 test('an absent adoption record resolves to the legacy in-place layout', () => {
-  const paths = resolveActiveGenerationPaths('/repo/.adlc', { present: false });
-  assert.equal(paths.generationDir, '/repo/.adlc');
-  assert.equal(paths.manifestPath, '/repo/.adlc/manifest.jsonl');
-  assert.equal(paths.segmentDirPath, '/repo/.adlc/manifest.d');
+  const paths = resolveActiveGenerationPaths(DIR, { present: false });
+  assert.equal(paths.generationDir, DIR);
+  assert.equal(paths.manifestPath, join(DIR, 'manifest.jsonl'));
+  assert.equal(paths.segmentDirPath, join(DIR, 'manifest.d'));
 });
 
 test('a valid record with a real generation resolves under manifest-generations/', () => {
   const adoption = { present: true, valid: true, record: { schemaVersion: 1, keyFingerprint: FP_A, generation: 'g1', priorFingerprints: [] } };
-  const paths = resolveActiveGenerationPaths('/repo/.adlc', adoption);
-  assert.equal(paths.generationDir, '/repo/.adlc/manifest-generations/g1');
-  assert.equal(paths.manifestPath, '/repo/.adlc/manifest-generations/g1/manifest.jsonl');
-  assert.equal(paths.segmentDirPath, '/repo/.adlc/manifest-generations/g1/manifest.d');
+  const paths = resolveActiveGenerationPaths(DIR, adoption);
+  assert.equal(paths.generationDir, join(DIR, 'manifest-generations', 'g1'));
+  assert.equal(paths.manifestPath, join(DIR, 'manifest-generations', 'g1', 'manifest.jsonl'));
+  assert.equal(paths.segmentDirPath, join(DIR, 'manifest-generations', 'g1', 'manifest.d'));
 });
 
 test('a valid record with generation 0 resolves to the legacy layout too (adopted but not yet rotated)', () => {
   const adoption = { present: true, valid: true, record: { schemaVersion: 1, keyFingerprint: FP_A, generation: 0, priorFingerprints: [] } };
-  const paths = resolveActiveGenerationPaths('/repo/.adlc', adoption);
-  assert.equal(paths.generationDir, '/repo/.adlc');
+  const paths = resolveActiveGenerationPaths(DIR, adoption);
+  assert.equal(paths.generationDir, DIR);
 });
 
 test('resolveActiveGenerationPaths refuses a malformed adoption record rather than guessing a generation', () => {
   const adoption = { present: true, valid: false, reason: 'signing.keyFingerprint must be a 64-character lowercase hex sha256 digest' };
-  assert.throws(() => resolveActiveGenerationPaths('/repo/.adlc', adoption), /keyFingerprint/);
+  assert.throws(() => resolveActiveGenerationPaths(DIR, adoption), /keyFingerprint/);
+});
+
+// ── assertGenerationDirNotSymlinked ─────────────────────────────────────────────────
+
+test('the legacy layout (generationDir === dir) is a no-op even if dir itself does not exist', () => {
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(DIR, DIR));
+});
+
+test('a genuinely real, fully-created generation directory passes', () => {
+  const { dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  mkdirSync(generationDir, { recursive: true });
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir));
+});
+
+test('a SYMLINKED manifest-generations/ directory is rejected — the exact committed-symlink attack', () => {
+  const { root, dir } = makeAdlcDir();
+  const outside = join(root, 'outside-generations');
+  mkdirSync(join(outside, 'g1'), { recursive: true });
+  symlinkSync(outside, join(dir, 'manifest-generations'));
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, generationDir), /symlink/);
+});
+
+test('a SYMLINKED generation id directory itself (manifest-generations/ real, g1 symlinked) is rejected', () => {
+  const { root, dir } = makeAdlcDir();
+  mkdirSync(join(dir, 'manifest-generations'), { recursive: true });
+  const outside = join(root, 'outside-g1');
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(dir, 'manifest-generations', 'g1'));
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, generationDir), /symlink/);
+});
+
+test('a NOT-YET-CREATED generation directory does not throw by default (nothing to redirect through yet)', () => {
+  const { dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir));
+});
+
+test('mustExist:true rejects a not-yet-created generation directory instead of silently passing', () => {
+  const { dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, generationDir, { mustExist: true }));
+});
+
+test('a FILE occupying the manifest-generations/ position (not a directory) is rejected', () => {
+  const { dir } = makeAdlcDir();
+  writeFileSync(join(dir, 'manifest-generations'), 'not a directory');
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, generationDir), /not a directory/);
 });
