@@ -63,7 +63,7 @@ function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {}, en
     git(dir, ['add', '-A']);
     git(dir, ['commit', '-qm', 'change']);
     try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, ...env } });
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '', ...env } });
       return 0;
     } catch (e) {
       return e.status ?? 1;
