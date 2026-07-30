@@ -341,3 +341,61 @@ test('a commit failure after a successful call PRESERVES the parsed usage', asyn
   assert.equal(res.usage.inputTokens, 10);
   assert.equal(res.usage.outputTokens, 54);
 });
+
+// ---- a recorder failure must be loud, never silent ----
+
+function captureStderr(fn) {
+  const original = console.error;
+  const lines = [];
+  console.error = (...args) => lines.push(args.join(' '));
+  try { fn(); } finally { console.error = original; }
+  return lines.join('\n');
+}
+
+function depsWithRecorder(adlcImpl) {
+  const io = fakeIo([], env);
+  io.adlc = adlcImpl;
+  return buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'codex', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io,
+  });
+}
+
+// io.adlc is spawnSync-shaped: an ordinary CLI failure returns a nonzero status
+// and NEVER throws, so a bare try/catch reports it as success. Each of these is
+// a real way the recorder fails in production.
+const RECORDER_FAILURES = {
+  'nonzero exit (invalid chain, signing error)': () => ({ status: 1, stdout: '', stderr: 'manifest chain broken' }),
+  'spawn error (binary missing)': () => ({ error: new Error('spawn adlc ENOENT') }),
+  'killed by signal': () => ({ status: null, signal: 'SIGKILL' }),
+  'no exit status at all': () => ({}),
+  'a thrown failure': () => { throw new Error('ledger unavailable'); },
+};
+
+for (const [label, impl] of Object.entries(RECORDER_FAILURES)) {
+  test(`a recorder failure is reported, not swallowed — ${label}`, () => {
+    const deps = depsWithRecorder(impl);
+    const stderr = captureStderr(() => {
+      deps.recordDispatchUsage({ ticket, result: { exitCode: 0, output: 'ok', usage: { inputTokens: 900, outputTokens: 150, cachedTokens: 0 }, usageStatus: 'reported' } });
+    });
+    assert.match(stderr, /was NOT recorded/, `${label}: the operator must be told`);
+    assert.match(stderr, /MISSING from the ledger, not zero/, `${label}: and told what it means`);
+  });
+
+  test(`a recorder failure never aborts the build — ${label}`, () => {
+    const deps = depsWithRecorder(impl);
+    assert.doesNotThrow(() => captureStderr(() => {
+      deps.recordDispatchUsage({ ticket, result: { exitCode: 0, output: 'ok', usageStatus: 'unreported' } });
+    }));
+  });
+}
+
+test('a SUCCESSFUL record says nothing', () => {
+  const deps = depsWithRecorder(() => ({ status: 0, stdout: '{}', stderr: '' }));
+  const stderr = captureStderr(() => {
+    deps.recordDispatchUsage({ ticket, result: { exitCode: 0, output: 'ok', usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 }, usageStatus: 'reported' } });
+  });
+  assert.equal(stderr, '', 'a working recorder must not cry wolf');
+});

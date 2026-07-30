@@ -441,8 +441,26 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // operator registry is mutable, so channel/transport labels alone cannot
       // prove which registry version chose them.
       if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
-      try { io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
-      catch { /* evidence is best-effort */ }
+
+      // Recording stays NON-BLOCKING — a recorder problem must never fail a
+      // build — but it must not be SILENT. `io.adlc` is spawnSync-shaped, so an
+      // ordinary CLI failure (missing binary, invalid chain, signing error)
+      // comes back as a nonzero `status` and never throws: a bare try/catch
+      // lets it pass as success. The carrier then simply does not exist, and a
+      // missing entry is indistinguishable from a dispatch that never happened
+      // — unknown silently becoming zero, one layer up from the counters
+      // (adversarial-review).
+      const warn = (why) => console.error(
+        `warning: ${ticket.id} dispatch usage was NOT recorded (${why}). This call's spend is `
+        + 'MISSING from the ledger, not zero — phase totals will under-report until it is re-recorded.'
+      );
+      let res;
+      try { res = io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
+      catch (e) { warn(e.message); return; }
+      if (res?.error) warn(res.error.message);
+      else if (res?.signal) warn(`recorder killed by ${res.signal}`);
+      else if (typeof res?.status !== 'number') warn('recorder produced no exit status');
+      else if (res.status !== 0) warn(`recorder exited ${res.status}: ${(res.stderr ?? '').trim()}`.trim());
     },
 
     recordGate: ({ ticket, phase, ok, data }) => {
