@@ -325,3 +325,29 @@ test('a FILE occupying the manifest-generations/ position (not a directory) is r
   const generationDir = join(dir, 'manifest-generations', 'g1');
   assert.throws(() => assertGenerationDirNotSymlinked(dir, generationDir), /not a directory/);
 });
+
+test('a SYMLINKED manifest.jsonl LEAF FILE is rejected even when every directory above it is genuinely real', () => {
+  // The gap this closes: confining only the DIRECTORY tree up through generationDir
+  // would pass here (every directory component really is a directory), while the leaf
+  // file itself — the thing a verifier actually opens — is a symlink to a decoy or an
+  // unbounded device. The check must be called on the EXACT path being used
+  // (manifestPath), not only on its parent directory.
+  const { root, dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  mkdirSync(generationDir, { recursive: true });
+  const decoy = join(root, 'decoy-manifest.jsonl');
+  writeFileSync(decoy, '{"seq":1}\n');
+  const manifestPath = join(generationDir, 'manifest.jsonl');
+  symlinkSync(decoy, manifestPath);
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir), 'the directory tree above the leaf is genuinely real');
+  assert.throws(() => assertGenerationDirNotSymlinked(dir, manifestPath), /symlink/, 'checking the EXACT leaf path must catch what checking only the directory misses');
+});
+
+test('a genuinely real manifest.jsonl leaf file (regular file, no symlink anywhere in its path) passes', () => {
+  const { dir } = makeAdlcDir();
+  const generationDir = join(dir, 'manifest-generations', 'g1');
+  mkdirSync(generationDir, { recursive: true });
+  const manifestPath = join(generationDir, 'manifest.jsonl');
+  writeFileSync(manifestPath, '{"seq":1}\n');
+  assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, manifestPath));
+});

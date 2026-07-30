@@ -79,34 +79,44 @@ export function resolveGenerationDir(dir, generation) {
 }
 
 /**
- * Verify no path component between `dir` (exclusive) and `generationDir` (inclusive) is
- * a symlink or other non-directory object — i.e. that `generationDir` is genuinely
- * reached by descending real directories from `dir`, not redirected through a component
- * a branch committed as a symlink (e.g. `.adlc/manifest-generations/g1` pointing at an
- * attacker-controlled directory elsewhere in the checkout).
+ * Verify no path component between `dir` (exclusive) and `targetPath` (inclusive) is a
+ * symlink — i.e. that `targetPath` is genuinely reached by descending real directories
+ * from `dir`, not redirected through a component a branch committed as a symlink (e.g.
+ * `.adlc/manifest-generations/g1` pointing at an attacker-controlled directory
+ * elsewhere in the checkout, OR `manifest-generations/g1/manifest.jsonl` itself being a
+ * symlink to a decoy file or an unbounded device while every directory ABOVE it is
+ * genuinely real). `targetPath` may be a directory (e.g. `generationDir` or
+ * `segmentDirPath`) or a file (e.g. `manifestPath`) — every INTERMEDIATE component must
+ * be a real directory, but the FINAL component is only required not to be a symlink
+ * (only its intermediate ancestors are directory-checked).
  *
  * resolveGenerationDir/resolveActiveGenerationPaths return PATH STRINGS ONLY and never
  * touch the filesystem — this is deliberate (this module has no consumers yet, and a
  * confinement check performed once at resolution time, then trusted later, is a TOCTOU
  * race: the check and the actual file access are two different moments). Every future
  * writer or verifier that performs REAL file I/O against a resolved generation path
- * MUST call this immediately before that I/O — not once, cached, at an earlier point —
- * exactly as this module's own readAdoptionRecord, @adlc/gate-manifest's forest.mjs, and
- * @adlc/tickets's own manifest-segments.mjs already do lstatSync-immediately-before-open
- * at their own point of access. A no-op for the legacy layout (generationDir === dir):
- * there is nothing beneath dir to confine.
+ * MUST call this on the EXACT path it is about to read or write — generationDir AND
+ * manifestPath AND segmentDirPath separately, each immediately before its own I/O, not
+ * once, cached, at an earlier point, and not only on the directory while trusting the
+ * leaf file beneath it — exactly as this module's own readAdoptionRecord,
+ * @adlc/gate-manifest's forest.mjs, and @adlc/tickets's own manifest-segments.mjs
+ * already do lstatSync-immediately-before-open at their own point of access. A no-op
+ * for the legacy layout (targetPath === dir): there is nothing beneath dir to confine.
  * @param {string} dir  the .adlc directory (trusted; never itself re-checked here)
- * @param {string} generationDir  resolveGenerationDir's result
+ * @param {string} targetPath  a path returned by resolveActiveGenerationPaths
+ *   (generationDir, manifestPath, or segmentDirPath) — the EXACT path about to be used
  * @param {{mustExist?: boolean}} [options]  mustExist: throw on a not-yet-created
  *   component too (default false — a component that does not exist yet has nothing to
  *   redirect through, which is the normal case before a generation's first write)
  */
-export function assertGenerationDirNotSymlinked(dir, generationDir, { mustExist = false } = {}) {
-  if (generationDir === dir) return;
-  const rel = relative(dir, generationDir);
+export function assertGenerationDirNotSymlinked(dir, targetPath, { mustExist = false } = {}) {
+  if (targetPath === dir) return;
+  const rel = relative(dir, targetPath);
+  const parts = rel.split(sep);
   let current = dir;
-  for (const part of rel.split(sep)) {
-    current = join(current, part);
+  for (let i = 0; i < parts.length; i += 1) {
+    current = join(current, parts[i]);
+    const isLast = i === parts.length - 1;
     let st;
     try {
       st = lstatSync(current);
@@ -117,7 +127,7 @@ export function assertGenerationDirNotSymlinked(dir, generationDir, { mustExist 
     if (st.isSymbolicLink()) {
       throw invalid('GENERATION_DIR_UNSAFE', `${current} is a symlink; the generation tree must never be reached through one`);
     }
-    if (!st.isDirectory()) {
+    if (!isLast && !st.isDirectory()) {
       throw invalid('GENERATION_DIR_UNSAFE', `${current} is not a directory`);
     }
   }
