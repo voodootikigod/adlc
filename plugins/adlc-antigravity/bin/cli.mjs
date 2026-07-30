@@ -241,7 +241,17 @@ function runBounded(command, args, { inherit = false } = {}) {
       // Waits on 'exit', not 'close': 'close' waits for stdio EOF, which a
       // GRANDCHILD holds open long after the child is gone. Nothing here reads the
       // child's output, so there is no pipe to own.
-      if (timedOut) return; // the escalation above owns settling this path
+      // Neither a TIMEOUT nor a CANCELLATION may be settled by the leader's exit.
+      //
+      // An interrupt does not set timedOut, so this used to let a leader that exits
+      // on forwarded SIGTERM settle the promise — the caller then ran its `finally`
+      // and DELETED THE STAGING DIRECTORY while a SIGTERM-ignoring worker was still
+      // copying out of it, two seconds before escalation reached it. A worker
+      // watching its source vanish mid-copy is how a half-written plugin happens.
+      //
+      // In both cases the escalation path owns settling: it SIGKILLs the group
+      // first, then removes staging, then exits.
+      if (timedOut || shuttingDown) return;
       settle({ status: code });
     });
   });

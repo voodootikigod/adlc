@@ -707,6 +707,67 @@ test('bin/cli.mjs Ctrl-C during the VERSION PROBE reaps the worker and reports c
   }
 });
 
+test('bin/cli.mjs does not delete staging while a cancelled agy worker still reads it', async () => {
+  // ORDERING, not just liveness. On Ctrl-C the leader exits on SIGTERM; if that
+  // exit settles runBounded, the caller's `finally` removes the staged source while
+  // a SIGTERM-ignoring worker is still copying out of it — two seconds before
+  // escalation reaches that worker. The worker here reports if its source vanishes
+  // underneath it, which is the observable that distinguishes correct ordering from
+  // "everything died eventually".
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-order-'));
+  let workerPidValue = 0;
+  try {
+    const home = join(work, 'home');
+    const binDir = join(work, 'bin');
+    const pidFile = join(work, 'worker.pid');
+    const vanished = join(work, 'vanished');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    // `agy plugin install <staged>` → the staged path is $3.
+    writeFileSync(
+      join(binDir, 'agy'),
+      '#!/bin/sh\n' +
+        'if [ "$1" = "--version" ]; then echo 1.1.8; exit 0; fi\n' +
+        'STAGED="$3"\n' +
+        "( trap '' TERM\n" +
+        '  i=0\n' +
+        '  while [ $i -lt 200 ]; do\n' +
+        `    [ -d "$STAGED" ] || { echo yes > "${vanished}"; exit 0; }\n` +
+        '    sleep 0.05\n' +
+        '    i=$((i+1))\n' +
+        '  done ) &\n' +
+        `echo $! > "${pidFile}"\n` +
+        'wait\n',
+    );
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      stdio: 'ignore',
+    });
+    const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
+
+    workerPidValue = readPidWhenReady(pidFile, 20_000);
+    assert.ok(workerPidValue > 1, 'the stub agy never recorded a worker pid');
+    child.kill('SIGINT');
+    const code = await exited;
+
+    assert.equal(code, 130, `expected exit 130 for a Ctrl-C'd install, got ${code}`);
+    assert.ok(
+      !existsSync(vanished),
+      'the staged source was deleted while a cancelled worker was still reading it',
+    );
+    assert.equal(
+      survives(workerPidValue, 5_000),
+      false,
+      `the worker outlived cancellation (pid ${workerPidValue})`,
+    );
+  } finally {
+    if (workerPidValue) reap(workerPidValue);
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('bin/cli.mjs ignores RELATIVE PATH entries when resolving agy', () => {
   // join('.', 'agy') is 'agy' and join('bin', 'agy') is 'bin/agy' — both resolve
   // against the CURRENT DIRECTORY, so a PATH containing '.' or a project-relative
