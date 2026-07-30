@@ -78,7 +78,22 @@ function resolveManifestArtifactAfterWrite(repo, artifact) {
   const peeked = peekOpenSegment(dir, { cwd: repo }); // safe now: the file genuinely exists
   if (!peeked) return artifact; // unreachable in practice after a real write; keep the prior guess
   const resolved = segmentArtifact(dir, peeked.name);
-  if (!artifact.pending && artifact.abs !== resolved.abs) return { ...resolved, raced: true };
+  if (!artifact.pending) {
+    if (artifact.abs !== resolved.abs) return { ...resolved, raced: true };
+    return resolved;
+  }
+  // artifact.pending assumed no segment was open pre-write, so priorManifest
+  // was captured as null on the theory that the write mints a BRAND NEW file
+  // containing only our own single evidence entry. If the resolved segment
+  // instead has MORE than one entry, the write actually landed in a segment
+  // that already existed — a checkout-switch race redirected us into another
+  // branch's segment (adversarial-review finding). Trusting priorManifest as
+  // null there would make a failed-commit rollback `restoreFile(..., null)`
+  // and delete that pre-existing segment entirely.
+  const lineCount = existsSync(resolved.abs)
+    ? readFileSync(resolved.abs, 'utf8').split('\n').filter((l) => l.trim() !== '').length
+    : 0;
+  if (lineCount > 1) return { ...resolved, raced: true };
   return resolved;
 }
 

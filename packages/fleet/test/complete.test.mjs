@@ -458,6 +458,47 @@ test('a checkout switch mid-transaction is detected and quarantined, never silen
   }
 });
 
+test('a checkout switch during a PENDING completion never deletes another branch\'s pre-existing segment (T-MANIFEST-FOREST)', () => {
+  const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
+  try {
+    activateSegments(root);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'activate segments');
+
+    // "other-branch" gets its OWN, pre-existing segment with REAL prior content —
+    // never git-added/committed, so it stays on disk untouched by the later
+    // checkout back to integrationBranch (git does not remove untracked files).
+    git('checkout', '-q', '-b', 'other-branch');
+    const otherService = new TicketService(detectTicketStore({ root }), { root });
+    otherService.apply(otherService.planCreate({ id: 'T9', title: 'other' }));
+    otherService.apply(otherService.planComplete('T9'));
+    const otherSegFile = openSegmentFile(root);
+    const otherSegFirstLineBefore = readFileSync(otherSegFile, 'utf8').split('\n')[0];
+
+    git('checkout', '-q', integrationBranch);
+    // Precondition: integration itself has NOT opened its own segment (pending case) —
+    // the only segment file on disk right now is other-branch's untracked one.
+    assert.equal(readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1);
+
+    const racingGit = makeMidTransactionBranchSwitchGit(git, root, 'other-branch');
+    let caught;
+    try {
+      completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git: racingGit });
+      assert.fail('expected the race to be detected and thrown');
+    } catch (error) { caught = error; }
+
+    assert.equal(caught.ledgerDirty, true, 'a pending-case race into an EXISTING other-branch segment must also be detected');
+    assert.ok(existsSync(otherSegFile), 'other-branch\'s pre-existing segment must never be deleted — priorManifest=null must not be trusted here');
+    assert.equal(
+      readFileSync(otherSegFile, 'utf8').split('\n')[0], otherSegFirstLineBefore,
+      'other-branch\'s original T9 evidence (first line) must survive untouched'
+    );
+  } finally {
+    execFileSync('git', ['symbolic-ref', 'HEAD', `refs/heads/${integrationBranch}`], { cwd: root, stdio: 'ignore' });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a failed segmented completion commit rolls back the segment exactly (T-MANIFEST-FOREST)', () => {
   const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'first' }, { bootstrapManifest: false });
   try {
