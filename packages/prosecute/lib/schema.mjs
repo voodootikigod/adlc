@@ -36,6 +36,58 @@ function validateProof(value, prefix, fields) {
   return errors;
 }
 
+/**
+ * Token-counter field names, verbatim from `gate-manifest/lib/spend.mjs` — the
+ * READ side, and a rail. `aggregateSpend` sums exactly these keys, so a packet
+ * that spells one of them differently records spend nothing ever counts. They
+ * are restated here rather than imported because prosecute must not take a
+ * dependency on the reader to validate the writer.
+ */
+const USAGE_COUNTERS = Object.freeze(['inputTokens', 'outputTokens', 'cachedTokens']);
+/** Descriptive siblings spend.mjs carries alongside the counters (§8a). */
+const USAGE_LABELS = Object.freeze(['provider', 'model', 'tier']);
+
+function isTokenCount(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Validate an OPTIONAL per-pass `usage` block (§8a).
+ *
+ * Absent usage is valid and means "nothing was reported" — the no-fabrication
+ * rule. What is rejected is a usage block that is PRESENT but unusable, because
+ * silently dropping a malformed one would under-report spend while looking
+ * healthy. A counter must be a non-negative integer: a float or a negative would
+ * corrupt every downstream sum, and `aggregateSpend` coerces absent counters to
+ * 0 rather than validating, so this is the only place it can be caught.
+ */
+export function validateUsage(usage, prefix) {
+  if (usage === undefined) return [];
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) {
+    return [`${prefix}.usage must be an object when present`];
+  }
+  const errors = [];
+  if (!USAGE_COUNTERS.some((key) => usage[key] !== undefined)) {
+    errors.push(`${prefix}.usage must carry at least one of ${USAGE_COUNTERS.join(', ')}`);
+  }
+  for (const key of USAGE_COUNTERS) {
+    if (usage[key] !== undefined && !isTokenCount(usage[key])) {
+      errors.push(`${prefix}.usage.${key} must be a non-negative integer`);
+    }
+  }
+  for (const key of USAGE_LABELS) {
+    if (usage[key] !== undefined && !isNonEmptyString(usage[key])) {
+      errors.push(`${prefix}.usage.${key} must be a non-empty string when present`);
+    }
+  }
+  for (const key of Object.keys(usage)) {
+    if (!USAGE_COUNTERS.includes(key) && !USAGE_LABELS.includes(key)) {
+      errors.push(`${prefix}.usage.${key} is not a recognized usage field`);
+    }
+  }
+  return errors;
+}
+
 export function validateFinding(finding, passIndex, findingIndex) {
   const prefix = `pass ${passIndex + 1} finding ${findingIndex + 1}`;
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
@@ -102,6 +154,16 @@ export function validateInput(input) {
     }
     if (pass.findings.length === 0 && !isNonEmptyString(pass.dry_evidence)) {
       errors.push(`pass ${passIndex + 1}: dry_evidence must be a non-empty string when findings is empty`);
+    }
+    errors.push(...validateUsage(pass.usage, `pass ${passIndex + 1}`));
+    // `callId` is what makes the usage carrier retry-safe: it identifies the
+    // external model call, so re-running an unchanged packet can recognise the
+    // spend it already recorded instead of appending it twice. A packet without
+    // one still records, but cannot be deduplicated — so it is a warning, not an
+    // error (rejecting it would refuse honest spend from a caller that simply
+    // has no stable id to offer).
+    if (pass.callId !== undefined && !isNonEmptyString(pass.callId)) {
+      errors.push(`pass ${passIndex + 1}: callId must be a non-empty string when present`);
     }
     for (const [findingIndex, finding] of pass.findings.entries()) {
       errors.push(...validateFinding(finding, passIndex, findingIndex));

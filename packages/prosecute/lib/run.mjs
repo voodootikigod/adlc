@@ -194,6 +194,83 @@ function seedOpenFindingsFromManifest(dir, ticket, revision) {
   return openFindings;
 }
 
+/**
+ * Identity of one external model call, for the usage carrier's exactly-once
+ * guarantee (§8a).
+ *
+ * `callId` alone is not enough: two different prosecutions could reuse the same
+ * caller-supplied id, and the same packet re-run against a different revision is
+ * genuinely different spend. Binding the id to the revision and the packet's own
+ * content hash means "the same call" is judged by what was actually reviewed.
+ */
+function usageCallKey(revision, packetHash, callId) {
+  return `${revision ?? ''}\u0000${packetHash ?? ''}\u0000${callId}`;
+}
+
+/**
+ * Usage already recorded on the ledger, keyed by call identity.
+ *
+ * Read once per run and consulted per pass, so a retry after a crash sees the
+ * spend its predecessor recorded. Without this, every rerun of an unchanged
+ * packet would append another carrier and inflate the phase total — silently,
+ * because each individual entry would look perfectly well-formed.
+ */
+function recordedUsageByCall(dir) {
+  const recorded = new Map();
+  const { entries } = readManifestForest(dir);
+  for (const entry of entries) {
+    const key = entry?.data?.usageCallKey;
+    if (typeof key === 'string' && entry?.data?.usage) recorded.set(key, entry.data.usage);
+  }
+  return recorded;
+}
+
+/** Do two usage blocks report the same spend? Compared on the counters only. */
+function sameUsage(a, b) {
+  return ['inputTokens', 'outputTokens', 'cachedTokens'].every((k) => (a?.[k] ?? 0) === (b?.[k] ?? 0));
+}
+
+/**
+ * Decide what usage fields the pass-completed entry should carry (§8a).
+ *
+ * Four outcomes:
+ *  - no usage reported  → `usageStatus: 'unreported'` and NO `usage` key. Never a
+ *    zeroed object: `aggregateSpend` would count that as a measured free call,
+ *    collapsing "unknown" into "free".
+ *  - fresh usage        → the block plus `usageStatus: 'claimed'`. Never
+ *    'reported' — shape validation cannot prove a provider actually emitted
+ *    these counters, and 'reported' is reserved for adapter-attested telemetry.
+ *  - already recorded, same spend → carry no usage again (the ledger keeps its
+ *    original carrier), so a retry aggregates to exactly one call.
+ *  - already recorded, different spend → conflict; the caller fails closed.
+ */
+function usageCarrierFor({ pass, revision, packetHash, recorded }) {
+  // Everything goes under `data`, because that is where the reader looks:
+  // `aggregateSpend` reads `entry.data.usage`. A flat `usage` field would be
+  // recorded faithfully and counted by nothing.
+  const carrier = (data) => ({ payload: { gate: 'prosecute', data } });
+
+  // `callKey`, never `key`: since T2 this module also threads `key`, the HMAC
+  // key that SIGNS ledger entries. Two different secrets-adjacent meanings for
+  // one name in one file is how a signing key ends up somewhere it should not
+  // be. The recorded FIELD stays `usageCallKey` — that is on-ledger schema.
+  if (pass?.usage === undefined) return { ...carrier({ usageStatus: 'unreported' }), callKey: null };
+
+  const hasCallId = typeof pass.callId === 'string' && pass.callId.trim().length > 0;
+  const callKey = hasCallId ? usageCallKey(revision, packetHash, pass.callId) : null;
+  if (callKey && recorded.has(callKey)) {
+    const recordedUsage = recorded.get(callKey);
+    if (!sameUsage(recordedUsage, pass.usage)) return { conflict: true, recordedUsage, callKey };
+    // Idempotent replay: the spend is already on the ledger, so this entry
+    // records the status and a pointer, but NOT the counters again.
+    return { ...carrier({ usageStatus: 'claimed', usageReplayOf: callKey }), callKey: null };
+  }
+
+  const data = { usage: pass.usage, usageStatus: 'claimed' };
+  if (callKey) data.usageCallKey = callKey;
+  return { ...carrier(data), callKey };
+}
+
 export function runProsecution(input, {
   ticket,
   key = null,
@@ -264,6 +341,10 @@ export function runProsecution(input, {
   let consecutiveDry = 0;
   const passResults = [];
   const openFindings = seedOpenFindingsFromManifest(dir, ticket, resolvedRevision);
+  // Packet identity for the usage carrier: the review packet's own inputs hash
+  // when it has one, so "the same call" means the same reviewed content.
+  const usagePacketHash = input?.review_packet?.inputs_hash ?? null;
+  const alreadyRecordedUsage = recordedUsageByCall(dir);
 
   for (const [index, pass] of input.passes.entries()) {
     const passNo = index + 1;
@@ -329,6 +410,35 @@ export function runProsecution(input, {
       }
     }
 
+    // §8a usage carrier. The pass-completed entry is the SOLE carrier for this
+    // pass: one prosecution pass emits pass-started, a finding entry each, and
+    // this one, and `aggregateSpend` counts a call per entry carrying
+    // `data.usage` — so attaching it to more than one would multiply the pass's
+    // spend by its entry count.
+    //
+    // `gate: 'prosecute'` is what makes the spend attributable: aggregateSpend
+    // derives the phase from `PHASE_BY_GATE[entry.gate]`, and an entry without
+    // it lands in `unphased` instead of P5. It is safe alongside `type` because
+    // every existing reader resolves `entry.type ?? entry.gate`, so `type` still
+    // wins for the P5 evidence assertions.
+    const usageCarrier = usageCarrierFor({
+      pass,
+      revision: resolvedRevision,
+      packetHash: usagePacketHash,
+      recorded: alreadyRecordedUsage,
+    });
+    if (usageCarrier.conflict) {
+      return {
+        status: 'op-error',
+        exitCode: 1,
+        errors: [
+          `pass ${passNo}: usage replay conflict for callId ${JSON.stringify(pass.callId)} — the ledger already ` +
+            `records ${JSON.stringify(usageCarrier.recordedUsage)} for this call but the packet now reports ` +
+            `${JSON.stringify(pass.usage)}. Refusing to record contradictory spend for one model call.`,
+        ],
+      };
+    }
+
     writeEvidence('p5-pass-completed', {
       ticket,
       target,
@@ -341,7 +451,9 @@ export function runProsecution(input, {
       needsHuman: result.needsHuman.length,
       consecutiveDry,
       ...binding,
+      ...usageCarrier.payload,
     }, dir, cwd, key);
+    if (usageCarrier.callKey) alreadyRecordedUsage.set(usageCarrier.callKey, pass.usage);
 
     passResults.push({
       pass: passNo,
