@@ -118,8 +118,8 @@ a guarantee about which credential paid for the call.
 
     // `rateWindow` is optional and observed-only (spec §11 q2): a coarse hint
     // about the gateway's quota window, never a pre-flight probe.
-    "mid":              { "adapter": "opencode",    "model": "zai/glm-5.2",       "transport": "gateway:opencode-go",        "provider": "zai",      "rateWindow": "5h" },
-    "cheap":            { "adapter": "opencode",    "model": "deepseek/v4-flash", "transport": "gateway:opencode-go",        "provider": "deepseek", "rateWindow": "5h" }
+    "mid":              { "adapter": "opencode",    "model": "opencode-go/glm-5.2",          "transport": "gateway:opencode-go",        "provider": "zai",      "rateWindow": "5h" },
+    "cheap":            { "adapter": "opencode",    "model": "opencode-go/deepseek-v4-flash","transport": "gateway:opencode-go",        "provider": "deepseek", "rateWindow": "5h" }
   },
 
   // Reviewer groups (§6). Members carry CONCRETE model IDs — never an alias.
@@ -127,7 +127,7 @@ a guarantee about which credential paid for the call.
     "cross-model-routine": {
       "quorum": 1,
       "members": [
-        { "adapter": "opencode", "model": "qwen/qwen3.7-coder", "transport": "gateway:opencode-go", "provider": "alibaba" }
+        { "adapter": "opencode", "model": "opencode-go/qwen3.7-plus", "transport": "gateway:opencode-go", "provider": "alibaba" }
       ]
     },
     "cross-model-trust-root": {
@@ -136,7 +136,7 @@ a guarantee about which credential paid for the call.
       // itself `directAuth`.
       "quorum": 2,
       "members": [
-        { "adapter": "opencode", "model": "moonshot/kimi-k3", "transport": "gateway:opencode-go",       "provider": "moonshot" },
+        { "adapter": "opencode", "model": "opencode-go/kimi-k3",    "transport": "gateway:opencode-go",       "provider": "moonshot" },
         { "adapter": "codex",    "model": "gpt-5.3-codex",    "transport": "subscription:chatgpt-plus", "provider": "openai", "directAuth": true }
       ]
     }
@@ -147,7 +147,7 @@ a guarantee about which credential paid for the call.
   "modelProviders": {
     "claude-code": { "claude-opus-5": "anthropic", "claude-sonnet-5": "anthropic", "claude-haiku-4-5": "anthropic" },
     "codex":       { "gpt-5.3-codex": "openai" },
-    "opencode":    { "zai/glm-5.2": "zai", "deepseek/v4-flash": "deepseek", "qwen/qwen3.7-coder": "alibaba", "moonshot/kimi-k3": "moonshot" }
+    "opencode":    { "opencode-go/glm-5.2": "zai", "opencode-go/deepseek-v4-flash": "deepseek", "opencode-go/qwen3.7-plus": "alibaba", "opencode-go/kimi-k3": "moonshot" }
   }
 }
 ```
@@ -238,6 +238,47 @@ alternative applies — use a concrete model ID. The reference registry above do
 When §9.3 lands and adapters surface `resolvedModel`, alias channels become
 available again for attesting adapters, and rule 7's alias-coverage requirement
 starts doing real work.
+
+### Model IDs are the HARNESS's names, not the vendor's
+
+A `model` must be spelled exactly as the harness spells it, because §4c forces it
+onto the command line verbatim. For a gateway transport that means the
+**gateway's** namespace, which is usually *not* the upstream vendor's name.
+
+OpenCode Go namespaces every model it brokers under `opencode-go/`:
+
+| Upstream family | What you might write | What the harness accepts |
+| --- | --- | --- |
+| Z.ai GLM | ~~`zai/glm-5.2`~~ | `opencode-go/glm-5.2` |
+| DeepSeek | ~~`deepseek/v4-flash`~~ | `opencode-go/deepseek-v4-flash` |
+| Moonshot Kimi | ~~`moonshot/kimi-k3`~~ | `opencode-go/kimi-k3` |
+| Alibaba Qwen | ~~`qwen/qwen3.7-coder`~~ | `opencode-go/qwen3.7-plus` |
+
+A vendor-style ID validates fine at load — nothing here can know which strings a
+remote gateway accepts — and then fails at dispatch. List the real ones with:
+
+```sh
+opencode models
+```
+
+Note also that OpenCode Go and OpenCode Zen are **separate** products with
+separate credentials, billing, and namespaces (`opencode-go/*` vs `opencode/*`).
+A model ID from one is not valid on the other, and an empty balance on one does
+not affect the other.
+
+### `provider` is an operator assertion, and a gateway cannot confirm it
+
+Because the gateway flattens everything into its own namespace,
+`opencode-go/glm-5.2` does not reveal that the upstream family is Z.ai. So the
+`provider` field — and the `modelProviders` mapping — are things **you** assert;
+nothing validates them against the gateway.
+
+This is not a gap so much as the reason §6 exists in the shape it does: all
+members sharing a `gateway:*` transport collapse to a single family for quorum,
+*precisely* because a mediated channel cannot prove the diversity it declares.
+Keep the vendor family in `provider` (it is the honest intent, and phase-2
+author binding needs it), but do not read a passing load as confirmation that
+the gateway agrees.
 
 ### The alias contract is adapter-owned
 

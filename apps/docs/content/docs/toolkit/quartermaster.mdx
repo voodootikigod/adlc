@@ -108,10 +108,10 @@ adlc fleet run --dry-run
 
 ```
   quartermaster registry: /Users/you/.config/adlc/quartermaster.json
-  T900     job=build.critical-path channel=frontier adapter=opencode model=operator/frontier-model transport=subscription:anthropic-max
-           argv: opencode ["run","-m","operator/frontier-model","<prompt>"]
-  T901     job=build.ladder-start channel=mid adapter=opencode model=zai/glm-5.2 transport=gateway:opencode-go
-           argv: opencode ["run","-m","zai/glm-5.2","<prompt>"]
+  T900     job=build.critical-path channel=frontier adapter=claude-code model=claude-opus-5 transport=subscription:anthropic-max
+           argv: claude ["-p","<prompt>","--permission-mode","acceptEdits","--output-format","text","--model","claude-opus-5"]
+  T901     job=build.ladder-start channel=mid adapter=opencode model=opencode-go/glm-5.2 transport=gateway:opencode-go
+           argv: opencode ["run","-m","opencode-go/glm-5.2","<prompt>"]
 ```
 
 Notices — an ignored in-repo registry, a disabled path — go to stderr. Adding
