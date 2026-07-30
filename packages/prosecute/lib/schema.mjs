@@ -94,6 +94,34 @@ export function validateUsage(usage, prefix) {
   return errors;
 }
 
+/**
+ * Non-fatal diagnostics about a packet's usage blocks (§8a).
+ *
+ * A usage-bearing pass with no `callId` is VALID — the ticket is explicit that
+ * such a packet "records usage as usual but is not retry-safe" — but silence
+ * would be the wrong kind of valid: the carrier cannot be deduplicated, so an
+ * ordinary operator rerun after a crash appends a SECOND carrier and quietly
+ * doubles that call's spend. The operator gets told, because the alternative is
+ * discovering it as an unexplained spike in a phase total weeks later.
+ */
+export function usageWarnings(input) {
+  const passes = Array.isArray(input?.passes) ? input.passes : [];
+  const warnings = [];
+  for (const [index, pass] of passes.entries()) {
+    if (pass?.usage === undefined) continue;
+    const hasCallId = typeof pass.callId === 'string' && pass.callId.trim().length > 0;
+    if (!hasCallId) {
+      warnings.push(
+        `pass ${index + 1}: usage is recorded but carries no callId — this carrier cannot be `
+        + 'deduplicated, so re-running this packet after a crash or an operator rerun will append '
+        + 'a SECOND carrier and double this call in the phase totals. Supply a stable callId to '
+        + 'make the recording retry-safe.'
+      );
+    }
+  }
+  return warnings;
+}
+
 export function validateFinding(finding, passIndex, findingIndex) {
   const prefix = `pass ${passIndex + 1} finding ${findingIndex + 1}`;
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {

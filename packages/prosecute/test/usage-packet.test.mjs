@@ -8,11 +8,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
 import { aggregateSpend } from '@adlc/gate-manifest/lib/spend.mjs';
+import { sha256 } from '@adlc/core';
 import { FIXTURE_REVISION, finding, gitRepo, killedFinding, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
@@ -24,7 +25,7 @@ const USAGE = Object.freeze({ inputTokens: 900, outputTokens: 150, cachedTokens:
  * working-tree-inclusive, so the CLI must run in a clean throwaway repo or the
  * ambient repo's dirtiness leaks into the verdict (see prosecute-cli.test.mjs).
  */
-function packet(dir, passes) {
+function packet(dir, passes, { prefix = 'review' } = {}) {
   return {
     provenance: {
       reviewer: 'fixture-reviewer',
@@ -32,7 +33,7 @@ function packet(dir, passes) {
       command: 'fixture review command',
       transcript: transcript(dir),
     },
-    review_packet: reviewPacket(dir),
+    review_packet: reviewPacket(dir, { prefix }),
     no_findings_attestation: {
       reason: 'fixture reviewer found no candidates',
       method: 'review transcript audit',
@@ -57,6 +58,13 @@ function prosecute(dir, inputPath, repo, { expectFailure = false } = {}) {
     if (!expectFailure) throw err;
     return JSON.parse(err.stdout || '{}');
   }
+}
+
+/** Run the CLI and return stderr, where the non-fatal §8a diagnostics go. */
+function runCapturingStderr(dir, inputPath, repo) {
+  const argv = [BIN, '--input', inputPath, '--ticket', 'T1', '--revision', FIXTURE_REVISION, '--base', 'HEAD', '--dir', dir, '--json'];
+  const res = spawnSync(process.execPath, argv, { cwd: repo.dir, encoding: 'utf8' });
+  return res.stderr ?? '';
 }
 
 function cleanRepo() {
@@ -375,4 +383,82 @@ describe('P5 packet usage — partial counters are unknown, not zero', () => {
       }
     });
   }
+});
+
+describe('P5 packet usage — identity and diagnostics', () => {
+  it('two DIFFERENT prompts over the same inputs record distinct calls, not a false replay', () => {
+    // The review packet validates prompt_hash separately because the prompt is
+    // part of what was reviewed. Keying identity on inputs_hash alone made a
+    // revised prompt over the same diff collide with the original whenever a
+    // caller reused a locally-scoped call id — silently suppressing the second
+    // real call, or rejecting it as a contradictory replay.
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      // SHARED inputs, DIFFERENT prompt — the exact shape that used to collide.
+      const inputsFile = join(dir, 'shared-inputs.txt');
+      writeFileSync(inputsFile, 'reviewed input packet — shared across both runs\n');
+      const inputsHash = sha256(readFileSync(inputsFile));
+      const packetWithPrompt = (name, text) => {
+        const promptFile = join(dir, name);
+        writeFileSync(promptFile, text);
+        return { prompt: promptFile, prompt_hash: sha256(readFileSync(promptFile)), inputs: inputsFile, inputs_hash: inputsHash, clean_worktree: FIXTURE_REVISION };
+      };
+
+      const inputPath = join(dir, 'passes.json');
+      const build = (reviewPacketDoc, usage) => ({
+        provenance: { reviewer: 'r', session: 's', command: 'c', transcript: transcript(dir) },
+        review_packet: reviewPacketDoc,
+        no_findings_attestation: { reason: 'r', method: 'm', evidence: 'review.txt' },
+        passes: [{ lens: 'security', findings: [killedFinding()], callId: 'call-1', usage }, ...DRY_TAIL],
+      });
+
+      writeFileSync(inputPath, JSON.stringify(build(packetWithPrompt('p1.txt', 'review prompt A\n'), USAGE)));
+      assert.equal(prosecute(dir, inputPath, repo).exitCode, 0);
+
+      writeFileSync(inputPath, JSON.stringify(build(packetWithPrompt('p2.txt', 'review prompt B — revised security focus\n'), { ...USAGE, outputTokens: 777 })));
+      const verdict = prosecute(dir, inputPath, repo, { expectFailure: true });
+      assert.equal(verdict.exitCode, 0, 'a genuinely different prompt is a different call, not a conflict');
+
+      const agg = aggregateSpend(entriesFor(dir));
+      assert.equal(agg.total.calls, 2, 'both real calls are booked');
+      assert.equal(agg.byPhase.P5.outputTokens, 150 + 777);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('warns when usage is recorded without a callId (the carrier is not retry-safe)', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], usage: USAGE },   // no callId
+        ...DRY_TAIL,
+      ])));
+
+      const stderr = runCapturingStderr(dir, inputPath, repo);
+      assert.match(stderr, /warning:/);
+      assert.match(stderr, /no callId/);
+      assert.match(stderr, /retry-safe/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stays silent when every usage-bearing pass carries a callId', () => {
+    const dir = tmpAdlc();
+    const repo = cleanRepo();
+    try {
+      const inputPath = join(dir, 'passes.json');
+      writeFileSync(inputPath, JSON.stringify(packet(dir, [
+        { lens: 'security', findings: [killedFinding()], callId: 'call-1', usage: USAGE },
+        ...DRY_TAIL,
+      ])));
+      assert.doesNotMatch(runCapturingStderr(dir, inputPath, repo), /no callId/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
 });

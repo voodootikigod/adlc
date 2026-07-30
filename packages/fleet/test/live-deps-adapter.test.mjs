@@ -245,21 +245,6 @@ test('two channels running the SAME model over different transports stay disting
   assert.equal(api.transport, 'api:anthropic-batch');
 });
 
-test('registryDigest is OMITTED, never fabricated, while nothing produces one', () => {
-  // §8a says record these siblings when supplied and omit cleanly otherwise.
-  // Emitting a placeholder would be a fabricated provenance claim — the same
-  // failure the no-fabrication rule forbids for counters.
-  const adlcCalls = [];
-  depsWithSeat(adlcCalls, {
-    route: { channel: 'mid' },
-    seat: { adapter: 'opencode', model: 'zai/glm-5.2', provider: 'zai', transport: 'gateway:opencode-go' },
-    assignment: { tier: 'mid' },
-  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
-
-  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
-  const data = JSON.parse(call[call.indexOf('--data') + 1]);
-  assert.equal('registryDigest' in data, false);
-});
 
 test('an unreported dispatch records status only — no usage, no invented provenance', () => {
   const adlcCalls = [];
@@ -288,4 +273,35 @@ test('a legacy (seatless) dispatch still records its counters', () => {
   const data = JSON.parse(call[call.indexOf('--data') + 1]);
   assert.equal(data.usage.inputTokens, 900);
   assert.equal('channel' in data, false, 'no seat means no routing claim');
+});
+
+test('the usage carrier binds the charge to the registry bytes in force at dispatch', () => {
+  // The operator registry is MUTABLE. channel/transport labels alone cannot
+  // prove which registry version chose them, so an operator who edits a channel
+  // between runs leaves two plausible entries an auditor cannot tell apart.
+  const adlcCalls = [];
+  depsWithSeat(adlcCalls, {
+    route: { channel: 'mid' },
+    seat: { adapter: 'opencode', model: 'zai/glm-5.2', provider: 'zai', transport: 'gateway:opencode-go' },
+    assignment: { tier: 'mid' },
+    registryDigest: 'sha256:deadbeef',
+  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  const data = JSON.parse(call[call.indexOf('--data') + 1]);
+  assert.equal(data.registryDigest, 'sha256:deadbeef');
+});
+
+test('registryDigest is omitted, never fabricated, when the seat has none', () => {
+  // §8a: record when supplied, omit cleanly otherwise. A placeholder would be a
+  // fabricated provenance claim — the failure the no-fabrication rule forbids.
+  const adlcCalls = [];
+  depsWithSeat(adlcCalls, {
+    route: { channel: 'mid' },
+    seat: { adapter: 'opencode', model: 'zai/glm-5.2', provider: 'zai', transport: 'gateway:opencode-go' },
+    assignment: { tier: 'mid' },
+  }).recordDispatchUsage({ ticket: SEAT_TICKET, result: REPORTED });
+
+  const call = adlcCalls.find((a) => a[0] === 'gate-manifest');
+  assert.equal('registryDigest' in JSON.parse(call[call.indexOf('--data') + 1]), false);
 });

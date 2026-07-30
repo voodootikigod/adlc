@@ -6,6 +6,7 @@ import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
+import { usageWarnings } from '../lib/schema.mjs';
 import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE, scopeObservedEntriesToAuthor } from '../lib/cross-model.mjs';
 import { readObservedAttestations, assertNoTruncation, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -616,6 +617,12 @@ try {
 } catch (err) {
   opError(`could not read input: ${err.message}`);
 }
+
+// §8a non-fatal diagnostics. Printed to STDERR so they never corrupt --json's
+// stdout contract, and printed BEFORE the run so an operator sees the
+// retry-safety caveat even if the prosecution then fails for another reason.
+const usageDiagnostics = usageWarnings(input);
+for (const warning of usageDiagnostics) console.error(`warning: ${warning}`);
 
 // Classify the change under prosecution: if it is trust-root tier, a clean P5
 // additionally requires a distinct-provider cross-model approve at this revision.

@@ -245,6 +245,26 @@ function sameUsage(a, b) {
  *  - already recorded, different spend → conflict; the caller fails closed.
  */
 /**
+ * Identity of the reviewed packet, for the usage dedup key.
+ *
+ * BOTH hashes, not just `inputs_hash`: the review packet validates a
+ * `prompt_hash` separately because the prompt is part of what was reviewed. Two
+ * genuinely different model calls — same diff, revised security prompt — share
+ * a revision and an inputs hash, so keying on inputs alone made them collide
+ * whenever a caller reused a locally-scoped call id. The collision is not
+ * benign in either direction: equal counters silently SUPPRESS the second real
+ * call, and different counters REJECT it as a contradictory replay.
+ *
+ * `:` is a safe separator because both values are hex digests.
+ */
+function packetIdentity(reviewPacket) {
+  const prompt = typeof reviewPacket?.prompt_hash === 'string' ? reviewPacket.prompt_hash : '';
+  const inputs = typeof reviewPacket?.inputs_hash === 'string' ? reviewPacket.inputs_hash : '';
+  if (prompt === '' && inputs === '') return null;
+  return `${prompt}:${inputs}`;
+}
+
+/**
  * Find the first usage conflict across the WHOLE packet, touching nothing.
  *
  * Runs before any manifest append so a rejected packet is side-effect-free.
@@ -374,7 +394,7 @@ export function runProsecution(input, {
   const openFindings = seedOpenFindingsFromManifest(dir, ticket, resolvedRevision);
   // Packet identity for the usage carrier: the review packet's own inputs hash
   // when it has one, so "the same call" means the same reviewed content.
-  const usagePacketHash = input?.review_packet?.inputs_hash ?? null;
+  const usagePacketHash = packetIdentity(input?.review_packet);
   const alreadyRecordedUsage = recordedUsageByCall(dir);
 
   // A REJECTED RUN MUST LEAVE NO TRACE. The manifest is append-only, so an

@@ -432,6 +432,10 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       }
       if (entry?.route?.channel) data.channel = entry.route.channel;
       if (seat?.transport) data.transport = seat.transport;
+      // Binds the charge to the registry BYTES in force at dispatch time. The
+      // operator registry is mutable, so channel/transport labels alone cannot
+      // prove which registry version chose them.
+      if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
       try { io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
       catch { /* evidence is best-effort */ }
     },

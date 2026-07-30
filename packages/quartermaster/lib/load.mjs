@@ -7,6 +7,7 @@
 // none of them fall back to a default registry, because a default registry is a
 // channel selection nobody authorized.
 
+import { createHash } from 'node:crypto';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { resolveRegistryPath, findIgnoredInRepoRegistries } from './registry-path.mjs';
@@ -83,7 +84,18 @@ export function loadRegistry({
   }
 
   const registry = validateRegistry(parsed, { adapters, path: resolved.path });
-  return { registry, path: resolved.path, notices };
+  // §8a: the digest of the registry BYTES that authorized this run's routing.
+  // The operator-local registry is mutable, so a recorded channel/transport
+  // label alone cannot prove WHICH registry version chose that model and
+  // transport — an operator who edits a channel between runs leaves two
+  // plausible-looking entries an auditor cannot bind to the bytes that were
+  // actually in force. Hashed from the raw text rather than the parsed object
+  // so it commits to exactly what was read.
+  // node:crypto directly rather than @adlc/core's sha256: quartermaster
+  // declares NO dependencies, and an undeclared cross-package import is exactly
+  // the defect T2's review caught elsewhere. Same algorithm, same encoding.
+  const digest = `sha256:${createHash('sha256').update(text).digest('hex')}`;
+  return { registry, path: resolved.path, notices, registryDigest: digest };
 }
 
 /**

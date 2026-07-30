@@ -120,7 +120,7 @@ export function assertNoArgvOverride(config = {}) {
  * `assign.mjs` is consumed exactly as it emits — float comes from the assignment,
  * never from the ticket.
  *
- * @returns {{ registryPath, notices, seats: Map<string, {job, route, seat, assignment}> }}
+ * @returns {{ registryPath, registryDigest, notices, seats: Map<string, {job, route, seat, assignment, registryDigest}> }}
  * @throws on a disabled/missing/invalid registry, or an unroutable ticket (fail closed)
  */
 export function planSeats({
@@ -133,7 +133,7 @@ export function planSeats({
   exists = existsSync,
   readFile = (p) => readFileSync(p, 'utf8'),
 } = {}) {
-  const { registry, path: registryPath, notices } = loadRegistry({
+  const { registry, path: registryPath, notices, registryDigest } = loadRegistry({
     env,
     repoDir,
     adapters: adapterCatalog(),
@@ -142,7 +142,7 @@ export function planSeats({
   });
 
   const seats = new Map();
-  if (!Array.isArray(tickets) || tickets.length === 0) return { registryPath, notices, seats };
+  if (!Array.isArray(tickets) || tickets.length === 0) return { registryPath, registryDigest, notices, seats };
 
   // CPM float is a property of the WHOLE active DAG, never of a selection from
   // it. `tickets` must therefore be every active ticket, and a `--tickets`
@@ -189,9 +189,9 @@ export function planSeats({
     const job = deriveBuildJob({ assignment, ticket });
     const route = routeJob({ job, assignment, ticket });
     if (selected && !selected.has(ticket.id)) continue; // routed on the full DAG, reported for the subset
-    seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment });
+    seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment, registryDigest });
   }
-  return { registryPath, notices, seats };
+  return { registryPath, registryDigest, notices, seats };
 }
 
 /**
