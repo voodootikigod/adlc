@@ -457,6 +457,13 @@ if (command === 'install' || command === '--install') {
   // What IS fixed: a cancellation queued during the copy no longer loses to the
   // success exit. Yielding once before exiting lets the handler run, so a user who
   // pressed Ctrl-C gets 130 rather than a success report.
+  //
+  // NOT COVERED BY A TEST, deliberately. Exercising it means landing a signal inside
+  // a synchronous copy, so whether the test proves anything depends on whether the
+  // copy is still running — which is disk speed. A version of it passed on macOS and
+  // failed on CI's faster disk, where the copy finished first and the process exited
+  // 0. A test whose verdict depends on the machine is worse than an honest gap, so
+  // this is recorded here instead of pinned by something that flakes.
   const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
   const targetDir = join(pluginsDir, PLUGIN_NAME);
 

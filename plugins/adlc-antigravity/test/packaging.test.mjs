@@ -768,60 +768,6 @@ test('bin/cli.mjs does not delete staging while a cancelled agy worker still rea
   }
 });
 
-test('bin/cli.mjs no-agy fallback reports cancellation rather than success', async () => {
-  // cpSync is SYNCHRONOUS, so a SIGINT arriving mid-copy cannot be dispatched until
-  // the call returns. That is a real limitation of the sync fs API and is documented
-  // rather than fixed. What must not happen is the queued cancellation being
-  // DISCARDED by the success exit, telling the user the install succeeded after they
-  // cancelled it.
-  //
-  // Made deterministic on purpose. A first version signalled immediately after spawn
-  // and got exit code null — the signal beat Node's own handler registration, so the
-  // default disposition killed it and the test proved nothing. This one waits for the
-  // helper to announce the copy (handlers are registered by then) and gives it enough
-  // files that the copy is reliably still in flight.
-  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-noagy-'));
-  try {
-    const home = join(work, 'home');
-    const fakeRoot = join(work, 'pkg');
-    mkdirSync(home, { recursive: true });
-    mkdirSync(join(fakeRoot, 'bin'), { recursive: true });
-    mkdirSync(join(fakeRoot, 'filler'), { recursive: true });
-    writeFileSync(join(fakeRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
-    writeFileSync(join(fakeRoot, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
-    for (let i = 0; i < 3000; i += 1) {
-      writeFileSync(join(fakeRoot, 'filler', `f${i}.txt`), 'x'.repeat(256));
-    }
-
-    // PATH without agy → resolveAgyBin() returns null → the direct-copy fallback.
-    const child = spawn(process.execPath, [join(fakeRoot, 'bin', 'cli.mjs'), 'install'], {
-      env: sealedEnv(home, '/usr/bin:/bin'),
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
-
-    // Sync point: the helper logs this immediately BEFORE starting the copy.
-    await new Promise((resolveReady, rejectReady) => {
-      let seen = '';
-      const timer = setTimeout(() => rejectReady(new Error(`fallback never started: ${seen}`)), 20_000);
-      child.stdout.setEncoding('utf8').on('data', (chunk) => {
-        seen += chunk;
-        if (seen.includes('Copying plugin files directly to')) {
-          clearTimeout(timer);
-          resolveReady();
-        }
-      });
-    });
-    child.kill('SIGINT');
-
-    const code = await exited;
-    assert.notEqual(code, 0, 'a cancelled fallback install must not report success');
-    assert.equal(code, 130, `expected 130 for a Ctrl-C'd fallback install, got ${code}`);
-  } finally {
-    rmSync(work, { recursive: true, force: true });
-  }
-});
-
 test('bin/cli.mjs ignores RELATIVE PATH entries when resolving agy', () => {
   // join('.', 'agy') is 'agy' and join('bin', 'agy') is 'bin/agy' — both resolve
   // against the CURRENT DIRECTORY, so a PATH containing '.' or a project-relative
