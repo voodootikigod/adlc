@@ -106,6 +106,21 @@ function failureExitStatus() {
   return interruptSignal === 'SIGINT' ? 130 : 143;
 }
 
+/**
+ * Exit, but never before cancellation has finished escalating.
+ *
+ * Every exit that follows a runBounded() await goes through here. Forwarding
+ * Ctrl-C makes agy die, which the normal control flow reports as an ordinary
+ * failure and exits — cancelling the pending group SIGKILL and leaving a
+ * SIGTERM-ignoring worker alive. Routing all of them through one function is
+ * deliberate: this bug has now appeared in three separate exit paths because each
+ * was patched individually.
+ */
+async function exitAfterCancellation(code) {
+  if (cancellationDone) await cancellationDone;
+  process.exit(code);
+}
+
 let shuttingDown = false;
 /** Resolves once cancellation has escalated and cleaned up; awaited before exiting. */
 let cancellationDone = null;
@@ -383,14 +398,17 @@ if (command === 'install' || command === '--install') {
     if (probe.status !== 0) {
       console.error(`Found agy at ${agyBin}, but \`agy --version\` failed${probe.error ? `: ${probe.error.message}` : ` (exit ${probe.status})`}.`);
       console.error('Not falling back to a direct copy: an agy this broken cannot register the plugin.');
-      process.exit(1);
+      await exitAfterCancellation(failureExitStatus());
     }
 
     console.log('Google Antigravity (agy) detected. Running agy plugin install...');
     const status = await agyInstallFromStagedCopy(packageRoot, agyBin);
     if (status === 0) {
       console.log('✓ Successfully installed @adlc/antigravity plugin via agy!');
-      process.exit(0);
+      // Still awaits cancellation: a status of 0 means agy finished BEFORE the
+      // signal was processed, so 0 is truthful — but any group we signalled must
+      // still be reaped before we go.
+      await exitAfterCancellation(0);
     }
     // FAIL CLOSED when agy is PRESENT and still refused the plugin.
     //
@@ -408,8 +426,7 @@ if (command === 'install' || command === '--install') {
     console.error('Not falling back to a direct copy: agy is installed and rejected this plugin.');
     // A cancelled install must not exit before escalation has finished killing the
     // group — otherwise the worker outlives us and races the user's retry.
-    if (cancellationDone) await cancellationDone;
-    process.exit(failureExitStatus());
+    await exitAfterCancellation(failureExitStatus());
   }
 
   // Fallback for a machine with NO agy: place the files where agy would look.

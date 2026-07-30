@@ -432,8 +432,29 @@ test('bin/cli.mjs bounds an agy that IGNORES SIGTERM', () => {
   }
 });
 
+/**
+ * Read a pid from a file a shell stub is writing, waiting for real CONTENT.
+ *
+ * `echo $! > file` creates the file before the bytes land, so existsSync alone
+ * yields an empty read — and Number('') is 0. That matters far more than a flaky
+ * assertion: process.kill(0, …) signals THE CALLER'S OWN PROCESS GROUP, so a pid of
+ * 0 reaching the helpers below would SIGKILL the test runner. Hence pid > 1 (1 is
+ * init) here and a hard guard in both helpers.
+ */
+function readPidWhenReady(pidFile, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      if (Number.isInteger(pid) && pid > 1) return pid;
+    }
+  }
+  return 0;
+}
+
 /** Poll until `pid` is gone, or the deadline passes. Returns true if it survived. */
 function survives(pid, ms) {
+  assert.ok(Number.isInteger(pid) && pid > 1, `refusing to probe pid ${pid} — 0 means our own group`);
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     try {
@@ -447,6 +468,8 @@ function survives(pid, ms) {
 
 /** Best-effort reaping so a failing assertion does not litter the machine. */
 function reap(pid) {
+  // Never signal 0 or 1: 0 is our own process group, 1 is init.
+  if (!Number.isInteger(pid) || pid <= 1) return;
   for (const target of [-pid, pid]) {
     try {
       process.kill(target, 'SIGKILL');
@@ -494,8 +517,8 @@ test('bin/cli.mjs SIGKILLs a surviving agy WORKER even when the leader exits on 
     assert.ok(!res.error, `the outer harness timed out, not our bound: ${res.error?.code}`);
     assert.equal(res.status, 1, `a wedged agy tree must fail:\n${res.stderr}`);
 
-    workerPidValue = Number(readFileSync(pidFile, 'utf8').trim());
-    assert.ok(Number.isInteger(workerPidValue) && workerPidValue > 0, 'stub must record a worker pid');
+    workerPidValue = readPidWhenReady(pidFile, 5_000);
+    assert.ok(workerPidValue > 1, 'stub must record a worker pid');
     assert.equal(
       survives(workerPidValue, 5_000),
       false,
@@ -550,10 +573,8 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
     });
 
     // Wait for agy to be running, then interrupt the helper as a user would.
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline && !existsSync(pidFile)) { /* spin */ }
-    assert.ok(existsSync(pidFile), 'the stub agy never started');
-    leaderPidValue = Number(readFileSync(pidFile, 'utf8').trim());
+    leaderPidValue = readPidWhenReady(pidFile, 20_000);
+    assert.ok(leaderPidValue > 1, 'the stub agy never recorded its pid');
     child.kill('SIGINT');
 
     const { code } = await exited;
@@ -611,10 +632,8 @@ test('bin/cli.mjs Ctrl-C kills a SIGTERM-IGNORING worker after the leader exits'
     });
     const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
 
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline && !existsSync(pidFile)) { /* spin */ }
-    assert.ok(existsSync(pidFile), 'the stub agy never started its worker');
-    workerPidValue = Number(readFileSync(pidFile, 'utf8').trim());
+    workerPidValue = readPidWhenReady(pidFile, 20_000);
+    assert.ok(workerPidValue > 1, 'the stub agy never recorded a worker pid');
     child.kill('SIGINT');
 
     const code = await exited;
@@ -624,6 +643,64 @@ test('bin/cli.mjs Ctrl-C kills a SIGTERM-IGNORING worker after the leader exits'
       false,
       `a SIGTERM-ignoring worker outlived cancellation (pid ${workerPidValue})`,
     );
+  } finally {
+    if (workerPidValue) reap(workerPidValue);
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('bin/cli.mjs Ctrl-C during the VERSION PROBE reaps the worker and reports cancellation', async () => {
+  // The third exit path to carry this bug. The probe-failure branch exited 1
+  // directly, which cancelled the pending group SIGKILL, returned 1 instead of
+  // 130, and left a SIGTERM-ignoring worker alive to race the user's retry.
+  //
+  // It also went unfixed longer than the others because an earlier patch to this
+  // exact branch silently no-oped on an indentation mismatch — so this test exists
+  // partly to make that class of miss impossible to repeat quietly.
+  const work = mkdtempSync(join(tmpdir(), 'adlc-agy-probe-'));
+  let workerPidValue = 0;
+  try {
+    const home = join(work, 'home');
+    const binDir = join(work, 'bin');
+    const pidFile = join(work, 'worker.pid');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    // --version itself forks a worker that ignores SIGTERM, then hangs.
+    writeFileSync(
+      join(binDir, 'agy'),
+      '#!/bin/sh\n' +
+        "( trap '' TERM; sleep 600 ) &\n" +
+        `echo $! > "${pidFile}"\n` +
+        'wait\n',
+    );
+    chmodSync(join(binDir, 'agy'), 0o755);
+
+    const stagingBefore = new Set(
+      readdirSync(tmpdir()).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry)),
+    );
+
+    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      stdio: 'ignore',
+    });
+    const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
+
+    workerPidValue = readPidWhenReady(pidFile, 20_000);
+    assert.ok(workerPidValue > 1, 'the stub agy --version never recorded a worker pid');
+    child.kill('SIGINT');
+
+    const code = await exited;
+    assert.equal(code, 130, `a Ctrl-C'd probe must report cancellation, not failure; got ${code}`);
+    assert.equal(
+      survives(workerPidValue, 5_000),
+      false,
+      `a probe worker outlived cancellation (pid ${workerPidValue})`,
+    );
+    // Cancelling the probe must not go on to start an install.
+    const created = readdirSync(tmpdir())
+      .filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry))
+      .filter((entry) => !stagingBefore.has(entry));
+    assert.deepEqual(created, [], `an install was staged after cancellation: ${created.join(', ')}`);
   } finally {
     if (workerPidValue) reap(workerPidValue);
     rmSync(work, { recursive: true, force: true });
