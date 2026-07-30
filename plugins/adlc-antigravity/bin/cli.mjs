@@ -430,6 +430,15 @@ if (command === 'install' || command === '--install') {
   }
 
   // Fallback for a machine with NO agy: place the files where agy would look.
+  //
+  // The exits below deliberately do NOT route through exitAfterCancellation(),
+  // unlike every exit in the agy path. This branch is reached only when
+  // resolveAgyBin() returned null, so no subprocess was ever spawned and there is
+  // no process group to reap — the wait would be waiting on nothing. If the user
+  // interrupts during the copy, the interrupt handler's own exit reports 130 and
+  // races the success exit; whichever wins, the copy either completed (0 is
+  // truthful) or the rename swap left the previous install intact. Recorded here so
+  // the asymmetry reads as deliberate rather than as a site that was missed.
   const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
   const targetDir = join(pluginsDir, PLUGIN_NAME);
 
