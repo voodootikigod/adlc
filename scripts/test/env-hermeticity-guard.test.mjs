@@ -161,7 +161,12 @@ function collectParameterNames(ast) {
  *     `const X = { ... };` object-literal assignment — used to resolve both a bare
  *     `env: X` reference AND a `...X` spread nested inside a LARGER env object (the
  *     `env: { ...process.env, ...HERMETIC_ENV, BASE_REF: 'main' }` shape). Excluded on
- *     a parameter-name collision — see `collectParameterNames`.
+ *     a parameter-name collision — see `collectParameterNames` — AND on a SECOND
+ *     same-named object-literal declaration ANYWHERE in the file: without real lexical
+ *     scope resolution, a flat name-keyed map cannot tell which of two same-named
+ *     declarations a given reference binds to, so — same principle as the
+ *     parameter-name exclusion — trust NEITHER rather than silently pick one (which
+ *     traversal order could make either the safe or the unsafe one).
  *   processEnvAliasVars: every name bound directly to `process.env` itself (e.g.
  *     `const inherited = process.env;`) — NOT an object literal, so it is invisible to
  *     `objectLiteralVars`, but spreading it is exactly as unsafe as `...process.env`.
@@ -171,16 +176,22 @@ function collectParameterNames(ast) {
 function resolveModuleVariables(ast) {
   const entrypointVars = new Map();
   const objectLiteralVars = new Map();
+  const ambiguousObjectVars = new Set();
   const processEnvAliasVars = new Set();
   const paramNames = collectParameterNames(ast);
   walk(ast, (node) => {
     if (node.type !== 'VariableDeclarator' || node.id.type !== 'Identifier' || !node.init) return;
     const name = node.id.name;
-    if (node.init.type === 'ObjectExpression') {
+    if (node.init.type === 'ObjectExpression' && !paramNames.has(name)) {
       // Excluding on a parameter-name collision is safe for OBJECT-LITERAL resolution
       // specifically: resolveEnvArgument treats a missing entry as AMBIGUOUS (flagged),
       // never as silently clean, so dropping it can only ever be over-cautious.
-      if (!paramNames.has(name)) objectLiteralVars.set(name, node.init);
+      if (objectLiteralVars.has(name) || ambiguousObjectVars.has(name)) {
+        objectLiteralVars.delete(name);
+        ambiguousObjectVars.add(name);
+      } else {
+        objectLiteralVars.set(name, node.init);
+      }
     }
     if (isProcessEnv(node.init) && !paramNames.has(name)) processEnvAliasVars.add(name);
     const pathText = resolveCallToPathText(node.init);
@@ -348,13 +359,28 @@ function hasLiteralNeutralization(objExpr, varName, objectLiteralVars, processEn
  *     where `env` is data flowing in from each CALLER's own `cleanEnv(overrides)` call,
  *     invisible from here without interprocedural analysis). AMBIGUOUS, not clean: this
  *     detector cannot verify hermeticity, so it must not report it as verified.
- * @param {object} optionsArg  the spawn call's options ObjectExpression argument
+ * The OPTIONS argument itself (not just its `env` property) may ALSO be a bare
+ * identifier — `execFileSync(file, args, optionsVar)` — rather than the ObjectExpression
+ * literal this used to require outright. Resolved through `objectLiteralVars` first;
+ * if it still isn't an object literal, that is ambiguous (not absent) too, UNLESS
+ * `optionsArg` itself is completely absent (no third call argument at all).
+ * @param {object} optionsArg  the spawn call's options argument (object literal or identifier)
  * @param {Map<string,object>} objectLiteralVars
  * @returns {{present: boolean, object?: object|null}}
  */
 function resolveEnvArgument(optionsArg, objectLiteralVars) {
-  if (!optionsArg || optionsArg.type !== 'ObjectExpression') return { present: false };
-  const envProp = optionsArg.properties.find(
+  if (!optionsArg) return { present: false };
+  let resolvedOptions = optionsArg;
+  if (resolvedOptions.type === 'Identifier' && objectLiteralVars.has(resolvedOptions.name)) {
+    resolvedOptions = objectLiteralVars.get(resolvedOptions.name);
+  }
+  if (resolvedOptions.type !== 'ObjectExpression') {
+    // An options argument that IS a bare identifier this scanner could not resolve
+    // might still carry an env property — ambiguous, not out of scope. Anything else
+    // (an ArrayExpression, a call, etc.) is simply not options-shaped at all.
+    return optionsArg.type === 'Identifier' ? { present: true, object: null } : { present: false };
+  }
+  const envProp = resolvedOptions.properties.find(
     (p) => (p.type === 'Property' || p.type === 'ObjectProperty') &&
       (p.key?.name === 'env' || p.key?.value === 'env'),
   );
@@ -365,6 +391,31 @@ function resolveEnvArgument(optionsArg, objectLiteralVars) {
     return { present: true, object: objectLiteralVars.get(value.name) };
   }
   return { present: true, object: null };
+}
+
+/** True iff `node` is a function expression (used to detect `exec`'s trailing callback). */
+function isFunctionNode(node) {
+  return !!node && (node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression');
+}
+
+/**
+ * The options argument for a spawn CallExpression — normally the LAST argument, except
+ * `exec`, which takes an OPTIONAL trailing callback: `exec(command, options, callback)`
+ * puts options SECOND-TO-LAST regardless of whether the callback is an inline function
+ * or a named reference (arity alone disambiguates a 3-argument call, unlike the last
+ * argument's shape), and a bare `exec(command, callback)` has no options argument at
+ * all — only a 2-argument call whose second argument is an INLINE function can be told
+ * apart from `exec(command, options)` by shape alone.
+ * @param {object} node  a CallExpression matching one of SPAWN_FN_NAMES
+ * @returns {object|undefined}
+ */
+function resolveOptionsArgument(node) {
+  const args = node.arguments;
+  if (node.callee.name === 'exec') {
+    if (args.length >= 3) return args[args.length - 2];
+    if (args.length === 2 && isFunctionNode(args[1])) return undefined;
+  }
+  return args.at(-1);
 }
 
 /**
@@ -468,7 +519,7 @@ function findViolationsInSource(filePath, source) {
     }
     if (!required) return; // spawns something, but not a matched ADLC entrypoint
 
-    const optionsArg = node.arguments.at(-1);
+    const optionsArg = resolveOptionsArgument(node);
     const envArg = resolveEnvArgument(optionsArg, objectLiteralVars);
     if (!envArg.present) return; // no `env` property at all — out of scope (matches the ticket's literal wording)
 
@@ -1020,4 +1071,62 @@ test('an unrelated function parameter sharing a name with a real entrypoint vari
   const violations = findViolationsInSource('fixtures/entrypoint-name-collision.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a real entrypoint match must not be dropped because an unrelated parameter elsewhere reuses its name');
   assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+// ── round-5 review: options-argument shape and duplicate-name declarations ────────
+
+test('an unneutralized env passed as an IDENTIFIER-backed options argument (not the literal last-argument object) is flagged', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const options = { env: { ...process.env } };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], options);
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/identifier-options-arg.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'an options argument passed by reference must resolve the same as one written inline');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('exec(command, options, callback) resolves the SECOND-TO-LAST argument as options, not the trailing callback', () => {
+  const fixture = `
+    import { exec } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(cb) {
+      return exec(BIN, { env: { ...process.env } }, cb);
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/exec-callback-form.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a trailing callback must not be mistaken for the options object, hiding a real unneutralized spread');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('exec(command, options, callback) is compliant when the actual options object neutralizes the variable', () => {
+  const fixture = `
+    import { exec } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(cb) {
+      return exec(BIN, { env: { ...process.env, ADLC_MANIFEST_KEY: '' } }, cb);
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/exec-callback-form-safe.test.mjs', fixture), []);
+});
+
+test('a same-named object literal declared TWICE in the file (module-level unsafe, unrelated function-local safe) is not resolved to either — flagged as ambiguous rather than silently picking the wrong one', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const ENV = { ADLC_MANIFEST_KEY: '' };
+    function unrelatedHelper() {
+      const ENV = { SOME_OTHER_VAR: 'x' };
+      return ENV.SOME_OTHER_VAR;
+    }
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: ENV });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/duplicate-name-declaration.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a name reused for an unrelated object literal elsewhere must not silently resolve the real reference to the wrong one');
+  assert.match(violations[0].message, /cannot statically resolve/);
 });
