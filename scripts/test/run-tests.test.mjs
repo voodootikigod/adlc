@@ -1,4 +1,4 @@
-// run-tests-hermetic.test.mjs — the test runner must scrub ambient trust-root env
+// run-tests.test.mjs — the test runner must scrub ambient trust-root env
 // (T-01KYQMPBEKCDCZ60FZKDC1WNF7, spec .adlc/specs/manifest-key-hermeticity.md Layer 1).
 //
 // Why: an exported ADLC_MANIFEST_KEY flips key-present/key-absent branches deep in
