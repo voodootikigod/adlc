@@ -123,15 +123,40 @@ function resolveCallToPathText(node) {
 }
 
 /**
- * Every name bound as a FUNCTION PARAMETER anywhere in the file (plain identifiers and
- * default-valued `= …` params; a destructured/rest param is not a bare name-collision
- * risk and is skipped). A parameter always SHADOWS any outer same-named declaration —
- * without real scope resolution, a name-based lookup cannot tell "the `env` object
- * literal declared inside cleanEnv()'s body" from "the unrelated `env` PARAMETER of a
- * different function" apart; both are named `env`. Excluding every parameter name from
- * `objectLiteralVars` is a conservative, name-collision-safe fix: it can only cause a
- * MISSED indirection (a call flagged that a human would recognize as fine, cheap to
- * confirm or annotate) — never a missed real leak.
+ * Every name bound by a binding PATTERN — a plain identifier, a default-valued `= …`
+ * wrapper, a destructured `{ env }` / `{ env: renamed }` object pattern (including its
+ * OWN rest element), a `[a, b]` array pattern, or a `...rest` element — collected
+ * recursively since any of these can nest inside one another (`{ env: [a, ...b] }`).
+ * @param {object|null|undefined} pattern
+ * @param {Set<string>} names
+ */
+function collectBindingNames(pattern, names) {
+  if (!pattern) return;
+  if (pattern.type === 'Identifier') { names.add(pattern.name); return; }
+  if (pattern.type === 'AssignmentPattern') { collectBindingNames(pattern.left, names); return; }
+  if (pattern.type === 'RestElement') { collectBindingNames(pattern.argument, names); return; }
+  if (pattern.type === 'ObjectPattern') {
+    for (const prop of pattern.properties) {
+      collectBindingNames(prop.type === 'RestElement' ? prop.argument : prop.value, names);
+    }
+    return;
+  }
+  if (pattern.type === 'ArrayPattern') {
+    for (const el of pattern.elements) collectBindingNames(el, names);
+  }
+}
+
+/**
+ * Every name bound as a FUNCTION PARAMETER anywhere in the file — including every name
+ * a destructuring pattern binds (`function run({ env }) { ... }` binds `env` exactly as
+ * much as `function run(env) { ... }` does — see `collectBindingNames`). A parameter
+ * always SHADOWS any outer same-named declaration — without real scope resolution, a
+ * name-based lookup cannot tell "the `env` object literal declared inside cleanEnv()'s
+ * body" from "the unrelated `env` PARAMETER of a different function" apart; both are
+ * named `env`. Excluding every parameter name from `objectLiteralVars` is a
+ * conservative, name-collision-safe fix: it can only cause a MISSED indirection (a call
+ * flagged that a human would recognize as fine, cheap to confirm or annotate) — never a
+ * missed real leak.
  * @param {object} ast
  * @returns {Set<string>}
  */
@@ -140,10 +165,7 @@ function collectParameterNames(ast) {
   walk(ast, (node) => {
     if (node.type !== 'FunctionDeclaration' && node.type !== 'FunctionExpression' &&
       node.type !== 'ArrowFunctionExpression') return;
-    for (const p of node.params) {
-      if (p.type === 'Identifier') names.add(p.name);
-      else if (p.type === 'AssignmentPattern' && p.left.type === 'Identifier') names.add(p.left.name);
-    }
+    for (const p of node.params) collectBindingNames(p, names);
   });
   return names;
 }
@@ -375,10 +397,13 @@ function resolveEnvArgument(optionsArg, objectLiteralVars) {
     resolvedOptions = objectLiteralVars.get(resolvedOptions.name);
   }
   if (resolvedOptions.type !== 'ObjectExpression') {
-    // An options argument that IS a bare identifier this scanner could not resolve
-    // might still carry an env property — ambiguous, not out of scope. Anything else
-    // (an ArrayExpression, a call, etc.) is simply not options-shaped at all.
-    return optionsArg.type === 'Identifier' ? { present: true, object: null } : { present: false };
+    // An options argument this scanner could not resolve to an object literal — a bare
+    // identifier, a helper CALL (`makeOptions()`), a ternary, a member access, etc. —
+    // might still carry an env property at runtime: ambiguous, not out of scope. Only
+    // an ArrayExpression is excluded: this codebase's spawn calls always write the args
+    // list as a literal array, so an ArrayExpression in the options SLOT is the args
+    // list with options genuinely omitted, not an unresolvable options value.
+    return optionsArg.type === 'ArrayExpression' ? { present: false } : { present: true, object: null };
   }
   const envResult = findEffectiveEnvProperty(resolvedOptions, objectLiteralVars, new Set());
   if (!envResult) return { present: false };
@@ -443,7 +468,12 @@ function isFunctionNode(node) {
  * or a named reference (arity alone disambiguates a 3-argument call, unlike the last
  * argument's shape), and a bare `exec(command, callback)` has no options argument at
  * all — only a 2-argument call whose second argument is an INLINE function can be told
- * apart from `exec(command, options)` by shape alone.
+ * apart from `exec(command, options)` by shape alone. `execFileSync`/`spawnSync` need
+ * at least 3 arguments (command, args, options) before the last one is genuinely an
+ * OPTIONS candidate at all — this codebase always writes an explicit args array as the
+ * second argument (verified across every real call site), so a 1- or 2-argument call's
+ * last argument is the COMMAND or the args list, never options, and returning it here
+ * would wrongly treat an entrypoint path reference as an unresolvable "options" value.
  * @param {object} node  a CallExpression matching one of SPAWN_FN_NAMES
  * @param {string} calleeName  the RESOLVED name (see resolveSpawnCalleeName) — not
  *   necessarily `node.callee.name`, which is absent for a namespace-member callee
@@ -453,9 +483,10 @@ function resolveOptionsArgument(node, calleeName) {
   const args = node.arguments;
   if (calleeName === 'exec') {
     if (args.length >= 3) return args[args.length - 2];
-    if (args.length === 2 && isFunctionNode(args[1])) return undefined;
+    if (args.length === 2) return isFunctionNode(args[1]) ? undefined : args[1]; // callback-only vs options-only
+    return undefined; // exec(command) alone — no options argument
   }
-  return args.at(-1);
+  return args.length >= 3 ? args.at(-1) : undefined;
 }
 
 /**
@@ -466,15 +497,30 @@ function resolveOptionsArgument(node, calleeName) {
  * never execute (the function is never called, or only conditionally), so it must not
  * be trusted as an unconditional pin. Scans only `ast.body` directly, not the full
  * recursive walk, to enforce that restriction.
+ *
+ * Tracks the LAST Program-level write to `varName` in SOURCE ORDER, not merely whether
+ * a literal pin exists anywhere: a later reassignment (to a non-literal), compound
+ * assignment (`+=`, `??=`, …), or `delete process.env.VARNAME` undoes an earlier pin
+ * before any spawn that runs after module load — presence alone would keep trusting a
+ * pin that no longer holds by the time a test actually spawns.
  * @param {object} ast
  * @param {string} varName
  * @returns {boolean}
  */
 function fileTopPinsFor(ast, varName) {
-  return ast.body.some((stmt) =>
-    stmt.type === 'ExpressionStatement' && stmt.expression.type === 'AssignmentExpression' &&
-    stmt.expression.operator === '=' &&
-    isProcessEnvVar(stmt.expression.left, varName) && isStringLiteral(stmt.expression.right));
+  let pinned = false;
+  for (const stmt of ast.body) {
+    if (stmt.type !== 'ExpressionStatement') continue;
+    const expr = stmt.expression;
+    if (expr.type === 'UnaryExpression' && expr.operator === 'delete' && isProcessEnvVar(expr.argument, varName)) {
+      pinned = false;
+      continue;
+    }
+    if (expr.type === 'AssignmentExpression' && isProcessEnvVar(expr.left, varName)) {
+      pinned = expr.operator === '=' && isStringLiteral(expr.right);
+    }
+  }
+  return pinned;
 }
 
 /**
@@ -507,17 +553,25 @@ function mergeAdjacentLineComments(comments) {
  * the `WINDOW_LINES` lines immediately before `node`'s start line) suppresses
  * `varName` with a non-empty reason: `// env-hermeticity: inherits VARNAME — <reason>`
  * — the marker may appear on any line of a merged multi-line block, not only its last.
+ * Bound ONE-TO-ONE to the NEAREST following matched spawn: if some OTHER matched-
+ * entrypoint spawn (`otherSpawnLines`) falls strictly between the comment and `node`,
+ * the comment was written for THAT call, not this one — a single suppression must not
+ * silently exempt every spawn in its proximity window, only the one it precedes.
  * @param {object} node
  * @param {{value: string, loc: object}[]} comments
  * @param {string} varName
+ * @param {number[]} otherSpawnLines  start lines of every OTHER matched-entrypoint spawn in the file
  * @returns {boolean}
  */
 const WINDOW_LINES = 6;
-function hasNearbySuppression(node, comments, varName) {
+function hasNearbySuppression(node, comments, varName, otherSpawnLines) {
   const nodeLine = node.loc.start.line;
   const re = new RegExp(`env-hermeticity:\\s*inherits\\s+${varName}\\s*(?:—|--|-)\\s*\\S`);
-  return mergeAdjacentLineComments(comments)
-    .some((c) => c.loc.end.line <= nodeLine && nodeLine - c.loc.end.line <= WINDOW_LINES && re.test(c.value));
+  return mergeAdjacentLineComments(comments).some((c) => {
+    if (c.loc.end.line > nodeLine || nodeLine - c.loc.end.line > WINDOW_LINES) return false;
+    if (!re.test(c.value)) return false;
+    return !otherSpawnLines.some((line) => line > c.loc.end.line && line < nodeLine);
+  });
 }
 
 const CHILD_PROCESS_MODULES = new Set(['node:child_process', 'child_process']);
@@ -568,6 +622,32 @@ function resolveSpawnCalleeName(callee, bindings) {
 }
 
 /**
+ * Which entrypoint does this CallExpression target, if any? Scans every argument for a
+ * direct literal match or a reference to a resolved entrypoint variable (position-
+ * independent — matches this codebase's varied call shapes: `[BIN, ...args]`,
+ * `[BIN, 'sub', ...]`).
+ * @param {object} node  a CallExpression already confirmed to be a spawn call
+ * @param {Map<string,string[]>} entrypointVars
+ * @returns {string[]|null}
+ */
+function findRequiredVars(node, entrypointVars) {
+  for (const arg of node.arguments) {
+    const literalPath = resolveCallToPathText(arg);
+    if (literalPath) { const s = sensitiveVarsForEntrypoint(literalPath); if (s) return s; }
+    if (arg.type === 'Identifier' && entrypointVars.has(arg.name)) return entrypointVars.get(arg.name);
+    if (arg.type === 'ArrayExpression') {
+      for (const el of arg.elements) {
+        if (!el) continue;
+        const elPath = resolveCallToPathText(el);
+        if (elPath) { const s = sensitiveVarsForEntrypoint(elPath); if (s) return s; }
+        if (el.type === 'Identifier' && entrypointVars.has(el.name)) return entrypointVars.get(el.name);
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Scan one file's source for spawn sites that inherit ambient env while targeting a
  * known ADLC entrypoint, without neutralizing or suppressing every variable that
  * entrypoint reads. Throws (does not report clean) on a parse failure.
@@ -582,30 +662,27 @@ function findViolationsInSource(filePath, source) {
   const childProcessBindings = collectChildProcessBindings(ast);
   const violations = [];
 
+  // First pass: every matched-entrypoint spawn's start line, so a suppression comment
+  // can be bound to the ONE call it precedes (see hasNearbySuppression) rather than
+  // silently covering every spawn in its proximity window.
+  const matchedSpawnLines = [];
+  walk(ast, (node) => {
+    if (node.type !== 'CallExpression') return;
+    const calleeName = resolveSpawnCalleeName(node.callee, childProcessBindings);
+    if (calleeName && SPAWN_FN_NAMES.has(calleeName) && findRequiredVars(node, entrypointVars)) {
+      matchedSpawnLines.push(node.loc.start.line);
+    }
+  });
+
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return;
     const calleeName = resolveSpawnCalleeName(node.callee, childProcessBindings);
     if (!calleeName || !SPAWN_FN_NAMES.has(calleeName)) return;
 
-    // Which entrypoint does this call target? Scan every argument for a direct literal
-    // match or a reference to a resolved entrypoint variable (position-independent —
-    // matches this codebase's varied call shapes: `[BIN, ...args]`, `[BIN, 'sub', ...]`).
-    let required = null;
-    for (const arg of node.arguments) {
-      const literalPath = resolveCallToPathText(arg);
-      if (literalPath) { required = sensitiveVarsForEntrypoint(literalPath); if (required) break; }
-      if (arg.type === 'Identifier' && entrypointVars.has(arg.name)) { required = entrypointVars.get(arg.name); break; }
-      if (arg.type === 'ArrayExpression') {
-        for (const el of arg.elements) {
-          if (!el) continue;
-          const elPath = resolveCallToPathText(el);
-          if (elPath) { required = sensitiveVarsForEntrypoint(elPath); if (required) break; }
-          if (el.type === 'Identifier' && entrypointVars.has(el.name)) { required = entrypointVars.get(el.name); break; }
-        }
-      }
-      if (required) break;
-    }
+    const required = findRequiredVars(node, entrypointVars);
     if (!required) return; // spawns something, but not a matched ADLC entrypoint
+
+    const otherSpawnLines = matchedSpawnLines.filter((line) => line !== node.loc.start.line);
 
     const optionsArg = resolveOptionsArgument(node, calleeName);
     const envArg = resolveEnvArgument(optionsArg, objectLiteralVars);
@@ -617,7 +694,7 @@ function findViolationsInSource(filePath, source) {
     // render as "verified".
     if (!envArg.object) {
       for (const varName of required) {
-        if (hasNearbySuppression(node, comments, varName) || fileTopPinsFor(ast, varName)) continue;
+        if (hasNearbySuppression(node, comments, varName, otherSpawnLines) || fileTopPinsFor(ast, varName)) continue;
         violations.push({
           file: filePath,
           variable: varName,
@@ -634,7 +711,7 @@ function findViolationsInSource(filePath, source) {
 
     for (const varName of required) {
       const neutralized = hasLiteralNeutralization(envArg.object, varName, objectLiteralVars, processEnvAliasVars) || fileTopPinsFor(ast, varName);
-      const suppressed = hasNearbySuppression(node, comments, varName);
+      const suppressed = hasNearbySuppression(node, comments, varName, otherSpawnLines);
       if (!neutralized && !suppressed) {
         violations.push({
           file: filePath,
@@ -1285,4 +1362,90 @@ test('a spawn function called via a NAMESPACE import member (cp.execFileSync(...
   const violations = findViolationsInSource('fixtures/namespace-import-member.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a namespace-import member call must resolve the same as the bare imported name');
   assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+// ── round-7 review: helper-built options, destructured shadowing, pin ordering, ───
+// ── and one-suppression-per-spawn binding ──────────────────────────────────────────
+
+test('an options argument built by a HELPER CALL (makeOptions()) is flagged ambiguous, not treated as absent', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], makeOptions());
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/helper-built-options.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'an options argument this scanner cannot resolve must not be silently treated as absent');
+  assert.match(violations[0].message, /cannot statically resolve/);
+});
+
+test('a spawn call with fewer than 3 arguments never mistakes the command itself for an unresolvable options argument', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin() {
+      return execFileSync(BIN);
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/short-arity-call.test.mjs', fixture), []);
+});
+
+test('a DESTRUCTURED parameter ({ env }) is excluded from name resolution the same as a plain one, so it cannot be misresolved to an unrelated outer object', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const env = { ADLC_MANIFEST_KEY: '' };
+    function runBin(args, { env }) {
+      return execFileSync(process.execPath, [BIN, ...args], { env });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/destructured-param-collision.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a destructured parameter must shadow an outer same-named object literal exactly like a plain parameter does');
+  assert.match(violations[0].message, /cannot statically resolve/);
+});
+
+test('a top-level pin later UNDONE by a reassignment or delete before the spawn does not count as neutralization', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    process.env.ADLC_MANIFEST_KEY = 'test-key';
+    delete process.env.ADLC_MANIFEST_KEY;
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/undone-pin.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a pin that is deleted again before any spawn runs must not be trusted');
+});
+
+test('a top-level pin re-established AFTER being undone is trusted again (last write wins)', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    process.env.ADLC_MANIFEST_KEY = 'test-key';
+    delete process.env.ADLC_MANIFEST_KEY;
+    process.env.ADLC_MANIFEST_KEY = 'test-key-again';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  assert.deepEqual(findViolationsInSource('fixtures/re-pinned-after-undone.test.mjs', fixture), []);
+});
+
+test('ONE suppression comment does not silently cover a SECOND, different unsafe spawn within its proximity window', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runFirst(args) {
+      // env-hermeticity: inherits ADLC_MANIFEST_KEY — verified safe by inspection
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+    function runSecond(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/one-suppression-two-spawns.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a suppression comment must cover only the ONE spawn it directly precedes, not a second unrelated one nearby');
+  assert.match(violations[0].message, /:9 spawns/, 'the flagged call must be runSecond\'s (line 9), not runFirst\'s suppressed one');
 });
