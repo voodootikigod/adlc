@@ -380,17 +380,55 @@ function resolveEnvArgument(optionsArg, objectLiteralVars) {
     // (an ArrayExpression, a call, etc.) is simply not options-shaped at all.
     return optionsArg.type === 'Identifier' ? { present: true, object: null } : { present: false };
   }
-  const envProp = resolvedOptions.properties.find(
-    (p) => (p.type === 'Property' || p.type === 'ObjectProperty') &&
-      (p.key?.name === 'env' || p.key?.value === 'env'),
-  );
-  if (!envProp) return { present: false };
-  const value = envProp.value;
+  const envResult = findEffectiveEnvProperty(resolvedOptions, objectLiteralVars, new Set());
+  if (!envResult) return { present: false };
+  if (!envResult.resolved) return { present: true, object: null };
+  const value = envResult.value;
   if (value.type === 'ObjectExpression') return { present: true, object: value };
   if (value.type === 'Identifier' && objectLiteralVars.has(value.name)) {
     return { present: true, object: objectLiteralVars.get(value.name) };
   }
   return { present: true, object: null };
+}
+
+/**
+ * Find the `env` property that WINS inside an options object — honoring SOURCE ORDER
+ * (a later `env:` key, or one reached through a later spread, overrides an earlier
+ * one — `.find()` alone would wrongly return the FIRST match) and resolving nested
+ * `...OPTIONS`-style spreads through `objectLiteralVars` (`{ ...OPTIONS }` where
+ * OPTIONS itself declares `env` is otherwise invisible to a direct-properties-only
+ * scan). Returns:
+ *   - null                          — no `env` property found anywhere, and every
+ *     spread along the way resolved cleanly: genuinely absent.
+ *   - {resolved: true, value: node} — the value of the winning `env` property.
+ *   - {resolved: false}             — an unresolvable spread appears with no LATER
+ *     literal `env` property to override it — might carry one; ambiguous.
+ * @param {object} objExpr
+ * @param {Map<string,object>} objectLiteralVars
+ * @param {Set<object>} seen
+ * @returns {{resolved: boolean, value?: object}|null}
+ */
+function findEffectiveEnvProperty(objExpr, objectLiteralVars, seen) {
+  if (seen.has(objExpr)) return null;
+  seen.add(objExpr);
+  let result = null;
+  for (const p of objExpr.properties) {
+    if (p.type === 'SpreadElement') {
+      if (p.argument.type === 'Identifier' && objectLiteralVars.has(p.argument.name)) {
+        const nested = findEffectiveEnvProperty(objectLiteralVars.get(p.argument.name), objectLiteralVars, seen);
+        if (nested) result = nested;
+        continue;
+      }
+      result = { resolved: false }; // unresolvable spread — might introduce or override env
+      continue;
+    }
+    if (p.type !== 'Property' && p.type !== 'ObjectProperty') continue;
+    const key = p.key;
+    const keyName = key?.type === 'Identifier' ? key.name : (isStringLiteral(key) ? key.value : null);
+    if (keyName !== 'env') continue;
+    result = { resolved: true, value: p.value };
+  }
+  return result;
 }
 
 /** True iff `node` is a function expression (used to detect `exec`'s trailing callback). */
@@ -407,11 +445,13 @@ function isFunctionNode(node) {
  * all — only a 2-argument call whose second argument is an INLINE function can be told
  * apart from `exec(command, options)` by shape alone.
  * @param {object} node  a CallExpression matching one of SPAWN_FN_NAMES
+ * @param {string} calleeName  the RESOLVED name (see resolveSpawnCalleeName) — not
+ *   necessarily `node.callee.name`, which is absent for a namespace-member callee
  * @returns {object|undefined}
  */
-function resolveOptionsArgument(node) {
+function resolveOptionsArgument(node, calleeName) {
   const args = node.arguments;
-  if (node.callee.name === 'exec') {
+  if (calleeName === 'exec') {
     if (args.length >= 3) return args[args.length - 2];
     if (args.length === 2 && isFunctionNode(args[1])) return undefined;
   }
@@ -480,6 +520,53 @@ function hasNearbySuppression(node, comments, varName) {
     .some((c) => c.loc.end.line <= nodeLine && nodeLine - c.loc.end.line <= WINDOW_LINES && re.test(c.value));
 }
 
+const CHILD_PROCESS_MODULES = new Set(['node:child_process', 'child_process']);
+
+/**
+ * Bindings into `node:child_process` this scanner must resolve back to the real
+ * export name — an aliased named import (`import { execFileSync as run }`, mapped
+ * `run` -> `execFileSync`) or a namespace import (`import * as cp from
+ * 'node:child_process'`, `cp` recorded so `cp.execFileSync(...)` is recognized as a
+ * namespace-member spawn call). Import declarations are only ever Program-level, so
+ * scanning `ast.body` directly is sufficient — no need for a full recursive walk.
+ * @param {object} ast
+ * @returns {{aliasToReal: Map<string,string>, namespaceNames: Set<string>}}
+ */
+function collectChildProcessBindings(ast) {
+  const aliasToReal = new Map();
+  const namespaceNames = new Set();
+  for (const stmt of ast.body) {
+    if (stmt.type !== 'ImportDeclaration' || !CHILD_PROCESS_MODULES.has(stmt.source.value)) continue;
+    for (const spec of stmt.specifiers) {
+      if (spec.type === 'ImportSpecifier') aliasToReal.set(spec.local.name, spec.imported.name);
+      else if (spec.type === 'ImportNamespaceSpecifier') namespaceNames.add(spec.local.name);
+    }
+  }
+  return { aliasToReal, namespaceNames };
+}
+
+/**
+ * The real `node:child_process` export name a CallExpression's callee resolves to, or
+ * null if it does not match a spawn function at all — handles a bare name (the common
+ * case, matched regardless of import tracking, as before), an ALIASED named import
+ * (`import { execFileSync as run }`, then `run(...)`), and a NAMESPACE-member call
+ * (`cp.execFileSync(...)` where `cp` is a tracked namespace import).
+ * @param {object} callee
+ * @param {{aliasToReal: Map<string,string>, namespaceNames: Set<string>}} bindings
+ * @returns {string|null}
+ */
+function resolveSpawnCalleeName(callee, bindings) {
+  if (callee.type === 'Identifier') {
+    return bindings.aliasToReal.get(callee.name) ?? callee.name;
+  }
+  if (callee.type === 'MemberExpression' && !callee.computed &&
+    callee.object.type === 'Identifier' && bindings.namespaceNames.has(callee.object.name) &&
+    callee.property.type === 'Identifier') {
+    return callee.property.name;
+  }
+  return null;
+}
+
 /**
  * Scan one file's source for spawn sites that inherit ambient env while targeting a
  * known ADLC entrypoint, without neutralizing or suppressing every variable that
@@ -492,12 +579,13 @@ function findViolationsInSource(filePath, source) {
   const comments = [];
   const ast = parse(source, { ...ACORN_OPTIONS, onComment: comments });
   const { entrypointVars, objectLiteralVars, processEnvAliasVars } = resolveModuleVariables(ast);
+  const childProcessBindings = collectChildProcessBindings(ast);
   const violations = [];
 
   walk(ast, (node) => {
     if (node.type !== 'CallExpression') return;
-    const callee = node.callee;
-    if (callee.type !== 'Identifier' || !SPAWN_FN_NAMES.has(callee.name)) return;
+    const calleeName = resolveSpawnCalleeName(node.callee, childProcessBindings);
+    if (!calleeName || !SPAWN_FN_NAMES.has(calleeName)) return;
 
     // Which entrypoint does this call target? Scan every argument for a direct literal
     // match or a reference to a resolved entrypoint variable (position-independent —
@@ -519,7 +607,7 @@ function findViolationsInSource(filePath, source) {
     }
     if (!required) return; // spawns something, but not a matched ADLC entrypoint
 
-    const optionsArg = resolveOptionsArgument(node);
+    const optionsArg = resolveOptionsArgument(node, calleeName);
     const envArg = resolveEnvArgument(optionsArg, objectLiteralVars);
     if (!envArg.present) return; // no `env` property at all — out of scope (matches the ticket's literal wording)
 
@@ -1129,4 +1217,72 @@ test('a same-named object literal declared TWICE in the file (module-level unsaf
   const violations = findViolationsInSource('fixtures/duplicate-name-declaration.test.mjs', fixture);
   assert.equal(violations.length, 1, 'a name reused for an unrelated object literal elsewhere must not silently resolve the real reference to the wrong one');
   assert.match(violations[0].message, /cannot statically resolve/);
+});
+
+// ── round-6 review: options composed via nested spreads, aliased/namespace imports ─
+
+test('an env property nested inside a spread of a resolved OPTIONS variable ({ ...OPTIONS }) is still found and checked', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    const OPTIONS = { env: { ...process.env } };
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { ...OPTIONS });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/nested-options-spread.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a nested spread of a resolvable OPTIONS variable must not hide its env property');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('an options object composed via an UNRESOLVABLE spread ({ ...unknownOptions }) with no direct env property is flagged ambiguous, not treated as absent', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args, unknownOptions) {
+      return execFileSync(process.execPath, [BIN, ...args], { ...unknownOptions });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/unresolvable-options-spread.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'an options object built from an unresolvable spread might still carry an env property — cannot be assumed absent');
+  assert.match(violations[0].message, /cannot statically resolve/);
+});
+
+test('the LAST of two env properties in the same options object wins (JS duplicate-key semantics), not the first', () => {
+  const fixture = `
+    import { execFileSync } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return execFileSync(process.execPath, [BIN, ...args], { env: { ADLC_MANIFEST_KEY: '' }, env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/duplicate-env-key.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'JS uses the LAST duplicate key at runtime — the guard must check the same one, not the first');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('a spawn function imported under an ALIAS (import { execFileSync as run }) is still recognized', () => {
+  const fixture = `
+    import { execFileSync as run } from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return run(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/aliased-import.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'an aliased named import of a spawn function must resolve back to the real export it aliases');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
+});
+
+test('a spawn function called via a NAMESPACE import member (cp.execFileSync(...)) is still recognized', () => {
+  const fixture = `
+    import * as cp from 'node:child_process';
+    const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
+    function runBin(args) {
+      return cp.execFileSync(process.execPath, [BIN, ...args], { env: { ...process.env } });
+    }
+  `;
+  const violations = findViolationsInSource('fixtures/namespace-import-member.test.mjs', fixture);
+  assert.equal(violations.length, 1, 'a namespace-import member call must resolve the same as the bare imported name');
+  assert.equal(violations[0].variable, 'ADLC_MANIFEST_KEY');
 });
