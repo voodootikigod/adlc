@@ -519,9 +519,72 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     );
     assert.match(
       result.stdout,
-      /Antigravity:.*agy plugin install/s,
+      /Antigravity:.*npx @adlc\/antigravity@latest install/s,
       'a harness in MANUAL must get its own printed instruction',
     );
+    // The version spec is load-bearing, not decoration: npx resolves a BARE name
+    // against the current project first, so `npx @adlc/antigravity` inside a repo
+    // shipping a workspace of that name runs THAT binary. Same hazard this script
+    // already pins for the `plugins` package.
+    assert.ok(
+      !/npx @adlc\/antigravity(?!@)/.test(result.stdout),
+      `an npx instruction lacks a version spec and can be shadowed locally:\n${result.stdout}`,
+    );
+    // The instruction must not hand the user the very command that fails: a bare
+    // `agy plugin install <path>/@adlc/antigravity` is rejected by agy's
+    // marketplace parser (see the @-free staging test below).
+    assert.ok(
+      !/agy plugin install \S*@/.test(result.stdout),
+      `the fallback instruction still tells the user to pass an @ path:\n${result.stdout}`,
+    );
+    // Nor may it name a package that does not exist. `adlc-agy` is a BIN name
+    // inside @adlc/antigravity, not a package: `npx adlc-agy install` resolves
+    // against the registry on any machine without the global install and 404s —
+    // and leaves an unclaimed name that someone else's code could answer to.
+    assert.ok(
+      !/npx adlc-agy/.test(result.stdout),
+      `the instruction names an unpublished npm package:\n${result.stdout}`,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install.sh delegates the Antigravity install to the package helper, never agy directly', () => {
+  // install.sh USED to stage the plugin and call `agy plugin install` itself, a
+  // second copy of logic the shipped helper already owns: @-free staging, agy
+  // resolution that ignores npm-injected bin dirs, a subprocess timeout, and
+  // fail-closed semantics. The duplication did what duplication does — the helper
+  // gained a timeout and this path kept none, so a wedged agy hung the whole
+  // installer past its own summary and exit status.
+  //
+  // So the property this test pins is DELEGATION, not staging: staging is proved
+  // where it now lives, in plugins/adlc-antigravity/test/packaging.test.mjs
+  // (including the hostile-TMPDIR case). Asserting it in both places would
+  // recreate the duplication in the tests.
+  const box = sandbox({ bins: ['node', 'npm', 'agy'] });
+  try {
+    // Give the stub `npm root -g` a real helper to find.
+    const helperDir = path.join(box.root, 'npmroot', '@adlc', 'antigravity', 'bin');
+    mkdirSync(helperDir, { recursive: true });
+    writeFileSync(path.join(helperDir, 'cli.mjs'), '// helper\n');
+
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+
+    const commands = box.commands();
+    const nodeLine = commands
+      .split('\n')
+      .find((line) => line.startsWith('node ') && line.includes('cli.mjs'));
+    assert.ok(nodeLine, `the helper was never invoked; log was:\n${commands}`);
+    assert.match(nodeLine, /bin\/cli\.mjs install$/, `expected \`<helper> install\`: ${nodeLine}`);
+
+    // And agy must NOT be driven from here any more — that is the whole point.
+    assert.ok(
+      !/(^|\n)agy /.test(commands),
+      `install.sh must not invoke agy directly; it delegates:\n${commands}`,
+    );
+    assert.match(result.stdout, /installed for: .*Antigravity/);
   } finally {
     box.cleanup();
   }

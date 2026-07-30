@@ -6,31 +6,55 @@ skills and a `PreToolUse` rails-guard that freezes ADLC rails. Requires the
 
 ## Install
 
-**Global npm install (recommended):**
+**One-liner via npx (recommended):**
+
+```sh
+(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)
+```
+
+**Global npm install:**
 
 ```sh
 npm install -g @adlc/antigravity
-agy plugin install $(npm root -g)/@adlc/antigravity
-```
-
-**One-liner via npx:**
-
-```sh
-npx adlc-agy install
+adlc-agy install
 ```
 
 **Local project install:**
 
 ```sh
 npm install @adlc/antigravity
-agy plugin install ./node_modules/@adlc/antigravity
+./node_modules/.bin/adlc-agy install
 ```
 
 **From local checkout:**
 
 ```sh
-agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 ```
+
+Never hand `agy` a plugin directory yourself. `agy` resolves its target as
+`plugin@marketplace` before deciding whether it is a filesystem path, so the `@`
+in `.../@adlc/antigravity` is read as that separator and the install fails with
+`unknown marketplace: adlc/antigravity`. A source checkout is not reliably safe
+either — an `@` in any parent directory (a clone under `/home/user@example.com/…`)
+reproduces it. The helper stages the plugin under an `@`-free path and installs
+from there.
+
+The `@latest` above is load-bearing too: `npx @adlc/antigravity` resolves a bare
+name against the current project first, so a repo shipping a workspace or
+dependency named `@adlc/antigravity` would have its binary run instead. A version
+spec forces registry resolution — it pins nothing, it only refuses local
+shadowing.
+
+## Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ADLC_AGY_TIMEOUT_MS` | `120000` | Wall-clock bound on each `agy` subprocess, in **milliseconds**. Must be a positive, finite number — anything else (including `0` and `Infinity`, both of which would disable the bound) is refused rather than silently ignored. Raise it if `agy` is legitimately slow: a cold cache or network-mounted storage can exceed 120s. |
+| `ADLC_P4_ENFORCEMENT` | unset | Set to `1`, with an active ticket, to arm in-session rail enforcement. |
+
+If an install fails with `timed out after 120000ms`, that is this bound, not `agy`
+crashing — retry with a larger `ADLC_AGY_TIMEOUT_MS`.
 
 ## Manifest: `version` and `adlcContract`
 

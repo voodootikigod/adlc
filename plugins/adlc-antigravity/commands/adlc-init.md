@@ -7,14 +7,27 @@ description: Bootstrap ADLC in this repo for Antigravity — install the plugin 
 
 Bootstrap the ADLC runtime for use with `agy`.
 
-1. **Install this plugin into agy** (idempotent):
+1. **Install this plugin into agy** (idempotent). Always go through the bundled
+   helper — never hand `agy` the plugin directory yourself. `agy` reads its
+   install target as `plugin@marketplace` *before* treating it as a path, so an
+   `@` anywhere in the argument (an npm scope, or a checkout under
+   `/home/user@example.com/…`) is parsed as a marketplace and the install fails
+   with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
+   under an `@`-free path first:
    ```sh
-   agy plugin install /absolute/path/to/plugins/adlc-antigravity
+   node /absolute/path/to/plugins/adlc-antigravity/bin/cli.mjs install
    agy plugin list   # confirm "adlc-antigravity" with a "hooks" component
    ```
-2. **Initialize the ADLC workspace** (creates `.adlc/`, requires `npm i -g @adlc/cli`):
+2. **Initialize the ADLC workspace** (creates `.adlc/`). This one *must* run
+   inside the target repository, so the neutral-directory trick used for the
+   install one-liner does not apply — and that is exactly why it does not fall
+   back to `npx @adlc/cli`: npm would resolve a bare name against the repository
+   you are standing in, so a repo shipping a workspace or dependency named
+   `@adlc/cli` would have *its* binary run against your tree. Install the toolkit
+   globally once, then run the real binary:
    ```sh
-   adlc init || npx @adlc/cli init
+   command -v adlc >/dev/null || npm install -g @adlc/cli
+   adlc init
    ```
 3. **Resolve ticket storage.** New repositories use `.adlc/tickets/` plus
    `.adlc/ticket-archive/`. If legacy `.adlc/tickets.json` exists, run

@@ -276,7 +276,64 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   assert.match(ag?.enforcement.session.body ?? '', /fail-open|Advisory/i);
   assert.match(ag?.enforcement.ci.body ?? '', /unbypassable|rails-guard-ci/i);
   assert.match(ag?.note ?? '', /ADLC_P4_ENFORCEMENT=1/);
-  assert.match(ag?.note ?? '', /npm install -g @adlc\/antigravity/);
+  // The note used to recommend `npm install -g` + pointing agy at the resulting
+  // path. That path CANNOT work: agy resolves its target as `plugin@marketplace`
+  // before treating it as a filesystem path, so the `@` in
+  // `.../@adlc/antigravity` is read as the separator and the install dies with
+  // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
+  // plugin under an @-free path, actually registers the plugin.
+  assert.match(ag?.note ?? "", /npx @adlc\/antigravity@latest install/);
+
+  const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
+
+  // Every npx invocation must carry a VERSION SPEC. npx resolves a bare name
+  // against the current project first, so `npx @adlc/antigravity` in a repo that
+  // ships a workspace or dependency of that name executes THAT binary instead —
+  // reproduced against a real local install. A scoped name is no protection. This
+  // is the same hazard install.sh already pins for the `plugins` package.
+  for (const line of advertised) {
+    for (const [, spec] of line.matchAll(/npx\s+(?:--\S+\s+)*(@?[\w./@-]+)/g)) {
+      assert.ok(
+        spec.includes('@', 1),
+        `npx must carry a version spec or a repo-local package can shadow it: ${line}`,
+      );
+    }
+  }
+
+  // The neutral-cwd hop must be AND-chained. Not string-shape pedantry: with
+  // `||`, npx runs in the CALLER's directory whenever the cd SUCCEEDS — the
+  // control inverted — and in the caller's directory on failure too, which is
+  // exactly the hostile-.npmrc case the scratch dir exists to avoid. The
+  // operator is the security property here, so it is pinned deliberately.
+  for (const line of advertised) {
+    if (!line.includes('mktemp -d') || !line.includes('npx ')) continue;
+    assert.match(
+      line,
+      /mktemp -d\)"\s*&&\s*npx /,
+      `the neutral-cwd hop must be "&&" so npx runs INSIDE the scratch dir: ${line}`,
+    );
+    // …and it must be a SUBSHELL. A bare `cd "$(mktemp -d)" && npx …` changes the
+    // caller's interactive shell, so a successful install leaves the user sitting
+    // in a scratch directory — and the very next documented step, /adlc-init,
+    // then scaffolds .adlc/ there instead of in their repository.
+    assert.match(
+      line,
+      /\(cd "\$\(mktemp -d\)"/,
+      `the neutral-cwd hop must be a subshell or it strands the caller's cwd: ${line}`,
+    );
+  }
+  assert.ok(
+    !advertised.some((line) => /agy plugin install \S*@/.test(line)),
+    `an advertised command hands agy a path it parses as plugin@marketplace: ${advertised.join(' | ')}`,
+  );
+  // `adlc-agy` is a BIN name inside @adlc/antigravity, not a package name.
+  // `npx adlc-agy install` resolves against the registry on any machine without
+  // the global install and 404s — and it points at an unclaimed npm name that
+  // someone else's package could answer to.
+  assert.ok(
+    !advertised.some((line) => /npx adlc-agy/.test(line)),
+    `an advertised command names an unpublished npm package: ${advertised.join(' | ')}`,
+  );
 });
 
 test('Pi marketing publication claim matches a non-private @adlc/pi package', () => {

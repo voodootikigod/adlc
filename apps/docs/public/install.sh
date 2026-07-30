@@ -295,11 +295,10 @@ install_pi() {
 install_antigravity() {
     have agy || return 0
     log "Google Antigravity detected"
-    # `agy plugin install` only accepts a filesystem path, so the plugin has to
-    # land on disk first. The path is then VERIFIED rather than assumed: with
-    # version managers and custom prefixes, `npm install -g` can write somewhere
-    # `npm root -g` does not report, and handing agy a non-existent path produces
-    # a confusing downstream error instead of a clear one here.
+    # The plugin has to land on disk first, and the path is VERIFIED rather than
+    # assumed: with version managers and custom prefixes, `npm install -g` can
+    # write somewhere `npm root -g` does not report, and a non-existent path
+    # produces a confusing downstream error instead of a clear one here.
     if ! npm install -g @adlc/antigravity; then
         warn "Google Antigravity: npm install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
@@ -307,20 +306,38 @@ install_antigravity() {
     fi
 
     agy_root=$(npm root -g 2>/dev/null || echo "")
-    agy_plugin="${agy_root}/@adlc/antigravity"
-    if [ -z "$agy_root" ] || [ ! -d "$agy_plugin" ]; then
-        warn "Google Antigravity: @adlc/antigravity installed, but not found at"
-        warn "  ${agy_plugin:-<npm root -g unavailable>}"
-        warn "Locate it with 'npm root -g', then: agy plugin install <path>/@adlc/antigravity"
+    agy_helper="${agy_root}/@adlc/antigravity/bin/cli.mjs"
+    if [ -z "$agy_root" ] || [ ! -f "$agy_helper" ]; then
+        warn "Google Antigravity: @adlc/antigravity installed, but its helper was not found at"
+        warn "  ${agy_helper:-<npm root -g unavailable>}"
+        # SINGLE-quoted on purpose: this is a command for the user to TYPE, not
+        # one to run here. Double quotes would expand $(mktemp -d) at warn time,
+        # leaking a temp directory and printing a machine-specific path in place
+        # of the literal instruction.
+        warn 'Register it with: (cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)'
         record_manual "Google Antigravity"
         return 0
     fi
 
-    if agy plugin install "$agy_plugin"; then
+    # DELEGATE to the package's own helper instead of re-implementing the install.
+    #
+    # The helper owns four things this script would otherwise duplicate: staging
+    # under an @-free path (agy resolves its target as `plugin@marketplace` BEFORE
+    # treating it as a filesystem path, and every npm location for a scoped
+    # package contains an `@`, so the real directory is rejected with
+    # "unknown marketplace: adlc/antigravity"); resolving `agy` while ignoring
+    # npm-injected bin directories; a timeout on every agy subprocess; and
+    # fail-closed semantics when a present agy refuses the plugin.
+    #
+    # This script HAD its own copy of the staging logic, and the duplication did
+    # exactly what duplication does — the helper gained a subprocess timeout and
+    # this path silently kept none, so a wedged agy hung the whole installer past
+    # its summary and exit status. One implementation, one place to fix.
+    if node "$agy_helper" install; then
         ok "Google Antigravity"
         record_installed "Google Antigravity"
     else
-        warn "Google Antigravity: agy plugin install failed — see ${SITE}/integrations/antigravity"
+        warn "Google Antigravity: install failed — see ${SITE}/integrations/antigravity"
         record_failed "Google Antigravity"
     fi
 }
@@ -399,7 +416,7 @@ summary() {
         manual_has "Cursor" && printf '      Cursor:   Settings -> Plugins -> Add marketplace -> https://github.com/voodootikigod/adlc, then install adlc-cursor\n'
         manual_has "OpenCode" && printf '      OpenCode: run INSIDE your repo -- npx @adlc/opencode init   (it scaffolds the current directory)\n'
         manual_has "pi" && printf '      pi:       needs Node >= 22.19; upgrade Node, then "pi install npm:@adlc/pi"\n'
-        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Locate it, then: agy plugin install <path>/@adlc/antigravity\n'
+        manual_has "Google Antigravity" && printf '      Antigravity: @adlc/antigravity is installed but was not found under "npm root -g".\n                   Register it with: (cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)\n'
     fi
     if [ -z "$INSTALLED" ] && [ -z "$FAILED" ] && [ -z "$MANUAL" ]; then
         warn "no agent harness detected — the gate toolkit works standalone"

@@ -21,31 +21,69 @@ Native ADLC integration for the Antigravity CLI. Two layers:
 > [`docs/ci/rails-guard.yml`](../ci/rails-guard.yml)) — **make it a required
 > check** before relying on this integration for enforcement.
 
-**Global npm Install (Recommended).** Install `@adlc/antigravity` globally via npm, then point `agy` at the global package location:
+**One-liner via npx (Recommended).** The helper CLI fetches the package and registers it with `agy` in one step:
+
+```sh
+(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)
+```
+
+**Global npm Install.** Install `@adlc/antigravity` globally via npm, then let the bundled helper register it:
 
 ```sh
 npm install -g @adlc/antigravity
-agy plugin install $(npm root -g)/@adlc/antigravity
+adlc-agy install
 ```
 
-**One-liner via npx.** Alternatively, run the helper CLI directly via `npx` to install and register:
-
-```sh
-npx adlc-agy install
-```
-
-**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules` and register with `agy`:
+**Local Project Install.** Install `@adlc/antigravity` into your project's `node_modules`, then run the binary you just installed:
 
 ```sh
 npm install @adlc/antigravity
-agy plugin install ./node_modules/@adlc/antigravity
+./node_modules/.bin/adlc-agy install
 ```
 
-**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout:
+**Local Checkout (from Source).** For local development or installing directly from an `adlc` source checkout, run the checkout's own helper so it stages the plugin for you:
 
 ```sh
-agy plugin install /abs/path/to/adlc/plugins/adlc-antigravity
+node /abs/path/to/adlc/plugins/adlc-antigravity/bin/cli.mjs install
 ```
+
+> **Why never hand the plugin directory to `agy` yourself?** `agy` resolves its
+> install target as `plugin@marketplace` *before* deciding whether that target is
+> a filesystem path, so an `@` anywhere in the argument is read as the separator.
+> Every location npm gives a scoped package contains one, so
+> `agy plugin install $(npm root -g)/@adlc/antigravity` fails with
+> `unknown marketplace: adlc/antigravity` and installs nothing. A source checkout
+> is not reliably safe either: an `@` in any parent directory — a clone under
+> `/home/user@example.com/...`, say — reproduces the same failure. The helper
+> stages the plugin under an `@`-free path and installs from there; `agy` copies
+> the contents into `~/.gemini/config/plugins/adlc-antigravity/`, so the staging
+> directory is discarded afterwards.
+>
+> **And why `cd "$(mktemp -d)" && npx @adlc/antigravity@latest`?** Both halves are
+> load-bearing, and each was reproduced against a real npm install before being
+> adopted. This is a machine-level install that never needs your repository, so
+> running it from a scratch directory costs nothing.
+>
+> - **`@latest`.** `npx @adlc/antigravity` resolves a bare name against the
+>   **current project** first, so a repository shipping a workspace or dependency
+>   named `@adlc/antigravity` gets *its* binary executed. A version spec forces
+>   registry resolution — it pins nothing, it only refuses local shadowing (the
+>   same reason `install.sh` calls `plugins@<version>` rather than bare `plugins`).
+> - **The neutral directory.** npm reads the current project's `.npmrc` and
+>   prepends its `node_modules/.bin` to the child's PATH. A hostile repo can
+>   therefore redirect the `@adlc` scope to its own registry, or plant a bin named
+>   `agy` for the helper to invoke. Starting from an empty directory removes both.
+>   (The helper also resolves `agy` itself while ignoring npm-injected bin
+>   directories, so the two controls are independent.)
+>
+> **Residual risk, stated rather than papered over.** `mktemp -d` honours `TMPDIR`,
+> and npm discovers a project by walking *upward* from the working directory. If
+> your `TMPDIR` points inside a repository, the scratch directory is still inside
+> that npm project and its `.npmrc` is still discovered — so the isolation is only
+> as good as `TMPDIR` being outside the repo you are standing in. npm offers no
+> flag that ignores an ancestor project config, so if you are installing from a
+> repository you do not trust, prefer the global-npm path above: `npm install -g`
+> resolves nothing relative to your working directory.
 
 **Universal Installer (Planned — Not yet supported).** Support for Google Antigravity inside the vendor-neutral `plugins` installer is currently in development and **not yet present**. Once implemented, you will be able to install it via:
 
@@ -56,6 +94,8 @@ npx plugins add voodootikigod/adlc
 **Note on native marketplace:** The native `.agents` marketplace registration command (`agy plugin install adlc-antigravity@adlc`) is currently subject to a CLI limitation where the CLI rejects unregistered third-party marketplaces with `unknown marketplace: adlc`. Global npm or local installation is the recommended path.
 
 Then `/adlc-init` (or manual bootstrap). Enforcement: `export ADLC_P4_ENFORCEMENT=1` with an active ticket.
+
+**Install timeout.** Each `agy` subprocess is bounded by `ADLC_AGY_TIMEOUT_MS` (milliseconds, default `120000`). A failure reading `timed out after 120000ms` is that bound, not `agy` crashing — re-run with a larger value if the install is legitimately slow (cold cache, network-mounted storage). The value must be positive and finite; `0` and `Infinity` would disable the bound and are refused rather than silently ignored.
 
 ## Formal ADLC Coverage
 

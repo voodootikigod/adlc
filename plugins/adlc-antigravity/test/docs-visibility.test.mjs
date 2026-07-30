@@ -76,3 +76,73 @@ test('the Antigravity plugin points at scripts/rails-guard-ci.mjs as a required-
     'the rails-guard-ci.mjs reference should be framed as a required-check recommendation'
   );
 });
+
+test('no shipped surface tells a user to run `agy plugin install <path>` directly', () => {
+  // The whole point of this integration's install path is that agy resolves its
+  // target as `plugin@marketplace` BEFORE treating it as a filesystem path, so an
+  // `@` ANYWHERE in the argument is read as the separator. Every npm location for
+  // a scoped package has one, and a source checkout is not safe either — a clone
+  // under /home/user@example.com/... reproduces it exactly.
+  //
+  // Prose that QUOTES the broken command to explain the hazard is fine and
+  // expected; an instruction a user copies is not. So only fenced code blocks are
+  // scanned: that is the difference between explaining the trap and setting it.
+  //
+  // This caught the shipped /adlc-init command still teaching the raw-path form
+  // while every guide around it warned against exactly that.
+  const SURFACES = [
+    'plugins/adlc-antigravity/commands/adlc-init.md',
+    'plugins/adlc-antigravity/README.md',
+    'docs/integrations/antigravity.md',
+    'apps/docs/content/docs/integrations/antigravity.mdx',
+  ];
+
+  let scanned = 0;
+  for (const relative of SURFACES) {
+    const text = readFileSync(join(REPO_ROOT, relative), 'utf8');
+    scanned += 1;
+    for (const [, block] of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+      for (const line of block.split('\n')) {
+        const match = line.match(/agy\s+plugin\s+install\s+(\S+)/);
+        if (!match) continue;
+        assert.fail(
+          `${relative} instructs a user to pass a path to agy directly: "${line.trim()}"\n` +
+            'Route it through the helper (bin/cli.mjs install), which stages under an @-free path.'
+        );
+      }
+    }
+  }
+  assert.equal(scanned, SURFACES.length, 'every listed surface must exist and be scanned');
+});
+
+test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', () => {
+  // The implementation accepts that a legitimate install can exceed 120s and adds
+  // this knob as the remedy. A knob documented only in a source comment is not a
+  // remedy: a user who hits the bound sees an elapsed duration and retries the same
+  // published command forever. So every surface that tells someone how to install
+  // has to name it, and so does the failure message itself.
+  const SURFACES = [
+    'plugins/adlc-antigravity/README.md',
+    'docs/integrations/antigravity.md',
+    'apps/docs/content/docs/integrations/antigravity.mdx',
+    'plugins/adlc-antigravity/bin/cli.mjs',
+  ];
+  for (const relative of SURFACES) {
+    const text = readFileSync(join(REPO_ROOT, relative), 'utf8');
+    assert.match(text, /ADLC_AGY_TIMEOUT_MS/, `${relative} never names the timeout knob`);
+    assert.match(
+      text,
+      /millisecond/i,
+      `${relative} names the knob without its units — "300" is 300ms or 5min depending on the guess`,
+    );
+  }
+
+  // And the error a user actually sees must point at it, since that is the moment
+  // they need it.
+  const cli = readFileSync(join(REPO_ROOT, 'plugins/adlc-antigravity/bin/cli.mjs'), 'utf8');
+  assert.match(
+    cli,
+    /timed out after[\s\S]{0,200}ADLC_AGY_TIMEOUT_MS/,
+    'the timeout error must name the knob that fixes it'
+  );
+});

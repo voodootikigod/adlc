@@ -720,12 +720,24 @@ export const ANTIGRAVITY_INTEGRATION = {
   name: 'Google Antigravity',
   status: 'local',
   tagline: 'Advisory PreToolUse rails-guard for agy, plus skills and a prosecutor agent. The unbypassable CI rail-freeze gate is the real control.',
+  // Two hazards are encoded in these commands; neither is cosmetic.
+  //
+  // 1. `agy plugin install <path>` cannot be handed the npm location: agy resolves
+  //    its target as `plugin@marketplace` BEFORE treating it as a path, so the `@`
+  //    in `.../@adlc/antigravity` is read as that separator and the install dies
+  //    with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
+  //    under an @-free path, so it is the npm path that actually works.
+  // 2. The `@latest` is REQUIRED, not decorative. `npx @adlc/antigravity` resolves
+  //    a bare name against the CURRENT PROJECT first, so a repo shipping a
+  //    workspace or dependency named `@adlc/antigravity` gets ITS binary executed
+  //    instead (reproduced against a real local install). A version spec forces
+  //    registry resolution; it pins nothing, it only refuses local shadowing.
   install: [
+    '(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)',
     'npm install -g @adlc/antigravity',
-    'agy plugin install $(npm root -g)/@adlc/antigravity',
-    'npx adlc-agy install',
+    'adlc-agy install',
   ],
-  note: 'Recommended: install globally via npm (npm install -g @adlc/antigravity) and register with agy, or run npx adlc-agy install. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: (cd "$(mktemp -d)" && npx @adlc/antigravity@latest install) — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-antigravity',
   hero: {
     kicker: 'Antigravity integration',
@@ -817,17 +829,17 @@ export const ANTIGRAVITY_INTEGRATION = {
   },
   installSection: {
     kicker: 'Install',
-    title: 'Install via global npm or npx',
+    title: 'Install via npx or global npm',
   },
   operate: {
     title: 'operate: Antigravity plugin',
     lines: [
-      '# Recommended global npm install',
-      'npm install -g @adlc/antigravity',
-      'agy plugin install $(npm root -g)/@adlc/antigravity',
+      '# Recommended one-liner via npx',
+      '(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)',
       '',
-      '# Or one-liner via npx',
-      'npx adlc-agy install',
+      '# Or install globally, then register',
+      'npm install -g @adlc/antigravity',
+      'adlc-agy install',
       '',
       '# Arm enforcement for an active ticket',
       'export ADLC_P4_ENFORCEMENT=1',
