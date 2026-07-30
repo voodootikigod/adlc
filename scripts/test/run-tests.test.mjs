@@ -89,3 +89,17 @@ test('spawned runner prints no notice when the environment is clean', () => {
   const out = runRunner({});
   assert.ok(!/scrub/i.test(out), `expected no scrub notice, got:\n${out}`);
 });
+
+test('an unknown segment filter is an OPERATIONAL error: exit 1, never the gate-fail code 2', () => {
+  // Exit codes are load-bearing across ADLC: 1 = operational error, 2 = a gate
+  // failed. A runner that exits 2 for a typo'd segment name would read as a real
+  // test failure to any caller that distinguishes the two.
+  let status = 0, stderr = '';
+  try {
+    execFileSync(process.execPath, ['scripts/run-tests.mjs', 'no-such-segment-xyz'], {
+      cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) { status = err.status; stderr = String(err.stderr); }
+  assert.equal(status, 1);
+  assert.match(stderr, /no test segment matches/);
+});
