@@ -17,7 +17,7 @@
 // looks the same as before.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,10 +29,41 @@ import { fileURLToPath } from 'node:url';
 // PATH and those spawns fail with ENOENT on a runner without a global adlc — a
 // silent false red. Prepending it here makes the runner self-sufficient either way.
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SEGMENT_ENV = {
-  ...process.env,
-  PATH: `${join(REPO_ROOT, 'node_modules', '.bin')}${delimiter}${process.env.PATH ?? ''}`,
-};
+
+// Ambient trust-root variables the OPERATOR's shell may carry that must not decide
+// test outcomes (spec: .adlc/specs/manifest-key-hermeticity.md, Layer 1):
+//   ADLC_MANIFEST_KEY — flips key-present/key-absent branches deep in library code
+//     (measured: gate-manifest + tickets segments 0/2 with it exported, 2/2 without);
+//   RAILS_BASE / BASE_REF — retarget rails-guard base resolution at branches the
+//     tests' scratch repos don't contain (75/80 bootstrap tests failed).
+// Tests that NEED one of these set their own value inline and are unaffected.
+export const SCRUBBED_ENV_VARS = ['ADLC_MANIFEST_KEY', 'RAILS_BASE', 'BASE_REF'];
+
+/**
+ * Build the env every segment is spawned with: the caller's env with the repo's
+ * node_modules/.bin prepended to PATH, and each SCRUBBED_ENV_VARS member DELETED when
+ * its value is non-empty. An explicitly-empty value ('') is PRESERVED: presence beats
+ * truthiness for these variables — an empty ADLC_MANIFEST_KEY is a deliberate
+ * fail-closed that blocks the .env.local file loader (load-env-local.mjs rule 2), and
+ * deleting it would re-enable file fallback inside spawned bins. Unset stays absent.
+ *
+ * @param {NodeJS.ProcessEnv} [baseEnv]
+ * @returns {{env: NodeJS.ProcessEnv, scrubbed: string[]}} scrubbed lists what was deleted
+ */
+export function buildSegmentEnv(baseEnv = process.env) {
+  const env = {
+    ...baseEnv,
+    PATH: `${join(REPO_ROOT, 'node_modules', '.bin')}${delimiter}${baseEnv.PATH ?? ''}`,
+  };
+  const scrubbed = [];
+  for (const name of SCRUBBED_ENV_VARS) {
+    if (Object.hasOwn(env, name) && env[name] !== '') {
+      delete env[name];
+      scrubbed.push(name);
+    }
+  }
+  return { env, scrubbed };
+}
 
 const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck true';
 
@@ -70,24 +101,39 @@ const SEGMENTS = [
   ['docs app', 'node --test apps/docs/test/*.test.mjs'],
 ];
 
-const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
-const segments = only.length ? SEGMENTS.filter(([name]) => only.some((o) => name.includes(o))) : SEGMENTS;
-if (only.length && segments.length === 0) {
-  console.error(`no test segment matches ${JSON.stringify(only)}. Known: ${SEGMENTS.map(([n]) => n).join(', ')}`);
-  process.exit(1);
+function main() {
+  const { env: segmentEnv, scrubbed } = buildSegmentEnv(process.env);
+  if (scrubbed.length) {
+    console.log(`note: ${scrubbed.join(', ')} set in your shell — scrubbed for test segments`);
+  }
+
+  const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+  const segments = only.length ? SEGMENTS.filter(([name]) => only.some((o) => name.includes(o))) : SEGMENTS;
+  if (only.length && segments.length === 0) {
+    console.error(`no test segment matches ${JSON.stringify(only)}. Known: ${SEGMENTS.map(([n]) => n).join(', ')}`);
+    process.exit(1);
+  }
+
+  const failed = [];
+  for (const [name, command] of segments) {
+    console.log(`\n─── ${name}`);
+    const result = spawnSync(command, { shell: true, stdio: 'inherit', env: segmentEnv });
+    // A signal (status null) is a failure too — never let a killed segment read as a pass.
+    if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
+  }
+
+  console.log(`\n═══ ${segments.length - failed.length}/${segments.length} segments passed`);
+  if (failed.length) {
+    for (const f of failed) console.log(`  FAILED  ${f.name}${f.signal ? ` (${f.signal})` : ` (exit ${f.status})`}`);
+    process.exit(1);
+  }
+  console.log('  all green');
 }
 
-const failed = [];
-for (const [name, command] of segments) {
-  console.log(`\n─── ${name}`);
-  const result = spawnSync(command, { shell: true, stdio: 'inherit', env: SEGMENT_ENV });
-  // A signal (status null) is a failure too — never let a killed segment read as a pass.
-  if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
-}
-
-console.log(`\n═══ ${segments.length - failed.length}/${segments.length} segments passed`);
-if (failed.length) {
-  for (const f of failed) console.log(`  FAILED  ${f.name}${f.signal ? ` (${f.signal})` : ` (exit ${f.status})`}`);
-  process.exit(1);
-}
-console.log('  all green');
+// Only run the suite when executed directly — the hermeticity test imports this module
+// for buildSegmentEnv, and an import must never launch every test segment. realpathSync
+// on BOTH sides: macOS /tmp is a symlink, so a path-string comparison can disagree
+// locally while agreeing on Linux CI (or vice versa).
+const invokedDirectly = process.argv[1]
+  && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+if (invokedDirectly) main();

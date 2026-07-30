@@ -1,0 +1,91 @@
+// run-tests-hermetic.test.mjs — the test runner must scrub ambient trust-root env
+// (T-01KYQMPBEKCDCZ60FZKDC1WNF7, spec .adlc/specs/manifest-key-hermeticity.md Layer 1).
+//
+// Why: an exported ADLC_MANIFEST_KEY flips key-present/key-absent branches deep in
+// library code (measured 2026-07-29: gate-manifest + tickets segments 0/2 with the key
+// exported, 2/2 without), and an exported RAILS_BASE retargets rails-guard tests at
+// branches the scratch repos don't contain (75/80 bootstrap tests failed). The failure
+// names a package, not a variable — so the runner deletes non-empty values of the
+// sensitive set from every segment's env and says so once.
+//
+// Presence-vs-emptiness is load-bearing: an explicitly-empty ADLC_MANIFEST_KEY='' is a
+// deliberate fail-closed that beats the .env.local file loader
+// (packages/prosecute/lib/load-env-local.mjs rule 2). DELETING it would convert
+// "never fall back to a file key" into absence and re-enable file fallback in spawned
+// bins — so '' is PRESERVED, and only non-empty values are deleted.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join, dirname, delimiter } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildSegmentEnv, SCRUBBED_ENV_VARS } from '../run-tests.mjs';
+
+const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+
+test('the sensitive set is exactly the three ambient trust-root variables', () => {
+  assert.deepEqual([...SCRUBBED_ENV_VARS].sort(), ['ADLC_MANIFEST_KEY', 'BASE_REF', 'RAILS_BASE']);
+});
+
+test('non-empty sensitive values are ABSENT from the segment env and reported', () => {
+  const { env, scrubbed } = buildSegmentEnv({
+    HOME: '/h',
+    ADLC_MANIFEST_KEY: 'leaked-key',
+    RAILS_BASE: 'chore/somewhere',
+    BASE_REF: 'main',
+  });
+  for (const name of SCRUBBED_ENV_VARS) {
+    assert.equal(Object.hasOwn(env, name), false, `${name} must be deleted, not emptied`);
+  }
+  assert.deepEqual([...scrubbed].sort(), ['ADLC_MANIFEST_KEY', 'BASE_REF', 'RAILS_BASE']);
+  assert.equal(env.HOME, '/h', 'unrelated vars pass through');
+});
+
+test("an explicitly-empty value ('') is PRESERVED as the deliberate fail-closed state", () => {
+  const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: '', RAILS_BASE: '' });
+  assert.equal(env.ADLC_MANIFEST_KEY, '', "'' must survive: it blocks .env.local fallback by PRESENCE");
+  assert.equal(env.RAILS_BASE, '');
+  assert.deepEqual(scrubbed, [], 'preserving is not scrubbing — no notice for empty values');
+});
+
+test('unset variables stay absent and produce no notice', () => {
+  const { env, scrubbed } = buildSegmentEnv({ HOME: '/h' });
+  for (const name of SCRUBBED_ENV_VARS) assert.equal(Object.hasOwn(env, name), false);
+  assert.deepEqual(scrubbed, []);
+});
+
+test('mixed input: only the non-empty members are scrubbed', () => {
+  const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: 'k', RAILS_BASE: '' });
+  assert.equal(Object.hasOwn(env, 'ADLC_MANIFEST_KEY'), false);
+  assert.equal(env.RAILS_BASE, '');
+  assert.deepEqual(scrubbed, ['ADLC_MANIFEST_KEY']);
+});
+
+test('the runner PATH prepend is preserved by the helper', () => {
+  const { env } = buildSegmentEnv({ PATH: '/usr/bin' });
+  assert.ok(env.PATH.startsWith(join(REPO_ROOT, 'node_modules', '.bin') + delimiter),
+    'node_modules/.bin must stay first on PATH (mutation-gate baseline runs the runner directly)');
+});
+
+// Behavioral, process-boundary: the notice appears exactly once when a non-empty key is
+// exported, and never when the environment is clean. Uses the cheapest real segment.
+// The assertion greps for the variable name plus the word "scrub" rather than pinning
+// the full sentence — the notice is prose, and prose must stay reword-able.
+function runRunner(extraEnv) {
+  const env = { ...process.env, ...extraEnv };
+  delete env.ADLC_MANIFEST_KEY; delete env.RAILS_BASE; delete env.BASE_REF;
+  Object.assign(env, extraEnv);
+  return execFileSync(process.execPath, ['scripts/run-tests.mjs', 'generated-reader'], {
+    cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
+  });
+}
+
+test('spawned runner prints the scrub notice exactly once with a leaked key', () => {
+  const out = runRunner({ ADLC_MANIFEST_KEY: 'leak-test' });
+  const notices = out.split('\n').filter((l) => /ADLC_MANIFEST_KEY/.test(l) && /scrub/i.test(l));
+  assert.equal(notices.length, 1, `expected exactly one notice line, got:\n${out}`);
+});
+
+test('spawned runner prints no notice when the environment is clean', () => {
+  const out = runRunner({});
+  assert.ok(!/scrub/i.test(out), `expected no scrub notice, got:\n${out}`);
+});
