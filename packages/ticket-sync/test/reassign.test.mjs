@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from '@adlc/core';
-import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson } from '@adlc/tickets';
+import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson, lineagePath } from '@adlc/tickets';
 import { reassignId, planManifestMigration, migrateManifestEvidence } from '../lib/reassign.mjs';
 
 // ---- reassignId (pure, store-wide edge rewrite) ----
@@ -225,6 +225,27 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
     assert.equal(existsSync(join(dir, 'manifest.jsonl')), false, 'root must never be created once segmented');
     const { entries } = { entries: readForestEntries(dir) };
     assert.equal(entries.filter((e) => e.ticket === 'gh:acme/app#7').length, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// T-MANIFEST-FOREST lineage-durability finding: migrateSegmentedSet's internal
+// readOwnChains call used to return root-only (silently finding ZERO sources to
+// carry forward) the moment the local, gitignored .lineage token was lost — a
+// fresh clone or a branch switch away and back — even though the real evidence
+// sat in a committed segment on disk. Simulates that precondition directly
+// (deleting the token after the evidence-bearing segment already exists).
+test('migrateManifestEvidence still finds source evidence after the local .lineage token is lost (fresh clone / branch switch)', () => {
+  const { root, dir } = gitRepo();
+  try {
+    activate(dir);
+    recordTicketEvidence(root, {
+      transactionId: 'tx-1', operation: 'complete', ticketId: 'T7',
+      ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
+    });
+    rmSync(lineagePath(dir), { force: true });
+    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null });
+    assert.equal(result.migrated, 1, 'the committed segment\'s evidence must still be found and carried forward');
+    assert.equal(result.entries[0].data.migratedFrom, 'T7');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

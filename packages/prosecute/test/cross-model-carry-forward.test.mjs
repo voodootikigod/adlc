@@ -340,6 +340,35 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
+  // T-MANIFEST-FOREST lineage-durability finding: the "latest entry" lookup used
+  // to call peekOpenSegment directly, which returns null the moment the local,
+  // gitignored .lineage token is lost — a fresh clone or a branch switch away and
+  // back — even when the real prior approve sits in a committed segment on disk.
+  // That looked identical to "no prior verdict at all" and refused a carry-forward
+  // that should have succeeded.
+  it('still finds the prior approve in this checkout\'s own segment after the local .lineage token is lost (fresh clone / branch switch)', () => {
+    const dir = gitLedger();
+    try {
+      activateSegments(dir);
+      seed(dir, rev(BASE1)); // lands in the newly-opened segment, writes .lineage
+      rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
+
+      // Without the fix, this would throw "no prior cross-model verdict recorded".
+      carry(dir, rev(BASE1), rev(BASE2));
+      // The carry's own WRITE mints a fresh segment (never the recovered one) since
+      // .lineage is still gone at write time — writers stay precise and never reuse
+      // a segment identified only by a read-side recovery scan (by design; only
+      // READS recover). Scan every segment file for the carry entry rather than
+      // assuming it landed in the one .lineage originally pointed at.
+      const segDir = join(dir, 'manifest.d');
+      const entries = readdirSync(segDir).filter((n) => n.endsWith('.jsonl'))
+        .flatMap((n) => readFileSync(join(segDir, n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)));
+      const carried = entries.find((e) => e.data?.revision === rev(BASE2));
+      assert.ok(carried, 'the carry-forward entry must exist in SOME segment');
+      assert.equal(carried.data.carriedFrom, rev(BASE1), 'carried from the recovered prior approve, not lost');
+    } finally { clean(dir); }
+  });
+
   // Adversarial-review finding: the "latest entry" lookup must be scoped to root +
   // THIS checkout's own segment ONLY — no total order exists across independent
   // lineages. An UNRELATED segment (never opened via this checkout's .lineage

@@ -33,7 +33,7 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // makes "which chain an entry lives in" a non-issue for crossModelSatisfied below
 // (order does not matter to the terminal-revocation rule at all, by design).
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
-import { peekOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
+import { recoverOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
@@ -198,13 +198,21 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   // within one chain appends are strictly sequential), but there is no total
   // order across UNRELATED segments, so this deliberately never reads any other
   // lineage's segment (same scoping as doctor.mjs's storeHashBindingCheck and
-  // ticket-sync's planManifestMigration). peekOpenSegment (never mints) keeps
-  // this read-only check free of the write side effect resolveOpenSegment's
-  // minting branch carries. The forest-wide revocation check below (after a
-  // genuine prior approve is confirmed) is the exception: it does not need a
-  // total order, only forest-wide membership, so it reads every segment.
+  // ticket-sync's planManifestMigration). recoverOpenSegment (never mints)
+  // keeps this read-only check free of the write side effect
+  // resolveOpenSegment's minting branch carries, and additionally recovers
+  // this checkout's segment when the local `.lineage` token is absent or
+  // stale — a fresh clone or a branch switch away and back must not report
+  // "no prior verdict" when a real, committed segment holding the actual
+  // prior approve exists (T-MANIFEST-FOREST lineage-durability finding); it
+  // throws instead of guessing when more than one committed segment could be
+  // this branch's, which this fail-closed carry-forward path already
+  // propagates like every other refusal above. The forest-wide revocation
+  // check below (after a genuine prior approve is confirmed) is the
+  // exception: it does not need a total order, only forest-wide membership,
+  // so it reads every segment.
   const forest = readManifestForest(dir);
-  const peeked = peekOpenSegment(dir, { cwd: dirname(dir) });
+  const peeked = recoverOpenSegment(dir, { cwd: dirname(dir) });
   const entries = peeked
     ? forest.entries.filter((e) => e.segment === 'root' || e.segment === peeked.name)
     : forest.entries.filter((e) => e.segment === 'root');

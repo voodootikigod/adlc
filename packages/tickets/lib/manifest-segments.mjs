@@ -271,11 +271,19 @@ export function readForestEntries(dir) {
  * root+own-segment scoping used by storeHashBindingCheck and
  * carryForwardCrossModelReview — no total order exists across UNRELATED
  * segments, so this deliberately never reads them.
+ *
+ * Uses recoverOpenSegment, not peekOpenSegment directly (T-MANIFEST-FOREST
+ * lineage-durability finding): a fresh clone or a branch switch that
+ * overwrote `.lineage` must not silently look like "this branch has no
+ * segment" when a real, committed one exists on disk. Throws if the recovery
+ * scan finds more than one candidate — this is a READ, so it must fail
+ * closed rather than guess; callers should let that propagate as a real
+ * failure, never swallow it into "no evidence".
  */
 export function readOwnChains(dir, { cwd = dirname(dir) } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
   if (!isSegmentedRepo(dir)) return [root];
-  const peeked = peekOpenSegment(dir, { cwd });
+  const peeked = recoverOpenSegment(dir, { cwd });
   if (!peeked) return [root];
   return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
 }
@@ -354,13 +362,13 @@ function encodeUlidPart(value, width) {
   }
   return output;
 }
-function generateSegmentUlid(now = Date.now(), entropy = randomBytes(10)) {
+export function generateSegmentUlid(now = Date.now(), entropy = randomBytes(10)) {
   const random = BigInt(`0x${entropy.toString('hex')}`);
   return `${encodeUlidPart(BigInt(now), 10)}${encodeUlidPart(random, 16)}`;
 }
 
 // spec §7.1 slug derivation — mirrors gate-manifest/lib/lineage.mjs's deriveSlug exactly.
-function deriveSlug(branchName) {
+export function deriveSlug(branchName) {
   const lowered = String(branchName ?? '').toLowerCase();
   const substituted = lowered.replace(/[^a-z0-9-]+/g, '-');
   const collapsed = substituted.replace(/-+/g, '-').replace(/^-+|-+$/g, '');
@@ -368,7 +376,7 @@ function deriveSlug(branchName) {
   return truncated || 'segment';
 }
 
-function currentBranch(cwd) {
+export function currentBranch(cwd) {
   try {
     const out = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     return out === '' || out === 'HEAD' ? null : out; // detached HEAD never matches a cached token
@@ -441,6 +449,62 @@ export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
     }
   }
   return null;
+}
+
+// spec §4.2: segment names are `${slug}-${ULID}.jsonl`; the ULID is a fixed
+// 26-char Crockford-base32 suffix using ONLY uppercase letters/digits (see
+// ULID_ALPHABET above), while a slug (deriveSlug) is restricted to lowercase
+// letters/digits/hyphen — the two character sets never overlap, so the split
+// point is unambiguous without needing SEGMENT_NAME_RE's full grammar here:
+// strip `.jsonl` (6 chars) and the ULID (26 chars) and the separating `-` (1
+// char), and whatever remains is exactly the slug that named it. Mirrors
+// @adlc/gate-manifest/lib/lineage.mjs's identical helper.
+function slugOf(segmentName) {
+  return segmentName.slice(0, segmentName.length - '.jsonl'.length - 26 - 1);
+}
+
+/**
+ * Read-only recovery for callers that need "what evidence exists for MY
+ * branch" to survive a fresh clone or a branch switch that overwrote
+ * `.lineage` (T-MANIFEST-FOREST lineage-durability finding): `.lineage` is
+ * deliberately gitignored, so peekOpenSegment alone returns null in exactly
+ * those cases even when a real, COMMITTED segment for this branch exists on
+ * disk. Falls back to scanning discoverSegments() for a segment whose slug
+ * (per slugOf, exact match — never a prefix match, which would wrongly match
+ * e.g. branch "feat" against branch "feat-x"'s segment) equals this branch's
+ * own deriveSlug output.
+ *
+ * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
+ * candidates: a writer resolving where to APPEND must stay precise
+ * (resolveOpenSegment, below, deliberately does not use this), but a reader
+ * recovering "what's already there" must not silently guess either — two
+ * branches forked from the same rootless state can legitimately mint
+ * independent segments without coordinating (spec §7 point 1), so more than
+ * one committed segment can share a derived slug, and picking one at random
+ * could silently ignore genuine evidence in the other. Throws in that case;
+ * callers must fail closed, never report "no evidence" when the truth is
+ * "ambiguous". Mirrors @adlc/gate-manifest/lib/lineage.mjs's identical
+ * function.
+ *
+ * @returns {{ name: string, isNew: false }|null}
+ * @throws {Error} when more than one committed segment matches this branch's
+ *   derived slug and the local token does not disambiguate
+ */
+export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
+  const peeked = peekOpenSegment(dir, { cwd });
+  if (peeked) return peeked;
+  const branch = currentBranch(cwd);
+  if (branch === null) return null; // detached HEAD: no branch identity to recover by
+  const slug = deriveSlug(branch);
+  const candidates = discoverSegments(dir).valid.filter((name) => slugOf(name) === slug);
+  if (candidates.length === 0) return null;
+  if (candidates.length > 1) {
+    throw new Error(
+      `ambiguous: ${candidates.length} committed segments match branch "${branch}"'s derived slug "${slug}" `
+      + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess`
+    );
+  }
+  return { name: candidates[0], isNew: false };
 }
 
 /**

@@ -406,6 +406,23 @@ test('doctor storehash-manifest-bind: binds to evidence recorded in a segment (s
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// T-MANIFEST-FOREST lineage-durability finding: storeHashBindingCheck used to
+// call peekOpenSegment directly, which returns null the moment the local,
+// gitignored .lineage token is gone — indistinguishable from "this branch never
+// recorded evidence". Simulates the fresh-clone/branch-switch precondition
+// directly (deleting the token) rather than a full `git clone`, since the two
+// are functionally identical from storeHashBindingCheck's point of view: no
+// token file present, real committed segment on disk.
+test('doctor storehash-manifest-bind: still binds after the local .lineage token is lost (fresh clone / branch switch)', () => {
+  const { root, store } = gitStoreWithSegmentedEvidence();
+  try {
+    rmSync(join(root, '.adlc', 'manifest.d', '.lineage'), { force: true });
+    const check = bindCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, true, JSON.stringify(check));
+    assert.equal(check.bound, true, 'must still find the committed segment\'s checkpoint without a local .lineage token');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('doctor storehash-manifest-bind: a signed segment checkpoint is authenticated the same as a signed root one', () => {
   // The key is an EXPLICIT parameter now — env manipulation is inert by design
   // (spec Layer 2, P1): both evidence recording and doctor consult only what

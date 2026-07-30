@@ -6,7 +6,7 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, peekOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
 /**
@@ -136,13 +136,25 @@ function storeHashBindingCheck(root, snapshot, key) {
   // state at mint time.
   const dir = join(root, '.adlc');
   if (isSegmentedRepo(dir)) {
-    // peekOpenSegment (never mints), NOT resolveOpenSegment — this is a read-only
-    // doctor check with no writer lock held; resolveOpenSegment's minting branch
-    // writes the .lineage token as a side effect, which could race a genuine
-    // writer that already minted its own token but has not yet created the
-    // segment file, splitting that writer's evidence across two segments
-    // (adversarial-review finding).
-    const resolved = peekOpenSegment(dir, { cwd: root });
+    // recoverOpenSegment (never mints), NOT resolveOpenSegment — this is a
+    // read-only doctor check with no writer lock held; resolveOpenSegment's
+    // minting branch writes the .lineage token as a side effect, which could
+    // race a genuine writer that already minted its own token but has not yet
+    // created the segment file, splitting that writer's evidence across two
+    // segments (adversarial-review finding). recoverOpenSegment (not the
+    // plain peekOpenSegment) additionally recovers this checkout's segment
+    // when the local `.lineage` token is absent or stale — a fresh clone or a
+    // branch switch away and back must not report "not bound" when a real,
+    // committed segment for this branch exists (T-MANIFEST-FOREST
+    // lineage-durability finding); it throws instead of guessing when more
+    // than one committed segment could be this branch's, which this check
+    // surfaces as a failure rather than silently reporting clean.
+    let resolved;
+    try {
+      resolved = recoverOpenSegment(dir, { cwd: root });
+    } catch (error) {
+      return { ...check, ok: false, code: 'SEGMENT_AMBIGUOUS', message: error.message };
+    }
     if (resolved) {
       const segFile = segmentPath(dir, resolved.name);
       let segLines;

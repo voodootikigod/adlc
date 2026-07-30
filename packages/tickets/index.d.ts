@@ -212,6 +212,7 @@ export function withManifestLock<T>(path: string, fn: () => T, options?: { retri
 export function isSegmentedRepo(dir: string): boolean;
 export function resolveOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean; anchor?: Record<string, unknown> | null };
 export function peekOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: boolean } | null;
+export function recoverOpenSegment(dir: string, options?: { cwd?: string }): { name: string; isNew: false } | null;
 export function readForestEntries(dir: string): Record<string, unknown>[];
 export function readOwnChains(dir: string, options?: { cwd?: string }): Record<string, unknown>[][];
 export function forestChainsIntact(dir: string, options?: { key?: string | null }): boolean;
@@ -219,6 +220,9 @@ export function entrySigValid(key: string, entry: Record<string, unknown>): bool
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
+export function deriveSlug(branchName: string): string;
+export function generateSegmentUlid(now?: number, entropy?: NodeBuffer): string;
+export function currentBranch(cwd?: string): string | null;
 export function fsyncFile(path: string): void;
 export function fsyncDirectory(path: string): boolean;
 export function durableMkdir(path: string): void;

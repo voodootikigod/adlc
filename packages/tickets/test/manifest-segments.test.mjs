@@ -9,7 +9,10 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordTicketEvidence } from '../lib/evidence.mjs';
-import { isSegmentedRepo, resolveOpenSegment, readForestEntries, segmentPath } from '../lib/manifest-segments.mjs';
+import {
+  isSegmentedRepo, resolveOpenSegment, recoverOpenSegment, readForestEntries, segmentPath,
+  lineagePath, deriveSlug, generateSegmentUlid, currentBranch,
+} from '../lib/manifest-segments.mjs';
 
 function gitRepo(branch = 'feat/ticket-evidence') {
   const root = mkdtempSync(join(tmpdir(), 'adlc-ticket-segments-'));
@@ -346,6 +349,141 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
         (error) => error.code === 'INVALID_MANIFEST',
         'a disguised real segment must be reported invalid, not excluded as a genuine transient lock'
       );
+    } finally { clean(root); }
+  });
+});
+
+// recoverOpenSegment (T-MANIFEST-FOREST lineage-durability finding) — mirrors
+// @adlc/gate-manifest/lib/lineage.mjs's identical function and its own test suite
+// in segment-writer.test.mjs; see that file's header comment for the full
+// rationale. peekOpenSegment alone returns null whenever the local, gitignored
+// `.lineage` token is absent or stale, even when a real, committed segment for
+// this branch exists on disk — readOwnChains and everything built on it
+// (ticket-sync push, doctor, reassignment) route through recoverOpenSegment
+// instead so that stays discoverable.
+describe('recoverOpenSegment (lineage-durability finding)', () => {
+  it('delegates to peekOpenSegment when the token is present and matches — identical result', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const recovered = recoverOpenSegment(dir, { cwd: root });
+      assert.ok(recovered, 'the just-written segment must be found');
+      assert.equal(recovered.isNew, false);
+    } finally { clean(root); }
+  });
+
+  it('returns null when this branch genuinely has no segment yet (not an error)', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      assert.equal(recoverOpenSegment(dir, { cwd: root }), null);
+    } finally { clean(root); }
+  });
+
+  it('AC1: finds a committed segment on a FRESH CLONE, which never has a local .lineage token', () => {
+    const { root, dir } = gitRepo('feat/clone-recovery');
+    let clonedRoot;
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      // Commit the marker and the segment — NOT .lineage, which stays local per
+      // spec §4.8/§7 point 1, exactly like a real gitignored checkout.
+      execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${resolved.name}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'segment evidence'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'adlc-ticket-segments-clone-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/clone-recovery', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'precondition: the fresh clone has no local .lineage token');
+
+      const recovered = recoverOpenSegment(clonedDir, { cwd: clonedRoot });
+      assert.ok(recovered, 'a fresh clone must still find its branch\'s committed segment');
+      assert.equal(recovered.name, resolved.name);
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
+
+  it('AC2: a checkout switching A -> B -> A does not lose visibility into A\'s own segment, despite B overwriting the token', () => {
+    const { root, dir } = gitRepo('feat/branch-a');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const aSegment = resolveOpenSegment(dir, { cwd: root }).name;
+
+      execFileSync('git', ['checkout', '-q', '-b', 'feat/branch-b'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-on-b' })); // mints B's own segment, overwrites .lineage
+      const bSegment = resolveOpenSegment(dir, { cwd: root }).name;
+      assert.notEqual(bSegment, aSegment, 'precondition: B minted its own, separate segment');
+      const token = JSON.parse(readFileSync(lineagePath(dir), 'utf8'));
+      assert.equal(token.branch, 'feat/branch-b', 'precondition: the token now names B, not A');
+
+      execFileSync('git', ['checkout', '-q', 'feat/branch-a'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      assert.equal(currentBranch(root), 'feat/branch-a', 'precondition: checked out back to A');
+      // peekOpenSegment alone would return null here: the token names branch B, not A.
+      const recovered = recoverOpenSegment(dir, { cwd: root });
+      assert.ok(recovered, 'recoverOpenSegment must find A\'s own segment despite the token now naming B');
+      assert.equal(recovered.name, aSegment, 'must resolve to A\'s real segment, never B\'s');
+    } finally { clean(root); }
+  });
+
+  it('AC3: refuses to guess when more than one committed segment matches this branch\'s derived slug', () => {
+    const { root, dir } = gitRepo('feat/ambiguous');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const slug = deriveSlug('feat/ambiguous');
+      // A second, independently-minted segment for the SAME branch slug — legitimate
+      // per spec §7 point 1 (two branches forked from the same rootless state can
+      // each mint independently without coordinating); simulated here by hand-writing
+      // a second well-formed segment sharing the slug, then discarding the token so
+      // neither is preferred by the fast path.
+      const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
+      writeFileSync(
+        segmentPath(dir, secondName),
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
+      );
+      execFileSync('git', ['add', `.adlc/manifest.d/${secondName}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'second ambiguous segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      rmSync(lineagePath(dir), { force: true }); // no token to disambiguate
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /ambiguous/,
+        'must refuse to silently pick one of two candidate segments',
+      );
+    } finally { clean(root); }
+  });
+
+  it('a slug prefix match never cross-matches a DIFFERENT branch\'s segment (exact match only)', () => {
+    const { root, dir } = gitRepo('feat');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence()); // mints "feat-<ULID>.jsonl"
+      const featSegment = resolveOpenSegment(dir, { cwd: root }).name;
+
+      execFileSync('git', ['checkout', '-q', '-b', 'feat-x'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }); // slug "feat-x" — "feat-" is a PREFIX of "feat-x-<ULID>.jsonl" too
+      recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-on-feat-x' }));
+
+      execFileSync('git', ['checkout', '-q', 'feat'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      rmSync(lineagePath(dir), { force: true }); // force recovery, not the fast token path
+      const recovered = recoverOpenSegment(dir, { cwd: root });
+      assert.ok(recovered, 'branch "feat" must still find its own segment');
+      assert.equal(recovered.name, featSegment, 'must resolve to "feat"\'s own segment, never "feat-x"\'s, despite the prefix overlap');
+    } finally { clean(root); }
+  });
+
+  it('returns null on detached HEAD — no branch identity to recover by', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      assert.equal(currentBranch(root), null, 'precondition: detached HEAD');
+      assert.equal(recoverOpenSegment(dir, { cwd: root }), null);
     } finally { clean(root); }
   });
 });

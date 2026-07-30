@@ -149,7 +149,19 @@ export async function push({
   // can live in more than one chain (adversarial-review finding: this used to read
   // root only, so post-cutover P5 outcomes recorded in a segment never surfaced in
   // push's rendered status).
-  let outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+  //
+  // readOwnChains can now THROW (lineage-durability finding): it recovers this
+  // checkout's segment even without a local `.lineage` token, but refuses to guess
+  // when more than one committed segment could be this branch's. That must surface
+  // as a real push failure — never silently fall through and render a status
+  // computed from root alone, which would look identical to "no evidence" and could
+  // remove a real status label a genuine, ambiguous-but-real segment recorded.
+  let outcomes;
+  try {
+    outcomes = reduceTicketOutcomes(manifestEntries ?? readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+  } catch (error) {
+    return { exitCode: 1, errors: [`cannot determine gate status: ${error.message}`] };
+  }
 
   // Mutable working state (reassignment rewrites tickets store-wide).
   let tickets = localTickets.map((t) => ({ ...t }));
@@ -202,7 +214,14 @@ export async function push({
       if (recoveredEvidence && manifestEntries === undefined) {
         // Re-read for the same reason as the initial load above (a resumed
         // migration just re-attested evidence, possibly into a segment).
-        outcomes = reduceTicketOutcomes(readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+        // Same "must not silently fall through" rule as the initial load — see
+        // its comment above.
+        try {
+          outcomes = reduceTicketOutcomes(readOwnChains(join(dir, '.adlc'), { cwd: dir }));
+        } catch (error) {
+          errors.push(`cannot determine gate status after resuming evidence re-attestation: ${error.message}`);
+          failed = true;
+        }
       }
     }
 
