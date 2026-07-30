@@ -507,7 +507,7 @@ test('bin/cli.mjs SIGKILLs a surviving agy WORKER even when the leader exits on 
   }
 });
 
-test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging', () => {
+test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging', async () => {
   // Detaching agy so the timeout can bound its tree also detaches it from the
   // terminal: Ctrl-C reaches only OUR process group. Without forwarding, the user
   // gets their prompt back while agy keeps rewriting the live plugin directory,
@@ -541,12 +541,25 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
       stdio: 'ignore',
     });
 
+    // The helper's OWN EXIT is the synchronization point, not agy's death. The
+    // interrupt handler escalates TERM->KILL over a grace period and removes
+    // staging on its way out, so sampling the moment agy dies races that cleanup —
+    // which is exactly how the first version of this test failed intermittently.
+    const exited = new Promise((resolveExit) => {
+      child.on('exit', (code, signal) => resolveExit({ code, signal }));
+    });
+
     // Wait for agy to be running, then interrupt the helper as a user would.
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline && !existsSync(pidFile)) { /* spin */ }
     assert.ok(existsSync(pidFile), 'the stub agy never started');
     leaderPidValue = Number(readFileSync(pidFile, 'utf8').trim());
     child.kill('SIGINT');
+
+    const { code } = await exited;
+    // 128 + SIGINT(2): a cancelled install must not look like a clean one to
+    // whatever invoked it.
+    assert.equal(code, 130, `expected exit 130 for a Ctrl-C'd install, got ${code}`);
 
     assert.equal(
       survives(leaderPidValue, 10_000),

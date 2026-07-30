@@ -86,10 +86,27 @@ function signalGroup(child, signal) {
  * install they believe they cancelled. The staging `finally` does not run either,
  * because the default disposition terminates us outright.
  */
+let interruptSignal = null;
+
+/**
+ * Exit status for a failed install: 128+signo when we were CANCELLED, 1 otherwise.
+ *
+ * Forwarding Ctrl-C makes agy die, which the normal control flow then reports as
+ * an ordinary install failure and exits 1 — so a cancelled install looked
+ * identical to a broken one, and the interrupt handler's own exit was unreachable
+ * because that path got there first. Automation needs to tell "the user stopped
+ * this" from "this does not work".
+ */
+function failureExitStatus() {
+  if (!interruptSignal) return 1;
+  return interruptSignal === 'SIGINT' ? 130 : 143;
+}
+
 let shuttingDown = false;
 function onInterrupt(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  interruptSignal = signal;
   for (const child of activeChildren) signalGroup(child, 'SIGTERM');
   setTimeout(() => {
     for (const child of activeChildren) signalGroup(child, 'SIGKILL');
@@ -363,7 +380,7 @@ if (command === 'install' || command === '--install') {
         : `\`agy plugin install\` failed (exit ${status}); see agy's output above.`,
     );
     console.error('Not falling back to a direct copy: agy is installed and rejected this plugin.');
-    process.exit(1);
+    process.exit(failureExitStatus());
   }
 
   // Fallback for a machine with NO agy: place the files where agy would look.
