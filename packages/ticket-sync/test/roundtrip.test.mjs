@@ -28,7 +28,7 @@ import { pull } from '../lib/pull.mjs';
 import { push } from '../lib/push.mjs';
 import { serializeBlock } from '../lib/block.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
-import { recordTicketEvidence, deriveSlug, generateSegmentUlid, segmentPath } from '@adlc/tickets';
+import { recordTicketEvidence } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // The REAL consumer gate, resolved from the repo root (packages/ticket-sync/test → root).
@@ -343,13 +343,15 @@ test('pull still deletes a block field the remote dropped', async () => {
   }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding: push's two readOwnChains calls
-// (push.mjs:152/205) can now THROW when the local .lineage token is lost AND more
-// than one committed segment could be this branch's — recoverOpenSegment refuses
-// to guess (see manifest-segments.test.mjs's own AC3 test for the primitive).
-// That must surface as a real push failure (exitCode 1), never crash uncaught or
-// silently render a status computed from root alone.
-test('push fails closed (exitCode 1) rather than crashing or rendering a false status when segment recovery is ambiguous', async () => {
+// T-MANIFEST-FOREST lineage-durability finding (third round): push's own-segment
+// read (push.mjs's readOwnChainsOrRefuse) is STRICT — it never falls back to
+// recoverOpenSegment's lossy, attacker-controllable slug scan, because
+// publishing a GitHub label/comment is a remote trust-boundary mutation, not a
+// harmless local display. A lost `.lineage` token in a segmented repo must
+// therefore surface as a real push failure (exitCode 1) rather than either
+// guessing at a foreign segment or silently rendering a status computed from
+// root alone (which could wrongly remove a real, earned status label).
+test('push fails closed (exitCode 1), never recovers or silently renders from root alone, when this checkout\'s own segment cannot be identified', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-ambiguous-'));
   try {
     git(dir, ['init', '-q', '-b', 'feat/push-ambiguous']);
@@ -369,20 +371,47 @@ test('push fails closed (exitCode 1) rather than crashing or rendering a false s
       transactionId: 'tx-1', operation: 'complete', ticketId: 'T1',
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
-    // A second, independently-minted segment for the SAME branch slug (legitimate
-    // per spec §7 point 1), then discard the token so neither is preferred.
-    const slug = deriveSlug('feat/push-ambiguous');
-    const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
-    writeFileSync(
-      segmentPath(join(dir, '.adlc'), secondName),
-      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
-    );
+    // Discard the token — this checkout can no longer identify its own segment,
+    // even though a real committed segment (with real evidence) exists on disk.
     rmSync(join(dir, '.adlc', 'manifest.d', '.lineage'), { force: true });
 
     const gh = fakeGitHub();
     const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
     assert.equal(r.exitCode, 1, 'must fail closed, never crash uncaught or silently succeed with a wrong status');
-    assert.ok(r.errors.some((e) => /ambiguous/.test(e)), `expected an ambiguous-segment error, got: ${JSON.stringify(r.errors)}`);
+    assert.ok(
+      r.errors.some((e) => /cannot determine gate status/.test(e) && /cannot be identified/.test(e)),
+      `expected a segment-identification error, got: ${JSON.stringify(r.errors)}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The refuse guard above must not fire when there is genuinely nothing to
+// miss: a repo freshly cut over to segments (`.store.json` written) but with
+// no segment ever opened for this branch has no local `.lineage` token either
+// — that is the ordinary, expected state, not a lost-token failure, and push
+// must proceed normally rather than refuse every first push after cutover.
+test('push succeeds normally in a freshly segmented repo with no .lineage token, when no segment has ever been opened for this branch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-fresh-segment-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'feat/push-fresh-segment']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+
+    // Cut over to segments — no evidence recorded, no segment ever opened, no
+    // .lineage token ever written (there's nothing yet for one to name).
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: false, now: 'T' });
+    assert.equal(r.exitCode, 0, `must not wrongly refuse when there is no segment to miss: ${JSON.stringify(r.errors)}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

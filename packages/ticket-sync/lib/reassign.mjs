@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
 import {
-  isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
+  isSegmentedRepo, resolveOpenSegment, peekOpenSegment, recoverOpenSegment, readOwnChains, forestChainsIntact,
   segmentPath, lineagePath, withManifestLock, canonicalJson, entrySigValid,
   validateKeyParam,
 } from '@adlc/tickets';
@@ -170,15 +170,49 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
       throw new Error('cannot re-attest evidence: manifest forest is invalid — a segment or root chain is broken, or an entry is unsigned/forged');
     }
     // readOwnChains's default (no allowRecovery: true) is deliberate here
-    // (distinct-provider adversarial-review finding, T-MANIFEST-FOREST): this
-    // re-signs whatever it finds as a FRESH, newly-signed re-attestation under
-    // the new id — recovering across a lost `.lineage` token via the lossy,
+    // (distinct-provider adversarial-review finding, T-MANIFEST-FOREST, round 2):
+    // this re-signs whatever it finds as a FRESH, newly-signed re-attestation
+    // under the new id — recovering across a lost `.lineage` token via the lossy,
     // caller-controlled derived slug could launder an unrelated lineage's
-    // evidence into a validly-signed entry nobody with the key actually
-    // approved for THIS ticket. A lost token means no source is found (sources
-    // stays empty below), not a silently-recovered wrong one. See
-    // readOwnChains's own doc for which callers may safely opt in (informational
-    // reads that never sign, like doctor.mjs and ticket-sync's status render).
+    // evidence into a validly-signed entry nobody with the key actually approved
+    // for THIS ticket. No production consumer opts in to recovery (round 3
+    // extended the same reasoning to ticket-sync's status render too, once a
+    // reviewer pointed out that publishing a GitHub label/comment IS a remote
+    // trust-boundary mutation, not a harmless local display).
+    //
+    // But a lost token must not be silently treated as "nothing to migrate"
+    // either (round 3 finding): if this repo IS segmented and the token can't
+    // identify this branch's own segment, a REAL segment may exist that we simply
+    // cannot attribute — proceeding with the ID rewrite anyway would strand its
+    // evidence under the abandoned old id forever (nothing ever looks up oldId
+    // again once newId is committed). Refuse outright; the caller's existing
+    // catch-and-report handling (push.mjs) already surfaces this as an
+    // operational failure rather than a silent success.
+    //
+    // Only when a segment PLAUSIBLY belongs to this branch, though — a fresh
+    // branch that never had a segment open (nothing to strand) or a repo that
+    // only holds OTHER lineages' segments (nothing of ours to miss) must still
+    // proceed, or every first-time reassignment on a newly segmented repo would
+    // wrongly refuse, and unrelated lineages would never be ignorable. We reuse
+    // recoverOpenSegment's slug-based candidate scan ONLY as an existence check
+    // here — never to pick content to read or sign, so a crafted colliding
+    // branch name can at worst make an honest branch refuse its own
+    // reassignment (denial of service against itself), never launder foreign
+    // evidence into a signed artifact.
+    if (isSegmentedRepo(adlcDir) && !peekOpenSegment(adlcDir, { cwd })) {
+      let mightHaveOwnSegment;
+      try {
+        mightHaveOwnSegment = recoverOpenSegment(adlcDir, { cwd }) !== null;
+      } catch {
+        mightHaveOwnSegment = true; // ambiguous match — still refuse
+      }
+      if (mightHaveOwnSegment) {
+        throw new Error(
+          `cannot re-attest evidence: this checkout's own segment cannot be identified (no local .lineage token) — `
+          + `refusing to reassign ${oldId} without proof there is no evidence to carry forward`
+        );
+      }
+    }
     const sources = planManifestMigration(readOwnChains(adlcDir, { cwd }), oldId, newId, key);
     if (sources.length === 0) return [];
 

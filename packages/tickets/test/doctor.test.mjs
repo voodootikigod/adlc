@@ -5,7 +5,7 @@ import { createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename, deriveSlug, generateSegmentUlid, segmentPath } from '../index.mjs';
+import { DirectoryTicketStore, TicketService, doctorTicketStore, prettyCanonicalJson, ticketFilename } from '../index.mjs';
 import { ticket, writeDirectory } from './helpers.mjs';
 
 test('doctor is read-only and reports active/archive/runtime health', () => {
@@ -406,41 +406,22 @@ test('doctor storehash-manifest-bind: binds to evidence recorded in a segment (s
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding: storeHashBindingCheck used to
-// call peekOpenSegment directly, which returns null the moment the local,
-// gitignored .lineage token is gone — indistinguishable from "this branch never
-// recorded evidence". Simulates the fresh-clone/branch-switch precondition
-// directly (deleting the token) rather than a full `git clone`, since the two
-// are functionally identical from storeHashBindingCheck's point of view: no
-// token file present, real committed segment on disk.
-test('doctor storehash-manifest-bind: still binds after the local .lineage token is lost (fresh clone / branch switch)', () => {
+// T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" by
+// recovering here (distinct-provider adversarial-review finding, third round):
+// storeHashBindingCheck stays on the strict, token-only peekOpenSegment, never
+// the slug-based recoverOpenSegment. The derived slug is a lossy, caller-
+// controlled identity; recovering across a lost token could report a FOREIGN
+// lineage's signed checkpoint as this branch's own "authenticated" binding — a
+// false reassurance an operator (or automated tooling) reading `authenticated`/
+// `signaturesVerified` would trust. A lost token degrades to "not bound yet"
+// (the pre-fix behavior), never a silently-recovered wrong one. See
+// readOwnChains's own doc — no production consumer opts into recovery.
+test('doctor storehash-manifest-bind: does NOT recover across a lost .lineage token — reports not-bound, never trusts an unverified lineage', () => {
   const { root, store } = gitStoreWithSegmentedEvidence();
   try {
     rmSync(join(root, '.adlc', 'manifest.d', '.lineage'), { force: true });
     const check = bindCheck(doctorTicketStore(store, { root }));
-    assert.equal(check.ok, true, JSON.stringify(check));
-    assert.equal(check.bound, true, 'must still find the committed segment\'s checkpoint without a local .lineage token');
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test('doctor storehash-manifest-bind: reports SEGMENT_AMBIGUOUS rather than a false clean bind when recovery cannot disambiguate', () => {
-  const { root, store } = gitStoreWithSegmentedEvidence();
-  const dir = join(root, '.adlc');
-  try {
-    // A second, independently-minted segment for the SAME branch slug — legitimate
-    // per spec §7 point 1; simulated by hand-writing a second well-formed segment
-    // sharing the slug, then discarding the token so neither is preferred.
-    const slug = deriveSlug('feat/doctor-segment-test');
-    const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
-    writeFileSync(
-      segmentPath(dir, secondName),
-      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null })}\n`,
-    );
-    rmSync(join(dir, 'manifest.d', '.lineage'), { force: true });
-
-    const check = bindCheck(doctorTicketStore(store, { root }));
-    assert.equal(check.ok, false, 'must not report a false clean bind when it cannot tell which segment is real');
-    assert.equal(check.code, 'SEGMENT_AMBIGUOUS');
+    assert.equal(check.bound, false, 'a lost token must not be silently recovered into a trusted binding');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -228,16 +228,21 @@ test('migrateManifestEvidence routes to the segment writer once segmented — ro
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" here
-// (distinct-provider adversarial-review finding, second round): migrateSegmentedSet
-// stays on readOwnChains's strict default (no allowRecovery), never the slug-based
-// recovery. Recovering across a lost `.lineage` token here would re-sign whatever
-// a lossy, attacker-controllable branch-slug match finds as a FRESH re-attestation
-// under the new id — a malicious branch could launder an unrelated lineage's
-// evidence into a validly-signed entry nobody actually approved for this ticket.
-// A lost token means no source is found (a real, if unfortunate, degradation for
-// a fresh clone or branch switch), not a silently-recovered wrong one.
-test('migrateManifestEvidence finds no source evidence (does not recover) after the local .lineage token is lost — refuses to trust an unverified lineage', () => {
+// T-MANIFEST-FOREST lineage-durability finding — DELIBERATELY NOT "fixed" by
+// recovering here (distinct-provider adversarial-review finding, second round):
+// migrateSegmentedSet stays on readOwnChains's strict default (no allowRecovery),
+// never the slug-based recovery. Recovering across a lost `.lineage` token here
+// would re-sign whatever a lossy, attacker-controllable branch-slug match finds
+// as a FRESH re-attestation under the new id — a malicious branch could launder
+// an unrelated lineage's evidence into a validly-signed entry nobody actually
+// approved for this ticket.
+//
+// But a lost token must ALSO not be silently treated as "nothing to migrate"
+// (third round finding): this repo IS segmented, so a real segment holding real
+// evidence for T7 may exist that simply cannot be attributed without the token —
+// proceeding with the id rewrite anyway would strand it under the abandoned old
+// id forever. Refuses outright instead of guessing either way.
+test('migrateManifestEvidence refuses (does not silently proceed) when this segmented repo\'s own segment cannot be identified — never recovers, never strands evidence', () => {
   const { root, dir } = gitRepo();
   try {
     activate(dir);
@@ -246,8 +251,11 @@ test('migrateManifestEvidence finds no source evidence (does not recover) after 
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
     rmSync(lineagePath(dir), { force: true });
-    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null });
-    assert.equal(result.migrated, 0, 'a lost token must not be silently recovered for a re-signing operation');
+    assert.throws(
+      () => migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: null }),
+      /cannot be identified/,
+      'must refuse rather than either recover an unverified lineage or silently strand real evidence',
+    );
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

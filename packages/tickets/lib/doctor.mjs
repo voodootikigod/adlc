@@ -6,7 +6,7 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
+import { isSegmentedRepo, peekOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
 /**
@@ -136,25 +136,25 @@ function storeHashBindingCheck(root, snapshot, key) {
   // state at mint time.
   const dir = join(root, '.adlc');
   if (isSegmentedRepo(dir)) {
-    // recoverOpenSegment (never mints), NOT resolveOpenSegment — this is a
+    // peekOpenSegment (never mints), NOT resolveOpenSegment — this is a
     // read-only doctor check with no writer lock held; resolveOpenSegment's
     // minting branch writes the .lineage token as a side effect, which could
     // race a genuine writer that already minted its own token but has not yet
     // created the segment file, splitting that writer's evidence across two
-    // segments (adversarial-review finding). recoverOpenSegment (not the
-    // plain peekOpenSegment) additionally recovers this checkout's segment
-    // when the local `.lineage` token is absent or stale — a fresh clone or a
-    // branch switch away and back must not report "not bound" when a real,
-    // committed segment for this branch exists (T-MANIFEST-FOREST
-    // lineage-durability finding); it throws instead of guessing when more
-    // than one committed segment could be this branch's, which this check
-    // surfaces as a failure rather than silently reporting clean.
-    let resolved;
-    try {
-      resolved = recoverOpenSegment(dir, { cwd: root });
-    } catch (error) {
-      return { ...check, ok: false, code: 'SEGMENT_AMBIGUOUS', message: error.message };
-    }
+    // segments (adversarial-review finding).
+    //
+    // Deliberately STRICT, not recoverOpenSegment (distinct-provider
+    // adversarial-review finding, T-MANIFEST-FOREST, third round): recovering
+    // across a lost `.lineage` token via the lossy, attacker-controllable
+    // derived slug could report a FOREIGN lineage's signed checkpoint as this
+    // branch's own "authenticated" binding — a false reassurance, not a
+    // harmless local display, once `check.authenticated`/`signaturesVerified`
+    // are read as meaning anything. A lost token degrades to "no evidence
+    // bound yet" (the pre-fix behavior) rather than trusting an unverified
+    // lineage. See readOwnChains's own doc — no production consumer opts into
+    // recovery; the primitive stays fully tested for a future consumer once a
+    // non-lossy, verifiable lineage identity exists.
+    const resolved = peekOpenSegment(dir, { cwd: root });
     if (resolved) {
       const segFile = segmentPath(dir, resolved.name);
       let segLines;
@@ -167,9 +167,12 @@ function storeHashBindingCheck(root, snapshot, key) {
       if (!segResult.ok) return { ...check, ok: false, code: segResult.code, reason: segResult.reason };
       if (segResult.boundStoreHash !== null) boundStoreHash = segResult.boundStoreHash;
     }
-    // resolved === null means this branch has never recorded evidence into a
-    // segment yet — nothing to add; root's own boundStoreHash (if any) still
-    // stands as the latest known checkpoint for this checkout.
+    // resolved === null means either this branch never recorded evidence into
+    // a segment, or the local token is lost and a real segment exists that
+    // this read-only, non-signing check simply cannot see — root's own
+    // boundStoreHash (if any) still stands as the latest known checkpoint for
+    // this checkout, and an unresolved segment degrades to "not bound", never
+    // a false claim of binding (see the STRICT comment above).
   }
 
   if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };

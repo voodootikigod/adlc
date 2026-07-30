@@ -281,21 +281,31 @@ export function readForestEntries(dir) {
  * — a READ must fail closed rather than guess; callers should let that
  * propagate as a real failure, never swallow it into "no evidence".
  *
- * DELIBERATELY opt-in, not the default, and DELIBERATELY not used by every
- * caller (distinct-provider adversarial-review finding, second round): the
- * derived slug is a LOSSY, CALLER-CONTROLLED identity — `deriveSlug`
- * lowercases, collapses, and truncates, and nothing stops an attacker from
- * naming a branch specifically to derive the same slug as an EXISTING,
- * unrelated committed segment. `allowRecovery: true` is safe only for
- * informational, non-signing consumers (doctor's health check, ticket-sync's
- * status render) where a wrong recovery means a stale display, not a forged
- * trust artifact. It MUST stay false for any caller that turns "recovered"
- * content into a FRESH SIGNED entry — reassignment's re-attestation and
- * prosecute's cross-model carry-forward both do exactly that, so a
- * slug-collision there could launder an unrelated lineage's evidence into a
- * newly-signed approval. Those two callers pass no options (the strict,
- * token-only default) on purpose; do not "fix" that without first closing
- * the identity-binding gap (tracked as a follow-up — see T-MANIFEST-FOREST).
+ * NO production consumer currently opts in (distinct-provider
+ * adversarial-review finding, third round, superseding the second round's
+ * conclusion below). The derived slug is a LOSSY, CALLER-CONTROLLED identity
+ * — `deriveSlug` lowercases, collapses, and truncates, and nothing stops an
+ * attacker from naming a branch specifically to derive the same slug as an
+ * EXISTING, unrelated committed segment. The second round judged this safe
+ * for "informational, non-signing" consumers (doctor's health check,
+ * ticket-sync's status render) on the theory that a wrong recovery there
+ * means a stale display, not a forged trust artifact — but doctor's
+ * "authenticated"/"signaturesVerified" fields ARE a trust assertion, and
+ * ticket-sync's push publishes labels/comments to a REMOTE, third-party-
+ * trusted surface, which is a real trust-boundary mutation, not a harmless
+ * local display. Both were reverted to the strict default; each instead
+ * detects "segmented + token missing" up front and REFUSES (throws) rather
+ * than either recovering an unverified lineage or silently proceeding as if
+ * there is no evidence — a wrongly-computed "no evidence" status is exactly
+ * as dangerous as a wrongly-recovered one, since it can remove a real,
+ * earned status label. reassignment's re-attestation and prosecute's
+ * cross-model carry-forward were already strict (they mint a FRESH SIGNED
+ * entry from what they read, so a slug-collision there could launder an
+ * unrelated lineage's evidence into a newly-signed approval) and gained the
+ * same refuse-on-ambiguity guard. `allowRecovery: true` remains available for
+ * a future consumer that can independently verify the recovered segment's
+ * identity (tracked as a follow-up — see T-MANIFEST-FOREST); do not opt a new
+ * caller in without that verification.
  */
 export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
