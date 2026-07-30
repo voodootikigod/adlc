@@ -106,3 +106,17 @@ test('writeSidecar round-trips and fills the empty defaults', () => {
     assert.deepEqual(back.pendingCreates, {});
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('expectedStoreAbsent defaults OFF: omitting it never trips the appeared-after-planning conflict', () => {
+  // Pins the `expectedStoreAbsent = false` default: flipped on, every ordinary write
+  // against an EXISTING store would throw STALE_SNAPSHOT ("store appeared after
+  // synchronization planning") — a conflict reserved for callers that explicitly
+  // planned against an absent store.
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-store-'));
+  try {
+    const first = writeTicketsAtomic(dir, { tickets: [{ id: 'T1', title: 'x' }] });
+    // Second write with the hash but WITHOUT expectedStoreAbsent — must succeed.
+    const second = writeTicketsAtomic(dir, { tickets: [{ id: 'T1', title: 'y' }] }, { expectedSnapshotHash: first.hash });
+    assert.ok(second.hash, 'omitted expectedStoreAbsent must not conflict against an existing store');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

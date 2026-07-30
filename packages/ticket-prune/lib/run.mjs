@@ -37,7 +37,7 @@ function computeNeedsCeremony(stale, ticketsById) {
  * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
-  const pruneKey = Object.hasOwn(options, 'key') ? options.key : null;
+  const { key: pruneKey = null } = options;
   const {
     cwd = process.cwd(),
     ticketsPath = '.adlc/tickets.json',
