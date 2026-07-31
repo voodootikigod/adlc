@@ -294,27 +294,33 @@ test('REAL git diff: a filename containing a space keeps its added-line coverage
   }
 });
 
-test('the real default gitDiffForFile (not injected) scopes to one file — an added line in an unrelated file does not leak into another file\'s added-line set', () => {
+test('the real default gitDiffForFile (not injected) scopes to one file — an added line in another TRACKED file does not leak into this file\'s added-line set', () => {
   // Exercises the actual production default (no gitDiff override), unlike every
   // other test in this file. Proves two things at once: the default does not crash
   // (it returns real diff text, not null), and it is genuinely scoped per file — if
-  // it silently diffed the whole repo instead, B's harmless added line 2 would leak
-  // into A's added-line set and wrongly flag A's PRE-EXISTING (untouched) violation,
-  // which also happens to sit on line 2.
+  // it silently diffed the whole repo instead, b.mjs's harmless added lines would
+  // merge into a.mjs's added-line set (parseAddedLines' line numbers are taken
+  // without regard to which file's hunk they came from) and wrongly flag a.mjs's
+  // PRE-EXISTING (untouched) violation, which sits on the same line number.
+  // Both files must be TRACKED at the base commit and then modified — an
+  // untracked file never appears in `git diff HEAD` at all (scoped or not), which
+  // would make a scoped and an unscoped diff indistinguishable here.
   const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-default-scope-'));
   const originalCwd = process.cwd();
   try {
     execFileSync('git', ['init', '--quiet'], { cwd: repo });
     execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
     writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
-    execFileSync('git', ['add', 'a.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a with a pre-existing violation'], { cwd: repo });
+    writeFileSync(join(repo, 'b.mjs'), 'unrelated\n');
+    execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
 
-    // Feature side: A only gets a new trailing line (its line-2 violation is
-    // untouched). B is a brand-new file whose own added line 2 is harmless but
-    // numerically coincides with A's untouched violation.
+    // Feature side: a.mjs only gets a new trailing line (its line-2 violation is
+    // untouched). b.mjs gets two new lines inserted at the top, so ITS OWN added
+    // lines land at 1 and 2 — line 2 numerically coincides with a.mjs's untouched
+    // violation.
     writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\nmore context\n');
-    writeFileSync(join(repo, 'b.mjs'), 'unrelated\nfiller\n');
+    writeFileSync(join(repo, 'b.mjs'), 'filler1\nfiller2\nunrelated\n');
 
     process.chdir(repo);
     const code = check('HEAD', {
