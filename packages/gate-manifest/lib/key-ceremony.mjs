@@ -197,8 +197,9 @@ export function writeKeyHandoffFile(path, key, options = {}) {
  * TTY (a pipe would either hang forever or silently read unrelated data — this
  * checkpoint exists specifically to prove a HUMAN captured the key, which a non-TTY
  * context cannot demonstrate). Restores the terminal's prior raw-mode state on every
- * exit path — normal completion, Ctrl-C, or an unexpected error — so a cancelled
- * ceremony never leaves the operator's shell with echo silently disabled.
+ * exit path — normal completion, Ctrl-C, a stream error, or setup itself throwing
+ * (e.g. a synchronous write failure on `output`) — so a cancelled or failed ceremony
+ * never leaves the operator's shell with echo silently disabled.
  * @param {{input?: NodeJS.ReadStream, output?: NodeJS.WriteStream, prompt?: string}} [options]
  * @returns {Promise<string>}
  */
@@ -216,22 +217,25 @@ export function readSecretLine({
       return;
     }
     const wasRaw = input.isRaw === true;
-    input.setRawMode(true);
-    input.resume();
-    input.setEncoding('utf8');
     let value = '';
     let settled = false;
+    let listenersAttached = false;
 
-    const restore = () => {
-      input.setRawMode(wasRaw);
-      input.pause();
-      input.removeListener('data', onData);
-      process.removeListener('SIGINT', onSigint);
+    // Best-effort: runs on EVERY exit path, including setup itself failing (the
+    // try/catch below) — a throwing stream method must not leave raw mode enabled
+    // with no listener ever registered to call restore() again.
+    const teardown = () => {
+      try { input.setRawMode(wasRaw); } catch { /* best-effort restore */ }
+      try { input.pause(); } catch { /* best-effort */ }
+      if (listenersAttached) {
+        input.removeListener('data', onData);
+        process.removeListener('SIGINT', onSigint);
+      }
     };
     const settle = (fn) => {
       if (settled) return;
       settled = true;
-      restore();
+      teardown();
       output.write('\n');
       fn();
     };
@@ -244,9 +248,21 @@ export function readSecretLine({
         value += ch;
       }
     };
-    output.write(prompt);
-    input.on('data', onData);
-    process.on('SIGINT', onSigint);
+    try {
+      input.setRawMode(true);
+      input.resume();
+      input.setEncoding('utf8');
+      output.write(prompt);
+      input.on('data', onData);
+      process.on('SIGINT', onSigint);
+      listenersAttached = true;
+    } catch (err) {
+      if (!settled) {
+        settled = true;
+        teardown();
+        reject(err);
+      }
+    }
   });
 }
 

@@ -198,3 +198,28 @@ test('CLI: refuses a handoff path inside a LINKED WORKTREE of the same repositor
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
+
+test('the documented loading snippet (README/docs "Signing & provenance") never traces the key under `set -x`', () => {
+  const { repoDir, outsideDir } = makeDirs();
+  const handoffPath = join(outsideDir, 'key.txt');
+  try {
+    const generate = run(['generate-key', '--output', handoffPath], repoDir);
+    assert.equal(generate.status, 0, generate.stderr);
+    const key = readFileSync(handoffPath, 'utf8');
+
+    // Exactly the loading line documented in both README/docs copies — proves the
+    // GUIDANCE is safe, not just the generate-key binary itself (round 3 finding: an
+    // `export VAR="$(cat file)"` example traces the expanded value regardless of how
+    // the value was obtained; `read` never puts it in an expanded command argument).
+    const traced = spawnSync('bash', ['-c', `
+      set -x
+      IFS= read -r ADLC_MANIFEST_KEY < "${handoffPath}"
+      export ADLC_MANIFEST_KEY
+    `], { encoding: 'utf8' });
+    assert.equal(traced.status, 0, traced.stderr);
+    assertNeverAppears(key, traced.stdout, traced.stderr);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});

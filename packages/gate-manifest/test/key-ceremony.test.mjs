@@ -309,6 +309,18 @@ test('readSecretLine backspace on an empty buffer does not underflow', async () 
   assert.equal(await resultPromise, 'y');
 });
 
+test('readSecretLine restores raw mode when writing the prompt throws synchronously', async () => {
+  const { input } = makeFakeTty();
+  input.isRaw = false;
+  const output = {
+    isTTY: true,
+    write: () => { throw new Error('synthetic output failure'); },
+  };
+  await assert.rejects(() => readSecretLine({ input, output }), /synthetic output failure/);
+  assert.equal(input.isRaw, false, 'raw mode must be restored even when the prompt write itself throws');
+  assert.equal(input.listenerCount('data'), 0, 'no dangling data listener after a setup failure');
+});
+
 test('readSecretLine rejects on Ctrl-C and restores raw mode', async () => {
   const { input, output } = makeFakeTty();
   input.isRaw = false;
