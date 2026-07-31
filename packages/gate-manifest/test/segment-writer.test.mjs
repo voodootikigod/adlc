@@ -740,4 +740,31 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       assert.equal(recoverOpenSegment(dir, { cwd: root }), null);
     } finally { clean(root); }
   });
+
+  // Adversarial-review finding, T-MANIFEST-FOREST sixth round: recovery used
+  // to read and split the WHOLE segment file just to inspect its first
+  // line, so scan cost grew with the total size of every discovered
+  // segment. A segment whose first entry alone exceeds the bounded-read cap
+  // must be treated as unparseable (never matched), not read in full.
+  it('an oversized first entry (larger than the bounded read cap) is treated as unparseable, never matched, never read in full', () => {
+    const { root, dir } = gitRepo('feat/oversized-first-entry');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/oversized-first-entry');
+      const oversizedName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      // A first "entry" whose JSON alone is well over 64 KiB — real segment
+      // entries are a few hundred bytes; nothing legitimate is ever this large.
+      const oversized = {
+        seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: { padding: 'x'.repeat(200_000) },
+        files: {}, prev: null, anchor: null, branch: 'feat/oversized-first-entry',
+      };
+      writeFileSync(segmentPath(dir, oversizedName), `${JSON.stringify(oversized)}\n`);
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.equal(
+        recoverOpenSegment(dir, { cwd: root }), null,
+        'an oversized first entry must be treated as unparseable (not matched), not read/parsed in full',
+      );
+    } finally { clean(root); }
+  });
 });

@@ -321,10 +321,33 @@ export function readForestEntries(dir) {
  * FORGERY/TAMPERING risk.
  */
 export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, key = null } = {}) {
-  const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
+  const rootRaw = readRawLines(join(dir, 'manifest.jsonl'));
+  // Root and a token-matched (peeked) segment are not identity-ambiguous the
+  // way a RECOVERED segment is — root is canonically root, and the local
+  // `.lineage` token is proof this checkout itself minted the peeked
+  // segment, not a self-reported claim from untrusted content. So both still
+  // get chainIsIntact's tamper/continuity check when a key is available
+  // (round 6 of the same finding — push.mjs previously trusted root and a
+  // token-matched segment with NO verification at all, even with a real key
+  // passed in, so an attacker with commit-but-not-key access could append an
+  // unsigned forged entry there and have it published), but NEITHER needs
+  // the recovered-only "at least one signed entry" requirement below — an
+  // entirely-unsigned root/peeked chain is a legitimate legacy or
+  // never-adopted-signing state, not a forgery risk, since nothing about
+  // WHICH chain to read was ever in question.
+  if (key !== null && !chainIsIntact(rootRaw, key)) {
+    throw new Error('root manifest failed chain or signature verification — refusing to trust it');
+  }
+  const root = parseLines(rootRaw);
   if (!isSegmentedRepo(dir)) return [root];
   const peeked = peekOpenSegment(dir, { cwd });
-  if (peeked) return [root, parseLines(readRawLines(segmentPath(dir, peeked.name)))];
+  if (peeked) {
+    const peekedRaw = readRawLines(segmentPath(dir, peeked.name));
+    if (key !== null && !chainIsIntact(peekedRaw, key)) {
+      throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
+    }
+    return [root, parseLines(peekedRaw)];
+  }
   if (!allowRecovery || key === null) return [root];
   const recovered = recoverOpenSegment(dir, { cwd });
   if (!recovered) return [root];
@@ -531,15 +554,38 @@ export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   return null;
 }
 
-// Read ONLY the first line of a segment (its anchor-carrying entry) — cheap
-// even when the segment has grown large, and all recoverOpenSegment needs:
-// the `branch` field (below) is written exclusively on a segment's first
-// entry, mirroring `anchor`. Mirrors @adlc/gate-manifest/lib/lineage.mjs's
+// Read ONLY the first line of a segment (its anchor-carrying entry) — a
+// BOUNDED read, not readRawLines (adversarial-review finding, T-MANIFEST-
+// FOREST sixth round): the original version read and split the WHOLE
+// segment file just to inspect its first line — recoverOpenSegment's
+// per-candidate scan cost grew with the TOTAL size of every discovered
+// segment, not just the bytes actually needed. discoverSegments already
+// rejects symlinks before a name ever reaches here, so no O_NOFOLLOW
+// hardening is needed the way readBoundedJsonNoFollow's (.lineage/
+// .store.json) needs it. Mirrors @adlc/gate-manifest/lib/lineage.mjs's
 // identical helper.
+const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is a few hundred bytes
 function firstEntryOf(dir, segmentName) {
-  const raw = readRawLines(segmentPath(dir, segmentName));
-  if (raw.length === 0) return null;
-  try { return JSON.parse(raw[0]); } catch { return null; }
+  let fd;
+  try {
+    fd = openSync(segmentPath(dir, segmentName), fsConstants.O_RDONLY);
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.alloc(MAX_FIRST_LINE_BYTES);
+    const bytesRead = readSync(fd, buf, 0, MAX_FIRST_LINE_BYTES, 0);
+    const chunk = buf.subarray(0, bytesRead).toString('utf8');
+    const newlineIndex = chunk.indexOf('\n');
+    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return null; // no newline within the cap — refuse to guess whether it was truncated
+    const firstLine = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
+    if (firstLine.trim() === '') return null;
+    return JSON.parse(firstLine);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

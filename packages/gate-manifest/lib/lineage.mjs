@@ -211,14 +211,39 @@ export function peekOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   return null;
 }
 
-// Read ONLY the first line of a segment (its anchor-carrying entry) — cheap
-// even when the segment has grown large, and all `recoverOpenSegment` needs:
-// the `branch` field (below) is written exclusively on a segment's first
-// entry, mirroring `anchor`.
+// Read ONLY the first line of a segment (its anchor-carrying entry) — a
+// BOUNDED read, not readRawLines (adversarial-review finding, T-MANIFEST-
+// FOREST sixth round): the original version read and split the WHOLE
+// segment file just to inspect its first line, so recoverOpenSegment's
+// per-candidate scan cost grew with the TOTAL size of every discovered
+// segment, not just the bytes actually needed — one oversized (but
+// grammar-valid) segment could stall or exhaust memory on every recovery
+// attempt, including a routine fresh-clone push/doctor/reassign/carry-
+// forward run. discoverSegments already rejects symlinks before a name
+// ever reaches here, so no O_NOFOLLOW hardening is needed the way
+// readBoundedJsonNoFollow's (.lineage/.store.json) needs it.
+const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is a few hundred bytes
 function firstEntryOf(dir, segmentName) {
-  const raw = readRawLines(segmentPath(dir, segmentName));
-  if (raw.length === 0) return null;
-  try { return JSON.parse(raw[0].line); } catch { return null; }
+  let fd;
+  try {
+    fd = openSync(segmentPath(dir, segmentName), fsConstants.O_RDONLY);
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.alloc(MAX_FIRST_LINE_BYTES);
+    const bytesRead = readSync(fd, buf, 0, MAX_FIRST_LINE_BYTES, 0);
+    const chunk = buf.subarray(0, bytesRead).toString('utf8');
+    const newlineIndex = chunk.indexOf('\n');
+    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return null; // no newline within the cap — refuse to guess whether it was truncated
+    const firstLine = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
+    if (firstLine.trim() === '') return null;
+    return JSON.parse(firstLine);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

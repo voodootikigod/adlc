@@ -504,6 +504,33 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       assert.equal(recoverOpenSegment(dir, { cwd: root }), null);
     } finally { clean(root); }
   });
+
+  // Adversarial-review finding, T-MANIFEST-FOREST sixth round: recovery used
+  // to read and split the WHOLE segment file just to inspect its first
+  // line, so scan cost grew with the total size of every discovered
+  // segment. A segment whose first entry alone exceeds the bounded-read cap
+  // must be treated as unparseable (never matched), not read in full.
+  it('an oversized first entry (larger than the bounded read cap) is treated as unparseable, never matched, never read in full', () => {
+    const { root, dir } = gitRepo('feat/oversized-first-entry');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/oversized-first-entry');
+      const oversizedName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      // A first "entry" whose JSON alone is well over 64 KiB — real segment
+      // entries are a few hundred bytes; nothing legitimate is ever this large.
+      const oversized = {
+        seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: { padding: 'x'.repeat(200_000) },
+        files: {}, prev: null, anchor: null, branch: 'feat/oversized-first-entry',
+      };
+      writeFileSync(segmentPath(dir, oversizedName), `${JSON.stringify(oversized)}\n`);
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.equal(
+        recoverOpenSegment(dir, { cwd: root }), null,
+        'an oversized first entry must be treated as unparseable (not matched), not read/parsed in full',
+      );
+    } finally { clean(root); }
+  });
 });
 
 // readOwnChains's `allowRecovery` flag (distinct-provider adversarial-review
@@ -664,6 +691,60 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
         () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
         /failed chain or signature verification/,
         'a wholly unsigned segment must never be trusted just because its hash chain is consistent and its branch matches',
+      );
+    } finally { clean(root); }
+  });
+
+  // Round 6 of the same finding: the whole-chain verification added for
+  // RECOVERED segments (rounds 4-5) did not apply to the ordinary, non-
+  // recovery paths — root, and a segment reached via a valid `.lineage`
+  // token (peekOpenSegment's fast path) — even when a real key was passed
+  // in. Neither is identity-ambiguous the way a recovered segment is (root
+  // is canonically root; the token proves this checkout minted the peeked
+  // segment), but both must still refuse a TAMPERED chain — an attacker
+  // with commit-but-not-key access could otherwise append an unsigned
+  // forged entry after a real signed one and have it trusted.
+  it('a valid token (peeked, not recovered) still refuses a signed-then-unsigned segment when a key is available', () => {
+    const { root, dir } = gitRepo('feat/peeked-tamper');
+    const KEY = 'peeked-tamper-key';
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ key: KEY })); // signed, real token stays valid
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      const segPath = join(segDir, segName);
+      const firstRaw = readFileSync(segPath, 'utf8').trim();
+      const forged = {
+        seq: 2, gate: 'prosecution', ts: new Date().toISOString(), ticket: 'A',
+        data: { verdict: 'clear' }, files: {}, prev: sha256(firstRaw),
+      };
+      writeFileSync(segPath, `${firstRaw}\n${JSON.stringify(forged)}\n`); // appended WITHOUT the key — unsigned
+
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, key: KEY }), // no allowRecovery — the plain token path
+        /failed chain or signature verification/,
+        'the token proves identity, but an unsigned entry after a signed one is still a tampered/forged chain',
+      );
+    } finally { clean(root); }
+  });
+
+  it('root itself still refuses a signed-then-unsigned chain when a key is available, independent of segmentation', () => {
+    const { root, dir } = gitRepo();
+    const KEY = 'root-tamper-key';
+    try {
+      recordTicketEvidence(root, baseEvidence({ key: KEY })); // pre-cutover: lands in root, signed
+      const rootPath = join(dir, 'manifest.jsonl');
+      const firstRaw = readFileSync(rootPath, 'utf8').trim();
+      const forged = {
+        seq: 2, gate: 'prosecution', ts: new Date().toISOString(), ticket: 'A',
+        data: { verdict: 'clear' }, files: {}, prev: sha256(firstRaw),
+      };
+      writeFileSync(rootPath, `${firstRaw}\n${JSON.stringify(forged)}\n`); // appended WITHOUT the key
+
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, key: KEY }),
+        /root manifest failed chain or signature verification/,
+        'an unsigned entry after a signed one in root is a tampered chain, even in a non-segmented repo',
       );
     } finally { clean(root); }
   });
