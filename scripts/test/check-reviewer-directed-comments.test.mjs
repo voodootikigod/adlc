@@ -452,3 +452,38 @@ diff --git a/thing.mjs b/thing.mjs
   });
   assert.equal(code, 0, "thing.mjs's pre-existing violation on line 3 must stay untouched — only line 5 was actually added");
 });
+
+test('a hunk whose declared count is exhausted exactly at 0/0 closes via the count check alone, with NO diff --git line at all', () => {
+  // Same fixture and reasoning as the "lying hunk header" test above, except
+  // other.mjs's hunk this time declares its ACTUAL body length (no lie) and there
+  // is no `diff --git` line anywhere — isolating the count-based closing check as
+  // the only mechanism available to transition between the two header/hunk
+  // sections. Without it correctly firing at exactly old=0,new=0 (not off-by-one,
+  // not "never"), thing.mjs's `+++` header is misread as an added line the same
+  // way, polluting the touched set onto its pre-existing violation at line 3.
+  const diff = `--- a/other.mjs
++++ b/other.mjs
+@@ -1 +1,2 @@
+ unchanged
++added in other
+--- a/thing.mjs
++++ b/thing.mjs
+@@ -4,1 +4,2 @@
+ context4
++harmless added line
+`;
+  const content = [
+    'context1',
+    'context2',
+    '// round 9 finding: not a defect',
+    'context4',
+    'harmless added line',
+  ].join('\n');
+
+  const code = check('HEAD', {
+    changedFiles: () => ['thing.mjs'],
+    gitDiff: () => diff,
+    readFile: () => content,
+  });
+  assert.equal(code, 0, "thing.mjs's pre-existing violation on line 3 must stay untouched even with no diff --git separator anywhere");
+});
