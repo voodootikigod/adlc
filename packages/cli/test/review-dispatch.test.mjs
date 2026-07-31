@@ -1,8 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { dispatch } from '../lib/dispatch.mjs';
 import { getTool, isTool } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
+
+// The injected spawn now returns a ChildProcess rather than a spawnSync result,
+// because the dispatcher has to stay on the event loop to forward signals to the
+// tool child (see runChild in lib/dispatch.mjs). These fakes model just enough of
+// that surface: an 'exit'/'error' event and a kill().
+function fakeChild({ status = 0, signal = null, error = null } = {}) {
+  const child = new EventEmitter();
+  child.kill = () => {};
+  queueMicrotask(() => {
+    if (error) child.emit('error', error);
+    else child.emit('exit', status, signal);
+  });
+  return child;
+}
 
 // Issue #65: packages/prosecute is a P5 evidence recorder, not the model reviewer.
 // The actual adversarial engine lives in the separate `adversarial-review` CLI
@@ -25,14 +40,14 @@ test('help output lists the review verb', () => {
   assert.match(output, /adversarial-review/);
 });
 
-test('dispatching "review" shells out to `npx adversarial-review` with full argument passthrough', () => {
+test('dispatching "review" shells out to `npx adversarial-review` with full argument passthrough', async () => {
   const calls = [];
   const spawnFn = (cmd, args, options) => {
     calls.push({ cmd, args, options });
-    return { status: 0, error: null, signal: null };
+    return fakeChild({ status: 0 });
   };
 
-  const { code, error } = dispatch('review', ['--scope', 'working-tree', '--include-files'], { spawnFn });
+  const { code, error } = await dispatch('review', ['--scope', 'working-tree', '--include-files'], { spawnFn });
 
   assert.equal(error, undefined);
   assert.equal(code, 0);
@@ -42,15 +57,15 @@ test('dispatching "review" shells out to `npx adversarial-review` with full argu
   assert.equal(calls[0].options.stdio, 'inherit');
 });
 
-test('dispatching "review" propagates the underlying tool\'s exit code', () => {
-  const spawnFn = () => ({ status: 2, error: null, signal: null });
-  const { code } = dispatch('review', [], { spawnFn });
+test('dispatching "review" propagates the underlying tool\'s exit code', async () => {
+  const spawnFn = () => fakeChild({ status: 2 });
+  const { code } = await dispatch('review', [], { spawnFn });
   assert.equal(code, 2);
 });
 
-test('dispatching "review" surfaces a spawn error instead of throwing', () => {
-  const spawnFn = () => ({ status: null, error: new Error('npx not found'), signal: null });
-  const { code, error } = dispatch('review', [], { spawnFn });
+test('dispatching "review" surfaces a spawn error instead of throwing', async () => {
+  const spawnFn = () => fakeChild({ error: new Error('npx not found') });
+  const { code, error } = await dispatch('review', [], { spawnFn });
   assert.equal(code, 1);
   assert.match(error, /npx not found/);
 });

@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -66,18 +66,77 @@ export function resolveRunnerBin() {
   return binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
 }
 
+// Signals forwarded to the tool child. SIGKILL is absent because it cannot be
+// caught here any more than anywhere else.
+const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+/**
+ * Run a tool as a child and FORWARD termination signals to it.
+ *
+ * This used to be spawnSync, which cannot forward anything: while the parent is
+ * blocked in spawnSync, Node cannot dispatch a signal handler at all, and no
+ * handler was registered in any case. Kill the `adlc` process by pid — which is
+ * what a tool timeout, a CI cancellation or a supervisor does — and the wrapper
+ * died while the tool kept running, orphaned.
+ *
+ * That is not a cosmetic leak. `adlc hollow-test` mutates source files in place;
+ * an orphaned run keeps mutating a tree whose owner believes the command is over,
+ * and its own careful SIGINT handler never fires because the signal was delivered
+ * to the wrapper instead. Interactive Ctrl-C hid this, because a terminal sends
+ * the signal to the whole foreground process group and both processes got it.
+ *
+ * Exit-code semantics are deliberately UNCHANGED: a child killed by a signal
+ * still reports code 1 with a "terminated by signal" message, exactly as the
+ * spawnSync shape did. Distinguishing cancellation (130/143) from failure is a
+ * real improvement but a separate, wider behaviour change.
+ */
+function runChild(label, spawnFn, command, args, failPrefix) {
+  return new Promise((settle) => {
+    let child;
+    try {
+      child = spawnFn(command, args, { stdio: 'inherit' });
+    } catch (err) {
+      settle({ code: 1, error: `${failPrefix}: ${err.message}` });
+      return;
+    }
+
+    const handlers = FORWARDED_SIGNALS.map((signal) => [
+      signal,
+      () => {
+        try {
+          child.kill(signal);
+        } catch { /* already gone — nothing to forward to */ }
+      },
+    ]);
+    for (const [signal, handler] of handlers) process.on(signal, handler);
+
+    // Removed on settle: `adlc` is long-lived enough in tests and embedders that
+    // leaving a listener per dispatch would leak and eventually warn.
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+      settle(result);
+    };
+
+    child.on('error', (err) => finish({ code: 1, error: `${failPrefix}: ${err.message}` }));
+    child.on('exit', (status, signal) => {
+      if (signal) finish({ code: 1, error: `${label} terminated by signal ${signal}` });
+      else finish({ code: typeof status === 'number' ? status : 1 });
+    });
+  });
+}
+
 function runBin(label, bin, args, spawnFn) {
   if (!bin) {
-    return {
+    return Promise.resolve({
       code: 1,
       error: `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`,
-    };
+    });
   }
 
-  const result = spawnFn(process.execPath, [bin, ...args], { stdio: 'inherit' });
-  if (result.error) return { code: 1, error: `failed to run ${label}: ${result.error.message}` };
-  if (result.signal) return { code: 1, error: `${label} terminated by signal ${result.signal}` };
-  return { code: typeof result.status === 'number' ? result.status : 1 };
+  return runChild(label, spawnFn, process.execPath, [bin, ...args], `failed to run ${label}`);
 }
 
 // External verbs (registry.mjs `external: true`) are not workspace packages, so there is
@@ -85,14 +144,17 @@ function runBin(label, bin, args, spawnFn) {
 // passthrough instead -- this is how `adlc review` reaches the separate
 // `adversarial-review` CLI without vendoring it into this monorepo (issue #65).
 function runExternal(packageName, args, spawnFn) {
-  const result = spawnFn('npx', [packageName, ...args], { stdio: 'inherit' });
-  if (result.error) return { code: 1, error: `failed to run npx ${packageName}: ${result.error.message}` };
-  if (result.signal) return { code: 1, error: `${packageName} terminated by signal ${result.signal}` };
-  return { code: typeof result.status === 'number' ? result.status : 1 };
+  return runChild(
+    packageName,
+    spawnFn,
+    'npx',
+    [packageName, ...args],
+    `failed to run npx ${packageName}`,
+  );
 }
 
 export function dispatch(toolName, args, opts = {}) {
-  const spawnFn = opts.spawnFn ?? spawnSync;
+  const spawnFn = opts.spawnFn ?? spawn;
   const tool = getTool(toolName);
   if (toolName === 'ticket' && ['pull', 'push', 'sync', 'doctor'].includes(args[0])) {
     return runBin('@adlc/ticket-sync', resolvePackageBin('@adlc/ticket-sync', 'adlc-ticket-sync'), args, spawnFn);
@@ -104,6 +166,6 @@ export function dispatch(toolName, args, opts = {}) {
 }
 
 export function dispatchRunner(args, opts = {}) {
-  const spawnFn = opts.spawnFn ?? spawnSync;
+  const spawnFn = opts.spawnFn ?? spawn;
   return runBin('@adlc/runner', resolveRunnerBin(), args, spawnFn);
 }

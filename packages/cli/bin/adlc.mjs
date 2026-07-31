@@ -31,7 +31,7 @@ if (first === '--version' || first === '-v') {
 }
 
 if (first === 'run' || first === 'accept') {
-  const { code, error } = dispatchRunner(argv);
+  const { code, error } = await dispatchRunner(argv);
   if (error) console.error(`error: ${error}`);
   process.exit(code);
 }
@@ -50,6 +50,6 @@ if (!isTool(first)) {
   process.exit(1);
 }
 
-const { code, error } = dispatch(first, argv.slice(1));
+const { code, error } = await dispatch(first, argv.slice(1));
 if (error) console.error(`error: ${error}`);
 process.exit(code);
