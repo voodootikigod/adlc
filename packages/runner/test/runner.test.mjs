@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { assertPhase } from '../lib/assertions.mjs';
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
 import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manifest';
@@ -166,9 +166,15 @@ function p4Fixture() {
   return { cwd, dir, railPath };
 }
 
+// p4-build fixtures use `gate:`, not `type:` — the real, documented producer
+// (`adlc gate-manifest record p4-build`) only ever sets `gate` (see
+// packages/gate-manifest/lib/record.mjs's `record()`), so entryType()'s
+// `entry.type ?? entry.gate` fallback is what actually resolves it in
+// production. rails-check and flail-check keep `type:` because their real
+// producers (rails-guard.mjs, flail-detector.mjs) set that field explicitly.
 function writeP4Evidence(dir, content) {
   writeManifest(dir, [
-    { type: 'rails-green', ticket: 'T1' },
+    { gate: 'p4-build', ticket: 'T1' },
     {
       type: 'rails-check',
       ticket: 'T1',
@@ -182,7 +188,7 @@ function writeP4Evidence(dir, content) {
 
 function writeP4EvidenceForTicket(dir, ticket, content) {
   writeManifest(dir, [
-    { type: 'rails-green', ticket },
+    { gate: 'p4-build', ticket },
     {
       type: 'rails-check',
       ticket,
@@ -206,6 +212,66 @@ describe('assertPhase', () => {
     }
   });
 
+  it('reports exactly the missing marker when only one of the three p4 markers is absent', () => {
+    const { cwd, dir, railPath } = p4Fixture();
+    try {
+      writeManifest(dir, [
+        { gate: 'p4-build', ticket: 'T1' },
+        {
+          type: 'rails-check',
+          ticket: 'T1',
+          railsDiffEmpty: true,
+          suppressionsClean: true,
+          railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
+        },
+        // flail-check deliberately omitted
+      ]);
+      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.missing, ['flail-check']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports exactly p4-build missing when only it is absent', () => {
+    const { cwd, dir, railPath } = p4Fixture();
+    try {
+      writeManifest(dir, [
+        // p4-build deliberately omitted
+        {
+          type: 'rails-check',
+          ticket: 'T1',
+          railsDiffEmpty: true,
+          suppressionsClean: true,
+          railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
+        },
+        { type: 'flail-check', ticket: 'T1' },
+      ]);
+      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.missing, ['p4-build']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports exactly rails-check missing when only it is absent', () => {
+    const { cwd, dir } = p4Fixture();
+    try {
+      writeManifest(dir, [
+        { gate: 'p4-build', ticket: 'T1' },
+        // rails-check deliberately omitted
+        { type: 'flail-check', ticket: 'T1' },
+      ]);
+      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.missing, ['rails-check']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('requires ticket-scoped evidence for p3 and p4', () => {
     const { cwd, dir, railPath } = p4Fixture();
     try {
@@ -223,7 +289,7 @@ describe('assertPhase', () => {
 
       const t1 = assertPhase('p4', { dir, ticket: 'T1', cwd });
       assert.equal(t1.ok, false);
-      assert.deepEqual(t1.missing, ['rails-green', 'rails-check', 'flail-check']);
+      assert.deepEqual(t1.missing, ['p4-build', 'rails-check', 'flail-check']);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -233,7 +299,7 @@ describe('assertPhase', () => {
     const { cwd, dir } = p4Fixture();
     try {
       writeManifest(dir, [
-        { type: 'rails-green', ticket: 'T1' },
+        { gate: 'p4-build', ticket: 'T1' },
         { type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true },
         { type: 'flail-check', ticket: 'T1' },
       ]);
@@ -1155,5 +1221,49 @@ describe('adlc cli', () => {
       assert.match(err.stdout, /no p5-complete for ticket T1/);
     }
     assert.equal(code, 1);
+  });
+
+  it('adlc run p4 exits 0 once real rails-guard, flail-detector, and gate-manifest recordings all land for a ticket', () => {
+    const { dir: cwd, g } = gitRepo();
+    const adlcDir = join(cwd, '.adlc');
+    mkdirSync(join(cwd, 'test'), { recursive: true });
+    writeFileSync(join(cwd, 'test/a.test.mjs'), 'test("rail", () => {});\n');
+    writeFileSync(join(cwd, 'src.mjs'), 'export const x = 1;\n');
+    mkdirSync(adlcDir, { recursive: true });
+    writeFileSync(join(adlcDir, 'tickets.json'), JSON.stringify({
+      tickets: [{ id: 'T1', title: 'T1 fixture', scope: ['src.mjs'], rails: ['test/**'], edges: [] }],
+    }));
+    g('add', '-A');
+    g('commit', '-q', '-m', 'initial');
+    const base = g('rev-parse', 'HEAD').trim();
+    writeFileSync(join(cwd, 'src.mjs'), 'export const x = 2;\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'non-rail change');
+
+    const railsGuardBin = join(repoRoot, 'packages/rails-guard/bin/rails-guard.mjs');
+    const railsResult = spawnSync(process.execPath, [
+      railsGuardBin, '--ticket', 'T1', '--tickets', join(adlcDir, 'tickets.json'), '--base', base, '--record',
+    ], { cwd, encoding: 'utf8' });
+    assert.equal(railsResult.status, 0, `rails-guard --record failed: ${railsResult.stderr}`);
+
+    const logFile = join(cwd, 'session.log');
+    writeFileSync(logFile, 'Build started\nDone in 2.3s\nAll tests passed.\n');
+    const flailBin = join(repoRoot, 'packages/flail-detector/bin/flail-detector.mjs');
+    const flailResult = spawnSync(process.execPath, [
+      flailBin, logFile, '--record', '--ticket', 'T1',
+    ], { cwd, encoding: 'utf8' });
+    assert.equal(flailResult.status, 0, `flail-detector --record failed: ${flailResult.stderr}`);
+
+    const gateManifestBin = join(repoRoot, 'packages/gate-manifest/bin/gate-manifest.mjs');
+    const p4BuildResult = spawnSync(process.execPath, [
+      gateManifestBin, 'record', 'p4-build', '--ticket', 'T1',
+    ], { cwd, encoding: 'utf8' });
+    assert.equal(p4BuildResult.status, 0, `gate-manifest record p4-build failed: ${p4BuildResult.stderr}`);
+
+    const adlcBin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
+    const runResult = spawnSync(process.execPath, [
+      adlcBin, 'run', 'p4', '--ticket', 'T1',
+    ], { cwd, encoding: 'utf8' });
+    assert.equal(runResult.status, 0, `adlc run p4 failed: ${runResult.stdout}${runResult.stderr}`);
   });
 });
