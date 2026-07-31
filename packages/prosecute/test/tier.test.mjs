@@ -46,6 +46,16 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     }
   });
 
+  it('TRUE for the reviewer-directed-comment gate and its test', () => {
+    // Not under packages/, so it does not also tier via ENFORCEMENT_PREFIXES — this
+    // exact-file entry is the only thing that makes a future gate-only PR tier.
+    for (const f of ['scripts/check-reviewer-directed-comments.mjs', 'scripts/test/check-reviewer-directed-comments.test.mjs']) {
+      const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
+      assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
+      assert.ok(r.reasons.some((x) => x.includes(f)));
+    }
+  });
+
   it('TRUE for an enforcement-package prefix (packages/prosecute/…)', () => {
     const r = classifyTrustRootTier({ changedFiles: ['packages/prosecute/lib/run.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, true);

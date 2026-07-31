@@ -729,3 +729,30 @@ test('REAL git diff: a repo-local textconv filter that strips the violation from
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('REAL git diff: a filename that is itself git pathspec magic syntax is diffed literally, not interpreted (round-7 finding 1)', () => {
+  // `--` ends OPTION parsing but does not disable PATHSPEC MAGIC: a tracked file
+  // literally named `:(literal)notes.md` is otherwise read as magic syntax by
+  // `git diff -- <file>`, silently diffing the unrelated (and here nonexistent)
+  // path `notes.md` instead — verified directly: without --literal-pathspecs this
+  // reproduction diffs nothing and the real violation goes uncaught.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-pathspec-magic-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    const magicName = ':(literal)notes.md';
+    writeFileSync(join(repo, magicName), 'context\n');
+    execFileSync('git', ['--literal-pathspecs', 'add', magicName], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, magicName), 'context\nReview status: closed\n');
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => [magicName] });
+    assert.equal(code, 2, 'a pathspec-magic filename must still be diffed literally and its violation caught');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

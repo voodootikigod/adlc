@@ -68,8 +68,16 @@ import { resolveBase, changedFiles, git } from '@adlc/core';
 // transform what this scan actually sees away from the real added/removed lines.
 const FORCE_TEXTUAL_DIFF = ['--text', '--no-ext-diff', '--no-textconv'];
 
+// --literal-pathspecs (a top-level git option, before the subcommand): `file` here
+// is an arbitrary repository-controlled filename passed straight through as a
+// pathspec argument. `--` ends OPTION parsing but does not disable PATHSPEC MAGIC —
+// a tracked file literally named e.g. `:(literal)notes.md` is otherwise interpreted
+// as magic syntax (verified: `git diff -- ':(literal)notes.md'` silently diffs the
+// unrelated path `notes.md` instead, which need not even exist). This forces every
+// pathspec argument to be read as an exact literal string, repo-wide, for this
+// invocation only.
 function gitDiffForFile(base, file) {
-  return git(['diff', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
+  return git(['--literal-pathspecs', 'diff', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
 }
 
 // A base-vs-INDEX diff, for the same reason changedFiles() (@adlc/core) unions
@@ -79,7 +87,7 @@ function gitDiffForFile(base, file) {
 // content. Scanning only the worktree diff would pass a tree locally that is not
 // the one about to be committed.
 function gitDiffForFileStaged(base, file) {
-  return git(['diff', '--cached', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
+  return git(['--literal-pathspecs', 'diff', '--cached', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
 }
 
 // The file's content AS STAGED (what `git commit` would record), independent of

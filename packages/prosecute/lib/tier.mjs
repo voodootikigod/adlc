@@ -37,6 +37,14 @@ const TRUST_ROOT_FILES = [
   // step additionally reinstalls with --ignore-scripts as defense-in-depth.
   'package.json',
   'package-lock.json',
+  // A required CI gate whose own source and test control both the enforcement
+  // logic and the tests that verify it in the same change — declared a trust root
+  // in scripts/rails-guard-ci.mjs's REPO_TRUST_ROOTS and CODEOWNERS, but neither
+  // mechanism alone makes a future PR editing only this file cross-model tier;
+  // this classifier is what actually gates that requirement. Not under
+  // packages/, so it does not match an ENFORCEMENT_PREFIXES entry either.
+  'scripts/check-reviewer-directed-comments.mjs',
+  'scripts/test/check-reviewer-directed-comments.test.mjs',
 ];
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
