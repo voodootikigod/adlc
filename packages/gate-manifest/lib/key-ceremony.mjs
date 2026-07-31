@@ -156,11 +156,25 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * ANY failure after the exclusive create — a short-write loop error, fsync, chmod, or
  * the directory fsync — the just-created file is removed (best-effort) so a retry is
  * not permanently blocked by `EEXIST` against a partial or unusable secret.
+ * Fails closed on win32: `chmodSync`/the `0o600` open mode there only toggle the
+ * read-only attribute, not an owner-only ACL — the file actually inherits its parent
+ * directory's permissions, so claiming "mode 0600" would be a false promise of
+ * confinement for a signing key. Real Windows support needs an explicit, verified
+ * owner-only DACL (out of scope for this slice); until then this refuses to run
+ * rather than hand back a key file that looks restricted but is not.
  * @param {string} path
  * @param {string} key
  * @param {{roots?: string[]}} [options]
  */
 export function writeKeyHandoffFile(path, key, options = {}) {
+  if (process.platform === 'win32') {
+    throw new Error(
+      'the key handoff ceremony is not supported on win32 yet: chmod/mode 0600 only toggles the '
+      + 'read-only attribute there, not an owner-only ACL, so the file would NOT actually be '
+      + 'confined to the current user — refusing rather than writing a secret behind a false sense '
+      + 'of restricted permissions.',
+    );
+  }
   assertHandoffPathOutsideRepo(path, options);
   let fd;
   try {
@@ -197,9 +211,11 @@ export function writeKeyHandoffFile(path, key, options = {}) {
  * TTY (a pipe would either hang forever or silently read unrelated data — this
  * checkpoint exists specifically to prove a HUMAN captured the key, which a non-TTY
  * context cannot demonstrate). Restores the terminal's prior raw-mode state on every
- * exit path — normal completion, Ctrl-C, a stream error, or setup itself throwing
- * (e.g. a synchronous write failure on `output`) — so a cancelled or failed ceremony
- * never leaves the operator's shell with echo silently disabled.
+ * exit path — normal completion, Ctrl-C, an `error`/`end`/`close` on either stream (a
+ * dropped SSH session or killed terminal surfaces this way, not as a keystroke), or
+ * setup itself throwing (e.g. a synchronous write failure on `output`) — so a
+ * cancelled, disconnected, or failed ceremony never leaves the operator's shell with
+ * echo silently disabled.
  * @param {{input?: NodeJS.ReadStream, output?: NodeJS.WriteStream, prompt?: string}} [options]
  * @returns {Promise<string>}
  */
@@ -229,6 +245,10 @@ export function readSecretLine({
       try { input.pause(); } catch { /* best-effort */ }
       if (listenersAttached) {
         input.removeListener('data', onData);
+        input.removeListener('error', onInputError);
+        input.removeListener('end', onInputEnd);
+        input.removeListener('close', onInputEnd);
+        output.removeListener('error', onOutputError);
         process.removeListener('SIGINT', onSigint);
       }
     };
@@ -236,10 +256,19 @@ export function readSecretLine({
       if (settled) return;
       settled = true;
       teardown();
-      output.write('\n');
+      try { output.write('\n'); } catch { /* best-effort; the settlement reason (fn) is what matters */ }
       fn();
     };
     const onSigint = () => settle(() => reject(new Error('custody checkpoint cancelled (Ctrl-C)')));
+    // A closed terminal (SSH drop, killed session) surfaces as an 'error' or 'end'/'close'
+    // on either stream rather than a normal keystroke — without these, the promise never
+    // settles and raw mode is never restored (round 4 finding: only 'data' and SIGINT
+    // were previously handled).
+    const onInputError = (err) => settle(() => reject(err));
+    const onInputEnd = () => settle(() => reject(new Error(
+      'custody checkpoint input ended before a value was entered — the terminal or session was likely closed',
+    )));
+    const onOutputError = (err) => settle(() => reject(err));
     const onData = (chunk) => {
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n') { settle(() => resolvePromise(value)); return; }
@@ -254,6 +283,10 @@ export function readSecretLine({
       input.setEncoding('utf8');
       output.write(prompt);
       input.on('data', onData);
+      input.on('error', onInputError);
+      input.on('end', onInputEnd);
+      input.on('close', onInputEnd);
+      output.on('error', onOutputError);
       process.on('SIGINT', onSigint);
       listenersAttached = true;
     } catch (err) {

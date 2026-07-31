@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -230,6 +230,23 @@ test('refuses a handoff path inside the repository, before writing anything', ()
   assert.throws(() => writeKeyHandoffFile(insidePath, generateManifestKey(), { roots: [root] }), /outside the repository/i);
 });
 
+test('fails closed on win32 — chmod there does not install an owner-only ACL', () => {
+  const root = tmpRoot();
+  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+  const handoffPath = join(outsideDir, 'key.txt');
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  try {
+    assert.throws(
+      () => writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root] }),
+      /win32/,
+    );
+    assert.equal(existsSync(handoffPath), false, 'nothing should be written when the platform is refused up front');
+  } finally {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  }
+});
+
 test('writes every byte of the key — guards the write loop against reporting success on a short write', () => {
   const root = tmpRoot();
   const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
@@ -252,7 +269,9 @@ function makeFakeTty({ isTTY = true } = {}) {
   input.pause = () => {};
   input.setEncoding = () => {};
   let written = '';
-  const output = { isTTY, write: (s) => { written += s; } };
+  const output = new EventEmitter();
+  output.isTTY = isTTY;
+  output.write = (s) => { written += s; };
   return { input, output, writtenOutput: () => written };
 }
 
@@ -307,6 +326,42 @@ test('readSecretLine backspace on an empty buffer does not underflow', async () 
   input.emit('data', 'y');
   input.emit('data', '\r');
   assert.equal(await resultPromise, 'y');
+});
+
+test('readSecretLine rejects and restores raw mode when input emits "error"', async () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const resultPromise = readSecretLine({ input, output });
+  input.emit('error', new Error('synthetic input error'));
+  await assert.rejects(() => resultPromise, /synthetic input error/);
+  assert.equal(input.isRaw, false);
+});
+
+test('readSecretLine rejects and restores raw mode when input ends before a value is entered', async () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const resultPromise = readSecretLine({ input, output });
+  input.emit('end');
+  await assert.rejects(() => resultPromise, /input ended before a value was entered/);
+  assert.equal(input.isRaw, false);
+});
+
+test('readSecretLine rejects and restores raw mode when input emits "close"', async () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const resultPromise = readSecretLine({ input, output });
+  input.emit('close');
+  await assert.rejects(() => resultPromise, /input ended before a value was entered/);
+  assert.equal(input.isRaw, false);
+});
+
+test('readSecretLine rejects and restores raw mode when output emits "error"', async () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const resultPromise = readSecretLine({ input, output });
+  output.emit('error', new Error('synthetic output stream error'));
+  await assert.rejects(() => resultPromise, /synthetic output stream error/);
+  assert.equal(input.isRaw, false);
 });
 
 test('readSecretLine restores raw mode when writing the prompt throws synchronously', async () => {
