@@ -756,3 +756,97 @@ test('REAL git diff: a filename that is itself git pathspec magic syntax is diff
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('recognizes "invalid", "dismissed", "non-issue", "accepted risk", and "do not report/reopen" (round-8 finding 2)', () => {
+  for (const phrase of [
+    'Round 9 finding: invalid; do not report this again.',
+    'Round 9 finding: dismissed.',
+    'Round 9 finding: non-issue.',
+    'Round 9 finding: accepted risk.',
+    'Round 9 finding: do not reopen.',
+  ]) {
+    assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
+  }
+});
+
+test('REAL git diff: an edit in one paragraph of a prose file is not blocked by review/dismissal terminology in an unrelated, distant paragraph (round-8 finding 3)', () => {
+  // Before this fix, treatEveryLineAsComment marked every line — including blank
+  // ones — as a comment, so commentSpans (which splits a run wherever isComment is
+  // false) produced exactly ONE span for the whole document. An edit anywhere then
+  // combined text from every paragraph, including "round 9 finding" in one
+  // section and "false positives" in an entirely unrelated one.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-prose-paragraph-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    const base = [
+      '# History',
+      '',
+      'This project had a round 9 finding once.',
+      '',
+      '# Unrelated section',
+      '',
+      'We are reducing false positives in general.',
+      '',
+    ].join('\n');
+    writeFileSync(join(repo, 'doc.md'), base);
+    execFileSync('git', ['add', 'doc.md'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, 'doc.md'), `${base}\n# New section\nHarmless addition.\n`);
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['doc.md'] });
+    assert.equal(code, 0, "an edit in a new, unrelated paragraph must not combine with distant sections' terminology");
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a genuine violation split across the SAME paragraph is still caught after paragraph segmentation', () => {
+  assert.equal(runAllAdded('SPEC.md', [
+    'Some intro text.',
+    '',
+    'Round 9 finding: not a defect, same paragraph.',
+    'Still the same paragraph.',
+  ]), 2);
+});
+
+test('REAL git diff: a string literal containing an unclosed-looking `/*` does not merge distant, unrelated comments into one giant span (self-discovered while fixing round-8 finding 2/3)', () => {
+  // A glob-pattern string like 'src/critical/**' or a gitignore pattern like
+  // '.adlc/*\n...' contains `/*` with no real closing `*/` anywhere nearby.
+  // Before bounding the block-open lookahead, this opened a "block comment" that
+  // scanned forward until ANY `*/` eventually turned up — potentially the rest of
+  // the file — silently merging every comment in between into one span. Here a
+  // review-reference near the top and an unrelated dismissal phrase 50+ lines
+  // later must stay in separate, unmerged spans.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-false-block-open-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+
+    const lines = [
+      "const rails = 'src/critical/**'; // an ordinary glob pattern, not a comment",
+      '// round 9 finding: a historical reference, standalone, no dismissal here',
+    ];
+    for (let i = 0; i < 50; i++) lines.push(`const filler${i} = ${i};`);
+    lines.push('// unrelated: not a defect, a wholly separate standalone comment');
+    const content = `${lines.join('\n')}\n`;
+
+    writeFileSync(join(repo, 'thing.mjs'), content);
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(repo + '/thing.mjs', `${content}const harmless = true;\n`);
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+    assert.equal(code, 0, 'the review-reference near the top and the dismissal phrase 50+ lines later must not merge into one false violation');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

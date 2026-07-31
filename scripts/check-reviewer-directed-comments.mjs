@@ -186,8 +186,14 @@ function touchedLineNumbers(diffText) {
 const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breview(?:er)?\s+(flagged|found)\b|\breview\s+status\b/i;
 
 // A word or phrase that CLASSIFIES or DISMISSES what the comment describes,
-// rather than stating a fact about it.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b/i;
+// rather than stating a fact about it. This is a LEXICAL phrase list, not a
+// semantic classifier: it guarantees catching the enumerated phrasings (and their
+// combination with REVIEW_PROCESS_REFERENCE below is what triggers a violation,
+// so a bare dismissal word alone does not), not every possible way to express a
+// dismissal in English. Each addition here has come from a real reproduction
+// found by review — treat a new one the same way: add the specific phrase, don't
+// try to generalize ahead of a concrete case.
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -230,23 +236,68 @@ const BLOCK_COMMENT_MARKERS = [
   ['<!--', '-->'],
 ];
 
+// A block comment that does not close within this many lines is treated as not
+// a real block-comment opener at all (see closeFoundWithinBound). This repo's own
+// glob/gitignore-pattern string literals — 'src/critical/**', '.adlc/*\n...' —
+// contain `/*` with no real closing `*/` anywhere nearby: without a bound, ONE
+// such string opens a "block" that keeps scanning forward until ANY `*/`
+// eventually turns up, even one embedded in a wholly unrelated string hundreds of
+// lines later, silently merging everything in between into one giant comment
+// span. Genuine block comments (including JSDoc) in this codebase close within a
+// handful of lines; this bound is generous relative to that, not tuned to it.
+const MAX_BLOCK_LOOKAHEAD_LINES = 40;
+
+// True if `close` appears in the remainder of the current line after `openEndIdx`,
+// or in any of the next MAX_BLOCK_LOOKAHEAD_LINES lines.
+function closeFoundWithinBound(lines, lineIndex, restAfterOpen, close) {
+  if (restAfterOpen.includes(close)) return true;
+  for (let i = 1; i <= MAX_BLOCK_LOOKAHEAD_LINES && lineIndex + i < lines.length; i++) {
+    if (lines[lineIndex + i].includes(close)) return true;
+  }
+  return false;
+}
+
+// Index of the first occurrence of `open` in `rest` whose matching `close` is
+// verifiably reachable within MAX_BLOCK_LOOKAHEAD_LINES — skipping any occurrence
+// that is not (a false open from a string/glob literal, not a real comment) and
+// continuing the search past it.
+function findBlockOpenIndex(lines, lineIndex, rest, open, close) {
+  let searchFrom = 0;
+  for (;;) {
+    const idx = rest.indexOf(open, searchFrom);
+    if (idx === -1) return -1;
+    if (!closeFoundWithinBound(lines, lineIndex, rest.slice(idx + open.length), close)) {
+      searchFrom = idx + 1;
+      continue;
+    }
+    return idx;
+  }
+}
+
 /**
  * Per-line comment classification for one file's full text. A line is "in a comment"
  * if it is inside an open block comment (`/* ... *\/` or `<!-- ... -->`), OR it
  * contains `//`/`#` anywhere (an inline trailing comment counts), OR the file is a
- * prose/doc file (every line counts). `text` is the comment-only portion of the line.
+ * prose/doc file and the line is non-blank (a blank line ends a paragraph — see
+ * below). `text` is the comment-only portion of the line.
  * @param {string[]} lines
  * @param {boolean} treatEveryLineAsComment
  * @returns {{isComment: boolean, text: string}[]}
  */
 function classifyLines(lines, treatEveryLineAsComment) {
   if (treatEveryLineAsComment) {
-    return lines.map((line) => ({ isComment: true, text: line }));
+    // A blank line breaks the span at paragraph boundaries (commentSpans already
+    // splits a run wherever isComment is false). Without this, the WHOLE document
+    // is one span — an edit anywhere combines review terminology and dismissal
+    // language from entirely unrelated, distant sections, rejecting an edit whose
+    // OWN paragraph never mentions either.
+    return lines.map((line) => ({ isComment: line.trim() !== '', text: line }));
   }
 
   const result = [];
   let blockClose = null; // the closing marker we're waiting for, or null if not in a block
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     let text = '';
     let sawComment = false;
     let pos = 0;
@@ -272,7 +323,7 @@ function classifyLines(lines, treatEveryLineAsComment) {
       // The earliest-starting block-comment marker pair, if any.
       let block = null;
       for (const [open, close] of BLOCK_COMMENT_MARKERS) {
-        const idx = rest.indexOf(open);
+        const idx = findBlockOpenIndex(lines, lineIndex, rest, open, close);
         if (idx !== -1 && (block === null || idx < block.idx)) block = { idx, open, close };
       }
 
