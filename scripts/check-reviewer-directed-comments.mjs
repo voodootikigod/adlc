@@ -46,6 +46,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { resolveBase, changedFiles, git } from '@adlc/core';
 
 // A unified-diff header path can desync from the true path for names containing
@@ -236,37 +237,43 @@ const BLOCK_COMMENT_MARKERS = [
   ['<!--', '-->'],
 ];
 
-// A block comment that does not close within this many lines is treated as not
-// a real block-comment opener at all (see closeFoundWithinBound). This repo's own
-// glob/gitignore-pattern string literals — 'src/critical/**', '.adlc/*\n...' —
-// contain `/*` with no real closing `*/` anywhere nearby: without a bound, ONE
-// such string opens a "block" that keeps scanning forward until ANY `*/`
-// eventually turns up, even one embedded in a wholly unrelated string hundreds of
-// lines later, silently merging everything in between into one giant comment
-// span. Genuine block comments (including JSDoc) in this codebase close within a
-// handful of lines; this bound is generous relative to that, not tuned to it.
-const MAX_BLOCK_LOOKAHEAD_LINES = 40;
-
-// True if `close` appears in the remainder of the current line after `openEndIdx`,
-// or in any of the next MAX_BLOCK_LOOKAHEAD_LINES lines.
-function closeFoundWithinBound(lines, lineIndex, restAfterOpen, close) {
-  if (restAfterOpen.includes(close)) return true;
-  for (let i = 1; i <= MAX_BLOCK_LOOKAHEAD_LINES && lineIndex + i < lines.length; i++) {
-    if (lines[lineIndex + i].includes(close)) return true;
+// True if `pos` in `line` lies inside a quoted string literal ('..'/".."/`..`)
+// opened earlier on the SAME line — a lightweight per-line quote-balance scan,
+// not full tokenization, good enough to keep this codebase's overwhelmingly
+// common inline glob/path strings (e.g. 'src/critical/**', which contains `/*`
+// with no real closing `*/` anywhere nearby) from being misread as opening a
+// block comment. A length-based cutoff was tried and rejected here: it silently
+// stops recognizing a REAL block comment once its closer is far enough away,
+// letting a violation deliberately padded past that distance through unscanned
+// (a deterministic bypass) — the opposite failure mode from what this scan
+// exists to avoid. Handles backslash-escaped quote characters; does not attempt
+// to special-case other languages' string/comment syntax (a real tokenizer for
+// every language this repo's files use is the documented, deliberate scope
+// limit — see the module docstring).
+function isInsideStringLiteral(line, pos) {
+  let quote = null;
+  for (let i = 0; i < pos; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = null;
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+    }
   }
-  return false;
+  return quote !== null;
 }
 
-// Index of the first occurrence of `open` in `rest` whose matching `close` is
-// verifiably reachable within MAX_BLOCK_LOOKAHEAD_LINES — skipping any occurrence
-// that is not (a false open from a string/glob literal, not a real comment) and
-// continuing the search past it.
-function findBlockOpenIndex(lines, lineIndex, rest, open, close) {
+// Index of the first occurrence of `open` in `rest` that is not inside a string
+// literal on this line — skipping any that is and continuing the search past it.
+// `lineOffset` is `rest`'s starting position within the full original line, so
+// the string-literal scan sees the whole line's quote state up to this point.
+function findBlockOpenIndex(line, lineOffset, rest, open) {
   let searchFrom = 0;
   for (;;) {
     const idx = rest.indexOf(open, searchFrom);
     if (idx === -1) return -1;
-    if (!closeFoundWithinBound(lines, lineIndex, rest.slice(idx + open.length), close)) {
+    if (isInsideStringLiteral(line, lineOffset + idx)) {
       searchFrom = idx + 1;
       continue;
     }
@@ -323,7 +330,7 @@ function classifyLines(lines, treatEveryLineAsComment) {
       // The earliest-starting block-comment marker pair, if any.
       let block = null;
       for (const [open, close] of BLOCK_COMMENT_MARKERS) {
-        const idx = findBlockOpenIndex(lines, lineIndex, rest, open, close);
+        const idx = findBlockOpenIndex(line, pos, rest, open);
         if (idx !== -1 && (block === null || idx < block.idx)) block = { idx, open, close };
       }
 
@@ -484,6 +491,6 @@ export function check(base, deps = {}) {
   return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = check(process.argv[2]);
 }

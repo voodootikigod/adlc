@@ -10,9 +10,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { check } from '../check-reviewer-directed-comments.mjs';
 
@@ -848,5 +849,58 @@ test('REAL git diff: a string literal containing an unclosed-looking `/*` does n
   } finally {
     process.chdir(originalCwd);
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a block comment longer than the old 40-line cutoff still catches a violation (round-9 finding 3)', () => {
+  // The 40-line lookahead bound tried in an earlier round was a deterministic
+  // bypass: pad a real violation inside a genuinely long comment and it went
+  // unscanned. Replaced with quote-literal tracking (no length limit at all) —
+  // this proves a 50-line real block comment is still fully scanned.
+  const filler = Array.from({ length: 48 }, (_, i) => ` * filler line ${i}`);
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '/**',
+    ...filler,
+    ' * round 9 finding: not a defect',
+    ' */',
+  ]), 2);
+});
+
+test('REAL CLI: the direct-execution guard runs the gate when invoked from a path containing a space (round-9 finding 4)', () => {
+  // `import.meta.url === \`file://${process.argv[1]}\`` silently never matches
+  // when the SCRIPT's own path needs URL-encoding (a space becomes %20 in the URL
+  // but stays a literal space in argv[1]) — the script exits 0 having never run
+  // check() at all. The script copy must stay nested under this repo (not an
+  // unrelated temp dir) so its own `@adlc/core` import still resolves via the
+  // real node_modules — only its own path needs the space, not the git repo it
+  // scans, so a separate temp git repo (via --cwd) supplies that.
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const spacedDir = join(testDir, 'adlc cli space test dir');
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-cli-space-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+    mkdirSync(spacedDir, { recursive: true });
+    const scriptSrc = readFileSync(new URL('../check-reviewer-directed-comments.mjs', import.meta.url), 'utf8');
+    const scriptCopy = join(spacedDir, 'check-reviewer-directed-comments.mjs');
+    writeFileSync(scriptCopy, scriptSrc);
+
+    let status = 0;
+    try {
+      execFileSync(process.execPath, [scriptCopy, 'HEAD'], { cwd: repo, stdio: 'pipe' });
+    } catch (e) {
+      status = e.status ?? 1;
+    }
+    assert.equal(status, 2, 'the CLI must actually run check() and detect the violation even from a spaced path');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(spacedDir, { recursive: true, force: true });
   }
 });
