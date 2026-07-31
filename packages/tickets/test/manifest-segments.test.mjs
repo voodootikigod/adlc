@@ -670,6 +670,60 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       );
     } finally { clean(root); }
   });
+
+  // T-MANIFEST-FOREST follow-up (gap 1, ticket T-01KYTQ4BADHSDJNBFNZHB2ZG5V):
+  // a WRITE that happens before any read on a fresh clone (no local .lineage
+  // token) used to mint a needless duplicate segment rather than continuing a
+  // real, unambiguous, already-committed one for this branch. Mirrors
+  // @adlc/gate-manifest/lib/lineage.mjs's identical test.
+  it('AC12: a fresh clone whose FIRST action is a write continues the branch\'s own committed segment, never mints a needless duplicate', () => {
+    const { root, dir } = gitRepo('feat/clone-write-first');
+    let clonedRoot;
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const first = resolveOpenSegment(dir, { cwd: root });
+      execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${first.name}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'segment evidence'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'adlc-ticket-segments-clone-write-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/clone-write-first', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'precondition: the fresh clone has no local .lineage token');
+
+      // The FIRST action in this clone is a WRITE, not a read.
+      const resolved = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
+      assert.equal(resolved.isNew, false, 'must continue the real committed segment, not mint a duplicate');
+      assert.equal(resolved.name, first.name);
+      assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'exactly one segment must exist — no needless duplicate was minted');
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
+
+  it('AC12: refuses (ambiguous) rather than mint when recovery finds more than one candidate segment for this branch', () => {
+    const { root, dir } = gitRepo('feat/ambiguous-write');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const slug = deriveSlug('feat/ambiguous-write');
+      const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
+      writeFileSync(
+        segmentPath(dir, secondName),
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/ambiguous-write' })}\n`,
+      );
+      execFileSync('git', ['add', `.adlc/manifest.d/${secondName}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'second ambiguous segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      rmSync(lineagePath(dir), { force: true }); // no token to disambiguate
+
+      assert.throws(
+        () => resolveOpenSegment(dir, { cwd: root }),
+        /ambiguous/,
+        'a WRITE must refuse rather than silently pick one of two candidate segments to extend',
+      );
+    } finally { clean(root); }
+  });
 });
 
 // readOwnChains's `allowRecovery` flag (distinct-provider adversarial-review

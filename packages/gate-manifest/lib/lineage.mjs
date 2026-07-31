@@ -391,6 +391,16 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
 /**
  * Resolve which segment file the NEXT append should target (spec §7.1).
  *
+ * Tries, in order: (a) the local `.lineage` token (fast path, unchanged);
+ * (b) `recoverOpenSegment`'s exact-`branch` scan (§4.4a) — a write is never
+ * allowed to mint a needless duplicate of a segment that already,
+ * unambiguously, belongs to this checkout on a fresh clone or after a lost
+ * token (T-MANIFEST-FOREST follow-up, gap 1: write-side recovery blindness).
+ * Only when NEITHER yields a segment does this mint a fresh one.
+ * `recoverOpenSegment` may throw on genuine ambiguity (two candidates, no
+ * token to disambiguate); that throw propagates — a writer must refuse,
+ * never guess, exactly like a reader.
+ *
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  *   `isNew: true` means this append is the segment's FIRST entry and must
  *   carry `anchor` and `branch` (both also returned); `isNew: false` means
@@ -401,7 +411,15 @@ export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
 
-  // No usable token: mint a new segment, anchored to root's current head line
+  const recovered = recoverOpenSegment(dir, { cwd });
+  if (recovered) {
+    // Heal the token so the NEXT resolution on this checkout takes the fast
+    // path instead of falling through to recovery (or minting) again.
+    if (branch !== null) writeLineageToken(dir, { segment: recovered.name, ulid: ulidOf(recovered.name), branch });
+    return recovered;
+  }
+
+  // No usable token or recoverable segment: mint a new one, anchored to root's current head line
   // if a root exists, else anchor: null (spec §4.4/§7.1 — never chase the
   // stale token's segment or any other segment as a fallback anchor target).
   const rootLines = readRawLines(ledgerPath('manifest', dir));

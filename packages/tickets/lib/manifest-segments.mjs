@@ -857,7 +857,10 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
  * Resolve which segment the next ticket-evidence append should target,
  * mirroring @adlc/gate-manifest/lib/lineage.mjs's resolveOpenSegment (spec
  * §7.1) so both producers share the SAME open segment for one branch rather
- * than each minting their own.
+ * than each minting their own. Tries (a) the local token, then (b)
+ * `recoverOpenSegment`'s exact-`branch` scan before minting fresh
+ * (T-MANIFEST-FOREST follow-up, gap 1: write-side recovery blindness) — see
+ * that sibling function's doc for the full rationale.
  *
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  */
@@ -865,6 +868,13 @@ export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
+
+  const recovered = recoverOpenSegment(dir, { cwd });
+  if (recovered) {
+    if (branch !== null) writeLineageToken(dir, { segment: recovered.name, ulid: ulidOf(recovered.name), branch });
+    return recovered;
+  }
+
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
   const rootLast = rootLines.at(-1) ?? null;
   let anchor = null;
