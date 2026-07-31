@@ -122,6 +122,44 @@ function makeGitRepo() {
   return root;
 }
 
+test('repoBoundaryRoots is immune to GIT_DIR/GIT_WORK_TREE pointing at a DIFFERENT repository (round 12 finding — the actual bypass)', () => {
+  const root = makeGitRepo();
+  const otherRepo = makeGitRepo();
+  const originalGitDir = process.env.GIT_DIR;
+  const originalWorkTree = process.env.GIT_WORK_TREE;
+  // Reproduced concretely before this fix: with these set, `git rev-parse
+  // --git-common-dir` and `git worktree list` described ONLY otherRepo, so a handoff
+  // path genuinely inside `root` was accepted as "outside the repository".
+  process.env.GIT_DIR = join(otherRepo, '.git');
+  process.env.GIT_WORK_TREE = otherRepo;
+  try {
+    const roots = repoBoundaryRoots({ cwd: root });
+    assert.ok(
+      roots.some((r) => realpathSync(r) === realpathSync(root)),
+      `expected roots to still describe ${root} (not the GIT_DIR/GIT_WORK_TREE-poisoned ${otherRepo}), got ${JSON.stringify(roots)}`,
+    );
+    assert.throws(
+      () => assertHandoffPathOutsideRepo(join(root, 'key.txt'), { roots }),
+      /outside the repository/i,
+      'a path genuinely inside root must still be refused despite the poisoned Git selector',
+    );
+  } finally {
+    if (originalGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = originalGitDir;
+    if (originalWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = originalWorkTree;
+  }
+});
+
+test('repoBoundaryRoots fails closed if Git reports boundaries that do not contain cwd at all (defense in depth)', () => {
+  const fakeGit = (args) => {
+    if (args[0] === 'rev-parse') return '/some/totally-other-repo/.git\n';
+    return 'worktree /some/totally-other-repo\0HEAD abc123\0branch refs/heads/main\0\0';
+  };
+  assert.throws(
+    () => repoBoundaryRoots({ cwd: '/tmp/definitely-not-that-repo', git: fakeGit }),
+    /do not contain the current directory/,
+  );
+});
+
 test('repoBoundaryRoots never hands its Git children the signing key, even when it is exported (round 11 finding)', () => {
   const root = makeGitRepo();
   const shimDir = mkdtempSync(join(tmpdir(), 'adlc-git-shim-'));

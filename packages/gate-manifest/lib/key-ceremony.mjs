@@ -161,30 +161,63 @@ export function computeKeyFingerprint(key) {
  * bytes before decoding and fails closed on anything that cannot round-trip through
  * UTF-8 — the same aliasing risk a decode-then-split would reintroduce here.
  *
- * Both Git invocations run with `ADLC_MANIFEST_KEY` deleted from their environment
- * (everything else in `process.env` is preserved, since Git legitimately depends on
- * things like `HOME` and `GIT_*` config vars this call has no business stripping). This
+ * Both Git invocations run with `ADLC_MANIFEST_KEY` AND every `GIT_*`-prefixed
+ * variable deleted from their environment (everything else in `process.env` is
+ * preserved — `HOME` and the like are Git's ordinary dependencies, not something this
+ * call has any business stripping). `ADLC_MANIFEST_KEY` matters because this
  * ceremony's own contract requires the signing key to already be present in the
  * environment during a legacy import (and it may still be exported during rotation) —
- * without this, a PATH-resolved `git` shim would receive it by simple environment
- * inheritance, the same exposure class stripAclBestEffort closes for its own subprocess
- * (round 11 finding).
- * @param {{cwd?: string}} [options]
+ * without stripping it, a PATH-resolved `git` shim would receive it by simple
+ * environment inheritance, the same exposure class stripAclBestEffort closes for its
+ * own subprocess (round 11 finding). `GIT_*` matters even more: `GIT_DIR` and
+ * `GIT_WORK_TREE` override which repository Git reports on ENTIRELY, independent of
+ * `cwd` — reproduced concretely: with `GIT_DIR` pointed at a second repository, both
+ * `rev-parse --git-common-dir` and `worktree list` described ONLY that other
+ * repository, so this function would have returned boundaries that never include the
+ * real current repository at all, and a handoff path genuinely inside it would have
+ * been accepted as "outside" (round 12 finding — this is the actual bypass the whole
+ * function exists to prevent, not a defense-in-depth nicety).
+ *
+ * As a second, independent check (belt-and-suspenders against exactly this class of
+ * poisoning, in case some future Git selector this function doesn't yet know to strip
+ * has the same effect): the returned roots MUST contain `cwd` itself. If Git's answer
+ * does not describe the caller's own directory at all, something is deeply wrong with
+ * repository selection and the answer cannot be trusted as a boundary set — this fails
+ * closed rather than silently handing back roots for a repository the caller never
+ * asked about.
+ * @param {{cwd?: string, git?: Function}} [options]  git: override for @adlc/core's git() (test injection, for the fail-closed self-check)
  * @returns {string[]}
  */
-function envWithoutManifestKey() {
-  const { ADLC_MANIFEST_KEY: _omit, ...rest } = process.env;
-  return rest;
+function sanitizedGitEnv() {
+  const sanitized = { ...process.env };
+  delete sanitized.ADLC_MANIFEST_KEY;
+  for (const name of Object.keys(sanitized)) {
+    if (name.startsWith('GIT_')) delete sanitized[name];
+  }
+  return sanitized;
 }
 
-export function repoBoundaryRoots({ cwd = process.cwd() } = {}) {
-  const env = envWithoutManifestKey();
-  const commonDirRaw = git(['rev-parse', '--git-common-dir'], { cwd, env }).trim();
+export function repoBoundaryRoots({ cwd = process.cwd(), git: gitFn = git } = {}) {
+  const env = sanitizedGitEnv();
+  const commonDirRaw = gitFn(['rev-parse', '--git-common-dir'], { cwd, env }).trim();
   const commonDir = resolve(cwd, commonDirRaw);
-  const worktreeListRaw = git(['worktree', 'list', '--porcelain', '-z'], { cwd, env, encoding: null });
+  const worktreeListRaw = gitFn(['worktree', 'list', '--porcelain', '-z'], { cwd, env, encoding: null });
   const roots = [commonDir];
   for (const field of splitNulPaths(worktreeListRaw)) {
     if (field.startsWith('worktree ')) roots.push(field.slice('worktree '.length));
+  }
+  const resolvedCwd = realpathOfDeepestExisting(cwd);
+  const describesCwd = roots.some((root) => {
+    const resolvedRoot = realpathOfDeepestExisting(root);
+    const rel = relative(resolvedRoot, resolvedCwd);
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  });
+  if (!describesCwd) {
+    throw new Error(
+      `git reported repository boundaries that do not contain the current directory (${cwd}) — refusing to `
+      + 'trust a repository-selection answer that appears to describe a different repository entirely '
+      + '(e.g. via GIT_DIR/GIT_WORK_TREE)',
+    );
   }
   return roots;
 }
