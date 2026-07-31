@@ -207,7 +207,9 @@ test('writes the key to the handoff path with mode 0600', () => {
   const key = generateManifestKey();
   const handoffPath = join(outsideDir, 'key.txt');
   writeKeyHandoffFile(handoffPath, key, { roots: [root] });
-  assert.equal(readFileSync(handoffPath, 'utf8'), key);
+  // Newline-terminated so the documented `read -r` loader doesn't hit EOF before a
+  // delimiter (round 5 finding) — the key VALUE itself is still exactly `key`.
+  assert.equal(readFileSync(handoffPath, 'utf8'), `${key}\n`);
   const mode = statSync(handoffPath).mode & 0o777;
   assert.equal(mode, 0o600);
 });
@@ -254,8 +256,24 @@ test('writes every byte of the key — guards the write loop against reporting s
   const handoffPath = join(outsideDir, 'key.txt');
   writeKeyHandoffFile(handoffPath, key, { roots: [root] });
   const writtenBytes = readFileSync(handoffPath);
-  assert.equal(writtenBytes.length, Buffer.byteLength(key, 'utf8'), 'the file must contain the FULL key, not a truncated prefix');
-  assert.ok(writtenBytes.equals(Buffer.from(key, 'utf8')));
+  const expected = Buffer.from(`${key}\n`, 'utf8');
+  assert.equal(writtenBytes.length, expected.length, 'the file must contain the FULL key plus its trailing newline, not a truncated prefix');
+  assert.ok(writtenBytes.equals(expected));
+});
+
+test('verifies the mode the filesystem actually enforced, not merely that chmod was called', () => {
+  const root = tmpRoot();
+  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+  const handoffPath = join(outsideDir, 'key.txt');
+  // Inject a `stat` that reports a filesystem which silently ignored the chmod(0600)
+  // call (e.g. FAT/exFAT, some network mounts) — real chmodSync still runs, but the
+  // post-write verification must catch the mismatch and refuse the handoff anyway.
+  const fakeStat = () => ({ mode: 0o644 });
+  assert.throws(
+    () => writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root], stat: fakeStat }),
+    /did not enforce mode 0600/,
+  );
+  assert.equal(existsSync(handoffPath), false, 'a file whose mode could not be verified must not be left behind');
 });
 
 // ── readSecretLine / confirmCustody: fake TTY-like streams (no real pty needed) ────
@@ -361,6 +379,36 @@ test('readSecretLine rejects and restores raw mode when output emits "error"', a
   const resultPromise = readSecretLine({ input, output });
   output.emit('error', new Error('synthetic output stream error'));
   await assert.rejects(() => resultPromise, /synthetic output stream error/);
+  assert.equal(input.isRaw, false);
+});
+
+test('readSecretLine rejects and restores raw mode when output emits "close"', async () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const resultPromise = readSecretLine({ input, output });
+  output.emit('close');
+  await assert.rejects(() => resultPromise, /output stream closed unexpectedly/);
+  assert.equal(input.isRaw, false);
+});
+
+test('readSecretLine restores the terminal and exits with the conventional code, preserving normal SIGTERM semantics', () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const exitCalls = [];
+  readSecretLine({ input, output, exit: (code) => exitCalls.push(code) });
+  assert.equal(input.isRaw, true, 'raw mode is enabled while the prompt is pending');
+  process.emit('SIGTERM');
+  assert.deepEqual(exitCalls, [143], 'exits with the conventional 128+15 code for SIGTERM, not silently swallowing it');
+  assert.equal(input.isRaw, false, 'raw mode must be restored BEFORE exiting');
+});
+
+test('readSecretLine restores the terminal and exits with the conventional code, preserving normal SIGHUP semantics', () => {
+  const { input, output } = makeFakeTty();
+  input.isRaw = false;
+  const exitCalls = [];
+  readSecretLine({ input, output, exit: (code) => exitCalls.push(code) });
+  process.emit('SIGHUP');
+  assert.deepEqual(exitCalls, [129], 'exits with the conventional 128+1 code for SIGHUP');
   assert.equal(input.isRaw, false);
 });
 

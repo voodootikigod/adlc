@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -40,11 +40,14 @@ test('CLI: generate-key writes a real key to the handoff file, and the key never
     const result = run(['generate-key', '--output', handoffPath], repoDir);
     assert.equal(result.status, 0, result.stderr);
     const key = readFileSync(handoffPath, 'utf8');
-    assert.match(key, /^[0-9a-f]{64}$/, 'the handoff file must contain a real generated key');
+    // The file is line-oriented (trailing '\n') so the documented `read -r` loader
+    // doesn't hit EOF before a delimiter — see key-ceremony.mjs's writeKeyHandoffFile.
+    assert.match(key, /^[0-9a-f]{64}\n$/, 'the handoff file must contain a real generated key, newline-terminated');
     assertNeverAppears(key, result.stdout, result.stderr);
     // Belt-and-braces: the fingerprint printed must be the correct commitment to the
     // key that was actually written, proving the ceremony didn't drift between the two.
-    const fingerprint = createHash('sha256').update(key, 'utf8').digest('hex');
+    // The fingerprint commits to the KEY, not the newline-terminated file bytes.
+    const fingerprint = createHash('sha256').update(key.replace(/\n$/, ''), 'utf8').digest('hex');
     assert.ok(result.stdout.includes(fingerprint), 'the printed fingerprint must match the written key');
     assert.ok(result.stdout.includes(handoffPath), 'the path is safe to print — only the contents are secret');
   } finally {
@@ -79,7 +82,7 @@ test('CLI: the audited import exception reads the CALLER-SUPPLIED key from ADLC_
   try {
     const result = run(['generate-key', '--output', handoffPath, '--allow-key-import'], repoDir, env);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(handoffPath, 'utf8'), importedKey);
+    assert.equal(readFileSync(handoffPath, 'utf8'), `${importedKey}\n`);
     assertNeverAppears(importedKey, result.stdout, result.stderr);
     assert.match(result.stderr, /AUDITED IMPORT EXCEPTION/, 'the exception must be visibly flagged for future doctor reporting');
   } finally {
@@ -199,7 +202,7 @@ test('CLI: refuses a handoff path inside a LINKED WORKTREE of the same repositor
   }
 });
 
-test('the documented loading snippet (README/docs "Signing & provenance") never traces the key under `set -x`', () => {
+test('the documented loading snippet (README/docs "Signing & provenance") runs to completion under `set -e -x`, never tracing the key', () => {
   const { repoDir, outsideDir } = makeDirs();
   const handoffPath = join(outsideDir, 'key.txt');
   try {
@@ -207,17 +210,27 @@ test('the documented loading snippet (README/docs "Signing & provenance") never 
     assert.equal(generate.status, 0, generate.stderr);
     const key = readFileSync(handoffPath, 'utf8');
 
-    // Exactly the loading line documented in both README/docs copies — proves the
-    // GUIDANCE is safe, not just the generate-key binary itself (round 3 finding: an
-    // `export VAR="$(cat file)"` example traces the expanded value regardless of how
-    // the value was obtained; `read` never puts it in an expanded command argument).
+    // Exactly the loading snippet documented in both README/docs copies, run under BOTH
+    // `set -e` and `set -x` — round 5 finding: the handoff file's raw key bytes have no
+    // trailing newline, so `read -r` hits EOF before a delimiter and returns exit status
+    // 1; under `set -e` (the ordinary case for CI/maintenance scripts) that silently
+    // aborted the snippet before export/delete/record ever ran, and the prior version of
+    // this test (no `set -e`) could not have caught it. Also proves the snippet reaches
+    // its FINAL line (rm) and that deletion actually happens, not just that read/export
+    // succeed.
     const traced = spawnSync('bash', ['-c', `
+      set -e
       set -x
       IFS= read -r ADLC_MANIFEST_KEY < "${handoffPath}"
       export ADLC_MANIFEST_KEY
+      rm "${handoffPath}"
+      echo "REACHED_END:\${#ADLC_MANIFEST_KEY}"
     `], { encoding: 'utf8' });
     assert.equal(traced.status, 0, traced.stderr);
+    assert.match(traced.stdout, /REACHED_END:64/, 'the snippet must run to its final line with the full 64-char key loaded, not abort partway under set -e');
+    assert.equal(existsSync(handoffPath), false, 'the documented snippet deletes the handoff file');
     assertNeverAppears(key, traced.stdout, traced.stderr);
+    assertNeverAppears(key.replace(/\n$/, ''), traced.stdout, traced.stderr);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
     rmSync(outsideDir, { recursive: true, force: true });

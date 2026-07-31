@@ -22,7 +22,7 @@
 // transaction — this slice establishes the refusal and the exception flag itself.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync, unlinkSync } from 'node:fs';
+import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
 import { sha256, git, splitNulPaths } from '@adlc/core';
@@ -155,7 +155,12 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * buffer, so the loop below keeps writing until every byte lands before fsyncing. On
  * ANY failure after the exclusive create — a short-write loop error, fsync, chmod, or
  * the directory fsync — the just-created file is removed (best-effort) so a retry is
- * not permanently blocked by `EEXIST` against a partial or unusable secret.
+ * not permanently blocked by `EEXIST` against a partial or unusable secret. The file
+ * content is `key + '\n'` (fingerprinting still uses `key` alone) so the documented
+ * `read -r VAR < file` loader finds a line delimiter before EOF — without it `read`
+ * returns nonzero and aborts the workflow under `set -e`. After chmod, the mode is
+ * READ BACK and verified equal to 0600, not merely assumed — some filesystems accept a
+ * chmod call without actually enforcing owner-only access.
  * Fails closed on win32: `chmodSync`/the `0o600` open mode there only toggle the
  * read-only attribute, not an owner-only ACL — the file actually inherits its parent
  * directory's permissions, so claiming "mode 0600" would be a false promise of
@@ -164,9 +169,10 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * rather than hand back a key file that looks restricted but is not.
  * @param {string} path
  * @param {string} key
- * @param {{roots?: string[]}} [options]
+ * @param {{roots?: string[], stat?: Function}} [options]  stat: override for statSync (test injection, for the post-chmod mode-verification step)
  */
 export function writeKeyHandoffFile(path, key, options = {}) {
+  const { stat = statSync } = options;
   if (process.platform === 'win32') {
     throw new Error(
       'the key handoff ceremony is not supported on win32 yet: chmod/mode 0600 only toggles the '
@@ -186,7 +192,14 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     throw err;
   }
   try {
-    const buffer = Buffer.from(key, 'utf8');
+    // A trailing newline makes the file line-oriented WITHOUT changing the key value
+    // itself: the fingerprint is computed from `key` (never from file bytes), and
+    // `read -r` strips the delimiter it read on, so the loaded env var is still exactly
+    // `key`. Without it, `read -r VAR < file` hits EOF before finding a line delimiter
+    // and returns exit status 1 — under `set -e` (the ordinary case for CI/maintenance
+    // scripts) that aborts the documented loading snippet before export/delete/record
+    // ever run, verified against both bash and zsh.
+    const buffer = Buffer.from(`${key}\n`, 'utf8');
     let written = 0;
     while (written < buffer.length) {
       written += writeSync(fd, buffer, written, buffer.length - written);
@@ -195,6 +208,17 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     closeSync(fd);
     fd = undefined;
     chmodSync(path, 0o600);
+    // Verify the filesystem actually enforced the mode we just requested — chmod can
+    // succeed as a no-op on filesystems that don't map POSIX permissions faithfully
+    // (FAT/exFAT, some network mounts), which would otherwise let this command report
+    // "mode 0600" over a file the OS never actually confined to the owner.
+    const actualMode = stat(path).mode & 0o777;
+    if (actualMode !== 0o600) {
+      throw new Error(
+        `the filesystem at ${path} did not enforce mode 0600 (observed ${actualMode.toString(8)}) — `
+        + 'refusing to hand off a key the OS cannot actually confine to the current user',
+      );
+    }
     fsyncDirectory(dirname(resolve(path)));
   } catch (err) {
     if (fd !== undefined) {
@@ -211,17 +235,21 @@ export function writeKeyHandoffFile(path, key, options = {}) {
  * TTY (a pipe would either hang forever or silently read unrelated data — this
  * checkpoint exists specifically to prove a HUMAN captured the key, which a non-TTY
  * context cannot demonstrate). Restores the terminal's prior raw-mode state on every
- * exit path — normal completion, Ctrl-C, an `error`/`end`/`close` on either stream (a
- * dropped SSH session or killed terminal surfaces this way, not as a keystroke), or
- * setup itself throwing (e.g. a synchronous write failure on `output`) — so a
- * cancelled, disconnected, or failed ceremony never leaves the operator's shell with
- * echo silently disabled.
- * @param {{input?: NodeJS.ReadStream, output?: NodeJS.WriteStream, prompt?: string}} [options]
+ * exit path — normal completion, Ctrl-C (a soft cancel: rejects the promise, does not
+ * exit the process), SIGTERM/SIGHUP (restore-then-exit with the conventional 128+signal
+ * code, preserving their normal termination semantics rather than suppressing them),
+ * an `error`/`end`/`close` on either stream (a dropped SSH session or killed terminal
+ * surfaces this way, not as a keystroke), or setup itself throwing (e.g. a synchronous
+ * write failure on `output`) — so a cancelled, disconnected, terminated, or failed
+ * ceremony never leaves the operator's shell with echo silently disabled. SIGKILL
+ * cannot be caught by any process and is therefore unrecoverable by design.
+ * @param {{input?: NodeJS.ReadStream, output?: NodeJS.WriteStream, prompt?: string, exit?: Function}} [options]  exit: override for process.exit (test injection, for the SIGTERM/SIGHUP path)
  * @returns {Promise<string>}
  */
 export function readSecretLine({
   input = stdin,
   output = stdout,
+  exit = process.exit.bind(process),
   prompt = 'Re-enter the generated key to confirm capture (input hidden): ',
 } = {}) {
   return new Promise((resolvePromise, reject) => {
@@ -249,7 +277,10 @@ export function readSecretLine({
         input.removeListener('end', onInputEnd);
         input.removeListener('close', onInputEnd);
         output.removeListener('error', onOutputError);
+        output.removeListener('close', onOutputClose);
         process.removeListener('SIGINT', onSigint);
+        process.removeListener('SIGTERM', onSigterm);
+        process.removeListener('SIGHUP', onSighup);
       }
     };
     const settle = (fn) => {
@@ -260,15 +291,26 @@ export function readSecretLine({
       fn();
     };
     const onSigint = () => settle(() => reject(new Error('custody checkpoint cancelled (Ctrl-C)')));
+    // Unlike SIGINT (a soft cancel — the promise rejects, the process is left running so
+    // the caller decides what happens next), SIGTERM/SIGHUP preserve their NORMAL exit
+    // semantics: restore the terminal first, then actually exit with the conventional
+    // 128+signal code (round 5 finding: registering a signal listener without exiting
+    // ourselves would otherwise suppress the process's normal termination on that signal
+    // entirely, for as long as this promise is pending).
+    const onSigterm = () => { teardown(); exit(128 + 15); };
+    const onSighup = () => { teardown(); exit(128 + 1); };
     // A closed terminal (SSH drop, killed session) surfaces as an 'error' or 'end'/'close'
     // on either stream rather than a normal keystroke — without these, the promise never
     // settles and raw mode is never restored (round 4 finding: only 'data' and SIGINT
-    // were previously handled).
+    // were previously handled; round 5 finding: output 'close' was still missing).
     const onInputError = (err) => settle(() => reject(err));
     const onInputEnd = () => settle(() => reject(new Error(
       'custody checkpoint input ended before a value was entered — the terminal or session was likely closed',
     )));
     const onOutputError = (err) => settle(() => reject(err));
+    const onOutputClose = () => settle(() => reject(new Error(
+      'custody checkpoint output stream closed unexpectedly',
+    )));
     const onData = (chunk) => {
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n') { settle(() => resolvePromise(value)); return; }
@@ -287,7 +329,10 @@ export function readSecretLine({
       input.on('end', onInputEnd);
       input.on('close', onInputEnd);
       output.on('error', onOutputError);
+      output.on('close', onOutputClose);
       process.on('SIGINT', onSigint);
+      process.on('SIGTERM', onSigterm);
+      process.on('SIGHUP', onSighup);
       listenersAttached = true;
     } catch (err) {
       if (!settled) {
