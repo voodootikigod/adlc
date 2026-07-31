@@ -31,11 +31,22 @@ import { fileURLToPath } from 'node:url';
 // default). It produces the ADLC_PR_REVIEWS the #141 ceremony reads, so tampering with it
 // to forge reviews is itself a trust-root change.
 //
+// check-reviewer-directed-comments.mjs is a required CI gate whose own source and test
+// otherwise sat completely unprotected: a PR could rewrite `check()` to return success
+// and adjust its unit test in the same change, disabling the control without ever
+// touching a protected file or needing the trust-root ceremony — the mutation gate is
+// not an authorization boundary here, since the same change controls both the logic
+// and the tests that verify it.
+//
 // The gate's OWN sources are deliberately NOT passed from here. They live in
 // DEFAULT_IMMUTABLE_TRUST_ROOTS: passing them in made it possible for one PR to drop these
 // arguments AND remove this wrapper from the defaults, unprotecting both enforcement
 // sources at once (cross-model review, #363).
-const REPO_TRUST_ROOTS = ['.github/workflows/ci.yml'];
+const REPO_TRUST_ROOTS = [
+  '.github/workflows/ci.yml',
+  'scripts/check-reviewer-directed-comments.mjs',
+  'scripts/test/check-reviewer-directed-comments.test.mjs',
+];
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
 const bin = join(

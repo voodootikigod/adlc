@@ -532,6 +532,40 @@ test('trust root: PR edits deployed rails guard workflow while base rails exist 
   assert.equal(code, 2);
 });
 
+// These three paths are not built into the shared package's own defaults — they are
+// THIS repo's REPO_TRUST_ROOTS, declared in rails-guard-ci.mjs and passed to the
+// shared gate via repeated `--trust-root` flags. Every test above exercises only the
+// shared package's DEFAULT_IMMUTABLE_TRUST_ROOTS; none of them would catch a
+// regression in this repo's own --trust-root wiring or in the entries themselves.
+for (const path of [
+  '.github/workflows/ci.yml',
+  'scripts/check-reviewer-directed-comments.mjs',
+  'scripts/test/check-reviewer-directed-comments.test.mjs',
+]) {
+  test(`REPO_TRUST_ROOTS: PR edits ${path} while base rails exist → exit 2`, () => {
+    const code = runScenario({
+      baseTickets: RAILED,
+      seedFiles: ['src/critical/auth.mjs', path],
+      seedFileContents: { [path]: 'orig\n' },
+      mutate: (d) => writeFileSync(join(d, path), 'changed\n'),
+    });
+    assert.equal(code, 2);
+  });
+}
+
+test('REPO_TRUST_ROOTS: an unrelated file edit is NOT blocked as a trust-root change', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: [
+      'src/other.mjs',
+      '.github/workflows/ci.yml',
+      'scripts/check-reviewer-directed-comments.mjs',
+    ],
+    mutate: (d) => writeFileSync(join(d, 'src/other.mjs'), 'changed\n'),
+  });
+  assert.equal(code, 0);
+});
+
 for (const [path, renamedPath] of [
   ['.adlc/tickets.json', 'tickets-renamed.json'],
   ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],
