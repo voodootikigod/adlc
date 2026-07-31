@@ -25,8 +25,33 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
+import { execFileSync } from 'node:child_process';
 import { sha256, git, splitNulPaths } from '@adlc/core';
 import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
+
+/**
+ * Best-effort removal of any extended ACL on `path`, using the platform's own tool
+ * (macOS `chmod -N`, Linux `setfacl -b`) — POSIX mode bits alone do not confine a file
+ * when an inherited ACL entry (a macOS ACE, an NFSv4/POSIX ACL) grants another
+ * principal access independent of those bits. NOT verified afterward (no built-in Node
+ * API exposes ACL state, and this codebase has no ACL-reading dependency): a missing
+ * tool or an unsupported filesystem means this silently does nothing, so it narrows —
+ * but does not close — the exposure the mode-bit check alone cannot see. Every failure
+ * (tool absent, unsupported, permission denied) is swallowed; this call must never be
+ * the reason the ceremony fails, since the POSIX mode-bit check remains the actual gate.
+ * @param {string} path
+ */
+export function stripAclBestEffort(path) {
+  try {
+    if (process.platform === 'darwin') {
+      execFileSync('chmod', ['-N', path], { stdio: 'ignore' });
+    } else if (process.platform === 'linux') {
+      execFileSync('setfacl', ['-b', path], { stdio: 'ignore' });
+    }
+  } catch {
+    /* best-effort only — see doc comment above */
+  }
+}
 
 // Resolve `path` through every symlink, INCLUDING when `path` itself does not exist yet
 // (the common case for a handoff file about to be created): walk up to the deepest
@@ -167,6 +192,17 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * confinement for a signing key. Real Windows support needs an explicit, verified
  * owner-only DACL (out of scope for this slice); until then this refuses to run
  * rather than hand back a key file that looks restricted but is not.
+ * RESIDUAL LIMITATION: assertHandoffPathOutsideRepo is a pathname check, not an open —
+ * it inspects the repository boundary set and returns, without retaining any file
+ * descriptor or lock for what it verified. A concurrent process registering a new
+ * linked worktree (or retargeting an ancestor symlink) at the exact chosen path between
+ * that check and this function's own openSync could in principle make a path validated
+ * as "outside" resolve "inside" before the write happens. Fully closing that gap would
+ * need every boundary check bound to the same opened inode via an openat-style,
+ * fd-relative primitive — Node's `fs` module has none without a native addon, and this
+ * is the same pathname-check-then-open shape (and the same gap) already documented on
+ * @adlc/tickets's generation-descriptor.mjs (readAdoptionRecord) and this codebase's
+ * other filesystem-boundary checks (forest.mjs, manifest-segments.mjs).
  * @param {string} path
  * @param {string} key
  * @param {{roots?: string[], stat?: Function}} [options]  stat: override for statSync (test injection, for the post-chmod mode-verification step)
@@ -208,16 +244,21 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     closeSync(fd);
     fd = undefined;
     chmodSync(path, 0o600);
+    // Narrow (not close) the inherited-ACL exposure BEFORE the mode-bit check below: an
+    // ACE inherited from the chosen directory's ancestry grants access independent of
+    // POSIX mode bits, so removing it here is what actually reduces exposure — checking
+    // mode bits alone cannot detect or remove it. See stripAclBestEffort's doc comment
+    // for exactly what this does and does not cover.
+    stripAclBestEffort(path);
     // Verify the filesystem actually enforced the mode we just requested — chmod can
     // succeed as a no-op on filesystems that don't map POSIX permissions faithfully
     // (FAT/exFAT, some network mounts), which would otherwise let this command report
     // "mode 0600" over a file the OS never actually confined to the owner. This checks
-    // the standard nine permission bits only; it does not inspect file ownership or
-    // extended ACLs (macOS ACEs inherited from a parent directory, POSIX ACLs on Linux),
-    // which are evaluated independently of these bits and can grant another principal
-    // access even when they read back as 0600. Closing that gap needs an OS-native ACL
-    // read/removal mechanism (no built-in Node API covers it) — out of scope for this
-    // slice, the same category of limitation as the win32 refusal above.
+    // the standard nine permission bits only; ownership and any ACL entry that survived
+    // stripAclBestEffort (unsupported platform, missing tool, unsupported filesystem)
+    // are NOT verified here — closing that residual gap needs an OS-native ACL-reading
+    // mechanism this codebase does not have, the same category of limitation as the
+    // win32 refusal above.
     const actualMode = stat(path).mode & 0o777;
     if (actualMode !== 0o600) {
       throw new Error(

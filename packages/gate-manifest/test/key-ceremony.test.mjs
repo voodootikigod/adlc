@@ -21,6 +21,7 @@ import {
   resolveCeremonyKey,
   realpathOfDeepestExisting,
   repoBoundaryRoots,
+  stripAclBestEffort,
 } from '../lib/key-ceremony.mjs';
 
 function tmpRoot() {
@@ -274,6 +275,32 @@ test('verifies the mode the filesystem actually enforced, not merely that chmod 
     /did not enforce mode 0600/,
   );
   assert.equal(existsSync(handoffPath), false, 'a file whose mode could not be verified must not be left behind');
+});
+
+// ── stripAclBestEffort: real inherited ACL, real removal (round 7 finding) ─────────
+
+test('stripAclBestEffort removes a real ACL entry inherited from the parent directory', { skip: process.platform !== 'darwin' }, () => {
+  // POSIX mode bits alone would not have caught this: the file below reads back as
+  // 0600 the whole time, yet a real ACE grants `everyone` read access until stripped.
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-key-acl-'));
+  execFileSync('chmod', ['+a', 'everyone allow read,file_inherit', dir]);
+  const childPath = join(dir, 'child.txt');
+  writeFileSync(childPath, 'x');
+  const before = execFileSync('ls', ['-le', childPath], { encoding: 'utf8' });
+  assert.ok(before.trim().split('\n').length > 1, 'the child file must have really inherited an ACL entry before the test proceeds');
+  stripAclBestEffort(childPath);
+  const after = execFileSync('ls', ['-le', childPath], { encoding: 'utf8' });
+  assert.equal(after.trim().split('\n').length, 1, 'the inherited ACL entry must actually be gone, not just the mode bits unaffected');
+});
+
+test('writeKeyHandoffFile strips a real inherited ACL end to end, not just mode bits', { skip: process.platform !== 'darwin' }, () => {
+  const root = tmpRoot();
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-key-acl-e2e-'));
+  execFileSync('chmod', ['+a', 'everyone allow read,file_inherit', dir]);
+  const handoffPath = join(dir, 'key.txt');
+  writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root] });
+  const listing = execFileSync('ls', ['-le', handoffPath], { encoding: 'utf8' });
+  assert.equal(listing.trim().split('\n').length, 1, 'the handoff file must not carry the ACL its parent directory would have inherited onto it');
 });
 
 // ── readSecretLine / confirmCustody: fake TTY-like streams (no real pty needed) ────
