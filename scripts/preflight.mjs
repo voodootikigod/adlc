@@ -69,6 +69,11 @@ export function buildGates(base) {
       why: 'the durable findings ledger is only extended, never deleted/truncated/rewritten (ADR 0014)',
       argv: ['node', ['scripts/guard-findings-ledger-append-only.mjs', `origin/${base}`]],
     },
+    {
+      name: 'reviewer-directed-comments',
+      why: 'no added comment instructs a future reviewer how to classify a finding (round-reference + classification phrase)',
+      argv: ['node', ['scripts/check-reviewer-directed-comments.mjs', `origin/${base}`]],
+    },
   ];
 }
 

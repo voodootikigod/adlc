@@ -332,6 +332,14 @@ jobs:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
 
+      # Repository content (a comment) must never instruct a future reviewer — human
+      # or model — how to classify a finding. Recurred three times before this gate
+      # existed; mirrors the `check-reviewer-directed-comments` gate in preflight.mjs.
+      - name: Reviewer-directed-comment gate
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: node scripts/check-reviewer-directed-comments.mjs "origin/$BASE_REF"
+
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that
     # notices it being removed — code that is correct but unverified.
