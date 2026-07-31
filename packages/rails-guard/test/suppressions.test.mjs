@@ -64,6 +64,65 @@ diff --git a/b.ts b/b.ts
     const added = parseAddedLines(diff);
     assert.equal(added.length, 0);
   });
+
+  test('an added line starting with `++ ` (diff-prefixed to `+++ `) is NOT mistaken for a new-file header', () => {
+    // `++ counter;` is unusual but valid JS (pre-increment with a space). Diff-prefixed
+    // with its own leading `+`, the raw patch line reads `+++ counter;` — identical in
+    // shape to a `+++ b/path` new-file header. Without hunk-state tracking this resets
+    // `currentFile` to the bogus name "counter;", silently misattributing every added
+    // line that follows (including the marker-bearing line in this test) away from the
+    // real file.
+    const diff = `diff --git a/lib/thing.mjs b/lib/thing.mjs
+--- a/lib/thing.mjs
++++ b/lib/thing.mjs
+@@ -1,1 +1,3 @@
+ context
++++ counter;
++it.skip('should still be attributed to lib/thing.mjs', () => {})
+`;
+    const added = parseAddedLines(diff);
+    assert.equal(added.length, 2);
+    assert.equal(added[0].file, 'lib/thing.mjs');
+    assert.equal(added[0].content, '++ counter;');
+    assert.equal(added[1].file, 'lib/thing.mjs');
+    assert.equal(added[1].content, "it.skip('should still be attributed to lib/thing.mjs', () => {})");
+  });
+
+  test('a removed line starting with `-- ` (diff-prefixed to `--- `) does not reset hunk state either', () => {
+    // The symmetric case on the removal side: `-- counter;` diff-prefixed reads
+    // `--- counter;`, identical in shape to the OLD-file `--- a/path` header. Hunk
+    // state must reset only on the unambiguous `diff --git ` marker, not on `--- `,
+    // or this would silently misattribute added lines the same way.
+    const diff = `diff --git a/lib/thing.mjs b/lib/thing.mjs
+--- a/lib/thing.mjs
++++ b/lib/thing.mjs
+@@ -1,2 +1,2 @@
+ context
+--- counter;
++it.skip('still attributed correctly', () => {})
+`;
+    const added = parseAddedLines(diff);
+    assert.equal(added.length, 1);
+    assert.equal(added[0].file, 'lib/thing.mjs');
+    assert.equal(added[0].content, "it.skip('still attributed correctly', () => {})");
+  });
+
+  test('multiple hunks in the same file still share currentFile after the first @@ (no false diff --git match needed)', () => {
+    const diff = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1 +1,2 @@
+ unchanged
++added in first hunk
+@@ -10 +11,2 @@
+ unchanged
++added in second hunk
+`;
+    const added = parseAddedLines(diff);
+    assert.equal(added.length, 2);
+    assert.equal(added[0].file, 'a.ts');
+    assert.equal(added[1].file, 'a.ts');
+  });
 });
 
 describe('findSuppressions', () => {

@@ -18,16 +18,36 @@ export const SUPPRESSION_MARKERS = [
  * Parse added lines from a unified diff string.
  * Returns [ { file, lineNo, content } ] for each added line.
  * Lines starting with '+++' (diff header) are excluded.
+ *
+ * The `+++ b/path` file-header check is recognized ONLY OUTSIDE a hunk (`inHunk`
+ * false). An added source line that itself starts with `++ ` (a pre-increment
+ * expression with a space, e.g. `++ counter;` — unusual but valid JS) becomes
+ * `+++ counter;` once diff-prefixed with its own leading `+`; without this guard that
+ * line is misread as the START OF A NEW FILE's header, resetting `currentFile` to the
+ * bogus name `counter;` and silently misattributing every added line after it — a
+ * verified bypass for any consumer of this function that gates on which FILE an added
+ * line belongs to (this module's own suppression scanner included). Hunk state resets
+ * on the unambiguous `diff --git ` marker, not on `--- `: a removed line starting with
+ * `-- ` becomes `--- text` once diff-prefixed, which would create the identical
+ * ambiguity on the OLD-file-header side if used as the reset signal instead.
  */
 export function parseAddedLines(diffText) {
   const lines = diffText.split('\n');
   const results = [];
   let currentFile = null;
   let newLineNo = 0;
+  let inHunk = false;
 
   for (const raw of lines) {
-    // New file header: +++ b/path/to/file
-    if (raw.startsWith('+++ ')) {
+    // Unambiguous start of the next file's diff section — never produced by
+    // diff-prefixing a content line, so safe to use for resetting hunk state.
+    if (raw.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
+
+    // New file header: +++ b/path/to/file — recognized only outside a hunk.
+    if (!inHunk && raw.startsWith('+++ ')) {
       const fileMatch = raw.match(/^\+\+\+ (?:b\/)?(.+)$/);
       currentFile = fileMatch ? fileMatch[1] : null;
       newLineNo = 0;
@@ -36,6 +56,7 @@ export function parseAddedLines(diffText) {
 
     // Hunk header: @@ -a,b +c,d @@
     if (raw.startsWith('@@')) {
+      inHunk = true;
       const m = raw.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       if (m) newLineNo = parseInt(m[1], 10) - 1;
       continue;
@@ -47,7 +68,9 @@ export function parseAddedLines(diffText) {
       continue;
     }
 
-    // Removed line — does not count in new side
+    // Removed line — does not count in new side. Also matches the old-file `--- a/path`
+    // header when outside a hunk, which needs no special handling here: it never
+    // touches currentFile/newLineNo either way.
     if (raw.startsWith('-')) {
       continue;
     }
