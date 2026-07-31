@@ -63,6 +63,12 @@ test('does NOT bridge two separate comment blocks broken by a non-comment line',
   ]), 0);
 });
 
+test('is self-exempt for its own source file — its header necessarily quotes the pattern as documentation', () => {
+  assert.equal(run('scripts/check-reviewer-directed-comments.mjs', [
+    '// (round 13 finding, not a new independently-closable bug) — a quoted historical example',
+  ]), 0);
+});
+
 test('is exempt for a test file — "regression test for round N" is normal test documentation', () => {
   assert.equal(run('test/thing.test.mjs', [
     '// Regression test for round 12 finding — this is not a new bug, already fixed and verified.',

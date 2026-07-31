@@ -41,6 +41,12 @@ const COMMENT_LINE = /^\s*(\/\/|\*(?!\/)|\/\*|#)/;
 
 const TEST_FILE = /(^|\/)test\/|\.test\.mjs$|\.spec\.mjs$/;
 
+// This file's OWN header necessarily quotes the exact phrases it detects, as concrete
+// historical examples — that is documentation of the pattern, not an instance of it.
+// Exempting it by path (not by weakening the pattern itself) keeps the check strict
+// everywhere else.
+const SELF_EXEMPT_FILE = 'scripts/check-reviewer-directed-comments.mjs';
+
 /**
  * Group consecutive added comment lines within one file into blocks, so a
  * multi-line comment is checked as a whole rather than line by line (the review
@@ -95,7 +101,9 @@ export function check(base, deps = {}) {
   }
 
   const testFiles = new Set(files.filter((f) => TEST_FILE.test(f)));
-  const addedLines = parseAddedLines(diffText).filter((l) => !testFiles.has(l.file));
+  const addedLines = parseAddedLines(diffText).filter(
+    (l) => !testFiles.has(l.file) && l.file !== SELF_EXEMPT_FILE,
+  );
   const blocks = groupCommentBlocks(addedLines);
 
   const violations = blocks.filter(
