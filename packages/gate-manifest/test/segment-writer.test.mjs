@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, chmodSync, renameSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -820,6 +820,56 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
           'a segment that cannot be opened must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
         );
       } finally { chmodSync(unreadablePath, 0o644); } // restore before clean()'s rmSync
+    } finally { clean(root); }
+  });
+
+  // Round 9 of the same finding: recoverOpenSegment only ever scanned
+  // discoverSegments(dir).valid, silently ignoring .invalid — a real segment
+  // renamed to a bad-grammar name, replaced with a symlink, or otherwise
+  // turned into a non-conforming filesystem object became indistinguishable
+  // from "never existed", the same silent-exclusion bug already closed for
+  // oversized/malformed/unreadable first entries, just at the discovery
+  // layer instead of the read layer.
+  it('recoverOpenSegment refuses when an INVALID filesystem object exists under manifest.d/, never silently excludes it', () => {
+    const { root, dir } = gitRepo('feat/invalid-object-present');
+    try {
+      activate(dir);
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root });
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      // Rename the real, valid segment to a bad-grammar name — discoverSegments
+      // now reports it under `invalid`, not `valid`.
+      renameSync(join(segDir, segName), join(segDir, 'not-a-conforming-name.jsonl.bak'));
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /non-conforming filesystem object/,
+        'an invalid object anywhere under manifest.d/ must refuse recovery, not be silently treated as absent',
+      );
+    } finally { clean(root); }
+  });
+
+  // Round 9 of the same finding: a genuinely EMPTY (zero-byte) segment file
+  // is not a legitimate "nothing here" state — this package's own
+  // verifyChain treats an empty segment as INVALID ("has no first entry to
+  // carry the required anchor"), since every real segment's mint atomically
+  // writes its anchor-carrying first entry. A zero-byte segment can only
+  // mean a crash between file creation and first append, or truncation.
+  it('recoverOpenSegment refuses when a real segment file exists but is empty, never silently excludes it', () => {
+    const { root, dir } = gitRepo('feat/empty-segment-present');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/empty-segment-present');
+      const emptyName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, emptyName), '');
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /first entry could not be read or parsed/,
+        'an empty segment file must refuse recovery, not be silently treated as a non-candidate',
+      );
     } finally { clean(root); }
   });
 

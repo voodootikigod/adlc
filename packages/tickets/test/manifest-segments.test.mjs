@@ -616,6 +616,60 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       );
     } finally { clean(root); }
   });
+
+  // Round 9 of the same finding: recoverOpenSegment only ever scanned
+  // discoverSegments(dir).valid, silently ignoring .invalid — a real segment
+  // renamed to a bad-grammar name, replaced with a symlink, or otherwise
+  // turned into a non-conforming filesystem object became indistinguishable
+  // from "never existed", the same silent-exclusion bug already closed for
+  // oversized/malformed/unreadable first entries, just at the discovery
+  // layer instead of the read layer. forestChainsIntact (the write-time
+  // precondition) already refuses on ANY invalid object anywhere in the
+  // forest; recovery had no equivalent.
+  it('recoverOpenSegment refuses when an INVALID filesystem object exists under manifest.d/, never silently excludes it', () => {
+    const { root, dir } = gitRepo('feat/invalid-object-present');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence());
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      // Rename the real, valid segment to a bad-grammar name — discoverSegments
+      // now reports it under `invalid`, not `valid`.
+      renameSync(join(segDir, segName), join(segDir, 'not-a-conforming-name.jsonl.bak'));
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /non-conforming filesystem object/,
+        'an invalid object anywhere under manifest.d/ must refuse recovery, not be silently treated as absent',
+      );
+    } finally { clean(root); }
+  });
+
+  // Round 9 of the same finding: a genuinely EMPTY (zero-byte) segment file
+  // is not a legitimate "nothing here" state the way an empty ROOT is —
+  // gate-manifest's own verifyChain treats an empty segment as INVALID
+  // ("has no first entry to carry the required anchor"), since every real
+  // segment's mint atomically writes its anchor-carrying first entry. A
+  // zero-byte segment can only mean a crash between file creation and first
+  // append, or truncation/tampering — recovery must refuse it, not silently
+  // skip it as a non-candidate the way a merely-absent file would be.
+  it('recoverOpenSegment refuses when a real segment file exists but is empty, never silently excludes it', () => {
+    const { root, dir } = gitRepo('feat/empty-segment-present');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/empty-segment-present');
+      const emptyName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, emptyName), '');
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /first entry could not be read or parsed/,
+        'an empty segment file must refuse recovery, not be silently treated as a non-candidate',
+      );
+    } finally { clean(root); }
+  });
 });
 
 // readOwnChains's `allowRecovery` flag (distinct-provider adversarial-review
@@ -959,6 +1013,34 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
       mkdirSync(dir, { recursive: true }); // segmented-or-not, root genuinely has nothing
       const chains = readOwnChains(dir, { cwd: root, key: KEY });
       assert.deepEqual(chains, [[]], 'an empty root has nothing to distrust, so this must not refuse');
+    } finally { clean(root); }
+  });
+
+  // Round 9 of the same finding: unlike an empty ROOT (deliberately safe —
+  // see the test above), a segment reached via the local `.lineage` token is
+  // never legitimately empty — every real segment's mint atomically writes
+  // its anchor-carrying first entry (gate-manifest's verifyChain: an empty
+  // segment "has no first entry to carry the required anchor"). This is
+  // checked UNCONDITIONALLY, even with no key at all, because it is a
+  // structural fact about the segment, not a trust decision.
+  it('a token-resolved (peeked) segment that is empty on disk refuses, with or without a key', () => {
+    const { root, dir } = gitRepo('feat/peeked-empty');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence()); // mints a real segment + token
+      const resolved = resolveOpenSegment(dir, { cwd: root });
+      writeFileSync(segmentPath(dir, resolved.name), ''); // truncate to empty, as if crashed mid-mint
+
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, key: 'irrelevant-key' }),
+        /is empty — a real segment always has a first entry/,
+        'an empty token-resolved segment must refuse, not be silently treated as having no evidence',
+      );
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, key: null }),
+        /is empty — a real segment always has a first entry/,
+        'the empty-segment refusal is structural, not gated on whether a key is available',
+      );
     } finally { clean(root); }
   });
 });

@@ -232,17 +232,23 @@ const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is 
 // lost-token bug, just via a different mechanism. recoverOpenSegment (below)
 // refuses instead of silently excluding an oversized segment as a candidate.
 const OVERSIZED_FIRST_ENTRY = Symbol('oversized-first-entry');
-// Distinguishes "genuinely empty file" (null — safe, nothing to exclude
-// unsafely) from "bytes exist but could not be read or parsed"
-// (adversarial-review finding, T-MANIFEST-FOREST eighth round): a JSON.parse
-// failure used to collapse to the SAME `null` as a genuinely empty/absent
-// file, so a truncated write, disk fault, or malicious commit made
-// recoverOpenSegment silently exclude a real segment as "not a candidate"
-// instead of "cannot determine" — the exact class of bug the oversized-entry
-// case above already closed, just via a different failure mode. An
-// open-failure is included here too: discoverSegments already confirmed this
-// name exists, so a failure to open it is unexpected and equally unsafe to
-// treat as absence.
+// Returns a parsed first entry, or one of two "cannot determine, refuse"
+// sentinels — never `null` (adversarial-review finding, T-MANIFEST-FOREST
+// ninth round): a genuinely EMPTY file used to return `null` on the theory
+// that empty is always safe, but `firstEntryOf` is only ever called on a
+// name `discoverSegments` already confirmed exists as a real, discovered
+// segment file — an EXISTING segment being zero bytes is not "nothing to
+// see", it's the same anomaly this package's own verifyChain treats as
+// invalid ("empty segment file has no first entry to carry the required
+// anchor"): every real segment's mint atomically writes its anchor-carrying
+// first entry, so zero bytes can only mean a crash between file creation
+// and first append, or truncation/tampering. Folded into
+// MALFORMED_FIRST_ENTRY rather than given a third sentinel — the caller's
+// response (refuse, cannot safely exclude as a non-candidate) is identical
+// either way. Unreadable (open failure) and unparseable (JSON.parse
+// failure) get the same treatment for the same underlying reason:
+// discoverSegments already confirmed this name exists, so any failure past
+// that point is unexpected and unsafe to treat as absence.
 const MALFORMED_FIRST_ENTRY = Symbol('malformed-first-entry');
 function firstEntryOf(dir, segmentName) {
   let fd;
@@ -258,7 +264,7 @@ function firstEntryOf(dir, segmentName) {
     const newlineIndex = chunk.indexOf('\n');
     if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return OVERSIZED_FIRST_ENTRY;
     const firstLine = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
-    if (firstLine.trim() === '') return null;
+    if (firstLine.trim() === '') return MALFORMED_FIRST_ENTRY;
     return JSON.parse(firstLine);
   } catch {
     return MALFORMED_FIRST_ENTRY;
@@ -338,8 +344,25 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
   if (branch === null) return null; // detached HEAD: no branch identity to recover by
+  const discovered = discoverSegments(dir);
+  // adversarial-review finding, T-MANIFEST-FOREST ninth round: this used to
+  // scan ONLY `.valid`, silently ignoring `.invalid` — a real segment
+  // renamed to a bad-grammar name, replaced with a symlink, or otherwise
+  // turned into a non-conforming filesystem object became indistinguishable
+  // from "never existed", exactly the class of silent exclusion already
+  // closed for oversized/malformed first entries below, just one layer up.
+  // The forest's own write-time precondition already refuses on ANY invalid
+  // object anywhere; recovery must match that fail-closed contract rather
+  // than quietly proceed as if nothing is wrong.
+  if (discovered.invalid.length > 0) {
+    throw new Error(
+      `manifest.d/ contains ${discovered.invalid.length} non-conforming filesystem object(s) `
+      + `(${discovered.invalid.map((i) => i.name).sort().join(', ')}) — one could be a disguised or `
+      + `tampered segment belonging to this branch, so recovery refuses rather than guess`
+    );
+  }
   const candidates = [];
-  for (const name of discoverSegments(dir).valid) {
+  for (const name of discovered.valid) {
     const first = firstEntryOf(dir, name);
     if (first === OVERSIZED_FIRST_ENTRY) {
       throw new Error(
