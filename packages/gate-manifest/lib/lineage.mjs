@@ -65,7 +65,7 @@ function readBoundedJsonNoFollow(path) {
     if (bytesRead >= MAX_LOCAL_JSON_BYTES) return null; // at/over the cap — refuse to guess whether it was truncated
     return JSON.parse(buf.subarray(0, bytesRead).toString('utf8'));
   } catch {
-    return MALFORMED_FIRST_ENTRY;
+    return null;
   } finally {
     closeSync(fd);
   }
