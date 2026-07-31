@@ -455,3 +455,20 @@ describe('P4 dispatch usage — `total` is a cross-check, not a requirement', ()
     assert.deepEqual(b.result.usage, { inputTokens: 62779, outputTokens: 66, cachedTokens: 0 });
   });
 });
+
+describe('P4 dispatch usage — degenerate JSON documents', () => {
+  // `JSON.parse` happily yields null and scalars. `typeof null === 'object'`,
+  // so the null case is the ONLY input that separates a correct document guard
+  // from one that reads `.usage` off null and throws — a harness emitting a
+  // bare `null` must downgrade the call, never crash the dispatch.
+  const DEGENERATE = { 'literal null': 'null', 'a bare number': '5', 'a bare string': '"ok"', 'a bare array': '[]', 'a bare boolean': 'true' };
+
+  for (const [label, stdout] of Object.entries(DEGENERATE)) {
+    it(`claude-code: ${label} is unreported, and does not throw`, async () => {
+      const { result } = await dispatchWith('claude-code', { stdout });
+      assert.equal(result.usageStatus, 'unreported');
+      assert.equal('usage' in result, false);
+      assert.equal(result.exitCode, 0, 'a degenerate document is not a build failure');
+    });
+  }
+});

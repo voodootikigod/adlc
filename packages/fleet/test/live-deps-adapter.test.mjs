@@ -399,3 +399,28 @@ test('a SUCCESSFUL record says nothing', () => {
   });
   assert.equal(stderr, '', 'a working recorder must not cry wolf');
 });
+
+test('a commit failure is reported as a FAILURE, not as a timeout', async () => {
+  // `timedOut` drives how the failure is classified downstream. Labelling a
+  // commit failure as a harness timeout sends an operator hunting a hung model
+  // call that never happened, and misreports the strike's cause.
+  const rec = [];
+  const io = fakeIo(rec, env);
+  io.spawnWorker = async () => ({ status: 0, stdout: '{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":54,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}', stderr: '' });
+  io.git = () => (...args) => {
+    if (args[0] === 'commit') throw new Error('nothing to commit, working tree clean');
+    if (args[0] === 'rev-parse') return 'SHA';
+    return '';
+  };
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { adapter: 'claude-code', gate: { test: 'true' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 },
+    io,
+  });
+
+  const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
+  assert.equal(res.exitCode, 1, 'precondition: the commit-failure path');
+  assert.equal(res.timedOut, false, 'a commit failure is not a timeout');
+  assert.match(res.output, /commit failed/);
+});
