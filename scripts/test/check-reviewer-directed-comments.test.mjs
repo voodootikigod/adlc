@@ -904,3 +904,37 @@ test('REAL CLI: the direct-execution guard runs the gate when invoked from a pat
     rmSync(spacedDir, { recursive: true, force: true });
   }
 });
+
+test('recognizes "out of scope", "safe to ignore", "works as intended", and "disregard it" (round-10 finding 3)', () => {
+  for (const phrase of [
+    'Round 9 finding is out of scope; disregard it.',
+    'Round 9 finding: safe to ignore.',
+    'Round 9 finding: works as intended.',
+  ]) {
+    assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
+  }
+});
+
+test('a real block comment on the SAME line as a regex literal containing a quote character is still caught (round-10 finding 4)', () => {
+  // /'/  is a regex literal matching an apostrophe — its single quote character
+  // would otherwise desync the quote-balance scan for the REST OF THE SAME LINE,
+  // making the block-comment opener right after it look like it's still inside a
+  // string and get silently excluded (a false negative — missing a real
+  // violation, the dangerous direction). The scan resets per line, so this only
+  // reproduces when both are on the same line, matching the real finding.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    "const apostrophe = /'/; /* round 9 finding: not a defect */",
+  ]), 2);
+});
+
+test('a regex literal on the same line as a REAL trailing line comment does not desync detection (negative control)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    "const apostrophe = /'/; // round 9 finding: not a defect, but on a REAL line comment",
+  ]), 2);
+});
+
+test('an ordinary division expression is not misread as a regex literal', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    'const half = total / 2; // round 9 finding: not a defect',
+  ]), 2);
+});

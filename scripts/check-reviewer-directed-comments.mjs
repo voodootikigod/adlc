@@ -194,7 +194,7 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // dismissal in English. Each addition here has come from a real reproduction
 // found by review — treat a new one the same way: add the specific phrase, don't
 // try to generalize ahead of a concrete case.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -237,6 +237,26 @@ const BLOCK_COMMENT_MARKERS = [
   ['<!--', '-->'],
 ];
 
+// A JS/TS regex literal (/pattern/flags) can itself contain a quote character
+// (e.g. /'/, a regex matching an apostrophe) that would otherwise desync the
+// quote-balance scan below for the rest of the line, making a REAL comment
+// opener after it look like it is still "inside a string" — a false negative
+// (missing a real violation), the dangerous direction. Distinguishing a regex
+// literal from a division expression needs to know whether an expression is
+// expected at that position; full JS lexing is out of this module's scope (see
+// its docstring), so this uses the common, practical heuristic: a `/` opens a
+// regex literal when it is at the start of the line or immediately follows
+// (skipping whitespace) a character/keyword that can only precede an
+// expression, never end one — and is not immediately followed by `*` or `/`
+// (which would make it a real block/line comment, never a regex). Matched
+// spans are replaced with underscores of the same length so position offsets
+// used elsewhere on the line stay aligned.
+const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\breturn\b|\btypeof\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
+
+function maskRegexLiterals(line) {
+  return line.replace(REGEX_LITERAL, (_m, prefix, ws, regexLit) => prefix + ws + '_'.repeat(regexLit.length));
+}
+
 // True if `pos` in `line` lies inside a quoted string literal ('..'/".."/`..`)
 // opened earlier on the SAME line — a lightweight per-line quote-balance scan,
 // not full tokenization, good enough to keep this codebase's overwhelmingly
@@ -249,7 +269,8 @@ const BLOCK_COMMENT_MARKERS = [
 // exists to avoid. Handles backslash-escaped quote characters; does not attempt
 // to special-case other languages' string/comment syntax (a real tokenizer for
 // every language this repo's files use is the documented, deliberate scope
-// limit — see the module docstring).
+// limit — see the module docstring). `line` is expected pre-masked by
+// maskRegexLiterals so a regex literal's own quote characters do not count.
 function isInsideStringLiteral(line, pos) {
   let quote = null;
   for (let i = 0; i < pos; i++) {
@@ -305,6 +326,9 @@ function classifyLines(lines, treatEveryLineAsComment) {
   let blockClose = null; // the closing marker we're waiting for, or null if not in a block
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
+    // Only used for the string-literal check below; the actual open/close marker
+    // search and the extracted comment `text` still use the real, unmasked line.
+    const lineForQuoteScan = maskRegexLiterals(line);
     let text = '';
     let sawComment = false;
     let pos = 0;
@@ -330,7 +354,7 @@ function classifyLines(lines, treatEveryLineAsComment) {
       // The earliest-starting block-comment marker pair, if any.
       let block = null;
       for (const [open, close] of BLOCK_COMMENT_MARKERS) {
-        const idx = findBlockOpenIndex(line, pos, rest, open);
+        const idx = findBlockOpenIndex(lineForQuoteScan, pos, rest, open);
         if (idx !== -1 && (block === null || idx < block.idx)) block = { idx, open, close };
       }
 
