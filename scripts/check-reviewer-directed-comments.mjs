@@ -47,7 +47,6 @@
 
 import { readFileSync } from 'node:fs';
 import { resolveBase, changedFiles, git } from '@adlc/core';
-import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 
 // A unified-diff header path can desync from the true path for names containing
 // spaces, tabs, quotes, or newlines: git appends a trailing tab to a space-bearing
@@ -56,12 +55,75 @@ import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 // (see @adlc/core's gitDiff docstring). Joining the two by string equality — as a
 // whole-repo diff parsed once and matched against changedFiles() output would
 // require — silently drops such files from coverage. Diffing each changedFiles()
-// path individually sidesteps the mismatch entirely: every added line in a diff
-// scoped to exactly one path belongs to that path, so the header text
-// parseAddedLines derives is never consulted for file identity, only line numbers
-// (which core.quotepath cannot affect, only header display — so it is not set here).
+// path individually sidesteps the mismatch entirely: every touched line in a diff
+// scoped to exactly one path belongs to that path, so no header text is ever
+// consulted for file identity here, only line numbers (which core.quotepath cannot
+// affect, only header display — so it is not set here).
 function gitDiffForFile(base, file) {
   return git(['diff', base, '--', file]);
+}
+
+// Post-change (new-file) line numbers this diff TOUCHED: every added line, plus the
+// post-change line immediately before and after every deletion. Deleting the code
+// between two pre-existing, individually-harmless comment runs can merge them into
+// one contiguous, newly-authority-smuggling span while producing a deletion-only
+// patch — no line in the merged span was itself ADDED, so tracking added lines
+// alone misses it. Marking the deletion's boundary lines as touched, in addition to
+// every added line, catches this without needing full before/after span diffing.
+//
+// Written locally (not via the shared parseAddedLines) so a single-file-scoped diff
+// is walked directly: hunk state closes once its declared old/new line counts are
+// consumed, so a concatenated multi-file diff with no `diff --git` separators
+// between hunks is handled correctly too, not just diffs @adlc/core's git module
+// itself produces.
+function touchedLineNumbers(diffText) {
+  const touched = new Set();
+  let newLineNo = 0;
+  let oldRemaining = 0;
+  let newRemaining = 0;
+  let inHunk = false;
+
+  for (const raw of diffText.split('\n')) {
+    if (raw.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
+
+    if (inHunk && oldRemaining <= 0 && newRemaining <= 0) inHunk = false;
+
+    if (raw.startsWith('@@')) {
+      const m = raw.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (m) {
+        oldRemaining = m[2] !== undefined ? parseInt(m[2], 10) : 1;
+        newRemaining = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+        newLineNo = parseInt(m[3], 10) - 1;
+        inHunk = true;
+      }
+      continue;
+    }
+
+    if (!inHunk) continue; // a header line (---/+++), or text between diff sections
+
+    if (raw.startsWith(' ')) {
+      newLineNo++;
+      oldRemaining--;
+      newRemaining--;
+      continue;
+    }
+    if (raw.startsWith('-')) {
+      oldRemaining--;
+      touched.add(newLineNo);
+      touched.add(newLineNo + 1);
+      continue;
+    }
+    if (raw.startsWith('+')) {
+      newLineNo++;
+      newRemaining--;
+      touched.add(newLineNo);
+      continue;
+    }
+  }
+  return touched;
 }
 
 // A comment referencing the review PROCESS itself — not the code's own behavior.
@@ -95,8 +157,11 @@ const SELF_EXEMPT_FILES = new Set([
 // "review status: closed" section headers) was exactly this: plain prose, not a code
 // comment. Treating every line as scannable for these extensions closes that gap
 // instead of relying on an accidental match (a markdown `#` heading happens to look
-// like a shell comment marker, but plain prose text does not).
-const PROSE_FILE = /\.(md|markdown|mdx)$/i;
+// like a shell comment marker, but plain prose text does not). `.mdc` (Cursor agent
+// rule files, e.g. plugins/adlc-cursor/rules/*.mdc) is plain-text model instruction
+// content with no comment marker of its own, the same category of risk as the other
+// prose extensions here.
+const PROSE_FILE = /\.(md|markdown|mdx|mdc)$/i;
 
 /**
  * Per-line comment classification for one file's full text. A line is "in a comment"
@@ -111,47 +176,56 @@ function classifyLines(lines, treatEveryLineAsComment) {
   if (treatEveryLineAsComment) {
     return lines.map((line) => ({ isComment: true, text: line }));
   }
-  // A block comment can close mid-line and be followed by a `//`/`#` line comment
-  // on the SAME line (`/* factual */ // round 9 finding: not a defect`) — the text
-  // after the close must still be captured, not dropped, so this appends any
-  // trailing line-comment content found after a block's closing `*/`.
-  function withTrailingLineComment(text, rest) {
-    const trailingMatch = rest.match(/\/\/|#/);
-    if (!trailingMatch) return text;
-    return text + rest.slice(rest.indexOf(trailingMatch[0]));
-  }
 
   const result = [];
   let inBlock = false;
   for (const line of lines) {
+    let text = '';
+    let sawComment = false;
+    let pos = 0;
+
     if (inBlock) {
       const endIdx = line.indexOf('*/');
       if (endIdx === -1) {
         result.push({ isComment: true, text: line });
-      } else {
-        inBlock = false;
-        result.push({ isComment: true, text: withTrailingLineComment(line.slice(0, endIdx + 2), line.slice(endIdx + 2)) });
+        continue;
       }
-      continue;
+      text = line.slice(0, endIdx + 2);
+      sawComment = true;
+      inBlock = false;
+      pos = endIdx + 2;
     }
-    const blockIdx = line.indexOf('/*');
-    const lineCommentMatch = line.match(/\/\/|#/);
-    const lineIdx = lineCommentMatch ? line.indexOf(lineCommentMatch[0]) : -1;
-    if (blockIdx !== -1 && (lineIdx === -1 || blockIdx < lineIdx)) {
-      const endIdx = line.indexOf('*/', blockIdx + 2);
+
+    // Iteratively consume every remaining comment segment on the line — a line can
+    // carry more than one (`/* round 9 finding */ /* not a defect */`, or a closed
+    // block followed by a `//`/`#` comment) — rather than stopping after the first.
+    while (pos < line.length) {
+      const rest = line.slice(pos);
+      const blockIdx = rest.indexOf('/*');
+      const lineCommentMatch = rest.match(/\/\/|#/);
+      const lineIdx = lineCommentMatch ? rest.indexOf(lineCommentMatch[0]) : -1;
+
+      if (blockIdx === -1 && lineIdx === -1) break;
+
+      if (lineIdx !== -1 && (blockIdx === -1 || lineIdx < blockIdx)) {
+        text += rest.slice(lineIdx);
+        sawComment = true;
+        break; // a line comment always consumes the rest of the line
+      }
+
+      const endIdx = rest.indexOf('*/', blockIdx + 2);
       if (endIdx === -1) {
+        text += rest.slice(blockIdx);
+        sawComment = true;
         inBlock = true;
-        result.push({ isComment: true, text: line.slice(blockIdx) });
-      } else {
-        result.push({ isComment: true, text: withTrailingLineComment(line.slice(blockIdx, endIdx + 2), line.slice(endIdx + 2)) });
+        break;
       }
-      continue;
+      text += rest.slice(blockIdx, endIdx + 2);
+      sawComment = true;
+      pos += endIdx + 2;
     }
-    if (lineIdx !== -1) {
-      result.push({ isComment: true, text: line.slice(lineIdx) });
-      continue;
-    }
-    result.push({ isComment: false, text: '' });
+
+    result.push(sawComment ? { isComment: true, text } : { isComment: false, text: '' });
   }
   return result;
 }
@@ -222,8 +296,8 @@ export function check(base, deps = {}) {
       console.error(`check-reviewer-directed-comments: could not compute the diff for ${file}: ${err.message}`);
       return 1;
     }
-    const addedLineNos = new Set(parseAddedLines(diffText).map((l) => l.lineNo));
-    if (addedLineNos.size === 0) continue;
+    const touchedLines = touchedLineNumbers(diffText);
+    if (touchedLines.size === 0) continue;
 
     let content;
     try {
@@ -234,11 +308,11 @@ export function check(base, deps = {}) {
 
     const spans = commentSpans(content.split('\n'), PROSE_FILE.test(file));
     for (const span of spans) {
-      let touchedByAddedLine = false;
+      let touched = false;
       for (let ln = span.startLine; ln <= span.endLine; ln++) {
-        if (addedLineNos.has(ln)) { touchedByAddedLine = true; break; }
+        if (touchedLines.has(ln)) { touched = true; break; }
       }
-      if (!touchedByAddedLine) continue;
+      if (!touched) continue;
       spanCount++;
       const isViolation = (REVIEW_PROCESS_REFERENCE.test(span.text) && CLASSIFICATION_PHRASE.test(span.text))
         || REVIEW_STATUS_ASSERTION.test(span.text);

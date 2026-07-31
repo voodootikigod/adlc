@@ -123,6 +123,32 @@ diff --git a/b.ts b/b.ts
     assert.equal(added[0].file, 'a.ts');
     assert.equal(added[1].file, 'a.ts');
   });
+
+  test('a concatenated multi-file patch with NO `diff --git` separator between files still attributes each hunk to its own file', () => {
+    // A hand-built or third-party-tool-produced unified patch can consist of nothing
+    // but consecutive `--- a/x` / `+++ b/x` header pairs, with no `diff --git` line at
+    // all. Without closing a hunk once its declared old/new line counts are consumed,
+    // the second file's `+++ b/b.ts` header is read as hunk BODY content of the FIRST
+    // file's still-open hunk (it starts with `+`), and every line after it is
+    // misattributed to a.ts instead of b.ts.
+    const diff = `--- a/a.ts
++++ b/a.ts
+@@ -1 +1,2 @@
+ unchanged
++added in a
+--- a/b.ts
++++ b/b.ts
+@@ -1 +1,2 @@
+ unchanged
++added in b
+`;
+    const added = parseAddedLines(diff);
+    assert.equal(added.length, 2);
+    assert.equal(added[0].file, 'a.ts');
+    assert.equal(added[0].content, 'added in a');
+    assert.equal(added[1].file, 'b.ts');
+    assert.equal(added[1].content, 'added in b');
+  });
 });
 
 describe('findSuppressions', () => {

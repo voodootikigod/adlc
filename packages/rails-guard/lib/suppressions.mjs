@@ -26,10 +26,17 @@ export const SUPPRESSION_MARKERS = [
  * line is misread as the START OF A NEW FILE's header, resetting `currentFile` to the
  * bogus name `counter;` and silently misattributing every added line after it — a
  * verified bypass for any consumer of this function that gates on which FILE an added
- * line belongs to (this module's own suppression scanner included). Hunk state resets
- * on the unambiguous `diff --git ` marker, not on `--- `: a removed line starting with
- * `-- ` becomes `--- text` once diff-prefixed, which would create the identical
- * ambiguity on the OLD-file-header side if used as the reset signal instead.
+ * line belongs to (this module's own suppression scanner included).
+ *
+ * Hunk state resets on the unambiguous `diff --git ` marker — never on `--- `, since a
+ * removed line starting with `-- ` becomes `--- text` once diff-prefixed, the
+ * identical ambiguity on the old-file-header side — AND once a hunk's declared
+ * old/new line counts (from its `@@ -a,b +c,d @@` header) are fully consumed. The
+ * latter matters for a concatenated multi-file patch with no `diff --git` separator
+ * between files (only consecutive `--- a/x`/`+++ b/x` header pairs): without it, the
+ * parser stays "in" the first file's hunk forever, reads the next file's `+++ b/y`
+ * line as hunk BODY content (an added line, since it starts with `+`), and never
+ * recognizes the second header — misattributing every line after it to the first file.
  */
 export function parseAddedLines(diffText) {
   const lines = diffText.split('\n');
@@ -37,6 +44,8 @@ export function parseAddedLines(diffText) {
   let currentFile = null;
   let newLineNo = 0;
   let inHunk = false;
+  let oldRemaining = 0;
+  let newRemaining = 0;
 
   for (const raw of lines) {
     // Unambiguous start of the next file's diff section — never produced by
@@ -46,6 +55,10 @@ export function parseAddedLines(diffText) {
       continue;
     }
 
+    // A hunk's declared body has been fully consumed — the following line is a new
+    // header, not more hunk content, even with no `diff --git` in between.
+    if (inHunk && oldRemaining <= 0 && newRemaining <= 0) inHunk = false;
+
     // New file header: +++ b/path/to/file — recognized only outside a hunk.
     if (!inHunk && raw.startsWith('+++ ')) {
       const fileMatch = raw.match(/^\+\+\+ (?:b\/)?(.+)$/);
@@ -54,17 +67,25 @@ export function parseAddedLines(diffText) {
       continue;
     }
 
-    // Hunk header: @@ -a,b +c,d @@
+    // Hunk header: @@ -a,b +c,d @@ (b and d default to 1 when omitted).
     if (raw.startsWith('@@')) {
+      const m = raw.match(/@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (m) {
+        oldRemaining = m[1] !== undefined ? parseInt(m[1], 10) : 1;
+        newLineNo = parseInt(m[2], 10) - 1;
+        newRemaining = m[3] !== undefined ? parseInt(m[3], 10) : 1;
+      }
       inHunk = true;
-      const m = raw.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (m) newLineNo = parseInt(m[1], 10) - 1;
       continue;
     }
+
+    if (!inHunk) continue; // a header line (---/+++), or text between diff sections
 
     // Context line
     if (raw.startsWith(' ')) {
       newLineNo++;
+      oldRemaining--;
+      newRemaining--;
       continue;
     }
 
@@ -72,12 +93,14 @@ export function parseAddedLines(diffText) {
     // header when outside a hunk, which needs no special handling here: it never
     // touches currentFile/newLineNo either way.
     if (raw.startsWith('-')) {
+      oldRemaining--;
       continue;
     }
 
     // Added line
     if (raw.startsWith('+')) {
       newLineNo++;
+      newRemaining--;
       if (currentFile !== null) {
         results.push({ file: currentFile, lineNo: newLineNo, content: raw.slice(1) });
       }
