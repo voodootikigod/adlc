@@ -65,7 +65,7 @@ function readBoundedJsonNoFollow(path) {
     if (bytesRead >= MAX_LOCAL_JSON_BYTES) return null; // at/over the cap — refuse to guess whether it was truncated
     return JSON.parse(buf.subarray(0, bytesRead).toString('utf8'));
   } catch {
-    return null;
+    return MALFORMED_FIRST_ENTRY;
   } finally {
     closeSync(fd);
   }
@@ -232,12 +232,24 @@ const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is 
 // lost-token bug, just via a different mechanism. recoverOpenSegment (below)
 // refuses instead of silently excluding an oversized segment as a candidate.
 const OVERSIZED_FIRST_ENTRY = Symbol('oversized-first-entry');
+// Distinguishes "genuinely empty file" (null — safe, nothing to exclude
+// unsafely) from "bytes exist but could not be read or parsed"
+// (adversarial-review finding, T-MANIFEST-FOREST eighth round): a JSON.parse
+// failure used to collapse to the SAME `null` as a genuinely empty/absent
+// file, so a truncated write, disk fault, or malicious commit made
+// recoverOpenSegment silently exclude a real segment as "not a candidate"
+// instead of "cannot determine" — the exact class of bug the oversized-entry
+// case above already closed, just via a different failure mode. An
+// open-failure is included here too: discoverSegments already confirmed this
+// name exists, so a failure to open it is unexpected and equally unsafe to
+// treat as absence.
+const MALFORMED_FIRST_ENTRY = Symbol('malformed-first-entry');
 function firstEntryOf(dir, segmentName) {
   let fd;
   try {
     fd = openSync(segmentPath(dir, segmentName), fsConstants.O_RDONLY);
   } catch {
-    return null;
+    return MALFORMED_FIRST_ENTRY;
   }
   try {
     const buf = Buffer.alloc(MAX_FIRST_LINE_BYTES);
@@ -249,7 +261,7 @@ function firstEntryOf(dir, segmentName) {
     if (firstLine.trim() === '') return null;
     return JSON.parse(firstLine);
   } catch {
-    return null;
+    return MALFORMED_FIRST_ENTRY;
   } finally {
     closeSync(fd);
   }
@@ -332,6 +344,12 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
     if (first === OVERSIZED_FIRST_ENTRY) {
       throw new Error(
         `segment ${name}'s first entry exceeds the ${MAX_FIRST_LINE_BYTES}-byte bounded-read cap — `
+        + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
+      );
+    }
+    if (first === MALFORMED_FIRST_ENTRY) {
+      throw new Error(
+        `segment ${name}'s first entry could not be read or parsed — `
         + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
       );
     }

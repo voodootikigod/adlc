@@ -536,6 +536,30 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
+  // Round 8 of the same finding: a MALFORMED (non-JSON) first entry hit the
+  // SAME silent-exclusion bug the oversized case above already closed —
+  // firstEntryOf's catch block returned `null` for a JSON.parse failure
+  // exactly like it does for a genuinely empty file, so recoverOpenSegment
+  // treated a corrupted segment as "not a candidate" instead of "cannot
+  // determine". A truncated write, disk fault, or malicious commit can
+  // produce exactly this shape; the branch is unknowable, not absent.
+  it('a malformed (non-JSON) first entry makes recovery refuse, never silently excludes the segment', () => {
+    const { root, dir } = gitRepo('feat/malformed-first-entry');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/malformed-first-entry');
+      const malformedName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, malformedName), '{not valid json at all\n');
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /first entry could not be read or parsed/,
+        'a malformed first entry must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
+      );
+    } finally { clean(root); }
+  });
+
   // Pins the EXACT bounded-read cap value (64 KiB), not just "very large":
   // a first line whose JSON body is exactly 65536 bytes places its trailing
   // newline at byte offset 65536 — the 65537th byte, one past a 65536-byte
@@ -776,6 +800,54 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
         () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
         /failed chain or signature verification/,
         'a wholly unsigned segment must never be trusted just because its hash chain is consistent and its branch matches',
+      );
+    } finally { clean(root); }
+  });
+
+  // Round 8 of the same finding: chainIsIntact's legacy-unsigned-PREFIX
+  // tolerance (needed so an honest chain that predates signing can still
+  // verify) combined with "at least one signed entry anywhere" let an
+  // attacker without the key plant an unsigned forged entry FIRST, then have
+  // it laundered into trust by ANY unrelated, later, genuinely signed append
+  // to the SAME chain — signing entry 2 proves only entry 2's own
+  // provenance, not that anyone reviewed entry 1's content. Unlike the
+  // signed-then-unsigned tests above (already caught by chainIsIntact's
+  // "once signed, stays signed" rule), unsigned-then-signed is the exact
+  // legacy-prefix shape chainIsIntact is DESIGNED to tolerate structurally —
+  // the forged entry must still never reach a trust-consuming caller.
+  it('allowRecovery: true never returns an unsigned forged entry, even once a later, unrelated entry in the same chain is genuinely signed', () => {
+    const { root, dir } = gitRepo('feat/laundered-prefix');
+    const KEY = 'laundered-prefix-key';
+    const sign = (entry) => createHmac('sha256', KEY).update(canonicalEntryBytes(entry)).digest('hex');
+    try {
+      activate(dir);
+      // An attacker WITHOUT the key commits a forged P5 "clear" verdict for
+      // ticket A as this segment's FIRST entry — unsigned, but the exact
+      // branch match and hash-chain-from-genesis are both perfectly valid.
+      const forged = {
+        seq: 1, gate: 'prosecution', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+        data: { verdict: 'clear' }, files: {}, prev: null, branch: 'feat/laundered-prefix',
+      };
+      const forgedLine = JSON.stringify(forged);
+      // Later, a real key holder appends a genuine, validly-signed entry —
+      // for an UNRELATED ticket/gate, as would happen in ordinary operation
+      // once the project starts signing (no forgery-awareness required).
+      const genuine = {
+        seq: 2, gate: 'p1', ts: '2026-01-02T00:00:00.000Z', ticket: 'B',
+        data: {}, files: {}, prev: sha256(forgedLine),
+      };
+      genuine.sig = sign(genuine);
+      const segDir = join(dir, 'manifest.d');
+      mkdirSync(segDir, { recursive: true });
+      const segPath = join(segDir, `${deriveSlug('feat/laundered-prefix')}-${generateSegmentUlid()}.jsonl`);
+      writeFileSync(segPath, `${forgedLine}\n${JSON.stringify(genuine)}\n`);
+
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY });
+      assert.equal(chains.length, 2, 'root + the recovered segment');
+      const ticketAEntries = chains[1].filter((e) => e.ticket === 'A');
+      assert.equal(
+        ticketAEntries.length, 0,
+        'the unsigned forged ticket-A verdict must never be returned, even though the chain has a later, unrelated valid signature',
       );
     } finally { clean(root); }
   });

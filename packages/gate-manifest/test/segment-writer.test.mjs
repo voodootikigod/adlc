@@ -772,6 +772,30 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
+  // Round 8 of the same finding: a MALFORMED (non-JSON) first entry hit the
+  // SAME silent-exclusion bug the oversized case above already closed —
+  // firstEntryOf's catch block returned `null` for a JSON.parse failure
+  // exactly like it does for a genuinely empty file, so recoverOpenSegment
+  // treated a corrupted segment as "not a candidate" instead of "cannot
+  // determine". A truncated write, disk fault, or malicious commit can
+  // produce exactly this shape; the branch is unknowable, not absent.
+  it('a malformed (non-JSON) first entry makes recovery refuse, never silently excludes the segment', () => {
+    const { root, dir } = gitRepo('feat/malformed-first-entry');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/malformed-first-entry');
+      const malformedName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, malformedName), '{not valid json at all\n');
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /first entry could not be read or parsed/,
+        'a malformed first entry must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
+      );
+    } finally { clean(root); }
+  });
+
   // Pins the EXACT bounded-read cap value (64 KiB), not just "very large":
   // a first line whose JSON body is exactly 65536 bytes places its trailing
   // newline at byte offset 65536 — the 65537th byte, one past a 65536-byte

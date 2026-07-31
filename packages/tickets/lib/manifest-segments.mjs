@@ -228,22 +228,32 @@ function chainIsIntact(lines, key = null) {
   return true;
 }
 
-// chainIsIntact deliberately tolerates a chain with NO signed entries at all
-// (a legacy chain that predates signing, or a repo that never adopted it —
-// see chainIsIntact's own callers). That tolerance is wrong for a caller that
-// is about to trust a chain's content to drive a REMOTE, authenticated
-// decision (adversarial-review finding, T-MANIFEST-FOREST seventh round): a
-// commit-capable attacker without the key can append an unsigned but
-// perfectly hash-chained forged entry to a chain that has simply never been
-// signed, and chainIsIntact alone would accept it even with a real key
-// available at read time. Used alongside chainIsIntact, never instead of it.
-function hasAnySignedEntry(lines) {
-  for (const line of lines) {
+// chainIsIntact deliberately tolerates a chain with an unsigned PREFIX (a
+// legacy chain that predates signing, or a repo that never adopted it — see
+// chainIsIntact's own callers): its rule is "once signed, stays signed
+// forward", which says nothing about entries BEFORE the first signature.
+// That tolerance is structurally correct (an honest chain really can adopt
+// signing partway through) but was wrong to also treat as a TRUST decision
+// (adversarial-review finding, T-MANIFEST-FOREST eighth round): a
+// commit-capable attacker without the key can plant an unsigned forged entry
+// FIRST, then have it laundered into trust by ANY later, unrelated, genuinely
+// signed append sharing the same chain — signing entry N proves only entry
+// N's own provenance, not that anyone reviewed an earlier unsigned entry's
+// content. Filtering to entries with a genuinely valid signature (rather than
+// merely checking "does at least one exist") closes this without
+// reintroducing the round 4/5 per-entry-filter bug: this filter only ever
+// runs AFTER chainIsIntact has already refused the whole read on any entry
+// with an INVALID signature, so every entry reaching this filter either has
+// a valid signature or was never signed at all — dropping the never-signed
+// ones cannot make a tampered entry silently disappear the way the round 4/5
+// bug did. Mirrors reassign.mjs's planManifestMigration, which already
+// applies this exact per-entry filter for the identical reason.
+function signedEntriesOnly(lines, key) {
+  return lines.filter((line) => {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (typeof entry?.sig === 'string' && entry.sig.length > 0) return true;
-  }
-  return false;
+    try { entry = JSON.parse(line); } catch { return false; }
+    return entrySigValid(key, entry);
+  });
 }
 
 /**
@@ -365,42 +375,45 @@ export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, 
   // attacker with commit-but-not-key access could append an unsigned forged
   // entry there and have it published).
   //
-  // AND (round 7): each also requires at least one entry actually carry a
-  // signature. chainIsIntact alone tolerates a chain with NO signed entries
-  // at all — correct for its OTHER callers' legacy-unsigned-prefix case, but
-  // wrong here: a commit-capable attacker without the key can append an
-  // unsigned but perfectly hash-chained forged entry to a chain that has
-  // simply never adopted signing, and chainIsIntact alone would accept it
-  // even with a real key available right now. Unlike the recovered path's
-  // identical requirement below, this is NOT about identity (root/peeked
-  // aren't self-claimed) — it is about not letting "this repo happens to
-  // have never signed anything yet" become "so nothing here needs signing,
-  // ever, even once a key exists."
+  // AND (round 7 + round 8): once verified intact, only entries with a
+  // genuinely valid signature are handed back — never merely "at least one
+  // exists" (round 7's original check, closed further in round 8: see
+  // signedEntriesOnly's own doc for why an unsigned PREFIX can otherwise be
+  // laundered into trust by an unrelated later signature). Unlike the
+  // recovered path's identical requirement below, this is NOT about identity
+  // (root/peeked aren't self-claimed) — it is about not letting "this repo
+  // happens to have never signed anything yet" (or "not yet, for THIS
+  // entry") become "so nothing here needs signing, ever, even once a key
+  // exists."
+  let rootLines = rootRaw;
   if (key !== null) {
     if (!chainIsIntact(rootRaw, key)) {
       throw new Error('root manifest failed chain or signature verification — refusing to trust it');
     }
+    rootLines = signedEntriesOnly(rootRaw, key);
     // Empty is not "unsigned" — a rootless segmented repo genuinely has
     // nothing in root, which is not a forgery risk (nothing to distrust);
-    // only a NON-EMPTY, entirely-unsigned chain is the round-7 concern.
-    if (rootRaw.length > 0 && !hasAnySignedEntry(rootRaw)) {
+    // only a NON-EMPTY chain with zero validly-signed entries is the concern.
+    if (rootRaw.length > 0 && rootLines.length === 0) {
       throw new Error('root manifest has no signed entries — cannot authenticate it with the available key, refusing to trust it');
     }
   }
-  const root = parseLines(rootRaw);
+  const root = parseLines(rootLines);
   if (!isSegmentedRepo(dir)) return [root];
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) {
     const peekedRaw = readRawLines(segmentPath(dir, peeked.name));
+    let peekedLines = peekedRaw;
     if (key !== null) {
       if (!chainIsIntact(peekedRaw, key)) {
         throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
       }
-      if (peekedRaw.length > 0 && !hasAnySignedEntry(peekedRaw)) {
+      peekedLines = signedEntriesOnly(peekedRaw, key);
+      if (peekedRaw.length > 0 && peekedLines.length === 0) {
         throw new Error(`segment ${peeked.name} has no signed entries — cannot authenticate it with the available key, refusing to trust it`);
       }
     }
-    return [root, parseLines(peekedRaw)];
+    return [root, parseLines(peekedLines)];
   }
   if (!allowRecovery) return [root];
 
@@ -463,20 +476,26 @@ export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, 
   // which is why this belongs in the shared primitive, not each caller.
   //
   // chainIsIntact alone is NOT sufficient here, though (round 5 of the same
-  // finding): it deliberately tolerates a chain with NO signed entries at
-  // all — that legacy-unsigned-prefix tolerance is correct for
+  // finding): it deliberately tolerates a chain with an unsigned PREFIX —
+  // that legacy-unsigned-prefix tolerance is correct for
   // forestChainsIntact's write-time precondition on a segment THIS checkout
   // already owns via a valid token, but a RECOVERED segment is untrusted
   // input claiming an identity this checkout never verified. An attacker
   // without the key can trivially hand-write an entirely unsigned segment
   // that is perfectly hash-chain-consistent and passes chainIsIntact — so
-  // recovery ALSO requires at least one entry actually carry a signature,
-  // proving someone who held the key touched this segment at all.
+  // recovery filters to entries with a genuinely valid signature (round 8:
+  // not merely "at least one exists" — see signedEntriesOnly's own doc for
+  // why a lone later signature must not launder an earlier unsigned forged
+  // entry into trust).
   const rawLines = readRawLines(segmentPath(dir, recovered.name));
-  if (!chainIsIntact(rawLines, key) || !hasAnySignedEntry(rawLines)) {
+  if (!chainIsIntact(rawLines, key)) {
     throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
   }
-  return [root, parseLines(rawLines)];
+  const signedRecovered = signedEntriesOnly(rawLines, key);
+  if (signedRecovered.length === 0) {
+    throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
+  }
+  return [root, parseLines(signedRecovered)];
 }
 
 // SECURITY: `.store.json` is repository-TRACKED, so a malicious branch can
@@ -668,12 +687,24 @@ const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is 
 // lost-token bug, just via a different mechanism. recoverOpenSegment (below)
 // refuses instead of silently excluding an oversized segment as a candidate.
 const OVERSIZED_FIRST_ENTRY = Symbol('oversized-first-entry');
+// Distinguishes "genuinely empty file" (null — safe, nothing to exclude
+// unsafely) from "bytes exist but could not be read or parsed"
+// (adversarial-review finding, T-MANIFEST-FOREST eighth round): a JSON.parse
+// failure used to collapse to the SAME `null` as a genuinely empty/absent
+// file, so a truncated write, disk fault, or malicious commit made
+// recoverOpenSegment silently exclude a real segment as "not a candidate"
+// instead of "cannot determine" — the exact class of bug the oversized-entry
+// case above already closed, just via a different failure mode. An
+// open-failure is included here too: discoverSegments already confirmed this
+// name exists, so a failure to open it is unexpected and equally unsafe to
+// treat as absence.
+const MALFORMED_FIRST_ENTRY = Symbol('malformed-first-entry');
 function firstEntryOf(dir, segmentName) {
   let fd;
   try {
     fd = openSync(segmentPath(dir, segmentName), fsConstants.O_RDONLY);
   } catch {
-    return null;
+    return MALFORMED_FIRST_ENTRY;
   }
   try {
     const buf = Buffer.alloc(MAX_FIRST_LINE_BYTES);
@@ -685,7 +716,7 @@ function firstEntryOf(dir, segmentName) {
     if (firstLine.trim() === '') return null;
     return JSON.parse(firstLine);
   } catch {
-    return null;
+    return MALFORMED_FIRST_ENTRY;
   } finally {
     closeSync(fd);
   }
@@ -760,6 +791,12 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
     if (first === OVERSIZED_FIRST_ENTRY) {
       throw new Error(
         `segment ${name}'s first entry exceeds the ${MAX_FIRST_LINE_BYTES}-byte bounded-read cap — `
+        + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
+      );
+    }
+    if (first === MALFORMED_FIRST_ENTRY) {
+      throw new Error(
+        `segment ${name}'s first entry could not be read or parsed — `
         + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
       );
     }
