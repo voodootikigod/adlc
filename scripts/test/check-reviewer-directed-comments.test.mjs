@@ -10,6 +10,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { check } from '../check-reviewer-directed-comments.mjs';
 
 // Builds a real unified diff whose "new file" side is exactly `fullLines`, marking the
@@ -59,6 +63,24 @@ test('passes a classification phrase with NO review-process reference', () => {
 test('passes an ordinary "regression test for round N" comment (no dismissal phrase)', () => {
   assert.equal(runAllAdded('lib/thing.mjs', [
     '// Regression test for round 12 finding — proves the write happens after confinement.',
+  ]), 0);
+});
+
+test('flags the exact historical incident this gate documents: a "review status: closed" header (round-2 finding 2)', () => {
+  assert.equal(runAllAdded('SPEC.md', [
+    '## Review status: closed',
+  ]), 2);
+});
+
+test('"review status" variants (resolved/done/passed/complete) are also flagged', () => {
+  for (const verdict of ['resolved', 'done', 'passed', 'complete']) {
+    assert.equal(runAllAdded('SPEC.md', [`Review status: ${verdict}`]), 2, `expected "${verdict}" to be flagged`);
+  }
+});
+
+test('an ordinary, unrelated use of "fixed"/"closed" does NOT trigger the narrow status-assertion check', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Fixed the null-check bug; the ticket is now closed in our tracker.',
   ]), 0);
 });
 
@@ -221,4 +243,28 @@ test('an explicit base argument is used instead of calling resolveBase', () => {
   };
   assert.equal(check('explicit-base', deps), 0);
   assert.equal(resolveBaseCalled, false, 'resolveBase must not be called when an explicit base is provided');
+});
+
+test('REAL git diff: an added `++ counter;` line does not hide a later violation in the same file (round-2 finding 1, real git, not a mocked fixture)', () => {
+  // A mocked unified-diff fixture cannot validate this: the exact byte shape of
+  // `+++ counter;` in a real patch depends on git's own diff generation, not on
+  // whatever shape a hand-built fixture assumes. This drives the real `git` binary.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-real-git-'));
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n++ counter;\n// round 9 finding: not a defect\n');
+
+    const code = check('HEAD', {
+      changedFiles: () => ['thing.mjs'],
+      gitDiff: () => execFileSync('git', ['diff', 'HEAD', '--', 'thing.mjs'], { cwd: repo, encoding: 'utf8' }),
+      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    });
+    assert.equal(code, 2, 'the violation must still be caught even though it follows a `++ counter;` added line in the same file');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

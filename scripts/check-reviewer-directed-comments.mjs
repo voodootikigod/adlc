@@ -50,11 +50,20 @@ import { resolveBase, changedFiles, gitDiff } from '@adlc/core';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 
 // A comment referencing the review PROCESS itself — not the code's own behavior.
-const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breviewer?\s+(flagged|found)\b/i;
+const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breviewer?\s+(flagged|found)\b|\breview\s+status\b/i;
 
 // A word or phrase that CLASSIFIES or DISMISSES what the comment describes,
 // rather than stating a fact about it.
 const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b/i;
+
+// A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
+// one short phrase, the exact shape of the historical incident this gate's own header
+// describes: a spec doc with self-congratulatory "review status: closed" section
+// headers. "closed"/"fixed"/"resolved" alone are far too common in ordinary comments
+// ("fixed the null-check bug") to use as a bare classification word, so this only
+// fires on the narrow, specific "review status: <verdict>" shape rather than either
+// word in isolation.
+const REVIEW_STATUS_ASSERTION = /\breview\s+status\s*:?\s*(closed|resolved|done|passed|complete)\b/i;
 
 // This file and its own test file necessarily quote the exact phrases above, as
 // documentation and as test fixtures — that is what they exist to describe/exercise,
@@ -65,14 +74,28 @@ const SELF_EXEMPT_FILES = new Set([
   'scripts/test/check-reviewer-directed-comments.test.mjs',
 ]);
 
+// Prose/doc files (a spec, an ADR, a README) have no code/comment distinction — the
+// WHOLE file is documentation, the same category of content a `//`/`#` comment is in a
+// source file. The historical incident this predates (a spec doc's self-congratulatory
+// "review status: closed" section headers) was exactly this: plain prose, not a code
+// comment. Treating every line as scannable for these extensions closes that gap
+// instead of relying on an accidental match (a markdown `#` heading happens to look
+// like a shell comment marker, but plain prose text does not).
+const PROSE_FILE = /\.(md|markdown|mdx)$/i;
+
 /**
  * Per-line comment classification for one file's full text. A line is "in a comment"
  * if it is inside an open `/* ... *\/` block, OR it contains `//`/`#` anywhere (an
- * inline trailing comment counts). `text` is the comment-only portion of the line.
+ * inline trailing comment counts), OR the file is a prose/doc file (every line counts).
+ * `text` is the comment-only portion of the line.
  * @param {string[]} lines
+ * @param {boolean} [treatEveryLineAsComment]
  * @returns {{isComment: boolean, text: string}[]}
  */
-function classifyLines(lines) {
+function classifyLines(lines, treatEveryLineAsComment = false) {
+  if (treatEveryLineAsComment) {
+    return lines.map((line) => ({ isComment: true, text: line }));
+  }
   const result = [];
   let inBlock = false;
   for (const line of lines) {
@@ -112,10 +135,11 @@ function classifyLines(lines) {
  * Every maximal comment span in `lines` (1-indexed start/end), each carrying its full
  * joined text regardless of which lines within it were actually changed.
  * @param {string[]} lines
+ * @param {boolean} [treatEveryLineAsComment]
  * @returns {{startLine: number, endLine: number, text: string}[]}
  */
-function commentSpans(lines) {
-  const classified = classifyLines(lines);
+function commentSpans(lines, treatEveryLineAsComment = false) {
+  const classified = classifyLines(lines, treatEveryLineAsComment);
   const spans = [];
   let start = -1;
   let texts = [];
@@ -180,7 +204,7 @@ export function check(base, deps = {}) {
       continue; // deleted or unreadable at the diff's "after" state — nothing to scan
     }
 
-    const spans = commentSpans(content.split('\n'));
+    const spans = commentSpans(content.split('\n'), PROSE_FILE.test(file));
     for (const span of spans) {
       let touchedByAddedLine = false;
       for (let ln = span.startLine; ln <= span.endLine; ln++) {
@@ -188,7 +212,9 @@ export function check(base, deps = {}) {
       }
       if (!touchedByAddedLine) continue;
       spanCount++;
-      if (REVIEW_PROCESS_REFERENCE.test(span.text) && CLASSIFICATION_PHRASE.test(span.text)) {
+      const isViolation = (REVIEW_PROCESS_REFERENCE.test(span.text) && CLASSIFICATION_PHRASE.test(span.text))
+        || REVIEW_STATUS_ASSERTION.test(span.text);
+      if (isViolation) {
         violations.push({ file, startLine: span.startLine });
       }
     }
