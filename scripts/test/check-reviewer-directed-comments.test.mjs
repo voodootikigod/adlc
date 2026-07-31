@@ -587,3 +587,60 @@ test('REAL git diff: an unstaged, in-progress edit with no violation does not fa
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('REAL git diff: a genuine UNSTAGED violation is still caught via the real default gitDiffForFile (nothing injected at all)', () => {
+  // Every other test in this file injects at least gitDiff. This one injects
+  // NOTHING — changedFiles, gitDiff, gitDiffStaged, readFile, and readStagedFile all
+  // resolve to their real production defaults — proving gitDiffForFile's default
+  // does not silently swallow a genuine worktree-only violation (e.g. by returning
+  // null instead of real diff text, which check()'s catch around the worktree scan
+  // would otherwise absorb as if the file were merely deleted/unreadable).
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-real-default-worktree-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+    assert.equal(code, 2, 'an unstaged worktree violation must still be caught with every dependency at its real default');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('REAL git diff: staged-diff scoping does not leak another file\'s staged addition onto an untouched pre-existing violation', () => {
+  // Mirrors the worktree-side "leak into this file" test, but for the STAGED path:
+  // a.mjs has a pre-existing violation on line 2 and is otherwise untouched (neither
+  // staged nor in the working tree); b.mjs gets a new line STAGED at line 2. If
+  // gitDiffForFileStaged dropped its --file scoping (returning a whole-repo staged
+  // diff regardless of which file it was asked for), b.mjs's added line 2 would
+  // leak into a.mjs's touched-line set and wrongly flag a.mjs's untouched violation.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-scope-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
+    writeFileSync(join(repo, 'b.mjs'), 'line0\nunrelated\n');
+    execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
+
+    // a.mjs stays fully untouched. b.mjs gets a line STAGED at position 2.
+    writeFileSync(join(repo, 'b.mjs'), 'line0\nadded staged\nunrelated\n');
+    execFileSync('git', ['add', 'b.mjs'], { cwd: repo });
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['a.mjs', 'b.mjs'] });
+    assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated staged line 2");
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
