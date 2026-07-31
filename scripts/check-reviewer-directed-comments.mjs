@@ -63,6 +63,31 @@ function gitDiffForFile(base, file) {
   return git(['diff', base, '--', file]);
 }
 
+// A base-vs-INDEX diff, for the same reason changedFiles() (@adlc/core) unions
+// worktree and --cached diffs (see its own docstring, #244): a plain `git diff
+// base` never consults the index, so a violation staged and then reverted in the
+// working tree diffs empty locally, yet `git commit` (no -a) records the staged
+// content. Scanning only the worktree diff would pass a tree locally that is not
+// the one about to be committed.
+function gitDiffForFileStaged(base, file) {
+  return git(['diff', '--cached', base, '--', file]);
+}
+
+// The file's content AS STAGED (what `git commit` would record), independent of
+// what the working tree currently holds. Returns null for a path with no staged
+// blob (never staged, or staged as a deletion) — the caller falls back to treating
+// it as absent, matching readFileFn's own ENOENT handling for a deleted file.
+function readStagedFile(file) {
+  try {
+    // Failing (no staged blob) is the expected, common case for most changed
+    // files — suppress git's stderr for it rather than printing "fatal: ambiguous
+    // argument" noise on every clean run.
+    return git(['show', `:${file}`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return null;
+  }
+}
+
 // Post-change (new-file) line numbers this diff TOUCHED: every added line, plus the
 // post-change line immediately before and after every deletion. Deleting the code
 // between two pre-existing, individually-harmless comment runs can merge them into
@@ -174,11 +199,20 @@ const SELF_EXEMPT_FILES = new Set([
 // prose extensions here.
 const PROSE_FILE = /\.(md|markdown|mdx|mdc)$/i;
 
+// Block-comment marker pairs recognized in code files, checked in order at each
+// position — C-style `/* */` (JS/TS/CSS/...) and HTML/XML/SVG-style `<!-- -->`
+// (this repo's .svg/.tsx/.html content can carry the latter; a reviewer-directed
+// dismissal hidden in one is exactly as much a risk as in a `//` comment).
+const BLOCK_COMMENT_MARKERS = [
+  ['/*', '*/'],
+  ['<!--', '-->'],
+];
+
 /**
  * Per-line comment classification for one file's full text. A line is "in a comment"
- * if it is inside an open `/* ... *\/` block, OR it contains `//`/`#` anywhere (an
- * inline trailing comment counts), OR the file is a prose/doc file (every line counts).
- * `text` is the comment-only portion of the line.
+ * if it is inside an open block comment (`/* ... *\/` or `<!-- ... -->`), OR it
+ * contains `//`/`#` anywhere (an inline trailing comment counts), OR the file is a
+ * prose/doc file (every line counts). `text` is the comment-only portion of the line.
  * @param {string[]} lines
  * @param {boolean} treatEveryLineAsComment
  * @returns {{isComment: boolean, text: string}[]}
@@ -189,22 +223,22 @@ function classifyLines(lines, treatEveryLineAsComment) {
   }
 
   const result = [];
-  let inBlock = false;
+  let blockClose = null; // the closing marker we're waiting for, or null if not in a block
   for (const line of lines) {
     let text = '';
     let sawComment = false;
     let pos = 0;
 
-    if (inBlock) {
-      const endIdx = line.indexOf('*/');
+    if (blockClose !== null) {
+      const endIdx = line.indexOf(blockClose);
       if (endIdx === -1) {
         result.push({ isComment: true, text: line });
         continue;
       }
-      text = line.slice(0, endIdx + 2);
+      text = line.slice(0, endIdx + blockClose.length);
       sawComment = true;
-      inBlock = false;
-      pos = endIdx + 2;
+      pos = endIdx + blockClose.length;
+      blockClose = null;
     }
 
     // Iteratively consume every remaining comment segment on the line — a line can
@@ -212,28 +246,35 @@ function classifyLines(lines, treatEveryLineAsComment) {
     // block followed by a `//`/`#` comment) — rather than stopping after the first.
     while (pos < line.length) {
       const rest = line.slice(pos);
-      const blockIdx = rest.indexOf('/*');
+
+      // The earliest-starting block-comment marker pair, if any.
+      let block = null;
+      for (const [open, close] of BLOCK_COMMENT_MARKERS) {
+        const idx = rest.indexOf(open);
+        if (idx !== -1 && (block === null || idx < block.idx)) block = { idx, open, close };
+      }
+
       const lineCommentMatch = rest.match(/\/\/|#/);
       const lineIdx = lineCommentMatch ? rest.indexOf(lineCommentMatch[0]) : -1;
 
-      if (blockIdx === -1 && lineIdx === -1) break;
+      if (block === null && lineIdx === -1) break;
 
-      if (lineIdx !== -1 && (blockIdx === -1 || lineIdx < blockIdx)) {
+      if (lineIdx !== -1 && (block === null || lineIdx < block.idx)) {
         text += rest.slice(lineIdx);
         sawComment = true;
         break; // a line comment always consumes the rest of the line
       }
 
-      const endIdx = rest.indexOf('*/', blockIdx + 2);
+      const endIdx = rest.indexOf(block.close, block.idx + block.open.length);
       if (endIdx === -1) {
-        text += rest.slice(blockIdx);
+        text += rest.slice(block.idx);
         sawComment = true;
-        inBlock = true;
+        blockClose = block.close;
         break;
       }
-      text += rest.slice(blockIdx, endIdx + 2);
+      text += rest.slice(block.idx, endIdx + block.close.length);
       sawComment = true;
-      pos += endIdx + 2;
+      pos += endIdx + block.close.length;
     }
 
     result.push(sawComment ? { isComment: true, text } : { isComment: false, text: '' });
@@ -269,17 +310,21 @@ function commentSpans(lines, treatEveryLineAsComment) {
 
 /**
  * @param {string} [base] override for the freeze baseline (test injection)
- * @param {{resolveBase?: Function, changedFiles?: Function, gitDiff?: Function, readFile?: Function}} [deps]
- *        `gitDiff`, if provided, is called as `(base, file)` and must return a diff
- *        scoped to that single file (matching gitDiffForFile's contract), not a
- *        whole-repo diff.
+ * @param {{resolveBase?: Function, changedFiles?: Function, gitDiff?: Function, gitDiffStaged?: Function, readFile?: Function, readStagedFile?: Function}} [deps]
+ *        `gitDiff`/`gitDiffStaged`, if provided, are each called as `(base, file)` and
+ *        must return a diff scoped to that single file (matching gitDiffForFile's /
+ *        gitDiffForFileStaged's contract), not a whole-repo diff. `readStagedFile`, if
+ *        provided, is called as `(file)` and must return the staged content string, or
+ *        `null` if the path has no staged blob (matching readStagedFile's contract).
  * @returns {number} exit code
  */
 export function check(base, deps = {}) {
   const resolveBaseFn = deps.resolveBase ?? resolveBase;
   const changedFilesFn = deps.changedFiles ?? changedFiles;
   const gitDiffFn = deps.gitDiff ?? gitDiffForFile;
+  const gitDiffStagedFn = deps.gitDiffStaged ?? gitDiffForFileStaged;
   const readFileFn = deps.readFile ?? ((file) => readFileSync(file, 'utf8'));
+  const readStagedFileFn = deps.readStagedFile ?? readStagedFile;
 
   const resolvedBase = base ?? resolveBaseFn();
   if (!resolvedBase) {
@@ -297,25 +342,16 @@ export function check(base, deps = {}) {
 
   const violations = [];
   let spanCount = 0;
-  for (const file of files) {
-    if (SELF_EXEMPT_FILES.has(file)) continue;
 
-    let diffText;
-    try {
-      diffText = gitDiffFn(resolvedBase, file);
-    } catch (err) {
-      console.error(`check-reviewer-directed-comments: could not compute the diff for ${file}: ${err.message}`);
-      return 1;
-    }
+  // Scans one (diffText, content) pairing for `file` and records any violation.
+  // Called once for the worktree state and once for the staged (index) state — a
+  // violation staged and then reverted in the working tree diffs empty against the
+  // worktree alone, yet `git commit` (no -a) records the staged content, so both
+  // must be checked for `check()` to be accurate about what is about to be
+  // committed, not just what is currently on disk.
+  function scan(file, diffText, content) {
     const touchedLines = touchedLineNumbers(diffText);
-    if (touchedLines.size === 0) continue;
-
-    let content;
-    try {
-      content = readFileFn(file);
-    } catch {
-      continue; // deleted or unreadable at the diff's "after" state — nothing to scan
-    }
+    if (touchedLines.size === 0) return;
 
     const spans = commentSpans(content.split('\n'), PROSE_FILE.test(file));
     for (const span of spans) {
@@ -330,6 +366,31 @@ export function check(base, deps = {}) {
       if (isViolation) {
         violations.push({ file, startLine: span.startLine });
       }
+    }
+  }
+
+  for (const file of files) {
+    if (SELF_EXEMPT_FILES.has(file)) continue;
+
+    let worktreeDiff;
+    let stagedDiff;
+    try {
+      worktreeDiff = gitDiffFn(resolvedBase, file);
+      stagedDiff = gitDiffStagedFn(resolvedBase, file);
+    } catch (err) {
+      console.error(`check-reviewer-directed-comments: could not compute the diff for ${file}: ${err.message}`);
+      return 1;
+    }
+
+    try {
+      scan(file, worktreeDiff, readFileFn(file));
+    } catch {
+      // deleted or unreadable at the diff's "after" state — nothing to scan
+    }
+
+    const stagedContent = readStagedFileFn(file);
+    if (stagedContent !== null) {
+      scan(file, stagedDiff, stagedContent);
     }
   }
 

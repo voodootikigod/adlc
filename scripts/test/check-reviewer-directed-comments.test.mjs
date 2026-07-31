@@ -30,7 +30,11 @@ function run(file, fullLines, addedLineNos) {
     resolveBase: () => 'origin/main',
     changedFiles: () => [file],
     gitDiff: (_base, f) => buildDiff(f, fullLines, addedLineNos),
+    // No staged content in this fake fixture — explicit, not relying on a real `git`
+    // call against a fake path happening to return nothing in the actual repo.
+    gitDiffStaged: () => '',
     readFile: (f) => (f === file ? fullLines.join('\n') : (() => { throw new Error('ENOENT'); })()),
+    readStagedFile: () => null,
   };
   return check(undefined, deps);
 }
@@ -195,7 +199,9 @@ test('reports the exact file and starting line of a violation', () => {
       'const unrelated = 1;',
       '// round 5 finding: not independently closable',
     ], [1, 2]),
+    gitDiffStaged: () => '',
     readFile: () => 'const unrelated = 1;\n// round 5 finding: not independently closable',
+    readStagedFile: () => null,
   };
   const originalError = console.error;
   const lines = [];
@@ -228,7 +234,9 @@ test('a deleted file (unreadable at the diff head) is skipped, not an error', ()
     resolveBase: () => 'origin/main',
     changedFiles: () => ['gone.mjs'],
     gitDiff: () => buildDiff('gone.mjs', ['// round 9 finding: not a defect'], [1]),
+    gitDiffStaged: () => '',
     readFile: () => { throw new Error('ENOENT: no such file'); },
+    readStagedFile: () => null,
   };
   assert.equal(check(undefined, deps), 0);
 });
@@ -239,7 +247,9 @@ test('an explicit base argument is used instead of calling resolveBase', () => {
     resolveBase: () => { resolveBaseCalled = true; return 'should-not-be-used'; },
     changedFiles: () => ['lib/thing.mjs'],
     gitDiff: () => buildDiff('lib/thing.mjs', ['// a clean comment'], [1]),
+    gitDiffStaged: () => '',
     readFile: () => '// a clean comment',
+    readStagedFile: () => null,
   };
   assert.equal(check('explicit-base', deps), 0);
   assert.equal(resolveBaseCalled, false, 'resolveBase must not be called when an explicit base is provided');
@@ -261,7 +271,9 @@ test('REAL git diff: an added `++ counter;` line does not hide a later violation
     const code = check('HEAD', {
       changedFiles: () => ['thing.mjs'],
       gitDiff: () => execFileSync('git', ['diff', 'HEAD', '--', 'thing.mjs'], { cwd: repo, encoding: 'utf8' }),
+      gitDiffStaged: () => '',
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+      readStagedFile: () => null,
     });
     assert.equal(code, 2, 'the violation must still be caught even though it follows a `++ counter;` added line in the same file');
   } finally {
@@ -287,6 +299,8 @@ test('REAL git diff: a filename containing a space keeps its added-line coverage
       changedFiles: () => ['review notes.md'],
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
       gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+      gitDiffStaged: () => '',
+      readStagedFile: () => null,
     });
     assert.equal(code, 2, 'the violation in a space-bearing filename must still be caught');
   } finally {
@@ -326,6 +340,8 @@ test('the real default gitDiffForFile (not injected) scopes to one file — an a
     const code = check('HEAD', {
       changedFiles: () => ['a.mjs', 'b.mjs'],
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+      gitDiffStaged: () => '',
+      readStagedFile: () => null,
     });
     assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated added line 2");
   } finally {
@@ -386,7 +402,9 @@ test('REAL git diff: deleting the line between two pre-existing comment runs mer
     const code = check('HEAD', {
       changedFiles: () => ['thing.mjs'],
       gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+      gitDiffStaged: () => '',
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+      readStagedFile: () => null,
     });
     assert.equal(code, 2, 'the merged span created purely by a deletion must still be caught');
   } finally {
@@ -407,7 +425,9 @@ test('a deletion that does NOT merge two comment runs (they stay separated by ot
     const code = check('HEAD', {
       changedFiles: () => ['thing.mjs'],
       gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+      gitDiffStaged: () => '',
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+      readStagedFile: () => null,
     });
     assert.equal(code, 0, "const other = 2; still separates the two comments post-change, so they must stay two spans, neither containing both halves");
   } finally {
@@ -448,7 +468,9 @@ diff --git a/thing.mjs b/thing.mjs
   const code = check('HEAD', {
     changedFiles: () => ['thing.mjs'],
     gitDiff: () => diff,
+    gitDiffStaged: () => '',
     readFile: () => content,
+    readStagedFile: () => null,
   });
   assert.equal(code, 0, "thing.mjs's pre-existing violation on line 3 must stay untouched — only line 5 was actually added");
 });
@@ -483,7 +505,85 @@ test('a hunk whose declared count is exhausted exactly at 0/0 closes via the cou
   const code = check('HEAD', {
     changedFiles: () => ['thing.mjs'],
     gitDiff: () => diff,
+    gitDiffStaged: () => '',
     readFile: () => content,
+    readStagedFile: () => null,
   });
   assert.equal(code, 0, "thing.mjs's pre-existing violation on line 3 must stay untouched even with no diff --git separator anywhere");
+});
+
+test('catches a single-line HTML/XML comment (.svg/.tsx/.html content, round-5 finding)', () => {
+  assert.equal(runAllAdded('assets/logo.svg', [
+    '<!-- round 9 finding: not a defect -->',
+  ]), 2);
+});
+
+test('catches a multi-line HTML/XML comment', () => {
+  assert.equal(runAllAdded('assets/logo.svg', [
+    '<!-- round 9 finding',
+    '     not a defect -->',
+  ]), 2);
+});
+
+test('an HTML comment followed by a trailing line comment on the same line is still fully captured', () => {
+  assert.equal(runAllAdded('app/page.tsx', [
+    '<!-- round 9 finding --> // not a defect',
+  ]), 2);
+});
+
+test('an ordinary HTML comment with no trigger phrase passes', () => {
+  assert.equal(runAllAdded('assets/logo.svg', [
+    '<!-- decorative icon, no functional purpose -->',
+  ]), 0);
+});
+
+test('REAL git diff: a violation staged and then reverted in the working tree is still caught (round-5 finding 3, local preflight blind spot)', () => {
+  // The exact scenario from the finding: a plain `git diff base -- file` (worktree
+  // vs base) never consults the index. Staging a violation and then reverting the
+  // working tree copy back to base makes the worktree diff empty, yet `git commit`
+  // (no -a) would record the staged content. Uses the REAL default gitDiffForFile /
+  // gitDiffForFileStaged / readStagedFile (none injected) via process.chdir, so this
+  // exercises the actual production defaults, not a mock standing in for them.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n'); // revert the WORKING TREE only
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+    assert.equal(code, 2, 'the staged (about-to-be-committed) violation must be caught even though the worktree copy was reverted');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('REAL git diff: an unstaged, in-progress edit with no violation does not false-positive against a clean staged version', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-clean-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, 'thing.mjs'), 'context\nharmless addition\n');
+    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+    assert.equal(code, 0);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
