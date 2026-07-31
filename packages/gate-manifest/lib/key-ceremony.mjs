@@ -38,9 +38,9 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * so it silently does nothing and narrows (does not close) the exposure the mode-bit
  * check alone cannot see. Any OTHER failure — the tool exists but exits non-zero or
  * errors (permission denied, an unexpected filesystem condition) — is NOT tolerated and
- * is thrown: a present tool that fails to do its job is exactly the "ACL removal
- * failed yet the ceremony still succeeds" gap this exists to close (round 9 finding),
- * so the caller must treat that as a real confinement failure, not a soft warning.
+ * is thrown: a present tool that fails to do its job would otherwise let the ceremony
+ * report success while the file remains ACL-exposed, so the caller must treat that as
+ * a real confinement failure, not a soft warning.
  * Still not verified either way afterward (no built-in Node API exposes ACL state, and
  * this codebase has no ACL-reading dependency) — a tool that exits 0 without actually
  * having removed a real entry would not be caught here.
@@ -53,7 +53,7 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * child process by default, in reach of anything that can read that child's
  * environment: a malicious `chmod`/`setfacl` shim earlier on PATH, or another local
  * account able to read `/proc/<pid>/environ`-equivalent process state. Neither tool
- * needs any OTHER inherited variable to do its job (round 10 finding).
+ * needs any OTHER inherited variable to do its job.
  *
  * Invoked by a TRUSTED ABSOLUTE PATH, not a bare command name resolved through the
  * caller's PATH: a PATH-resolved shim receives the handoff pathname as an argument and
@@ -62,8 +62,8 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * uses fstatSync/the open descriptor, not the pathname) would still pass, and the
  * secret write still lands correctly on the renamed inode via that same descriptor, but
  * the file the OPERATOR is told to read from would then be the attacker's decoy while
- * the real key sits at the attacker's hidden path (round 11 finding). An absolute path
- * is not resolved through PATH at all, closing this specific redirection vector for
+ * the real key sits at the attacker's hidden path. An absolute path is not resolved
+ * through PATH at all, closing this specific redirection vector for
  * this specific subprocess (it does not address an attacker who can already write to
  * system binary directories — a materially higher bar than prepending to PATH).
  * @param {string} path
@@ -169,14 +169,14 @@ export function computeKeyFingerprint(key) {
  * environment during a legacy import (and it may still be exported during rotation) —
  * without stripping it, a PATH-resolved `git` shim would receive it by simple
  * environment inheritance, the same exposure class stripAclBestEffort closes for its
- * own subprocess (round 11 finding). `GIT_*` matters even more: `GIT_DIR` and
- * `GIT_WORK_TREE` override which repository Git reports on ENTIRELY, independent of
- * `cwd` — reproduced concretely: with `GIT_DIR` pointed at a second repository, both
- * `rev-parse --git-common-dir` and `worktree list` described ONLY that other
- * repository, so this function would have returned boundaries that never include the
+ * own subprocess. `GIT_*` matters even more: `GIT_DIR` and `GIT_WORK_TREE` override
+ * which repository Git reports on ENTIRELY, independent of `cwd` — verified directly:
+ * with `GIT_DIR` pointed at a second repository, both `rev-parse --git-common-dir`
+ * and `worktree list` described ONLY that other repository, so without this
+ * sanitization this function would have returned boundaries that never include the
  * real current repository at all, and a handoff path genuinely inside it would have
- * been accepted as "outside" (round 12 finding — this is the actual bypass the whole
- * function exists to prevent, not a defense-in-depth nicety).
+ * been accepted as "outside" — the actual bypass this function exists to prevent, not
+ * a defense-in-depth nicety.
  *
  * As a second, independent check (belt-and-suspenders against exactly this class of
  * poisoning, in case some future Git selector this function doesn't yet know to strip
@@ -312,9 +312,9 @@ export function writeKeyHandoffFile(path, key, options = {}) {
   try {
     // Confine the (still EMPTY) file BEFORE a single secret byte is written — chmod,
     // ACL-strip, and mode verification all happen first, in that order. Doing this
-    // AFTER writing would leave a real window where the complete key sits in a file an
-    // inherited ACL entry (round 8 finding) could still let another principal read,
-    // even though the write is fsynced and closed a moment later.
+    // AFTER writing would leave a window where the complete key sits in a file an
+    // inherited ACL entry could still let another principal read, even though the
+    // write is fsynced and closed a moment later.
     //
     // fchmodSync/fstatSync operate on the OPEN DESCRIPTOR, not the pathname — immune to
     // a path being replaced between these calls (the secret write below also goes
@@ -323,20 +323,17 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     // takes a path (the external chmod -N/setfacl -b tools have no fd-argument form),
     // so it alone keeps the pathname-check-then-open TOCTOU already documented above.
     //
-    // RESIDUAL WINDOW even with this ordering (round 13 finding, sharpening the same
-    // already-documented ACL limitation, not a new independently-closable bug): on a
-    // filesystem where the CHOSEN DIRECTORY carries an inheritable ACL entry, that ACE
-    // attaches to this file at the moment openSync creates it — atomically, at the OS
-    // level, before this process ever gets to run fchmodSync or stripAcl. A principal
-    // already granted access by that inherited ACE could in principle open the file
-    // for reading during the (small, but nonzero) interval between creation and
-    // stripAcl's external-process call completing, and an already-open descriptor is
-    // not revoked by a later chmod/ACL change. Fully closing this needs either an
-    // OS-native "create with no inherited ACL" primitive (not exposed by Node's `fs`
-    // without a native addon) or doing the ACL removal via a syscall instead of
-    // spawning an external process (removing the window's dominant cost, not the
-    // window itself) — both out of scope for this slice, the same category of
-    // limitation as the win32 refusal and the mode-bit-only verification below.
+    // A window remains even with this ordering: on a filesystem where the CHOSEN
+    // DIRECTORY carries an inheritable ACL entry, that ACE attaches to this file at the
+    // moment openSync creates it — atomically, at the OS level, before this process
+    // ever gets to run fchmodSync or stripAcl. A principal already granted access by
+    // that inherited ACE could in principle open the file for reading during the
+    // (small, but nonzero) interval between creation and stripAcl's external-process
+    // call completing, and an already-open descriptor is not revoked by a later
+    // chmod/ACL change. Closing this needs either an OS-native "create with no
+    // inherited ACL" primitive (not exposed by Node's `fs` without a native addon) or
+    // doing the ACL removal via a syscall instead of spawning an external process
+    // (which would shrink the window's dominant cost, not eliminate the window).
     fchmodSync(fd, 0o600);
     // Narrow (not close) the inherited-ACL exposure — an ACE inherited from the chosen
     // directory's ancestry grants access independent of POSIX mode bits, so removing it
@@ -450,15 +447,14 @@ export function readSecretLine({
     // Unlike SIGINT (a soft cancel — the promise rejects, the process is left running so
     // the caller decides what happens next), SIGTERM/SIGHUP preserve their NORMAL exit
     // semantics: restore the terminal first, then actually exit with the conventional
-    // 128+signal code (round 5 finding: registering a signal listener without exiting
-    // ourselves would otherwise suppress the process's normal termination on that signal
-    // entirely, for as long as this promise is pending).
+    // 128+signal code. Registering a signal listener without exiting ourselves would
+    // otherwise suppress the process's normal termination on that signal entirely, for
+    // as long as this promise is pending.
     const onSigterm = () => { teardown(); exit(128 + 15); };
     const onSighup = () => { teardown(); exit(128 + 1); };
     // A closed terminal (SSH drop, killed session) surfaces as an 'error' or 'end'/'close'
-    // on either stream rather than a normal keystroke — without these, the promise never
-    // settles and raw mode is never restored (round 4 finding: only 'data' and SIGINT
-    // were previously handled; round 5 finding: output 'close' was still missing).
+    // on either stream rather than a normal keystroke — without these, the promise
+    // never settles and raw mode is never restored.
     const onInputError = (err) => settle(() => reject(err));
     const onInputEnd = () => settle(() => reject(new Error(
       'custody checkpoint input ended before a value was entered — the terminal or session was likely closed',
