@@ -22,10 +22,10 @@
 // transaction — this slice establishes the refusal and the exception flag itself.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync } from 'node:fs';
+import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync, unlinkSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
-import { sha256, git } from '@adlc/core';
+import { sha256, git, splitNulPaths } from '@adlc/core';
 import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
 
 // Resolve `path` through every symlink, INCLUDING when `path` itself does not exist yet
@@ -94,16 +94,24 @@ export function computeKeyFingerprint(key) {
  * committed by a concurrent session. Also includes the common `.git` directory itself
  * (`git rev-parse --git-common-dir`) — a handoff file placed there is invisible to
  * `git status` today but is not a boundary this ceremony should trust either.
+ *
+ * Parses `worktree list --porcelain -z`, NOT the newline-delimited default: a worktree
+ * path is an arbitrary filesystem path and can itself contain a newline, so splitting
+ * plain porcelain output on `\n` can silently truncate or misplace a path and drop it
+ * from the boundary set. `-z` NUL-terminates each field with no escaping, and
+ * splitNulPaths (this codebase's existing helper, `@adlc/core`, #249) splits on the raw
+ * bytes before decoding and fails closed on anything that cannot round-trip through
+ * UTF-8 — the same aliasing risk a decode-then-split would reintroduce here.
  * @param {{cwd?: string}} [options]
  * @returns {string[]}
  */
 export function repoBoundaryRoots({ cwd = process.cwd() } = {}) {
   const commonDirRaw = git(['rev-parse', '--git-common-dir'], { cwd }).trim();
   const commonDir = resolve(cwd, commonDirRaw);
-  const worktreeListRaw = git(['worktree', 'list', '--porcelain'], { cwd });
+  const worktreeListRaw = git(['worktree', 'list', '--porcelain', '-z'], { cwd, encoding: null });
   const roots = [commonDir];
-  for (const line of worktreeListRaw.split('\n')) {
-    if (line.startsWith('worktree ')) roots.push(line.slice('worktree '.length).trim());
+  for (const field of splitNulPaths(worktreeListRaw)) {
+    if (field.startsWith('worktree ')) roots.push(field.slice('worktree '.length));
   }
   return roots;
 }
@@ -142,6 +150,12 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * because that argument is subject to the process umask — a permissive umask would
  * silently widen the file beyond 0600 (mirrors packages/rails-guard/lib/ci/bootstrap.mjs's
  * identical two-step pattern for its own restrictive-permission write).
+ * A short write is treated as a failure, not success: `writeSync` returns the number
+ * of bytes actually written and a single call is not guaranteed to write the whole
+ * buffer, so the loop below keeps writing until every byte lands before fsyncing. On
+ * ANY failure after the exclusive create — a short-write loop error, fsync, chmod, or
+ * the directory fsync — the just-created file is removed (best-effort) so a retry is
+ * not permanently blocked by `EEXIST` against a partial or unusable secret.
  * @param {string} path
  * @param {string} key
  * @param {{roots?: string[]}} [options]
@@ -158,13 +172,23 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     throw err;
   }
   try {
-    writeSync(fd, key);
+    const buffer = Buffer.from(key, 'utf8');
+    let written = 0;
+    while (written < buffer.length) {
+      written += writeSync(fd, buffer, written, buffer.length - written);
+    }
     fsyncSync(fd);
-  } finally {
     closeSync(fd);
+    fd = undefined;
+    chmodSync(path, 0o600);
+    fsyncDirectory(dirname(resolve(path)));
+  } catch (err) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* best-effort; the write-side error is what matters */ }
+    }
+    try { unlinkSync(path); } catch { /* best-effort cleanup so a retry is not blocked by EEXIST */ }
+    throw err;
   }
-  chmodSync(path, 0o600);
-  fsyncDirectory(dirname(resolve(path)));
 }
 
 /**

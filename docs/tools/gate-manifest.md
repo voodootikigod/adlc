@@ -163,13 +163,26 @@ middle line breaks all subsequent links and is detected by `verify`.
 
 The hash chain alone proves **internal consistency**, not **authorship**. `sha256` is a public, keyless function: anyone who can write `manifest.jsonl` can recompute every `prev` and forge a clean chain from scratch. On its own the chain is therefore *not* cryptographic provenance — do not represent a hash-chain-only pass as in-toto/SLSA attestation.
 
-To get real provenance, set a secret signing key:
+To get real provenance, generate a secret signing key with the ceremony below — not
+`export ADLC_MANIFEST_KEY="$(openssl rand -hex 32)"`. That form puts the key in a shell
+assignment: with tracing enabled (`set -x`, or any CI runner that logs commands) the
+expanded key is printed to the terminal or build log, which is the exact exposure this
+ceremony exists to avoid. `generate-key` never prints the key on any stream — it writes it
+to a mode-0600 file at an operator-chosen path OUTSIDE the repository, and prints only the
+path and a one-way fingerprint:
 
 ```sh
-export ADLC_MANIFEST_KEY="$(openssl rand -hex 32)"   # store in your CI secret manager, never in the repo
+gate-manifest generate-key --output /path/outside/the/repo/manifest-key.txt
+# fingerprint: <sha256 of the key — safe to log, not the key itself>
+export ADLC_MANIFEST_KEY="$(cat /path/outside/the/repo/manifest-key.txt)"   # load, then delete the file
+rm /path/outside/the/repo/manifest-key.txt
 gate-manifest record spec-lint --ticket T-42
 gate-manifest verify --json    # → { ..., "signed": true }
 ```
+
+Loading the key into the environment still requires disabling shell tracing for that one
+line (`set +x` first if a script has it enabled) — the ceremony keeps the key off of every
+ceremony output stream, but it cannot reach into how a caller subsequently loads it.
 
 - **record** keeps its compatible v1 signature over `{ seq, gate, ts, ticket?, data?, files, prev }`. Generalized first-party evidence uses `sigVersion: 2` and signs canonical JSON for every entry field except `sig`, including ticket, revision, and provenance data.
 - **verify** (run with the key) requires every entry to carry a valid sig — comparison is constant-time (`crypto.timingSafeEqual`). A missing sig → `unsigned entry`; a wrong sig → `signature invalid`. Either breaks the chain (exit 2). This defeats the forge-from-scratch attack: without the key, an attacker cannot produce valid signatures.

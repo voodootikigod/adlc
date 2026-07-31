@@ -161,6 +161,28 @@ test('the PRIMARY checkout (queried from a linked worktree) is refused as a hand
   }
 });
 
+test('a linked worktree whose path contains a space and non-ASCII characters is still recognized as a boundary — NUL-delimited parsing, not newline-split', () => {
+  const root = makeGitRepo();
+  const parent = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+  const linkedPath = join(parent, 'wörktree with spaces');
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-unicode-branch', linkedPath], { cwd: root });
+  try {
+    const roots = repoBoundaryRoots({ cwd: root });
+    assert.ok(
+      roots.some((r) => realpathSync(r) === realpathSync(linkedPath)),
+      `expected the space/unicode worktree path among ${JSON.stringify(roots)}`,
+    );
+    const destination = join(linkedPath, 'key.txt');
+    assert.throws(
+      () => assertHandoffPathOutsideRepo(destination, { roots }),
+      /outside the repository/i,
+      'a handoff destination inside this worktree must still be refused even though its path has a space and non-ASCII characters',
+    );
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linkedPath], { cwd: root });
+  }
+});
+
 // ── realpathOfDeepestExisting ────────────────────────────────────────────────────────
 
 test('reattaches the full non-existent tail exactly, not just the deepest existing ancestor', () => {
@@ -206,6 +228,17 @@ test('refuses a handoff path inside the repository, before writing anything', ()
   const root = tmpRoot();
   const insidePath = join(root, 'key.txt');
   assert.throws(() => writeKeyHandoffFile(insidePath, generateManifestKey(), { roots: [root] }), /outside the repository/i);
+});
+
+test('writes every byte of the key — guards the write loop against reporting success on a short write', () => {
+  const root = tmpRoot();
+  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+  const key = generateManifestKey();
+  const handoffPath = join(outsideDir, 'key.txt');
+  writeKeyHandoffFile(handoffPath, key, { roots: [root] });
+  const writtenBytes = readFileSync(handoffPath);
+  assert.equal(writtenBytes.length, Buffer.byteLength(key, 'utf8'), 'the file must contain the FULL key, not a truncated prefix');
+  assert.ok(writtenBytes.equals(Buffer.from(key, 'utf8')));
 });
 
 // ── readSecretLine / confirmCustody: fake TTY-like streams (no real pty needed) ────
