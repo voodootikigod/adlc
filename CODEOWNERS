@@ -46,6 +46,11 @@
 /.github/workflows/ci.yml                            @voodootikigod
 /packages/rails-guard/bin/rails-guard.mjs             @voodootikigod
 
+# A required CI gate whose own source and test otherwise controlled both the
+# enforcement logic and the tests that verify it in the same change.
+/scripts/check-reviewer-directed-comments.mjs         @voodootikigod
+/scripts/test/check-reviewer-directed-comments.test.mjs   @voodootikigod
+
 # #141: the enforcement engine's verdict-producing code. The in-gate trust-root
 # freeze cannot be transitively complete (the gate delegates through check.mjs ->
 # rails.mjs -> ... -> @adlc/tickets), so these subtrees rely on branch-protection

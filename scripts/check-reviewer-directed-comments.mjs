@@ -89,10 +89,10 @@ const PROSE_FILE = /\.(md|markdown|mdx)$/i;
  * inline trailing comment counts), OR the file is a prose/doc file (every line counts).
  * `text` is the comment-only portion of the line.
  * @param {string[]} lines
- * @param {boolean} [treatEveryLineAsComment]
+ * @param {boolean} treatEveryLineAsComment
  * @returns {{isComment: boolean, text: string}[]}
  */
-function classifyLines(lines, treatEveryLineAsComment = false) {
+function classifyLines(lines, treatEveryLineAsComment) {
   if (treatEveryLineAsComment) {
     return lines.map((line) => ({ isComment: true, text: line }));
   }
@@ -135,10 +135,10 @@ function classifyLines(lines, treatEveryLineAsComment = false) {
  * Every maximal comment span in `lines` (1-indexed start/end), each carrying its full
  * joined text regardless of which lines within it were actually changed.
  * @param {string[]} lines
- * @param {boolean} [treatEveryLineAsComment]
+ * @param {boolean} treatEveryLineAsComment
  * @returns {{startLine: number, endLine: number, text: string}[]}
  */
-function commentSpans(lines, treatEveryLineAsComment = false) {
+function commentSpans(lines, treatEveryLineAsComment) {
   const classified = classifyLines(lines, treatEveryLineAsComment);
   const spans = [];
   let start = -1;
