@@ -13,7 +13,8 @@
     },
     "./package.json": "./package.json",
     "./lib/key-contract.mjs": "./lib/key-contract.mjs",
-    "./lib/generation-descriptor.mjs": "./lib/generation-descriptor.mjs"
+    "./lib/generation-descriptor.mjs": "./lib/generation-descriptor.mjs",
+    "./lib/durability.mjs": "./lib/durability.mjs"
   },
   "bin": {
     "adlc-tickets": "./bin/adlc-tickets.mjs"
