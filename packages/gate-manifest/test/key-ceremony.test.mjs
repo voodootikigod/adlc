@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -275,6 +275,20 @@ test('verifies the mode the filesystem actually enforced, not merely that chmod 
     /did not enforce mode 0600/,
   );
   assert.equal(existsSync(handoffPath), false, 'a file whose mode could not be verified must not be left behind');
+});
+
+test('confines the file (chmod, ACL-strip, mode-verify) BEFORE writing a single secret byte, not after (round 8 finding)', () => {
+  const root = tmpRoot();
+  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+  const handoffPath = join(outsideDir, 'key.txt');
+  let sizeAtVerification;
+  const stat = (fd) => {
+    sizeAtVerification = fstatSync(fd).size;
+    return fstatSync(fd);
+  };
+  writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root], stat });
+  assert.equal(sizeAtVerification, 0, 'the mode-verification step must observe an EMPTY file — proving confinement happened before the secret was written, not after');
+  assert.ok(statSync(handoffPath).size > 0, 'the finished file must still contain the actual key');
 });
 
 // ── stripAclBestEffort: real inherited ACL, real removal (round 7 finding) ─────────

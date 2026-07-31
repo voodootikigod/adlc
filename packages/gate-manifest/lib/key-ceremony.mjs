@@ -22,7 +22,7 @@
 // transaction — this slice establishes the refusal and the exception flag itself.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync, unlinkSync, statSync } from 'node:fs';
+import { openSync, writeSync, fsyncSync, closeSync, fchmodSync, realpathSync, unlinkSync, fstatSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
 import { execFileSync } from 'node:child_process';
@@ -174,10 +174,11 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * whatever is already there would be a surprising, silent side effect). Refuses a
  * path inside the repository (assertHandoffPathOutsideRepo, checked against EVERY
  * linked worktree and the common .git directory, not just the current worktree). The
- * mode is asserted via a POST-write chmodSync, not just openSync's mode argument,
- * because that argument is subject to the process umask — a permissive umask would
- * silently widen the file beyond 0600 (mirrors packages/rails-guard/lib/ci/bootstrap.mjs's
- * identical two-step pattern for its own restrictive-permission write).
+ * mode is asserted via an explicit fchmodSync BEFORE any secret byte is written, not
+ * just openSync's mode argument, because that argument is subject to the process
+ * umask — a permissive umask would silently widen the file beyond 0600 (mirrors
+ * packages/rails-guard/lib/ci/bootstrap.mjs's identical two-step pattern for its own
+ * restrictive-permission write, though that one chmods after its own non-secret write).
  * A short write is treated as a failure, not success: `writeSync` returns the number
  * of bytes actually written and a single call is not guaranteed to write the whole
  * buffer, so the loop below keeps writing until every byte lands before fsyncing. On
@@ -208,10 +209,10 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * other filesystem-boundary checks (forest.mjs, manifest-segments.mjs).
  * @param {string} path
  * @param {string} key
- * @param {{roots?: string[], stat?: Function}} [options]  stat: override for statSync (test injection, for the post-chmod mode-verification step)
+ * @param {{roots?: string[], stat?: Function}} [options]  stat: override for fstatSync (test injection, for the post-chmod mode-verification step) — called with the open FILE DESCRIPTOR, not the path
  */
 export function writeKeyHandoffFile(path, key, options = {}) {
-  const { stat = statSync } = options;
+  const { stat = fstatSync } = options;
   if (process.platform === 'win32') {
     throw new Error(
       'the key handoff ceremony is not supported on win32 yet: chmod/mode 0600 only toggles the '
@@ -231,27 +232,23 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     throw err;
   }
   try {
-    // A trailing newline makes the file line-oriented WITHOUT changing the key value
-    // itself: the fingerprint is computed from `key` (never from file bytes), and
-    // `read -r` strips the delimiter it read on, so the loaded env var is still exactly
-    // `key`. Without it, `read -r VAR < file` hits EOF before finding a line delimiter
-    // and returns exit status 1 — under `set -e` (the ordinary case for CI/maintenance
-    // scripts) that aborts the documented loading snippet before export/delete/record
-    // ever run, verified against both bash and zsh.
-    const buffer = Buffer.from(`${key}\n`, 'utf8');
-    let written = 0;
-    while (written < buffer.length) {
-      written += writeSync(fd, buffer, written, buffer.length - written);
-    }
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    chmodSync(path, 0o600);
-    // Narrow (not close) the inherited-ACL exposure BEFORE the mode-bit check below: an
-    // ACE inherited from the chosen directory's ancestry grants access independent of
-    // POSIX mode bits, so removing it here is what actually reduces exposure — checking
-    // mode bits alone cannot detect or remove it. See stripAclBestEffort's doc comment
-    // for exactly what this does and does not cover.
+    // Confine the (still EMPTY) file BEFORE a single secret byte is written — chmod,
+    // ACL-strip, and mode verification all happen first, in that order. Doing this
+    // AFTER writing would leave a real window where the complete key sits in a file an
+    // inherited ACL entry (round 8 finding) could still let another principal read,
+    // even though the write is fsynced and closed a moment later.
+    //
+    // fchmodSync/fstatSync operate on the OPEN DESCRIPTOR, not the pathname — immune to
+    // a path being replaced between these calls (the secret write below also goes
+    // through this same `fd`, so even a pathname swap aimed at THIS step cannot divert
+    // the actual key bytes to a different file). stripAclBestEffort still necessarily
+    // takes a path (the external chmod -N/setfacl -b tools have no fd-argument form),
+    // so it alone keeps the pathname-check-then-open TOCTOU already documented above.
+    fchmodSync(fd, 0o600);
+    // Narrow (not close) the inherited-ACL exposure — an ACE inherited from the chosen
+    // directory's ancestry grants access independent of POSIX mode bits, so removing it
+    // here is what actually reduces exposure. See stripAclBestEffort's doc comment for
+    // exactly what this does and does not cover.
     stripAclBestEffort(path);
     // Verify the filesystem actually enforced the mode we just requested — chmod can
     // succeed as a no-op on filesystems that don't map POSIX permissions faithfully
@@ -262,13 +259,29 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     // are NOT verified here — closing that residual gap needs an OS-native ACL-reading
     // mechanism this codebase does not have, the same category of limitation as the
     // win32 refusal above.
-    const actualMode = stat(path).mode & 0o777;
+    const actualMode = stat(fd).mode & 0o777;
     if (actualMode !== 0o600) {
       throw new Error(
         `the filesystem at ${path} did not enforce mode 0600 (observed ${actualMode.toString(8)}) — `
         + 'refusing to hand off a key the OS cannot actually confine to the current user',
       );
     }
+    // ONLY NOW does the secret itself get written. A trailing newline makes the file
+    // line-oriented WITHOUT changing the key value itself: the fingerprint is computed
+    // from `key` (never from file bytes), and `read -r` strips the delimiter it read
+    // on, so the loaded env var is still exactly `key`. Without it, `read -r VAR < file`
+    // hits EOF before finding a line delimiter and returns exit status 1 — under `set
+    // -e` (the ordinary case for CI/maintenance scripts) that aborts the documented
+    // loading snippet before export/delete/record ever run, verified against both bash
+    // and zsh.
+    const buffer = Buffer.from(`${key}\n`, 'utf8');
+    let written = 0;
+    while (written < buffer.length) {
+      written += writeSync(fd, buffer, written, buffer.length - written);
+    }
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
     fsyncDirectory(dirname(resolve(path)));
   } catch (err) {
     if (fd !== undefined) {
