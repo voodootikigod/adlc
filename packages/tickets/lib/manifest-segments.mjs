@@ -289,9 +289,23 @@ export function readForestEntries(dir) {
  * the SPECIFIC entries they mint a fresh signature from before trusting them
  * — but push.mjs does not (it renders a display status straight from what
  * this returns), so an unsigned, exact-branch-claiming forged segment could
- * publish a fabricated P5 pass. Recovered entries are therefore filtered to
- * only those passing `entrySigValid(key, entry)` when `key` is non-null;
- * when `key` is null, nothing can be verified, so recovery is disabled
+ * publish a fabricated P5 pass.
+ *
+ * The recovered segment's WHOLE chain is verified with `chainIsIntact`
+ * (round 2 of the SAME finding, not a per-entry filter): an earlier version
+ * of this fix dropped individually-invalid entries from the returned array
+ * rather than refusing the read. A tampered LATER entry (a real, once-signed
+ * "blocked"/revocation verdict edited by someone without the key, which
+ * invalidates its own signature) would simply vanish under a per-entry
+ * filter, leaving an EARLIER, still-validly-signed "clear" verdict as the
+ * apparent latest — resurrecting a stale pass past its own revocation.
+ * `chainIsIntact` enforces "once this chain has a signed entry, every LATER
+ * entry must also carry a valid signature" and throws the whole read out on
+ * any violation, the same whole-chain precondition reassignment
+ * (forestChainsIntact) and carry-forward (manifestChainTrustworthy) already
+ * require before trusting anything they read.
+ *
+ * When `key` is null, nothing can be verified, so recovery is disabled
  * entirely and this degrades to the strict, token-only default — the same
  * "cannot verify, cannot trust" boundary `doctor.mjs`'s
  * `authenticated: key !== null` already expresses elsewhere. Every
@@ -303,8 +317,8 @@ export function readForestEntries(dir) {
  * deriving the same slug as an unrelated committed segment's) — which made
  * recovery unsafe for every consumer, informational or signing. Matching on
  * the exact `branch` field instead (spec §4.4) closes the CROSS-BRANCH
- * collision risk; the signature filter here closes the remaining FORGERY
- * risk (an unsigned segment can still claim any branch it likes by name).
+ * collision risk; whole-chain verification here closes the remaining
+ * FORGERY/TAMPERING risk.
  */
 export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, key = null } = {}) {
   const root = parseLines(readRawLines(join(dir, 'manifest.jsonl')));
@@ -314,9 +328,38 @@ export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, 
   if (!allowRecovery || key === null) return [root];
   const recovered = recoverOpenSegment(dir, { cwd });
   if (!recovered) return [root];
-  const entries = parseLines(readRawLines(segmentPath(dir, recovered.name)))
-    .filter((entry) => entrySigValid(key, entry));
-  return [root, entries];
+  // WHOLE-CHAIN verification, not a per-entry filter (adversarial-review
+  // finding, T-MANIFEST-FOREST fourth round, round 2): filtering out entries
+  // that individually fail entrySigValid used to silently DROP them from the
+  // returned chain rather than refusing the read. A tampered LATER entry
+  // (e.g. a real, signed "blocked"/revocation verdict edited by someone
+  // without the key, invalidating its own signature) would vanish, leaving
+  // an EARLIER, still-validly-signed "clear" verdict as if it were the
+  // latest — resurrecting a stale pass past its own revocation. chainIsIntact
+  // enforces "once this chain has a signed entry, every LATER entry must also
+  // carry a valid signature" (see its own doc) — the SAME whole-chain
+  // precondition reassignment (forestChainsIntact) and carry-forward
+  // (manifestChainTrustworthy) already require before trusting anything they
+  // read; push.mjs was the one consumer with no such precondition of its own,
+  // which is why this belongs in the shared primitive, not each caller.
+  //
+  // chainIsIntact alone is NOT sufficient here, though (round 5 of the same
+  // finding): it deliberately tolerates a chain with NO signed entries at
+  // all — that legacy-unsigned-prefix tolerance is correct for
+  // forestChainsIntact's write-time precondition on a segment THIS checkout
+  // already owns via a valid token, but a RECOVERED segment is untrusted
+  // input claiming an identity this checkout never verified. An attacker
+  // without the key can trivially hand-write an entirely unsigned segment
+  // that is perfectly hash-chain-consistent and passes chainIsIntact — so
+  // recovery ALSO requires at least one entry actually carry a signature,
+  // proving someone who held the key touched this segment at all.
+  const rawLines = readRawLines(segmentPath(dir, recovered.name));
+  const parsedForSigCheck = rawLines.map((line) => { try { return JSON.parse(line); } catch { return null; } });
+  const hasAnySignedEntry = parsedForSigCheck.some((entry) => typeof entry?.sig === 'string' && entry.sig.length > 0);
+  if (!chainIsIntact(rawLines, key) || !hasAnySignedEntry) {
+    throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
+  }
+  return [root, parsedForSigCheck.filter(Boolean)];
 }
 
 // SECURITY: `.store.json` is repository-TRACKED, so a malicious branch can

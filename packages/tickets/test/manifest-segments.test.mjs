@@ -5,14 +5,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from '../lib/canonical.mjs';
 import { recordTicketEvidence } from '../lib/evidence.mjs';
 import {
   isSegmentedRepo, resolveOpenSegment, recoverOpenSegment, readForestEntries, segmentPath,
-  lineagePath, deriveSlug, generateSegmentUlid, currentBranch, readOwnChains,
+  lineagePath, deriveSlug, generateSegmentUlid, currentBranch, readOwnChains, canonicalEntryBytes,
 } from '../lib/manifest-segments.mjs';
 
 function gitRepo(branch = 'feat/ticket-evidence') {
@@ -560,8 +560,10 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
   // The exploit an unauthenticated recovery would enable (adversarial-review
   // finding): a segment can be hand-planted with an EXACT branch match but no
   // valid signature — identity claimed, authenticity absent. Recovery must
-  // refuse to trust it even though the branch field matches perfectly.
-  it('allowRecovery: true WITH a key never trusts an unsigned entry, even when its branch field matches exactly', () => {
+  // refuse the WHOLE read (round 5: not silently filter the one bad entry —
+  // see readOwnChains's own doc for why a per-entry filter is unsafe) even
+  // though the branch field matches perfectly.
+  it('allowRecovery: true WITH a key refuses the whole read when a signed segment is followed by an unsigned entry, even with an exact branch match', () => {
     const { root, dir } = gitRepo('feat/forged-branch');
     const KEY = 'recovery-trust-key';
     try {
@@ -581,9 +583,88 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
       writeFileSync(segPath, `${firstRaw}\n${JSON.stringify(forged)}\n`);
       rmSync(lineagePath(dir), { force: true });
 
-      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY });
-      assert.equal(chains.length, 2);
-      assert.ok(!chains[1].some((e) => e.gate === 'prosecution'), 'the unsigned forged entry must never be trusted, regardless of its exact branch match');
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
+        /failed chain or signature verification/,
+        'a signed-then-unsigned segment must refuse the whole read, never silently drop just the bad entry',
+      );
+    } finally { clean(root); }
+  });
+
+  // Round 5's exact exploit: entrySigValid alone (a per-entry filter) let an
+  // attacker WITHOUT the key tamper with the segment's LATEST entry (breaking
+  // only ITS signature) and have it silently vanish, resurrecting an EARLIER,
+  // still-validly-signed verdict as if it were the latest. chainIsIntact's
+  // hash-chain check catches this: tampering with any entry's content (even
+  // just to break its own signature) does not, by itself, break `prev`
+  // linkage for entries BEFORE it — but the ATTACKER can't recompute a valid
+  // sig without the key, so the tampered entry's OWN check fails, and
+  // chainIsIntact refuses the whole chain rather than silently accepting a
+  // truncated one that ends at the earlier, untampered entry.
+  it('allowRecovery: true refuses the whole read when a segment\'s LATEST signed entry is tampered, never resurrecting an earlier stale verdict', () => {
+    const { root, dir } = gitRepo('feat/resurrection');
+    const KEY = 'resurrection-key';
+    const sign = (entry) => createHmac('sha256', KEY).update(canonicalEntryBytes(entry)).digest('hex');
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ key: KEY }));
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      const segPath = join(segDir, segName);
+      const firstRaw = readFileSync(segPath, 'utf8').trim();
+      // A REAL, validly-signed "clear" verdict...
+      const clear = {
+        seq: 2, gate: 'prosecution', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
+        data: { verdict: 'clear' }, files: {}, prev: sha256(firstRaw),
+      };
+      clear.sig = sign(clear);
+      const clearLine = JSON.stringify(clear);
+      // ...followed by a REAL, validly-signed later "blocked" revocation...
+      const blocked = {
+        seq: 3, gate: 'prosecution', ts: '2026-01-02T00:00:00.000Z', ticket: 'A',
+        data: { verdict: 'blocked' }, files: {}, prev: sha256(clearLine),
+      };
+      blocked.sig = sign(blocked);
+
+      // ...then an attacker WITHOUT the key tampers with the blocked entry's
+      // verdict, invalidating (but not removing) its own signature.
+      const tampered = { ...blocked, data: { verdict: 'clear' } };
+      writeFileSync(segPath, `${firstRaw}\n${clearLine}\n${JSON.stringify(tampered)}\n`);
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
+        /failed chain or signature verification/,
+        'a tampered later entry must refuse the whole read, never silently resurrect an earlier stale verdict as the latest',
+      );
+    } finally { clean(root); }
+  });
+
+  // An ENTIRELY unsigned segment is hash-chain-consistent (chainIsIntact
+  // alone tolerates it — the same tolerance that lets an honest chain
+  // predating signing still verify), but nothing proves anyone who held the
+  // key ever touched it. Recovery must still refuse it.
+  it('allowRecovery: true refuses an ENTIRELY unsigned recovered segment, even though its hash chain is perfectly consistent', () => {
+    const { root, dir } = gitRepo('feat/wholly-unsigned');
+    const KEY = 'wholly-unsigned-key';
+    try {
+      activate(dir);
+      // Recorded WITHOUT a key — hash-chain-consistent, zero signatures.
+      recordTicketEvidence(root, baseEvidence());
+      const segDir = join(dir, 'manifest.d');
+      const segName = readdirSync(segDir).find((n) => n.endsWith('.jsonl'));
+      const first = JSON.parse(readFileSync(join(segDir, segName), 'utf8').trim());
+      assert.equal(first.branch, 'feat/wholly-unsigned', 'precondition: exact branch match');
+      assert.equal(Object.hasOwn(first, 'sig'), false, 'precondition: entirely unsigned');
+      rmSync(lineagePath(dir), { force: true });
+
+      // A real key IS available at read time (the normal CI configuration) —
+      // the segment itself just happens to have none.
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
+        /failed chain or signature verification/,
+        'a wholly unsigned segment must never be trusted just because its hash chain is consistent and its branch matches',
+      );
     } finally { clean(root); }
   });
 });

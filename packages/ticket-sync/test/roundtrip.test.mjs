@@ -413,12 +413,15 @@ test('push recovers real evidence across a lost .lineage token (fresh-clone/bran
   }
 });
 
-// The forgery this exists to prevent (round-4 adversarial-review finding):
-// exact branch matching proves identity, not authenticity. An UNSIGNED
-// segment claiming the right branch, with a hand-planted "clear" P5 verdict,
-// must never get published — even though push has a real key available and
-// the branch field matches perfectly.
-test('push does NOT publish a forged P5 pass from an unsigned recovered segment, even with an exact branch match', async () => {
+// The forgery this exists to prevent (round-4/round-5 adversarial-review
+// findings): exact branch matching proves identity, not authenticity. An
+// ENTIRELY UNSIGNED segment claiming the right branch, with a hand-planted
+// "clear" P5 verdict, must never get published — even though push has a
+// real key available and the branch field matches perfectly. It refuses
+// outright (never silently renders a status computed from root alone,
+// which could equally remove a real label) since nothing here proves anyone
+// who held the key ever touched this segment.
+test('push refuses (never publishes a forged P5 pass) when a recovered segment is entirely unsigned, even with an exact branch match', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-forged-'));
   const KEY = 'push-forgery-key';
   try {
@@ -459,9 +462,13 @@ test('push does NOT publish a forged P5 pass from an unsigned recovered segment,
     // Push DOES have a real key available (the normal CI configuration).
     const gh = fakeGitHub();
     const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K', key: KEY });
-    assert.equal(r.exitCode, 0, `must still succeed (just with no status), never crash: ${JSON.stringify(r.errors)}`);
+    assert.equal(r.exitCode, 1, `an entirely unsigned recovered segment must refuse, not silently render a status computed from root alone`);
     assert.ok(
-      !gh.state.issues[0].labels.includes('adlc:passed'),
+      r.errors.some((e) => /failed chain or signature verification/.test(e)),
+      `expected a chain/signature verification error, got: ${JSON.stringify(r.errors)}`,
+    );
+    assert.ok(
+      !(gh.state.issues[0]?.labels ?? []).includes('adlc:passed'),
       `an unsigned forged verdict must never be published, even with an exact branch match: ${JSON.stringify(gh.state.issues[0]?.labels)}`,
     );
   } finally {
