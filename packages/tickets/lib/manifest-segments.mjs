@@ -780,17 +780,16 @@ function firstEntryOf(dir, segmentName) {
  * a disruptive rewrite of already-committed segments (tracked as a follow-up
  * — T-01KYTQ4BADHSDJNBFNZHB2ZG5V).
  *
- * ALSO deliberately out of scope: resolveOpenSegment (below) never consults
- * this function, so a WRITE that happens before any read on a fresh clone
- * (token absent) mints a fresh segment rather than continuing a real,
- * unambiguous, already-committed one for this branch — and once that fresh
- * segment's token exists, peekOpenSegment's fast path means this function
- * never scans further, permanently hiding the older evidence again for the
- * rest of that checkout's lifetime. Same follow-up ticket.
+ * `resolveOpenSegment` (below) DOES now consult this function
+ * (T-MANIFEST-FOREST follow-up, gap 1) — a WRITE that happens before any read
+ * on a fresh clone (token absent) continues this function's match instead of
+ * always minting a needless fresh segment. The identity this returns is
+ * STILL UNVERIFIED (see above): `resolveOpenSegment` deliberately does NOT
+ * heal (write) the `.lineage` token from a match here — see that function's
+ * doc for the full rationale.
  *
  * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
- * candidates: a writer resolving where to APPEND must stay precise
- * (resolveOpenSegment, below, deliberately does not use this), but a reader
+ * candidates: a writer resolving where to APPEND must stay precise, but a reader
  * recovering "what's already there" must not silently guess either — two
  * branches forked from the same rootless state can legitimately mint
  * independent segments without coordinating (spec §7 point 1), and the SAME
@@ -860,21 +859,23 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
  * than each minting their own. Tries (a) the local token, then (b)
  * `recoverOpenSegment`'s exact-`branch` scan before minting fresh
  * (T-MANIFEST-FOREST follow-up, gap 1: write-side recovery blindness) — see
- * that sibling function's doc for the full rationale.
+ * that sibling function's doc for the full rationale. Deliberately does NOT
+ * heal (write) the token from a (b) match — see
+ * @adlc/gate-manifest/lib/lineage.mjs's identical resolveOpenSegment for why:
+ * the token's downstream trust value (readOwnChains's keyless "peeked" path)
+ * depends on it being written ONLY by a genuine mint, never from
+ * recoverOpenSegment's unauthenticated, branch-string-only match.
  *
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  */
 export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
-  const branch = currentBranch(cwd);
 
   const recovered = recoverOpenSegment(dir, { cwd });
-  if (recovered) {
-    if (branch !== null) writeLineageToken(dir, { segment: recovered.name, ulid: ulidOf(recovered.name), branch });
-    return recovered;
-  }
+  if (recovered) return recovered;
 
+  const branch = currentBranch(cwd);
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
   const rootLast = rootLines.at(-1) ?? null;
   let anchor = null;

@@ -353,11 +353,17 @@ describe('resolveOpenSegment (spec §7.1)', () => {
       assert.equal(resolved.name, first.name);
       const { valid } = discoverSegments(clonedDir);
       assert.equal(valid.length, 1, 'exactly one segment must exist — no needless duplicate was minted');
-      // The token must be healed by this recovery — a SECOND resolution must
-      // take the fast (a) path, not fall through to (b) again.
-      const token = JSON.parse(readFileSync(lineagePath(clonedDir), 'utf8'));
-      assert.equal(token.segment, first.name, 'recovering via (b) must heal the local token to the recovered segment');
-      assert.equal(token.branch, 'feat/clone-write-first');
+      // Deliberately does NOT heal (write) the token from this UNVERIFIED
+      // recovery match (adversarial-review finding): the token's downstream
+      // trust value (readOwnChains's keyless "peeked" path treats a token
+      // match as proof this checkout itself minted the segment) depends on
+      // it being written only by a genuine mint.
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'recovering via (b) must never write the local token — it would launder an unverified match into the trusted fast path');
+      // A SECOND write re-scans via (b) again (no token to fast-path through)
+      // and still resolves correctly — no correctness cost, only a repeated scan.
+      const second = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
+      assert.equal(second.isNew, false);
+      assert.equal(second.name, first.name);
     } finally {
       clean(root);
       if (clonedRoot) clean(clonedRoot);

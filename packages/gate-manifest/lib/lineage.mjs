@@ -312,17 +312,17 @@ function firstEntryOf(dir, segmentName) {
  * a disruptive rewrite of already-committed segments (tracked as a follow-up
  * — T-01KYTQ4BADHSDJNBFNZHB2ZG5V).
  *
- * ALSO deliberately out of scope: resolveOpenSegment (below) never consults
- * this function, so a WRITE that happens before any read on a fresh clone
- * (token absent) mints a fresh segment rather than continuing a real,
- * unambiguous, already-committed one for this branch — and once that fresh
- * segment's token exists, peekOpenSegment's fast path means this function
- * never scans further, permanently hiding the older evidence again for the
- * rest of that checkout's lifetime. Same follow-up ticket.
+ * `resolveOpenSegment` (below) DOES now consult this function
+ * (T-MANIFEST-FOREST follow-up, gap 1) — a WRITE that happens before any read
+ * on a fresh clone (token absent) continues this function's match instead of
+ * always minting a needless fresh segment. The identity this returns is
+ * STILL UNVERIFIED (see above): `resolveOpenSegment` deliberately does NOT
+ * heal (write) the `.lineage` token from a match here, precisely because the
+ * token's own downstream trust value depends on it being written only by a
+ * genuine mint — see that function's doc for the full rationale.
  *
  * NEVER mints (like peekOpenSegment) and NEVER guesses among multiple
- * candidates: a writer resolving where to APPEND must stay precise
- * (resolveOpenSegment, below, deliberately does not use this), but a reader
+ * candidates: a writer resolving where to APPEND must stay precise, but a reader
  * recovering "what's already there" must not silently guess either — spec's
  * own multiple-independent-segments-per-branch possibility (§7 point 1: two
  * branches forked from the same rootless state can legitimately mint
@@ -401,6 +401,20 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
  * token to disambiguate); that throw propagates — a writer must refuse,
  * never guess, exactly like a reader.
  *
+ * Deliberately does NOT heal (write) the `.lineage` token from a (b) match
+ * (adversarial-review finding): the token's whole trust value downstream —
+ * `readOwnChains`'s "peeked" path treats a token match as PROOF this checkout
+ * itself minted the segment, and (with no signing key configured, a fully
+ * supported configuration) skips all signature verification on that basis
+ * alone — depends on the token being written ONLY by a genuine mint, never
+ * from `recoverOpenSegment`'s unauthenticated, branch-string-only match
+ * (its own doc: "does not verify any signature... only proves the claim, not
+ * that anyone with the key made it"). Healing from it would launder an
+ * attacker-committed, unsigned, branch-matching segment into the
+ * token-trusted fast path the moment any keyless write recovered it. The
+ * cost of not healing is purely a repeated (b) scan on the checkout's NEXT
+ * write — no correctness or security cost, since recovery is idempotent.
+ *
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  *   `isNew: true` means this append is the segment's FIRST entry and must
  *   carry `anchor` and `branch` (both also returned); `isNew: false` means
@@ -409,16 +423,11 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
 export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
-  const branch = currentBranch(cwd);
 
   const recovered = recoverOpenSegment(dir, { cwd });
-  if (recovered) {
-    // Heal the token so the NEXT resolution on this checkout takes the fast
-    // path instead of falling through to recovery (or minting) again.
-    if (branch !== null) writeLineageToken(dir, { segment: recovered.name, ulid: ulidOf(recovered.name), branch });
-    return recovered;
-  }
+  if (recovered) return recovered;
 
+  const branch = currentBranch(cwd);
   // No usable token or recoverable segment: mint a new one, anchored to root's current head line
   // if a root exists, else anchor: null (spec §4.4/§7.1 — never chase the
   // stale token's segment or any other segment as a fallback anchor target).
