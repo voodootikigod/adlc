@@ -78,18 +78,29 @@ function gitDiffForFile(base, file) {
 // itself produces.
 function touchedLineNumbers(diffText) {
   const touched = new Set();
-  let newLineNo = 0;
-  let oldRemaining = 0;
-  let newRemaining = 0;
-  let inHunk = false;
+  // Never read before the `@@` branch below sets them, and that branch sets
+  // `inHunk = true` in the same step whenever it sets the others — so no initial
+  // value here is ever observed; left uninitialized rather than given a literal a
+  // mutation test could flip without changing behavior.
+  let newLineNo;
+  let oldRemaining;
+  let newRemaining;
+  let inHunk;
 
   for (const raw of diffText.split('\n')) {
+    // Load-bearing independently of the count-based closing check below: a hunk
+    // header that OVER-declares its line count never reaches the exact-zero close
+    // on its own, so without this hard reset a following file's lines stay
+    // misattributed (see the "lying hunk header" test).
     if (raw.startsWith('diff --git ')) {
       inHunk = false;
       continue;
     }
 
-    if (inHunk && oldRemaining <= 0 && newRemaining <= 0) inHunk = false;
+    // Strict equality (not <=): both counters only ever reach exactly 0 while
+    // inHunk is being actively decremented, never negative, since this check
+    // itself stops further decrementing the moment they do.
+    if (inHunk && oldRemaining === 0 && newRemaining === 0) inHunk = false;
 
     if (raw.startsWith('@@')) {
       const m = raw.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);

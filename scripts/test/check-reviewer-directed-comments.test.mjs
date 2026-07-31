@@ -414,3 +414,41 @@ test('a deletion that does NOT merge two comment runs (they stay separated by ot
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('a hunk header that OVER-declares its line count does not pollute a later file\'s touched-line set (the diff --git hard reset, not the count check, closes it)', () => {
+  // gitDiffForFile never actually produces multi-`diff --git`-section output (it
+  // scopes to one path), but touchedLineNumbers is written to handle it defensively.
+  // The first (other.mjs) hunk claims 5 new lines but only 2 follow before the next
+  // `diff --git` line — a lying header the count-based closing check alone can never
+  // close. Without the hard reset, the following `--- `/`+++ ` header lines get
+  // misread as hunk body content (the `+++` line starts with `+`, so it is read as
+  // an ADDED line), spuriously marking a wrong line number as touched — landing,
+  // in this fixture, exactly on thing.mjs's own PRE-EXISTING (untouched) violation.
+  const diff = `diff --git a/other.mjs b/other.mjs
+--- a/other.mjs
++++ b/other.mjs
+@@ -1 +1,5 @@
+ unchanged
++added in other
+diff --git a/thing.mjs b/thing.mjs
+--- a/thing.mjs
++++ b/thing.mjs
+@@ -4,1 +4,2 @@
+ context4
++harmless added line
+`;
+  const content = [
+    'context1',
+    'context2',
+    '// round 9 finding: not a defect',
+    'context4',
+    'harmless added line',
+  ].join('\n');
+
+  const code = check('HEAD', {
+    changedFiles: () => ['thing.mjs'],
+    gitDiff: () => diff,
+    readFile: () => content,
+  });
+  assert.equal(code, 0, "thing.mjs's pre-existing violation on line 3 must stay untouched — only line 5 was actually added");
+});

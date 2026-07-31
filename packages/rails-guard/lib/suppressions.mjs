@@ -42,22 +42,34 @@ export function parseAddedLines(diffText) {
   const lines = diffText.split('\n');
   const results = [];
   let currentFile = null;
-  let newLineNo = 0;
-  let inHunk = false;
-  let oldRemaining = 0;
-  let newRemaining = 0;
+  // Never read before the `@@` branch below sets them, and that branch always sets
+  // `inHunk = true` in the same step — so no initial value here is ever observed;
+  // left uninitialized (undefined, falsy) rather than given a literal that a
+  // mutation test could flip without changing behavior.
+  let newLineNo;
+  let inHunk;
+  let oldRemaining;
+  let newRemaining;
 
   for (const raw of lines) {
     // Unambiguous start of the next file's diff section — never produced by
-    // diff-prefixing a content line, so safe to use for resetting hunk state.
+    // diff-prefixing a content line, so safe to use for resetting hunk state. Load
+    // -bearing independently of the count-based closing check below: a hunk header
+    // that OVER-declares its line count (lies about how many lines follow) never
+    // reaches the exact-zero close on its own, so without this hard reset the next
+    // file's `+++` header would be missed and its added lines misattributed to the
+    // previous file (see the "lying hunk header" test).
     if (raw.startsWith('diff --git ')) {
       inHunk = false;
       continue;
     }
 
     // A hunk's declared body has been fully consumed — the following line is a new
-    // header, not more hunk content, even with no `diff --git` in between.
-    if (inHunk && oldRemaining <= 0 && newRemaining <= 0) inHunk = false;
+    // header, not more hunk content, even with no `diff --git` in between. Strict
+    // equality (not <=): both counters only ever reach exactly 0 while inHunk is
+    // being actively decremented, never negative, since this check itself stops
+    // further decrementing the moment they do.
+    if (inHunk && oldRemaining === 0 && newRemaining === 0) inHunk = false;
 
     // New file header: +++ b/path/to/file — recognized only outside a hunk.
     if (!inHunk && raw.startsWith('+++ ')) {

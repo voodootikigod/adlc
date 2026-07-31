@@ -149,6 +149,31 @@ diff --git a/b.ts b/b.ts
     assert.equal(added[1].file, 'b.ts');
     assert.equal(added[1].content, 'added in b');
   });
+
+  test('a hunk header that OVER-declares its new-line count does not swallow the next file (the diff --git hard reset, not the count check, closes it)', () => {
+    // The first hunk claims 5 new lines but only 2 actually follow before the next
+    // file's `diff --git` line — a lying/malformed header the count-based closing
+    // check alone can never close (it never reaches exactly old=0,new=0). Only the
+    // explicit `diff --git` reset recovers correct attribution for b.ts.
+    const diff = `diff --git a/a.ts b/a.ts
+--- a/a.ts
++++ b/a.ts
+@@ -1 +1,5 @@
+ unchanged
++added in a
+diff --git a/b.ts b/b.ts
+--- a/b.ts
++++ b/b.ts
+@@ -1 +1,2 @@
+ unchanged
++added in b
+`;
+    const added = parseAddedLines(diff);
+    assert.equal(added.length, 2);
+    assert.equal(added[0].file, 'a.ts');
+    assert.equal(added[1].file, 'b.ts');
+    assert.equal(added[1].content, 'added in b');
+  });
 });
 
 describe('findSuppressions', () => {
