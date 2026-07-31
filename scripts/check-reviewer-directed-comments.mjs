@@ -58,9 +58,10 @@ import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 // require — silently drops such files from coverage. Diffing each changedFiles()
 // path individually sidesteps the mismatch entirely: every added line in a diff
 // scoped to exactly one path belongs to that path, so the header text
-// parseAddedLines derives is never consulted for file identity, only line numbers.
+// parseAddedLines derives is never consulted for file identity, only line numbers
+// (which core.quotepath cannot affect, only header display — so it is not set here).
 function gitDiffForFile(base, file) {
-  return git(['-c', 'core.quotepath=false', 'diff', base, '--', file]);
+  return git(['diff', base, '--', file]);
 }
 
 // A comment referencing the review PROCESS itself — not the code's own behavior.

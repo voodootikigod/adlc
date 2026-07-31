@@ -286,14 +286,44 @@ test('REAL git diff: a filename containing a space keeps its added-line coverage
     const code = check('HEAD', {
       changedFiles: () => ['review notes.md'],
       readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      gitDiff: (base, file) => execFileSync(
-        'git',
-        ['-c', 'core.quotepath=false', 'diff', base, '--', file],
-        { cwd: repo, encoding: 'utf8' },
-      ),
+      gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
     });
     assert.equal(code, 2, 'the violation in a space-bearing filename must still be caught');
   } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('the real default gitDiffForFile (not injected) scopes to one file — an added line in an unrelated file does not leak into another file\'s added-line set', () => {
+  // Exercises the actual production default (no gitDiff override), unlike every
+  // other test in this file. Proves two things at once: the default does not crash
+  // (it returns real diff text, not null), and it is genuinely scoped per file — if
+  // it silently diffed the whole repo instead, B's harmless added line 2 would leak
+  // into A's added-line set and wrongly flag A's PRE-EXISTING (untouched) violation,
+  // which also happens to sit on line 2.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-default-scope-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
+    execFileSync('git', ['add', 'a.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a with a pre-existing violation'], { cwd: repo });
+
+    // Feature side: A only gets a new trailing line (its line-2 violation is
+    // untouched). B is a brand-new file whose own added line 2 is harmless but
+    // numerically coincides with A's untouched violation.
+    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\nmore context\n');
+    writeFileSync(join(repo, 'b.mjs'), 'unrelated\nfiller\n');
+
+    process.chdir(repo);
+    const code = check('HEAD', {
+      changedFiles: () => ['a.mjs', 'b.mjs'],
+      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    });
+    assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated added line 2");
+  } finally {
+    process.chdir(originalCwd);
     rmSync(repo, { recursive: true, force: true });
   }
 });
