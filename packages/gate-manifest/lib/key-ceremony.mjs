@@ -211,7 +211,13 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     // Verify the filesystem actually enforced the mode we just requested — chmod can
     // succeed as a no-op on filesystems that don't map POSIX permissions faithfully
     // (FAT/exFAT, some network mounts), which would otherwise let this command report
-    // "mode 0600" over a file the OS never actually confined to the owner.
+    // "mode 0600" over a file the OS never actually confined to the owner. This checks
+    // the standard nine permission bits only; it does not inspect file ownership or
+    // extended ACLs (macOS ACEs inherited from a parent directory, POSIX ACLs on Linux),
+    // which are evaluated independently of these bits and can grant another principal
+    // access even when they read back as 0600. Closing that gap needs an OS-native ACL
+    // read/removal mechanism (no built-in Node API covers it) — out of scope for this
+    // slice, the same category of limitation as the win32 refusal above.
     const actualMode = stat(path).mode & 0o777;
     if (actualMode !== 0o600) {
       throw new Error(
@@ -394,6 +400,18 @@ export function resolveCeremonyKey({ importKey, allowKeyImport = false, entropy 
     }
     if (typeof importKey !== 'string' || importKey.length === 0) {
       throw new TypeError('an imported key must be a non-empty string');
+    }
+    // The handoff file is line-oriented (writeKeyHandoffFile appends a trailing '\n'
+    // so the documented `read -r` loader finds a delimiter before EOF). An imported key
+    // that itself contains a newline would round-trip through that file as only its
+    // first line — a silently DIFFERENT value than the one just fingerprinted/imported,
+    // not merely a formatting quirk.
+    if (importKey.includes('\n') || importKey.includes('\r')) {
+      throw new TypeError(
+        'an imported key must not contain a newline — the handoff file is line-oriented, so a '
+        + 'multiline value would round-trip through the documented `read -r` loader as only its '
+        + 'first line, silently diverging from the key that was actually imported and fingerprinted',
+      );
     }
     return { key: importKey, imported: true };
   }

@@ -33,21 +33,34 @@ function assertNeverAppears(secret, ...haystacks) {
   }
 }
 
+// Negative control (round 6 finding): proves assertNeverAppears itself would catch a
+// leak wrapped in JSON or followed by other text, not just an exact standalone match —
+// this is what every real leakage assertion in this file relies on.
+test('assertNeverAppears helper: detects a bare key embedded inside JSON or trailing text, not just an exact match', () => {
+  const key = 'a'.repeat(64);
+  assert.throws(() => assertNeverAppears(key, `{"debug":"key=${key}"}`), /secret must never appear/);
+  assert.throws(() => assertNeverAppears(key, `prefix ${key} suffix`), /secret must never appear/);
+  assert.doesNotThrow(() => assertNeverAppears(key, 'no secret here'));
+});
+
 test('CLI: generate-key writes a real key to the handoff file, and the key never appears on stdout or stderr', () => {
   const { repoDir, outsideDir } = makeDirs();
   const handoffPath = join(outsideDir, 'key.txt');
   try {
     const result = run(['generate-key', '--output', handoffPath], repoDir);
     assert.equal(result.status, 0, result.stderr);
-    const key = readFileSync(handoffPath, 'utf8');
+    const rawFileContent = readFileSync(handoffPath, 'utf8');
     // The file is line-oriented (trailing '\n') so the documented `read -r` loader
     // doesn't hit EOF before a delimiter — see key-ceremony.mjs's writeKeyHandoffFile.
-    assert.match(key, /^[0-9a-f]{64}\n$/, 'the handoff file must contain a real generated key, newline-terminated');
+    assert.match(rawFileContent, /^[0-9a-f]{64}\n$/, 'the handoff file must contain a real generated key, newline-terminated');
+    // Check the bare key VALUE (not the file's newline-terminated bytes) — a leak
+    // wrapped in JSON or followed by other text would not contain the literal
+    // `<key>\n` substring, so asserting on that alone would miss it (round 6 finding).
+    const key = rawFileContent.replace(/\n$/, '');
     assertNeverAppears(key, result.stdout, result.stderr);
     // Belt-and-braces: the fingerprint printed must be the correct commitment to the
     // key that was actually written, proving the ceremony didn't drift between the two.
-    // The fingerprint commits to the KEY, not the newline-terminated file bytes.
-    const fingerprint = createHash('sha256').update(key.replace(/\n$/, ''), 'utf8').digest('hex');
+    const fingerprint = createHash('sha256').update(key, 'utf8').digest('hex');
     assert.ok(result.stdout.includes(fingerprint), 'the printed fingerprint must match the written key');
     assert.ok(result.stdout.includes(handoffPath), 'the path is safe to print — only the contents are secret');
   } finally {
@@ -62,7 +75,9 @@ test('CLI: --json mode also never leaks the key, and the JSON is well-formed', (
   try {
     const result = run(['generate-key', '--output', handoffPath, '--json'], repoDir);
     assert.equal(result.status, 0, result.stderr);
-    const key = readFileSync(handoffPath, 'utf8');
+    // The bare key VALUE, not the file's newline-terminated bytes (round 6 finding —
+    // checking for `<key>\n` would miss a leak wrapped in JSON or followed by text).
+    const key = readFileSync(handoffPath, 'utf8').replace(/\n$/, '');
     assertNeverAppears(key, result.stdout, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.path, handoffPath);
@@ -85,6 +100,22 @@ test('CLI: the audited import exception reads the CALLER-SUPPLIED key from ADLC_
     assert.equal(readFileSync(handoffPath, 'utf8'), `${importedKey}\n`);
     assertNeverAppears(importedKey, result.stdout, result.stderr);
     assert.match(result.stderr, /AUDITED IMPORT EXCEPTION/, 'the exception must be visibly flagged for future doctor reporting');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: refuses a multiline imported key — it would silently truncate to its first line through the line-oriented handoff file', () => {
+  const { repoDir, outsideDir } = makeDirs();
+  const handoffPath = join(outsideDir, 'key.txt');
+  const multilineKey = 'first-line-of-a-legacy-secret\nsecond-line-that-would-be-silently-dropped';
+  const env = { ...process.env, ADLC_MANIFEST_KEY: multilineKey };
+  try {
+    const result = run(['generate-key', '--output', handoffPath, '--allow-key-import'], repoDir, env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /must not contain a newline/);
+    assert.equal(existsSync(handoffPath), false, 'nothing should be written when the imported key is refused');
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
     rmSync(outsideDir, { recursive: true, force: true });
