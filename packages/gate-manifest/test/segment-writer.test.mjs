@@ -741,12 +741,15 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  // Adversarial-review finding, T-MANIFEST-FOREST sixth round: recovery used
-  // to read and split the WHOLE segment file just to inspect its first
-  // line, so scan cost grew with the total size of every discovered
-  // segment. A segment whose first entry alone exceeds the bounded-read cap
-  // must be treated as unparseable (never matched), not read in full.
-  it('an oversized first entry (larger than the bounded read cap) is treated as unparseable, never matched, never read in full', () => {
+  // Adversarial-review finding, T-MANIFEST-FOREST sixth/seventh rounds:
+  // recovery used to read and split the WHOLE segment file just to inspect
+  // its first line, so scan cost grew with the total size of every
+  // discovered segment. A segment whose first entry alone exceeds the
+  // bounded-read cap must REFUSE (round 7 — never silently exclude it as
+  // "not a candidate", since nothing on the write side caps entry size, so
+  // a legitimately large evidence payload could hit this exact case and
+  // silently vanish from recovery the same way the original bug worked).
+  it('an oversized first entry (larger than the bounded read cap) makes recovery refuse, never silently excludes the segment', () => {
     const { root, dir } = gitRepo('feat/oversized-first-entry');
     try {
       activate(dir);
@@ -761,9 +764,10 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       writeFileSync(segmentPath(dir, oversizedName), `${JSON.stringify(oversized)}\n`);
       rmSync(lineagePath(dir), { force: true });
 
-      assert.equal(
-        recoverOpenSegment(dir, { cwd: root }), null,
-        'an oversized first entry must be treated as unparseable (not matched), not read/parsed in full',
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /exceeds the .+-byte bounded-read cap/,
+        'an oversized first entry must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
       );
     } finally { clean(root); }
   });
@@ -773,7 +777,7 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
   // newline at byte offset 65536 — the 65537th byte, one past a 65536-byte
   // read window. A cap even one byte larger would read far enough to see
   // that newline and successfully parse this line; the real cap must not.
-  it('the bounded-read cap is exactly 64 KiB: a first line whose newline sits one byte past it is refused', () => {
+  it('the bounded-read cap is exactly 64 KiB: a first line whose newline sits one byte past it makes recovery refuse', () => {
     const { root, dir } = gitRepo('feat/exact-cap-boundary');
     try {
       activate(dir);
@@ -790,9 +794,10 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       writeFileSync(segmentPath(dir, boundaryName), `${firstLine}\n`);
       rmSync(lineagePath(dir), { force: true });
 
-      assert.equal(
-        recoverOpenSegment(dir, { cwd: root }), null,
-        'a first line landing its newline exactly one byte past the cap must be refused, not parsed',
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /exceeds the .+-byte bounded-read cap/,
+        'a first line landing its newline exactly one byte past the cap must refuse, not parse',
       );
     } finally { clean(root); }
   });

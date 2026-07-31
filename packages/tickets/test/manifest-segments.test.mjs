@@ -505,12 +505,15 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  // Adversarial-review finding, T-MANIFEST-FOREST sixth round: recovery used
-  // to read and split the WHOLE segment file just to inspect its first
-  // line, so scan cost grew with the total size of every discovered
-  // segment. A segment whose first entry alone exceeds the bounded-read cap
-  // must be treated as unparseable (never matched), not read in full.
-  it('an oversized first entry (larger than the bounded read cap) is treated as unparseable, never matched, never read in full', () => {
+  // Adversarial-review finding, T-MANIFEST-FOREST sixth/seventh rounds:
+  // recovery used to read and split the WHOLE segment file just to inspect
+  // its first line, so scan cost grew with the total size of every
+  // discovered segment. A segment whose first entry alone exceeds the
+  // bounded-read cap must REFUSE (round 7 — never silently exclude it as
+  // "not a candidate", since nothing on the write side caps entry size, so
+  // a legitimately large evidence payload could hit this exact case and
+  // silently vanish from recovery the same way the original bug worked).
+  it('an oversized first entry (larger than the bounded read cap) makes recovery refuse, never silently excludes the segment', () => {
     const { root, dir } = gitRepo('feat/oversized-first-entry');
     try {
       activate(dir);
@@ -525,9 +528,10 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       writeFileSync(segmentPath(dir, oversizedName), `${JSON.stringify(oversized)}\n`);
       rmSync(lineagePath(dir), { force: true });
 
-      assert.equal(
-        recoverOpenSegment(dir, { cwd: root }), null,
-        'an oversized first entry must be treated as unparseable (not matched), not read/parsed in full',
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /exceeds the .+-byte bounded-read cap/,
+        'an oversized first entry must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
       );
     } finally { clean(root); }
   });
@@ -537,7 +541,7 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
   // newline at byte offset 65536 — the 65537th byte, one past a 65536-byte
   // read window. A cap even one byte larger would read far enough to see
   // that newline and successfully parse this line; the real cap must not.
-  it('the bounded-read cap is exactly 64 KiB: a first line whose newline sits one byte past it is refused', () => {
+  it('the bounded-read cap is exactly 64 KiB: a first line whose newline sits one byte past it makes recovery refuse', () => {
     const { root, dir } = gitRepo('feat/exact-cap-boundary');
     try {
       activate(dir);
@@ -554,9 +558,10 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       writeFileSync(segmentPath(dir, boundaryName), `${firstLine}\n`);
       rmSync(lineagePath(dir), { force: true });
 
-      assert.equal(
-        recoverOpenSegment(dir, { cwd: root }), null,
-        'a first line landing its newline exactly one byte past the cap must be refused, not parsed',
+      assert.throws(
+        () => recoverOpenSegment(dir, { cwd: root }),
+        /exceeds the .+-byte bounded-read cap/,
+        'a first line landing its newline exactly one byte past the cap must refuse, not parse',
       );
     } finally { clean(root); }
   });
@@ -589,14 +594,65 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
   // proves identity, not authenticity — an unsigned segment can still claim
   // any branch by name. Without a key nothing can be signature-verified, so
   // recovery is disabled entirely and this still falls back to root-only.
-  it('allowRecovery: true with NO key does not recover — cannot verify authenticity, so it does not trust identity alone', () => {
+  // T-MANIFEST-FOREST, seventh round: `key: null` is a fully supported,
+  // common configuration (e.g. ordinary local dev without
+  // ADLC_MANIFEST_KEY) — it must not silently disable recovery and look
+  // like "no evidence" when a real candidate segment EXISTS. Existence is
+  // checked (never trusting content) and this refuses rather than guess.
+  it('allowRecovery: true with NO key REFUSES when a candidate segment exists — never silently treats it as absent', () => {
     const { root, dir } = gitRepo();
     try {
       activate(dir);
       recordTicketEvidence(root, baseEvidence());
       rmSync(lineagePath(dir), { force: true });
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: null }),
+        /a candidate segment for this branch exists but cannot be verified/,
+        'a real candidate segment must never be silently treated as absent just because there is no key to verify it',
+      );
+    } finally { clean(root); }
+  });
+
+  it('allowRecovery: true with NO key returns root-only when genuinely no candidate segment exists', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir); // segmented, but no evidence recorded — no segment exists yet
       const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: null });
-      assert.equal(chains.length, 1, 'no key means nothing can be verified — must not trust an unverifiable recovery');
+      assert.equal(chains.length, 1, 'nothing exists to miss, so this is safe even without a key');
+    } finally { clean(root); }
+  });
+
+  // T-MANIFEST-FOREST, seventh round: detached HEAD (a common CI checkout
+  // shape — e.g. a PR SHA checked out directly) has no branch identity to
+  // recover by AT ALL. This must not silently look like "no evidence" when
+  // committed segments exist that could belong to the checkout — only a
+  // genuinely segment-free forest is safe to treat as "nothing to miss".
+  it('allowRecovery: true on detached HEAD REFUSES when committed segments exist — never silently treats them as absent', () => {
+    const { root, dir } = gitRepo('feat/detach-me');
+    const KEY = 'detached-key';
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ key: KEY })); // a real, signed segment for feat/detach-me
+      execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      rmSync(lineagePath(dir), { force: true });
+      assert.equal(currentBranch(root), null, 'precondition: detached HEAD');
+
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY }),
+        /detached HEAD has no branch identity/,
+        'a detached checkout must refuse rather than assume no committed segment belongs to it',
+      );
+    } finally { clean(root); }
+  });
+
+  it('allowRecovery: true on detached HEAD returns root-only when genuinely no segments exist anywhere', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir); // segmented, but nothing committed yet
+      execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      assert.equal(currentBranch(root), null, 'precondition: detached HEAD');
+      const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: 'irrelevant-key' });
+      assert.equal(chains.length, 1, 'nothing exists to miss, so a detached checkout is safe here too');
     } finally { clean(root); }
   });
 
@@ -775,6 +831,35 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
         /root manifest failed chain or signature verification/,
         'an unsigned entry after a signed one in root is a tampered chain, even in a non-segmented repo',
       );
+    } finally { clean(root); }
+  });
+
+  // T-MANIFEST-FOREST, seventh round: chainIsIntact alone tolerates a chain
+  // with NO signed entries at all (correct for its OTHER callers' legacy-
+  // unsigned-prefix case). A commit-capable attacker without the key can
+  // append an unsigned but perfectly hash-chained forged entry to a chain
+  // that has simply never adopted signing — root must refuse to be trusted
+  // for that reason too, once a key IS available to the reader.
+  it('root itself refuses when ENTIRELY unsigned but a key is available, even with a perfectly consistent hash chain', () => {
+    const { root, dir } = gitRepo();
+    const KEY = 'root-wholly-unsigned-key';
+    try {
+      recordTicketEvidence(root, baseEvidence()); // pre-cutover: lands in root, UNSIGNED
+      assert.throws(
+        () => readOwnChains(dir, { cwd: root, key: KEY }),
+        /root manifest has no signed entries/,
+        'an entirely unsigned root must never be trusted just because its hash chain is consistent',
+      );
+    } finally { clean(root); }
+  });
+
+  it('root with ZERO entries is safe even with a key available — empty is not "unsigned"', () => {
+    const { root, dir } = gitRepo();
+    const KEY = 'root-empty-key';
+    try {
+      mkdirSync(dir, { recursive: true }); // segmented-or-not, root genuinely has nothing
+      const chains = readOwnChains(dir, { cwd: root, key: KEY });
+      assert.deepEqual(chains, [[]], 'an empty root has nothing to distrust, so this must not refuse');
     } finally { clean(root); }
   });
 });

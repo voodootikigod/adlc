@@ -266,7 +266,16 @@ test('migrateManifestEvidence recovers real evidence across a lost .lineage toke
 // re-attest once a signing key IS available at migration time. Without the
 // entrySigValid check, this function would sign the copied data FRESH under the
 // new id, laundering an unsigned claim into a validly HMAC-signed attestation.
-test('migrateManifestEvidence never signs a re-attestation sourced from an UNSIGNED entry, even in this checkout\'s own segment', () => {
+//
+// T-MANIFEST-FOREST, seventh round: this segment is entirely unsigned, and
+// readOwnChains now refuses the WHOLE read for an entirely-unsigned
+// token-matched segment when a key is available (not just filter out its
+// entries downstream) — a commit-capable attacker without the key could
+// otherwise append forged entries to a chain that simply never adopted
+// signing, and nothing would ever refuse it just because it's "always been
+// like that". This subsumes the original per-entry protection: the call
+// now refuses outright rather than silently returning 0 migrated sources.
+test('migrateManifestEvidence refuses (never signs) when this checkout\'s own segment is entirely unsigned but a key is available', () => {
   const { root, dir } = gitRepo();
   try {
     activate(dir);
@@ -277,10 +286,11 @@ test('migrateManifestEvidence never signs a re-attestation sourced from an UNSIG
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: null,
     });
 
-    const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#9', {
-      now: '2026-06-27T00:00:00Z', key: 'migration-time-key',
-    });
-    assert.equal(result.migrated, 0, 'an unsigned source must never be laundered into a freshly signed attestation');
+    assert.throws(
+      () => migrateManifestEvidence(root, 'T7', 'gh:acme/app#9', { now: '2026-06-27T00:00:00Z', key: 'migration-time-key' }),
+      /has no signed entries/,
+      'an entirely unsigned segment must never be trusted for a fresh signed re-attestation, even for entries that individually fail their own check',
+    );
     const resolved = resolveOpenSegment(dir, { cwd: root });
     const raw = readFileSync(segmentPath(dir, resolved.name), 'utf8').trim().split('\n');
     assert.equal(raw.length, 1, 'nothing was appended for the refused migration');

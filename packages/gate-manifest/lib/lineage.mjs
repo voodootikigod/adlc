@@ -223,6 +223,15 @@ export function peekOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
 // ever reaches here, so no O_NOFOLLOW hardening is needed the way
 // readBoundedJsonNoFollow's (.lineage/.store.json) needs it.
 const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is a few hundred bytes
+// Distinguishes "no first entry / malformed" (null — genuinely absent, safe
+// to treat as a non-candidate) from "first entry exists but exceeds the
+// bounded-read cap" (adversarial-review finding, T-MANIFEST-FOREST seventh
+// round): nothing on the write side caps entry size, so a legitimately large
+// evidence payload (a big `data` object or `files` map) could exceed 64 KiB
+// and previously vanished from recovery exactly like the original
+// lost-token bug, just via a different mechanism. recoverOpenSegment (below)
+// refuses instead of silently excluding an oversized segment as a candidate.
+const OVERSIZED_FIRST_ENTRY = Symbol('oversized-first-entry');
 function firstEntryOf(dir, segmentName) {
   let fd;
   try {
@@ -235,7 +244,7 @@ function firstEntryOf(dir, segmentName) {
     const bytesRead = readSync(fd, buf, 0, MAX_FIRST_LINE_BYTES, 0);
     const chunk = buf.subarray(0, bytesRead).toString('utf8');
     const newlineIndex = chunk.indexOf('\n');
-    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return null; // no newline within the cap — refuse to guess whether it was truncated
+    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return OVERSIZED_FIRST_ENTRY;
     const firstLine = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
     if (firstLine.trim() === '') return null;
     return JSON.parse(firstLine);
@@ -308,14 +317,26 @@ function firstEntryOf(dir, segmentName) {
  *
  * @returns {{ name: string, isNew: false }|null}
  * @throws {Error} when more than one committed segment's first entry declares
- *   this branch and the local token does not disambiguate
+ *   this branch and the local token does not disambiguate, or when a
+ *   discovered segment's first entry exceeds the bounded-read cap (its
+ *   branch cannot be determined, so it cannot be safely excluded either)
  */
 export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
   if (branch === null) return null; // detached HEAD: no branch identity to recover by
-  const candidates = discoverSegments(dir).valid.filter((name) => firstEntryOf(dir, name)?.branch === branch);
+  const candidates = [];
+  for (const name of discoverSegments(dir).valid) {
+    const first = firstEntryOf(dir, name);
+    if (first === OVERSIZED_FIRST_ENTRY) {
+      throw new Error(
+        `segment ${name}'s first entry exceeds the ${MAX_FIRST_LINE_BYTES}-byte bounded-read cap — `
+        + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
+      );
+    }
+    if (first?.branch === branch) candidates.push(name);
+  }
   if (candidates.length === 0) return null;
   if (candidates.length > 1) {
     throw new Error(

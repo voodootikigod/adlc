@@ -228,6 +228,24 @@ function chainIsIntact(lines, key = null) {
   return true;
 }
 
+// chainIsIntact deliberately tolerates a chain with NO signed entries at all
+// (a legacy chain that predates signing, or a repo that never adopted it —
+// see chainIsIntact's own callers). That tolerance is wrong for a caller that
+// is about to trust a chain's content to drive a REMOTE, authenticated
+// decision (adversarial-review finding, T-MANIFEST-FOREST seventh round): a
+// commit-capable attacker without the key can append an unsigned but
+// perfectly hash-chained forged entry to a chain that has simply never been
+// signed, and chainIsIntact alone would accept it even with a real key
+// available at read time. Used alongside chainIsIntact, never instead of it.
+function hasAnySignedEntry(lines) {
+  for (const line of lines) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (typeof entry?.sig === 'string' && entry.sig.length > 0) return true;
+  }
+  return false;
+}
+
 /**
  * True iff root's chain AND every discovered segment's chain are each
  * internally intact (adversarial-review finding: a corrupted OTHER segment
@@ -319,36 +337,114 @@ export function readForestEntries(dir) {
  * the exact `branch` field instead (spec §4.4) closes the CROSS-BRANCH
  * collision risk; whole-chain verification here closes the remaining
  * FORGERY/TAMPERING risk.
+ *
+ * REFUSE, NEVER SILENTLY LOOK LIKE "NO EVIDENCE" (T-MANIFEST-FOREST, seventh
+ * round): two more situations used to fall through to `return [root]` as if
+ * genuinely nothing existed, when the truth was "cannot determine" — the
+ * exact same class of bug ambiguous recovery already refuses rather than
+ * guesses at. (1) `key === null` (a fully supported, common configuration —
+ * e.g. ordinary local dev without `ADLC_MANIFEST_KEY`) used to disable
+ * recovery outright; now it still checks whether a candidate segment
+ * EXISTS (never trusting its content) and refuses if one does, since a
+ * mutating consumer (reassignment) proceeding as if there's nothing to
+ * migrate can permanently strand real evidence under an abandoned ticket
+ * ID. (2) Detached HEAD (a common CI checkout shape) used to return `null`
+ * from recoverOpenSegment and get silently treated the same as "no
+ * segment"; now, if ANY committed segment exists anywhere in the repo, this
+ * refuses rather than assume none of them are ours.
  */
 export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, key = null } = {}) {
   const rootRaw = readRawLines(join(dir, 'manifest.jsonl'));
   // Root and a token-matched (peeked) segment are not identity-ambiguous the
   // way a RECOVERED segment is — root is canonically root, and the local
   // `.lineage` token is proof this checkout itself minted the peeked
-  // segment, not a self-reported claim from untrusted content. So both still
+  // segment, not a self-reported claim from untrusted content. Both still
   // get chainIsIntact's tamper/continuity check when a key is available
-  // (round 6 of the same finding — push.mjs previously trusted root and a
-  // token-matched segment with NO verification at all, even with a real key
-  // passed in, so an attacker with commit-but-not-key access could append an
-  // unsigned forged entry there and have it published), but NEITHER needs
-  // the recovered-only "at least one signed entry" requirement below — an
-  // entirely-unsigned root/peeked chain is a legitimate legacy or
-  // never-adopted-signing state, not a forgery risk, since nothing about
-  // WHICH chain to read was ever in question.
-  if (key !== null && !chainIsIntact(rootRaw, key)) {
-    throw new Error('root manifest failed chain or signature verification — refusing to trust it');
+  // (round 6 — push.mjs previously trusted root and a token-matched segment
+  // with NO verification at all, even with a real key passed in, so an
+  // attacker with commit-but-not-key access could append an unsigned forged
+  // entry there and have it published).
+  //
+  // AND (round 7): each also requires at least one entry actually carry a
+  // signature. chainIsIntact alone tolerates a chain with NO signed entries
+  // at all — correct for its OTHER callers' legacy-unsigned-prefix case, but
+  // wrong here: a commit-capable attacker without the key can append an
+  // unsigned but perfectly hash-chained forged entry to a chain that has
+  // simply never adopted signing, and chainIsIntact alone would accept it
+  // even with a real key available right now. Unlike the recovered path's
+  // identical requirement below, this is NOT about identity (root/peeked
+  // aren't self-claimed) — it is about not letting "this repo happens to
+  // have never signed anything yet" become "so nothing here needs signing,
+  // ever, even once a key exists."
+  if (key !== null) {
+    if (!chainIsIntact(rootRaw, key)) {
+      throw new Error('root manifest failed chain or signature verification — refusing to trust it');
+    }
+    // Empty is not "unsigned" — a rootless segmented repo genuinely has
+    // nothing in root, which is not a forgery risk (nothing to distrust);
+    // only a NON-EMPTY, entirely-unsigned chain is the round-7 concern.
+    if (rootRaw.length > 0 && !hasAnySignedEntry(rootRaw)) {
+      throw new Error('root manifest has no signed entries — cannot authenticate it with the available key, refusing to trust it');
+    }
   }
   const root = parseLines(rootRaw);
   if (!isSegmentedRepo(dir)) return [root];
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) {
     const peekedRaw = readRawLines(segmentPath(dir, peeked.name));
-    if (key !== null && !chainIsIntact(peekedRaw, key)) {
-      throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
+    if (key !== null) {
+      if (!chainIsIntact(peekedRaw, key)) {
+        throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
+      }
+      if (peekedRaw.length > 0 && !hasAnySignedEntry(peekedRaw)) {
+        throw new Error(`segment ${peeked.name} has no signed entries — cannot authenticate it with the available key, refusing to trust it`);
+      }
     }
     return [root, parseLines(peekedRaw)];
   }
-  if (!allowRecovery || key === null) return [root];
+  if (!allowRecovery) return [root];
+
+  // Beyond this point the token is missing and we are attempting recovery.
+  // Two more ways this used to silently look like "no evidence" instead of
+  // "cannot determine" (adversarial-review finding, T-MANIFEST-FOREST
+  // seventh round) — both get the SAME treatment as an ambiguous recovery
+  // match: refuse outright, since a mutating consumer (reassignment) that
+  // proceeds as if there's nothing to migrate can permanently strand real
+  // evidence under an abandoned ticket ID, and push can wrongly remove a
+  // real status label.
+  const branch = currentBranch(cwd);
+  if (branch === null) {
+    // Detached HEAD — a common CI checkout shape (e.g. a PR SHA checked out
+    // directly) — has no branch identity to check candidates against AT
+    // ALL. If ANY committed segment exists anywhere in this repo, we cannot
+    // rule out that one belongs to us; only a genuinely segment-free forest
+    // is safe to treat as "nothing to miss".
+    if (discoverSegments(dir).valid.length > 0) {
+      throw new Error(
+        'cannot identify this checkout\'s own segment: detached HEAD has no branch identity to recover by, '
+        + 'and committed segments exist — refusing to treat them as absent'
+      );
+    }
+    return [root];
+  }
+  if (key === null) {
+    // A known branch, but nothing can be signature-verified. Check
+    // EXISTENCE only via recoverOpenSegment — never trust its content for
+    // this purpose, only whether a plausible candidate exists at all — the
+    // same "existence check, not a trust decision" pattern used by
+    // reassign.mjs before this logic moved into the shared primitive.
+    let candidateExists;
+    try { candidateExists = recoverOpenSegment(dir, { cwd }) !== null; }
+    catch { candidateExists = true; } // ambiguous match — still a candidate, still refuse
+    if (candidateExists) {
+      throw new Error(
+        'a candidate segment for this branch exists but cannot be verified without a signing key — '
+        + 'refusing to treat it as absent'
+      );
+    }
+    return [root];
+  }
+
   const recovered = recoverOpenSegment(dir, { cwd });
   if (!recovered) return [root];
   // WHOLE-CHAIN verification, not a per-entry filter (adversarial-review
@@ -377,12 +473,10 @@ export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, 
   // recovery ALSO requires at least one entry actually carry a signature,
   // proving someone who held the key touched this segment at all.
   const rawLines = readRawLines(segmentPath(dir, recovered.name));
-  const parsedForSigCheck = rawLines.map((line) => { try { return JSON.parse(line); } catch { return null; } });
-  const hasAnySignedEntry = parsedForSigCheck.some((entry) => typeof entry?.sig === 'string' && entry.sig.length > 0);
-  if (!chainIsIntact(rawLines, key) || !hasAnySignedEntry) {
+  if (!chainIsIntact(rawLines, key) || !hasAnySignedEntry(rawLines)) {
     throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
   }
-  return [root, parsedForSigCheck.filter(Boolean)];
+  return [root, parseLines(rawLines)];
 }
 
 // SECURITY: `.store.json` is repository-TRACKED, so a malicious branch can
@@ -565,6 +659,15 @@ export function peekOpenSegment(dir, { cwd = dirname(dir) } = {}) {
 // .store.json) needs it. Mirrors @adlc/gate-manifest/lib/lineage.mjs's
 // identical helper.
 const MAX_FIRST_LINE_BYTES = 65536; // generous headroom; a real first entry is a few hundred bytes
+// Distinguishes "no first entry / malformed" (null — genuinely absent, safe
+// to treat as a non-candidate) from "first entry exists but exceeds the
+// bounded-read cap" (adversarial-review finding, T-MANIFEST-FOREST seventh
+// round): nothing on the write side caps entry size, so a legitimately large
+// evidence payload (a big `data` object or `files` map) could exceed 64 KiB
+// and previously vanished from recovery exactly like the original
+// lost-token bug, just via a different mechanism. recoverOpenSegment (below)
+// refuses instead of silently excluding an oversized segment as a candidate.
+const OVERSIZED_FIRST_ENTRY = Symbol('oversized-first-entry');
 function firstEntryOf(dir, segmentName) {
   let fd;
   try {
@@ -577,7 +680,7 @@ function firstEntryOf(dir, segmentName) {
     const bytesRead = readSync(fd, buf, 0, MAX_FIRST_LINE_BYTES, 0);
     const chunk = buf.subarray(0, bytesRead).toString('utf8');
     const newlineIndex = chunk.indexOf('\n');
-    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return null; // no newline within the cap — refuse to guess whether it was truncated
+    if (newlineIndex === -1 && bytesRead >= MAX_FIRST_LINE_BYTES) return OVERSIZED_FIRST_ENTRY;
     const firstLine = newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
     if (firstLine.trim() === '') return null;
     return JSON.parse(firstLine);
@@ -651,7 +754,17 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
   if (branch === null) return null; // detached HEAD: no branch identity to recover by
-  const candidates = discoverSegments(dir).valid.filter((name) => firstEntryOf(dir, name)?.branch === branch);
+  const candidates = [];
+  for (const name of discoverSegments(dir).valid) {
+    const first = firstEntryOf(dir, name);
+    if (first === OVERSIZED_FIRST_ENTRY) {
+      throw new Error(
+        `segment ${name}'s first entry exceeds the ${MAX_FIRST_LINE_BYTES}-byte bounded-read cap — `
+        + `its branch cannot be determined, so it cannot be safely excluded as a candidate either; refusing to guess`
+      );
+    }
+    if (first?.branch === branch) candidates.push(name);
+  }
   if (candidates.length === 0) return null;
   if (candidates.length > 1) {
     throw new Error(
