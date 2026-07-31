@@ -696,6 +696,11 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       assert.equal(resolved.isNew, false, 'must continue the real committed segment, not mint a duplicate');
       assert.equal(resolved.name, first.name);
       assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'exactly one segment must exist — no needless duplicate was minted');
+      // The token must be healed by this recovery — a SECOND resolution must
+      // take the fast (a) path, not fall through to (b) again.
+      const token = JSON.parse(readFileSync(lineagePath(clonedDir), 'utf8'));
+      assert.equal(token.segment, first.name, 'recovering via (b) must heal the local token to the recovered segment');
+      assert.equal(token.branch, 'feat/clone-write-first');
     } finally {
       clean(root);
       if (clonedRoot) clean(clonedRoot);
