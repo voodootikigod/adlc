@@ -30,29 +30,36 @@ import { sha256, git, splitNulPaths } from '@adlc/core';
 import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
 
 /**
- * Best-effort removal of any extended ACL on `path`, using the platform's own tool
- * (macOS `chmod -N`, Linux `setfacl -b`) — POSIX mode bits alone do not confine a file
- * when an inherited ACL entry (a macOS ACE, an NFSv4/POSIX ACL) grants another
- * principal access independent of those bits. NOT verified afterward (no built-in Node
- * API exposes ACL state, and this codebase has no ACL-reading dependency): a missing
- * tool or an unsupported filesystem means this silently does nothing, so it narrows —
- * but does not close — the exposure the mode-bit check alone cannot see. Every failure
- * (tool absent, unsupported, permission denied) is swallowed; this call must never be
- * the reason the ceremony fails, since the POSIX mode-bit check remains the actual gate.
+ * Removal of any extended ACL on `path`, using the platform's own tool (macOS
+ * `chmod -N`, Linux `setfacl -b`) — POSIX mode bits alone do not confine a file when an
+ * inherited ACL entry (a macOS ACE, an NFSv4/POSIX ACL) grants another principal access
+ * independent of those bits. UNSUPPORTED PLATFORM OR MISSING TOOL (`ENOENT` — the
+ * binary itself does not exist) is tolerated: there is nothing this call can do there,
+ * so it silently does nothing and narrows (does not close) the exposure the mode-bit
+ * check alone cannot see. Any OTHER failure — the tool exists but exits non-zero or
+ * errors (permission denied, an unexpected filesystem condition) — is NOT tolerated and
+ * is thrown: a present tool that fails to do its job is exactly the "ACL removal
+ * failed yet the ceremony still succeeds" gap this exists to close (round 9 finding),
+ * so the caller must treat that as a real confinement failure, not a soft warning.
+ * Still not verified either way afterward (no built-in Node API exposes ACL state, and
+ * this codebase has no ACL-reading dependency) — a tool that exits 0 without actually
+ * having removed a real entry would not be caught here.
  * `platform`/`exec` are injectable (test injection — this repo's CI runs one OS at a
  * time, so the platform branch not currently running on cannot otherwise be exercised).
  * @param {string} path
  * @param {{platform?: string, exec?: Function}} [options]
  */
 export function stripAclBestEffort(path, { platform = process.platform, exec = execFileSync } = {}) {
+  if (platform !== 'darwin' && platform !== 'linux') return;
+  const [command, args] = platform === 'darwin' ? ['chmod', ['-N', path]] : ['setfacl', ['-b', path]];
   try {
-    if (platform === 'darwin') {
-      exec('chmod', ['-N', path], { stdio: 'ignore' });
-    } else if (platform === 'linux') {
-      exec('setfacl', ['-b', path], { stdio: 'ignore' });
-    }
-  } catch {
-    /* best-effort only — see doc comment above */
+    exec(command, args, { stdio: 'ignore' });
+  } catch (err) {
+    if (err.code === 'ENOENT') return; // the tool itself is not installed — nothing more we can do
+    throw new Error(
+      `ACL removal via \`${command}\` failed on ${path} (${err.message}) — refusing to hand off a key `
+      + 'whose confinement could not be established rather than silently proceeding as if it had been',
+    );
   }
 }
 
@@ -209,10 +216,10 @@ export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots()
  * other filesystem-boundary checks (forest.mjs, manifest-segments.mjs).
  * @param {string} path
  * @param {string} key
- * @param {{roots?: string[], stat?: Function}} [options]  stat: override for fstatSync (test injection, for the post-chmod mode-verification step) — called with the open FILE DESCRIPTOR, not the path
+ * @param {{roots?: string[], stat?: Function, stripAcl?: Function}} [options]  stat: override for fstatSync (test injection, for the post-chmod mode-verification step) — called with the open FILE DESCRIPTOR, not the path. stripAcl: override for stripAclBestEffort (test injection)
  */
 export function writeKeyHandoffFile(path, key, options = {}) {
-  const { stat = fstatSync } = options;
+  const { stat = fstatSync, stripAcl = stripAclBestEffort } = options;
   if (process.platform === 'win32') {
     throw new Error(
       'the key handoff ceremony is not supported on win32 yet: chmod/mode 0600 only toggles the '
@@ -249,7 +256,7 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     // directory's ancestry grants access independent of POSIX mode bits, so removing it
     // here is what actually reduces exposure. See stripAclBestEffort's doc comment for
     // exactly what this does and does not cover.
-    stripAclBestEffort(path);
+    stripAcl(path);
     // Verify the filesystem actually enforced the mode we just requested — chmod can
     // succeed as a no-op on filesystems that don't map POSIX permissions faithfully
     // (FAT/exFAT, some network mounts), which would otherwise let this command report

@@ -291,6 +291,18 @@ test('confines the file (chmod, ACL-strip, mode-verify) BEFORE writing a single 
   assert.ok(statSync(handoffPath).size > 0, 'the finished file must still contain the actual key');
 });
 
+test('a genuine ACL-strip failure aborts the whole ceremony and cleans up, rather than proceeding as if confined (round 9 finding)', () => {
+  const root = tmpRoot();
+  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+  const handoffPath = join(outsideDir, 'key.txt');
+  const stripAcl = () => { throw new Error('ACL removal via `chmod` failed on it (permission denied) — refusing to hand off'); };
+  assert.throws(
+    () => writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root], stripAcl }),
+    /refusing to hand off/,
+  );
+  assert.equal(existsSync(handoffPath), false, 'a file whose ACL confinement genuinely failed must not be left behind');
+});
+
 // ── stripAclBestEffort: real inherited ACL, real removal (round 7 finding) ─────────
 
 test('stripAclBestEffort invokes exactly the right platform tool with the right arguments', () => {
@@ -309,10 +321,29 @@ test('stripAclBestEffort invokes exactly the right platform tool with the right 
   assert.deepEqual(calls, [], 'an unsupported platform must not invoke any ACL tool');
 });
 
-test('stripAclBestEffort swallows a failing exec call — a missing tool must never break the ceremony', () => {
-  const exec = () => { throw new Error('command not found'); };
+test('stripAclBestEffort tolerates the tool simply being absent (ENOENT) — nothing more it can do there', () => {
+  const exec = () => { const err = new Error('spawnSync chmod ENOENT'); err.code = 'ENOENT'; throw err; };
   assert.doesNotThrow(() => stripAclBestEffort('/some/path', { platform: 'darwin', exec }));
   assert.doesNotThrow(() => stripAclBestEffort('/some/path', { platform: 'linux', exec }));
+});
+
+test('stripAclBestEffort FAILS CLOSED when the tool exists but genuinely fails (round 9 finding) — never silently proceeds', () => {
+  const exec = () => { throw new Error('permission denied'); };
+  assert.throws(
+    () => stripAclBestEffort('/some/path', { platform: 'darwin', exec }),
+    /ACL removal via `chmod` failed/,
+  );
+  assert.throws(
+    () => stripAclBestEffort('/some/path', { platform: 'linux', exec }),
+    /ACL removal via `setfacl` failed/,
+  );
+});
+
+test('stripAclBestEffort does nothing on an unsupported platform (e.g. win32) — no tool invoked, nothing thrown', () => {
+  const calls = [];
+  const exec = (...args) => calls.push(args);
+  assert.doesNotThrow(() => stripAclBestEffort('/some/path', { platform: 'win32', exec }));
+  assert.deepEqual(calls, []);
 });
 
 test('stripAclBestEffort removes a real ACL entry inherited from the parent directory', { skip: process.platform !== 'darwin' }, () => {
