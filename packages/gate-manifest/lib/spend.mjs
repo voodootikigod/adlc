@@ -19,10 +19,26 @@
 import { loadFiltered } from './show.mjs';
 
 /**
- * Gate name → ADLC lifecycle phase. Source of truth: the `/adlc:adlc`
- * skill's phase-routing table (canonical — this file mirrors it rather than
- * re-deriving it). Gates not listed here (deterministic tools with no LLM
- * spend, or tools not yet wired to report usage) fall under 'unphased'.
+ * Gate name → ADLC lifecycle phase. Gates not listed here (deterministic tools
+ * with no LLM spend, or tools not yet wired to report usage) fall under
+ * 'unphased'.
+ *
+ * TWO NAMING AXES land in this one table, deliberately:
+ *
+ *   1. GATE TOOL names (spec-lint, coldstart, prosecute, …). Source of truth:
+ *      the `/adlc:adlc` skill's phase-routing table — canonical, mirrored here
+ *      rather than re-derived.
+ *   2. PHASE names (p4, p5). The fleet records its own evidence under the phase
+ *      it just ran, not under a tool name: see packages/fleet/lib/scheduler.mjs's
+ *      `effects.record('p4', ok)` and live-deps.mjs's `recordDispatchUsage`,
+ *      both of which reach `adlc gate-manifest record p4` and land as
+ *      `gate: 'p4'`.
+ *
+ * The lowercase entries are NOT stray duplicates of the 'P4'/'P5' VALUES — do
+ * not "clean them up". Without them every fleet dispatch's spend falls to
+ * 'unphased', which made P4 — the phase ADLC.md §6 says should be LIGHT in a
+ * healthy barbell — the one phase whose spend could not be attributed at all,
+ * and left the §6 `share('P4') > 0.4` diagnostic unable to fire (#418).
  *
  * This map is itself a cache (ADLC Principle 10) — if a gate moves phases
  * or a new LLM-backed gate ships, update this table. `adlc spend --json`
@@ -39,10 +55,12 @@ export const PHASE_BY_GATE = {
   'rails-guard': 'P3',
   'flail-detector': 'P4',
   'consensus-fix': 'P4',
+  p4: 'P4',
   'hollow-test': 'P5',
   'behavior-diff': 'P5',
   'review-calibration': 'P5',
   prosecute: 'P5',
+  p5: 'P5',
   'lesson-foundry': 'P7',
   'rejection-mining': 'P7',
   'skill-rot': 'maintenance',

@@ -87,6 +87,59 @@ describe('aggregateSpend', () => {
       assert.ok(validPhases.has(phase), `${gate} → ${phase} is not a recognized phase`);
     }
   });
+
+  // ---- #418: the fleet's PHASE-named gates ----
+
+  it("the fleet's own gate names attribute to their phase, not to 'unphased'", () => {
+    // The fleet records evidence under the phase it just ran (`gate: 'p4'`),
+    // not under a tool name. Before this mapping existed every dispatch's spend
+    // fell to 'unphased', so P4 was the one phase whose spend could not be
+    // attributed at all. Exact numbers, not merely nonzero.
+    const p4 = aggregateSpend([{ gate: 'p4', data: { usage: usage({ inputTokens: 100, outputTokens: 20 }) } }]);
+    assert.deepEqual(p4.byPhase.P4, { calls: 1, inputTokens: 100, outputTokens: 20, cachedTokens: 0 });
+    assert.equal(p4.byPhase.unphased, undefined, 'nothing may be left in unphased');
+
+    const p5 = aggregateSpend([{ gate: 'p5', data: { usage: usage({ inputTokens: 7, outputTokens: 3, cachedTokens: 1 }) } }]);
+    assert.deepEqual(p5.byPhase.P5, { calls: 1, inputTokens: 7, outputTokens: 3, cachedTokens: 1 });
+    assert.equal(p5.byPhase.unphased, undefined);
+  });
+
+  it('an UNRECOGNIZED gate still falls through to unphased (staleness stays visible)', () => {
+    // The table's doc comment promises this: a gate it does not know is
+    // surfaced rather than silently mis-attributed. Adding p4/p5 must not turn
+    // that fallback off.
+    const agg = aggregateSpend([{ gate: 'some-future-gate', data: { usage: usage({ inputTokens: 5 }) } }]);
+    assert.equal(agg.byPhase.unphased.calls, 1);
+    assert.equal(Object.keys(agg.byPhase).length, 1);
+  });
+
+  it('the WHOLE table is pinned, so no future edit can silently move a gate between phases', () => {
+    // Deliberately a literal map compared with deepEqual rather than a spot
+    // check: a spot check cannot notice a gate quietly changing phase, which is
+    // the failure that would silently re-attribute an entire phase's spend.
+    assert.deepEqual(PHASE_BY_GATE, {
+      'spec-lint': 'P1',
+      premortem: 'P1',
+      parallax: 'P1',
+      coldstart: 'P2',
+      'model-router': 'P2',
+      'merge-forecast': 'P2',
+      'rails-guard': 'P3',
+      'flail-detector': 'P4',
+      'consensus-fix': 'P4',
+      p4: 'P4',
+      'hollow-test': 'P5',
+      'behavior-diff': 'P5',
+      'review-calibration': 'P5',
+      prosecute: 'P5',
+      p5: 'P5',
+      'lesson-foundry': 'P7',
+      'rejection-mining': 'P7',
+      'skill-rot': 'maintenance',
+      'model-ratchet': 'maintenance',
+      'gate-fuzzing': 'maintenance',
+    });
+  });
 });
 
 describe('diagnostics (ADLC.md §6)', () => {

@@ -12,20 +12,20 @@
 //      document proves the parser handles the shape we IMAGINED the harness
 //      emits, which is exactly the assumption worth testing.
 //
-// NOTE: the fleet's per-ticket gate-manifest RECORDING of this usage is not
-// covered here. It is blocked on issue #418 — fleet records
-// `gate: 'p4'`, which PHASE_BY_GATE does not map, so such an entry aggregates
-// to 'unphased' rather than byPhase.P4. Asserting byPhase.P4 today would mean
-// either editing spend.mjs (a T152 rail) or recording under a gate name that
-// did not run. What IS provable now — that the adapters parse real harness
-// output correctly and never fabricate — is proven here.
+// The recording half is covered too: the final block drives a real dispatch
+// through the real gate-manifest recorder and the real loader, asserting the
+// exact byPhase.P4 totals — the producer-to-consumer round trip that closes
+// T152's last acceptance criterion.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAdapter } from '../lib/adapters/index.mjs';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { loadSpend } from '@adlc/gate-manifest/lib/spend.mjs';
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const fixture = (name) => readFileSync(join(FIXTURES, name), 'utf8');
@@ -205,12 +205,9 @@ describe('P4 dispatch usage — test integrity', () => {
 //
 // These drive the REAL scheduler (advanceTicket) and the REAL recordGate
 // wiring, with the dispatch result shaped exactly as the adapters above
-// produce it. What they do NOT assert is `aggregate.byPhase.P4`: the fleet
-// records `gate: 'p4'`, which PHASE_BY_GATE does not map, so such an entry
-// aggregates to 'unphased'. That two-line mapping change is
-// issue #418, which cannot land until T152 completes and its
-// spend.mjs rail expires. Flipping these assertions to byPhase.P4 is that
-// ticket's final step.
+// produce it. They assert the SEAM — that one carrier is emitted per dispatch
+// and that verdict entries carry none. The block after them closes the loop by
+// putting a carrier through the real recorder and aggregator.
 
 import { advanceTicket } from '../lib/scheduler.mjs';
 import { usageEvidence } from '../lib/adapters/usage.mjs';
@@ -471,4 +468,72 @@ describe('P4 dispatch usage — degenerate JSON documents', () => {
       assert.equal(result.exitCode, 0, 'a degenerate document is not a build failure');
     });
   }
+});
+
+// ---- the producer-to-consumer round trip ----
+//
+// This is what T152 could not assert, and the reason its byPhase.P4 criterion
+// shipped deferred: the mapping lived in spend.mjs, which T152 had declared as
+// one of its own rails, and a ticket-declared rail is never lifted — only
+// outlived. T152 completed (#424), the rail expired, and this closes the loop.
+//
+// Nothing here is hand-constructed. The usage comes from a REAL captured
+// harness payload parsed by the REAL adapter, is written by the REAL recorder,
+// and is read back by the REAL loader — so a break anywhere along that chain
+// fails this test, which a hand-built manifest entry could never do.
+
+describe('P4 spend round trip — real dispatch to real aggregate', () => {
+  it('a dispatched call lands in byPhase.P4 with the fixture\'s exact totals', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fleet-p4-roundtrip-'));
+    try {
+      // 1. REAL adapter parsing a REAL captured payload.
+      const { result } = await dispatchWith('opencode', { stdout: fixture('opencode-run-json.jsonl') });
+      assert.equal(result.usageStatus, 'reported', 'precondition: the capture parsed');
+
+      // 2. REAL recorder, under the gate name the fleet actually writes.
+      record({ key: null, gate: 'p4', dir, rawData: JSON.stringify(usageEvidence(result)) });
+
+      // 3. REAL loader + aggregator.
+      const { aggregate } = loadSpend({ dir });
+      assert.deepEqual(aggregate.byPhase.P4, {
+        calls: 1, inputTokens: 53458, outputTokens: 3, cachedTokens: 0,
+      });
+      assert.equal(aggregate.byPhase.unphased, undefined, 'the whole point: no longer unphased');
+      assert.equal(aggregate.total.calls, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('an unreported dispatch records status only and is counted by nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fleet-p4-roundtrip-'));
+    try {
+      const { result } = await dispatchWith('opencode', { stdout: plainCapture() });
+      assert.equal(result.usageStatus, 'unreported');
+
+      record({ key: null, gate: 'p4', dir, rawData: JSON.stringify(usageEvidence(result)) });
+
+      const { aggregate } = loadSpend({ dir });
+      assert.equal(aggregate.entriesTotal, 1, 'the entry exists — the call happened');
+      assert.equal(aggregate.entriesWithUsage, 0, 'but nothing is counted from it');
+      assert.deepEqual(aggregate.byPhase, {}, 'unknown spend creates no bucket, not a zeroed one');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('p5 prosecution evidence attributes to P5 by the same path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fleet-p4-roundtrip-'));
+    try {
+      const { result } = await dispatchWith('claude-code', { stdout: fixture('claude-code-result.json') });
+      record({ key: null, gate: 'p5', dir, rawData: JSON.stringify(usageEvidence(result)) });
+
+      const { aggregate } = loadSpend({ dir });
+      assert.deepEqual(aggregate.byPhase.P5, {
+        calls: 1, inputTokens: 10, outputTokens: 54, cachedTokens: 38947,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
