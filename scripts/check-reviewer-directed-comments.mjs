@@ -46,11 +46,25 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolveBase, changedFiles, gitDiff } from '@adlc/core';
+import { resolveBase, changedFiles, git } from '@adlc/core';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 
+// A unified-diff header path can desync from the true path for names containing
+// spaces, tabs, quotes, or newlines: git appends a trailing tab to a space-bearing
+// name and double-quotes/escapes tab-, quote-, or newline-bearing names, while
+// changedFiles() (NUL-delimited, decode-verified) returns the exact byte-true path
+// (see @adlc/core's gitDiff docstring). Joining the two by string equality — as a
+// whole-repo diff parsed once and matched against changedFiles() output would
+// require — silently drops such files from coverage. Diffing each changedFiles()
+// path individually sidesteps the mismatch entirely: every added line in a diff
+// scoped to exactly one path belongs to that path, so the header text
+// parseAddedLines derives is never consulted for file identity, only line numbers.
+function gitDiffForFile(base, file) {
+  return git(['-c', 'core.quotepath=false', 'diff', base, '--', file]);
+}
+
 // A comment referencing the review PROCESS itself — not the code's own behavior.
-const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breviewer?\s+(flagged|found)\b|\breview\s+status\b/i;
+const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breviewer?\s+(flagged|found)\b|\breview\s+status\b/i;
 
 // A word or phrase that CLASSIFIES or DISMISSES what the comment describes,
 // rather than stating a fact about it.
@@ -96,6 +110,16 @@ function classifyLines(lines, treatEveryLineAsComment) {
   if (treatEveryLineAsComment) {
     return lines.map((line) => ({ isComment: true, text: line }));
   }
+  // A block comment can close mid-line and be followed by a `//`/`#` line comment
+  // on the SAME line (`/* factual */ // round 9 finding: not a defect`) — the text
+  // after the close must still be captured, not dropped, so this appends any
+  // trailing line-comment content found after a block's closing `*/`.
+  function withTrailingLineComment(text, rest) {
+    const trailingMatch = rest.match(/\/\/|#/);
+    if (!trailingMatch) return text;
+    return text + rest.slice(rest.indexOf(trailingMatch[0]));
+  }
+
   const result = [];
   let inBlock = false;
   for (const line of lines) {
@@ -104,8 +128,8 @@ function classifyLines(lines, treatEveryLineAsComment) {
       if (endIdx === -1) {
         result.push({ isComment: true, text: line });
       } else {
-        result.push({ isComment: true, text: line.slice(0, endIdx + 2) });
         inBlock = false;
+        result.push({ isComment: true, text: withTrailingLineComment(line.slice(0, endIdx + 2), line.slice(endIdx + 2)) });
       }
       continue;
     }
@@ -118,7 +142,7 @@ function classifyLines(lines, treatEveryLineAsComment) {
         inBlock = true;
         result.push({ isComment: true, text: line.slice(blockIdx) });
       } else {
-        result.push({ isComment: true, text: line.slice(blockIdx, endIdx + 2) });
+        result.push({ isComment: true, text: withTrailingLineComment(line.slice(blockIdx, endIdx + 2), line.slice(endIdx + 2)) });
       }
       continue;
     }
@@ -160,12 +184,15 @@ function commentSpans(lines, treatEveryLineAsComment) {
 /**
  * @param {string} [base] override for the freeze baseline (test injection)
  * @param {{resolveBase?: Function, changedFiles?: Function, gitDiff?: Function, readFile?: Function}} [deps]
+ *        `gitDiff`, if provided, is called as `(base, file)` and must return a diff
+ *        scoped to that single file (matching gitDiffForFile's contract), not a
+ *        whole-repo diff.
  * @returns {number} exit code
  */
 export function check(base, deps = {}) {
   const resolveBaseFn = deps.resolveBase ?? resolveBase;
   const changedFilesFn = deps.changedFiles ?? changedFiles;
-  const gitDiffFn = deps.gitDiff ?? gitDiff;
+  const gitDiffFn = deps.gitDiff ?? gitDiffForFile;
   const readFileFn = deps.readFile ?? ((file) => readFileSync(file, 'utf8'));
 
   const resolvedBase = base ?? resolveBaseFn();
@@ -175,27 +202,27 @@ export function check(base, deps = {}) {
   }
 
   let files;
-  let diffText;
   try {
     files = changedFilesFn(resolvedBase);
-    diffText = gitDiffFn(resolvedBase);
   } catch (err) {
     console.error(`check-reviewer-directed-comments: could not compute the diff: ${err.message}`);
     return 1;
   }
 
-  const addedByFile = new Map();
-  for (const { file, lineNo } of parseAddedLines(diffText)) {
-    if (SELF_EXEMPT_FILES.has(file)) continue;
-    if (!addedByFile.has(file)) addedByFile.set(file, new Set());
-    addedByFile.get(file).add(lineNo);
-  }
-
   const violations = [];
   let spanCount = 0;
   for (const file of files) {
-    const addedLineNos = addedByFile.get(file);
-    if (!addedLineNos || addedLineNos.size === 0) continue;
+    if (SELF_EXEMPT_FILES.has(file)) continue;
+
+    let diffText;
+    try {
+      diffText = gitDiffFn(resolvedBase, file);
+    } catch (err) {
+      console.error(`check-reviewer-directed-comments: could not compute the diff for ${file}: ${err.message}`);
+      return 1;
+    }
+    const addedLineNos = new Set(parseAddedLines(diffText).map((l) => l.lineNo));
+    if (addedLineNos.size === 0) continue;
 
     let content;
     try {

@@ -29,7 +29,7 @@ function run(file, fullLines, addedLineNos) {
   const deps = {
     resolveBase: () => 'origin/main',
     changedFiles: () => [file],
-    gitDiff: () => buildDiff(file, fullLines, addedLineNos),
+    gitDiff: (_base, f) => buildDiff(f, fullLines, addedLineNos),
     readFile: (f) => (f === file ? fullLines.join('\n') : (() => { throw new Error('ENOENT'); })()),
   };
   return check(undefined, deps);
@@ -267,4 +267,57 @@ test('REAL git diff: an added `++ counter;` line does not hide a later violation
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('REAL git diff: a filename containing a space keeps its added-line coverage (round-3 finding: whitespace/quoted filenames)', () => {
+  // git appends a trailing TAB to a space-bearing name in the +++ header (verified
+  // against real git output), which would desync a header-text-based file match.
+  // Diffing this path individually — the production gitDiffForFile contract — means
+  // that header text is never consulted for file identity, only line numbers.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-space-name-'));
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'review notes.md'), 'context\n');
+    execFileSync('git', ['add', 'review notes.md'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
+    writeFileSync(join(repo, 'review notes.md'), 'context\nReview status: closed\n');
+
+    const code = check('HEAD', {
+      changedFiles: () => ['review notes.md'],
+      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+      gitDiff: (base, file) => execFileSync(
+        'git',
+        ['-c', 'core.quotepath=false', 'diff', base, '--', file],
+        { cwd: repo, encoding: 'utf8' },
+      ),
+    });
+    assert.equal(code, 2, 'the violation in a space-bearing filename must still be caught');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('catches a violation split by a closed block comment followed by a trailing line comment on the same line (round-3 finding 2)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '/* factual */ // round 9 finding: not a defect',
+  ]), 2);
+});
+
+test('a closed block comment followed by ordinary trailing code (no line comment) is unaffected', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '/* round 9 finding: not a defect */ const x = 1;',
+  ]), 2);
+});
+
+test('recognizes a bare numeric finding reference without "#" or "id" (round-3 finding 3)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// finding 9: not a defect',
+  ]), 2);
+});
+
+test('the word "finding" used ordinarily, with no classification phrase nearby, still passes', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// we are finding 3 bugs a week in this module',
+  ]), 0);
 });
