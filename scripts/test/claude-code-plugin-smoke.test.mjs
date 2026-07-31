@@ -9,6 +9,24 @@ import { tmpdir } from 'node:os';
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'claude-code-plugin-smoke.mjs');
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+// What a throwaway copy of this repo must NOT include.
+//
+// `.adlc/` is LIVE, CONCURRENTLY MUTATING state, and copying it is what made
+// these tests fail only under a full suite run (#416): the `scripts` segment runs
+// its files in parallel, and gitignore-negations-effective.test.mjs creates
+// `.adlc/manifest.d/` in the real repo root for the duration of a `git
+// check-ignore` probe, then removes it. A cpSync racing that window has the entry
+// returned by readdir and gone by the time cp lstat's it — ENOENT, mid-copy.
+// Nothing under `.adlc/` is read by the smoke script; it checks plugin sources,
+// docs and manifests. Excluding it removes the race rather than narrowing it.
+//
+// Matched by PATH PREFIX, not substring: `.claude` must not also exclude
+// `.claude-plugin/`, which carries the plugin and marketplace manifests the smoke
+// script exists to validate. `.worktrees/` and `.claude/worktrees/` hold nested
+// checkouts, so copying them turns each case into minutes of I/O.
+const COPY_SKIP = ['.git', 'node_modules', '.worktrees', '.claude', '.adlc'].map((d) => resolve(REPO, d));
+const copyFilter = (src) => !COPY_SKIP.some((skip) => src === skip || src.startsWith(`${skip}/`));
+
 test('claude-code-plugin-smoke passes against the repo', () => {
   const result = spawnSync(process.execPath, [SCRIPT, REPO], { encoding: 'utf8' });
   assert.strictEqual(result.status, 0, `smoke test failed:\n${result.stderr}`);
@@ -26,7 +44,7 @@ test('claude-code-plugin-smoke fails on a bare, non-namespaced command recommend
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     const skillPath = join(tmpRepo, 'plugins/adlc-claude-code/skills/adlc/SKILL.md');
@@ -57,7 +75,7 @@ test('claude-code-plugin-smoke fails on a bare command recommendation in the hom
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     const docPath = join(tmpRepo, 'docs/integrations/claude-code.md');
@@ -84,7 +102,7 @@ test('claude-code-plugin-smoke fails on a bare command recommendation in README.
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     const readmePath = join(tmpRepo, 'README.md');
@@ -111,7 +129,7 @@ test('claude-code-plugin-smoke fails on a bare command recommendation in the des
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     const adrPath = join(tmpRepo, 'docs/adr/0003-adlc-claude-code-plugin.md');
@@ -140,7 +158,7 @@ test('claude-code-plugin-smoke fails on a bare command recommendation in an arbi
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // A brand-new doc, nested two levels deep, never listed in any allowlist.
@@ -170,7 +188,7 @@ test('claude-code-plugin-smoke fails on a bare reference to a newly-added comman
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // Add a brand-new command file the guard has never been told about by name.
@@ -221,7 +239,7 @@ test('claude-code-plugin-smoke escapes regex metacharacters in derived command n
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // A command name containing a literal "." — if spliced unescaped into the
@@ -256,7 +274,7 @@ test('claude-code-plugin-smoke fails cleanly (not an uncaught crash) on a comman
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // An unescaped "(" in the alternation would throw "Unterminated group" from
@@ -286,7 +304,7 @@ test('claude-code-plugin-smoke does not let a degenerate empty-name command file
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // A degenerate command filename that derives an empty name.
@@ -322,7 +340,7 @@ test('claude-code-plugin-smoke follows a symlinked directory under docs/ instead
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     // A real directory OUTSIDE docs/, containing a bare-command doc, linked
@@ -365,7 +383,7 @@ test('claude-code-plugin-smoke follows a symlinked directory under the plugin gu
   try {
     cpSync(REPO, tmpRepo, {
       recursive: true,
-      filter: (src) => !src.includes(`${resolve(REPO, '.git')}`) && !src.includes(`${resolve(REPO, 'node_modules')}`),
+      filter: copyFilter,
     });
 
     const externalDir = join(tmpRepo, '..', 'adlc-cc-smoke-external-commands');
@@ -400,15 +418,11 @@ test('claude-code-plugin-smoke follows a symlinked directory under the plugin gu
 // this lockstep from day one and never drifted. These four tests are the ones
 // whose absence let the bug ship.
 //
-// The repo copy filters .worktrees/ and .claude/ as well as .git/node_modules:
-// this repo carries 8 worktrees, and copying them makes each case take minutes.
+// Uses the same exclusion set as every other copy here (see COPY_SKIP): nested
+// checkouts and live .adlc/ state are never what a throwaway copy needs.
 function copyRepoFast() {
   const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-lockstep-'));
-  const skip = ['.git', 'node_modules', '.worktrees', '.claude'].map((d) => resolve(REPO, d));
-  cpSync(REPO, tmpRepo, {
-    recursive: true,
-    filter: (src) => !skip.some((s) => src === s || src.startsWith(s + '/')),
-  });
+  cpSync(REPO, tmpRepo, { recursive: true, filter: copyFilter });
   return tmpRepo;
 }
 

@@ -65,6 +65,31 @@ const isIgnored = (path) => isIgnoredIn(REPO_ROOT, path);
 // by anything actually wrong with the pattern. Make the directory genuinely
 // exist for the duration of the probe instead, removing exactly what this
 // created (deepest first) so a pre-existing directory is never touched.
+// Probe in a THROWAWAY repo carrying this repo's .gitignore, never in the live
+// checkout (#416).
+//
+// withDirEnsured below has to materialise the directory for the probe to be
+// meaningful, and doing that at REPO_ROOT mutates the working tree other tests
+// are concurrently reading: the `scripts` segment runs its files in parallel, and
+// claude-code-plugin-smoke.test.mjs cpSync's the repo, so it saw `.adlc/manifest.d`
+// returned by readdir and gone by lstat — an ENOENT that looked like a bug in the
+// forest writer and was only ever this probe's cleanup.
+//
+// Verdicts are unchanged: every negation under test is declared in the ROOT
+// .gitignore and names a repo-relative path, and check-ignore resolves patterns
+// against the repo it is run in, so a temp repo holding the same file answers
+// identically — while being immune to local .git/info/exclude entries.
+function withProbeRepo(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-gitignore-probe-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
+    writeFileSync(join(dir, '.gitignore'), readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8'));
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function withDirEnsured(repoRoot, relDir, fn) {
   const parts = relDir.split('/').filter(Boolean);
   const created = [];
@@ -88,13 +113,15 @@ const negations = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
 
 test('every .gitignore negation is effective, not shadowed by a later blanket rule', () => {
   assert.ok(negations.length > 0, 'expected .gitignore to declare negations — otherwise this guard is vacuous');
-  const dead = negations.filter((pattern) => {
-    const sample = samplePath(pattern);
-    const body = pattern.slice(1);
-    return body.endsWith('/')
-      ? withDirEnsured(REPO_ROOT, body.slice(0, -1), () => isIgnored(sample))
-      : isIgnored(sample);
-  });
+  const dead = withProbeRepo((probeRoot) =>
+    negations.filter((pattern) => {
+      const sample = samplePath(pattern);
+      const body = pattern.slice(1);
+      return body.endsWith('/')
+        ? withDirEnsured(probeRoot, body.slice(0, -1), () => isIgnoredIn(probeRoot, sample))
+        : isIgnoredIn(probeRoot, sample);
+    }),
+  );
   assert.deepEqual(
     dead,
     [],
