@@ -310,15 +310,30 @@ test('stripAclBestEffort invokes exactly the right platform tool with the right 
   const exec = (...args) => calls.push(args);
 
   stripAclBestEffort('/some/path', { platform: 'darwin', exec });
-  assert.deepEqual(calls, [['chmod', ['-N', '/some/path'], { stdio: 'ignore' }]]);
+  assert.deepEqual(calls, [['chmod', ['-N', '/some/path'], { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } }]]);
 
   calls.length = 0;
   stripAclBestEffort('/some/path', { platform: 'linux', exec });
-  assert.deepEqual(calls, [['setfacl', ['-b', '/some/path'], { stdio: 'ignore' }]]);
+  assert.deepEqual(calls, [['setfacl', ['-b', '/some/path'], { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } }]]);
 
   calls.length = 0;
   stripAclBestEffort('/some/path', { platform: 'win32', exec });
   assert.deepEqual(calls, [], 'an unsupported platform must not invoke any ACL tool');
+});
+
+test('stripAclBestEffort never hands the child process the caller\'s full environment — only PATH', () => {
+  let capturedEnv;
+  const exec = (_command, _args, opts) => { capturedEnv = opts.env; };
+  const originalKey = process.env.ADLC_MANIFEST_KEY;
+  process.env.ADLC_MANIFEST_KEY = 'a-secret-that-must-never-reach-the-child';
+  try {
+    stripAclBestEffort('/some/path', { platform: 'darwin', exec });
+    assert.deepEqual(Object.keys(capturedEnv), ['PATH'], 'the child environment must contain ONLY PATH, nothing else from process.env');
+    assert.ok(!('ADLC_MANIFEST_KEY' in capturedEnv), 'the signing key must never be present in the ACL-strip child process environment');
+  } finally {
+    if (originalKey === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = originalKey;
+  }
 });
 
 test('stripAclBestEffort tolerates the tool simply being absent (ENOENT) — nothing more it can do there', () => {

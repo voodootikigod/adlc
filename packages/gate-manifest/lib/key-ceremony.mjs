@@ -46,6 +46,14 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * having removed a real entry would not be caught here.
  * `platform`/`exec` are injectable (test injection — this repo's CI runs one OS at a
  * time, so the platform branch not currently running on cannot otherwise be exercised).
+ * Spawns `chmod`/`setfacl` with an environment stripped down to just `PATH` (needed for
+ * the OS to resolve the command name at all) — NOT the caller's full `process.env`.
+ * Without this, a legacy-import ceremony (where `ADLC_MANIFEST_KEY` is already present
+ * in the environment before this ever runs) would hand the signing key straight to a
+ * child process by default, in reach of anything that can read that child's
+ * environment: a malicious `chmod`/`setfacl` shim earlier on PATH, or another local
+ * account able to read `/proc/<pid>/environ`-equivalent process state. Neither tool
+ * needs any OTHER inherited variable to do its job (round 10 finding).
  * @param {string} path
  * @param {{platform?: string, exec?: Function}} [options]
  */
@@ -53,7 +61,7 @@ export function stripAclBestEffort(path, { platform = process.platform, exec = e
   if (platform !== 'darwin' && platform !== 'linux') return;
   const [command, args] = platform === 'darwin' ? ['chmod', ['-N', path]] : ['setfacl', ['-b', path]];
   try {
-    exec(command, args, { stdio: 'ignore' });
+    exec(command, args, { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } });
   } catch (err) {
     if (err.code === 'ENOENT') return; // the tool itself is not installed — nothing more we can do
     throw new Error(

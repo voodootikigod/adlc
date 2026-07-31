@@ -158,9 +158,15 @@ argument, so it is safe under tracing even with no `set +x` needed:
 ```sh
 gate-manifest generate-key --output /path/outside/the/repo/manifest-key.txt
 # fingerprint: <sha256 of the key — safe to log, not the key itself>
+
+# STOP — store the CONTENTS of that file in your secret manager (CI secret store,
+# vault, etc.) now, before going any further. The file is the ONLY durable copy of
+# this key: deleting it before it is stored elsewhere makes the key permanently
+# unrecoverable, and every signature ever made with it becomes unverifiable.
+
 IFS= read -r ADLC_MANIFEST_KEY < /path/outside/the/repo/manifest-key.txt
 export ADLC_MANIFEST_KEY
-rm /path/outside/the/repo/manifest-key.txt
+rm /path/outside/the/repo/manifest-key.txt   # only once the key is durably stored elsewhere
 gate-manifest record spec-lint --ticket T-42
 gate-manifest verify --json    # → { ..., "signed": true }
 ```
