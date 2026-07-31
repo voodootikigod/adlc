@@ -322,6 +322,21 @@ export function writeKeyHandoffFile(path, key, options = {}) {
     // the actual key bytes to a different file). stripAclBestEffort still necessarily
     // takes a path (the external chmod -N/setfacl -b tools have no fd-argument form),
     // so it alone keeps the pathname-check-then-open TOCTOU already documented above.
+    //
+    // RESIDUAL WINDOW even with this ordering (round 13 finding, sharpening the same
+    // already-documented ACL limitation, not a new independently-closable bug): on a
+    // filesystem where the CHOSEN DIRECTORY carries an inheritable ACL entry, that ACE
+    // attaches to this file at the moment openSync creates it — atomically, at the OS
+    // level, before this process ever gets to run fchmodSync or stripAcl. A principal
+    // already granted access by that inherited ACE could in principle open the file
+    // for reading during the (small, but nonzero) interval between creation and
+    // stripAcl's external-process call completing, and an already-open descriptor is
+    // not revoked by a later chmod/ACL change. Fully closing this needs either an
+    // OS-native "create with no inherited ACL" primitive (not exposed by Node's `fs`
+    // without a native addon) or doing the ACL removal via a syscall instead of
+    // spawning an external process (removing the window's dominant cost, not the
+    // window itself) — both out of scope for this slice, the same category of
+    // limitation as the win32 refusal and the mode-bit-only verification below.
     fchmodSync(fd, 0o600);
     // Narrow (not close) the inherited-ACL exposure — an ACE inherited from the chosen
     // directory's ancestry grants access independent of POSIX mode bits, so removing it
