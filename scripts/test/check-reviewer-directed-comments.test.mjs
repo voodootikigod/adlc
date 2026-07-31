@@ -142,6 +142,26 @@ test('catches an unstarred /* ... */ block comment body line (round-1 finding 2)
   ]), 2);
 });
 
+test('catches a violation whose text starts at column 0 of the CLOSING line of a block comment', () => {
+  // The closing line's comment text must be captured in full, from its own start —
+  // not off by one — and must still be classified as comment content, not dropped.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '/* round 9 finding',
+    'not a defect */',
+  ]), 2);
+});
+
+test('a closed block comment does not leak into later unrelated content — two single-category phrases stay separate', () => {
+  // If the block-comment CLOSE were not correctly tracked, everything after it would
+  // be wrongly folded into one giant open span, combining this review-reference with
+  // the later, otherwise-unrelated classification phrase into a false violation.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '/* round 9 finding, purely descriptive, no classification word here */',
+    'const untouched = 1;',
+    '// not a defect, purely descriptive, no review reference here',
+  ]), 0);
+});
+
 test('reports the exact file and starting line of a violation', () => {
   const deps = {
     resolveBase: () => 'origin/main',
