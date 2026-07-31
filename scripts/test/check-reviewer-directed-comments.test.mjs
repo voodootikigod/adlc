@@ -151,12 +151,15 @@ test('catches a violation whose text starts at column 0 of the CLOSING line of a
   ]), 2);
 });
 
-test('a closed block comment does not leak into later unrelated content — two single-category phrases stay separate', () => {
-  // If the block-comment CLOSE were not correctly tracked, everything after it would
-  // be wrongly folded into one giant open span, combining this review-reference with
-  // the later, otherwise-unrelated classification phrase into a false violation.
+test('a closed MULTI-LINE block comment does not leak into later unrelated content — two single-category phrases stay separate', () => {
+  // The block spans TWO lines (opens on line 1, closes on line 2) so the `inBlock`
+  // state machine is actually engaged — a single-line /* ... */ never touches it. If
+  // the close were not correctly tracked, every remaining line in the file would be
+  // wrongly folded into one giant open span, combining this review-reference with the
+  // later, otherwise-unrelated classification phrase into a false violation.
   assert.equal(runAllAdded('lib/thing.mjs', [
-    '/* round 9 finding, purely descriptive, no classification word here */',
+    '/* round 9 finding, purely descriptive,',
+    '   no classification word in this block */',
     'const untouched = 1;',
     '// not a defect, purely descriptive, no review reference here',
   ]), 0);
