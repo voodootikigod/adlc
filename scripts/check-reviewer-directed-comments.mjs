@@ -59,8 +59,17 @@ import { resolveBase, changedFiles, git } from '@adlc/core';
 // scoped to exactly one path belongs to that path, so no header text is ever
 // consulted for file identity here, only line numbers (which core.quotepath cannot
 // affect, only header display — so it is not set here).
+// --text: a `.gitattributes` rule marking a path `binary` (author-controlled, not a
+// trust root) makes a plain `git diff` emit "Binary files ... differ" with no `@@`
+// hunks — touchedLineNumbers then sees nothing and the file is silently unscanned
+// regardless of its real textual content. --text forces a textual diff regardless
+// of that classification. --no-ext-diff/--no-textconv: an external diff driver or
+// textconv filter (also author-configurable via .gitattributes) could otherwise
+// transform what this scan actually sees away from the real added/removed lines.
+const FORCE_TEXTUAL_DIFF = ['--text', '--no-ext-diff', '--no-textconv'];
+
 function gitDiffForFile(base, file) {
-  return git(['diff', base, '--', file]);
+  return git(['diff', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
 }
 
 // A base-vs-INDEX diff, for the same reason changedFiles() (@adlc/core) unions
@@ -70,7 +79,7 @@ function gitDiffForFile(base, file) {
 // content. Scanning only the worktree diff would pass a tree locally that is not
 // the one about to be committed.
 function gitDiffForFileStaged(base, file) {
-  return git(['diff', '--cached', base, '--', file]);
+  return git(['diff', '--cached', ...FORCE_TEXTUAL_DIFF, base, '--', file]);
 }
 
 // The file's content AS STAGED (what `git commit` would record), independent of
@@ -163,11 +172,14 @@ function touchedLineNumbers(diffText) {
 }
 
 // A comment referencing the review PROCESS itself — not the code's own behavior.
-const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breviewer?\s+(flagged|found)\b|\breview\s+status\b/i;
+// `review(?:er)?` (not the earlier `reviewer?`, which only matched "reviewe"/
+// "reviewer" — the trailing `?` applied to the single preceding "r", never making
+// "review" itself a match) so both "review found ..." and "reviewer found ..." hit.
+const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breview(?:er)?\s+(flagged|found)\b|\breview\s+status\b/i;
 
 // A word or phrase that CLASSIFIES or DISMISSES what the comment describes,
 // rather than stating a fact about it.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -175,8 +187,10 @@ const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\b
 // headers. "closed"/"fixed"/"resolved" alone are far too common in ordinary comments
 // ("fixed the null-check bug") to use as a bare classification word, so this only
 // fires on the narrow, specific "review status: <verdict>" shape rather than either
-// word in isolation.
-const REVIEW_STATUS_ASSERTION = /\breview\s+status\s*:?\s*(closed|resolved|done|passed|complete)\b/i;
+// word in isolation. `\**` tolerates light Markdown emphasis around the verdict word
+// ("review status: **closed**"), which is otherwise just formatting on the same
+// historical incident (a self-congratulatory status heading), not a different claim.
+const REVIEW_STATUS_ASSERTION = /\breview\s+status\s*:?\s*\**\s*(closed|resolved|done|passed|complete)\b/i;
 
 // This file and its own test file necessarily quote the exact phrases above, as
 // documentation and as test fixtures — that is what they exist to describe/exercise,

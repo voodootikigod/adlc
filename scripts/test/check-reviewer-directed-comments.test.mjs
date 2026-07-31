@@ -644,3 +644,59 @@ test('REAL git diff: staged-diff scoping does not leak another file\'s staged ad
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('REAL git diff: a .gitattributes `binary` rule does not hide a textual violation (round-6 finding 1)', () => {
+  // A `.gitattributes` rule marking a path `binary` (author-controlled, not a trust
+  // root) makes a plain `git diff` emit "Binary files ... differ" with no `@@`
+  // hunks. Without forcing a textual diff, touchedLineNumbers sees nothing and the
+  // file is silently unscanned regardless of its real content.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-binary-attr-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'target.mjs'), 'context\n');
+    execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, '.gitattributes'), 'target.mjs binary\n');
+    writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
+    assert.equal(code, 2, 'a .gitattributes binary rule must not hide a real textual violation');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('recognizes "review" (not just "reviewer") followed by "found"/"flagged" (round-6 finding 2)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Review found this; not a defect',
+  ]), 2);
+});
+
+test('"reviewer flagged" still matches (regression: the review(?:er)? fix must not narrow the existing reviewer case)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Reviewer flagged this; not a defect',
+  ]), 2);
+});
+
+test('recognizes "false positive" as a classification phrase (round-6 finding 2)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Round 3 review: false positive',
+  ]), 2);
+});
+
+test('recognizes "cleared to proceed" as a classification phrase (round-6 finding 2)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Post adversarial review round 3 — cleared to proceed',
+  ]), 2);
+});
+
+test('recognizes "review status" with light Markdown emphasis around the verdict word (round-6 finding 2)', () => {
+  assert.equal(runAllAdded('SPEC.md', [
+    '## Review status: **closed**',
+  ]), 2);
+});
