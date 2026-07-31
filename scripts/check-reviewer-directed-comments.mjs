@@ -12,21 +12,40 @@
  * caught only by a live adversarial-review pass rather than a deterministic
  * gate: a spec doc with self-congratulatory "review status: closed" headers,
  * a test-file comment calling a known limitation "not a defect ... deferred
- * as a follow-on" (codex round 9, CRITICAL), and a code comment on a still-open
- * limitation calling it "not a new independently-closable bug" (a later round,
- * also CRITICAL). This gate turns that repeated finding into a mechanical check
- * instead of relying on the next review pass to catch it again.
+ * as a follow-on", and a code comment on a still-open limitation calling it
+ * "not a new independently-closable bug". This gate turns that repeated
+ * finding into a mechanical check instead of relying on the next review pass
+ * to catch it again.
  *
- * Scans only ADDED lines in the diff against the freeze baseline (parseAddedLines),
- * not the whole file — an unrelated edit to a file that already contains an
- * old-style reference must not fail this gate. Test files are exempt: a comment
- * explaining why a REGRESSION TEST exists ("regression test for round N finding")
- * documents a fixed, verified behavior — it does not classify an open one, and is
- * the normal, universal way software documents what a test guards against.
+ * Scans the FULL comment SPAN (block comment or a contiguous run of line
+ * comments) surrounding every ADDED line in the diff against the freeze
+ * baseline — reconstructed from the actual post-change file content, not just
+ * the diff's added lines. A span whose classification half is unchanged
+ * context and whose review-reference half is newly added (or vice versa)
+ * still gets caught, because the whole span is scanned, not just its added
+ * lines in isolation.
+ *
+ * There is deliberately NO blanket exemption for test files: a dismissive
+ * comment about a still-open limitation is exactly as much an
+ * authority-smuggling risk inside a test file as anywhere else — that is
+ * literally how one of the three historical incidents happened. The only
+ * exemption is this file and its own test file by exact path, because both
+ * legitimately need to quote the trigger phrases verbatim as documentation
+ * and test fixtures, not as live guidance about an open finding.
+ *
+ * Comment detection intentionally treats ANY line containing `//` or `#`
+ * (even mid-line, even inside what might be a string literal) as starting a
+ * comment span, and tracks `/* ... *\/` block state across ALL lines
+ * regardless of a leading `*`. Telling "real comment" from "text that merely
+ * contains these characters" would need a real tokenizer for every language
+ * this repo's files use; the established convention here (see
+ * scripts/block-secret-exposure.mjs) is to accept the rare false positive
+ * over the risk of a silent bypass.
  *
  * Exit codes: 0 = clean, 2 = a violation was found, 1 = could not compute the diff.
  */
 
+import { readFileSync } from 'node:fs';
 import { resolveBase, changedFiles, gitDiff } from '@adlc/core';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 
@@ -37,52 +56,93 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // rather than stating a fact about it.
 const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b/i;
 
-const COMMENT_LINE = /^\s*(\/\/|\*(?!\/)|\/\*|#)/;
-
-const TEST_FILE = /(^|\/)test\/|\.test\.mjs$|\.spec\.mjs$/;
-
-// This file's OWN header necessarily quotes the exact phrases it detects, as concrete
-// historical examples — that is documentation of the pattern, not an instance of it.
-// Exempting it by path (not by weakening the pattern itself) keeps the check strict
-// everywhere else.
-const SELF_EXEMPT_FILE = 'scripts/check-reviewer-directed-comments.mjs';
+// This file and its own test file necessarily quote the exact phrases above, as
+// documentation and as test fixtures — that is what they exist to describe/exercise,
+// not an instance of the pattern itself. Exempted by exact path (not by weakening the
+// pattern, and not by exempting any broader category like "every test file").
+const SELF_EXEMPT_FILES = new Set([
+  'scripts/check-reviewer-directed-comments.mjs',
+  'scripts/test/check-reviewer-directed-comments.test.mjs',
+]);
 
 /**
- * Group consecutive added comment lines within one file into blocks, so a
- * multi-line comment is checked as a whole rather than line by line (the review
- * reference and the classification phrase are often on different lines of the
- * same comment).
- * @param {{file: string, lineNo: number, content: string}[]} addedLines
- * @returns {{file: string, startLine: number, text: string}[]}
+ * Per-line comment classification for one file's full text. A line is "in a comment"
+ * if it is inside an open `/* ... *\/` block, OR it contains `//`/`#` anywhere (an
+ * inline trailing comment counts). `text` is the comment-only portion of the line.
+ * @param {string[]} lines
+ * @returns {{isComment: boolean, text: string}[]}
  */
-function groupCommentBlocks(addedLines) {
-  const blocks = [];
-  let current = null;
-  for (const { file, lineNo, content } of addedLines) {
-    if (COMMENT_LINE.test(content)) {
-      if (current && current.file === file && lineNo === current.lastLine + 1) {
-        current.text += `\n${content}`;
-        current.lastLine = lineNo;
+function classifyLines(lines) {
+  const result = [];
+  let inBlock = false;
+  for (const line of lines) {
+    if (inBlock) {
+      const endIdx = line.indexOf('*/');
+      if (endIdx === -1) {
+        result.push({ isComment: true, text: line });
       } else {
-        current = { file, startLine: lineNo, lastLine: lineNo, text: content };
-        blocks.push(current);
+        result.push({ isComment: true, text: line.slice(0, endIdx + 2) });
+        inBlock = false;
       }
-    } else {
-      current = null;
+      continue;
+    }
+    const blockIdx = line.indexOf('/*');
+    const lineCommentMatch = line.match(/\/\/|#/);
+    const lineIdx = lineCommentMatch ? line.indexOf(lineCommentMatch[0]) : -1;
+    if (blockIdx !== -1 && (lineIdx === -1 || blockIdx < lineIdx)) {
+      const endIdx = line.indexOf('*/', blockIdx + 2);
+      if (endIdx === -1) {
+        inBlock = true;
+        result.push({ isComment: true, text: line.slice(blockIdx) });
+      } else {
+        result.push({ isComment: true, text: line.slice(blockIdx, endIdx + 2) });
+      }
+      continue;
+    }
+    if (lineIdx !== -1) {
+      result.push({ isComment: true, text: line.slice(lineIdx) });
+      continue;
+    }
+    result.push({ isComment: false, text: '' });
+  }
+  return result;
+}
+
+/**
+ * Every maximal comment span in `lines` (1-indexed start/end), each carrying its full
+ * joined text regardless of which lines within it were actually changed.
+ * @param {string[]} lines
+ * @returns {{startLine: number, endLine: number, text: string}[]}
+ */
+function commentSpans(lines) {
+  const classified = classifyLines(lines);
+  const spans = [];
+  let start = -1;
+  let texts = [];
+  for (let i = 0; i < classified.length; i++) {
+    if (classified[i].isComment) {
+      if (start === -1) start = i;
+      texts.push(classified[i].text);
+    } else if (start !== -1) {
+      spans.push({ startLine: start + 1, endLine: i, text: texts.join('\n') });
+      start = -1;
+      texts = [];
     }
   }
-  return blocks;
+  if (start !== -1) spans.push({ startLine: start + 1, endLine: classified.length, text: texts.join('\n') });
+  return spans;
 }
 
 /**
  * @param {string} [base] override for the freeze baseline (test injection)
- * @param {{resolveBase?: Function, changedFiles?: Function, gitDiff?: Function}} [deps]
+ * @param {{resolveBase?: Function, changedFiles?: Function, gitDiff?: Function, readFile?: Function}} [deps]
  * @returns {number} exit code
  */
 export function check(base, deps = {}) {
   const resolveBaseFn = deps.resolveBase ?? resolveBase;
   const changedFilesFn = deps.changedFiles ?? changedFiles;
   const gitDiffFn = deps.gitDiff ?? gitDiff;
+  const readFileFn = deps.readFile ?? ((file) => readFileSync(file, 'utf8'));
 
   const resolvedBase = base ?? resolveBaseFn();
   if (!resolvedBase) {
@@ -100,15 +160,39 @@ export function check(base, deps = {}) {
     return 1;
   }
 
-  const testFiles = new Set(files.filter((f) => TEST_FILE.test(f)));
-  const addedLines = parseAddedLines(diffText).filter(
-    (l) => !testFiles.has(l.file) && l.file !== SELF_EXEMPT_FILE,
-  );
-  const blocks = groupCommentBlocks(addedLines);
+  const addedByFile = new Map();
+  for (const { file, lineNo } of parseAddedLines(diffText)) {
+    if (SELF_EXEMPT_FILES.has(file)) continue;
+    if (!addedByFile.has(file)) addedByFile.set(file, new Set());
+    addedByFile.get(file).add(lineNo);
+  }
 
-  const violations = blocks.filter(
-    (b) => REVIEW_PROCESS_REFERENCE.test(b.text) && CLASSIFICATION_PHRASE.test(b.text),
-  );
+  const violations = [];
+  let spanCount = 0;
+  for (const file of files) {
+    const addedLineNos = addedByFile.get(file);
+    if (!addedLineNos || addedLineNos.size === 0) continue;
+
+    let content;
+    try {
+      content = readFileFn(file);
+    } catch {
+      continue; // deleted or unreadable at the diff's "after" state — nothing to scan
+    }
+
+    const spans = commentSpans(content.split('\n'));
+    for (const span of spans) {
+      let touchedByAddedLine = false;
+      for (let ln = span.startLine; ln <= span.endLine; ln++) {
+        if (addedLineNos.has(ln)) { touchedByAddedLine = true; break; }
+      }
+      if (!touchedByAddedLine) continue;
+      spanCount++;
+      if (REVIEW_PROCESS_REFERENCE.test(span.text) && CLASSIFICATION_PHRASE.test(span.text)) {
+        violations.push({ file, startLine: span.startLine });
+      }
+    }
+  }
 
   if (violations.length > 0) {
     console.error(`check-reviewer-directed-comments: ${violations.length} comment(s) reference this project's own review process alongside a classification/dismissal phrase:`);
@@ -123,7 +207,7 @@ export function check(base, deps = {}) {
     return 2;
   }
 
-  console.log(`check-reviewer-directed-comments: ${blocks.length} added comment block(s) checked, clean.`);
+  console.log(`check-reviewer-directed-comments: ${spanCount} comment span(s) touched by the diff checked, clean.`);
   return 0;
 }
 
