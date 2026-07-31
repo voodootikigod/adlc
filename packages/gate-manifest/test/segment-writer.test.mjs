@@ -767,4 +767,33 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       );
     } finally { clean(root); }
   });
+
+  // Pins the EXACT bounded-read cap value (64 KiB), not just "very large":
+  // a first line whose JSON body is exactly 65536 bytes places its trailing
+  // newline at byte offset 65536 — the 65537th byte, one past a 65536-byte
+  // read window. A cap even one byte larger would read far enough to see
+  // that newline and successfully parse this line; the real cap must not.
+  it('the bounded-read cap is exactly 64 KiB: a first line whose newline sits one byte past it is refused', () => {
+    const { root, dir } = gitRepo('feat/exact-cap-boundary');
+    try {
+      activate(dir);
+      const branch = 'feat/exact-cap-boundary';
+      const slug = deriveSlug(branch);
+      const boundaryName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      const base = { seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', data: { padding: '' }, files: {}, prev: null, anchor: null, branch };
+      const baseLength = JSON.stringify(base).length;
+      const CAP = 65536;
+      assert.ok(baseLength < CAP, 'precondition: padding must be able to grow, not shrink, to hit the cap exactly');
+      base.data.padding = 'x'.repeat(CAP - baseLength);
+      const firstLine = JSON.stringify(base);
+      assert.equal(firstLine.length, CAP, 'precondition: the first line body is exactly at the cap — its trailing newline is the (CAP+1)th byte');
+      writeFileSync(segmentPath(dir, boundaryName), `${firstLine}\n`);
+      rmSync(lineagePath(dir), { force: true });
+
+      assert.equal(
+        recoverOpenSegment(dir, { cwd: root }), null,
+        'a first line landing its newline exactly one byte past the cap must be refused, not parsed',
+      );
+    } finally { clean(root); }
+  });
 });
