@@ -248,12 +248,17 @@ function chainIsIntact(lines, key = null) {
 // ones cannot make a tampered entry silently disappear the way the round 4/5
 // bug did. Mirrors reassign.mjs's planManifestMigration, which already
 // applies this exact per-entry filter for the identical reason.
+//
+// No try/catch around JSON.parse here (mutation-gate: a mutant swallowing a
+// parse failure as "signed" survived, because there is no reachable input
+// that could ever trigger one): every caller runs chainIsIntact(lines, key)
+// first and only reaches this filter when it returned true, and
+// chainIsIntact's own loop already JSON.parses every one of these SAME
+// `lines` and returns false on the first failure — so by the time this
+// filter runs, all of `lines` is guaranteed parseable. A defensive catch
+// here would be untestable dead code, not a real safety net.
 function signedEntriesOnly(lines, key) {
-  return lines.filter((line) => {
-    let entry;
-    try { entry = JSON.parse(line); } catch { return false; }
-    return entrySigValid(key, entry);
-  });
+  return lines.filter((line) => entrySigValid(key, JSON.parse(line)));
 }
 
 /**

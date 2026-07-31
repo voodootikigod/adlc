@@ -8,7 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -793,6 +793,33 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
         /first entry could not be read or parsed/,
         'a malformed first entry must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
       );
+    } finally { clean(root); }
+  });
+
+  // firstEntryOf's OTHER catch — openSync itself failing — is a distinct code
+  // path from the JSON.parse failure above: discoverSegments already
+  // confirmed this name exists as a regular file at discovery time (its own
+  // lstatSync), so the only way open can still fail here is a permissions
+  // change or a TOCTOU race between discovery and this read. A chmod'd-
+  // unreadable file exercises exactly that gap deterministically.
+  it('a segment that exists but cannot be opened (permission denied) makes recovery refuse, never silently excludes it', { skip: process.platform === 'win32' }, () => {
+    const { root, dir } = gitRepo('feat/unreadable-first-entry');
+    try {
+      activate(dir);
+      const slug = deriveSlug('feat/unreadable-first-entry');
+      const unreadableName = `${slug}-${generateSegmentUlid()}.jsonl`;
+      const unreadablePath = segmentPath(dir, unreadableName);
+      writeFileSync(unreadablePath, `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/unreadable-first-entry' })}\n`);
+      chmodSync(unreadablePath, 0o000);
+      rmSync(lineagePath(dir), { force: true });
+
+      try {
+        assert.throws(
+          () => recoverOpenSegment(dir, { cwd: root }),
+          /first entry could not be read or parsed/,
+          'a segment that cannot be opened must refuse the whole recovery attempt, not be silently excluded as a non-candidate',
+        );
+      } finally { chmodSync(unreadablePath, 0o644); } // restore before clean()'s rmSync
     } finally { clean(root); }
   });
 
