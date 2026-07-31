@@ -552,15 +552,27 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    // Snapshot BEFORE, and compare only the delta. Scanning all of TMPDIR for the
-    // staging prefix would fail on litter from unrelated earlier runs — this test
-    // owns what THIS invocation leaves behind, nothing else.
-    const stagingBefore = new Set(
-      readdirSync(tmpdir()).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry)),
-    );
+    // GIVE THE CHILD ITS OWN TMPDIR, so "was staging left behind" is a question
+    // about THIS cli.mjs and nothing else.
+    //
+    // cli.mjs stages under os.tmpdir(), which is shared machine-wide. A
+    // before/after delta over the shared directory attributes to this test every
+    // adlc-agy-XXXXXX that appears during its window — including ones created by a
+    // cli.mjs running in another worktree, another agent session, or a second CI
+    // job on the same host. That is what made this flake load-dependent: the
+    // assertion failed on a directory this test never created, while the CLI's own
+    // cleanup was correct (it rmSync's staging before process.exit, on every path).
+    // Isolating TMPDIR makes the observation exact instead of probabilistic, so the
+    // guarantee below is asserted immediately and strictly — no polling, no grace.
+    const stagingRoot = join(work, 'staging');
+    mkdirSync(stagingRoot, { recursive: true });
 
     const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
-      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      env: {
+        ...sealedEnv(home, `${binDir}:/usr/bin:/bin`),
+        TMPDIR: stagingRoot,
+        ADLC_AGY_TIMEOUT_MS: '60000',
+      },
       stdio: 'ignore',
     });
 
@@ -589,9 +601,7 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
     );
     // Staging must not survive a cancelled install either — the `finally` cannot
     // run once a signal terminates us, so the interrupt handler has to do it.
-    const leaked = readdirSync(tmpdir())
-      .filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry))
-      .filter((entry) => !stagingBefore.has(entry));
+    const leaked = readdirSync(stagingRoot).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry));
     assert.deepEqual(leaked, [], `cancelled install left staging behind: ${leaked.join(', ')}`);
   } finally {
     if (leaderPidValue) reap(leaderPidValue);
@@ -675,12 +685,17 @@ test('bin/cli.mjs Ctrl-C during the VERSION PROBE reaps the worker and reports c
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const stagingBefore = new Set(
-      readdirSync(tmpdir()).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry)),
-    );
+    // Own TMPDIR for the same reason as the Ctrl-C test above: a shared-tmpdir
+    // delta blames this test for staging created by any other concurrent cli.mjs.
+    const stagingRoot = join(work, 'staging');
+    mkdirSync(stagingRoot, { recursive: true });
 
     const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
-      env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
+      env: {
+        ...sealedEnv(home, `${binDir}:/usr/bin:/bin`),
+        TMPDIR: stagingRoot,
+        ADLC_AGY_TIMEOUT_MS: '60000',
+      },
       stdio: 'ignore',
     });
     const exited = new Promise((resolveExit) => child.on('exit', (code) => resolveExit(code)));
@@ -697,9 +712,7 @@ test('bin/cli.mjs Ctrl-C during the VERSION PROBE reaps the worker and reports c
       `a probe worker outlived cancellation (pid ${workerPidValue})`,
     );
     // Cancelling the probe must not go on to start an install.
-    const created = readdirSync(tmpdir())
-      .filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry))
-      .filter((entry) => !stagingBefore.has(entry));
+    const created = readdirSync(stagingRoot).filter((entry) => /^adlc-agy-[A-Za-z0-9]{6}$/.test(entry));
     assert.deepEqual(created, [], `an install was staged after cancellation: ${created.join(', ')}`);
   } finally {
     if (workerPidValue) reap(workerPidValue);
