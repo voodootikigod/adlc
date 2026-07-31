@@ -418,3 +418,40 @@ describe('P4 dispatch usage — stream integrity and the attestation boundary', 
     assert.equal(result.usageStatus, 'reported');
   });
 });
+
+describe('P4 dispatch usage — `total` is a cross-check, not a requirement', () => {
+  const step = (tokens) => JSON.stringify({ type: 'step_finish', part: { tokens } });
+
+  it('parses the DOCUMENTED StepFinishPart shape, which has no `total`', async () => {
+    // opencode's generated SDK schema defines input/output/reasoning + cache
+    // only. Requiring `total` — an extra the installed runtime happens to emit
+    // — made every contract-shaped carrier from another provider or version
+    // parse as unreported, so the feature recorded nothing on those routes.
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ input: 10, output: 2, reasoning: 3, cache: { read: 4, write: 1 } }),
+    });
+    assert.equal(result.usageStatus, 'reported');
+    assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 5, cachedTokens: 5 });
+  });
+
+  it('still rejects a stream whose supplied totals are self-inconsistent', async () => {
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ total: 999, input: 10, output: 2, reasoning: 3, cache: { read: 1, write: 1 } }),
+    });
+    assert.equal(result.usageStatus, 'unreported', 'the cross-check still applies when total IS given');
+  });
+
+  it('rejects a malformed `total` rather than ignoring it', async () => {
+    const { result } = await dispatchWith('opencode', {
+      stdout: step({ total: -1, input: 10, output: 2, reasoning: 3, cache: { read: 0, write: 0 } }),
+    });
+    assert.equal(result.usageStatus, 'unreported');
+  });
+
+  it('the real captures — which DO carry total — are unchanged', async () => {
+    const a = await dispatchWith('opencode', { stdout: fixture('opencode-run-json.jsonl') });
+    assert.deepEqual(a.result.usage, { inputTokens: 53458, outputTokens: 3, cachedTokens: 0 });
+    const b = await dispatchWith('opencode', { stdout: fixture('opencode-run-json-reasoning.jsonl') });
+    assert.deepEqual(b.result.usage, { inputTokens: 62779, outputTokens: 66, cachedTokens: 0 });
+  });
+});

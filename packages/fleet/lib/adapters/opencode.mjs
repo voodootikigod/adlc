@@ -55,6 +55,7 @@ export function parseUsage(output) {
   let cacheWrite = 0;
   let outputRaw = 0;
   let reasoning = 0;
+  let sawTotal = true;   // cleared by any carrier that omits the optional `total`
 
   const { events, malformed } = jsonLines(output);
   // A truncated or partly-unparseable stream cannot be summed honestly: the
@@ -74,11 +75,20 @@ export function parseUsage(output) {
     // assemble into a complete-looking triple that normalizeUsage cannot reject
     // — certifying an empty `tokens: {}` as a measured FREE call. A payload we
     // do not fully understand is unreported, not zero (adversarial-review).
-    const parts = [tokens.input, tokens.total, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write];
-    if (!parts.every(isCount)) return UNREPORTED;
+    // The DOCUMENTED StepFinishPart shape is input/output/reasoning + cache
+    // counters; `total` is an extra the installed runtime happens to emit and
+    // is NOT required (adversarial-review compatibility). Requiring it made
+    // every contract-shaped carrier from another provider or version parse as
+    // unreported — the feature silently recording nothing on those routes.
+    const documented = [tokens.input, tokens.output, tokens.reasoning, tokens.cache?.read, tokens.cache?.write];
+    if (!documented.every(isCount)) return UNREPORTED;
+    // `total` is optional, but if it IS present it must be a clean count — a
+    // malformed one is a payload we do not understand, not one to ignore.
+    if (tokens.total !== undefined && !isCount(tokens.total)) return UNREPORTED;
     sawCarrier = true;
+    if (tokens.total === undefined) sawTotal = false;
+    else total += tokens.total;
     input += tokens.input;
-    total += tokens.total;
     outputRaw += tokens.output;
     reasoning += tokens.reasoning;
     cacheRead += tokens.cache.read;
@@ -114,13 +124,22 @@ export function parseUsage(output) {
   // and is unreported rather than silently mis-booked (adversarial-review).
   const cached = cacheRead + cacheWrite;
   const generated = outputRaw + reasoning;
-  const cacheInsideInput = input + generated === total;
-  const cacheOutsideInput = input + generated + cached === total;
-  if (!cacheInsideInput && !cacheOutsideInput) return UNREPORTED;
+
+  // `generated` (output + reasoning) is the answer under BOTH accountings, so
+  // it is what gets recorded. `total` is not needed to compute it — only to
+  // CHECK it. When every carrier supplied a total, verify the stream is
+  // self-consistent under one of the two accountings and reject it otherwise;
+  // when total is absent (the documented shape), record generated directly
+  // rather than discarding a perfectly good measurement.
+  if (sawTotal) {
+    const cacheInsideInput = input + generated === total;
+    const cacheOutsideInput = input + generated + cached === total;
+    if (!cacheInsideInput && !cacheOutsideInput) return UNREPORTED;
+  }
 
   const usage = normalizeUsage({
     inputTokens: input,
-    outputTokens: cacheInsideInput ? total - input : total - input - cached,
+    outputTokens: generated,
     cachedTokens: cached,
   });
   if (usage === null) return UNREPORTED;
