@@ -54,14 +54,29 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * environment: a malicious `chmod`/`setfacl` shim earlier on PATH, or another local
  * account able to read `/proc/<pid>/environ`-equivalent process state. Neither tool
  * needs any OTHER inherited variable to do its job (round 10 finding).
+ *
+ * Invoked by a TRUSTED ABSOLUTE PATH, not a bare command name resolved through the
+ * caller's PATH: a PATH-resolved shim receives the handoff pathname as an argument and
+ * could rename the underlying inode to a hidden capture location before creating a
+ * decoy at the original path — this call's own fd-bound mode check (writeKeyHandoffFile
+ * uses fstatSync/the open descriptor, not the pathname) would still pass, and the
+ * secret write still lands correctly on the renamed inode via that same descriptor, but
+ * the file the OPERATOR is told to read from would then be the attacker's decoy while
+ * the real key sits at the attacker's hidden path (round 11 finding). An absolute path
+ * is not resolved through PATH at all, closing this specific redirection vector for
+ * this specific subprocess (it does not address an attacker who can already write to
+ * system binary directories — a materially higher bar than prepending to PATH).
  * @param {string} path
  * @param {{platform?: string, exec?: Function}} [options]
  */
+const ACL_TOOL_PATHS = { darwin: '/bin/chmod', linux: '/usr/bin/setfacl' };
+
 export function stripAclBestEffort(path, { platform = process.platform, exec = execFileSync } = {}) {
   if (platform !== 'darwin' && platform !== 'linux') return;
-  const [command, args] = platform === 'darwin' ? ['chmod', ['-N', path]] : ['setfacl', ['-b', path]];
+  const command = ACL_TOOL_PATHS[platform];
+  const args = platform === 'darwin' ? ['-N', path] : ['-b', path];
   try {
-    exec(command, args, { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } });
+    exec(command, args, { stdio: 'ignore', env: {} });
   } catch (err) {
     if (err.code === 'ENOENT') return; // the tool itself is not installed — nothing more we can do
     throw new Error(
@@ -145,13 +160,28 @@ export function computeKeyFingerprint(key) {
  * splitNulPaths (this codebase's existing helper, `@adlc/core`, #249) splits on the raw
  * bytes before decoding and fails closed on anything that cannot round-trip through
  * UTF-8 — the same aliasing risk a decode-then-split would reintroduce here.
+ *
+ * Both Git invocations run with `ADLC_MANIFEST_KEY` deleted from their environment
+ * (everything else in `process.env` is preserved, since Git legitimately depends on
+ * things like `HOME` and `GIT_*` config vars this call has no business stripping). This
+ * ceremony's own contract requires the signing key to already be present in the
+ * environment during a legacy import (and it may still be exported during rotation) —
+ * without this, a PATH-resolved `git` shim would receive it by simple environment
+ * inheritance, the same exposure class stripAclBestEffort closes for its own subprocess
+ * (round 11 finding).
  * @param {{cwd?: string}} [options]
  * @returns {string[]}
  */
+function envWithoutManifestKey() {
+  const { ADLC_MANIFEST_KEY: _omit, ...rest } = process.env;
+  return rest;
+}
+
 export function repoBoundaryRoots({ cwd = process.cwd() } = {}) {
-  const commonDirRaw = git(['rev-parse', '--git-common-dir'], { cwd }).trim();
+  const env = envWithoutManifestKey();
+  const commonDirRaw = git(['rev-parse', '--git-common-dir'], { cwd, env }).trim();
   const commonDir = resolve(cwd, commonDirRaw);
-  const worktreeListRaw = git(['worktree', 'list', '--porcelain', '-z'], { cwd, encoding: null });
+  const worktreeListRaw = git(['worktree', 'list', '--porcelain', '-z'], { cwd, env, encoding: null });
   const roots = [commonDir];
   for (const field of splitNulPaths(worktreeListRaw)) {
     if (field.startsWith('worktree ')) roots.push(field.slice('worktree '.length));

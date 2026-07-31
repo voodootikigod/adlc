@@ -122,6 +122,32 @@ function makeGitRepo() {
   return root;
 }
 
+test('repoBoundaryRoots never hands its Git children the signing key, even when it is exported (round 11 finding)', () => {
+  const root = makeGitRepo();
+  const shimDir = mkdtempSync(join(tmpdir(), 'adlc-git-shim-'));
+  const markerPath = join(shimDir, 'leaked.txt');
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  const shimPath = join(shimDir, 'git');
+  // A forwarding shim: if it ever sees the key in its own environment, it records that
+  // fact, then delegates to the REAL git so repoBoundaryRoots's own logic still works —
+  // this proves absence of the leak, not just "the function still returns something".
+  writeFileSync(shimPath, `#!/bin/sh\nif [ -n "$ADLC_MANIFEST_KEY" ]; then echo leaked > "${markerPath}"; fi\nexec "${realGit}" "$@"\n`);
+  execFileSync('chmod', ['+x', shimPath]);
+  const originalPath = process.env.PATH;
+  const originalKey = process.env.ADLC_MANIFEST_KEY;
+  process.env.PATH = `${shimDir}:${originalPath}`;
+  process.env.ADLC_MANIFEST_KEY = 'a-secret-that-must-never-reach-git';
+  try {
+    const roots = repoBoundaryRoots({ cwd: root });
+    assert.ok(roots.length > 0, 'sanity: repoBoundaryRoots must still resolve correctly through the shim');
+    assert.equal(existsSync(markerPath), false, 'the Git shim must never have observed ADLC_MANIFEST_KEY in its environment');
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalKey === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = originalKey;
+  }
+});
+
 test('repoBoundaryRoots includes the current worktree root', () => {
   const root = makeGitRepo();
   const roots = repoBoundaryRoots({ cwd: root });
@@ -305,30 +331,30 @@ test('a genuine ACL-strip failure aborts the whole ceremony and cleans up, rathe
 
 // ── stripAclBestEffort: real inherited ACL, real removal (round 7 finding) ─────────
 
-test('stripAclBestEffort invokes exactly the right platform tool with the right arguments', () => {
+test('stripAclBestEffort invokes exactly the right TRUSTED ABSOLUTE PATH tool with the right arguments', () => {
   const calls = [];
   const exec = (...args) => calls.push(args);
 
   stripAclBestEffort('/some/path', { platform: 'darwin', exec });
-  assert.deepEqual(calls, [['chmod', ['-N', '/some/path'], { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } }]]);
+  assert.deepEqual(calls, [['/bin/chmod', ['-N', '/some/path'], { stdio: 'ignore', env: {} }]]);
 
   calls.length = 0;
   stripAclBestEffort('/some/path', { platform: 'linux', exec });
-  assert.deepEqual(calls, [['setfacl', ['-b', '/some/path'], { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } }]]);
+  assert.deepEqual(calls, [['/usr/bin/setfacl', ['-b', '/some/path'], { stdio: 'ignore', env: {} }]]);
 
   calls.length = 0;
   stripAclBestEffort('/some/path', { platform: 'win32', exec });
   assert.deepEqual(calls, [], 'an unsupported platform must not invoke any ACL tool');
 });
 
-test('stripAclBestEffort never hands the child process the caller\'s full environment — only PATH', () => {
+test('stripAclBestEffort never hands the child process the caller\'s environment at all', () => {
   let capturedEnv;
   const exec = (_command, _args, opts) => { capturedEnv = opts.env; };
   const originalKey = process.env.ADLC_MANIFEST_KEY;
   process.env.ADLC_MANIFEST_KEY = 'a-secret-that-must-never-reach-the-child';
   try {
     stripAclBestEffort('/some/path', { platform: 'darwin', exec });
-    assert.deepEqual(Object.keys(capturedEnv), ['PATH'], 'the child environment must contain ONLY PATH, nothing else from process.env');
+    assert.deepEqual(capturedEnv, {}, 'the child environment must be empty — an absolute-path invocation needs no PATH lookup and no other inherited variable');
     assert.ok(!('ADLC_MANIFEST_KEY' in capturedEnv), 'the signing key must never be present in the ACL-strip child process environment');
   } finally {
     if (originalKey === undefined) delete process.env.ADLC_MANIFEST_KEY;
@@ -346,11 +372,11 @@ test('stripAclBestEffort FAILS CLOSED when the tool exists but genuinely fails (
   const exec = () => { throw new Error('permission denied'); };
   assert.throws(
     () => stripAclBestEffort('/some/path', { platform: 'darwin', exec }),
-    /ACL removal via `chmod` failed/,
+    /ACL removal via `\/bin\/chmod` failed/,
   );
   assert.throws(
     () => stripAclBestEffort('/some/path', { platform: 'linux', exec }),
-    /ACL removal via `setfacl` failed/,
+    /ACL removal via `\/usr\/bin\/setfacl` failed/,
   );
 });
 
