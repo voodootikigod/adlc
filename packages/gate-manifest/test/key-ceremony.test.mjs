@@ -279,6 +279,28 @@ test('verifies the mode the filesystem actually enforced, not merely that chmod 
 
 // ── stripAclBestEffort: real inherited ACL, real removal (round 7 finding) ─────────
 
+test('stripAclBestEffort invokes exactly the right platform tool with the right arguments', () => {
+  const calls = [];
+  const exec = (...args) => calls.push(args);
+
+  stripAclBestEffort('/some/path', { platform: 'darwin', exec });
+  assert.deepEqual(calls, [['chmod', ['-N', '/some/path'], { stdio: 'ignore' }]]);
+
+  calls.length = 0;
+  stripAclBestEffort('/some/path', { platform: 'linux', exec });
+  assert.deepEqual(calls, [['setfacl', ['-b', '/some/path'], { stdio: 'ignore' }]]);
+
+  calls.length = 0;
+  stripAclBestEffort('/some/path', { platform: 'win32', exec });
+  assert.deepEqual(calls, [], 'an unsupported platform must not invoke any ACL tool');
+});
+
+test('stripAclBestEffort swallows a failing exec call — a missing tool must never break the ceremony', () => {
+  const exec = () => { throw new Error('command not found'); };
+  assert.doesNotThrow(() => stripAclBestEffort('/some/path', { platform: 'darwin', exec }));
+  assert.doesNotThrow(() => stripAclBestEffort('/some/path', { platform: 'linux', exec }));
+});
+
 test('stripAclBestEffort removes a real ACL entry inherited from the parent directory', { skip: process.platform !== 'darwin' }, () => {
   // POSIX mode bits alone would not have caught this: the file below reads back as
   // 0600 the whole time, yet a real ACE grants `everyone` read access until stripped.

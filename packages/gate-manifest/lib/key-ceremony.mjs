@@ -39,14 +39,17 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
  * but does not close — the exposure the mode-bit check alone cannot see. Every failure
  * (tool absent, unsupported, permission denied) is swallowed; this call must never be
  * the reason the ceremony fails, since the POSIX mode-bit check remains the actual gate.
+ * `platform`/`exec` are injectable (test injection — this repo's CI runs one OS at a
+ * time, so the platform branch not currently running on cannot otherwise be exercised).
  * @param {string} path
+ * @param {{platform?: string, exec?: Function}} [options]
  */
-export function stripAclBestEffort(path) {
+export function stripAclBestEffort(path, { platform = process.platform, exec = execFileSync } = {}) {
   try {
-    if (process.platform === 'darwin') {
-      execFileSync('chmod', ['-N', path], { stdio: 'ignore' });
-    } else if (process.platform === 'linux') {
-      execFileSync('setfacl', ['-b', path], { stdio: 'ignore' });
+    if (platform === 'darwin') {
+      exec('chmod', ['-N', path], { stdio: 'ignore' });
+    } else if (platform === 'linux') {
+      exec('setfacl', ['-b', path], { stdio: 'ignore' });
     }
   } catch {
     /* best-effort only — see doc comment above */
