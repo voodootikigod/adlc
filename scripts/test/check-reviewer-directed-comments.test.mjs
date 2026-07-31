@@ -700,3 +700,32 @@ test('recognizes "review status" with light Markdown emphasis around the verdict
     '## Review status: **closed**',
   ]), 2);
 });
+
+test('REAL git diff: a repo-local textconv filter that strips the violation from diff display does not hide it (--no-textconv)', () => {
+  // A `.gitattributes` diff driver + repo-local `diff.<driver>.textconv` config
+  // (both author-controlled, not trust roots) can transform what a plain `git diff`
+  // shows. Here the textconv strips the violating line, making the transformed old
+  // and new sides IDENTICAL — a plain `git diff --text` (no --no-textconv) shows
+  // NOTHING AT ALL for this file, not just a redacted line. --no-textconv forces the
+  // real, untransformed content.
+  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-textconv-'));
+  const originalCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+    writeFileSync(join(repo, 'target.mjs'), 'context\n');
+    execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+    writeFileSync(join(repo, '.gitattributes'), 'target.mjs diff=stripviolation\n');
+    execFileSync('git', ['config', 'diff.stripviolation.textconv', "sed '/not a defect/d'"], { cwd: repo });
+    writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+    process.chdir(repo);
+    const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
+    assert.equal(code, 2, 'a repo-local textconv filter must not hide a real textual violation');
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
