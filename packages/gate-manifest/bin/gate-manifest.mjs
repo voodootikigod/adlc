@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // gate-manifest — ADLC C11 hash-chained agentic provenance ledger.
-// Verbs: record | verify | show | attest
+// Verbs: record | verify | show | attest | repair-chain | generate-key
 
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { record, parseData, ticketCompletionReminder } from '../lib/record.mjs';
@@ -10,6 +10,7 @@ import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
+import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
 
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
@@ -17,7 +18,8 @@ const USAGE =
   '       verify [--json] [--allow-legacy-unsigned]\n' +
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
-  '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]';
+  '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
+  '       generate-key --output <path> [--allow-key-import] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -31,6 +33,8 @@ const { values: flags, positionals } = parseArgs({
     write:  { type: 'boolean', default: false },
     'attest-unsigned': { type: 'boolean', default: false },
     'allow-legacy-unsigned': { type: 'boolean', default: false },
+    output: { type: 'string' },
+    'allow-key-import': { type: 'boolean', default: false },
   },
 });
 
@@ -157,5 +161,63 @@ if (verb === 'repair-chain') {
   pass();
 }
 
+// ── generate-key ─────────────────────────────────────────────────────────────
+if (verb === 'generate-key') {
+  if (!flags.output) {
+    opError('usage: gate-manifest generate-key --output <path> [--allow-key-import] [--json]');
+  }
+
+  // The import exception NEVER accepts the key as a CLI argument — argv is visible via
+  // `ps`, xtrace, shell history, and any command-logging harness, the exact class of
+  // exposure this whole ceremony exists to prevent (see scripts/block-secret-exposure
+  // .mjs's own incident history). It is sourced ONLY from the already-established,
+  // already-audited ADLC_MANIFEST_KEY environment resolution (getKey(), Layer 2) —
+  // an operator who wants to import a legacy key exports it first, exactly as every
+  // other signing/verifying command in this codebase already expects.
+  const importKey = flags['allow-key-import'] ? getKey() : undefined;
+  if (flags['allow-key-import'] && !importKey) {
+    opError(
+      'generate-key: --allow-key-import requires ADLC_MANIFEST_KEY to be set in the environment — '
+      + 'the import exception never accepts a key as a CLI argument (visible via ps, xtrace, and shell history).',
+    );
+  }
+
+  let resolved;
+  try {
+    resolved = resolveCeremonyKey({ importKey, allowKeyImport: flags['allow-key-import'] });
+  } catch (err) {
+    opError(err.message);
+  }
+
+  try {
+    writeKeyHandoffFile(flags.output, resolved.key);
+  } catch (err) {
+    opError(err.message);
+  }
+
+  const fingerprint = computeKeyFingerprint(resolved.key);
+
+  // The key itself NEVER appears below — only its handoff PATH and its FINGERPRINT
+  // (a one-way sha256 commitment, not the key). See lib/key-ceremony.mjs's header for
+  // why: this repo has already had a key echoed into a session transcript once.
+  if (resolved.imported) {
+    console.error(
+      'generate-key: used the AUDITED IMPORT EXCEPTION — a caller-supplied key was written to the '
+      + 'handoff path instead of a freshly generated one. Doctor reporting of this exception is wired '
+      + 'in a later slice, alongside the full adoption transaction.',
+    );
+  }
+
+  if (flags.json) {
+    printJson({ path: flags.output, fingerprint, imported: resolved.imported });
+  } else {
+    console.log(`key written to ${flags.output} (mode 0600) — store it in your secret manager, then delete this file.`);
+    console.log(`fingerprint: ${fingerprint}`);
+    console.log('This ceremony does not yet run the custody checkpoint or adopt the key — that is wired into a later slice.');
+  }
+
+  pass();
+}
+
 // Unknown verb
-opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain`);
+opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key`);

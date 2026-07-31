@@ -351,7 +351,7 @@ test('an apply failure names the preserved draft, and keeps it', () => {
     const result = spawnSync(process.execPath, [BIN, 'edit', 'T1', '--write', '--json'], {
       encoding: 'utf8',
       cwd: root,
-      env: { ...process.env, EDITOR: process.execPath, VISUAL: process.execPath },
+      env: { ...process.env, ADLC_MANIFEST_KEY: '', EDITOR: process.execPath, VISUAL: process.execPath },
     });
 
     assert.notEqual(result.status, 0, 'apply must fail while the lock is held');

@@ -3,6 +3,7 @@ import './global.css';
 import { Archivo, Azeret_Mono } from 'next/font/google';
 import type { Metadata } from 'next';
 import { SITE_URL } from '@/lib/routes.mjs';
+import { Analytics } from '@vercel/analytics/next';
 
 // Archivo is a grotesque out of documentary and industrial printing, and it
 // carries a width axis — which is what lets the record's statement clause be set
@@ -101,6 +102,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
         <RootProvider theme={{ enabled: false }}>
           {children}
         </RootProvider>
+        <Analytics />
       </body>
     </html>
   );

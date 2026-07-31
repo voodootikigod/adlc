@@ -144,10 +144,29 @@ middle line breaks all subsequent links and is detected by `verify`.
 
 The hash chain alone proves **internal consistency**, not **authorship**. `sha256` is a public, keyless function: anyone who can write `manifest.jsonl` can recompute every `prev` and forge a clean chain from scratch. On its own the chain is therefore *not* cryptographic provenance — do not represent a hash-chain-only pass as in-toto/SLSA attestation.
 
-To get real provenance, set a secret signing key:
+To get real provenance, generate a secret signing key with the ceremony below — not
+`export ADLC_MANIFEST_KEY="$(openssl rand -hex 32)"`. That form, and equally
+`export ADLC_MANIFEST_KEY="$(cat handoff-file)"`, put the key in a shell **assignment**:
+with tracing enabled (`set -x`, or any CI runner that logs commands) the shell prints the
+command AFTER expanding it, so the key ends up in the terminal or build log regardless of
+where the value came from. `generate-key` never prints the key on any stream — it writes
+it to a mode-0600 file at an operator-chosen path OUTSIDE the repository, and prints only
+the path and a one-way fingerprint. Load it with `read`, not `export VAR="$(...)"`: `read`
+writes directly into the variable without the value ever appearing as an expanded command
+argument, so it is safe under tracing even with no `set +x` needed:
 
 ```sh
-export ADLC_MANIFEST_KEY="$(openssl rand -hex 32)"   # store in your CI secret manager, never in the repo
+gate-manifest generate-key --output /path/outside/the/repo/manifest-key.txt
+# fingerprint: <sha256 of the key — safe to log, not the key itself>
+
+# STOP — store the CONTENTS of that file in your secret manager (CI secret store,
+# vault, etc.) now, before going any further. The file is the ONLY durable copy of
+# this key: deleting it before it is stored elsewhere makes the key permanently
+# unrecoverable, and every signature ever made with it becomes unverifiable.
+
+IFS= read -r ADLC_MANIFEST_KEY < /path/outside/the/repo/manifest-key.txt
+export ADLC_MANIFEST_KEY
+rm /path/outside/the/repo/manifest-key.txt   # only once the key is durably stored elsewhere
 gate-manifest record spec-lint --ticket T-42
 gate-manifest verify --json    # → { ..., "signed": true }
 ```

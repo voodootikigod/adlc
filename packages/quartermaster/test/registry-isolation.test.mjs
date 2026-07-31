@@ -14,6 +14,11 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { loadRegistry } from '../lib/load.mjs';
+
+// Minimal adapter catalog for the direct loadRegistry tests below (the CLI path
+// supplies the real one from fleet; quartermaster itself declares no deps).
+const CATALOG = { opencode: { aliases: ['default'], forcesModel: true }, codex: { aliases: ['default'], forcesModel: true } };
 
 const FLEET_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet', 'bin', 'fleet.mjs');
 
@@ -252,7 +257,11 @@ test('--json carries the resolved seats and the argv, not just the legacy plan',
   const byId = Object.fromEntries(json.quartermaster.seats.map((s) => [s.id, s]));
   assert.equal(byId.T900.channel, 'frontier');
   assert.equal(byId.T900.model, 'operator/frontier-model');
-  assert.deepEqual(byId.T900.argv.args, ['run', '-m', 'operator/frontier-model', '<prompt>']);
+  // `--format json` is load-bearing (T152): it is the only opencode mode that
+  // emits the step_finish token events the P4 usage parser reads. The dry-run
+  // argv must mirror the live argv exactly, or automation pre-checks a command
+  // the real dispatch does not run.
+  assert.deepEqual(byId.T900.argv.args, ['run', '--format', 'json', '-m', 'operator/frontier-model', '<prompt>']);
   assert.equal(byId.T901.channel, 'mid');
   assert.equal(byId.T901.model, 'zai/glm-5.2');
   // The legacy scheduler plan is still there — this is an addition, not a swap.
@@ -361,4 +370,33 @@ test('the legacy dry-run rejects a --model the chosen adapter cannot force', () 
   const bad = dryRun(repo, { XDG_CONFIG_HOME: emptyConfig }, ['--adapter', 'cursor', '--model', 'vendor/frontier']);
   assert.notEqual(bad.code, 0);
   assert.match(bad.stderr, /cannot be honoured by the "cursor" adapter/);
+});
+
+// ---- §8a: the registry digest binds a dispatch to the bytes that authorized it ----
+
+test('loadRegistry returns a digest that CHANGES when the registry bytes change', () => {
+  const a = makeOperatorHome();
+  const changed = operatorRegistry();
+  changed.channels.mid.model = 'zai/glm-5.3';   // an operator edits one channel
+  changed.modelProviders.opencode['zai/glm-5.3'] = 'zai';  // ...validly
+  const b = makeOperatorHome(changed);
+  cleanup.push(a.home, b.home);
+
+  const one = loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: a.path }, repoDir: '/repo', adapters: CATALOG });
+  const two = loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: b.path }, repoDir: '/repo', adapters: CATALOG });
+
+  assert.match(one.registryDigest, /^sha256:[0-9a-f]{64}$/);
+  assert.notEqual(one.registryDigest, two.registryDigest, 'a mutated registry must not reuse its predecessor\'s digest');
+});
+
+test('the digest is stable for identical bytes at a different path', () => {
+  // It commits to CONTENT, not location — two operators running the same
+  // registry must produce correlatable evidence.
+  const a = makeOperatorHome();
+  const b = makeOperatorHome();
+  cleanup.push(a.home, b.home);
+  assert.equal(
+    loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: a.path }, repoDir: '/repo', adapters: CATALOG }).registryDigest,
+    loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: b.path }, repoDir: '/repo', adapters: CATALOG }).registryDigest
+  );
 });

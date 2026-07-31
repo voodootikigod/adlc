@@ -14,6 +14,7 @@ import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
+import { usageEvidence } from './adapters/usage.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
 import { makeReviewRunner } from './review-runner.mjs';
 import { builderPrompt, fixPrompt } from './charters.mjs';
@@ -294,7 +295,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           // repeating across strikes can never reach the repeated-error signal.
           const output = `${res.output}\ncommit failed: ${e.message}`;
           write(`commit failed: ${e.message}\n`);
-          return { exitCode: 1, output, timedOut: false };
+          // SPREAD `res`, do not rebuild it: the model call already happened and
+          // its usage was already parsed. Returning a fresh three-field object
+          // dropped usage/usageStatus/usageRaw, so a worker that succeeded but
+          // produced nothing committable — a routine outcome — had its real
+          // spend recorded as 'unreported' (adversarial-review).
+          return { ...res, exitCode: 1, output, timedOut: false };
         }
       }
       return { ...res, blocked: /TICKET-BLOCKED/.test(res.output) };
@@ -399,8 +405,73 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     // Best-effort evidence: never block the run on a recorder error (AC5).
-    recordGate: ({ ticket, phase, ok }) => {
-      try { io.adlc(['gate-manifest', 'record', phase, '--ticket', ticket.id, ok ? '--pass' : '--fail'], {}); }
+    /**
+     * §8a: ONE usage carrier per dispatch, written immediately after the call
+     * it accounts for and independent of any later verdict.
+     *
+     * Enriched from the quartermaster SEAT, because counters alone cannot be
+     * priced or filtered: two channels can run the same model over different
+     * transports (subscription vs metered API), and an operator auditing
+     * overflow needs to tell them apart (adversarial-review HIGH). The seat is
+     * the only place that knows, so the provenance is attached here rather
+     * than guessed downstream.
+     *
+     * `registryDigest` is deliberately ABSENT: nothing in the quartermaster
+     * produces one today, and §8a says record these siblings when supplied and
+     * omit them cleanly otherwise. Emitting a placeholder would be a fabricated
+     * provenance claim — the same failure the no-fabrication rule forbids for
+     * counters.
+     */
+    recordDispatchUsage: ({ ticket, result }) => {
+      const data = usageEvidence(result);
+      if (!data) return;
+      const entry = seats?.get(ticket?.id);
+      const seat = entry?.seat;
+      if (data.usage && seat) {
+        data.usage = {
+          ...data.usage,
+          ...(seat.provider ? { provider: seat.provider } : {}),
+          ...(seat.model ? { model: seat.model } : {}),
+          ...(entry?.assignment?.tier ? { tier: entry.assignment.tier } : {}),
+        };
+      }
+      if (entry?.route?.channel) data.channel = entry.route.channel;
+      if (seat?.transport) data.transport = seat.transport;
+      // Binds the charge to the registry BYTES in force at dispatch time. The
+      // operator registry is mutable, so channel/transport labels alone cannot
+      // prove which registry version chose them.
+      if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
+
+      // Recording stays NON-BLOCKING — a recorder problem must never fail a
+      // build — but it must not be SILENT. `io.adlc` is spawnSync-shaped, so an
+      // ordinary CLI failure (missing binary, invalid chain, signing error)
+      // comes back as a nonzero `status` and never throws: a bare try/catch
+      // lets it pass as success. The carrier then simply does not exist, and a
+      // missing entry is indistinguishable from a dispatch that never happened
+      // — unknown silently becoming zero, one layer up from the counters
+      // (adversarial-review).
+      const warn = (why) => console.error(
+        `warning: ${ticket.id} dispatch usage was NOT recorded (${why}). This call's spend is `
+        + 'MISSING from the ledger, not zero — phase totals will under-report until it is re-recorded.'
+      );
+      let res;
+      try { res = io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
+      catch (e) { warn(e.message); return; }
+      if (res?.error) warn(res.error.message);
+      else if (res?.signal) warn(`recorder killed by ${res.signal}`);
+      else if (typeof res?.status !== 'number') warn('recorder produced no exit status');
+      else if (res.status !== 0) warn(`recorder exited ${res.status}: ${(res.stderr ?? '').trim()}`.trim());
+    },
+
+    recordGate: ({ ticket, phase, ok, data }) => {
+      // §8a: `data` carries the dispatch's parsed usage (or just its
+      // usageStatus when the harness reported nothing). Passed only when
+      // present, so a recorder with nothing to say still emits the same argv it
+      // always did — this stays a pure addition to the evidence, not a change
+      // to what an existing entry looks like.
+      const argv = ['gate-manifest', 'record', phase, '--ticket', ticket.id, ok ? '--pass' : '--fail'];
+      if (data !== undefined) argv.push('--data', JSON.stringify(data));
+      try { io.adlc(argv, {}); }
       catch { /* evidence is best-effort */ }
     },
 

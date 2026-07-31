@@ -82,6 +82,15 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     log(`${ticket.id} strike ${strikes}: building`);
 
     const build = await effects.dispatch({ ticket, strike: strikes, deadEnds });
+    // §8a: usage belongs to the DISPATCH that incurred it, not to a downstream
+    // verdict. Emitted here — immediately after every completed dispatch and
+    // before any branch can return — so a blocked worker, a flail exit, or a
+    // strike that never clears the gate still books the tokens it really
+    // spent. Tying this to the gate verdict instead hid whole calls: a 100k
+    // first strike that failed its gate followed by a 20k repair reported only
+    // 20k (adversarial-review MEDIUM). This mirrors the P5 rule exactly —
+    // exactly one carrier entry per model call.
+    effects.recordDispatchUsage?.(build);
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the second strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };
@@ -105,6 +114,8 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
 
     gatePassed = true;
+    // Verdict evidence ONLY — the spend rode its own entry at dispatch time.
+    // Carrying it here too would double-count the call.
     effects.record?.('p4', true);
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
@@ -132,6 +143,9 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     }
     return { state: 'merged', strikes, deadEnds, gatePassed, prosecution };
   }
+  // Verdict evidence only; every strike already booked its own spend at
+  // dispatch time, so a run that never cleared the gate still has a complete
+  // per-call record rather than just its last attempt.
   if (!gatePassed) effects.record?.('p4', false);
   return fail('two-strike cap reached');
 }

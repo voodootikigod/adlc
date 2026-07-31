@@ -151,7 +151,7 @@ test('previewArgv renders the argv through the adapter itself, spawning nothing'
     prompt: 'build T1',
   });
   assert.equal(argv.cmd, 'opencode');
-  assert.deepEqual(argv.args, ['run', '-m', 'zai/glm-5.2', 'build T1']);
+  assert.deepEqual(argv.args, ['run', '--format', 'json', '-m', 'zai/glm-5.2', 'build T1']);
 });
 
 test('previewArgv honours the default sentinel exactly as dispatch would', async () => {

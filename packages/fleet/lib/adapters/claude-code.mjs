@@ -14,6 +14,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnAsync } from '../spawn-async.mjs';
 import { modelArgs } from './_shared.mjs';
+import { UNREPORTED, normalizeUsage, reported } from './usage.mjs';
 
 export const name = 'claude-code';
 export const pool = 'default';
@@ -96,16 +97,76 @@ function defaultWriteJson(path, obj) {
  *
  * @param exec injectable spawn: (cmd, args, opts) => { status, stdout, stderr, signal }
  */
+/**
+ * Parse usage out of a `claude -p --output-format json` result document (T152,
+ * §8a). Unlike opencode's JSONL event stream this mode emits ONE JSON object,
+ * whose `usage` block is the Anthropic shape:
+ *
+ *   {"type":"result","subtype":"success","result":"ok",
+ *    "usage":{"input_tokens":10,"output_tokens":54,
+ *             "cache_read_input_tokens":17615,"cache_creation_input_tokens":21332}}
+ *
+ * The mapping is deliberately identical to @adlc/core's `usageFromAnthropic`:
+ * cache READ and cache CREATION both count as cached, since both are input the
+ * provider billed at a cache rate rather than fresh input.
+ *
+ * Returns `{usage, usageStatus, usageRaw}`, or UNREPORTED when stdout is not
+ * that document (plain-text mode, a crash, a truncated pipe) or its counters
+ * are not clean counts.
+ */
+export function parseUsage(output) {
+  let doc;
+  try { doc = JSON.parse(String(output ?? '').trim()); }
+  catch { return UNREPORTED; }
+  if (doc === null || typeof doc !== 'object') return UNREPORTED;
+
+  const raw = doc.usage;
+  if (raw === null || typeof raw !== 'object') return UNREPORTED;
+
+  const usage = normalizeUsage({
+    inputTokens: raw.input_tokens,
+    outputTokens: raw.output_tokens,
+    cachedTokens: (raw.cache_read_input_tokens ?? 0) + (raw.cache_creation_input_tokens ?? 0),
+  });
+  if (usage === null) return UNREPORTED;
+
+  return reported(usage, {
+    input: raw.input_tokens,
+    output: raw.output_tokens,
+    cache: { read: raw.cache_read_input_tokens ?? 0, write: raw.cache_creation_input_tokens ?? 0 },
+  });
+}
+
+/**
+ * The assistant's text lives in `result` on the same document, so `output`
+ * keeps meaning what it meant under `--output-format text`. Null when this is
+ * not a result document, so the caller falls back to raw stdout instead of
+ * reporting an empty transcript.
+ */
+export function parseText(output) {
+  try {
+    const doc = JSON.parse(String(output ?? '').trim());
+    return typeof doc?.result === 'string' ? doc.result : null;
+  } catch { return null; }
+}
+
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, model }) {
   // §4c force half: the registry's model goes on the command line explicitly —
   // never the harness's ambient default.
-  const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'text', ...modelArgs('--model', model)];
+  //
+  // `json` rather than `text` so usage is observable at all; the assistant text
+  // is recovered from the document's `result` below, so downstream consumers
+  // (the flail transcript, the TICKET-BLOCKED probe) see what they saw before.
+  const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'json', ...modelArgs('--model', model)];
   const res = await exec('claude', args, { cwd: worktree, env, timeout: timeoutMs });
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
+  const stdout = `${res.stdout ?? ''}`;
+  const text = parseText(stdout);
   return {
     exitCode: typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1),
-    output: `${res.stdout ?? ''}${res.stderr ?? ''}`,
+    output: text === null ? `${stdout}${res.stderr ?? ''}` : `${text}${res.stderr ?? ''}`,
     timedOut,
+    ...parseUsage(stdout),
   };
 }
 
