@@ -938,3 +938,13 @@ test('an ordinary division expression is not misread as a regex literal', () => 
     'const half = total / 2; // round 9 finding: not a defect',
   ]), 2);
 });
+
+test('recognizes "harmless" and "leave this/it closed" (round-11 finding 4)', () => {
+  for (const phrase of [
+    'Round 9 finding: harmless; leave this closed.',
+    'Round 9 finding: harmless.',
+    'Review found this, but it is harmless; leave it closed.',
+  ]) {
+    assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
+  }
+});
