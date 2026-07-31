@@ -36,7 +36,7 @@ import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
 // case): the repo root resolves through the symlink to /private/tmp/repo while an
 // operator-chosen path built from $TMPDIR does not, so the two are compared as if they
 // were unrelated trees even when one is genuinely inside the other.
-function realpathOfDeepestExisting(path) {
+export function realpathOfDeepestExisting(path) {
   let current = resolve(path);
   const tail = [];
   for (;;) {

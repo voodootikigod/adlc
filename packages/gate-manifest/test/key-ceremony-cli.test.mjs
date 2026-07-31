@@ -132,12 +132,32 @@ test('CLI: refuses to overwrite an existing file at the handoff path, and leaves
   }
 });
 
-test('CLI: --output is required', () => {
+test('CLI: --output is required, and the usage message names the exact expected flag syntax', () => {
   const { repoDir } = makeDirs();
   try {
     const result = run(['generate-key'], repoDir);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /--output/);
+    // Pins the exact usage string, not just that "--output" appears somewhere — guards
+    // the literal flag syntax (angle brackets around the placeholder names) against
+    // corruption, not merely the presence of an unrelated substring.
+    assert.ok(
+      result.stderr.includes('generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]'),
+      `expected the exact usage string in stderr, got: ${result.stderr}`,
+    );
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: the top-level usage (no verb given) also names the exact generate-key flag syntax', () => {
+  const { repoDir } = makeDirs();
+  try {
+    const result = run([], repoDir);
+    assert.notEqual(result.status, 0);
+    assert.ok(
+      result.stderr.includes('generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]'),
+      `expected the exact usage string in stderr, got: ${result.stderr}`,
+    );
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }

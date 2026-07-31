@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +18,7 @@ import {
   readSecretLine,
   confirmCustody,
   resolveCeremonyKey,
+  realpathOfDeepestExisting,
 } from '../lib/key-ceremony.mjs';
 
 function tmpRoot() {
@@ -103,6 +104,22 @@ test('a sibling directory whose name merely starts with the repo root name is NO
   const sibling = `${root}-sibling`;
   const outsidePath = join(sibling, 'key.txt');
   assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outsidePath, { root }));
+});
+
+// ── realpathOfDeepestExisting ────────────────────────────────────────────────────────
+
+test('reattaches the full non-existent tail exactly, not just the deepest existing ancestor', () => {
+  const root = tmpRoot();
+  const target = join(root, 'not-yet-created', 'nested', 'file.txt');
+  const result = realpathOfDeepestExisting(target);
+  assert.equal(result, join(realpathSync(root), 'not-yet-created', 'nested', 'file.txt'));
+});
+
+test('returns the exact realpath when the target itself already exists (no tail to reattach)', () => {
+  const root = tmpRoot();
+  const existingFile = join(root, 'exists.txt');
+  writeFileSync(existingFile, 'x');
+  assert.equal(realpathOfDeepestExisting(existingFile), realpathSync(existingFile));
 });
 
 // ── writeKeyHandoffFile ──────────────────────────────────────────────────────────────
