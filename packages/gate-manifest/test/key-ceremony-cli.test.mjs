@@ -23,8 +23,8 @@ function makeDirs() {
   return { repoDir, outsideDir };
 }
 
-function run(args, cwd) {
-  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function run(args, cwd, env = process.env) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function assertNeverAppears(secret, ...haystacks) {
@@ -71,15 +71,13 @@ test('CLI: --json mode also never leaks the key, and the JSON is well-formed', (
   }
 });
 
-test('CLI: the audited import exception writes the CALLER-SUPPLIED key, warns on stderr, and still never leaks the key itself', () => {
+test('CLI: the audited import exception reads the CALLER-SUPPLIED key from ADLC_MANIFEST_KEY (never a CLI argument), warns on stderr, and still never leaks the key itself', () => {
   const { repoDir, outsideDir } = makeDirs();
   const handoffPath = join(outsideDir, 'key.txt');
   const importedKey = 'a-legacy-key-that-predates-this-ceremony';
+  const env = { ...process.env, ADLC_MANIFEST_KEY: importedKey };
   try {
-    const result = run(
-      ['generate-key', '--output', handoffPath, '--import-key', importedKey, '--allow-key-import'],
-      repoDir,
-    );
+    const result = run(['generate-key', '--output', handoffPath, '--allow-key-import'], repoDir, env);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(handoffPath, 'utf8'), importedKey);
     assertNeverAppears(importedKey, result.stdout, result.stderr);
@@ -90,15 +88,30 @@ test('CLI: the audited import exception writes the CALLER-SUPPLIED key, warns on
   }
 });
 
-test('CLI: a caller-supplied key WITHOUT the exception flag is refused, and the attempted key never appears anywhere', () => {
+test('CLI: never accepts an import key as a CLI ARGUMENT — no such flag exists at all', () => {
   const { repoDir, outsideDir } = makeDirs();
   const handoffPath = join(outsideDir, 'key.txt');
   const attemptedKey = 'a-key-nobody-authorized-importing';
   try {
+    // --import-key is not a recognized option; parseArgs must reject it outright.
     const result = run(['generate-key', '--output', handoffPath, '--import-key', attemptedKey], repoDir);
     assert.notEqual(result.status, 0);
     assertNeverAppears(attemptedKey, result.stdout, result.stderr);
-    assert.match(result.stderr, /never accepts one/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --allow-key-import without ADLC_MANIFEST_KEY set in the environment is refused', () => {
+  const { repoDir, outsideDir } = makeDirs();
+  const handoffPath = join(outsideDir, 'key.txt');
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  try {
+    const result = run(['generate-key', '--output', handoffPath, '--allow-key-import'], repoDir, env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires ADLC_MANIFEST_KEY/);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
     rmSync(outsideDir, { recursive: true, force: true });
@@ -141,7 +154,7 @@ test('CLI: --output is required, and the usage message names the exact expected 
     // the literal flag syntax (angle brackets around the placeholder names) against
     // corruption, not merely the presence of an unrelated substring.
     assert.ok(
-      result.stderr.includes('generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]'),
+      result.stderr.includes('generate-key --output <path> [--allow-key-import] [--json]'),
       `expected the exact usage string in stderr, got: ${result.stderr}`,
     );
   } finally {
@@ -155,10 +168,33 @@ test('CLI: the top-level usage (no verb given) also names the exact generate-key
     const result = run([], repoDir);
     assert.notEqual(result.status, 0);
     assert.ok(
-      result.stderr.includes('generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]'),
+      result.stderr.includes('generate-key --output <path> [--allow-key-import] [--json]'),
       `expected the exact usage string in stderr, got: ${result.stderr}`,
     );
   } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: refuses a handoff path inside a LINKED WORKTREE of the same repository, via the real binary', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-cli-repo-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: repoDir });
+  execFileSync(
+    'git',
+    ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'],
+    { cwd: repoDir },
+  );
+  const linkedPath = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-cli-linked-'));
+  rmSync(linkedPath, { recursive: true, force: true });
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'cli-linked-test-branch', linkedPath], { cwd: repoDir });
+  try {
+    const destination = join(linkedPath, 'key.txt');
+    // Run FROM the primary repoDir, targeting a path inside the SIBLING linked worktree.
+    const result = run(['generate-key', '--output', destination], repoDir);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /outside the repository/i);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linkedPath], { cwd: repoDir });
     rmSync(repoDir, { recursive: true, force: true });
   }
 });

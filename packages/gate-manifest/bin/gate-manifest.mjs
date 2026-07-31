@@ -19,7 +19,7 @@ const USAGE =
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
-  '       generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]';
+  '       generate-key --output <path> [--allow-key-import] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -34,7 +34,6 @@ const { values: flags, positionals } = parseArgs({
     'attest-unsigned': { type: 'boolean', default: false },
     'allow-legacy-unsigned': { type: 'boolean', default: false },
     output: { type: 'string' },
-    'import-key': { type: 'string' },
     'allow-key-import': { type: 'boolean', default: false },
   },
 });
@@ -165,12 +164,27 @@ if (verb === 'repair-chain') {
 // ── generate-key ─────────────────────────────────────────────────────────────
 if (verb === 'generate-key') {
   if (!flags.output) {
-    opError('usage: gate-manifest generate-key --output <path> [--import-key <hex> --allow-key-import] [--json]');
+    opError('usage: gate-manifest generate-key --output <path> [--allow-key-import] [--json]');
+  }
+
+  // The import exception NEVER accepts the key as a CLI argument — argv is visible via
+  // `ps`, xtrace, shell history, and any command-logging harness, the exact class of
+  // exposure this whole ceremony exists to prevent (see scripts/block-secret-exposure
+  // .mjs's own incident history). It is sourced ONLY from the already-established,
+  // already-audited ADLC_MANIFEST_KEY environment resolution (getKey(), Layer 2) —
+  // an operator who wants to import a legacy key exports it first, exactly as every
+  // other signing/verifying command in this codebase already expects.
+  const importKey = flags['allow-key-import'] ? getKey() : undefined;
+  if (flags['allow-key-import'] && !importKey) {
+    opError(
+      'generate-key: --allow-key-import requires ADLC_MANIFEST_KEY to be set in the environment — '
+      + 'the import exception never accepts a key as a CLI argument (visible via ps, xtrace, and shell history).',
+    );
   }
 
   let resolved;
   try {
-    resolved = resolveCeremonyKey({ importKey: flags['import-key'], allowKeyImport: flags['allow-key-import'] });
+    resolved = resolveCeremonyKey({ importKey, allowKeyImport: flags['allow-key-import'] });
   } catch (err) {
     opError(err.message);
   }

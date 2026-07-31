@@ -25,7 +25,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { openSync, writeSync, fsyncSync, closeSync, chmodSync, realpathSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
-import { sha256, repoRoot } from '@adlc/core';
+import { sha256, git } from '@adlc/core';
 import { fsyncDirectory } from '@adlc/tickets/lib/durability.mjs';
 
 // Resolve `path` through every symlink, INCLUDING when `path` itself does not exist yet
@@ -86,22 +86,49 @@ export function computeKeyFingerprint(key) {
 }
 
 /**
- * Refuse a handoff path that resolves inside the repository — committing the key
- * handoff file, even accidentally (an editor swap file, a build artifact scan, a
- * misconfigured backup), would defeat the entire point of keeping it OUTSIDE the tree
- * under review. Resolves both paths (symlink-following) before comparing, so a
- * symlinked repo checkout or a `..`-relative handoff path cannot slip past a naive
+ * Every filesystem boundary that belongs to THIS repository's Git identity — not just
+ * the current worktree's own top-level. A repository can have multiple LINKED
+ * worktrees (`git worktree add`) that all share one underlying repository: writing the
+ * handoff file into the primary checkout, or a sibling worktree, is exactly as
+ * dangerous as writing it into the current one, since any of them can be staged and
+ * committed by a concurrent session. Also includes the common `.git` directory itself
+ * (`git rev-parse --git-common-dir`) — a handoff file placed there is invisible to
+ * `git status` today but is not a boundary this ceremony should trust either.
+ * @param {{cwd?: string}} [options]
+ * @returns {string[]}
+ */
+export function repoBoundaryRoots({ cwd = process.cwd() } = {}) {
+  const commonDirRaw = git(['rev-parse', '--git-common-dir'], { cwd }).trim();
+  const commonDir = resolve(cwd, commonDirRaw);
+  const worktreeListRaw = git(['worktree', 'list', '--porcelain'], { cwd });
+  const roots = [commonDir];
+  for (const line of worktreeListRaw.split('\n')) {
+    if (line.startsWith('worktree ')) roots.push(line.slice('worktree '.length).trim());
+  }
+  return roots;
+}
+
+/**
+ * Refuse a handoff path that resolves inside ANY repository boundary (repoBoundaryRoots
+ * — every linked worktree, the primary checkout, and the common .git directory, not
+ * just the current worktree) — committing the key handoff file, even accidentally (an
+ * editor swap file, a build artifact scan, a misconfigured backup, a concurrent session
+ * in a sibling worktree), would defeat the entire point of keeping it OUTSIDE every tree
+ * under review. Resolves every path (symlink-following) before comparing, so a
+ * symlinked checkout or a `..`-relative handoff path cannot slip past a naive
  * string-prefix check.
  * @param {string} path  the operator-chosen handoff path
- * @param {{root?: string}} [options]  root: override for repoRoot() (test injection)
+ * @param {{roots?: string[]}} [options]  roots: override for repoBoundaryRoots() (test injection)
  */
-export function assertHandoffPathOutsideRepo(path, { root = repoRoot() } = {}) {
-  const resolvedRoot = realpathOfDeepestExisting(root);
+export function assertHandoffPathOutsideRepo(path, { roots = repoBoundaryRoots() } = {}) {
   const resolvedPath = realpathOfDeepestExisting(path);
-  const rel = relative(resolvedRoot, resolvedPath);
-  const inside = rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-  if (inside || resolvedPath === resolvedRoot) {
-    throw new Error(`the key handoff path must be OUTSIDE the repository; ${path} resolves inside ${resolvedRoot}`);
+  for (const root of roots) {
+    const resolvedRoot = realpathOfDeepestExisting(root);
+    const rel = relative(resolvedRoot, resolvedPath);
+    const inside = rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+    if (inside || resolvedPath === resolvedRoot) {
+      throw new Error(`the key handoff path must be OUTSIDE the repository; ${path} resolves inside ${resolvedRoot}`);
+    }
   }
 }
 
@@ -109,14 +136,15 @@ export function assertHandoffPathOutsideRepo(path, { root = repoRoot() } = {}) {
  * Write the key to a mode-0600 file at `path`, exclusive-create (refuses to overwrite
  * an existing file at that path — the operator chose it, and silently clobbering
  * whatever is already there would be a surprising, silent side effect). Refuses a
- * path inside the repository (assertHandoffPathOutsideRepo). The mode is asserted via
- * a POST-write chmodSync, not just openSync's mode argument, because that argument is
- * subject to the process umask — a permissive umask would silently widen the file
- * beyond 0600 (mirrors packages/rails-guard/lib/ci/bootstrap.mjs's identical two-step
- * pattern for its own restrictive-permission write).
+ * path inside the repository (assertHandoffPathOutsideRepo, checked against EVERY
+ * linked worktree and the common .git directory, not just the current worktree). The
+ * mode is asserted via a POST-write chmodSync, not just openSync's mode argument,
+ * because that argument is subject to the process umask — a permissive umask would
+ * silently widen the file beyond 0600 (mirrors packages/rails-guard/lib/ci/bootstrap.mjs's
+ * identical two-step pattern for its own restrictive-permission write).
  * @param {string} path
  * @param {string} key
- * @param {{root?: string}} [options]
+ * @param {{roots?: string[]}} [options]
  */
 export function writeKeyHandoffFile(path, key, options = {}) {
   assertHandoffPathOutsideRepo(path, options);
@@ -226,6 +254,13 @@ export async function confirmCustody(expectedKey, { input, output, readSecret = 
  * audited legacy IMPORT of a caller-supplied key. A caller-supplied key without the
  * exception flag is REFUSED, not silently generated instead — the flag's whole point
  * is to make the exception visible and deliberate, never an accidental fallback.
+ *
+ * `importKey` MUST be sourced from the environment (this codebase's existing
+ * `ADLC_MANIFEST_KEY` / `getKey()` resolution, Layer 2), NEVER from a CLI argument —
+ * argv is visible via `ps`, xtrace, shell history, and any command-logging harness,
+ * exactly the exposure class this whole ceremony exists to prevent. This function
+ * itself is agnostic to where the caller sourced `importKey` from; it is the CLI's
+ * responsibility to never accept it as a flag value.
  * @param {{importKey?: string, allowKeyImport?: boolean, entropy?: Buffer}} [options]
  * @returns {{key: string, imported: boolean}}
  */

@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -19,6 +20,7 @@ import {
   confirmCustody,
   resolveCeremonyKey,
   realpathOfDeepestExisting,
+  repoBoundaryRoots,
 } from '../lib/key-ceremony.mjs';
 
 function tmpRoot() {
@@ -79,31 +81,84 @@ test('refuses an empty or non-string key', () => {
 test('accepts a path genuinely outside the repo root', () => {
   const root = tmpRoot();
   const outside = join(tmpdir(), 'somewhere-else-entirely', 'key.txt');
-  assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outside, { root }));
+  assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outside, { roots: [root] }));
 });
 
 test('rejects a path inside the repo root', () => {
   const root = tmpRoot();
   const inside = join(root, 'key.txt');
-  assert.throws(() => assertHandoffPathOutsideRepo(inside, { root }), /outside the repository/i);
+  assert.throws(() => assertHandoffPathOutsideRepo(inside, { roots: [root] }), /outside the repository/i);
 });
 
 test('rejects the repo root itself', () => {
   const root = tmpRoot();
-  assert.throws(() => assertHandoffPathOutsideRepo(root, { root }), /outside the repository/i);
+  assert.throws(() => assertHandoffPathOutsideRepo(root, { roots: [root] }), /outside the repository/i);
 });
 
 test('rejects a nested inside-repo path even several directories deep', () => {
   const root = tmpRoot();
   const inside = join(root, 'a', 'b', 'c', 'key.txt');
-  assert.throws(() => assertHandoffPathOutsideRepo(inside, { root }), /outside the repository/i);
+  assert.throws(() => assertHandoffPathOutsideRepo(inside, { roots: [root] }), /outside the repository/i);
 });
 
 test('a sibling directory whose name merely starts with the repo root name is NOT inside it', () => {
   const root = tmpRoot();
   const sibling = `${root}-sibling`;
   const outsidePath = join(sibling, 'key.txt');
-  assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outsidePath, { root }));
+  assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outsidePath, { roots: [root] }));
+});
+
+// ── repoBoundaryRoots: multiple linked worktrees of the SAME repository ─────────────
+
+function makeGitRepo() {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-git-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: root });
+  execFileSync(
+    'git',
+    ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'],
+    { cwd: root },
+  );
+  return root;
+}
+
+test('repoBoundaryRoots includes the current worktree root', () => {
+  const root = makeGitRepo();
+  const roots = repoBoundaryRoots({ cwd: root });
+  assert.ok(roots.some((r) => realpathSync(r) === realpathSync(root)), `expected ${root} among ${JSON.stringify(roots)}`);
+});
+
+test('a LINKED WORKTREE of the same repository is refused as a handoff destination — the exact gap this closes', () => {
+  const root = makeGitRepo();
+  const linkedPath = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+  rmSync(linkedPath, { recursive: true, force: true }); // `git worktree add` requires the path not to exist yet
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-test-branch', linkedPath], { cwd: root });
+  try {
+    const roots = repoBoundaryRoots({ cwd: root });
+    const destination = join(linkedPath, 'key.txt');
+    assert.throws(
+      () => assertHandoffPathOutsideRepo(destination, { roots }),
+      /outside the repository/i,
+      'a destination inside a SIBLING linked worktree of the same repository must be refused, not just the current worktree',
+    );
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linkedPath], { cwd: root });
+  }
+});
+
+test('the PRIMARY checkout (queried from a linked worktree) is refused as a handoff destination', () => {
+  const root = makeGitRepo();
+  const linkedPath = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+  rmSync(linkedPath, { recursive: true, force: true });
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-test-branch-2', linkedPath], { cwd: root });
+  try {
+    // Query boundaries FROM the linked worktree — it must still know about the primary
+    // checkout (root) as a boundary, not only its own directory.
+    const roots = repoBoundaryRoots({ cwd: linkedPath });
+    const destinationInPrimary = join(root, 'key.txt');
+    assert.throws(() => assertHandoffPathOutsideRepo(destinationInPrimary, { roots }), /outside the repository/i);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linkedPath], { cwd: root });
+  }
 });
 
 // ── realpathOfDeepestExisting ────────────────────────────────────────────────────────
@@ -129,7 +184,7 @@ test('writes the key to the handoff path with mode 0600', () => {
   const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
   const key = generateManifestKey();
   const handoffPath = join(outsideDir, 'key.txt');
-  writeKeyHandoffFile(handoffPath, key, { root });
+  writeKeyHandoffFile(handoffPath, key, { roots: [root] });
   assert.equal(readFileSync(handoffPath, 'utf8'), key);
   const mode = statSync(handoffPath).mode & 0o777;
   assert.equal(mode, 0o600);
@@ -141,7 +196,7 @@ test('refuses to overwrite an existing file at the handoff path', () => {
   const handoffPath = join(outsideDir, 'key.txt');
   writeFileSync(handoffPath, 'pre-existing content');
   assert.throws(
-    () => writeKeyHandoffFile(handoffPath, generateManifestKey(), { root }),
+    () => writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root] }),
     /refusing to overwrite/,
   );
   assert.equal(readFileSync(handoffPath, 'utf8'), 'pre-existing content', 'the pre-existing file must be untouched');
@@ -150,7 +205,7 @@ test('refuses to overwrite an existing file at the handoff path', () => {
 test('refuses a handoff path inside the repository, before writing anything', () => {
   const root = tmpRoot();
   const insidePath = join(root, 'key.txt');
-  assert.throws(() => writeKeyHandoffFile(insidePath, generateManifestKey(), { root }), /outside the repository/i);
+  assert.throws(() => writeKeyHandoffFile(insidePath, generateManifestKey(), { roots: [root] }), /outside the repository/i);
 });
 
 // ── readSecretLine / confirmCustody: fake TTY-like streams (no real pty needed) ────
