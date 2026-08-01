@@ -100,6 +100,21 @@ describe('planEnable decision order (spec Storage modes; ticket work item 1h)', 
     } finally { clean(root); }
   });
 
+  it('refuses a SYMLINKED root manifest without reading through it — same no-follow policy as every other path component', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    const external = mkdtempSync(join(tmpdir(), 'enable-root-symlink-'));
+    try {
+      // The hazard: a symlinked manifest.jsonl (worst case, at a device like
+      // /dev/zero) must be refused by lstat, never opened and consumed.
+      writeFileSync(join(external, 'huge-or-hostile'), 'x');
+      symlinkSync(join(external, 'huge-or-hostile'), join(dir, 'manifest.jsonl'));
+      const out = enable(dir, { write: true });
+      assert.equal(out.decision, 'refuse-broken-manifest-dir');
+      assert.match(out.reason, /symlink/);
+      assert.equal(existsSync(join(dir, 'manifest.d')), false, 'nothing may be created');
+    } finally { clean(root); clean(external); }
+  });
+
   it('AC2: refuses a live (non-empty, non-cutover) root, naming the cutover ceremony ticket', () => {
     const { root, dir } = gitRepo({ gitignore: NEGATED });
     try {

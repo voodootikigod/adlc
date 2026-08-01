@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
 import { ADLC_DIR, withLedgerLock } from '@adlc/core';
 import { isSegmentedRepo, markerPath } from './lineage.mjs';
-import { segmentDirPath, readRawLines } from './forest.mjs';
+import { segmentDirPath } from './forest.mjs';
 
 // Duplicated from lineage.mjs's module-local constants (that file is a frozen
 // rail on this ticket, so no new export could be added there). Skew cannot
@@ -157,8 +157,20 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
     };
   }
-  const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
-  if (rootLines.length > 0) {
+  // The root is inspected without reading it (adversarial-review finding):
+  // greenfield only needs EMPTINESS, which lstat answers — reading through
+  // a symlinked manifest.jsonl (or any giant file) to learn its size would
+  // both follow a link the rest of this command refuses and consume an
+  // unbounded source before refusing. A symlinked root is refused outright,
+  // same no-follow policy as the workspace and manifest.d above.
+  const rootPath = join(dir, 'manifest.jsonl');
+  if (lstatIsSymlink(rootPath)) {
+    return {
+      decision: 'refuse-broken-manifest-dir',
+      reason: `${rootPath} is a symlink — refusing to inspect or activate through it`,
+    };
+  }
+  if (existsSync(rootPath) && lstatSync(rootPath).size > 0) {
     return {
       decision: 'refuse-live-root',
       reason: 'this repository already records evidence in a single-file root manifest; switching it to forest mode is the history-preserving cutover ceremony (T-MANIFEST-FOREST-MIGRATE), not greenfield enable',
@@ -230,8 +242,19 @@ export function enable(dir = ADLC_DIR, { write = false } = {}) {
         }
         published = true;
       } catch (fsyncErr) {
-        try { unlinkSync(locked.markerPath); } catch { /* rollback is best-effort; the error below states the risk */ }
-        throw new Error(`marker written but not durably published (${fsyncErr.message}) — rolled the marker back; re-run enable`);
+        // The failure report must match the on-disk state (adversarial-review
+        // finding): claim a rollback only when the unlink actually succeeded.
+        let rolledBack = false;
+        try { unlinkSync(locked.markerPath); rolledBack = true; } catch { /* reported below, not swallowed */ }
+        if (rolledBack && process.platform !== 'win32') {
+          try {
+            const dirFd = openSync(segDir, 'r');
+            try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+          } catch { /* the unlink itself succeeded; durability of the deletion is best-effort */ }
+        }
+        throw new Error(rolledBack
+          ? `marker written but not durably published (${fsyncErr.message}) — rolled the marker back; re-run enable`
+          : `marker written but not durably published (${fsyncErr.message}) — AND rollback failed, so forest mode may be active on this checkout; inspect ${locked.markerPath} before retrying`);
       }
     } finally {
       if (!published) {
@@ -241,9 +264,12 @@ export function enable(dir = ADLC_DIR, { write = false } = {}) {
     }
 
     if (!isSegmentedRepo(dir)) {
-      try { unlinkSync(locked.markerPath); } catch { /* rollback is best-effort */ }
-      if (createdDir) { try { rmdirSync(segDir); } catch { /* ditto */ } }
-      throw new Error('wrote an activation marker the mode resolver does not recognize — rolled back; enable.mjs and lineage.mjs disagree on the marker format');
+      let rolledBack = false;
+      try { unlinkSync(locked.markerPath); rolledBack = true; } catch { /* reported below, not swallowed */ }
+      if (rolledBack && createdDir) { try { rmdirSync(segDir); } catch { /* only removable when empty — correct */ } }
+      throw new Error(rolledBack
+        ? 'wrote an activation marker the mode resolver does not recognize — rolled back; enable.mjs and lineage.mjs disagree on the marker format'
+        : `wrote an activation marker the mode resolver does not recognize — AND rollback failed, so an unrecognized marker remains at ${locked.markerPath}; remove it by hand`);
     }
     return { ...locked, written: true };
   });
