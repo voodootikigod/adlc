@@ -332,42 +332,60 @@ describe('resolveOpenSegment (spec §7.1)', () => {
   // token) used to mint a needless duplicate segment rather than continuing a
   // real, unambiguous, already-committed one for this branch — permanently
   // hiding the older evidence once the fresh segment's own token existed.
-  it('AC12: a fresh clone whose FIRST action is a write continues the branch\'s own committed segment, never mints a needless duplicate', () => {
-    const { root, dir, g } = gitRepo('feat/clone-write-first');
-    let clonedRoot;
-    try {
-      activate(dir);
-      const first = resolveOpenSegment(dir, { cwd: root });
-      writeFileSync(segmentPath(dir, first.name), `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', data: { note: 'original' }, files: {}, prev: null, anchor: first.anchor, branch: 'feat/clone-write-first' })}\n`);
-      g('add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${first.name}`);
-      g('commit', '-q', '-m', 'segment evidence');
+  // Exercises the REAL producer end-to-end (clone -> append -> read), not just
+  // the resolver: AC1 asks that evidence recorded BEFORE the write is still
+  // visible to a consumer AFTER it, which a resolver-only assertion cannot show
+  // (it would still pass if the append layer or the reader mishandled a
+  // recovered segment). Raised by adversarial review of this very change.
+  it('AC12: a fresh clone whose FIRST action is a real WRITE extends the branch\'s own committed segment, and the pre-clone evidence stays visible to a reader afterwards', () => {
+    withKey('ac12-clone-write-key', () => {
+      const { root, dir, g } = gitRepo('feat/clone-write-first');
+      let clonedRoot;
+      try {
+        activate(dir);
+        // Build S1 with the REAL writer so it is signed and chained exactly as production would.
+        appendManifestEntry({ gate: 'evidence', data: { note: 'original' } }, dir, { cwd: root });
+        const { valid: originValid } = discoverSegments(dir);
+        assert.equal(originValid.length, 1, 'precondition: origin has exactly one segment');
+        const s1 = originValid[0];
+        g('add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${s1}`);
+        g('commit', '-q', '-m', 'segment evidence');
 
-      clonedRoot = mkdtempSync(join(tmpdir(), 'gate-manifest-clone-write-'));
-      execFileSync('git', ['clone', '-q', '--branch', 'feat/clone-write-first', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
-      const clonedDir = join(clonedRoot, '.adlc');
-      assert.equal(existsSync(lineagePath(clonedDir)), false, 'precondition: the fresh clone has no local .lineage token');
+        clonedRoot = mkdtempSync(join(tmpdir(), 'gate-manifest-clone-write-'));
+        execFileSync('git', ['clone', '-q', '--branch', 'feat/clone-write-first', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+        const clonedDir = join(clonedRoot, '.adlc');
+        assert.equal(existsSync(lineagePath(clonedDir)), false, 'precondition: the fresh clone has no local .lineage token');
 
-      // The FIRST action in this clone is a WRITE, not a read.
-      const resolved = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
-      assert.equal(resolved.isNew, false, 'must continue the real committed segment, not mint a duplicate');
-      assert.equal(resolved.name, first.name);
-      const { valid } = discoverSegments(clonedDir);
-      assert.equal(valid.length, 1, 'exactly one segment must exist — no needless duplicate was minted');
-      // Deliberately does NOT heal (write) the token from this UNVERIFIED
-      // recovery match (adversarial-review finding): the token's downstream
-      // trust value (readOwnChains's keyless "peeked" path treats a token
-      // match as proof this checkout itself minted the segment) depends on
-      // it being written only by a genuine mint.
-      assert.equal(existsSync(lineagePath(clonedDir)), false, 'recovering via (b) must never write the local token — it would launder an unverified match into the trusted fast path');
-      // A SECOND write re-scans via (b) again (no token to fast-path through)
-      // and still resolves correctly — no correctness cost, only a repeated scan.
-      const second = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
-      assert.equal(second.isNew, false);
-      assert.equal(second.name, first.name);
-    } finally {
-      clean(root);
-      if (clonedRoot) clean(clonedRoot);
-    }
+        // The FIRST action in this clone is a REAL WRITE through the production
+        // producer — not merely a resolver call.
+        appendManifestEntry({ gate: 'evidence', data: { note: 'after-clone' } }, clonedDir, { cwd: clonedRoot });
+
+        const { valid } = discoverSegments(clonedDir);
+        assert.deepEqual(valid, [s1], 'the write must EXTEND the committed segment — no needless duplicate minted');
+
+        // ...and a real consumer read AFTER the write still surfaces the pre-clone evidence.
+        const { entries } = readManifestForest(clonedDir);
+        const notes = entries.map((e) => e.data?.note);
+        assert.ok(notes.includes('original'), 'pre-clone evidence must remain visible to a reader AFTER the write');
+        assert.ok(notes.includes('after-clone'), 'the newly written evidence must be visible too');
+        assert.equal(entries.length, 2, 'exactly the two entries — the recovered segment was extended, not replaced');
+
+        // Deliberately does NOT heal (write) the token from this UNVERIFIED
+        // recovery match (adversarial-review finding): the token's downstream
+        // trust value (readOwnChains's keyless "peeked" path treats a token
+        // match as proof this checkout itself minted the segment) depends on
+        // it being written only by a genuine mint.
+        assert.equal(existsSync(lineagePath(clonedDir)), false, 'recovering via (b) must never write the local token — it would launder an unverified match into the trusted fast path');
+        // A SECOND write re-scans via (b) again (no token to fast-path through)
+        // and still extends the same segment — no correctness cost, only a repeated scan.
+        appendManifestEntry({ gate: 'evidence', data: { note: 'third' } }, clonedDir, { cwd: clonedRoot });
+        assert.deepEqual(discoverSegments(clonedDir).valid, [s1], 'the second write must also extend, not mint');
+        assert.equal(readManifestForest(clonedDir).entries.length, 3);
+      } finally {
+        clean(root);
+        if (clonedRoot) clean(clonedRoot);
+      }
+    });
   });
 
   it('AC12: refuses (ambiguous) rather than mint when recovery finds more than one candidate segment for this branch', () => {
@@ -386,11 +404,14 @@ describe('resolveOpenSegment (spec §7.1)', () => {
       g('commit', '-q', '-m', 'second ambiguous segment');
       rmSync(lineagePath(dir), { force: true }); // no token to disambiguate
 
+      // A REAL write must refuse — asserting on the resolver alone would not
+      // show that the refusal actually propagates out through the producer.
       assert.throws(
-        () => resolveOpenSegment(dir, { cwd: root }),
+        () => appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root }),
         /ambiguous/,
         'a WRITE must refuse rather than silently pick one of two candidate segments to extend',
       );
+      assert.equal(discoverSegments(dir).valid.length, 2, 'the refused write must not have minted a third segment');
     } finally { clean(root); }
   });
 });

@@ -676,12 +676,17 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
   // token) used to mint a needless duplicate segment rather than continuing a
   // real, unambiguous, already-committed one for this branch. Mirrors
   // @adlc/gate-manifest/lib/lineage.mjs's identical test.
-  it('AC12: a fresh clone whose FIRST action is a write continues the branch\'s own committed segment, never mints a needless duplicate', () => {
+  // Exercises the REAL producer end-to-end (clone -> recordTicketEvidence ->
+  // readOwnChains), not just the resolver: AC1 asks that evidence recorded
+  // BEFORE the write is still visible to a consumer AFTER it, which a
+  // resolver-only assertion cannot show. Raised by adversarial review.
+  it('AC12: a fresh clone whose FIRST action is a real WRITE extends the branch\'s own committed segment, and the pre-clone evidence stays visible to a reader afterwards', () => {
+    const KEY = 'ac12-clone-write-key';
     const { root, dir } = gitRepo('feat/clone-write-first');
     let clonedRoot;
     try {
       activate(dir);
-      recordTicketEvidence(root, baseEvidence());
+      recordTicketEvidence(root, baseEvidence({ key: KEY, ticketId: 'ORIGINAL' }));
       const first = resolveOpenSegment(dir, { cwd: root });
       execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${first.name}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       execFileSync('git', ['commit', '-q', '-m', 'segment evidence'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -691,18 +696,28 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       const clonedDir = join(clonedRoot, '.adlc');
       assert.equal(existsSync(lineagePath(clonedDir)), false, 'precondition: the fresh clone has no local .lineage token');
 
-      // The FIRST action in this clone is a WRITE, not a read.
-      const resolved = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
-      assert.equal(resolved.isNew, false, 'must continue the real committed segment, not mint a duplicate');
-      assert.equal(resolved.name, first.name);
-      assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'exactly one segment must exist — no needless duplicate was minted');
+      // The FIRST action in this clone is a REAL WRITE through the production
+      // producer — not merely a resolver call.
+      recordTicketEvidence(clonedRoot, baseEvidence({ key: KEY, ticketId: 'AFTER-CLONE', transactionId: 'tx-2' }));
+
+      const segs = readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+      assert.deepEqual(segs, [first.name], 'the write must EXTEND the committed segment — no needless duplicate minted');
+
+      // ...and a real consumer read AFTER the write still surfaces the pre-clone evidence.
+      const chains = readOwnChains(clonedDir, { cwd: clonedRoot, allowRecovery: true, key: KEY });
+      assert.equal(chains.length, 2, 'root + the single recovered segment');
+      const tickets = chains[1].map((e) => e.ticket);
+      assert.ok(tickets.includes('ORIGINAL'), 'pre-clone evidence must remain visible to a reader AFTER the write');
+      assert.ok(tickets.includes('AFTER-CLONE'), 'the newly written evidence must be visible too');
+      assert.equal(chains[1].length, 2, 'exactly the two entries — the recovered segment was extended, not replaced');
+
       // Deliberately does NOT heal (write) the token from this UNVERIFIED
       // recovery match (adversarial-review finding) — see the sibling
       // gate-manifest test for the full rationale.
       assert.equal(existsSync(lineagePath(clonedDir)), false, 'recovering via (b) must never write the local token — it would launder an unverified match into the trusted fast path');
-      const second = resolveOpenSegment(clonedDir, { cwd: clonedRoot });
-      assert.equal(second.isNew, false);
-      assert.equal(second.name, first.name);
+      // A SECOND write re-scans via (b) again and still extends the same segment.
+      recordTicketEvidence(clonedRoot, baseEvidence({ key: KEY, ticketId: 'THIRD', transactionId: 'tx-3' }));
+      assert.deepEqual(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')), [first.name], 'the second write must also extend, not mint');
     } finally {
       clean(root);
       if (clonedRoot) clean(clonedRoot);
@@ -724,11 +739,14 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       execFileSync('git', ['commit', '-q', '-m', 'second ambiguous segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       rmSync(lineagePath(dir), { force: true }); // no token to disambiguate
 
+      // A REAL write must refuse — asserting on the resolver alone would not
+      // show that the refusal actually propagates out through the producer.
       assert.throws(
-        () => resolveOpenSegment(dir, { cwd: root }),
+        () => recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-ambiguous' })),
         /ambiguous/,
         'a WRITE must refuse rather than silently pick one of two candidate segments to extend',
       );
+      assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 2, 'the refused write must not have minted a third segment');
     } finally { clean(root); }
   });
 });
