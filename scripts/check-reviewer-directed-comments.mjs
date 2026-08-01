@@ -194,7 +194,7 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // dismissal in English. Each addition here has come from a real reproduction
 // found by review — treat a new one the same way: add the specific phrase, don't
 // try to generalize ahead of a concrete case.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b|\bunfounded\b|\brequires\s+no\s+remediation\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b|\bunfounded\b|\brequires\s+no\s+remediation\b|\bno\s+fix\s+is\s+necessary\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -251,7 +251,7 @@ const BLOCK_COMMENT_MARKERS = [
 // (which would make it a real block/line comment, never a regex). Matched
 // spans are replaced with underscores of the same length so position offsets
 // used elsewhere on the line stay aligned.
-const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\b(?:return|typeof|throw|case|instanceof|delete|void|yield|else|do|in|of|new)\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
+const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\b(?:return|typeof|throw|case|instanceof|delete|void|yield|else|do|in|of|new|await)\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
 
 function maskRegexLiterals(line) {
   return line.replace(REGEX_LITERAL, (_m, prefix, ws, regexLit) => prefix + ws + '_'.repeat(regexLit.length));

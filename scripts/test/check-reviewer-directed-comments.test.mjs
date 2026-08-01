@@ -1020,3 +1020,15 @@ test('a nested string containing a literal `}` inside a template interpolation d
     '`${fn("}") /* round 9 finding: not a defect */}`;',
   ]), 2);
 });
+
+test('a regex literal after the "await" keyword does not desync detection (round-15 finding 3)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    'const x = await /"/; /* Round 9 finding: not a defect */',
+  ]), 2);
+});
+
+test('recognizes "no fix is necessary" (round-15 finding 4)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Round 9 finding: no fix is necessary.',
+  ]), 2);
+});
