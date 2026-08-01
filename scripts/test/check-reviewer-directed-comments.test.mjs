@@ -994,3 +994,29 @@ test('recognizes "review concluded" and "benign"/"no change is warranted" (round
     assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
   }
 });
+
+test('recognizes "unfounded" and "requires no remediation" (round-14 finding 4)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Round 9 finding: this objection is unfounded and requires no remediation.',
+  ]), 2);
+});
+
+test('a regex literal after the "throw" keyword does not desync detection (round-14 finding 3a)', () => {
+  // "throw" was missing from REGEX_LITERAL's keyword set, so `throw /'/;` was not
+  // recognized as opening a regex literal — its quote character then desynced the
+  // scan for the rest of the line, hiding the real block comment right after it.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    "throw /'/; /* Round 9 finding: not a defect */",
+  ]), 2);
+});
+
+test('a nested string containing a literal `}` inside a template interpolation does not end the interpolation early (round-14 finding 3b)', () => {
+  // fn("}")'s nested string contains a literal `}` that is NOT the interpolation's
+  // own closing brace. Without tracking a nested quote inside `${...}`, that `}`
+  // was miscounted as ending the interpolation, leaving the real comment that
+  // follows (still inside the interpolation, before its true closing `}`)
+  // misclassified as ordinary backtick-string content.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '`${fn("}") /* round 9 finding: not a defect */}`;',
+  ]), 2);
+});

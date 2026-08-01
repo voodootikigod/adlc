@@ -194,7 +194,7 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // dismissal in English. Each addition here has come from a real reproduction
 // found by review — treat a new one the same way: add the specific phrase, don't
 // try to generalize ahead of a concrete case.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b|\bunfounded\b|\brequires\s+no\s+remediation\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -251,7 +251,7 @@ const BLOCK_COMMENT_MARKERS = [
 // (which would make it a real block/line comment, never a regex). Matched
 // spans are replaced with underscores of the same length so position offsets
 // used elsewhere on the line stay aligned.
-const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\breturn\b|\btypeof\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
+const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\b(?:return|typeof|throw|case|instanceof|delete|void|yield|else|do|in|of|new)\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
 
 function maskRegexLiterals(line) {
   return line.replace(REGEX_LITERAL, (_m, prefix, ws, regexLit) => prefix + ws + '_'.repeat(regexLit.length));
@@ -269,19 +269,28 @@ function maskRegexLiterals(line) {
 // exists to avoid. Handles backslash-escaped quote characters and template-
 // literal `${...}` interpolation (real JS/expression context, not string
 // content — a comment inside one is real and must not be treated as string
-// text; nested braces are depth-tracked so an object literal or block inside
-// the interpolation doesn't end it early). Does not attempt to special-case
-// other languages' string/comment syntax, or a nested string inside `${...}`
-// that itself contains a quote/comment marker (a real tokenizer for every
-// language this repo's files use is the documented, deliberate scope limit —
-// see the module docstring). `line` is expected pre-masked by
-// maskRegexLiterals so a regex literal's own quote characters do not count.
+// text). Nested braces are depth-tracked so an object literal or block inside
+// the interpolation doesn't end it early, and a nested quoted string inside the
+// interpolation (e.g. `${fn("}")}`) has ITS OWN braces ignored while open, so a
+// literal `}` inside it can't be miscounted as the interpolation's close. Does
+// not recurse into a nested TEMPLATE literal's own `${...}` inside an
+// interpolation (a real tokenizer for every language this repo's files use is
+// the documented, deliberate scope limit — see the module docstring). `line` is
+// expected pre-masked by maskRegexLiterals so a regex literal's own quote
+// characters do not count.
 function isInsideStringLiteral(line, pos) {
   let quote = null;
   let templateExprDepth = 0; // brace depth inside a `${...}` when quote === '`'
+  let innerQuote = null; // a nested string literal open INSIDE `${...}`
   for (let i = 0; i < pos; i++) {
     const ch = line[i];
     if (quote === '`' && templateExprDepth > 0) {
+      if (innerQuote) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === innerQuote) innerQuote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') { innerQuote = ch; continue; }
       if (ch === '{') templateExprDepth++;
       else if (ch === '}') templateExprDepth--;
       continue;
