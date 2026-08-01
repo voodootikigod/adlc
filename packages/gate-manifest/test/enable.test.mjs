@@ -186,19 +186,78 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
     } finally { clean(root); }
   });
 
-  it('AC10: the remediation advice WORKS — appending exactly the advertised negation lines converts the refusal into a committable enable', () => {
-    const { root, dir } = gitRepo({ gitignore: IGNORED });
+  it('AC10: the remediation advice WORKS for BOTH ignore styles — appending exactly the advertised negation lines converts the refusal into a committable enable', () => {
+    // `.adlc/*` needs only the directory negation; `.adlc/**` matches
+    // descendants directly and needs the descendant negation too — the
+    // advertised set must be sufficient for BOTH (adversarial-review
+    // finding: a one-line advice left `.adlc/**` repos stuck refusing).
+    for (const style of ['.adlc/*\n', '.adlc/**\n']) {
+      const { root, dir } = gitRepo({ gitignore: style });
+      try {
+        assert.equal(enable(dir, { cwd: root, write: true }).decision, 'refuse-ignored', `style=${style.trim()}`);
+        // Follow the advice verbatim — the exported lines ARE the advice; if
+        // they shrink or drift, this stops converting the refusal and fails.
+        writeFileSync(join(root, '.gitignore'), style + MARKER_NEGATION_LINES.join('\n') + '\n');
+        const out = enable(dir, { cwd: root, write: true });
+        assert.equal(out.decision, 'greenfield', `style=${style.trim()}`);
+        assert.equal(out.written, true);
+        // The advice's whole point: the marker must now actually be stageable.
+        const r = spawnSync('git', ['check-ignore', '-q', '--', '.adlc/manifest.d/.store.json'], { cwd: root });
+        assert.equal(r.status, 1, `the written marker must NOT be gitignored after following the advice (style=${style.trim()})`);
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC10: a marker-SPECIFIC ignore rule refuses even though the directory probe alone would pass', () => {
+    const { root, dir } = gitRepo({ gitignore: '.adlc/manifest.d/.store.json\n' });
     try {
-      assert.equal(enable(dir, { cwd: root, write: true }).decision, 'refuse-ignored');
-      // Follow the advice verbatim — the exported lines ARE the advice; if
-      // they shrink or drift, this stops converting the refusal and fails.
-      writeFileSync(join(root, '.gitignore'), IGNORED + MARKER_NEGATION_LINES.join('\n') + '\n');
       const out = enable(dir, { cwd: root, write: true });
-      assert.equal(out.decision, 'greenfield');
-      assert.equal(out.written, true);
-      // The advice's whole point: the marker must now actually be stageable.
-      const r = spawnSync('git', ['check-ignore', '-q', '--', '.adlc/manifest.d/.store.json'], { cwd: root });
-      assert.equal(r.status, 1, 'the written marker must NOT be gitignored after following the advice');
+      assert.equal(out.decision, 'refuse-ignored', 'the FILE path must be probed, not just the directory');
+      assert.equal(out.written, false);
+      assert.equal(existsSync(join(dir, 'manifest.d')), false);
+    } finally { clean(root); }
+  });
+
+  it('the gitignore probe never leaks the manifest key or GIT_* repo selectors to the git child', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    const shimDir = mkdtempSync(join(tmpdir(), 'git-shim-'));
+    const envDump = join(shimDir, 'env-dump.txt');
+    // A PATH-resolved git shim that records its environment, then behaves
+    // like real git enough for the probe: rev-parse succeeds, check-ignore
+    // reports "no pattern matches".
+    writeFileSync(join(shimDir, 'git'), `#!/bin/sh\nenv > "${envDump}"\ncase "$1" in rev-parse) exit 0;; check-ignore) exit 1;; esac\nexit 0\n`, { mode: 0o755 });
+    const prevPath = process.env.PATH;
+    const prevKey = process.env.ADLC_MANIFEST_KEY;
+    const prevGitDir = process.env.GIT_DIR;
+    try {
+      process.env.PATH = `${shimDir}:${prevPath}`;
+      process.env.ADLC_MANIFEST_KEY = 'super-secret-trust-root-key';
+      process.env.GIT_DIR = '/tmp/nonexistent-elsewhere/.git';
+      const plan = planEnable(dir, { cwd: root });
+      assert.equal(plan.decision, 'greenfield', 'the shim answered like clean git, so the probe proceeds');
+      const dumped = readFileSync(envDump, 'utf8');
+      assert.ok(!dumped.includes('super-secret-trust-root-key'), 'the git child must never see the manifest key');
+      assert.ok(!dumped.includes('ADLC_MANIFEST_KEY'), 'the variable itself must be absent, not just emptied');
+      assert.ok(!dumped.includes('GIT_DIR='), 'GIT_* repo selectors must not redirect the probe');
+    } finally {
+      process.env.PATH = prevPath;
+      if (prevKey === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prevKey;
+      if (prevGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prevGitDir;
+      clean(root); clean(shimDir);
+    }
+  });
+
+  it('the marker is published under the root-ledger lock — a held lock blocks enable instead of racing a concurrent root append', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      // Hold the exact lock root appendEntries takes (ledgerPath + .lock).
+      writeFileSync(join(dir, 'manifest.jsonl.lock'), JSON.stringify({ version: 1, token: 'held-by-test', pid: 0 }));
+      assert.throws(
+        () => enable(dir, { cwd: root, write: true }),
+        /lock/i,
+        'enable must contend for the root ledger lock, not transition around a mid-append writer',
+      );
+      assert.equal(existsSync(markerPath(dir)), false, 'no marker may appear while the lock was held');
     } finally { clean(root); }
   });
 

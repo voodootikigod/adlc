@@ -227,7 +227,7 @@ if (verb === 'generate-key') {
 if (verb === 'enable') {
   let out;
   try {
-    out = enable(flags.dir, { cwd: process.cwd(), write: flags.write });
+    out = enable(flags.dir, { write: flags.write });
   } catch (err) {
     opError(err.message);
   }

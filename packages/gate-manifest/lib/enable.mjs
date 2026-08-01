@@ -15,8 +15,8 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { join, relative, sep } from 'node:path';
-import { ADLC_DIR } from '@adlc/core';
+import { dirname, join, relative, sep } from 'node:path';
+import { ADLC_DIR, withLedgerLock } from '@adlc/core';
 import { isSegmentedRepo, markerPath } from './lineage.mjs';
 import { segmentDirPath, readRawLines } from './forest.mjs';
 
@@ -26,32 +26,65 @@ import { segmentDirPath, readRawLines } from './forest.mjs';
 // isSegmentedRepo whether it recognizes the marker, and rolls back if not.
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
 
-// The minimal .gitignore addition a repo needs so the marker (and segments)
-// actually commit. One line is sufficient: a gitignore `*` does not cross
-// `/`, so `.adlc/*` only matches the directory itself — re-including the
-// directory frees everything inside it. (This repository's own .gitignore
-// also carries `!.adlc/manifest.d/**` as belt-and-suspenders; the advice
-// here is the sufficient set, verified end-to-end by the apply-the-advice
-// test.)
-export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/']);
+// The .gitignore additions a repo needs so the marker (and segments)
+// actually commit. BOTH lines are required for the advice to be sufficient
+// across the two common ignore styles (adversarial-review finding, verified
+// empirically by the apply-the-advice tests): re-including the directory
+// alone frees its contents from a `.adlc/*` rule (a gitignore `*` does not
+// cross `/`), but a `.adlc/**` rule matches descendants directly and needs
+// the descendant negation too.
+export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/', '!.adlc/manifest.d/**']);
+
+// The probe child needs no secrets and must answer for the repository that
+// owns `dir`, not whatever the caller's environment points at: the manifest
+// key is scrubbed (repo convention — a child that does not need the key
+// never inherits it), and GIT_* repository selectors are dropped so an
+// exported GIT_DIR cannot redirect the probe to an unrelated repository.
+function gitProbeEnv() {
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  return env;
+}
 
 /**
- * True when git would ignore the segment directory — which would make enable
- * a per-checkout illusion: the marker never commits, every OTHER clone keeps
- * running single-file mode, and evidence diverges by machine. Probed with a
- * TRAILING-SLASH directory path because the directory does not exist yet on
- * a dry-run, and a bare-path probe on a missing directory misreports.
- * Soft-passes (returns false) outside a git repository: evidence without git
- * is supported, and there is nothing to commit or ignore there.
+ * True when git would ignore the segment directory OR the marker file
+ * itself — either makes enable a per-checkout illusion: the marker never
+ * commits, every OTHER clone keeps running single-file mode, and evidence
+ * diverges by machine. Both paths are probed (adversarial-review finding):
+ * a marker-specific rule like `.adlc/manifest.d/.store.json` leaves the
+ * directory probe clean while the file can never commit. The directory is
+ * probed with a TRAILING SLASH so the answer is right before anything
+ * exists on disk (dry-run creates nothing). Runs in the directory that
+ * contains `dir`, so `--dir` into another repository is probed against THAT
+ * repository. Soft-passes outside any git repository (evidence without git
+ * is supported); a real check-ignore failure INSIDE a repository throws
+ * rather than guessing — only an exit meaning "no pattern matches" counts
+ * as committable.
  */
-function markerWouldBeIgnored(dir, cwd) {
-  const probe = `${relative(cwd, segmentDirPath(dir)).split(sep).join('/')}/`;
+function markerWouldBeIgnored(dir) {
+  const probeCwd = dirname(dir);
+  const env = gitProbeEnv();
+  const run = (args) => {
+    try {
+      execFileSync('git', args, { cwd: probeCwd, env, stdio: ['ignore', 'ignore', 'ignore'] });
+      return 0;
+    } catch (err) {
+      if (err.code === 'ENOENT') return 'no-git';
+      return err.status ?? 'error';
+    }
+  };
+  if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return false; // no git binary, or not a repository
+  const rel = relative(probeCwd, segmentDirPath(dir)).split(sep).join('/');
   let ignored = false;
-  try {
-    execFileSync('git', ['check-ignore', '-q', '--', probe], { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
-    ignored = true; // check-ignore succeeded: a pattern matches — the marker would never commit
-  } catch (err) {
-    // no match, or no git repo/binary — nothing blocks committing
+  for (const probe of [`${rel}/`, `${rel}/.store.json`]) {
+    const status = run(['check-ignore', '-q', '--', probe]);
+    if (status === 0) { ignored = true; break; } // a pattern matches — this path would never commit
+    if (status !== 1) {
+      throw new Error(`git check-ignore failed while probing ${probe} — cannot verify the marker is committable, refusing to guess`);
+    }
   }
   return ignored;
 }
@@ -71,7 +104,7 @@ function markerWouldBeIgnored(dir, cwd) {
  *
  * @returns {{ decision: 'refuse-no-workspace'|'already-enabled'|'refuse-broken-manifest-dir'|'refuse-live-root'|'refuse-ignored'|'greenfield', reason?: string, markerPath?: string, marker?: object }}
  */
-export function planEnable(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+export function planEnable(dir = ADLC_DIR) {
   if (!existsSync(dir)) {
     return {
       decision: 'refuse-no-workspace',
@@ -95,7 +128,7 @@ export function planEnable(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
       reason: 'this repository already records evidence in a single-file root manifest; switching it to forest mode is the history-preserving cutover ceremony (T-MANIFEST-FOREST-MIGRATE), not greenfield enable',
     };
   }
-  if (markerWouldBeIgnored(dir, cwd)) {
+  if (markerWouldBeIgnored(dir)) {
     return {
       decision: 'refuse-ignored',
       reason: `.gitignore would ignore the activation marker, so every other checkout would silently stay in single-file mode; add first: ${MARKER_NEGATION_LINES.join(' and ')}`,
@@ -114,21 +147,33 @@ export function planEnable(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
  *
  * @returns {ReturnType<typeof planEnable> & { written: boolean }}
  */
-export function enable(dir = ADLC_DIR, { cwd = process.cwd(), write = false } = {}) {
-  const plan = planEnable(dir, { cwd });
+export function enable(dir = ADLC_DIR, { write = false } = {}) {
+  const plan = planEnable(dir);
   if (plan.decision !== 'greenfield' || !write) return { ...plan, written: false };
 
-  const segDir = segmentDirPath(dir);
-  const createdDir = !existsSync(segDir);
-  mkdirSync(segDir, { recursive: true });
-  const tmp = join(segDir, `.store.json.tmp-${randomBytes(6).toString('hex')}`);
-  writeFileSync(tmp, JSON.stringify(plan.marker));
-  renameSync(tmp, plan.markerPath);
+  // Serialize the transition with root-ledger appenders (adversarial-review
+  // finding): a recorder passes its own segmented-mode check INSIDE the root
+  // lock, so an unlocked enable could observe a still-empty root while that
+  // recorder is mid-append — ending with a marker AND a non-cutover root,
+  // which is exactly the half-migrated state planEnable refuses. The
+  // greenfield decision is re-derived under the SAME lock root appends take
+  // (appendEntries locks ledgerPath), and the marker published inside it.
+  return withLedgerLock(join(dir, 'manifest.jsonl'), () => {
+    const locked = planEnable(dir);
+    if (locked.decision !== 'greenfield') return { ...locked, written: false };
 
-  if (!isSegmentedRepo(dir)) {
-    try { unlinkSync(plan.markerPath); } catch { /* rollback is best-effort */ }
-    if (createdDir) { try { rmdirSync(segDir); } catch { /* ditto */ } }
-    throw new Error('wrote an activation marker the mode resolver does not recognize — rolled back; enable.mjs and lineage.mjs disagree on the marker format');
-  }
-  return { ...plan, written: true };
+    const segDir = segmentDirPath(dir);
+    const createdDir = !existsSync(segDir);
+    mkdirSync(segDir, { recursive: true });
+    const tmp = join(segDir, `.store.json.tmp-${randomBytes(6).toString('hex')}`);
+    writeFileSync(tmp, JSON.stringify(locked.marker));
+    renameSync(tmp, locked.markerPath);
+
+    if (!isSegmentedRepo(dir)) {
+      try { unlinkSync(locked.markerPath); } catch { /* rollback is best-effort */ }
+      if (createdDir) { try { rmdirSync(segDir); } catch { /* ditto */ } }
+      throw new Error('wrote an activation marker the mode resolver does not recognize — rolled back; enable.mjs and lineage.mjs disagree on the marker format');
+    }
+    return { ...locked, written: true };
+  });
 }
