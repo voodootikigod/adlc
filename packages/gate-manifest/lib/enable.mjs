@@ -46,12 +46,14 @@ export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/']);
  */
 function markerWouldBeIgnored(dir, cwd) {
   const probe = `${relative(cwd, segmentDirPath(dir)).split(sep).join('/')}/`;
+  let ignored = false;
   try {
     execFileSync('git', ['check-ignore', '-q', '--', probe], { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
-    return true; // check-ignore succeeded: a pattern matches — the marker would never commit
+    ignored = true; // check-ignore succeeded: a pattern matches — the marker would never commit
   } catch (err) {
-    return false; // no match, or no git repo/binary — nothing blocks committing
+    // no match, or no git repo/binary — nothing blocks committing
   }
+  return ignored;
 }
 
 /**
