@@ -213,10 +213,23 @@ export function enable(dir = ADLC_DIR, { write = false } = {}) {
         fsyncSync(fd);
       } finally { closeSync(fd); }
       renameSync(tmp, locked.markerPath);
-      published = true;
-      if (process.platform !== 'win32') {
-        const dirFd = openSync(segDir, 'r');
-        try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+      // Publication is complete only once the rename is durable. If the
+      // directory fsync fails, the marker is unlinked again so the CLI's
+      // failure report matches the on-disk state — otherwise automation
+      // would be told "failed" while the mode switch was already visible.
+      // A newly created manifest.d also fsyncs its PARENT, so the directory
+      // entry itself survives a crash, not just its contents.
+      try {
+        if (process.platform !== 'win32') {
+          for (const toSync of createdDir ? [segDir, dir] : [segDir]) {
+            const dirFd = openSync(toSync, 'r');
+            try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+          }
+        }
+        published = true;
+      } catch (fsyncErr) {
+        try { unlinkSync(locked.markerPath); } catch { /* rollback is best-effort; the error below states the risk */ }
+        throw new Error(`marker written but not durably published (${fsyncErr.message}) — rolled the marker back; re-run enable`);
       }
     } finally {
       if (!published) {
