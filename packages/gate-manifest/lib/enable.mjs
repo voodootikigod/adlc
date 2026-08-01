@@ -132,28 +132,30 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${dir} is not a real directory (symlink or other non-directory) — enable refuses to write through links`,
     };
   }
+  const segDir = segmentDirPath(dir);
+  // No-follow policy, matching the rest of the store, checked BEFORE the
+  // already-enabled probe (adversarial-review finding): the bounded marker
+  // reader only refuses a symlink at the FINAL path component, so a
+  // symlinked manifest.d whose TARGET holds a valid marker would otherwise
+  // read as already-enabled — reporting success for a layout forest
+  // verification rejects. A symlinked (or dangling-symlinked, or
+  // non-directory) manifest.d is a broken state regardless of what its
+  // target contains. lstat, never stat: following the link is exactly the
+  // bug.
+  if ((existsSync(segDir) || lstatIsSymlink(segDir)) && (lstatIsSymlink(segDir) || !lstatSync(segDir).isDirectory())) {
+    return {
+      decision: 'refuse-broken-manifest-dir',
+      reason: `${segDir} exists but is not a real directory (symlink or other non-directory) — refusing to write through it`,
+    };
+  }
   if (isSegmentedRepo(dir)) {
     return { decision: 'already-enabled', reason: 'forest mode is already active for this repository' };
   }
-  const segDir = segmentDirPath(dir);
-  // No-follow policy, matching the rest of the store (adversarial-review
-  // finding): a symlinked manifest.d would route the marker write outside
-  // the workspace, and forest verification rejects a symlinked store anyway
-  // — refuse up front instead of succeeding into an unusable state. lstat,
-  // never stat: following the link is exactly the bug.
-  if (existsSync(segDir) || lstatIsSymlink(segDir)) {
-    if (lstatIsSymlink(segDir) || !lstatSync(segDir).isDirectory()) {
-      return {
-        decision: 'refuse-broken-manifest-dir',
-        reason: `${segDir} exists but is not a real directory (symlink or other non-directory) — refusing to write through it`,
-      };
-    }
-    if (readdirSync(segDir).length > 0) {
-      return {
-        decision: 'refuse-broken-manifest-dir',
-        reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
-      };
-    }
+  if (existsSync(segDir) && readdirSync(segDir).length > 0) {
+    return {
+      decision: 'refuse-broken-manifest-dir',
+      reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
+    };
   }
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
   if (rootLines.length > 0) {

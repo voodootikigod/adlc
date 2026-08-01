@@ -259,6 +259,21 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
     } finally { clean(root); }
   });
 
+  it('refuses a symlinked manifest.d even when its TARGET contains a valid marker — never reports already-enabled through a link', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    const external = mkdtempSync(join(tmpdir(), 'enable-symlink-marker-'));
+    try {
+      // The intermediate-symlink bypass: the bounded marker reader only
+      // refuses a symlink at the FINAL component, so marker detection would
+      // happily follow manifest.d -> target and find this valid marker.
+      writeFileSync(join(external, '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+      symlinkSync(external, join(dir, 'manifest.d'));
+      const out = enable(dir, { write: true });
+      assert.equal(out.decision, 'refuse-broken-manifest-dir', 'a symlinked store is broken regardless of what its target holds');
+      assert.deepEqual(readdirSync(external).sort(), ['.store.json'], 'the symlink target must stay untouched');
+    } finally { clean(root); clean(external); }
+  });
+
   it('refuses a symlinked manifest.d and leaves the external target untouched — never writes through the link', () => {
     const { root, dir } = gitRepo({ gitignore: NEGATED });
     const external = mkdtempSync(join(tmpdir(), 'enable-symlink-target-'));

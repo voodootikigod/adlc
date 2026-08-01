@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from '@adlc/core';
-import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson, lineagePath } from '@adlc/tickets';
+import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson, lineagePath, readOwnChains } from '@adlc/tickets';
 import { reassignId, planManifestMigration, migrateManifestEvidence } from '../lib/reassign.mjs';
 
 // ---- reassignId (pure, store-wide edge rewrite) ----
@@ -254,9 +254,19 @@ test('migrateManifestEvidence recovers real evidence across a lost .lineage toke
       ticketHash: 'h'.repeat(64), storeHash: 's'.repeat(64), key: KEY,
     });
     rmSync(lineagePath(dir), { force: true });
+    const segsBefore = readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
     const result = migrateManifestEvidence(root, 'T7', 'gh:acme/app#7', { now: '2026-06-27T00:00:00Z', key: KEY });
     assert.equal(result.migrated, 1, 'a lost token must not hide real, committed evidence');
     assert.equal(result.entries[0].data.migratedFrom, 'T7');
+    // Round-6 adversarial-review regression: the WRITE half of reassignment
+    // must recover with the same key the READ half used — a keyless resolver
+    // call here minted a SECOND segment and pointed the fresh token at it,
+    // hiding the just-recovered segment from every later branch-local read.
+    const segsAfter = readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+    assert.deepEqual(segsAfter, segsBefore, 'reassignment must EXTEND the recovered segment — never mint a duplicate');
+    const chains = readOwnChains(dir, { cwd: root, allowRecovery: true, key: KEY });
+    const tickets = chains.flat().map((e) => e.ticket);
+    assert.ok(tickets.includes('gh:acme/app#7'), 'the re-attestation lands in the SAME segment later reads see');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

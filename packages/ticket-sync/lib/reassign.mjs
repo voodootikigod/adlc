@@ -201,7 +201,12 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
     const sources = planManifestMigration(readOwnChains(adlcDir, { cwd, allowRecovery: true, key }), oldId, newId, key);
     if (sources.length === 0) return [];
 
-    const resolved = resolveOpenSegment(adlcDir, { cwd });
+    // `key` must reach the resolver (adversarial-review finding): the read
+    // above recovers the committed segment WITH the key, so a keyless
+    // resolver call here would skip recovery, mint a duplicate segment, and
+    // write its token — hiding the just-recovered evidence from every later
+    // branch-local read, the exact bug write-side recovery exists to close.
+    const resolved = resolveOpenSegment(adlcDir, { cwd, key });
     const targetPath = segmentPath(adlcDir, resolved.name);
     mkdirSync(dirname(targetPath), { recursive: true });
     return withManifestLock(targetPath, () => {
