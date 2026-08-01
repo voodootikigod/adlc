@@ -245,7 +245,7 @@ if (verb === 'enable') {
   }
   let out;
   try {
-    out = enable(flags.dir, { write: flags.write });
+    out = enable(flags.dir, { write: flags.write, auth: getKey(process.env) === null ? 'keyless' : 'keyed' });
   } catch (err) {
     opError(err.message);
   }

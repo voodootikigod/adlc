@@ -486,6 +486,19 @@ function assertSegmentPathCommittable(dir, name) {
  *   append as a plain continuation of the named, already-open segment.
  */
 export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd(), key = null } = {}) {
+  // The forest's persisted authentication mode is enforced on EVERY write
+  // (adversarial-review finding): a keyed forest written keylessly — by a
+  // hook, CI job, or worktree missing the key variable — would mint or
+  // extend unsigned evidence that keyed clones then refuse forever (a v2
+  // signature can never be added retroactively). Markers without the field
+  // (pre-policy activations, hand-built fixtures) carry no mode to enforce.
+  const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
+  if (markerDoc && markerDoc.auth === 'keyed' && key === null) {
+    throw new Error(
+      'this forest was activated in keyed mode, but no signing key was provided for this write — an unsigned '
+      + 'entry here would permanently strand every keyed clone of this branch; configure the manifest key',
+    );
+  }
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
 

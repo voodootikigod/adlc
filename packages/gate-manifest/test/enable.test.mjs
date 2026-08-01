@@ -173,8 +173,9 @@ describe('planEnable decision order (spec Storage modes; ticket work item 1h)', 
       execFileSync('git', ['add', '.gitignore'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       enable(dir, { write: true });
-      // A real keyless greenfield write mints the segment AND the token.
-      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null });
+      // A real keyed greenfield write mints the segment AND the token (the
+      // marker records keyed mode, so the write must carry the key).
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: 'token-test-key' });
       assert.equal(existsSync(lineagePath(dir)), true, 'precondition: the mint wrote the local token');
       execFileSync('git', ['add', '-A'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' });
@@ -477,6 +478,39 @@ describe('gate-manifest enable CLI (AC2, AC3, AC10, AC11)', () => {
       const ok = runBinKeyless(root, '--allow-keyless', '--write');
       assert.equal(ok.status, 0, ok.stderr);
       assert.equal(isSegmentedRepo(dir), true);
+    } finally { clean(root); }
+  });
+
+  it('AC15: the marker PERSISTS keyed mode, and a later keyless write is refused before touching anything — the invariant lives in the repository, not the shell', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      execFileSync('git', ['add', '.gitignore'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      enable(dir, { write: true, auth: 'keyed' });
+      assert.equal(JSON.parse(readFileSync(markerPath(dir), 'utf8')).auth, 'keyed');
+      // The everyday accident: a hook/CI/worktree process without the key.
+      assert.throws(
+        () => appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null }),
+        /keyed mode/,
+        'a keyless write into a keyed forest would strand every keyed clone permanently',
+      );
+      assert.deepEqual(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')), [], 'nothing may have been minted');
+      // The keyed write works, and keyless-mode forests keep working keylessly.
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: 'persist-key' });
+      assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1);
+    } finally { clean(root); }
+  });
+
+  it('AC15: an --allow-keyless activation persists keyless mode, and keyless writes keep working', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      execFileSync('git', ['add', '.gitignore'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      const r = runBinKeyless(root, '--allow-keyless', '--write');
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(JSON.parse(readFileSync(markerPath(dir), 'utf8')).auth, 'keyless');
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null });
+      assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'keyless-mode forests write keylessly');
     } finally { clean(root); }
   });
 

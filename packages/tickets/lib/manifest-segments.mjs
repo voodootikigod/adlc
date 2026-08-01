@@ -911,6 +911,17 @@ function assertSegmentPathCommittable(dir, name) {
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  */
 export function resolveOpenSegment(dir, { cwd = dirname(dir), key = null } = {}) {
+  // Persisted authentication mode enforced on every write — mirrors
+  // gate-manifest's identical resolver: a keyed forest written keylessly
+  // would mint or extend unsigned evidence keyed clones then refuse
+  // forever. Markers without the field carry no mode to enforce.
+  const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
+  if (markerDoc && markerDoc.auth === 'keyed' && key === null) {
+    throw new Error(
+      'this forest was activated in keyed mode, but no signing key was provided for this write — an unsigned '
+      + 'entry here would permanently strand every keyed clone of this branch; configure the manifest key',
+    );
+  }
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
 

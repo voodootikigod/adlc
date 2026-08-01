@@ -281,8 +281,17 @@ single-checkout PERMANENTLY; re-running it on an enabled repo re-checks the
 gitignore contract as a health check), and by the greenfield scaffold:
 
 ```json
-{ "format": "adlc-manifest-segments", "version": 1 }
+{ "format": "adlc-manifest-segments", "version": 1, "auth": "keyed" }
 ```
+
+`auth` (`"keyed"` or `"keyless"`) persists the forest's authentication mode:
+both producers' resolvers refuse a keyless write into a `"keyed"` forest
+before touching anything — a key checked only at activation would not
+survive into the hook, CI job, or worktree that performs the branch's first
+mint, and an unsigned first entry in a keyed forest permanently strands
+every keyed clone (a v2 signature can never be added retroactively).
+Markers without the field (pre-policy activations) carry no mode to
+enforce.
 
 Writers treat a repo as segmented when the marker exists **or** the root's last
 entry has `gate: "manifest-cutover"`; the double marker keeps a repo segmented
@@ -639,5 +648,12 @@ anchor under the same signature-verifying ceremony rules).
   packages/gate-manifest/test/segment-writer.test.mjs
   packages/tickets/test/manifest-segments.test.mjs
   --test-name-pattern='AC14'`.
+- **AC15 — persisted authentication mode:** activation without a key
+  refuses unless `--allow-keyless` opts in; the marker records the mode;
+  a keyless write into a `"keyed"` forest refuses in both producers before
+  touching anything; keyless-mode and pre-policy forests keep working.
+  **Verify:** `node --test packages/gate-manifest/test/enable.test.mjs
+  packages/tickets/test/manifest-segments.test.mjs
+  --test-name-pattern='AC15'`.
 
 Suppressions: none. A later ticket must name and justify any.

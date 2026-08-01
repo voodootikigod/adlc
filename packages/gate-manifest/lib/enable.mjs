@@ -25,6 +25,7 @@ import { segmentDirPath } from './forest.mjs';
 // ship silently: enable() self-verifies after writing by asking the IMPORTED
 // isSegmentedRepo whether it recognizes the marker, and rolls back if not.
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
+const AUTH_MODES = Object.freeze(['keyed', 'keyless']);
 
 // The .gitignore contract forest mode needs is TWO-SIDED (adversarial-review
 // findings, verified empirically by the apply-the-advice tests): the marker
@@ -220,6 +221,23 @@ export function planEnable(dir = ADLC_DIR) {
 }
 
 /**
+ * The marker persists the forest's AUTHENTICATION MODE (adversarial-review
+ * finding): checking the key only at activation verifies the operator's
+ * environment in that one moment, while the first mint may happen later in
+ * a hook, CI job, or worktree missing the variable — an unsigned first
+ * entry in a keyed forest permanently strands every keyed clone (a v2
+ * signature can never be added retroactively). The resolvers enforce the
+ * recorded mode on every segmented write, so the invariant lives in the
+ * repository, not the shell.
+ */
+function markerWithAuth(auth) {
+  if (!AUTH_MODES.includes(auth)) {
+    throw new Error(`enable auth mode must be one of ${AUTH_MODES.join('/')}`);
+  }
+  return { ...MARKER, auth };
+}
+
+/**
  * Execute the plan. Dry-run (write: false) returns the plan untouched with
  * `written: false`; only a greenfield decision with write: true touches disk.
  * The marker lands atomically (temp file + rename) and is then re-read
@@ -229,8 +247,11 @@ export function planEnable(dir = ADLC_DIR) {
  *
  * @returns {ReturnType<typeof planEnable> & { written: boolean }}
  */
-export function enable(dir = ADLC_DIR, { write = false } = {}) {
-  const plan = planEnable(dir);
+export function enable(dir = ADLC_DIR, { write = false, auth = 'keyed' } = {}) {
+  const planned = planEnable(dir);
+  const plan = planned.decision === 'greenfield'
+    ? { ...planned, marker: markerWithAuth(auth) }
+    : planned;
   if (plan.decision !== 'greenfield' || !write) return { ...plan, written: false };
 
   // Serialize the transition with root-ledger appenders (adversarial-review
@@ -241,8 +262,9 @@ export function enable(dir = ADLC_DIR, { write = false } = {}) {
   // greenfield decision is re-derived under the SAME lock root appends take
   // (appendEntries locks ledgerPath), and the marker published inside it.
   return withLedgerLock(join(dir, 'manifest.jsonl'), () => {
-    const locked = planEnable(dir);
-    if (locked.decision !== 'greenfield') return { ...locked, written: false };
+    const relocked = planEnable(dir);
+    if (relocked.decision !== 'greenfield') return { ...relocked, written: false };
+    const locked = { ...relocked, marker: markerWithAuth(auth) };
 
     const segDir = segmentDirPath(dir);
     const createdDir = !existsSync(segDir);

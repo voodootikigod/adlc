@@ -848,6 +848,26 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     }
   });
 
+  // AC15 — the marker's persisted auth mode is enforced by THIS package's
+  // resolver too (twin of gate-manifest's): a keyed forest written keylessly
+  // by any producer would strand keyed clones permanently.
+  it('AC15: a keyed-mode marker refuses a keyless ticket-evidence write before touching anything', () => {
+    const { root, dir } = gitRepo('feat/keyed-forest');
+    try {
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      writeFileSync(join(dir, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence()),
+        /keyed mode/,
+        'a keyless write into a keyed forest must refuse',
+      );
+      assert.deepEqual(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')), [], 'nothing may have been minted');
+      // The keyed write works.
+      recordTicketEvidence(root, baseEvidence({ key: 'twin-persist-key' }));
+      assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1);
+    } finally { clean(root); }
+  });
+
   // AC14 — mint-time committability, mirroring the gate-manifest twin.
   it('AC14: minting refuses when the branch-derived segment filename is gitignored — before any evidence is recorded', () => {
     const { root, dir } = gitRepo('release/1.0');
