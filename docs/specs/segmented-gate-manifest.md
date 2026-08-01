@@ -201,13 +201,18 @@ Two gaps remain open, deliberately deferred to a follow-up
 (T-01KYTQ4BADHSDJNBFNZHB2ZG5V) rather than folded into this same change, and
 a third is recorded as an accepted limitation rather than pending work:
 
-1. **Write-side recovery blindness** (open, follow-up ticket):
-   `resolveOpenSegment` (the WRITE side) never consults `recoverOpenSegment`
-   — a write that happens before any read on a fresh clone mints a fresh
-   segment rather than continuing a real, unambiguous, already-committed one
-   for this branch, and once that fresh segment's token exists, recovery's
-   fast path never scans further, permanently hiding the older evidence
-   again.
+1. **Write-side recovery blindness** (CLOSED, §7 point 1): `resolveOpenSegment`
+   (the WRITE side) used to never consult `recoverOpenSegment` — a write that
+   happened before any read on a fresh clone minted a needless fresh segment
+   rather than continuing a real, unambiguous, already-committed one for this
+   branch, and once that fresh segment's token existed, recovery's fast path
+   never scanned further, permanently hiding the older evidence. The writer
+   now tries the token, then the exact-`branch` recovery scan, and only then
+   mints (see §7 point 1 for the full resolution order, the fail-closed
+   ambiguity contract, and why a recovered match never writes the token).
+   This closure is what keeps the Threat model's in-scope promise for a lost
+   lineage token on a fresh clone true on the write side as well as the read
+   side.
 2. **Pre-`branch` segments unrecoverable** (open, follow-up ticket):
    segments minted before this field existed have no `branch` field and gain
    nothing from this mechanism — the original evidence-loss bug persists
@@ -346,16 +351,54 @@ in the existing test suite).
 
 When the repo is segmented (§4.7), `appendManifestEntry`:
 
-1. Resolves the open segment: `.adlc/manifest.d/.lineage` records
-   `{segment, branch}`; it is honored only when the named segment file exists,
-   its recorded lineage ULID matches, **and** the current Git branch equals the
-   token's branch (detached HEAD never matches). Any mismatch mints a new
-   segment: generate ULID, derive slug, and anchor its first entry (per §4.4)
-   to the current head line of the root if a root exists, else `anchor: null`
-   — and, per §4.4a, carry the exact minting branch as that entry's `branch`
-   field, so a reader can recover this segment later without a live token.
-   The writer never chases the token's previously-named segment, or any other
-   segment, as a fallback anchor target: two branches forked from the same
+1. Resolves the open segment, trying each of the following in order and
+   stopping at the first that yields exactly one segment:
+   a. `.adlc/manifest.d/.lineage` records `{segment, branch}`; honored only
+      when the named segment file exists, its recorded lineage ULID matches,
+      **and** the current Git branch equals the token's branch (detached HEAD
+      never matches this fast path).
+   b. Absent that, `recoverOpenSegment`'s exact-`branch` scan (§4.4a) — a
+      write must not mint a needless duplicate of a segment that already,
+      unambiguously, belongs to this checkout (gap 1 above: a write happening
+      before any read on a fresh clone, or after a lost token, used to
+      always mint fresh here, permanently hiding the real segment's older
+      evidence the instant the fresh one's token existed). More than one
+      candidate → refuse (ambiguous), the same fail-closed contract
+      `recoverOpenSegment` already gives readers: a writer must never
+      silently guess which of several candidates to extend. This is a
+      deliberate trade-off, surfaced by adversarial review: the same branch
+      legitimately owning two committed segments (the rootless-fork note
+      below) turns from a read-only limitation into a total write outage on
+      any token-less checkout of that branch until an operator resolves it
+      by hand (there is no `adopt`/repair command yet — a follow-up, not
+      solved here). Minting a THIRD segment instead of refusing was
+      considered and rejected: that is exactly gap 1's own bug, silently
+      multiplying duplicates rather than surfacing the conflict.
+   c. This resolution deliberately does NOT heal (write) the `.lineage` token
+      from a (b) match (adversarial-review finding): the token's downstream
+      trust value — `readOwnChains`'s keyless "peeked" path (§6) treats a
+      token match as proof this checkout itself minted the segment, and skips
+      all signature verification on that basis alone — depends on it being
+      written ONLY by a genuine mint, never from `recoverOpenSegment`'s
+      unauthenticated, branch-string-only match (§4.4a: "does not verify any
+      signature... only proves the claim, not that anyone with the key made
+      it"). Healing from it would launder an attacker-committed, unsigned,
+      branch-matching segment into the token-trusted fast path the moment any
+      keyless write recovered it. The cost of not healing is purely a
+      repeated (b) scan on the checkout's NEXT write — no correctness or
+      security cost, since recovery is idempotent.
+   Zero matches from either → mint a new segment: generate ULID, derive slug,
+   and anchor its first entry (per §4.4) to the current head line of the root
+   if a root exists, else `anchor: null` — and, per §4.4a, carry the exact
+   minting branch as that entry's `branch` field, so a reader can recover
+   this segment later without a live token. Only a segment minted HERE gets
+   its `.lineage` token written, so only after a genuine mint does the NEXT
+   resolution on this checkout take the fast (a) path; a segment resolved
+   via (b) leaves no token behind (per (c) above) and is re-scanned on the
+   next write.
+   The writer never chases a stale token's previously-named segment, or any
+   other segment, as a fallback anchor target when actually minting fresh:
+   two branches forked from the same
    root-less state legitimately mint independent `anchor: null` segments
    without coordinating, and whichever merges first must not retroactively
    invalidate the other's already-signed anchor — re-anchoring after the fact
@@ -534,5 +577,15 @@ anchor under the same signature-verifying ceremony rules).
 - **AC11 — prosecution:** P5 passes including the trust-root-tier cross-model
   approve bound to the reviewed revision. **Verify:** `adlc prosecute --base
   main` exits 0 on the implementation branch.
+- **AC12 — write-side recovery (gap 1):** a fresh clone of a branch with a
+  committed, `branch`-carrying segment S1, whose FIRST action is a real
+  write through the production producer, extends S1 rather than minting a
+  needless S2; the pre-clone evidence stays visible to a real consumer read
+  afterwards; recovery never writes the `.lineage` token; and a genuinely
+  ambiguous case (two candidate segments, no token) refuses through the
+  producer without minting. **Verify:** `node --test
+  packages/gate-manifest/test/segment-writer.test.mjs
+  packages/tickets/test/manifest-segments.test.mjs
+  --test-name-pattern='AC12'`.
 
 Suppressions: none. A later ticket must name and justify any.
