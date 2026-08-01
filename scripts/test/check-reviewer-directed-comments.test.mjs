@@ -948,3 +948,40 @@ test('recognizes "harmless" and "leave this/it closed" (round-11 finding 4)', ()
     assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
   }
 });
+
+test('recognizes "acceptable", "informational only", "approved exception", and "should remain closed" (round-12 finding 3)', () => {
+  for (const phrase of [
+    'Round 9 finding: acceptable; future audits should leave it closed.',
+    'Round 9 finding: informational only.',
+    'Round 9 finding: approved exception.',
+    'Round 9 finding: should remain closed.',
+  ]) {
+    assert.equal(runAllAdded('lib/thing.mjs', [`// ${phrase}`]), 2, `expected "${phrase}" to be flagged`);
+  }
+});
+
+test('catches a real block comment inside a template-literal `${...}` interpolation (round-12 finding 4)', () => {
+  // `${...}` is real JS expression context, not string content — a comment
+  // inside it is real. Without tracking interpolation, the opening backtick
+  // makes the quote-balance scan treat everything after it (including the
+  // interpolation) as string content, silently excluding a real block comment.
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    'const x = `${value /* round 9 finding: not a defect */}`;',
+  ]), 2);
+});
+
+test('a nested object literal inside a template interpolation does not end the interpolation early, so template-literal state resyncs correctly afterward', () => {
+  // `{ a: 1 }` is a nested brace pair inside the interpolation, not the end of
+  // it — without depth tracking, seeing its `}` would wrongly end interpolation
+  // mode one brace early, leaving the SAME line's quote-tracking desynced for
+  // everything after (here, a real comment following the whole template literal).
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    'const x = `${fn({ a: 1 })}`; /* round 9 finding: not a defect */',
+  ]), 2);
+});
+
+test('an ordinary template literal with no interpolation is still treated as a string (negative control)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    'const glob = `src/critical/**`; /* round 9 finding: not a defect */',
+  ]), 2);
+});
