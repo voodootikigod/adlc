@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planEnable, enable } from '../lib/enable.mjs';
+import { planEnable, enable, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
 import { isSegmentedRepo, markerPath } from '../lib/lineage.mjs';
 import { appendManifestEntry } from '../lib/record.mjs';
 import { readRawLines } from '../lib/forest.mjs';
@@ -183,6 +183,22 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
       assert.equal(out.decision, 'already-enabled');
       assert.equal(out.written, false);
       assert.deepEqual(readFileSync(markerPath(dir)), bytes, 'the marker must not be rewritten');
+    } finally { clean(root); }
+  });
+
+  it('AC10: the remediation advice WORKS — appending exactly the advertised negation lines converts the refusal into a committable enable', () => {
+    const { root, dir } = gitRepo({ gitignore: IGNORED });
+    try {
+      assert.equal(enable(dir, { cwd: root, write: true }).decision, 'refuse-ignored');
+      // Follow the advice verbatim — the exported lines ARE the advice; if
+      // they shrink or drift, this stops converting the refusal and fails.
+      writeFileSync(join(root, '.gitignore'), IGNORED + MARKER_NEGATION_LINES.join('\n') + '\n');
+      const out = enable(dir, { cwd: root, write: true });
+      assert.equal(out.decision, 'greenfield');
+      assert.equal(out.written, true);
+      // The advice's whole point: the marker must now actually be stageable.
+      const r = spawnSync('git', ['check-ignore', '-q', '--', '.adlc/manifest.d/.store.json'], { cwd: root });
+      assert.equal(r.status, 1, 'the written marker must NOT be gitignored after following the advice');
     } finally { clean(root); }
   });
 

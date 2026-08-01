@@ -145,8 +145,8 @@ writing nothing, when:
   hand, not silently adopt);
 - `.gitignore` would ignore the marker — an ignored marker never commits, so
   every other checkout would silently stay in single-file mode; the error
-  names the negation lines to add (`!.adlc/manifest.d/` and
-  `!.adlc/manifest.d/**`).
+  names the negation line to add (`!.adlc/manifest.d/` — sufficient on its
+  own, since a gitignore `*` does not cross `/`).
 
 `--json` emits exactly one JSON document on stdout in every mode.
 

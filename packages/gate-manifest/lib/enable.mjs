@@ -26,9 +26,14 @@ import { segmentDirPath, readRawLines } from './forest.mjs';
 // isSegmentedRepo whether it recognizes the marker, and rolls back if not.
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
 
-// The negation block a repo needs so the marker (and segments) actually
-// commit. Mirrors this repository's own .gitignore reference shape.
-export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/', '!.adlc/manifest.d/**']);
+// The minimal .gitignore addition a repo needs so the marker (and segments)
+// actually commit. One line is sufficient: a gitignore `*` does not cross
+// `/`, so `.adlc/*` only matches the directory itself — re-including the
+// directory frees everything inside it. (This repository's own .gitignore
+// also carries `!.adlc/manifest.d/**` as belt-and-suspenders; the advice
+// here is the sufficient set, verified end-to-end by the apply-the-advice
+// test.)
+export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/']);
 
 /**
  * True when git would ignore the segment directory — which would make enable
@@ -43,9 +48,9 @@ function markerWouldBeIgnored(dir, cwd) {
   const probe = `${relative(cwd, segmentDirPath(dir)).split(sep).join('/')}/`;
   try {
     execFileSync('git', ['check-ignore', '-q', '--', probe], { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
-    return true; // exit 0: a pattern matches — the marker would never commit
+    return true; // check-ignore succeeded: a pattern matches — the marker would never commit
   } catch (err) {
-    return false; // exit 1 (no match) or no git repo/binary — nothing blocks committing
+    return false; // no match, or no git repo/binary — nothing blocks committing
   }
 }
 
@@ -91,7 +96,7 @@ export function planEnable(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   if (markerWouldBeIgnored(dir, cwd)) {
     return {
       decision: 'refuse-ignored',
-      reason: `.gitignore would ignore the activation marker, so every other checkout would silently stay in single-file mode; add these lines first: ${MARKER_NEGATION_LINES.join(' and ')}`,
+      reason: `.gitignore would ignore the activation marker, so every other checkout would silently stay in single-file mode; add first: ${MARKER_NEGATION_LINES.join(' and ')}`,
     };
   }
   return { decision: 'greenfield', markerPath: markerPath(dir), marker: { ...MARKER } };
