@@ -9,7 +9,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -191,7 +191,7 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
     // descendants directly and needs the descendant negation too — the
     // advertised set must be sufficient for BOTH (adversarial-review
     // finding: a one-line advice left `.adlc/**` repos stuck refusing).
-    for (const style of ['.adlc/*\n', '.adlc/**\n']) {
+    for (const style of ['.adlc/*\n', '.adlc/**\n', '*.jsonl\n']) {
       const { root, dir } = gitRepo({ gitignore: style });
       try {
         assert.equal(enable(dir, { cwd: root, write: true }).decision, 'refuse-ignored', `style=${style.trim()}`);
@@ -201,11 +201,45 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
         const out = enable(dir, { cwd: root, write: true });
         assert.equal(out.decision, 'greenfield', `style=${style.trim()}`);
         assert.equal(out.written, true);
-        // The advice's whole point: the marker must now actually be stageable.
+        // The advice's whole point: the marker must now actually be stageable...
         const r = spawnSync('git', ['check-ignore', '-q', '--', '.adlc/manifest.d/.store.json'], { cwd: root });
         assert.equal(r.status, 1, `the written marker must NOT be gitignored after following the advice (style=${style.trim()})`);
+        // ...and so must a REAL recorded segment — a `*.jsonl`-style rule
+        // ignores segments while matching neither the dir nor the marker.
+        appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: 'advice-key' });
+        const seg = readdirSync(join(dir, 'manifest.d')).find((n) => n.endsWith('.jsonl'));
+        const s = spawnSync('git', ['check-ignore', '-q', '--', `.adlc/manifest.d/${seg}`], { cwd: root });
+        assert.equal(s.status, 1, `a recorded segment must NOT be gitignored after following the advice (style=${style.trim()})`);
       } finally { clean(root); }
     }
+  });
+
+  it('AC10: a segment-targeting ignore rule refuses even though the dir and marker probes alone would pass', () => {
+    for (const style of ['*.jsonl\n', '.adlc/manifest.d/*.jsonl\n']) {
+      const { root, dir } = gitRepo({ gitignore: style });
+      try {
+        const out = enable(dir, { write: true });
+        assert.equal(out.decision, 'refuse-ignored', `style=${style.trim()}: recorded segments would silently stay local`);
+        assert.equal(existsSync(join(dir, 'manifest.d')), false);
+      } finally { clean(root); }
+    }
+  });
+
+  it('refuses a symlinked manifest.d and leaves the external target untouched — never writes through the link', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    const external = mkdtempSync(join(tmpdir(), 'enable-symlink-target-'));
+    try {
+      symlinkSync(external, join(dir, 'manifest.d'));
+      const out = enable(dir, { write: true });
+      assert.equal(out.decision, 'refuse-broken-manifest-dir');
+      assert.match(out.reason, /symlink|not a real directory/);
+      assert.deepEqual(readdirSync(external), [], 'the symlink target must stay byte-identical — nothing written through the link');
+      // A DANGLING symlink must refuse too: existsSync follows links and
+      // reports "absent", which would otherwise fall through to greenfield.
+      rmSync(join(dir, 'manifest.d'));
+      symlinkSync(join(external, 'never-created'), join(dir, 'manifest.d'));
+      assert.equal(enable(dir, { write: true }).decision, 'refuse-broken-manifest-dir');
+    } finally { clean(root); clean(external); }
   });
 
   it('AC10: a marker-SPECIFIC ignore rule refuses even though the directory probe alone would pass', () => {

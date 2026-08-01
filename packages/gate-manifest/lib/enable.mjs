@@ -12,7 +12,7 @@
 // from lineage.mjs, changes no dispatch site (those files are this ticket's
 // frozen rails).
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
@@ -79,7 +79,12 @@ function markerWouldBeIgnored(dir) {
   if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return false; // no git binary, or not a repository
   const rel = relative(probeCwd, segmentDirPath(dir)).split(sep).join('/');
   let ignored = false;
-  for (const probe of [`${rel}/`, `${rel}/.store.json`]) {
+  // Three probes, each catching a rule shape the others miss (adversarial-
+  // review findings): the directory (`.adlc/*`-style), the marker file
+  // (marker-specific rules), and a representative grammar-valid segment
+  // name — a `*.jsonl`-style rule matches neither the directory nor the
+  // marker, yet would silently keep every recorded segment local.
+  for (const probe of [`${rel}/`, `${rel}/.store.json`, `${rel}/enable-probe-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl`]) {
     const status = run(['check-ignore', '-q', '--', probe]);
     if (status === 0) { ignored = true; break; } // a pattern matches — this path would never commit
     if (status !== 1) {
@@ -87,6 +92,12 @@ function markerWouldBeIgnored(dir) {
     }
   }
   return ignored;
+}
+
+// existsSync FOLLOWS symlinks, so a dangling symlink reports "absent" — the
+// no-follow refusal below needs its own look at the link itself.
+function lstatIsSymlink(p) {
+  try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
 }
 
 /**
@@ -115,11 +126,24 @@ export function planEnable(dir = ADLC_DIR) {
     return { decision: 'already-enabled', reason: 'forest mode is already active for this repository' };
   }
   const segDir = segmentDirPath(dir);
-  if (existsSync(segDir) && readdirSync(segDir).length > 0) {
-    return {
-      decision: 'refuse-broken-manifest-dir',
-      reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
-    };
+  // No-follow policy, matching the rest of the store (adversarial-review
+  // finding): a symlinked manifest.d would route the marker write outside
+  // the workspace, and forest verification rejects a symlinked store anyway
+  // — refuse up front instead of succeeding into an unusable state. lstat,
+  // never stat: following the link is exactly the bug.
+  if (existsSync(segDir) || lstatIsSymlink(segDir)) {
+    if (lstatIsSymlink(segDir) || !lstatSync(segDir).isDirectory()) {
+      return {
+        decision: 'refuse-broken-manifest-dir',
+        reason: `${segDir} exists but is not a real directory (symlink or other non-directory) — refusing to write through it`,
+      };
+    }
+    if (readdirSync(segDir).length > 0) {
+      return {
+        decision: 'refuse-broken-manifest-dir',
+        reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
+      };
+    }
   }
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
   if (rootLines.length > 0) {
