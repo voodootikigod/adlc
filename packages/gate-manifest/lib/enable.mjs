@@ -69,7 +69,7 @@ function markerWouldBeIgnored(dir) {
   const env = gitProbeEnv();
   const run = (args) => {
     try {
-      execFileSync('git', args, { cwd: probeCwd, env, stdio: ['ignore', 'ignore', 'ignore'] });
+      execFileSync('git', args, { cwd: probeCwd, env, stdio: 'ignore' });
       return 0;
     } catch (err) {
       if (err.code === 'ENOENT') return 'no-git';
