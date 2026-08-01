@@ -42,6 +42,7 @@
  * scripts/block-secret-exposure.mjs) is to accept the rare false positive
  * over the risk of a silent bypass.
  *
+ * Usage: node scripts/check-reviewer-directed-comments.mjs <base-ref>
  * Exit codes: 0 = clean, 2 = a violation was found, 1 = could not compute the diff.
  */
 

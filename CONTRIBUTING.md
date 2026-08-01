@@ -121,14 +121,17 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
 
 1. Fork the repo and create a branch (`feat/<name>`, `fix/<name>`, …).
 2. Make your change with tests, then run `npm run preflight` — **not just
-   `npm test`**. CI blocks a PR on three gates and the suite is only one of
-   them; preflight runs all three locally, in CI's order:
+   `npm test`**. CI blocks a PR on several gates and the suite is only one of
+   them; preflight runs all of them locally, in CI's order:
 
    | gate | what it checks |
    | --- | --- |
    | tests | the full workspace suite |
    | rail-freeze | no frozen rail edited, and no *existing* ticket changed in `.adlc/tickets.json` |
    | mutation-gate | changed code has tests that notice it being broken |
+   | findings-ledger | the committed findings ledger carries no secret or raw dump (git-boundary backstop, ADR 0014) |
+   | findings-append-only | the durable findings ledger is only extended, never deleted/truncated/rewritten (ADR 0014) |
+   | reviewer-directed-comments | no added comment instructs a future reviewer how to classify a finding (round-reference + classification phrase) |
 
    Note `adlc rails-guard` is **not** the CI check — `scripts/rails-guard-ci.mjs`
    is stricter, and a clean `adlc rails-guard` has already been mistaken for
