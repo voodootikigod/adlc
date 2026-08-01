@@ -5,7 +5,7 @@
 // an on-disk in-flight record that the NEXT run recovers from when the kill was
 // not catchable at all.
 
-import { writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
+import { readFileSync, realpathSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
@@ -16,7 +16,7 @@ import {
 import { runMutant, runTest } from '../lib/runner.mjs';
 import {
   ownerStateFor, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
-  resolveTarget, recordPathFor, writeFileAtomic,
+  resolveTarget, recordPathFor, writeFileAtomic, sweepStaleTemps,
 } from '../lib/inflight.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
 
@@ -131,8 +131,10 @@ if (!existsSync(gitDir)) {
 //
 // MUST run before the dirty-tree refusal below, because the dirt is very often
 // OUR OWN. Every in-process restore path dies with the process, so a SIGKILL, an
-// OOM kill or a power loss mid-trial leaves a live mutant in the working tree as
-// an unstaged edit. The next run then refuses with "commit or stash first", which
+// OOM kill or a tool/CI timeout mid-trial leaves a live mutant in the working
+// tree as an unstaged edit. (Process death, NOT power loss: the page cache
+// survives a killed process, so no fsync is needed or claimed — see
+// writeFileAtomic.) The next run then refuses with "commit or stash first", which
 // reads as if the USER's work is in the way; the reflex is to commit it, and that
 // is how a mutant ships. Observed for real: a tool timeout stranded `? 130 :`
 // flipped to `? 131 :`, and an `authorized = false` -> `true` flip before that.
@@ -176,6 +178,10 @@ function recoverInflight() {
     );
     return null;
   }
+
+  // A SIGKILL between creating a temp and renaming it leaves an untracked
+  // orphan, and the dirty-tree check would then refuse every future run.
+  sweepStaleTemps(target);
 
   let current;
   try {
@@ -530,7 +536,7 @@ function emergencyRestore() {
   let restored = true;
   if (currentFilePath !== null && currentOriginal !== null) {
     try {
-      writeFileSync(currentFilePath, currentOriginal, 'utf8');
+      writeFileAtomic(currentFilePath, currentOriginal);
     } catch {
       // Best-effort — we're in a signal handler.
       restored = false;

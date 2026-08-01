@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import {
   probeOwner, isWellFormed, decideRecovery, isContainedRelPath, resolveTarget,
   writeFileAtomic, writeRecord, readRecord, clearRecord, RECORD_VERSION,
-  makeTempPath, ownerStateFor,
+  makeTempPath, ownerStateFor, sweepStaleTemps,
 } from '../lib/inflight.mjs';
 
 function killError(code) {
@@ -275,19 +275,42 @@ test('an atomic write refuses a pre-existing temp path instead of following it',
 
 test('a failed atomic write leaves no temp file behind to wedge the next run', () => {
   // An orphaned *.tmp-* is untracked, and hollow-test refuses to run on a dirty
-  // tree — so litter from a failed write would block the NEXT run entirely.
+  // tree, so litter from a failed write would block the NEXT run entirely.
+  //
+  // The failure is injected AFTER the temp file exists. An earlier version of this
+  // test used a nonexistent parent directory, which made openSync fail before any
+  // temp was created — so deleting the cleanup code would not have failed it.
   const dir = mkdtempSync(join(tmpdir(), 'hollow-litter-'));
   try {
     const target = join(dir, 'thing.mjs');
     writeFileSync(target, 'original');
-    // chmod of a path that vanishes mid-write is awkward to force; instead make
-    // the RENAME fail by pointing the write at a target whose parent is removed.
-    const doomed = join(dir, 'gone', 'thing.mjs');
-    assert.throws(() => writeFileAtomic(doomed, 'x'));
+
+    // A Symbol cannot be written, so writeFileSync throws once the temp is open.
+    assert.throws(() => writeFileAtomic(target, Symbol('unwritable')));
+
     assert.deepEqual(
       readdirSync(dir).filter((e) => e.includes('.tmp-')), [],
-      'a failed write left a temp file behind',
+      'a failed write left its temp file behind',
     );
+    assert.equal(readFileSync(target, 'utf8'), 'original', 'target was damaged by the failed write');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stale temps from a DEAD run are swept, and a live run\'s are left alone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-sweep-'));
+  try {
+    const target = join(dir, 'thing.mjs');
+    writeFileSync(target, 'original');
+    writeFileSync(`${target}.tmp-4242-abc`, 'orphan from a killed run');
+    writeFileSync(`${target}.tmp-9999-def`, 'a live run is mid-write');
+
+    const swept = sweepStaleTemps(target, { probe: (pid) => (pid === 4242 ? 'dead' : 'alive') });
+
+    assert.equal(swept, 1);
+    assert.equal(existsSync(`${target}.tmp-4242-abc`), false, 'dead run\'s orphan was not swept');
+    assert.equal(existsSync(`${target}.tmp-9999-def`), true, 'pulled a temp out from under a LIVE run');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

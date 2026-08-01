@@ -3,7 +3,7 @@
 // Returns { killed: boolean, timedOut: boolean, exitCode: number | null }
 
 import { spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { writeFileAtomic } from './inflight.mjs';
 
 // Strip NODE_TEST_CONTEXT from the child environment so that a test command
 // using `node --test` does not hit Node.js v22's recursive-invocation guard
@@ -107,7 +107,12 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   let invalid;
   let syntax;
   try {
-    writeFileSync(filePath, mutated, 'utf8');
+    // ATOMIC, not in place. `writeFileSync` truncates before it writes, so a
+    // SIGKILL inside that window leaves bytes matching NEITHER the original nor
+    // the mutant — which recovery can only treat as a conflict, wedging the
+    // worktree on a file nobody actually edited. temp + rename means the file is
+    // only ever the old bytes or the new ones.
+    writeFileAtomic(filePath, mutated);
     // SYNTAX GATE, before the test command (#293).
     //
     // `killed` is inferred from a non-zero exit, and a file that does not PARSE
@@ -126,8 +131,9 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
     invalid = syntax === 'invalid';
     if (syntax === 'valid') trial = runTest(testCmd, timeoutMs, cwd);
   } finally {
-    // Always restore original content, even if the test run threw.
-    writeFileSync(filePath, original, 'utf8');
+    // Always restore original content, even if the test run threw — and
+    // atomically, for the same reason as the mutation write above.
+    writeFileAtomic(filePath, original);
   }
 
   // An invalid mutant is DISCARDED — neither killed nor survived. Counting it

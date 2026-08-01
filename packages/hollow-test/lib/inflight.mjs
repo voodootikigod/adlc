@@ -10,7 +10,7 @@
 // package's tests once per mutant.
 
 import {
-  openSync, closeSync, writeFileSync, renameSync, unlinkSync,
+  openSync, closeSync, writeFileSync, renameSync, unlinkSync, readdirSync,
   readFileSync, existsSync, lstatSync, statSync, chmodSync, realpathSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
@@ -235,6 +235,39 @@ export function resolveTarget(repoRoot, relFile) {
     return null; // missing target, or a path we cannot resolve: never write it
   }
   return absolute;
+}
+
+/**
+ * Remove temp files a DEAD run left beside `target`.
+ *
+ * writeFileAtomic unlinks its own temp in a `finally`, which a SIGKILL never
+ * runs. The orphan is untracked, and hollow-test refuses to run on a dirty tree,
+ * so one leftover would wedge every later run — the same "clean up after us by
+ * hand" failure this whole feature exists to remove.
+ *
+ * Only temps whose owning pid is definitely gone are swept, so a concurrent run's
+ * in-progress write is never pulled out from under it.
+ */
+export function sweepStaleTemps(target, { probe = probeOwner } = {}) {
+  const dir = dirname(target);
+  const prefix = `${basename(target)}.tmp-`;
+  let swept = 0;
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const pid = Number.parseInt(entry.slice(prefix.length).split('-')[0], 10);
+    if (!Number.isInteger(pid) || probe(pid) !== 'dead') continue;
+    try {
+      unlinkSync(join(dir, entry));
+      swept += 1;
+    } catch { /* someone else got there first */ }
+  }
+  return swept;
 }
 
 export function recordPathFor(gitDir) {
