@@ -207,12 +207,16 @@ a third is recorded as an accepted limitation rather than pending work:
    rather than continuing a real, unambiguous, already-committed one for this
    branch, and once that fresh segment's token existed, recovery's fast path
    never scanned further, permanently hiding the older evidence. The writer
-   now tries the token, then the exact-`branch` recovery scan, and only then
-   mints (see §7 point 1 for the full resolution order, the fail-closed
-   ambiguity contract, and why a recovered match never writes the token).
-   This closure is what keeps the Threat model's in-scope promise for a lost
-   lineage token on a fresh clone true on the write side as well as the read
-   side.
+   now tries the token, then — with a configured key only — the
+   authenticated exact-`branch` recovery scan, and only then mints (see §7
+   point 1 for the full resolution order, the key-gating that mirrors the
+   reader, the fail-closed ambiguity contract, and why a recovered match
+   never writes the token). This closure keeps the Threat model's in-scope
+   promise for a lost lineage token on a fresh clone true on the write side
+   for KEYED configurations; a keyless writer mints fresh by design — the
+   keyless reader's own contract refuses recovered content it cannot
+   authenticate, so extending it would strand the checkout, and a fresh
+   token-owned segment is the one shape keyless reads trust.
 2. **Pre-`branch` segments unrecoverable** (open, follow-up ticket):
    segments minted before this field existed have no `branch` field and gain
    nothing from this mechanism — the original evidence-loss bug persists
@@ -357,12 +361,25 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
       when the named segment file exists, its recorded lineage ULID matches,
       **and** the current Git branch equals the token's branch (detached HEAD
       never matches this fast path).
-   b. Absent that, `recoverOpenSegment`'s exact-`branch` scan (§4.4a) — a
-      write must not mint a needless duplicate of a segment that already,
-      unambiguously, belongs to this checkout (gap 1 above: a write happening
+   b. Absent that, AND ONLY WITH A CONFIGURED KEY, `recoverOpenSegment`'s
+      exact-`branch` scan (§4.4a), authenticated before use — a keyed write
+      must not mint a needless duplicate of a segment that already,
+      verifiably, belongs to this checkout (gap 1 above: a write happening
       before any read on a fresh clone, or after a lost token, used to
       always mint fresh here, permanently hiding the real segment's older
-      evidence the instant the fresh one's token existed). More than one
+      evidence the instant the fresh one's token existed). Recovery is
+      KEY-GATED, mirroring §6's reader contract exactly: a keyless writer
+      that extended a recovered segment would strand the checkout — the
+      keyless reader refuses recovered content it cannot authenticate, so
+      every subsequent read/push would fail loudly and permanently — so a
+      keyless writer always mints fresh and writes its own token, whose
+      peeked path the keyless reader does trust. A keyed writer
+      authenticates the single candidate (chain intact under the key with
+      no tampered or unsigned-after-signed entry, and at least one entry
+      the key verifies — the same acceptance §6 gives a recovered read) and
+      REFUSES, never extends and never mints past, a candidate that fails:
+      minting past an unauthenticatable same-branch segment would silently
+      fork the branch's lineage, gap 1's own bug. More than one
       candidate → refuse (ambiguous), the same fail-closed contract
       `recoverOpenSegment` already gives readers: a writer must never
       silently guess which of several candidates to extend. This is a
@@ -391,7 +408,13 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
    and anchor its first entry (per §4.4) to the current head line of the root
    if a root exists, else `anchor: null` — and, per §4.4a, carry the exact
    minting branch as that entry's `branch` field, so a reader can recover
-   this segment later without a live token. Only a segment minted HERE gets
+   this segment later without a live token. Before anything is written, the
+   minted FILENAME is probed against `.gitignore` and the mint refuses if it
+   is ignored: a branch-derived slug can match an ignore rule that `enable`'s
+   representative probes cannot anticipate (e.g. `release-*.jsonl` on a
+   `release/...` branch), and evidence recorded into an ignored file exists
+   only in that checkout — never in CI or any other clone — which is silent
+   evidence divergence, refused fail-closed rather than recorded blindly. Only a segment minted HERE gets
    its `.lineage` token written, so only after a genuine mint does the NEXT
    resolution on this checkout take the fast (a) path; a segment resolved
    via (b) leaves no token behind (per (c) above) and is re-scanned on the
@@ -587,5 +610,18 @@ anchor under the same signature-verifying ceremony rules).
   packages/gate-manifest/test/segment-writer.test.mjs
   packages/tickets/test/manifest-segments.test.mjs
   --test-name-pattern='AC12'`.
+- **AC13 — keyless write symmetry:** a keyless fresh clone's first write
+  MINTS fresh with a token (recovery is key-gated, mirroring the reader) and
+  the checkout stays functional; a keyed writer refuses an unauthenticatable
+  single candidate without extending or duplicating it. **Verify:** `node
+  --test packages/gate-manifest/test/segment-writer.test.mjs
+  packages/tickets/test/manifest-segments.test.mjs
+  --test-name-pattern='AC13'`.
+- **AC14 — mint-time committability:** with an ignore rule matching the
+  branch-derived slug, the first write on that branch refuses before
+  recording any evidence, in both producers. **Verify:** `node --test
+  packages/gate-manifest/test/segment-writer.test.mjs
+  packages/tickets/test/manifest-segments.test.mjs
+  --test-name-pattern='AC14'`.
 
 Suppressions: none. A later ticket must name and justify any.

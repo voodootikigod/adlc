@@ -117,7 +117,7 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
     const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key });
     if (existing) return existing;
 
-    const resolved = resolveOpenSegment(dir, { cwd: dirname(dir) });
+    const resolved = resolveOpenSegment(dir, { cwd: dirname(dir), key });
     const targetPath = segmentPath(dir, resolved.name);
     mkdirSync(dirname(targetPath), { recursive: true });
     return withManifestLock(targetPath, () => {

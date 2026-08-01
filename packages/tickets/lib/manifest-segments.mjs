@@ -32,7 +32,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { sha256, canonicalJson } from './canonical.mjs';
 
 const SEGMENT_DIRNAME = 'manifest.d';
@@ -852,28 +852,85 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   return { name: candidates[0], isNew: false };
 }
 
+// Mint-time committability probe — duplicated from
+// @adlc/gate-manifest/lib/lineage.mjs's identical helper (twin convention;
+// this package deliberately has no gate-manifest dependency). Evidence
+// recorded into a gitignored file exists only in this checkout, never in CI
+// or any other clone — silent divergence, refused before anything is
+// written. Scrubbed child env; soft-pass outside git; real probe failures
+// throw rather than recording blindly.
+function assertSegmentPathCommittable(dir, name) {
+  const probeCwd = dirname(dir);
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  const run = (args) => {
+    try {
+      execFileSync('git', args, { cwd: probeCwd, env, stdio: 'ignore' });
+      return 0;
+    } catch (err) {
+      if (err.code === 'ENOENT') return 'no-git';
+      return err.status ?? 'error';
+    }
+  };
+  if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return; // no git binary, or not a repository
+  const rel = relative(probeCwd, segmentPath(dir, name)).split(sep).join('/');
+  const status = run(['check-ignore', '-q', '--', rel]);
+  if (status === 0) {
+    throw new Error(
+      `refusing to mint segment ${name}: .gitignore would ignore its file, so evidence recorded there would exist `
+      + 'only in this checkout — never in CI or any other clone; fix the ignore rules (gate-manifest enable names '
+      + 'the required negation lines) and retry',
+    );
+  }
+  if (status !== 1) {
+    throw new Error(`git check-ignore failed while probing segment ${name} — cannot verify the segment is committable, refusing to record evidence blindly`);
+  }
+}
+
 /**
  * Resolve which segment the next ticket-evidence append should target,
  * mirroring @adlc/gate-manifest/lib/lineage.mjs's resolveOpenSegment (spec
  * §7.1) so both producers share the SAME open segment for one branch rather
- * than each minting their own. Tries (a) the local token, then (b)
- * `recoverOpenSegment`'s exact-`branch` scan before minting fresh
- * (T-MANIFEST-FOREST follow-up, gap 1: write-side recovery blindness) — see
- * that sibling function's doc for the full rationale. Deliberately does NOT
- * heal (write) the token from a (b) match — see
- * @adlc/gate-manifest/lib/lineage.mjs's identical resolveOpenSegment for why:
- * the token's downstream trust value (readOwnChains's keyless "peeked" path)
- * depends on it being written ONLY by a genuine mint, never from
- * recoverOpenSegment's unauthenticated, branch-string-only match.
+ * than each minting their own. Tries (a) the local token, then — WITH A KEY
+ * ONLY — (b) `recoverOpenSegment`'s exact-`branch` scan, authenticated
+ * before use, before minting fresh (T-MANIFEST-FOREST follow-up, gap 1) —
+ * see the sibling function's doc for the full rationale. Recovery is
+ * KEY-GATED, mirroring readOwnChains' reader contract: a keyless writer
+ * extending a recovered segment would strand the checkout (the keyless
+ * reader refuses recovered content it cannot authenticate), so a keyless
+ * writer mints fresh and writes its own token instead. A keyed writer whose
+ * single candidate cannot be authenticated REFUSES — never extends, never
+ * mints a duplicate. Deliberately never heals (writes) the token from a (b)
+ * match. At mint time the actual segment filename is probed against
+ * .gitignore and refused if ignored — evidence written into an ignored file
+ * is local-only, silent divergence.
  *
  * @returns {{ name: string, isNew: boolean, anchor?: object|null, branch?: string }}
  */
-export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
+export function resolveOpenSegment(dir, { cwd = dirname(dir), key = null } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
 
-  const recovered = recoverOpenSegment(dir, { cwd });
-  if (recovered) return recovered;
+  if (key !== null) {
+    const recovered = recoverOpenSegment(dir, { cwd });
+    if (recovered) {
+      const lines = readRawLines(segmentPath(dir, recovered.name));
+      const authenticated = chainIsIntact(lines, key) && lines.some((line) => {
+        try { return entrySigValid(key, JSON.parse(line)); } catch { return false; }
+      });
+      if (!authenticated) {
+        throw new Error(
+          `segment ${recovered.name} declares this branch but cannot be authenticated with the configured key `
+          + '(broken chain, forged entry, or no verifiably signed entry) — refusing to extend it, and refusing to '
+          + 'mint a duplicate past it (that would silently fork this branch\'s lineage)',
+        );
+      }
+      return recovered;
+    }
+  }
 
   const branch = currentBranch(cwd);
   const rootLines = readRawLines(join(dir, 'manifest.jsonl'));
@@ -887,6 +944,7 @@ export function resolveOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
+  assertSegmentPathCommittable(dir, name);
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   // branch is omitted (not `null`) on a detached-HEAD mint — see
   // gate-manifest/lib/lineage.mjs's identical resolveOpenSegment for why no

@@ -724,11 +724,15 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     }
   });
 
+  // Keyed: recovery (and its ambiguity refusal) is key-gated — a keyless
+  // writer skips recovery and mints fresh by design, mirroring the keyless
+  // reader's refusal to trust recovered content.
   it('AC12: refuses (ambiguous) rather than mint when recovery finds more than one candidate segment for this branch', () => {
+    const KEY = 'ambiguity-key';
     const { root, dir } = gitRepo('feat/ambiguous-write');
     try {
       activate(dir);
-      recordTicketEvidence(root, baseEvidence());
+      recordTicketEvidence(root, baseEvidence({ key: KEY }));
       const slug = deriveSlug('feat/ambiguous-write');
       const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
       writeFileSync(
@@ -742,11 +746,88 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       // A REAL write must refuse — asserting on the resolver alone would not
       // show that the refusal actually propagates out through the producer.
       assert.throws(
-        () => recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-ambiguous' })),
+        () => recordTicketEvidence(root, baseEvidence({ key: KEY, transactionId: 'tx-ambiguous' })),
         /ambiguous/,
         'a WRITE must refuse rather than silently pick one of two candidate segments to extend',
       );
       assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 2, 'the refused write must not have minted a third segment');
+    } finally { clean(root); }
+  });
+
+  // AC13 — recovery is KEY-GATED, mirroring readOwnChains: keyless writers
+  // mint fresh (extending a recovered segment would strand the checkout,
+  // since the keyless reader refuses recovered content); keyed writers
+  // refuse an unauthenticatable candidate.
+  it('AC13: a KEYLESS fresh clone whose first action is a write mints fresh with a token, and stays functional', () => {
+    const { root, dir } = gitRepo('feat/keyless-clone');
+    let clonedRoot;
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ ticketId: 'ORIGINAL' }));
+      const segs = () => readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+      const s1 = segs()[0];
+      execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${s1}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'keyless evidence'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'adlc-ticket-keyless-clone-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/keyless-clone', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+      const s1Bytes = readFileSync(join(clonedDir, 'manifest.d', s1));
+
+      recordTicketEvidence(clonedRoot, baseEvidence({ ticketId: 'KEYLESS-AFTER-CLONE', transactionId: 'tx-2' }));
+      const clonedSegs = readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+      assert.equal(clonedSegs.length, 2, 'keyless write must MINT fresh, never extend a segment the keyless reader would refuse');
+      assert.deepEqual(readFileSync(join(clonedDir, 'manifest.d', s1)), s1Bytes, 'the committed segment stays byte-identical');
+      assert.equal(existsSync(lineagePath(clonedDir)), true, 'a genuine mint writes its token');
+      // Not stranded: the keyless token-path read works.
+      const chains = readOwnChains(clonedDir, { cwd: clonedRoot, key: null });
+      assert.equal(chains.length, 2, 'root + the token-owned segment remain readable keylessly');
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
+
+  it('AC13: a KEYED writer refuses an unauthenticatable single candidate — no extend, no duplicate mint', () => {
+    const { root, dir } = gitRepo('feat/unauth-candidate');
+    let clonedRoot;
+    try {
+      activate(dir);
+      recordTicketEvidence(root, baseEvidence({ ticketId: 'UNSIGNED' })); // keyless → unsigned entries
+      const s1 = readdirSync(join(dir, 'manifest.d')).find((n) => n.endsWith('.jsonl'));
+      execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${s1}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'unsigned segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'adlc-ticket-unauth-clone-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/unauth-candidate', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+
+      assert.throws(
+        () => recordTicketEvidence(clonedRoot, baseEvidence({ key: 'a-real-key', ticketId: 'AFTER', transactionId: 'tx-2' })),
+        /cannot be authenticated|no signed entries|unsigned/,
+        'an unauthenticatable same-branch candidate must refuse, not fork the lineage',
+      );
+      assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'no duplicate segment may have been minted');
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'no token may have been written');
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
+
+  // AC14 — mint-time committability, mirroring the gate-manifest twin.
+  it('AC14: minting refuses when the branch-derived segment filename is gitignored — before any evidence is recorded', () => {
+    const { root, dir } = gitRepo('release/1.0');
+    try {
+      activate(dir);
+      writeFileSync(join(root, '.gitignore'), '.adlc/manifest.d/release-*.jsonl\n');
+      assert.throws(
+        () => recordTicketEvidence(root, baseEvidence()),
+        /refusing to mint/,
+        'evidence written into an ignored file would be local-only — silent divergence',
+      );
+      assert.equal(readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 0, 'nothing may have been recorded');
+      assert.equal(existsSync(lineagePath(dir)), false, 'no token may have been written');
     } finally { clean(root); }
   });
 });

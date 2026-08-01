@@ -59,7 +59,7 @@ function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd, key }) {
   if (!integrity.valid) {
     throw new Error(`manifest forest is invalid: ${integrity.message}`);
   }
-  const resolved = resolveOpenSegment(dir, { cwd });
+  const resolved = resolveOpenSegment(dir, { cwd, key });
   const targetPath = segmentPath(dir, resolved.name);
   mkdirSync(segmentDirPath(dir), { recursive: true });
   return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion, key));

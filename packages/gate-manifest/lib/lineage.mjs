@@ -7,10 +7,13 @@
 // ledger lock.
 
 import { lstatSync, writeFileSync, openSync, readSync, closeSync, unlinkSync, mkdirSync, constants as fsConstants } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { git, sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { segmentDirPath, segmentPath, discoverSegments, readRawLines, ulidOf } from './forest.mjs';
+import { verifyChain } from './verify.mjs';
+import { verifyEntrySig } from './sign.mjs';
 
 const MARKER_NAME = '.store.json';
 const LINEAGE_NAME = '.lineage';
@@ -389,17 +392,79 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
 }
 
 /**
+ * Refuse to mint a segment whose file .gitignore would ignore (spec §7.1) —
+ * evidence recorded into an ignored file exists only in this checkout,
+ * never in CI or any other clone, which is silent evidence divergence. The
+ * probe child gets a scrubbed environment (no manifest key, no GIT_* repo
+ * selectors) and soft-passes outside any git repository; a real
+ * check-ignore failure inside a repository throws rather than recording
+ * evidence blindly.
+ */
+function assertSegmentPathCommittable(dir, name) {
+  const probeCwd = dirname(dir);
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  const run = (args) => {
+    try {
+      execFileSync('git', args, { cwd: probeCwd, env, stdio: 'ignore' });
+      return 0;
+    } catch (err) {
+      if (err.code === 'ENOENT') return 'no-git';
+      return err.status ?? 'error';
+    }
+  };
+  if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return; // no git binary, or not a repository — nothing to commit or ignore
+  const rel = relative(probeCwd, segmentPath(dir, name)).split(sep).join('/');
+  const status = run(['check-ignore', '-q', '--', rel]);
+  if (status === 0) {
+    throw new Error(
+      `refusing to mint segment ${name}: .gitignore would ignore its file, so evidence recorded there would exist `
+      + 'only in this checkout — never in CI or any other clone; fix the ignore rules (gate-manifest enable names '
+      + 'the required negation lines) and retry',
+    );
+  }
+  if (status !== 1) {
+    throw new Error(`git check-ignore failed while probing segment ${name} — cannot verify the segment is committable, refusing to record evidence blindly`);
+  }
+}
+
+/**
  * Resolve which segment file the NEXT append should target (spec §7.1).
  *
  * Tries, in order: (a) the local `.lineage` token (fast path, unchanged);
- * (b) `recoverOpenSegment`'s exact-`branch` scan (§4.4a) — a write is never
- * allowed to mint a needless duplicate of a segment that already,
- * unambiguously, belongs to this checkout on a fresh clone or after a lost
- * token (T-MANIFEST-FOREST follow-up, gap 1: write-side recovery blindness).
- * Only when NEITHER yields a segment does this mint a fresh one.
- * `recoverOpenSegment` may throw on genuine ambiguity (two candidates, no
- * token to disambiguate); that throw propagates — a writer must refuse,
- * never guess, exactly like a reader.
+ * (b) WITH A KEY ONLY, `recoverOpenSegment`'s exact-`branch` scan (§4.4a),
+ * authenticated before use — a keyed write is never allowed to mint a
+ * needless duplicate of a segment that already, verifiably, belongs to this
+ * checkout on a fresh clone or after a lost token (T-MANIFEST-FOREST
+ * follow-up, gap 1: write-side recovery blindness). Only when NEITHER
+ * yields a segment does this mint a fresh one.
+ *
+ * Recovery is KEY-GATED, mirroring `readOwnChains`' reader contract
+ * (adversarial-review finding): a keyless writer that extended a recovered
+ * segment would strand the checkout — the keyless reader refuses recovered
+ * content it cannot authenticate, so every subsequent push/read would fail
+ * loudly and permanently. A keyless writer therefore mints fresh and writes
+ * its own token (whose peeked path the keyless reader does trust), exactly
+ * the pre-recovery behavior. A KEYED writer authenticates the candidate
+ * (chain intact under the key, at least one entry with a verified
+ * signature) and REFUSES — never extends, never mints a duplicate — when
+ * the single candidate cannot be authenticated; minting past an
+ * unauthenticatable same-branch segment would silently fork the branch's
+ * lineage, gap 1's own bug. `recoverOpenSegment` may throw on genuine
+ * ambiguity (two candidates, no token to disambiguate); that throw
+ * propagates — a writer must refuse, never guess, exactly like a reader.
+ *
+ * At MINT time the actual segment filename is probed against .gitignore
+ * (adversarial-review finding): a branch-derived slug can match an ignore
+ * rule that enable's representative probes cannot anticipate (e.g.
+ * `release-*.jsonl` on a `release/...` branch), and evidence written into
+ * an ignored file is local-only — invisible to CI and every other clone —
+ * which is silent evidence divergence. The writer fails closed BEFORE
+ * recording anything rather than recording evidence only this checkout
+ * will ever see.
  *
  * Deliberately does NOT heal (write) the `.lineage` token from a (b) match
  * (adversarial-review finding): the token's whole trust value downstream —
@@ -420,12 +485,34 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
  *   carry `anchor` and `branch` (both also returned); `isNew: false` means
  *   append as a plain continuation of the named, already-open segment.
  */
-export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd(), key = null } = {}) {
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
 
-  const recovered = recoverOpenSegment(dir, { cwd });
-  if (recovered) return recovered;
+  if (key !== null) {
+    const recovered = recoverOpenSegment(dir, { cwd });
+    if (recovered) {
+      // Lenient chain check (an honest unsigned legacy prefix is tolerated;
+      // tampered or unsigned-after-signed entries are not) plus at least one
+      // entry this key actually verifies — the same acceptance the tickets
+      // reader gives a recovered segment (chainIsIntact + signedEntriesOnly
+      // non-empty). verifyChain's own `signed` flag is a mode constant, not
+      // the per-entry tracker, so the second half is checked directly.
+      const lines = readRawLines(segmentPath(dir, recovered.name));
+      const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
+      const anyVerified = lines.some(({ line }) => {
+        try { return verifyEntrySig(key, JSON.parse(line)); } catch { return false; }
+      });
+      if (!chain.valid || !anyVerified) {
+        throw new Error(
+          `segment ${recovered.name} declares this branch but cannot be authenticated with the configured key `
+          + '(broken chain, forged entry, or no verifiably signed entry) — refusing to extend it, and refusing to '
+          + 'mint a duplicate past it (that would silently fork this branch\'s lineage)',
+        );
+      }
+      return recovered;
+    }
+  }
 
   const branch = currentBranch(cwd);
   // No usable token or recoverable segment: mint a new one, anchored to root's current head line
@@ -441,6 +528,7 @@ export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
+  assertSegmentPathCommittable(dir, name);
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   // branch is omitted (not `null`) when detached HEAD minted this segment —
   // recoverOpenSegment's exact-match scan simply never matches an omitted
