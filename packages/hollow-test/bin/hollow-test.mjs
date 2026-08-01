@@ -5,7 +5,7 @@
 // an on-disk in-flight record that the NEXT run recovers from when the kill was
 // not catchable at all.
 
-import { writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
@@ -113,11 +113,18 @@ try {
   opError(`could not resolve repository root: ${err.message}`);
 }
 
-let gitDir = null;
+// FAIL CLOSED if the git dir cannot be derived. Treating this as "no record" let
+// the run mutate with no way back and still exit 0 — the opposite of the
+// guarantee, and silent. We already know this is a git repo, so a failure here is
+// an anomaly worth stopping for, not a condition to route around.
+let gitDir;
 try {
   gitDir = resolve(cwd, git(['rev-parse', '--git-dir'], { cwd }).trim());
-} catch {
-  gitDir = null;
+} catch (err) {
+  opError(`could not resolve the git directory (${err.message}) — refusing to mutate without a recovery record`);
+}
+if (!existsSync(gitDir)) {
+  opError(`the resolved git directory does not exist (${gitDir}) — refusing to mutate without a recovery record`);
 }
 
 // ── recover a mutant stranded by an interrupted run ─────────────────────────
@@ -133,7 +140,7 @@ try {
 // The record lives in the git dir: never committed, and per-worktree
 // (`--git-dir` resolves to .git/worktrees/<name> in a linked worktree), so
 // parallel worktrees cannot recover each other's files.
-const inflightPath = gitDir === null ? null : recordPathFor(gitDir);
+const inflightPath = recordPathFor(gitDir);
 
 function clearInflight() {
   if (inflightPath !== null) clearRecord(inflightPath);
@@ -192,12 +199,16 @@ function recoverInflight() {
     return null;
   }
   if (decision.action === 'conflict') {
-    // KEEP the record: it holds the only surviving copy of the original bytes.
-    console.warn(
-      `hollow-test: ${record.file} ${decision.reason}, so it was NOT restored. ` +
-      `The original bytes are preserved in ${inflightPath}`
+    // STOP. Keeping the record is not enough on its own: if the run continued, the
+    // next mutation would overwrite this record and then clear it, destroying the
+    // only surviving copy of the original bytes — the exact loss the conflict
+    // branch exists to prevent. Resolving this needs a human.
+    opError(
+      `${record.file} ${decision.reason}, so it was not restored. A previous run was ` +
+      `interrupted while mutating it, and the file has changed since. The original ` +
+      `bytes are preserved in ${inflightPath}: compare them with the file, keep ` +
+      `whichever is correct, then delete that record to continue.`
     );
-    return null;
   }
 
   try {
@@ -527,10 +538,7 @@ function emergencyRestore() {
   }
   // Only drop the record once the file is actually back, and only once those
   // bytes are durable — the record's removal is.
-  if (restored) {
-    if (currentFilePath !== null) fsyncFile(currentFilePath);
-    clearInflight();
-  }
+  if (restored && currentFilePath !== null && fsyncFile(currentFilePath)) clearInflight();
 }
 
 // SIGINT only, deliberately, in THIS change.
@@ -619,10 +627,12 @@ for (const target of fileTargets) {
     // fsync FIRST. clearInflight removes the record durably, so a restore still
     // sitting in the page cache when that unlink lands would leave the mutant on
     // disk with nothing left to recover it from.
-    fsyncFile(target.absolutePath);
+    const durable = fsyncFile(target.absolutePath);
     currentFilePath = null;
     currentOriginal = null;
-    clearInflight();
+    // A record kept after a failed fsync is harmless: the next run sees the file
+    // already matches the original and drops it. Clearing it would not be.
+    if (durable) clearInflight();
 
     results.push({
       file: target.file,

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import {
   probeOwner, isWellFormed, decideRecovery, isContainedRelPath, resolveTarget,
   writeFileDurable, writeRecord, readRecord, clearRecord, RECORD_VERSION,
+  makeTempPath, fsyncFile,
 } from '../lib/inflight.mjs';
 
 function killError(code) {
@@ -217,6 +218,55 @@ test('a durable write preserves the file mode it replaced', () => {
 
     assert.equal(readFileSync(target, 'utf8'), 'restored');
     assert.equal(statSync(target).mode & 0o777, 0o755, 'restore dropped the executable bit');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the temp path is unpredictable, so it cannot be pre-empted', () => {
+  // A deterministic `<target>.tmp-<pid>` is a name an attacker can create FIRST,
+  // turning the durable write into a write through their symlink.
+  const a = makeTempPath('/repo/src/thing.mjs');
+  const b = makeTempPath('/repo/src/thing.mjs');
+  assert.notEqual(a, b);
+  assert.match(a, /^\/repo\/src\/thing\.mjs\.tmp-\d+-[0-9a-f]{16}$/);
+});
+
+test('a durable write refuses a pre-existing temp path instead of following it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-tmpsym-'));
+  const outside = mkdtempSync(join(tmpdir(), 'hollow-victim-'));
+  try {
+    const target = join(dir, 'thing.mjs');
+    writeFileSync(target, 'original');
+    const victim = join(outside, 'victim.txt');
+    writeFileSync(victim, 'DO NOT TOUCH');
+
+    // Booby-trap the exact temp path with a symlink pointing outside the repo.
+    const trap = join(dir, 'thing.mjs.trap');
+    symlinkSync(victim, trap);
+
+    assert.throws(
+      () => writeFileDurable(target, 'restored', { tempPath: trap }),
+      /EEXIST/,
+      'followed a planted symlink instead of refusing it',
+    );
+    assert.equal(readFileSync(victim, 'utf8'), 'DO NOT TOUCH', 'wrote through the symlink');
+    assert.equal(readFileSync(target, 'utf8'), 'original', 'target was replaced by the symlink');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('fsyncFile REPORTS failure rather than swallowing it', () => {
+  // The caller clears the in-flight record after this, and that removal is
+  // durable — so a silent failure here can lose the restore and the record.
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-fsync-'));
+  try {
+    const real = join(dir, 'real.txt');
+    writeFileSync(real, 'x');
+    assert.equal(fsyncFile(real), true);
+    assert.equal(fsyncFile(join(dir, 'missing.txt')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

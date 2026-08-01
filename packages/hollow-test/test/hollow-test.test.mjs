@@ -1825,6 +1825,18 @@ describe('CLI: recovery refuses to overwrite work that is not the mutant', () =>
     assert.equal(existsSync(inflightPathFor(dir)), true, 'discarded the only copy of the original bytes');
     assert.equal(result.status, 1, 'expected the dirty-tree refusal rather than a silent overwrite');
 
+    // AND the record must still be there on a SECOND run. Keeping it while letting
+    // the run continue was not enough: the next mutation overwrote this record and
+    // then cleared it, destroying the only copy of the original bytes — so an
+    // unresolved conflict has to STOP the run, every time, until a human resolves it.
+    const second = runCli(runArgs(counter), dir);
+    assert.equal(second.status, 1, 'a second run continued past an unresolved conflict');
+    assert.equal(
+      existsSync(inflightPathFor(dir)), true,
+      'the second run destroyed the only surviving copy of the original bytes',
+    );
+    assert.equal(readFileSync(target, 'utf8'), theirWork, 'the second run overwrote the developer\'s work');
+
     writeFileSync(target, committedContent(dir));
     rmSync(inflightPathFor(dir), { force: true });
   });

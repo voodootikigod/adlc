@@ -14,6 +14,7 @@ import {
   readFileSync, existsSync, lstatSync, statSync, chmodSync, realpathSync,
 } from 'node:fs';
 import { dirname, basename, join, resolve, relative, isAbsolute } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export const INFLIGHT_BASENAME = 'adlc-hollow-test-inflight.json';
 export const RECORD_VERSION = 2;
@@ -102,6 +103,19 @@ export function decideRecovery({ ownerState, currentContent, record }) {
   return { action: 'conflict', reason: 'the file matches neither the original nor the mutant' };
 }
 
+/**
+ * An unpredictable temp path next to `path`.
+ *
+ * The name used to be `<target>.tmp-<pid>`, which is guessable: anything able to
+ * create that name first turns the "durable" write into a write THROUGH a symlink,
+ * clobbering its destination and then renaming the symlink over the real target.
+ * Randomising the name removes the target; opening with 'wx' (O_CREAT|O_EXCL)
+ * removes the follow.
+ */
+export function makeTempPath(path) {
+  return `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+}
+
 function fsyncDir(path) {
   // Renames and unlinks are only durable once the DIRECTORY entry is synced.
   let fd;
@@ -124,16 +138,20 @@ function fsyncDir(path) {
  * executable would turn 0755 into 0644 and break whatever executes it. chmod
  * rather than open's mode argument, because umask masks the latter.
  */
-export function writeFileDurable(path, contents) {
+export function writeFileDurable(path, contents, { tempPath = null } = {}) {
   let mode = null;
   try {
     mode = statSync(path).mode & 0o7777;
   } catch { /* new file: take the default */ }
 
-  const tmp = `${path}.tmp-${process.pid}`;
+  // tempPath is injectable so a test can aim at a path it has booby-trapped.
+  const tmp = tempPath ?? makeTempPath(path);
   let fd;
   try {
-    fd = openSync(tmp, 'w');
+    // 'wx' is O_CREAT|O_EXCL|O_WRONLY: it REFUSES an existing path rather than
+    // following it, so a planted symlink here fails the write instead of
+    // redirecting it.
+    fd = openSync(tmp, 'wx');
     writeSync(fd, contents);
     fsyncSync(fd);
   } finally {
@@ -156,8 +174,12 @@ export function fsyncFile(path) {
   try {
     fd = openSync(path, 'r+');
     fsyncSync(fd);
+    return true;
   } catch {
-    // Best effort: a file we cannot open for sync is one we cannot make durable.
+    // REPORTED, not swallowed. The caller clears the in-flight record after this,
+    // and that removal IS durable — so if the restore is still only in cache, a
+    // power loss brings the mutant back with nothing left to recover it from.
+    return false;
   } finally {
     if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
   }
