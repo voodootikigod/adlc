@@ -10,10 +10,10 @@
 // package's tests once per mutant.
 
 import {
-  openSync, closeSync, fsyncSync, writeSync, renameSync, unlinkSync,
+  openSync, closeSync, writeFileSync, renameSync, unlinkSync,
   readFileSync, existsSync, lstatSync, statSync, chmodSync, realpathSync,
 } from 'node:fs';
-import { dirname, basename, join, resolve, relative, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 export const INFLIGHT_BASENAME = 'adlc-hollow-test-inflight.json';
@@ -134,72 +134,52 @@ export function makeTempPath(path) {
   return `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
 }
 
-function fsyncDir(path) {
-  // Renames and unlinks are only durable once the DIRECTORY entry is synced.
-  let fd;
-  try {
-    fd = openSync(path, 'r');
-    fsyncSync(fd);
-  } catch {
-    // Not every platform lets you open a directory for sync; the write is still
-    // atomic via rename, we simply cannot promise ordering across a power cut.
-  } finally {
-    if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
-  }
-}
-
 /**
- * Write bytes atomically and durably: temp file, fsync, rename, fsync dir.
+ * Replace a file's contents ATOMICALLY.
  *
- * PRESERVES THE TARGET'S MODE. rename installs a NEW inode, so without this a
- * restored file silently loses its permission bits — recovering a tracked
- * executable would turn 0755 into 0644 and break whatever executes it. chmod
- * rather than open's mode argument, because umask masks the latter.
+ * Atomic, deliberately NOT power-loss durable, and the distinction is the whole
+ * design. The failure modes this feature exists for — SIGKILL, an OOM kill, a tool
+ * or CI timeout — kill the PROCESS, not the page cache: the kernel still writes
+ * those bytes out. fsync only buys anything against power loss or a kernel panic,
+ * neither of which is what strands mutants, and chasing it here bought three
+ * review findings (a swallowed directory-sync failure, a short write, and a
+ * half-durable clear) in exchange for a guarantee a mutation-testing helper has no
+ * business making.
+ *
+ * What IS needed is atomicity: a process killed mid-write must never leave a
+ * TRUNCATED source file. Writing to a temp file and renaming gives exactly that,
+ * since rename is atomic within a filesystem.
+ *
+ * PRESERVES THE TARGET'S MODE, because rename installs a new inode — without it a
+ * restored executable would silently drop from 0755 to 0644.
+ *
+ * The temp path is randomised and opened O_EXCL: a guessable `<target>.tmp-<pid>`
+ * is a name anything with write access can create first, turning this into a write
+ * THROUGH their symlink and then a rename of that symlink over the real target.
  */
-export function writeFileDurable(path, contents, { tempPath = null } = {}) {
+export function writeFileAtomic(path, contents, { tempPath = null } = {}) {
   let mode = null;
   try {
     mode = statSync(path).mode & 0o7777;
   } catch { /* new file: take the default */ }
 
-  // tempPath is injectable so a test can aim at a path it has booby-trapped.
   const tmp = tempPath ?? makeTempPath(path);
-  let fd;
+  // 'wx' is O_CREAT|O_EXCL: refuses an existing path rather than following it.
+  const fd = openSync(tmp, 'wx');
+  let created = true;
   try {
-    // 'wx' is O_CREAT|O_EXCL|O_WRONLY: it REFUSES an existing path rather than
-    // following it, so a planted symlink here fails the write instead of
-    // redirecting it.
-    fd = openSync(tmp, 'wx');
-    writeSync(fd, contents);
-    fsyncSync(fd);
+    closeSync(fd);
+    // writeFileSync loops internally, so a short write cannot silently truncate.
+    writeFileSync(tmp, contents);
+    if (mode !== null) chmodSync(tmp, mode);
+    renameSync(tmp, path);
+    created = false; // renamed away; nothing left to clean up
   } finally {
-    if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
-  }
-  if (mode !== null) chmodSync(tmp, mode);
-  renameSync(tmp, path);
-  fsyncDir(dirname(path));
-}
-
-/**
- * Force a file's bytes to disk.
- *
- * Ordering matters more than it looks: the in-flight record is removed durably,
- * so if a restore is only in the page cache when the unlink reaches disk, a power
- * loss leaves the MUTANT on disk with no record to recover it from.
- */
-export function fsyncFile(path) {
-  let fd;
-  try {
-    fd = openSync(path, 'r+');
-    fsyncSync(fd);
-    return true;
-  } catch {
-    // REPORTED, not swallowed. The caller clears the in-flight record after this,
-    // and that removal IS durable — so if the restore is still only in cache, a
-    // power loss brings the mutant back with nothing left to recover it from.
-    return false;
-  } finally {
-    if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } }
+    // Never leave litter: an orphaned *.tmp-* is untracked, and hollow-test
+    // refuses to run on a dirty tree — so a failure here would wedge the NEXT run.
+    if (created) {
+      try { unlinkSync(tmp); } catch { /* nothing better to do */ }
+    }
   }
 }
 
@@ -211,7 +191,7 @@ export function fsyncFile(path) {
  * SIGKILL case the record exists for, silently unprotected.
  */
 export function writeRecord(recordPath, { pid, relFile, original, mutated }) {
-  writeFileDurable(
+  writeFileAtomic(
     recordPath,
     JSON.stringify({ version: RECORD_VERSION, pid, file: relFile, original, mutated }),
   );
@@ -227,10 +207,7 @@ export function readRecord(recordPath) {
 
 export function clearRecord(recordPath) {
   try {
-    if (existsSync(recordPath)) {
-      unlinkSync(recordPath);
-      fsyncDir(dirname(recordPath));
-    }
+    if (existsSync(recordPath)) unlinkSync(recordPath);
   } catch { /* best effort — a leftover record is re-evaluated, never obeyed blindly */ }
 }
 

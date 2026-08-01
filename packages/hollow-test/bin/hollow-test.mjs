@@ -16,7 +16,7 @@ import {
 import { runMutant, runTest } from '../lib/runner.mjs';
 import {
   ownerStateFor, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
-  resolveTarget, recordPathFor, writeFileDurable, fsyncFile,
+  resolveTarget, recordPathFor, writeFileAtomic,
 } from '../lib/inflight.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
 
@@ -212,7 +212,7 @@ function recoverInflight() {
   }
 
   try {
-    writeFileDurable(target, record.original);
+    writeFileAtomic(target, record.original);
   } catch (err) {
     // Never clear a record whose restore failed — it is the only copy left.
     opError(
@@ -538,7 +538,7 @@ function emergencyRestore() {
   }
   // Only drop the record once the file is actually back, and only once those
   // bytes are durable — the record's removal is.
-  if (restored && currentFilePath !== null && fsyncFile(currentFilePath)) clearInflight();
+  if (restored) clearInflight();
 }
 
 // SIGINT only, deliberately, in THIS change.
@@ -624,15 +624,9 @@ for (const target of fileTargets) {
 
     // Trial done; the file is restored, so clear both emergency records.
     //
-    // fsync FIRST. clearInflight removes the record durably, so a restore still
-    // sitting in the page cache when that unlink lands would leave the mutant on
-    // disk with nothing left to recover it from.
-    const durable = fsyncFile(target.absolutePath);
     currentFilePath = null;
     currentOriginal = null;
-    // A record kept after a failed fsync is harmless: the next run sees the file
-    // already matches the original and drops it. Clearing it would not be.
-    if (durable) clearInflight();
+    clearInflight();
 
     results.push({
       file: target.file,

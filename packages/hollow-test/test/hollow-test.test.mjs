@@ -1815,6 +1815,12 @@ describe('CLI: recovery refuses to overwrite work that is not the mutant', () =>
     const target = join(dir, 'src', 'thing.mjs');
     const theirWork = `${committedContent(dir)}\n// repaired by hand after the crash\n`;
     writeFileSync(target, theirWork);
+    // COMMIT their fix, so the tree is CLEAN. Left uncommitted, the dirty-tree
+    // refusal exits 1 all by itself and this test would pass against the old
+    // warn-and-continue behaviour that destroyed the record — i.e. it would prove
+    // nothing about the conflict path at all.
+    commitAll(dir, 'developer repairs the file by hand');
+    assert.equal(git(['status', '--porcelain'], dir).trim(), '', 'tree must be clean to isolate the conflict path');
 
     const result = runCli(runArgs(counter), dir);
 
@@ -1823,7 +1829,11 @@ describe('CLI: recovery refuses to overwrite work that is not the mutant', () =>
     assert.equal(readFileSync(target, 'utf8'), theirWork, 'recovery overwrote the developer\'s work');
     // And the record must survive: it holds the only copy of the original bytes.
     assert.equal(existsSync(inflightPathFor(dir)), true, 'discarded the only copy of the original bytes');
-    assert.equal(result.status, 1, 'expected the dirty-tree refusal rather than a silent overwrite');
+    assert.equal(result.status, 1, 'an unresolved conflict must stop the run');
+    assert.match(
+      result.stderr, /not restored|conflict|neither the original nor the mutant/i,
+      'the refusal must name the CONFLICT, not some unrelated operational error',
+    );
 
     // AND the record must still be there on a SECOND run. Keeping it while letting
     // the run continue was not enough: the next mutation overwrote this record and
@@ -1837,7 +1847,6 @@ describe('CLI: recovery refuses to overwrite work that is not the mutant', () =>
     );
     assert.equal(readFileSync(target, 'utf8'), theirWork, 'the second run overwrote the developer\'s work');
 
-    writeFileSync(target, committedContent(dir));
     rmSync(inflightPathFor(dir), { force: true });
   });
 });

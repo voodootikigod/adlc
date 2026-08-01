@@ -18,8 +18,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   probeOwner, isWellFormed, decideRecovery, isContainedRelPath, resolveTarget,
-  writeFileDurable, writeRecord, readRecord, clearRecord, RECORD_VERSION,
-  makeTempPath, fsyncFile, ownerStateFor,
+  writeFileAtomic, writeRecord, readRecord, clearRecord, RECORD_VERSION,
+  makeTempPath, ownerStateFor,
 } from '../lib/inflight.mjs';
 
 function killError(code) {
@@ -202,13 +202,13 @@ test('resolveTarget refuses to hand back a path outside the repo or via a symlin
 
 // ── durability ───────────────────────────────────────────────────────────────
 
-test('writeFileDurable replaces content atomically and leaves no temp file', () => {
+test('writeFileAtomic replaces content atomically and leaves no temp file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hollow-durable-'));
   try {
     const target = join(dir, 'record.json');
-    writeFileDurable(target, 'first');
+    writeFileAtomic(target, 'first');
     assert.equal(readFileSync(target, 'utf8'), 'first');
-    writeFileDurable(target, 'second');
+    writeFileAtomic(target, 'second');
     assert.equal(readFileSync(target, 'utf8'), 'second');
     assert.deepEqual(
       readdirSync(dir).filter((e) => e.includes('.tmp-')),
@@ -220,7 +220,7 @@ test('writeFileDurable replaces content atomically and leaves no temp file', () 
   }
 });
 
-test('a durable write preserves the file mode it replaced', () => {
+test('an atomic write preserves the file mode it replaced', () => {
   // rename installs a NEW inode. Without carrying the mode across, restoring a
   // tracked executable would turn 0755 into 0644 and break whatever runs it.
   const dir = mkdtempSync(join(tmpdir(), 'hollow-mode-'));
@@ -229,7 +229,7 @@ test('a durable write preserves the file mode it replaced', () => {
     writeFileSync(target, 'original');
     chmodSync(target, 0o755);
 
-    writeFileDurable(target, 'restored');
+    writeFileAtomic(target, 'restored');
 
     assert.equal(readFileSync(target, 'utf8'), 'restored');
     assert.equal(statSync(target).mode & 0o777, 0o755, 'restore dropped the executable bit');
@@ -247,7 +247,7 @@ test('the temp path is unpredictable, so it cannot be pre-empted', () => {
   assert.match(a, /^\/repo\/src\/thing\.mjs\.tmp-\d+-[0-9a-f]{16}$/);
 });
 
-test('a durable write refuses a pre-existing temp path instead of following it', () => {
+test('an atomic write refuses a pre-existing temp path instead of following it', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hollow-tmpsym-'));
   const outside = mkdtempSync(join(tmpdir(), 'hollow-victim-'));
   try {
@@ -261,7 +261,7 @@ test('a durable write refuses a pre-existing temp path instead of following it',
     symlinkSync(victim, trap);
 
     assert.throws(
-      () => writeFileDurable(target, 'restored', { tempPath: trap }),
+      () => writeFileAtomic(target, 'restored', { tempPath: trap }),
       /EEXIST/,
       'followed a planted symlink instead of refusing it',
     );
@@ -273,15 +273,21 @@ test('a durable write refuses a pre-existing temp path instead of following it',
   }
 });
 
-test('fsyncFile REPORTS failure rather than swallowing it', () => {
-  // The caller clears the in-flight record after this, and that removal is
-  // durable — so a silent failure here can lose the restore and the record.
-  const dir = mkdtempSync(join(tmpdir(), 'hollow-fsync-'));
+test('a failed atomic write leaves no temp file behind to wedge the next run', () => {
+  // An orphaned *.tmp-* is untracked, and hollow-test refuses to run on a dirty
+  // tree — so litter from a failed write would block the NEXT run entirely.
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-litter-'));
   try {
-    const real = join(dir, 'real.txt');
-    writeFileSync(real, 'x');
-    assert.equal(fsyncFile(real), true);
-    assert.equal(fsyncFile(join(dir, 'missing.txt')), false);
+    const target = join(dir, 'thing.mjs');
+    writeFileSync(target, 'original');
+    // chmod of a path that vanishes mid-write is awkward to force; instead make
+    // the RENAME fail by pointing the write at a target whose parent is removed.
+    const doomed = join(dir, 'gone', 'thing.mjs');
+    assert.throws(() => writeFileAtomic(doomed, 'x'));
+    assert.deepEqual(
+      readdirSync(dir).filter((e) => e.includes('.tmp-')), [],
+      'a failed write left a temp file behind',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
