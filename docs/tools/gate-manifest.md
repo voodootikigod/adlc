@@ -132,6 +132,13 @@ gate-manifest enable          # dry-run: prints the plan, writes nothing
 gate-manifest enable --write  # writes the marker atomically
 ```
 
+Activation without `ADLC_MANIFEST_KEY` refuses unless `--allow-keyless` is
+passed: keyless-minted segments can never be authenticated by a key added
+later, so keyless forest mode is single-checkout only, permanently — a
+deliberate opt-in, never a stumble. Re-running `enable` on an already-enabled
+repository re-checks the gitignore contract as a health check and exits `2`
+if ignore rules have drifted (e.g. `.lineage` became trackable).
+
 Dry-run by default. Exit `0` on a written or already-enabled repo (a
 cutover-tailed root counts as enabled even if its marker was lost). Exit `2`,
 writing nothing, when:

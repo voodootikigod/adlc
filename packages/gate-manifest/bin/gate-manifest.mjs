@@ -21,7 +21,7 @@ const USAGE =
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
-  '       enable [--write] [--json]';
+  '       enable [--write] [--json] [--allow-keyless]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -37,6 +37,7 @@ const { values: flags, positionals } = parseArgs({
     'allow-legacy-unsigned': { type: 'boolean', default: false },
     output: { type: 'string' },
     'allow-key-import': { type: 'boolean', default: false },
+    'allow-keyless': { type: 'boolean', default: false },
   },
 });
 
@@ -225,6 +226,23 @@ if (verb === 'generate-key') {
 // Greenfield forest-mode activation (spec 'Storage modes'). Dry-run by
 // default; refusals are gate failures (exit 2) that leave the tree untouched.
 if (verb === 'enable') {
+  // Keyless activation is a ONE-WAY trap for multi-checkout workflows
+  // (adversarial-review finding): keyless-minted first entries carry no v2
+  // signature, so configuring a key LATER can never authenticate them, and
+  // token-less checkouts of the branch fail closed forever. Activation is
+  // the moment to surface that — refuse unless the operator opts into
+  // single-checkout keyless mode deliberately. Key resolution is a bin
+  // concern (key-hermeticity: libraries never read the environment).
+  if (getKey(process.env) === null && !flags['allow-keyless']) {
+    const keylessReason = 'no ADLC_MANIFEST_KEY is configured. Keyless forest mode is single-checkout only, PERMANENTLY: '
+      + 'keyless-minted segments can never be authenticated by a later key, so every other clone of a branch fails closed on '
+      + 'its first write. Configure the signing key first, or re-run with --allow-keyless to accept single-checkout mode deliberately.';
+    if (flags.json) {
+      printJson({ decision: 'refuse-keyless', reason: keylessReason });
+      process.exit(2);
+    }
+    gateFail(`enable refused: ${keylessReason}`);
+  }
   let out;
   try {
     out = enable(flags.dir, { write: flags.write });

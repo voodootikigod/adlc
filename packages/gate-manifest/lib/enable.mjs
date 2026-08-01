@@ -179,6 +179,19 @@ export function planEnable(dir = ADLC_DIR) {
     };
   }
   if (isSegmentedRepo(dir)) {
+    // The gitignore contract is checked on the already-enabled path too
+    // (adversarial-review finding): ignore rules can drift AFTER activation
+    // — or the marker can predate this command — and an idempotent
+    // health-check run that reports success while .lineage became trackable
+    // (or the marker became local-only) defeats the contract this command
+    // exists to enforce.
+    const enabledViolation = gitignoreContractViolation(dir);
+    if (enabledViolation !== null) {
+      return {
+        decision: 'refuse-ignored',
+        reason: `forest mode is already active, BUT ${enabledViolation}; restore this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
+      };
+    }
     return { decision: 'already-enabled', reason: 'forest mode is already active for this repository' };
   }
   if (existsSync(segDir) && readdirSync(segDir).length > 0) {

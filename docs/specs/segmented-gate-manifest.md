@@ -271,9 +271,14 @@ old ones in; §8 step 7 names this to the operator as a required follow-up.
 
 `.adlc/manifest.d/.store.json` — a tracked marker file mirroring the ticket
 store's, written by the §8 ceremony, by `adlc gate-manifest enable` (the
-greenfield activation command: dry-run by default, refuses on a live root, a
-content-bearing `manifest.d/` without a marker, or a gitignored marker path),
-and by the greenfield scaffold:
+greenfield activation command: dry-run by default; refuses on a live root, a
+content-bearing `manifest.d/` without a marker, a broken two-sided gitignore
+contract — the marker and segments must be committable while `.lineage` and
+lock files must stay ignored — and, unless `--allow-keyless` is passed
+deliberately, on a missing signing key, because keyless-minted segments can
+never be authenticated by a later key, making keyless forest mode
+single-checkout PERMANENTLY; re-running it on an enabled repo re-checks the
+gitignore contract as a health check), and by the greenfield scaffold:
 
 ```json
 { "format": "adlc-manifest-segments", "version": 1 }

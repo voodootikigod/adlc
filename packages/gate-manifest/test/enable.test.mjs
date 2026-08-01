@@ -48,7 +48,14 @@ function clean(root) { rmSync(root, { recursive: true, force: true }); }
 
 function runBin(root, ...args) {
   // Ambient trust-root env must not leak into the spawned CLI (repo standard
-  // since the runner scrub landed) — enable needs no key anyway.
+  // since the runner scrub landed); a TEST key is set explicitly because
+  // keyless activation is deliberately gated behind --allow-keyless.
+  const env = { ...process.env };
+  env.ADLC_MANIFEST_KEY = 'cli-test-key';
+  return spawnSync(process.execPath, [BIN, 'enable', ...args], { cwd: root, encoding: 'utf8', env });
+}
+
+function runBinKeyless(root, ...args) {
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
   return spawnSync(process.execPath, [BIN, 'enable', ...args], { cwd: root, encoding: 'utf8', env });
@@ -454,6 +461,47 @@ describe('gate-manifest enable CLI (AC2, AC3, AC10, AC11)', () => {
       assert.match(r.stderr, /init/);
       assert.equal(existsSync(join(root, '.adlc')), false);
     } finally { clean(root); }
+  });
+
+  it('AC15: KEYLESS activation refuses with exit 2 in both modes — the trap is one-way, so it must be opted into, never stumbled into', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      for (const args of [[], ['--write']]) {
+        const r = runBinKeyless(root, ...args);
+        assert.equal(r.status, 2, `args=${args.join(' ')}`);
+        assert.match(r.stderr, /--allow-keyless/, 'the refusal must name the deliberate opt-in');
+        assert.match(r.stderr, /single-checkout|PERMANENTLY/, 'the refusal must state the permanence');
+        assert.equal(existsSync(join(dir, 'manifest.d')), false, 'nothing may be created');
+      }
+      // The deliberate opt-in works.
+      const ok = runBinKeyless(root, '--allow-keyless', '--write');
+      assert.equal(ok.status, 0, ok.stderr);
+      assert.equal(isSegmentedRepo(dir), true);
+    } finally { clean(root); }
+  });
+
+  it('AC15: keyless --json refusal is a single parseable document with decision refuse-keyless', () => {
+    const { root } = gitRepo({ gitignore: NEGATED });
+    try {
+      const r = runBinKeyless(root, '--json');
+      assert.equal(r.status, 2);
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.decision, 'refuse-keyless');
+    } finally { clean(root); }
+  });
+
+  it('AC10: an ALREADY-ENABLED repo whose ignore rules drifted refuses as a health check — never reports success while the token is trackable', () => {
+    for (const [gitignore, hazard] of [[IGNORED, /marker|segments/], [null, /TRACK|lineage token/]]) {
+      const { root, dir } = gitRepo({ gitignore });
+      try {
+        mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+        writeFileSync(markerPath(dir), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+        const plan = planEnable(dir, { cwd: root });
+        assert.equal(plan.decision, 'refuse-ignored', `gitignore=${gitignore === null ? 'none' : gitignore.trim()}`);
+        assert.match(plan.reason, /already active, BUT/);
+        assert.match(plan.reason, hazard);
+      } finally { clean(root); }
+    }
   });
 
   it('AC11: --json emits exactly one parseable document — dry-run, write, and refusal alike', () => {
