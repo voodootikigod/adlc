@@ -184,7 +184,7 @@ function touchedLineNumbers(diffText) {
 // `review(?:er)?` (not the earlier `reviewer?`, which only matched "reviewe"/
 // "reviewer" — the trailing `?` applied to the single preceding "r", never making
 // "review" itself a match) so both "review found ..." and "reviewer found ..." hit.
-const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breview(?:er)?\s+(flagged|found)\b|\breview\s+status\b/i;
+const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfinding\s*(#|id\b|-?id\b|\d)|\bcluster[\s-]?id\b|\bcodex\s+(flagged|found|round)\b|\breview(?:er)?\s+(flagged|found|concluded)\b|\breview\s+status\b/i;
 
 // A word or phrase that CLASSIFIES or DISMISSES what the comment describes,
 // rather than stating a fact about it. This is a LEXICAL phrase list, not a
@@ -194,7 +194,7 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // dismissal in English. Each addition here has come from a real reproduction
 // found by review — treat a new one the same way: add the specific phrase, don't
 // try to generalize ahead of a concrete case.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
