@@ -12,7 +12,7 @@
 // from lineage.mjs, changes no dispatch site (those files are this ticket's
 // frozen rails).
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
@@ -116,10 +116,20 @@ function lstatIsSymlink(p) {
  * @returns {{ decision: 'refuse-no-workspace'|'already-enabled'|'refuse-broken-manifest-dir'|'refuse-live-root'|'refuse-ignored'|'greenfield', reason?: string, markerPath?: string, marker?: object }}
  */
 export function planEnable(dir = ADLC_DIR) {
-  if (!existsSync(dir)) {
+  if (!existsSync(dir) && !lstatIsSymlink(dir)) {
     return {
       decision: 'refuse-no-workspace',
       reason: `no ADLC workspace at ${dir} — run adlc-init first; enable never creates one as a side effect`,
+    };
+  }
+  // The workspace itself gets the same no-follow policy as manifest.d below
+  // (adversarial-review finding): a symlinked .adlc would route the root
+  // lock and the marker outside the selected workspace — refusing only the
+  // inner link while following the outer one would be incoherent.
+  if (lstatIsSymlink(dir) || !lstatSync(dir).isDirectory()) {
+    return {
+      decision: 'refuse-no-workspace',
+      reason: `${dir} is not a real directory (symlink or other non-directory) — enable refuses to write through links`,
     };
   }
   if (isSegmentedRepo(dir)) {
@@ -189,9 +199,31 @@ export function enable(dir = ADLC_DIR, { write = false } = {}) {
     const segDir = segmentDirPath(dir);
     const createdDir = !existsSync(segDir);
     mkdirSync(segDir, { recursive: true });
+    // Durable, failure-clean publication (adversarial-review finding),
+    // mirroring appendEntries: fsync the marker bytes before the rename and
+    // the directory after it, and never strand the temp file — a leftover
+    // .store.json.tmp-* would make the NEXT run refuse the directory as a
+    // broken half-migrated state, manufacturing exactly what it refuses.
     const tmp = join(segDir, `.store.json.tmp-${randomBytes(6).toString('hex')}`);
-    writeFileSync(tmp, JSON.stringify(locked.marker));
-    renameSync(tmp, locked.markerPath);
+    let published = false;
+    try {
+      const fd = openSync(tmp, 'wx');
+      try {
+        writeFileSync(fd, JSON.stringify(locked.marker));
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
+      renameSync(tmp, locked.markerPath);
+      published = true;
+      if (process.platform !== 'win32') {
+        const dirFd = openSync(segDir, 'r');
+        try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+      }
+    } finally {
+      if (!published) {
+        try { unlinkSync(tmp); } catch { /* best-effort — may never have been created */ }
+        if (createdDir) { try { rmdirSync(segDir); } catch { /* only removable when empty — correct */ } }
+      }
+    }
 
     if (!isSegmentedRepo(dir)) {
       try { unlinkSync(locked.markerPath); } catch { /* rollback is best-effort */ }

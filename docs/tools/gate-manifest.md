@@ -150,6 +150,12 @@ writing nothing, when:
 
 `--json` emits exactly one JSON document on stdout in every mode.
 
+The gitignore probe is best-effort over the common rule shapes (the
+directory, the marker file, and a representative `*.jsonl` segment name). A
+rule targeting a specific branch-derived slug (e.g. `release-*.jsonl`) can
+still evade it — enforcing committability of each real segment at the moment
+it is minted belongs to the segment writer, deliberately outside `enable`.
+
 ### attest
 
 Generate a Markdown summary suitable for a PR comment.

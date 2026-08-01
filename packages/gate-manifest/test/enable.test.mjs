@@ -225,6 +225,40 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
     }
   });
 
+  it('refuses a symlinked WORKSPACE (.adlc itself) — same no-follow policy as the inner directory', () => {
+    const { root } = gitRepo({ gitignore: NEGATED });
+    const external = mkdtempSync(join(tmpdir(), 'enable-workspace-target-'));
+    try {
+      rmSync(join(root, '.adlc'), { recursive: true });
+      symlinkSync(external, join(root, '.adlc'));
+      const out = enable(join(root, '.adlc'), { write: true });
+      assert.equal(out.decision, 'refuse-no-workspace');
+      assert.match(out.reason, /symlink|not a real directory/);
+      assert.deepEqual(readdirSync(external), [], 'nothing may be written through the workspace link');
+      // Dangling workspace symlink refuses the same way, not as "no workspace".
+      rmSync(join(root, '.adlc'));
+      symlinkSync(join(external, 'never-created'), join(root, '.adlc'));
+      assert.match(enable(join(root, '.adlc'), { write: true }).reason, /symlink|not a real directory/);
+    } finally { clean(root); clean(external); }
+  });
+
+  it('a failed marker write strands NO temp file and leaves the repo still cleanly greenfield', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      // Inject the failure: manifest.d exists (empty — passes planning) but
+      // is unwritable, so creating the temp marker throws mid-publication.
+      mkdirSync(join(dir, 'manifest.d'));
+      execFileSync('chmod', ['0555', join(dir, 'manifest.d')]);
+      assert.throws(() => enable(dir, { write: true }), /EACCES|EPERM/);
+      execFileSync('chmod', ['0755', join(dir, 'manifest.d')]);
+      assert.deepEqual(readdirSync(join(dir, 'manifest.d')), [], 'no .store.json.tmp-* may be stranded — a leftover would make the next run refuse as broken');
+      // The whole point of failure-cleanliness: the next attempt just works.
+      const retry = enable(dir, { write: true });
+      assert.equal(retry.decision, 'greenfield');
+      assert.equal(retry.written, true);
+    } finally { clean(root); }
+  });
+
   it('refuses a symlinked manifest.d and leaves the external target untouched — never writes through the link', () => {
     const { root, dir } = gitRepo({ gitignore: NEGATED });
     const external = mkdtempSync(join(tmpdir(), 'enable-symlink-target-'));
