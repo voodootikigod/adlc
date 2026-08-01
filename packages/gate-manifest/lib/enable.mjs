@@ -26,14 +26,23 @@ import { segmentDirPath } from './forest.mjs';
 // isSegmentedRepo whether it recognizes the marker, and rolls back if not.
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
 
-// The .gitignore additions a repo needs so the marker (and segments)
-// actually commit. BOTH lines are required for the advice to be sufficient
-// across the two common ignore styles (adversarial-review finding, verified
-// empirically by the apply-the-advice tests): re-including the directory
-// alone frees its contents from a `.adlc/*` rule (a gitignore `*` does not
-// cross `/`), but a `.adlc/**` rule matches descendants directly and needs
-// the descendant negation too.
-export const MARKER_NEGATION_LINES = Object.freeze(['!.adlc/manifest.d/', '!.adlc/manifest.d/**']);
+// The .gitignore contract forest mode needs is TWO-SIDED (adversarial-review
+// findings, verified empirically by the apply-the-advice tests): the marker
+// and segments must be COMMITTABLE (both negation lines — re-including the
+// directory frees its contents from a `.adlc/*` rule, and the descendant
+// negation additionally defeats `.adlc/**`-style rules that match
+// descendants directly), while the checkout-local `.lineage` token and lock
+// files must stay IGNORED (the re-ignore lines — a TRACKED token recreates
+// the tail conflict forest mode removes, and a committed token makes every
+// clone treat its segment as self-minted, poisoning the peeked fast path's
+// trust assumption). Order matters: gitignore is last-match-wins, so the
+// re-ignores must follow the negations.
+export const MARKER_NEGATION_LINES = Object.freeze([
+  '!.adlc/manifest.d/',
+  '!.adlc/manifest.d/**',
+  '.adlc/manifest.d/.lineage',
+  '.adlc/manifest.d/*.lock',
+]);
 
 // The probe child needs no secrets and must answer for the repository that
 // owns `dir`, not whatever the caller's environment points at: the manifest
@@ -64,7 +73,7 @@ function gitProbeEnv() {
  * rather than guessing — only an exit meaning "no pattern matches" counts
  * as committable.
  */
-function markerWouldBeIgnored(dir) {
+function gitignoreContractViolation(dir) {
   const probeCwd = dirname(dir);
   const env = gitProbeEnv();
   const run = (args) => {
@@ -76,22 +85,30 @@ function markerWouldBeIgnored(dir) {
       return err.status ?? 'error';
     }
   };
-  if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return false; // no git binary, or not a repository
+  if (run(['rev-parse', '--is-inside-work-tree']) !== 0) return null; // no git binary, or not a repository
   const rel = relative(probeCwd, segmentDirPath(dir)).split(sep).join('/');
-  let ignored = false;
-  // Three probes, each catching a rule shape the others miss (adversarial-
-  // review findings): the directory (`.adlc/*`-style), the marker file
-  // (marker-specific rules), and a representative grammar-valid segment
-  // name — a `*.jsonl`-style rule matches neither the directory nor the
-  // marker, yet would silently keep every recorded segment local.
-  for (const probe of [`${rel}/`, `${rel}/.store.json`, `${rel}/enable-probe-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl`]) {
-    const status = run(['check-ignore', '-q', '--', probe]);
-    if (status === 0) { ignored = true; break; } // a pattern matches — this path would never commit
-    if (status !== 1) {
-      throw new Error(`git check-ignore failed while probing ${probe} — cannot verify the marker is committable, refusing to guess`);
+  const probe = (path) => {
+    const status = run(['check-ignore', '-q', '--', path]);
+    if (status !== 0 && status !== 1) {
+      throw new Error(`git check-ignore failed while probing ${path} — cannot verify the gitignore contract, refusing to guess`);
     }
+    return status === 0; // a pattern matches — git would ignore this path
+  };
+  // Committable side — three probes, each catching a rule shape the others
+  // miss (adversarial-review findings): the directory (`.adlc/*`-style), the
+  // marker file (marker-specific rules), and a representative grammar-valid
+  // segment name (`*.jsonl`-style rules match neither of the first two).
+  for (const path of [`${rel}/`, `${rel}/.store.json`, `${rel}/enable-probe-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl`]) {
+    if (probe(path)) return '.gitignore would ignore the activation marker or its evidence segments, so every other checkout would silently stay in single-file mode';
   }
-  return ignored;
+  // Ignored side (adversarial-review finding): the checkout-local token and
+  // lock files must NEVER be trackable — a committed `.lineage` recreates
+  // the tail conflict forest mode removes and makes every clone treat its
+  // segment as self-minted, poisoning the peeked fast path's trust.
+  for (const path of [`${rel}/.lineage`, `${rel}/enable-probe.lock`]) {
+    if (!probe(path)) return 'git would TRACK the checkout-local lineage token or lock files, which must stay ignored — a committed token recreates the merge conflict forest mode removes';
+  }
+  return null;
 }
 
 // existsSync FOLLOWS symlinks, so a dangling symlink reports "absent" — the
@@ -132,6 +149,19 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${dir} is not a real directory (symlink or other non-directory) — enable refuses to write through links`,
     };
   }
+  // The ROOT's no-follow refusal must also precede the already-enabled
+  // probe (adversarial-review finding): isSegmentedRepo's cutover-tail check
+  // reads manifest.jsonl in full through readRawLines, which follows
+  // symlinks — a root symlinked at an unbounded source (a device file)
+  // would be consumed before any later lstat refusal ran. lstat first, read
+  // never.
+  const rootPath = join(dir, 'manifest.jsonl');
+  if (lstatIsSymlink(rootPath)) {
+    return {
+      decision: 'refuse-broken-manifest-dir',
+      reason: `${rootPath} is a symlink — refusing to inspect or activate through it`,
+    };
+  }
   const segDir = segmentDirPath(dir);
   // No-follow policy, matching the rest of the store, checked BEFORE the
   // already-enabled probe (adversarial-review finding): the bounded marker
@@ -157,29 +187,20 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${segDir} has content but no valid activation marker — a broken or half-migrated state to repair by hand, not something enable can adopt`,
     };
   }
-  // The root is inspected without reading it (adversarial-review finding):
-  // greenfield only needs EMPTINESS, which lstat answers — reading through
-  // a symlinked manifest.jsonl (or any giant file) to learn its size would
-  // both follow a link the rest of this command refuses and consume an
-  // unbounded source before refusing. A symlinked root is refused outright,
-  // same no-follow policy as the workspace and manifest.d above.
-  const rootPath = join(dir, 'manifest.jsonl');
-  if (lstatIsSymlink(rootPath)) {
-    return {
-      decision: 'refuse-broken-manifest-dir',
-      reason: `${rootPath} is a symlink — refusing to inspect or activate through it`,
-    };
-  }
+  // Greenfield only needs the root's EMPTINESS, which lstat answers — no
+  // read (the symlink case was already refused above, before any mode
+  // predicate could open the file).
   if (existsSync(rootPath) && lstatSync(rootPath).size > 0) {
     return {
       decision: 'refuse-live-root',
       reason: 'this repository already records evidence in a single-file root manifest; switching it to forest mode is the history-preserving cutover ceremony (T-MANIFEST-FOREST-MIGRATE), not greenfield enable',
     };
   }
-  if (markerWouldBeIgnored(dir)) {
+  const violation = gitignoreContractViolation(dir);
+  if (violation !== null) {
     return {
       decision: 'refuse-ignored',
-      reason: `.gitignore would ignore the activation marker, so every other checkout would silently stay in single-file mode; add first: ${MARKER_NEGATION_LINES.join(' and ')}`,
+      reason: `${violation}; add this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
     };
   }
   return { decision: 'greenfield', markerPath: markerPath(dir), marker: { ...MARKER } };

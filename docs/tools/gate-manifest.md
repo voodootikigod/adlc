@@ -143,10 +143,14 @@ writing nothing, when:
   greenfield enable;
 - `manifest.d/` has content but no valid marker (a broken state to repair by
   hand, not silently adopt);
-- `.gitignore` would ignore the marker — an ignored marker never commits, so
-  every other checkout would silently stay in single-file mode; the error
-  names the negation line to add (`!.adlc/manifest.d/` — sufficient on its
-  own, since a gitignore `*` does not cross `/`).
+- the `.gitignore` contract fails in EITHER direction — the marker or
+  evidence segments would be ignored (they must commit, or every other
+  checkout silently stays in single-file mode), or the checkout-local
+  `.lineage` token and lock files would be trackable (they must stay
+  ignored — a committed token recreates the merge conflict forest mode
+  removes and makes clones treat a segment as self-minted). The error names
+  the full ordered block: `!.adlc/manifest.d/`, `!.adlc/manifest.d/**`,
+  `.adlc/manifest.d/.lineage`, `.adlc/manifest.d/*.lock`.
 
 `--json` emits exactly one JSON document on stdout in every mode.
 

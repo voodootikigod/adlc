@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { planEnable, enable, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
-import { isSegmentedRepo, markerPath } from '../lib/lineage.mjs';
+import { isSegmentedRepo, markerPath, lineagePath } from '../lib/lineage.mjs';
 import { appendManifestEntry } from '../lib/record.mjs';
 import { readRawLines } from '../lib/forest.mjs';
 import { isSegmentedRepo as ticketsIsSegmentedRepo } from '../../tickets/lib/manifest-segments.mjs';
@@ -135,19 +135,46 @@ describe('planEnable decision order (spec Storage modes; ticket work item 1h)', 
     } finally { clean(root); }
   });
 
-  it('proceeds greenfield with an ABSENT root, with an EMPTY root, with negations present, and with no .gitignore at all', () => {
-    for (const gitignore of [NEGATED, null]) {
-      for (const emptyRoot of [false, true]) {
-        const { root, dir } = gitRepo({ gitignore });
-        try {
-          if (emptyRoot) writeFileSync(join(dir, 'manifest.jsonl'), '');
-          const plan = planEnable(dir, { cwd: root });
-          assert.equal(plan.decision, 'greenfield', `gitignore=${gitignore === null ? 'none' : 'negated'} emptyRoot=${emptyRoot}`);
-          assert.equal(plan.marker.format, 'adlc-manifest-segments');
-          assert.equal(plan.marker.version, 1);
-        } finally { clean(root); }
-      }
+  it('proceeds greenfield with an ABSENT root and with an EMPTY root when the full gitignore contract holds', () => {
+    for (const emptyRoot of [false, true]) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        if (emptyRoot) writeFileSync(join(dir, 'manifest.jsonl'), '');
+        const plan = planEnable(dir, { cwd: root });
+        assert.equal(plan.decision, 'greenfield', `emptyRoot=${emptyRoot}`);
+        assert.equal(plan.marker.format, 'adlc-manifest-segments');
+        assert.equal(plan.marker.version, 1);
+      } finally { clean(root); }
     }
+  });
+
+  it('refuses a repo with NO .gitignore — the checkout-local token would be trackable, and a committed token poisons every clone', () => {
+    const { root, dir } = gitRepo({ gitignore: null });
+    try {
+      const plan = planEnable(dir, { cwd: root });
+      assert.equal(plan.decision, 'refuse-ignored');
+      assert.match(plan.reason, /TRACK|lineage token/, 'the refusal must name the token-tracking hazard');
+      assert.match(plan.reason, /\.adlc\/manifest\.d\/\.lineage/, 'the advice must include the re-ignore lines');
+    } finally { clean(root); }
+  });
+
+  it('the .lineage token stays untracked end-to-end: enable, first write, then git add -A stages segments but never the token', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      // An initial commit gives the branch a real identity — an unborn
+      // branch mints branchless (detached-style) and writes no token.
+      execFileSync('git', ['add', '.gitignore'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      enable(dir, { write: true });
+      // A real keyless greenfield write mints the segment AND the token.
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null });
+      assert.equal(existsSync(lineagePath(dir)), true, 'precondition: the mint wrote the local token');
+      execFileSync('git', ['add', '-A'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: root, encoding: 'utf8' });
+      assert.ok(staged.includes('.adlc/manifest.d/.store.json'), 'the marker must be staged');
+      assert.ok(staged.split('\n').some((f) => f.endsWith('.jsonl') && f.includes('manifest.d')), 'the segment must be staged');
+      assert.ok(!staged.includes('.lineage'), 'the checkout-local token must NEVER be stageable — a committed token recreates the tail conflict and poisons clone trust');
+    } finally { clean(root); }
   });
 
   it('proceeds outside a git repository — evidence without git is supported, so the probe soft-passes', () => {
@@ -323,7 +350,9 @@ describe('enable() write path (AC1, AC3, AC4)', () => {
     // A PATH-resolved git shim that records its environment, then behaves
     // like real git enough for the probe: rev-parse succeeds, check-ignore
     // reports "no pattern matches".
-    writeFileSync(join(shimDir, 'git'), `#!/bin/sh\nenv > "${envDump}"\ncase "$1" in rev-parse) exit 0;; check-ignore) exit 1;; esac\nexit 0\n`, { mode: 0o755 });
+    // The shim answers the two-sided contract like a healthy repo: token and
+    // lock probes report ignored, everything else reports committable.
+    writeFileSync(join(shimDir, 'git'), `#!/bin/sh\nenv > "${envDump}"\ncase "$1" in\n  rev-parse) exit 0;;\n  check-ignore) case "$4" in *.lineage|*.lock) exit 0;; *) exit 1;; esac;;\nesac\nexit 0\n`, { mode: 0o755 });
     const prevPath = process.env.PATH;
     const prevKey = process.env.ADLC_MANIFEST_KEY;
     const prevGitDir = process.env.GIT_DIR;
