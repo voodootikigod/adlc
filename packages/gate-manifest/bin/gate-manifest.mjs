@@ -8,6 +8,7 @@ import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
+import { enable } from '../lib/enable.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
 import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
@@ -19,7 +20,8 @@ const USAGE =
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
-  '       generate-key --output <path> [--allow-key-import] [--json]';
+  '       generate-key --output <path> [--allow-key-import] [--json]\n' +
+  '       enable [--write] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -219,5 +221,27 @@ if (verb === 'generate-key') {
   pass();
 }
 
+// ── enable ──────────────────────────────────────────────────────────────────
+// Greenfield forest-mode activation (spec 'Storage modes'). Dry-run by
+// default; refusals are gate failures (exit 2) that leave the tree untouched.
+if (verb === 'enable') {
+  let out;
+  try {
+    out = enable(flags.dir, { cwd: process.cwd(), write: flags.write });
+  } catch (err) {
+    opError(err.message);
+  }
+  const refused = out.decision.startsWith('refuse-');
+  if (flags.json) {
+    // Exactly ONE JSON document on stdout, in every mode (AC11).
+    printJson(out);
+    process.exit(refused ? 2 : 0);
+  }
+  if (refused) gateFail(`enable refused: ${out.reason}`);
+  if (out.decision === 'already-enabled') pass(out.reason);
+  if (out.written) pass(`forest mode enabled — wrote ${out.markerPath}`);
+  pass(`dry-run: would write ${out.markerPath} to enable forest mode — re-run with --write to apply`);
+}
+
 // Unknown verb
-opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key`);
+opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key | enable`);
