@@ -194,7 +194,7 @@ const REVIEW_PROCESS_REFERENCE = /\bround\s+\d+(\s+(finding|review))?\b|\bfindin
 // dismissal in English. Each addition here has come from a real reproduction
 // found by review — treat a new one the same way: add the specific phrase, don't
 // try to generalize ahead of a concrete case.
-const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b|\bunfounded\b|\brequires\s+no\s+remediation\b|\bno\s+fix\s+is\s+necessary\b/i;
+const CLASSIFICATION_PHRASE = /\bnot\s+a\s+defect\b|\bdon'?t\s+re-?litigate\b|\bnot\s+(?:a\s+new\s+)?independently[\s-]closable\b|\balready\s+accepted\b|\bwon'?t\s+fix\b|\bno\s+action\s+needed\b|\bignore\s+this\s+finding\b|\bnot\s+flagged\b|\bdeferred,?\s+not\s+a\s+bug\b|\bfalse\s+positive\b|\bcleared\s+to\s+proceed\b|\binvalid\b|\bdismissed\b|\bnon[\s-]?issue\b|\baccepted\s+risk\b|\bdo\s+not\s+report\s+this\s+again\b|\bdo\s+not\s+reopen\b|\bout\s+of\s+scope\b|\bsafe\s+to\s+ignore\b|\bworks\s+as\s+intended\b|\bdisregard\s+it\b|\bharmless\b|\bleave\s+(?:this|it)\s+closed\b|\bacceptable\b|\binformational\s+only\b|\bapproved\s+exception\b|\bshould\s+remain\s+closed\b|\bbenign\b|\bno\s+change\s+is\s+warranted\b|\bunfounded\b|\brequires\s+no\s+remediation\b|\bno\s+fix\s+is\s+necessary\b|\bremediation\s+should\s+be\s+declined\b/i;
 
 // A self-contained status ASSERTION that smuggles both roles (reference + verdict) in
 // one short phrase, the exact shape of the historical incident this gate's own header
@@ -251,7 +251,16 @@ const BLOCK_COMMENT_MARKERS = [
 // (which would make it a real block/line comment, never a regex). Matched
 // spans are replaced with underscores of the same length so position offsets
 // used elsewhere on the line stay aligned.
-const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\b(?:return|typeof|throw|case|instanceof|delete|void|yield|else|do|in|of|new|await)\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
+//
+// The keyword set is the FULL list of JS/TS reserved and contextual words that
+// can precede an expression (unlike CLASSIFICATION_PHRASE's dismissal
+// synonyms, this is a finite, standardized language grammar, not open-ended
+// English — so it is enumerated comprehensively here rather than reactively,
+// after two separate rounds each found one missing keyword: return, typeof,
+// throw, case, instanceof, delete, void, yield, else, do, in, of, new, await,
+// then default, export). Excludes expression-ENDING keywords (this, super,
+// true, false, null) on purpose: a `/` right after one of those IS division.
+const REGEX_LITERAL = /(^|[=(,[{;:!&|?+\-*%<>~^]|\b(?:return|typeof|throw|case|instanceof|delete|void|yield|else|do|in|of|new|await|default|export|import|from|as|extends|async|static|get|set|satisfies)\b)(\s*)(\/(?![*/])(?:[^/\n\\]|\\.)+\/[a-z]*)/g;
 
 function maskRegexLiterals(line) {
   return line.replace(REGEX_LITERAL, (_m, prefix, ws, regexLit) => prefix + ws + '_'.repeat(regexLit.length));

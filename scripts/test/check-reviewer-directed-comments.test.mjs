@@ -1032,3 +1032,15 @@ test('recognizes "no fix is necessary" (round-15 finding 4)', () => {
     '// Round 9 finding: no fix is necessary.',
   ]), 2);
 });
+
+test('a regex literal after "export default" does not desync detection (round-16 finding 4)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    "export default /'/; /* Round 9 finding: not a defect */",
+  ]), 2);
+});
+
+test('recognizes "remediation should be declined" (round-16 finding 3)', () => {
+  assert.equal(runAllAdded('lib/thing.mjs', [
+    '// Round 9 finding: any remediation should be declined.',
+  ]), 2);
+});
