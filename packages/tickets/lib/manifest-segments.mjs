@@ -917,18 +917,39 @@ export function resolveOpenSegment(dir, { cwd = dirname(dir), key = null } = {})
   if (key !== null) {
     const recovered = recoverOpenSegment(dir, { cwd });
     if (recovered) {
+      // The BRANCH-BEARING FIRST ENTRY itself must carry a verified v2
+      // signature (adversarial-review finding): a v1 signature does not
+      // cover `branch`/`anchor`, so a bolted-on branch claim atop a valid
+      // v1-signed entry still verifies — only v2 signs every field, so only
+      // a v2-verified first entry authenticates the identity claim recovery
+      // selects by. Mirrors gate-manifest's identical resolver.
       const lines = readRawLines(segmentPath(dir, recovered.name));
-      const authenticated = chainIsIntact(lines, key) && lines.some((line) => {
-        try { return entrySigValid(key, JSON.parse(line)); } catch { return false; }
-      });
-      if (!authenticated) {
+      let first = null;
+      try { first = JSON.parse(lines[0]); } catch { /* refused below */ }
+      const firstAuthenticated = Boolean(first) && first.sigVersion === 2 && entrySigValid(key, first);
+      if (!chainIsIntact(lines, key) || !firstAuthenticated) {
         throw new Error(
           `segment ${recovered.name} declares this branch but cannot be authenticated with the configured key `
-          + '(broken chain, forged entry, or no verifiably signed entry) — refusing to extend it, and refusing to '
-          + 'mint a duplicate past it (that would silently fork this branch\'s lineage)',
+          + '(broken chain, or its branch-bearing first entry lacks a verified v2 signature) — refusing to extend '
+          + 'it, and refusing to mint a duplicate past it (that would silently fork this branch\'s lineage)',
         );
       }
       return recovered;
+    }
+  } else {
+    // Keyless writers fail closed past a committed same-branch segment —
+    // extending strands the checkout (the keyless reader refuses recovered
+    // content), minting shadows the committed evidence behind the fresh
+    // token. Mirrors the keyless reader's refusal in this same state.
+    // Ambiguity counts as existence.
+    let candidateExists = false;
+    try { candidateExists = recoverOpenSegment(dir, { cwd }) !== null; } catch { candidateExists = true; }
+    if (candidateExists) {
+      throw new Error(
+        'a committed segment already declares this branch, and with no signing key this writer can neither '
+        + 'authenticate and extend it nor safely mint alongside it (a fresh token would shadow the committed '
+        + 'evidence from every later read) — configure the manifest key, or restore the local .lineage token',
+      );
     }
   }
 

@@ -17,7 +17,7 @@ import { appendManifestEntry as realAppendManifestEntry, record as realRecord } 
 import { verify as realVerify } from '../lib/verify.mjs';
 import { discoverSegments, readManifestForest, segmentPath, ulidOf } from '../lib/forest.mjs';
 import { isSegmentedRepo, markerPath, lineagePath, resolveOpenSegment, recoverOpenSegment, deriveSlug, generateSegmentUlid, currentBranch } from '../lib/lineage.mjs';
-import { verifyEntrySig, KEY_ENV } from '../lib/sign.mjs';
+import { verifyEntrySig, signEntry, KEY_ENV } from '../lib/sign.mjs';
 import { sha256 } from '@adlc/core';
 
 // The libraries no longer read the environment (spec Layer 2, P1): `key` is an
@@ -418,14 +418,18 @@ describe('resolveOpenSegment (spec §7.1)', () => {
     } finally { clean(root); }
   }));
 
-  // AC13 — recovery is KEY-GATED, mirroring the reader: a keyless writer
-  // must never extend a recovered segment (the keyless reader would then
-  // refuse to read it, stranding the checkout loudly and permanently).
-  it('AC13: a KEYLESS fresh clone whose first action is a write mints fresh with a token — and its own keyless reads keep working', () => withKey(null, () => {
+  // AC13 — a keyless writer facing a committed same-branch segment FAILS
+  // CLOSED (two adversarial-review rounds): extending it strands the
+  // checkout (the keyless reader refuses recovered content), and minting
+  // alongside it shadows the committed evidence behind the fresh token —
+  // refusal is the only shape that hides nothing. Keyless GREENFIELD writes
+  // (no committed candidate) still mint normally.
+  it('AC13: a KEYLESS fresh clone whose first action is a write REFUSES — never extends, never shadow-mints', () => withKey(null, () => {
     const { root, dir, g } = gitRepo('feat/keyless-clone');
     let clonedRoot;
     try {
       activate(dir);
+      // Keyless greenfield mint works — this very write proves it.
       appendManifestEntry({ gate: 'evidence', data: { note: 'original' } }, dir, { cwd: root });
       const s1 = discoverSegments(dir).valid[0];
       const s1Bytes = readFileSync(segmentPath(dir, s1));
@@ -436,19 +440,58 @@ describe('resolveOpenSegment (spec §7.1)', () => {
       execFileSync('git', ['clone', '-q', '--branch', 'feat/keyless-clone', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
       const clonedDir = join(clonedRoot, '.adlc');
 
-      appendManifestEntry({ gate: 'evidence', data: { note: 'keyless-after-clone' } }, clonedDir, { cwd: clonedRoot });
-      const segs = discoverSegments(clonedDir).valid;
-      assert.equal(segs.length, 2, 'keyless write must MINT fresh, never extend a segment the keyless reader would refuse');
+      assert.throws(
+        () => appendManifestEntry({ gate: 'evidence', data: { note: 'keyless-after-clone' } }, clonedDir, { cwd: clonedRoot }),
+        /shadow|neither authenticate/,
+        'a keyless write must fail closed when a committed same-branch segment exists',
+      );
+      assert.equal(discoverSegments(clonedDir).valid.length, 1, 'nothing may have been minted');
       assert.deepEqual(readFileSync(segmentPath(clonedDir, s1)), s1Bytes, 'the committed segment stays byte-identical');
-      assert.equal(existsSync(lineagePath(clonedDir)), true, 'a genuine mint writes its token, so the keyless peeked read path works');
-      // The keyless checkout is NOT stranded: the next write extends its own minted segment.
-      appendManifestEntry({ gate: 'evidence', data: { note: 'second' } }, clonedDir, { cwd: clonedRoot });
-      assert.equal(discoverSegments(clonedDir).valid.length, 2, 'the second keyless write extends the minted segment via the token');
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'no token may have been written');
     } finally {
       clean(root);
       if (clonedRoot) clean(clonedRoot);
     }
   }));
+
+  // A v1 signature does not cover `branch`/`anchor` — a bolted-on branch
+  // claim atop a valid v1-signed entry still verifies, so authentication
+  // must demand a v2-verified FIRST entry, never merely "some entry
+  // verifies" (adversarial-review round-7 finding).
+  it('AC13: a KEYED writer refuses a candidate whose branch claim rides a v1 signature — identity must be v2-authenticated', () => {
+    const KEY = 'v1-forgery-key';
+    const { root, dir, g } = gitRepo('feat/v1-forged');
+    let clonedRoot;
+    try {
+      activate(dir);
+      // Build a v1-signed entry (canonical covers seq/gate/ts/data/files/prev
+      // ONLY), then bolt on branch + anchor — the signature still verifies.
+      const entry = { seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', data: { note: 'v1' }, files: {}, prev: null };
+      entry.sig = signEntry(KEY, entry); // no sigVersion → v1 canonical, which omits branch/anchor
+      entry.anchor = null;
+      entry.branch = 'feat/v1-forged';
+      const name = `${deriveSlug('feat/v1-forged')}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, name), `${JSON.stringify(entry)}\n`);
+      g('add', `.adlc/manifest.d/${name}`, '.adlc/manifest.d/.store.json');
+      g('commit', '-q', '-m', 'forged v1 branch claim');
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'gate-manifest-v1-forged-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/v1-forged', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+
+      withKey(KEY, () => {
+        assert.throws(
+          () => appendManifestEntry({ gate: 'evidence' }, clonedDir, { cwd: clonedRoot }),
+          /verified v2 signature|cannot be authenticated/,
+          'a v1-signed branch claim is not an authenticated identity',
+        );
+      });
+      assert.equal(discoverSegments(clonedDir).valid.length, 1, 'nothing may have been minted past the refused candidate');
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
 
   it('AC13: a KEYED writer refuses when the single recovery candidate cannot be authenticated — no extend, no duplicate mint', () => {
     const { root, dir, g } = gitRepo('feat/unauth-candidate');

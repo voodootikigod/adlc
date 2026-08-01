@@ -213,10 +213,11 @@ a third is recorded as an accepted limitation rather than pending work:
    reader, the fail-closed ambiguity contract, and why a recovered match
    never writes the token). This closure keeps the Threat model's in-scope
    promise for a lost lineage token on a fresh clone true on the write side
-   for KEYED configurations; a keyless writer mints fresh by design — the
-   keyless reader's own contract refuses recovered content it cannot
-   authenticate, so extending it would strand the checkout, and a fresh
-   token-owned segment is the one shape keyless reads trust.
+   for KEYED configurations; a keyless writer fails closed past a committed
+   same-branch candidate by design — the keyless reader's own contract
+   refuses recovered content it cannot authenticate, so extending would
+   strand the checkout and minting would shadow the committed evidence;
+   multi-checkout forest workflows effectively require a signing key.
 2. **Pre-`branch` segments unrecoverable** (open, follow-up ticket):
    segments minted before this field existed have no `branch` field and gain
    nothing from this mechanism — the original evidence-loss bug persists
@@ -368,19 +369,27 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
       before any read on a fresh clone, or after a lost token, used to
       always mint fresh here, permanently hiding the real segment's older
       evidence the instant the fresh one's token existed). Recovery is
-      KEY-GATED, mirroring §6's reader contract exactly: a keyless writer
-      that extended a recovered segment would strand the checkout — the
-      keyless reader refuses recovered content it cannot authenticate, so
-      every subsequent read/push would fail loudly and permanently — so a
-      keyless writer always mints fresh and writes its own token, whose
-      peeked path the keyless reader does trust. A keyed writer
-      authenticates the single candidate (chain intact under the key with
-      no tampered or unsigned-after-signed entry, and at least one entry
-      the key verifies — the same acceptance §6 gives a recovered read) and
-      REFUSES, never extends and never mints past, a candidate that fails:
-      minting past an unauthenticatable same-branch segment would silently
-      fork the branch's lineage, gap 1's own bug. More than one
-      candidate → refuse (ambiguous), the same fail-closed contract
+      KEY-GATED, mirroring §6's reader contract exactly. A KEYLESS writer
+      facing any committed same-branch candidate FAILS CLOSED: extending it
+      would strand the checkout (the keyless reader refuses recovered
+      content it cannot authenticate), and minting alongside it would
+      shadow the committed evidence behind the fresh token for every later
+      read — refusal is the only shape that hides nothing, and it is the
+      same refusal the keyless reader already gives in this exact state.
+      Keyless greenfield writes (no committed candidate) mint normally.
+      The practical consequence, stated plainly: multi-checkout forest
+      workflows effectively require a configured signing key — that was
+      already true for reads, and writes now match. A KEYED writer
+      authenticates the single candidate: chain intact under the key with
+      no tampered or unsigned-after-signed entry, AND the branch-bearing
+      FIRST entry itself carrying a verified v2 signature — a v1 signature
+      does not cover `branch` or `anchor`, so a bolted-on branch claim atop
+      a valid v1-signed entry still verifies, meaning "some entry verifies"
+      can never authenticate the identity claim recovery selects by. The
+      keyed writer REFUSES, never extends and never mints past, a candidate
+      that fails: minting past an unauthenticatable same-branch segment
+      would silently fork the branch's lineage, gap 1's own bug. More than
+      one candidate → refuse (ambiguous), the same fail-closed contract
       `recoverOpenSegment` already gives readers: a writer must never
       silently guess which of several candidates to extend. This is a
       deliberate trade-off, surfaced by adversarial review: the same branch
@@ -610,10 +619,12 @@ anchor under the same signature-verifying ceremony rules).
   packages/gate-manifest/test/segment-writer.test.mjs
   packages/tickets/test/manifest-segments.test.mjs
   --test-name-pattern='AC12'`.
-- **AC13 — keyless write symmetry:** a keyless fresh clone's first write
-  MINTS fresh with a token (recovery is key-gated, mirroring the reader) and
-  the checkout stays functional; a keyed writer refuses an unauthenticatable
-  single candidate without extending or duplicating it. **Verify:** `node
+- **AC13 — write-side authentication symmetry:** a keyless fresh clone's
+  first write FAILS CLOSED when a committed same-branch segment exists
+  (never extends, never shadow-mints; greenfield keyless mints normally); a
+  keyed writer refuses an unauthenticatable single candidate — including a
+  branch claim riding a v1 signature, which does not cover `branch` —
+  without extending or duplicating it. **Verify:** `node
   --test packages/gate-manifest/test/segment-writer.test.mjs
   packages/tickets/test/manifest-segments.test.mjs
   --test-name-pattern='AC13'`.

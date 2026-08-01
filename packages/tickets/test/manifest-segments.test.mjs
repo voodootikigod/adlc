@@ -754,18 +754,18 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     } finally { clean(root); }
   });
 
-  // AC13 — recovery is KEY-GATED, mirroring readOwnChains: keyless writers
-  // mint fresh (extending a recovered segment would strand the checkout,
-  // since the keyless reader refuses recovered content); keyed writers
-  // refuse an unauthenticatable candidate.
-  it('AC13: a KEYLESS fresh clone whose first action is a write mints fresh with a token, and stays functional', () => {
+  // AC13 — a keyless writer facing a committed same-branch segment FAILS
+  // CLOSED: extending strands the checkout (the keyless reader refuses
+  // recovered content) and minting shadows the committed evidence behind
+  // the fresh token — refusal hides nothing. Keyless greenfield writes
+  // still mint normally (the origin repo's own first write proves it).
+  it('AC13: a KEYLESS fresh clone whose first action is a write REFUSES — never extends, never shadow-mints', () => {
     const { root, dir } = gitRepo('feat/keyless-clone');
     let clonedRoot;
     try {
       activate(dir);
-      recordTicketEvidence(root, baseEvidence({ ticketId: 'ORIGINAL' }));
-      const segs = () => readdirSync(join(dir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
-      const s1 = segs()[0];
+      recordTicketEvidence(root, baseEvidence({ ticketId: 'ORIGINAL' })); // keyless greenfield mint works
+      const s1 = readdirSync(join(dir, 'manifest.d')).find((n) => n.endsWith('.jsonl'));
       execFileSync('git', ['add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${s1}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
       execFileSync('git', ['commit', '-q', '-m', 'keyless evidence'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
 
@@ -774,14 +774,47 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
       const clonedDir = join(clonedRoot, '.adlc');
       const s1Bytes = readFileSync(join(clonedDir, 'manifest.d', s1));
 
-      recordTicketEvidence(clonedRoot, baseEvidence({ ticketId: 'KEYLESS-AFTER-CLONE', transactionId: 'tx-2' }));
-      const clonedSegs = readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
-      assert.equal(clonedSegs.length, 2, 'keyless write must MINT fresh, never extend a segment the keyless reader would refuse');
+      assert.throws(
+        () => recordTicketEvidence(clonedRoot, baseEvidence({ ticketId: 'KEYLESS-AFTER-CLONE', transactionId: 'tx-2' })),
+        /shadow|neither authenticate/,
+        'a keyless write must fail closed when a committed same-branch segment exists',
+      );
+      assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'nothing may have been minted');
       assert.deepEqual(readFileSync(join(clonedDir, 'manifest.d', s1)), s1Bytes, 'the committed segment stays byte-identical');
-      assert.equal(existsSync(lineagePath(clonedDir)), true, 'a genuine mint writes its token');
-      // Not stranded: the keyless token-path read works.
-      const chains = readOwnChains(clonedDir, { cwd: clonedRoot, key: null });
-      assert.equal(chains.length, 2, 'root + the token-owned segment remain readable keylessly');
+      assert.equal(existsSync(lineagePath(clonedDir)), false, 'no token may have been written');
+    } finally {
+      clean(root);
+      if (clonedRoot) clean(clonedRoot);
+    }
+  });
+
+  // v1 signatures omit branch/anchor — a bolted-on branch claim still
+  // verifies, so identity must be v2-authenticated (round-7 finding).
+  it('AC13: a KEYED writer refuses a candidate whose branch claim rides a v1 signature', () => {
+    const KEY = 'v1-forgery-key';
+    const { root, dir } = gitRepo('feat/v1-forged');
+    let clonedRoot;
+    try {
+      activate(dir);
+      const entry = { seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', data: { note: 'v1' }, files: {}, prev: null };
+      entry.sig = createHmac('sha256', KEY).update(canonicalEntryBytes(entry)).digest('hex'); // no sigVersion → v1 canonical
+      entry.anchor = null;
+      entry.branch = 'feat/v1-forged';
+      const name = `${deriveSlug('feat/v1-forged')}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, name), `${JSON.stringify(entry)}\n`);
+      execFileSync('git', ['add', `.adlc/manifest.d/${name}`, '.adlc/manifest.d/.store.json'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+      execFileSync('git', ['commit', '-q', '-m', 'forged v1 branch claim'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+
+      clonedRoot = mkdtempSync(join(tmpdir(), 'adlc-ticket-v1-forged-'));
+      execFileSync('git', ['clone', '-q', '--branch', 'feat/v1-forged', root, clonedRoot], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const clonedDir = join(clonedRoot, '.adlc');
+
+      assert.throws(
+        () => recordTicketEvidence(clonedRoot, baseEvidence({ key: KEY, ticketId: 'AFTER', transactionId: 'tx-2' })),
+        /verified v2 signature|cannot be authenticated|unsigned/,
+        'a v1-signed branch claim is not an authenticated identity',
+      );
+      assert.equal(readdirSync(join(clonedDir, 'manifest.d')).filter((n) => n.endsWith('.jsonl')).length, 1, 'nothing may have been minted past the refused candidate');
     } finally {
       clean(root);
       if (clonedRoot) clean(clonedRoot);

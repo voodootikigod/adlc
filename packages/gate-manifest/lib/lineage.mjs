@@ -493,24 +493,45 @@ export function resolveOpenSegment(dir = ADLC_DIR, { cwd = process.cwd(), key = 
     const recovered = recoverOpenSegment(dir, { cwd });
     if (recovered) {
       // Lenient chain check (an honest unsigned legacy prefix is tolerated;
-      // tampered or unsigned-after-signed entries are not) plus at least one
-      // entry this key actually verifies — the same acceptance the tickets
-      // reader gives a recovered segment (chainIsIntact + signedEntriesOnly
-      // non-empty). verifyChain's own `signed` flag is a mode constant, not
-      // the per-entry tracker, so the second half is checked directly.
+      // tampered or unsigned-after-signed entries are not) plus the
+      // BRANCH-BEARING FIRST ENTRY itself carrying a verified v2 signature
+      // (adversarial-review finding): a v1 signature does not cover `branch`
+      // or `anchor`, so a valid v1-signed entry with a bolted-on branch
+      // claim still verifies — "some entry verifies" authenticates the
+      // bytes of SOME entry, never the identity claim recovery selects by.
+      // Only v2 signs every field, so only a v2-verified first entry proves
+      // the branch binding was made by a key holder. Branch-carrying
+      // segments postdate v2 writers, so no legitimate segment is excluded.
       const lines = readRawLines(segmentPath(dir, recovered.name));
       const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
-      const anyVerified = lines.some(({ line }) => {
-        try { return verifyEntrySig(key, JSON.parse(line)); } catch { return false; }
-      });
-      if (!chain.valid || !anyVerified) {
+      let first = null;
+      try { first = JSON.parse(lines[0]?.line); } catch { /* refused below */ }
+      const firstAuthenticated = Boolean(first) && first.sigVersion === 2 && verifyEntrySig(key, first);
+      if (!chain.valid || !firstAuthenticated) {
         throw new Error(
           `segment ${recovered.name} declares this branch but cannot be authenticated with the configured key `
-          + '(broken chain, forged entry, or no verifiably signed entry) — refusing to extend it, and refusing to '
-          + 'mint a duplicate past it (that would silently fork this branch\'s lineage)',
+          + '(broken chain, or its branch-bearing first entry lacks a verified v2 signature) — refusing to extend '
+          + 'it, and refusing to mint a duplicate past it (that would silently fork this branch\'s lineage)',
         );
       }
       return recovered;
+    }
+  } else {
+    // Keyless writers must not resolve past a committed same-branch segment
+    // in EITHER direction (adversarial-review findings, two rounds):
+    // extending it strands the checkout (the keyless reader refuses
+    // recovered content it cannot authenticate), and minting alongside it
+    // shadows the committed evidence behind the fresh token for every later
+    // read. Fail closed instead, exactly like the keyless reader does in
+    // this same state. Ambiguity counts as existence.
+    let candidateExists = false;
+    try { candidateExists = recoverOpenSegment(dir, { cwd }) !== null; } catch { candidateExists = true; }
+    if (candidateExists) {
+      throw new Error(
+        'a committed segment already declares this branch, and with no signing key this writer can neither '
+        + 'authenticate and extend it nor safely mint alongside it (a fresh token would shadow the committed '
+        + 'evidence from every later read) — configure the manifest key, or restore the local .lineage token',
+      );
     }
   }
 
