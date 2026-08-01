@@ -69,3 +69,15 @@ test('dispatching "review" surfaces a spawn error instead of throwing', async ()
   assert.equal(code, 1);
   assert.match(error, /npx not found/);
 });
+
+test('dispatching "review" surfaces a synchronous spawn failure instead of throwing', async () => {
+  // Distinct from the async child.on('error') case above: here spawnFn() itself
+  // throws before a child ever exists (e.g. EAGAIN from the OS), exercising the
+  // try/catch around the spawnFn call in runChild rather than the 'error' event.
+  const spawnFn = () => {
+    throw new Error('EAGAIN spawn failed');
+  };
+  const { code, error } = await dispatch('review', [], { spawnFn });
+  assert.equal(code, 1);
+  assert.match(error, /EAGAIN spawn failed/);
+});
