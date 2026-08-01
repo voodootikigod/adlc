@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import {
   probeOwner, isWellFormed, decideRecovery, isContainedRelPath, resolveTarget,
   writeFileDurable, writeRecord, readRecord, clearRecord, RECORD_VERSION,
-  makeTempPath, fsyncFile,
+  makeTempPath, fsyncFile, ownerStateFor,
 } from '../lib/inflight.mjs';
 
 function killError(code) {
@@ -82,6 +82,21 @@ test('a malformed pid is unknown rather than probed', () => {
     assert.equal(probeOwner(bad, () => { probed = true; }), 'unknown', `pid ${String(bad)}`);
     assert.equal(probed, false, `pid ${String(bad)} should never reach kill()`);
   }
+});
+
+test('a record carrying OUR OWN pid is a corpse, not a live owner', () => {
+  // Recovery runs before this process writes any record, so a record with our pid
+  // is one the OS reused. Probing it would say 'alive' (we are), and the stranded
+  // mutant plus the dirty-tree refusal would then be permanent.
+  let probed = false;
+  assert.equal(ownerStateFor(4242, 4242, () => { probed = true; return 'alive'; }), 'dead');
+  assert.equal(probed, false, 'probed a pid it already knows is ours');
+});
+
+test('any other pid is delegated to the probe unchanged', () => {
+  assert.equal(ownerStateFor(999, 4242, () => 'alive'), 'alive');
+  assert.equal(ownerStateFor(999, 4242, () => 'dead'), 'dead');
+  assert.equal(ownerStateFor(999, 4242, () => 'unknown'), 'unknown');
 });
 
 // ── decideRecovery ───────────────────────────────────────────────────────────

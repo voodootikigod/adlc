@@ -47,6 +47,24 @@ export function probeOwner(pid, kill = process.kill.bind(process)) {
   }
 }
 
+/**
+ * Ownership state for a record, accounting for the record being OURS.
+ *
+ * A record carrying this process's own pid cannot belong to a running owner:
+ * recovery happens at startup, before this process writes any record. It is a
+ * corpse from an earlier process whose pid the OS has since handed to us. Probing
+ * it would answer 'alive' — we are alive — and recovery would be skipped forever,
+ * leaving the stranded mutant and the dirty-tree refusal in place permanently.
+ *
+ * Split out because a pid collision cannot be staged from an integration test.
+ *
+ * @returns {'alive'|'dead'|'unknown'}
+ */
+export function ownerStateFor(recordPid, selfPid, probe = probeOwner) {
+  if (recordPid === selfPid) return 'dead';
+  return probe(recordPid);
+}
+
 /** Structural validation. A record we cannot read is litter, never an instruction. */
 export function isWellFormed(record) {
   return (

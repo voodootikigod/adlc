@@ -15,7 +15,7 @@ import {
 } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
 import {
-  probeOwner, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
+  ownerStateFor, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
   resolveTarget, recordPathFor, writeFileDurable, fsyncFile,
 } from '../lib/inflight.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
@@ -184,7 +184,7 @@ function recoverInflight() {
     return null;
   }
 
-  const ownerState = record.pid === process.pid ? 'dead' : probeOwner(record.pid);
+  const ownerState = ownerStateFor(record.pid, process.pid);
   const decision = decideRecovery({ ownerState, currentContent: current, record });
 
   if (decision.action === 'none') {
