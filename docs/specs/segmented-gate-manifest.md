@@ -14,6 +14,29 @@ fork anchors, while preserving every existing guarantee: tamper evidence, HMAC
 provenance, append-only in PRs, provider revocation, and migration-evidence
 validation.
 
+### 1.1 Storage modes
+
+The ledger has two storage modes, and BOTH are first-class, permanent,
+supported configurations — segmented is not a destination every repo is
+expected to reach, and single-file is not a deprecation queue:
+
+- **Single-file** (the default): all evidence in `.adlc/manifest.jsonl`.
+  Simplest to read, grep, and reason about; the right mode for repositories
+  with low write parallelism, which rarely hit the tail conflict this spec
+  exists to remove.
+- **Segmented (forest)**: evidence in per-branch segment files under
+  `.adlc/manifest.d/` (§4). The right mode for repositories doing parallel
+  worktree fan-out, where concurrent branches otherwise conflict on the
+  single file's tail on every merge.
+
+Mode is a per-repository choice, detected exactly as §4.7 defines (the
+activation marker, or a cutover-tailed root) — no configuration file and no
+environment variable. A repo enters forest mode one of two ways: greenfield
+(no recorded evidence yet) via `adlc gate-manifest enable`, or with existing
+history via the §8 cutover ceremony (tracked as T-MANIFEST-FOREST-MIGRATE).
+The choice is one-way for now: compaction back to a single chain remains a
+non-goal below.
+
 ## 2. Non-goals
 
 - Closing the truncation honest-limit (#354): an author controlling a PR branch
@@ -24,10 +47,47 @@ validation.
   findings ledger (ADR-0014).
 - Automatic migration. Migration is an explicit, dry-run-first ceremony.
 
+## Threat model
+
+This section records the adversary scope this spec's mechanisms are designed
+against. It is a design decision by the maintainer, stated so future work on
+these mechanisms is sized against the same adversary rather than a re-derived
+one. It changes no runtime behavior: every defense already merged
+(signature-verified recovery, fail-closed ambiguity refusals, unsigned-entry
+rejection, bounded no-follow reads) is retained as-is.
+
+**In scope — what the ledger defends against:**
+
+- Accidental corruption: truncated writes, malformed tails, crashed writers.
+- Concurrent-writer races: two producers resolving the same append target
+  (the ledger lock and the §7 single-writer invariants).
+- Lost or stale local state: a missing `.lineage` token on a fresh clone, a
+  token pointing at a segment that no longer exists.
+- Honest-mistake divergence: a checkout switching branches mid-work, a
+  rebase moving a segment's base, an operator hand-deleting a marker.
+- Tamper EVIDENCE: detecting after the fact that committed evidence bytes
+  changed — hash chains always, HMAC provenance when `ADLC_MANIFEST_KEY` is
+  configured. Detection, not prevention.
+
+**Out of scope — what the ledger does not claim to resist:**
+
+- An adversary holding repository commit access but not the manifest key,
+  crafting committed manifest content intended to be trusted. Commit access
+  is treated as trusted for manifest purposes: whoever can rewrite the code a
+  gate's evidence describes can already make the evidence moot, so the
+  manifest cannot be a stronger trust root than the tree it lives in.
+  Repositories that need per-author accountability on commits get it from
+  Git's own commit signing, which composes with this ledger and is not
+  duplicated by it.
+- Denial of evidence by the branch author (#354's honest-limit, already a
+  non-goal above): an author controlling a PR branch can drop their own
+  branch-recorded entries.
+
 ## 3. Terminology
 
-- **Root segment** — the legacy `.adlc/manifest.jsonl`. Frozen at cutover;
-  absent in greenfield repos.
+- **Root segment** — the single-file-mode `.adlc/manifest.jsonl` a repo
+  recorded before cutting over. Frozen at cutover; absent in repos that
+  enabled forest mode greenfield.
 - **Segment** — one append-only JSONL chain file under `.adlc/manifest.d/`.
 - **Fork anchor** — the binding `{segment, seq, lineHash}` in a segment's first
   entry, naming the exact committed line it forks from.
@@ -46,7 +106,7 @@ validation.
 
 ```text
 .adlc/
-  manifest.jsonl            # root segment (legacy repos; frozen after cutover)
+  manifest.jsonl            # root segment (pre-cutover history; frozen after cutover)
   manifest.d/
     <slug>-<ulid>.jsonl     # one segment per writer lineage
     .lineage                # local lineage token — gitignored, never committed
@@ -137,17 +197,40 @@ independently re-verify the specific entries they use regardless of this
 filter — belt-and-suspenders, since those paths do not all go through
 `readOwnChains`.
 
-Two gaps remain, deliberately deferred to a follow-up
-(T-01KYTQ4BADHSDJNBFNZHB2ZG5V) rather than folded into this same change: (1)
-`resolveOpenSegment` (the WRITE side) never consults `recoverOpenSegment` — a
-write that happens before any read on a fresh clone mints a fresh segment
-rather than continuing a real, unambiguous, already-committed one for this
-branch, and once that fresh segment's token exists, recovery's fast path
-never scans further, permanently hiding the older evidence again; (2)
-segments minted before this field existed have no `branch` field and gain
-nothing from this mechanism — the original evidence-loss bug persists
-unchanged for all pre-existing segment history until a migration/re-
-attestation ceremony (or an authenticated lineage index) is designed.
+Two gaps remain open, deliberately deferred to a follow-up
+(T-01KYTQ4BADHSDJNBFNZHB2ZG5V) rather than folded into this same change, and
+a third is recorded as an accepted limitation rather than pending work:
+
+1. **Write-side recovery blindness** (open, follow-up ticket):
+   `resolveOpenSegment` (the WRITE side) never consults `recoverOpenSegment`
+   — a write that happens before any read on a fresh clone mints a fresh
+   segment rather than continuing a real, unambiguous, already-committed one
+   for this branch, and once that fresh segment's token exists, recovery's
+   fast path never scans further, permanently hiding the older evidence
+   again.
+2. **Pre-`branch` segments unrecoverable** (open, follow-up ticket):
+   segments minted before this field existed have no `branch` field and gain
+   nothing from this mechanism — the original evidence-loss bug persists
+   unchanged for all pre-existing segment history until a migration/re-
+   attestation ceremony (or an authenticated lineage index) is designed.
+   No repository can have such segments yet (forest mode only became
+   reachable with `adlc gate-manifest enable`), so this is a design
+   obligation on the §8 ceremony, not live data at risk.
+3. **Branch-name identity is not durable across time** (accepted
+   limitation, per the Threat model section): a branch name can be deleted
+   and later reused by an unrelated lineage, and a detached-HEAD checkout
+   has no branch name at all, so token-less recovery can surface — or
+   fail-closed refuse on — a semantically unrelated lineage's committed
+   segment when the reused name's segment is still present in the tree.
+   Under the recorded threat model this is accepted: every failure shape is
+   a visible refusal or stale-but-authentic evidence, never silent
+   corruption, and the preconditions (forest mode on, token lost, exact
+   name reuse, segment still in tree) compound to rare against the
+   recurring conflict cost forest mode removes. Revisiting it requires
+   git-ancestry-aware identity (distinguishing "this commit already
+   contains that segment's origin" from "we merely share an ancestor")
+   plus a segment lifecycle (close-on-merge) — design work a future ticket
+   must take whole, not a field to bolt on.
 
 ### 4.5 Cutover entry (root, last entry)
 
@@ -177,7 +260,10 @@ old ones in; §8 step 7 names this to the operator as a required follow-up.
 ### 4.7 Activation marker
 
 `.adlc/manifest.d/.store.json` — a tracked marker file mirroring the ticket
-store's, written by the ceremony and by the greenfield scaffold:
+store's, written by the §8 ceremony, by `adlc gate-manifest enable` (the
+greenfield activation command: dry-run by default, refuses on a live root, a
+content-bearing `manifest.d/` without a marker, or a gitignored marker path),
+and by the greenfield scaffold:
 
 ```json
 { "format": "adlc-manifest-segments", "version": 1 }
@@ -394,8 +480,9 @@ anchor under the same signature-verifying ceremony rules).
   the frozen root locally; §9.1 denies it at merge with a message naming the
   toolkit upgrade as the remedy. §7.3 gives the same message locally for new
   toolkits in inconsistent states.
-- Legacy repos that never migrate keep exact current behavior indefinitely;
-  every reader change is additive.
+- Single-file repos that never migrate keep exact current behavior
+  indefinitely — that is the permanent mode §1.1 describes, not a waiting
+  room; every reader change is additive.
 
 ## 12. Verification and acceptance criteria
 
