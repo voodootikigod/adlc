@@ -158,12 +158,26 @@ export function makeTempPath(path) {
  * THROUGH their symlink and then a rename of that symlink over the real target.
  */
 export function writeFileAtomic(path, contents, { tempPath = null } = {}) {
+  // RESOLVE A SYMLINK FIRST, and replace what it points AT.
+  //
+  // rename replaces an inode, so renaming over a symlink destroys the link and
+  // leaves a regular file in its place — a permanent change to the workspace, on a
+  // SUCCESSFUL run, to a file the tool was only supposed to mutate temporarily.
+  // The in-place write this replaced followed the link instead, so resolving here
+  // keeps that behaviour and adds atomicity rather than trading one for the other.
+  let realPath = path;
+  try {
+    if (lstatSync(path).isSymbolicLink()) realPath = realpathSync(path);
+  } catch { /* absent, or unreadable: fall through and let the write report it */ }
+
   let mode = null;
   try {
-    mode = statSync(path).mode & 0o7777;
+    mode = statSync(realPath).mode & 0o7777;
   } catch { /* new file: take the default */ }
 
-  const tmp = tempPath ?? makeTempPath(path);
+  // The temp must live beside the file being REPLACED — rename cannot cross
+  // filesystems, and a symlink may well point at another one.
+  const tmp = tempPath ?? makeTempPath(realPath);
   // 'wx' is O_CREAT|O_EXCL: refuses an existing path rather than following it.
   const fd = openSync(tmp, 'wx');
   let created = true;
@@ -172,7 +186,7 @@ export function writeFileAtomic(path, contents, { tempPath = null } = {}) {
     // writeFileSync loops internally, so a short write cannot silently truncate.
     writeFileSync(tmp, contents);
     if (mode !== null) chmodSync(tmp, mode);
-    renameSync(tmp, path);
+    renameSync(tmp, realPath);
     created = false; // renamed away; nothing left to clean up
   } finally {
     // Never leave litter: an orphaned *.tmp-* is untracked, and hollow-test

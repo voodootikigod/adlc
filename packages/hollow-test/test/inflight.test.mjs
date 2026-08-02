@@ -13,7 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync, existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync, existsSync, readdirSync, statSync, chmodSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -270,6 +270,43 @@ test('an atomic write refuses a pre-existing temp path instead of following it',
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('an atomic write REPLACES WHAT A SYMLINK POINTS AT, and leaves the link intact', () => {
+  // rename replaces an inode, so renaming over a symlink would destroy the link and
+  // leave a regular file — a permanent workspace change on a SUCCESSFUL run, to a
+  // file the tool only meant to mutate temporarily. The in-place write this
+  // replaced followed the link, so atomicity must not be bought by breaking it.
+  const dir = mkdtempSync(join(tmpdir(), 'hollow-symlink-'));
+  try {
+    mkdirSync(join(dir, 'versions'));
+    const real = join(dir, 'versions', 'impl.mjs');
+    const link = join(dir, 'current.mjs');
+    writeFileSync(real, 'original');
+    symlinkSync(real, link);
+
+    writeFileAtomic(link, 'mutated');
+
+    assert.equal(lstatSync(link).isSymbolicLink(), true, 'the atomic write destroyed the symlink');
+    assert.equal(readFileSync(real, 'utf8'), 'mutated', 'wrote somewhere other than the link target');
+    assert.equal(readFileSync(link, 'utf8'), 'mutated');
+
+    // And back again, as the per-trial restore does.
+    writeFileAtomic(link, 'original');
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+    assert.equal(readFileSync(real, 'utf8'), 'original');
+
+    assert.deepEqual(
+      readdirSync(dir).filter((e) => e.includes('.tmp-')), [],
+      'left a temp beside the link',
+    );
+    assert.deepEqual(
+      readdirSync(join(dir, 'versions')).filter((e) => e.includes('.tmp-')), [],
+      'left a temp beside the resolved target',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
