@@ -38,8 +38,11 @@ import { verifyEntrySig } from './sign.mjs';
  */
 function authenticate(dir, name, key) {
   const lines = readRawLines(segmentPath(dir, name));
-  if (lines.length === 0) return { ok: false, first: null };
   let first = null;
+  // An empty segment file lands here too: lines[0] is undefined, so reading
+  // .line throws into this same catch. One refusal path, not two — a
+  // separate emptiness guard would be unreachable behind the wrong-branch
+  // check below (an empty file declares no branch), i.e. untestable.
   try { first = JSON.parse(lines[0].line); } catch { return { ok: false, first: null }; }
   if (key === null) return { ok: false, first }; // keyless: nothing can be authenticated
   const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });

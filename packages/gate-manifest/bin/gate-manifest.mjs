@@ -23,7 +23,7 @@ const USAGE =
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
   '       enable [--write] [--json] [--allow-keyless]\n' +
-  '       adopt  [<segment>] [--write] [--json]';
+  '       adopt  [segment-name] [--write] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
