@@ -43,13 +43,13 @@ export function evaluateBands(observed = {}) {
   if (observed === null || typeof observed !== 'object' || Array.isArray(observed)) {
     return { warn: true, handoff: true, hard: true };
   }
-  const past = (value, warnAt, handoffAt, hardAt) => {
+  const past = (value, warnAt, handoffAt, hardAt, inDomain) => {
     const kind = classifyBandSignal(value);
     if (kind === 'absent') {
       return { warn: false, handoff: false, hard: false };
     }
-    if (kind === 'invalid') {
-      // Present but malformed → fail closed (past every band).
+    if (kind === 'invalid' || !inDomain(value)) {
+      // Present but malformed / out-of-domain → fail closed (past every band).
       return { warn: true, handoff: true, hard: true };
     }
     // Inclusive (>=): at-threshold is in-band. build-gate today uses strict >
@@ -61,9 +61,9 @@ export function evaluateBands(observed = {}) {
     };
   };
 
-  const pct = past(observed.pct, WARN_PCT, HANDOFF_PCT, HARD_PCT);
-  const depth = past(observed.depth, WARN_DEPTH, HANDOFF_DEPTH, HARD_DEPTH);
-  const bytes = past(observed.bytes, WARN_BYTES, HANDOFF_BYTES, HARD_BYTES);
+  const pct = past(observed.pct, WARN_PCT, HANDOFF_PCT, HARD_PCT, (v) => v >= 0 && v <= 100);
+  const depth = past(observed.depth, WARN_DEPTH, HANDOFF_DEPTH, HARD_DEPTH, (v) => v >= 0);
+  const bytes = past(observed.bytes, WARN_BYTES, HANDOFF_BYTES, HARD_BYTES, (v) => v >= 0);
 
   return {
     warn: pct.warn || depth.warn || bytes.warn,

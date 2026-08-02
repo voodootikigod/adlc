@@ -126,3 +126,11 @@ test('remainingToHard fails closed on non-finite floor signals', () => {
   assert.equal(remainingToHard(null), 0);
 });
 
+
+
+test('out-of-domain finite signals fail closed as hard', () => {
+  assert.equal(isHardDegraded({ pct: -1 }), true);
+  assert.equal(isHardDegraded({ pct: 101 }), true);
+  assert.equal(isHardDegraded({ depth: -5 }), true);
+  assert.equal(isHardDegraded({ bytes: -1 }), true);
+});
