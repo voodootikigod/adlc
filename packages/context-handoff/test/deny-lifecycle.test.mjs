@@ -106,3 +106,12 @@ test('cannot consume already-consumed or non-open record', () => {
     false,
   );
 });
+
+test('padded denier session_id on record cannot be consumed', () => {
+  const r = consumeDenyRecord(
+    { session_id: 'denier ', ticket_id: 'T154', content_hash: 'h', status: 'open' },
+    'other',
+  );
+  assert.equal(r.ok, false);
+  assert.match(r.error, /padded|unsafe|deny record session/);
+});

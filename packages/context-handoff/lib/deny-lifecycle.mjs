@@ -39,6 +39,10 @@ export function consumeDenyRecord(record, consumerSessionId) {
   if (record.status !== 'open') {
     return { ok: false, error: 'deny record is not open' };
   }
+  const denier = requireSessionId(record.session_id, 'deny record session id');
+  if (!denier.ok) {
+    return { ok: false, error: denier.error };
+  }
   const consumer = requireSessionId(consumerSessionId, 'consumer session id');
   if (!consumer.ok) {
     return { ok: false, error: consumer.error };

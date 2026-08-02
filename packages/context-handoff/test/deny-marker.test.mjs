@@ -361,3 +361,8 @@ test('absolute handoff + valid marker ⇒ handoff_active deny', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('padded sessionId rejected by assertSafeSessionId/ensureDenyMarker', () => {
+  assert.throws(() => assertSafeSessionId('denier '), /padded/);
+  assert.throws(() => ensureDenyMarker('/tmp', { sessionId: 'denier ' }), /padded/);
+});

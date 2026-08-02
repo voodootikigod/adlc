@@ -22,6 +22,9 @@ export function assertSafeSessionId(sessionId) {
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throw new Error('unsafe sessionId: empty');
   }
+  if (sessionId.trim().length === 0 || sessionId.trim() !== sessionId) {
+    throw new Error('unsafe sessionId: padded');
+  }
   if (sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('..')) {
     throw new Error('unsafe sessionId: path traversal');
   }
