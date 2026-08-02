@@ -151,6 +151,7 @@ export function ensureDenyMarker(
   assertSafeSessionId(sessionId);
   const existing = readDenyMarker(root, sessionId, { fs });
   if (existing.ok) {
+    ensureDenyStoreSentinel(root, fs);
     return { ok: true, processSticky: false, reason: 'already_present' };
   }
   // Exists but unreadable: never clobber durable state.
@@ -186,10 +187,7 @@ export function ensureDenyMarker(
   };
   try {
     fs.mkdirSync(dir, { recursive: true });
-    // Sentinel outside denies/ so deleting denies/ alone cannot erase store expectation.
-    const handoffsDir = dirname(dir);
-    fs.mkdirSync(handoffsDir, { recursive: true });
-    fs.writeFileSync(join(handoffsDir, '.deny-store'), '1\n', 'utf8');
+    ensureDenyStoreSentinel(root, fs);
     const tmp = `${path}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, path);
@@ -316,6 +314,20 @@ export function quarantineJunkDenies(
  * gate can fail closed (D3:invalid_record) rather than silently drop them.
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
+function ensureDenyStoreSentinel(root, fs) {
+  const handoffsDir = join(root, '.adlc', 'handoffs');
+  const sentinel = join(handoffsDir, '.deny-store');
+  try {
+    fs.mkdirSync(handoffsDir, { recursive: true });
+    if (!fs.existsSync(sentinel)) {
+      fs.writeFileSync(sentinel, '1\n', 'utf8');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function denyStoreExpectedBySentinel(root, fs) {
   // Only the handoff sentinel means a deny store was initialized. Ticket-store
   // markers must not imply denies/ — otherwise every ADLC repo denies mutations
@@ -331,6 +343,8 @@ export function loadDenyRecords(
       existsSync,
       readdirSync,
       readFileSync,
+      mkdirSync,
+      writeFileSync,
     },
     /**
      * When true, a missing/emptied denies/ directory is unavailable — not a clean store.
@@ -403,6 +417,11 @@ export function loadDenyRecords(
       content_hash: null,
     });
   }
+  // Self-heal sentinel whenever any deny marker material exists.
+  if (records.length > 0 || invalidRecords.length > 0) {
+    ensureDenyStoreSentinel(root, fs);
+  }
+
   // Sentinel present but no marker files left → store was wiped in place.
   if (expected && records.length === 0 && invalidRecords.length === 0) {
     invalidRecords.push({

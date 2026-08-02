@@ -658,3 +658,23 @@ test('sentinel alone makes cool reentry deny when marker vanished', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('sentinel self-heals when markers exist but sentinel was deleted', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'heal', ticketId: 'T154', contentHash: 'h' });
+    const sentinel = join(root, '.adlc', 'handoffs', '.deny-store');
+    rmSync(sentinel, { force: true });
+    assert.equal(existsSync(sentinel), false);
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.ok, true);
+    assert.equal(existsSync(sentinel), true);
+    // already_present path also heals
+    rmSync(sentinel, { force: true });
+    ensureDenyMarker(root, { sessionId: 'heal', ticketId: 'T154', contentHash: 'h' });
+    assert.equal(existsSync(sentinel), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
