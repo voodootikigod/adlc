@@ -92,10 +92,10 @@ export function authorized({
   if (!resumeAuth || resumeAuth.verified !== true) return false;
   if (resumeAuth.ticket_id !== record.ticket_id) return false;
   if (resumeAuth.content_hash !== record.content_hash) return false;
-  // Optional record bind: when present, resume-auth is not a cross-deny bearer.
+  // Resume-auth is record-bound — no cross-deny bearer credential.
   if (
-    typeof resumeAuth.deny_session_id === 'string' &&
-    resumeAuth.deny_session_id.trim().length > 0 &&
+    typeof resumeAuth.deny_session_id !== 'string' ||
+    resumeAuth.deny_session_id.trim().length === 0 ||
     resumeAuth.deny_session_id !== record.session_id
   ) {
     return false;
@@ -152,6 +152,14 @@ export function evaluateMutationGate({
     if (!r) continue;
     if (!isValidDenyRecord(r)) {
       const label = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : '?';
+      // Store sentinel always fails closed for every session.
+      if (r.session_id === '__deny_store__') {
+        reasons.push(`D3:invalid_record:${label}`);
+        continue;
+      }
+      // Foreign invalid/corrupt markers fail closed for that session only (via D2
+      // when self). Do not brick every session on another session's bad file.
+      if (r.session_id !== currentSessionId) continue;
       reasons.push(`D3:invalid_record:${label}`);
       continue;
     }

@@ -51,23 +51,48 @@ test('authorized requires matching ticket_id and content_hash', () => {
   assert.equal(
     authorized({
       record: open(),
-      resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: true },
+      resumeAuth: {
+        ticket_id: 'T154',
+        content_hash: 'abc',
+        verified: true,
+        deny_session_id: 's1',
+      },
     }),
     true,
   );
   assert.equal(
     authorized({
       record: open(),
-      resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true },
+      resumeAuth: {
+        ticket_id: 'T154',
+        content_hash: 'abc',
+        verified: true,
+        deny_session_id: 'other',
+      },
     }),
     false,
   );
   assert.equal(
     authorized({
       record: open(),
-      resumeAuth: { ticket_id: 'OTHER', content_hash: 'abc', verified: true },
+      resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true, deny_session_id: 's1' },
     }),
     false,
+  );
+  assert.equal(
+    authorized({
+      record: open(),
+      resumeAuth: { ticket_id: 'OTHER', content_hash: 'abc', verified: true, deny_session_id: 's1' },
+    }),
+    false,
+  );
+  assert.equal(
+    authorized({
+      record: open(),
+      resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: true },
+    }),
+    false,
+    'missing deny_session_id',
   );
 });
 
@@ -150,7 +175,12 @@ test('D2: denier session always denied even with resume-auth', () => {
   const g = evaluateMutationGate({
     currentSessionId: 's1',
     denyRecords: [open()],
-    resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: true },
+    resumeAuth: {
+      ticket_id: 'T154',
+      content_hash: 'abc',
+      verified: true,
+      deny_session_id: 's1',
+    },
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.some((r) => r.startsWith('D2')));
@@ -184,7 +214,12 @@ test('D3 cleared for consumed record when other open denies authorized', () => {
   const g = evaluateMutationGate({
     currentSessionId: 's2',
     denyRecords: records,
-    resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: true },
+    resumeAuth: {
+      ticket_id: 'T154',
+      content_hash: 'abc',
+      verified: true,
+      deny_session_id: 's3',
+    },
   });
   assert.equal(g.deny, false);
 });
@@ -197,7 +232,12 @@ test('multi-open-deny: must authorize every open record', () => {
   const g = evaluateMutationGate({
     currentSessionId: 'fresh',
     denyRecords: records,
-    resumeAuth: { ticket_id: 'T154', content_hash: 'h1', verified: true },
+    resumeAuth: {
+      ticket_id: 'T154',
+      content_hash: 'h1',
+      verified: true,
+      deny_session_id: 'a',
+    },
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.some((r) => r.includes('b')));
@@ -278,18 +318,25 @@ test('single-character currentSessionId is usable (D0 off-by-one)', () => {
   assert.deepEqual(g.reasons, []);
 });
 
-test('invalid/missing status fails closed under D3', () => {
+test('invalid/missing status fails closed under D3 for that session', () => {
   for (const status of ['revoked', 'bogus', null, undefined]) {
     const record = open({ session_id: 'denier' });
     if (status === undefined) delete record.status;
     else record.status = status;
-    const g = evaluateMutationGate({
+    const self = evaluateMutationGate({
+      currentSessionId: 'denier',
+      denyRecords: [record],
+      resumeAuth: null,
+    });
+    assert.equal(self.deny, true, `status=${JSON.stringify(status)}`);
+    assert.ok(self.reasons.some((r) => r.startsWith('D3:invalid_record:') || r.startsWith('D2:')), self.reasons.join(','));
+    const foreign = evaluateMutationGate({
       currentSessionId: 'fresh',
       denyRecords: [record],
       resumeAuth: null,
     });
-    assert.equal(g.deny, true, `status=${JSON.stringify(status)}`);
-    assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:')), g.reasons.join(','));
+    // Foreign invalid markers do not brick unrelated sessions.
+    assert.equal(foreign.deny, false, `foreign status=${JSON.stringify(status)}`);
   }
 });
 

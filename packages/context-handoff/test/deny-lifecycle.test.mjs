@@ -32,7 +32,12 @@ test('consume transitions open → consumed; denier stays D2; consumer authorize
   const otherGate = evaluateMutationGate({
     currentSessionId: 's2',
     denyRecords: [consumed.record],
-    resumeAuth: { ticket_id: 'T154', content_hash: 'h', verified: true },
+    resumeAuth: {
+      ticket_id: 'T154',
+      content_hash: 'h',
+      verified: true,
+      deny_session_id: 's1',
+    },
   });
   assert.equal(otherGate.deny, false, 'consumed drops D3 when authorized');
 });

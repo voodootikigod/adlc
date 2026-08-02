@@ -511,7 +511,13 @@ test('loadDenyRecords surfaces valid + invalid retained markers for the gate', (
     );
     assert.equal(g.deny, true);
     assert.ok(g.reasons.some((r) => r.includes('open1')));
-    assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
+    // Foreign corrupt markers no longer brick unrelated sessions.
+    assert.ok(!g.reasons.some((r) => r.includes('corrupt1')));
+    const selfBad = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'corrupt1' }),
+    );
+    assert.equal(selfBad.deny, true);
+    assert.ok(selfBad.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -570,7 +576,7 @@ test('ADLC repo markers make missing denies/ unavailable by default', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     mkdirSync(join(root, '.adlc'), { recursive: true });
-    writeFileSync(join(root, '.adlc', 'tickets.json'), '[]\n', 'utf8');
+    writeFileSync(join(root, '.adlc', '.store.json'), '{}\n', 'utf8');
     const loaded = loadDenyRecords(root);
     assert.equal(loaded.ok, false);
     assert.equal(loaded.denyStoreUnavailable, true);
@@ -602,5 +608,22 @@ test('quarantineJunkDenies reports failure when rename throws', () => {
   const result = quarantineJunkDenies('/x', { fs });
   assert.equal(result.ok, false);
   assert.match(result.reason, /quarantine_failed/);
+});
+
+test('.deny-store sentinel keeps storeExpected after denies/ removal', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 's1', ticketId: 'T154', contentHash: 'h' });
+    assert.equal(existsSync(join(root, '.adlc', 'handoffs', '.deny-store')), true);
+    rmSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true, force: true });
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 

@@ -186,6 +186,10 @@ export function ensureDenyMarker(
   };
   try {
     fs.mkdirSync(dir, { recursive: true });
+    // Sentinel outside denies/ so deleting denies/ alone cannot erase store expectation.
+    const handoffsDir = dirname(dir);
+    fs.mkdirSync(handoffsDir, { recursive: true });
+    fs.writeFileSync(join(handoffsDir, '.deny-store'), '1\n', 'utf8');
     const tmp = `${path}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, path);
@@ -313,10 +317,14 @@ export function quarantineJunkDenies(
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
 function adlcRepoMarkersPresent(root, fs) {
+  const adlc = join(root, '.adlc');
   return (
-    fs.existsSync(join(root, '.adlc', 'tickets.json')) ||
-    fs.existsSync(join(root, '.adlc', 'config.json')) ||
-    fs.existsSync(join(root, '.adlc', 'handoffs'))
+    fs.existsSync(join(adlc, 'tickets.json')) ||
+    fs.existsSync(join(adlc, 'tickets')) ||
+    fs.existsSync(join(adlc, '.store.json')) ||
+    fs.existsSync(join(adlc, 'config.json')) ||
+    fs.existsSync(join(adlc, 'handoffs', '.deny-store')) ||
+    fs.existsSync(join(adlc, 'handoffs'))
   );
 }
 
