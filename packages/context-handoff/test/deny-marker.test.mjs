@@ -1,3 +1,4 @@
+import { evaluateMutationGate } from '../lib/mutation-gate.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -19,6 +20,7 @@ import {
   quarantineJunkDenies,
   assertSafeSessionId,
   isSafeSessionId,
+  loadDenyRecords,
 } from '../lib/deny-marker.mjs';
 
 test('ensureDenyMarker writes readable open record', () => {
@@ -201,23 +203,28 @@ test('ensureDenyMarker refuses session_id_mismatch without overwrite', () => {
   }
 });
 
-test('ensureDenyMarker quarantines invalid_status then writes fresh open', () => {
+test('ensureDenyMarker refuses invalid_status without destroying binds', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     const path = denyPath(root, 'bad-status-rewrite');
-    const denies = join(root, '.adlc', 'handoffs', 'denies');
-    mkdirSync(denies, { recursive: true });
-    const old = JSON.stringify({ session_id: 'bad-status-rewrite', status: 'bogus', schema: 1 });
-    writeFileSync(path, old, 'utf8');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    const bytes = JSON.stringify({
+      session_id: 'bad-status-rewrite',
+      ticket_id: 'T154',
+      content_hash: 'HOST-BOUND-HASH',
+      status: 'expired',
+      schema: 2,
+    });
+    writeFileSync(path, bytes, 'utf8');
     const r = ensureDenyMarker(root, {
       sessionId: 'bad-status-rewrite',
-      ticketId: 'T154',
-      contentHash: 'h',
+      ticketId: null,
+      contentHash: null,
     });
-    assert.equal(r.ok, true);
-    assert.equal(readDenyMarker(root, 'bad-status-rewrite').record.status, 'open');
-    const qNames = readdirSync(join(denies, 'quarantine'));
-    assert.ok(qNames.some((n) => n.startsWith('bad-status-rewrite.json.invalid_status.')));
+    assert.equal(r.ok, false);
+    assert.equal(r.processSticky, true);
+    assert.equal(r.reason, 'invalid_status');
+    assert.equal(readFileSync(path, 'utf8'), bytes);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -468,6 +475,43 @@ test('write-then-delete with denyEverWritten stays denied on cool reentry', () =
     });
     assert.equal(cool.deny, true);
     assert.equal(cool.reason, 'marker_vanished');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('loadDenyRecords surfaces valid + invalid retained markers for the gate', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    mkdirSync(denies, { recursive: true });
+    ensureDenyMarker(root, { sessionId: 'open1', ticketId: 'T154', contentHash: 'h1' });
+    writeFileSync(
+      join(denies, 'consumed1.json'),
+      JSON.stringify({
+        session_id: 'consumed1',
+        ticket_id: 'T154',
+        content_hash: 'h2',
+        status: 'consumed',
+        schema: 1,
+      }),
+      'utf8',
+    );
+    writeFileSync(join(denies, 'corrupt1.json'), '{not-json', 'utf8');
+    writeFileSync(join(denies, 'notes.txt'), 'junk', 'utf8');
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.ok, true);
+    assert.equal(loaded.records.length, 2);
+    assert.ok(loaded.records.some((r) => r.session_id === 'open1' && r.status === 'open'));
+    assert.ok(loaded.records.some((r) => r.session_id === 'consumed1' && r.status === 'consumed'));
+    assert.ok(loaded.invalidRecords.some((r) => r.session_id === 'corrupt1'));
+    const g = evaluateMutationGate({
+      currentSessionId: 'fresh',
+      denyRecords: [...loaded.records, ...loaded.invalidRecords],
+    });
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.some((r) => r.includes('open1')));
+    assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

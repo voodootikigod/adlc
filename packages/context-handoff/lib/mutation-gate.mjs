@@ -123,6 +123,11 @@ export function evaluateMutationGate({
     return { deny: true, reasons };
   }
 
+  if (!Array.isArray(denyRecords)) {
+    reasons.push('D0:invalid_deny_records');
+    return { deny: true, reasons };
+  }
+
   // Manifest failure inertifies bypass (authorized + D2 lift).
   const grant = manifestVerifyFailed
     ? { active: false, allowUnbound: false }

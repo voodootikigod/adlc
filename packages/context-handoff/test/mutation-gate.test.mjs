@@ -334,3 +334,14 @@ test('authorized() rejects when manifestVerifyFailed even with bypass', () => {
   );
 });
 
+test('non-array denyRecords fails closed D0', () => {
+  for (const bad of [null, {}, 'x', 1]) {
+    const g = evaluateMutationGate({
+      currentSessionId: 'fresh',
+      denyRecords: bad,
+    });
+    assert.equal(g.deny, true, JSON.stringify(bad));
+    assert.ok(g.reasons.includes('D0:invalid_deny_records'));
+  }
+});
+

@@ -15,7 +15,8 @@ test('same-session consume rejected', () => {
 
 test('consume transitions open → consumed; denier stays D2; consumer authorized', () => {
   const denier = { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'open' };
-  const consumed = consumeDenyRecord(denier, 's2');
+  const auth = { ticket_id: 'T154', content_hash: 'h', verified: true };
+  const consumed = consumeDenyRecord(denier, 's2', { resumeAuth: auth });
   assert.equal(consumed.ok, true);
   assert.equal(consumed.record.status, 'consumed');
 
@@ -115,3 +116,34 @@ test('padded denier session_id on record cannot be consumed', () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /padded|unsafe|deny record session/);
 });
+
+test('consume requires verified resume-auth matching ticket/hash', () => {
+  const open = { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'open' };
+  assert.equal(consumeDenyRecord(open, 's2').ok, false);
+  assert.equal(consumeDenyRecord(open, 's2', { resumeAuth: null }).ok, false);
+  assert.equal(
+    consumeDenyRecord(open, 's2', {
+      resumeAuth: { ticket_id: 'T154', content_hash: 'h', verified: false },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    consumeDenyRecord(open, 's2', {
+      resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    consumeDenyRecord(open, 's2', {
+      resumeAuth: { ticket_id: 'OTHER', content_hash: 'h', verified: true },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    consumeDenyRecord(open, 's2', {
+      resumeAuth: { ticket_id: 'T154', content_hash: 'h', verified: true },
+    }).ok,
+    true,
+  );
+});
+

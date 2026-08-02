@@ -2,7 +2,7 @@
  * Deny record lifecycle: open → consumed. Denier session stays sticky (D2).
  */
 
-import { isBoundField } from './mutation-gate.mjs';
+import { authorized, isBoundField } from './mutation-gate.mjs';
 import { assertSafeSessionId } from './deny-marker.mjs';
 
 /**
@@ -28,11 +28,14 @@ export function requireSessionId(sessionId, label = 'session id') {
 }
 
 /**
+ * Other-session consume: requires verified resume-auth matching the record's
+ * ticket_id/content_hash (same bar as authorized() for open records).
  * @param {object} record
  * @param {string} consumerSessionId
+ * @param {{ resumeAuth?: { ticket_id: string, content_hash: string, verified: boolean }|null }} [opts]
  * @returns {{ ok: true, record: object } | { ok: false, error: string, exitCode?: number }}
  */
-export function consumeDenyRecord(record, consumerSessionId) {
+export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null } = {}) {
   if (!record || typeof record !== 'object') {
     return { ok: false, error: 'missing deny record' };
   }
@@ -52,6 +55,10 @@ export function consumeDenyRecord(record, consumerSessionId) {
   }
   if (!isBoundField(record.content_hash) || !isBoundField(record.ticket_id)) {
     return { ok: false, error: 'cannot consume without ticket_id and content_hash' };
+  }
+  // Spec: other-session consume requires final with non-null hash / resume-auth.
+  if (!authorized({ record, resumeAuth, bypassForSession: false })) {
+    return { ok: false, error: 'consume requires verified resume-auth matching ticket_id/content_hash' };
   }
   return {
     ok: true,

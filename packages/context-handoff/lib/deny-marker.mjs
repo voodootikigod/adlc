@@ -97,7 +97,7 @@ export function readDenyMarker(root, sessionId, { fs = { readFileSync, existsSyn
   return { ok: true, deny: false, record, reason: 'ok' };
 }
 
-const QUARANTINE_BEFORE_WRITE = new Set(['corrupt_json', 'invalid_shape', 'invalid_status']);
+const QUARANTINE_BEFORE_WRITE = new Set(['corrupt_json', 'invalid_shape']);
 
 /**
  * Quarantine an existing marker's bytes before rewriting.
@@ -149,6 +149,10 @@ export function ensureDenyMarker(
   // Foreign session's durable state under this path — never overwrite.
   if (existing.reason === 'session_id_mismatch') {
     return { ok: false, processSticky: true, reason: 'session_id_mismatch' };
+  }
+  // Unrecognized status may still carry host-repaired binds — fail closed, no rewrite.
+  if (existing.reason === 'invalid_status') {
+    return { ok: false, processSticky: true, reason: 'invalid_status' };
   }
 
   const path = denyPath(root, sessionId);
@@ -282,6 +286,65 @@ export function quarantineJunkDenies(
  * Re-entry: if absolute handoff still applies and marker missing/bad → sticky deny.
  * Cooling does not clear open or consumed self-deny (D2 sticky).
  */
+
+/**
+ * Enumerate denies/*.json into gate-ready records + invalid retained entries.
+ * Junk filenames are skipped (call quarantineJunkDenies separately).
+ * Unparseable / invalid self-named markers surface as invalidRecords so the
+ * gate can fail closed (D3:invalid_record) rather than silently drop them.
+ * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
+ */
+export function loadDenyRecords(
+  root,
+  {
+    fs = {
+      existsSync,
+      readdirSync,
+      readFileSync,
+    },
+  } = {},
+) {
+  const dir = join(root, '.adlc', 'handoffs', 'denies');
+  const records = [];
+  const invalidRecords = [];
+  if (!fs.existsSync(dir)) {
+    return { ok: true, records, invalidRecords };
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `readdir_failed:${err?.code || err?.message || 'error'}`,
+      records,
+      invalidRecords,
+    };
+  }
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    const isDir = typeof entry === 'string' ? false : entry.isDirectory();
+    if (name === 'quarantine' || isDir) continue;
+    if (name.endsWith('.tmp')) continue;
+    if (!name.endsWith('.json')) continue;
+    const sessionId = name.slice(0, -'.json'.length);
+    if (!isSafeSessionId(sessionId)) continue;
+    const check = readDenyMarker(root, sessionId, { fs });
+    if (check.ok && check.record) {
+      records.push(check.record);
+      continue;
+    }
+    if (check.reason === 'missing_marker') continue;
+    invalidRecords.push({
+      session_id: sessionId,
+      status: `invalid:${check.reason}`,
+      ticket_id: null,
+      content_hash: null,
+    });
+  }
+  return { ok: true, records, invalidRecords };
+}
+
 export function evaluateMarkerOnReentry(
   root,
   sessionId,
