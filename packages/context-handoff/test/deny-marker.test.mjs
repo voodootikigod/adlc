@@ -18,6 +18,7 @@ import {
   denyPath,
   quarantineJunkDenies,
   assertSafeSessionId,
+  isSafeSessionId,
 } from '../lib/deny-marker.mjs';
 
 test('ensureDenyMarker writes readable open record', () => {
@@ -143,12 +144,14 @@ test('ensureDenyMarker does not clobber unreadable existing marker', () => {
   assert.ok(reads >= 1);
 });
 
-test('ensureDenyMarker rewrites corrupt marker into valid open', () => {
+test('ensureDenyMarker quarantines corrupt marker then writes valid open', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     const path = denyPath(root, 'corrupt-repair');
-    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
-    writeFileSync(path, '{not-json', 'utf8');
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    mkdirSync(denies, { recursive: true });
+    const oldBytes = '{not-json';
+    writeFileSync(path, oldBytes, 'utf8');
     assert.equal(readDenyMarker(root, 'corrupt-repair').reason, 'corrupt_json');
     const r = ensureDenyMarker(root, {
       sessionId: 'corrupt-repair',
@@ -160,6 +163,61 @@ test('ensureDenyMarker rewrites corrupt marker into valid open', () => {
     assert.equal(check.ok, true);
     assert.equal(check.record.status, 'open');
     assert.equal(check.record.ticket_id, 'T154');
+    const qDir = join(denies, 'quarantine');
+    assert.equal(existsSync(qDir), true);
+    const qNames = readdirSync(qDir);
+    const hit = qNames.find((n) => n.startsWith('corrupt-repair.json.corrupt_json.'));
+    assert.ok(hit, `expected quarantine entry, got ${qNames.join(',')}`);
+    assert.equal(readFileSync(join(qDir, hit), 'utf8'), oldBytes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker refuses session_id_mismatch without overwrite', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'sess-c');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    const bytes = JSON.stringify({
+      session_id: 'OTHER',
+      ticket_id: 'T154',
+      content_hash: 'host-bound',
+      status: 'open',
+      schema: 1,
+    });
+    writeFileSync(path, bytes, 'utf8');
+    const r = ensureDenyMarker(root, {
+      sessionId: 'sess-c',
+      ticketId: 'NEW',
+      contentHash: 'clobber',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.processSticky, true);
+    assert.equal(r.reason, 'session_id_mismatch');
+    assert.equal(readFileSync(path, 'utf8'), bytes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker quarantines invalid_status then writes fresh open', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'bad-status-rewrite');
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    mkdirSync(denies, { recursive: true });
+    const old = JSON.stringify({ session_id: 'bad-status-rewrite', status: 'bogus', schema: 1 });
+    writeFileSync(path, old, 'utf8');
+    const r = ensureDenyMarker(root, {
+      sessionId: 'bad-status-rewrite',
+      ticketId: 'T154',
+      contentHash: 'h',
+    });
+    assert.equal(r.ok, true);
+    assert.equal(readDenyMarker(root, 'bad-status-rewrite').record.status, 'open');
+    const qNames = readdirSync(join(denies, 'quarantine'));
+    assert.ok(qNames.some((n) => n.startsWith('bad-status-rewrite.json.invalid_status.')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -367,4 +425,12 @@ test('absolute handoff + valid marker ⇒ handoff_active deny', () => {
 test('padded sessionId rejected by assertSafeSessionId/ensureDenyMarker', () => {
   assert.throws(() => assertSafeSessionId('denier '), /padded/);
   assert.throws(() => ensureDenyMarker('/tmp', { sessionId: 'denier ' }), /padded/);
+});
+
+test('isSafeSessionId matches assertSafeSessionId accept/reject set', () => {
+  assert.equal(isSafeSessionId('sess-ok'), true);
+  for (const id of ['', '  ', 'a/b', '../x', 'a\\b', '..', 'padded ']) {
+    assert.equal(isSafeSessionId(id), false, JSON.stringify(id));
+    assert.throws(() => assertSafeSessionId(id), /unsafe sessionId/);
+  }
 });

@@ -96,13 +96,42 @@ test('bypassForSession lifts D2 for denier', () => {
   assert.ok(!g.reasons.some((r) => r.startsWith('D2')));
 });
 
-test('bypass authorizes null-ticket/null-hash open for non-denier', () => {
+test('legacy true bypass does NOT authorize unbound open records', () => {
   const g = evaluateMutationGate({
     currentSessionId: 'fresh',
     denyRecords: [open({ ticket_id: null, content_hash: null })],
     bypassForSession: true,
   });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.some((r) => r.startsWith('D3')));
+});
+
+test('unboundReason grant authorizes unbound open for non-denier', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open({ ticket_id: null, content_hash: null })],
+    bypassForSession: { unboundReason: 'operator-override' },
+  });
   assert.equal(g.deny, false);
+});
+
+test('legacy true bypass still authorizes bound open and lifts D2', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 's1',
+    denyRecords: [open()],
+    bypassForSession: true,
+  });
+  assert.equal(g.deny, false);
+  assert.ok(!g.reasons.some((r) => r.startsWith('D2')));
+});
+
+test('empty unboundReason is not a bypass grant', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open({ ticket_id: null, content_hash: null })],
+    bypassForSession: { unboundReason: '  ' },
+  });
+  assert.equal(g.deny, true);
 });
 
 test('bypass does NOT lift D1', () => {
@@ -221,6 +250,18 @@ test('missing/empty/padded currentSessionId fail-closed', () => {
     const g = evaluateMutationGate({
       currentSessionId: id,
       denyRecords: [consumed],
+      resumeAuth: null,
+    });
+    assert.equal(g.deny, true, `expected deny for currentSessionId=${JSON.stringify(id)}`);
+    assert.ok(g.reasons.includes('D0:invalid_session_id'));
+  }
+});
+
+test('path-separator and traversal sessionIds fail-closed D0', () => {
+  for (const id of ['a/b', '../x', 'a\\b', '..', 'foo/../bar']) {
+    const g = evaluateMutationGate({
+      currentSessionId: id,
+      denyRecords: [],
       resumeAuth: null,
     });
     assert.equal(g.deny, true, `expected deny for currentSessionId=${JSON.stringify(id)}`);

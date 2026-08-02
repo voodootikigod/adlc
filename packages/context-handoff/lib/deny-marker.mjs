@@ -13,6 +13,23 @@ import { dirname, join, basename } from 'node:path';
  */
 
 /**
+ * Non-throwing session-id safety predicate shared with the mutation gate.
+ * Rejects empty / padded / path-separators / `..` / basename mismatch so deny
+ * paths cannot escape `.adlc/handoffs/denies/`.
+ * @param {unknown} sessionId
+ * @returns {boolean}
+ */
+export function isSafeSessionId(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return false;
+  if (sessionId.trim().length === 0 || sessionId.trim() !== sessionId) return false;
+  if (sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('..')) {
+    return false;
+  }
+  if (basename(sessionId) !== sessionId) return false;
+  return true;
+}
+
+/**
  * Reject empty / path-separators / `..` / basename mismatch so deny paths
  * cannot escape `.adlc/handoffs/denies/`.
  * @param {unknown} sessionId
@@ -80,11 +97,36 @@ export function readDenyMarker(root, sessionId, { fs = { readFileSync, existsSyn
   return { ok: true, deny: false, record, reason: 'ok' };
 }
 
+const QUARANTINE_BEFORE_WRITE = new Set(['corrupt_json', 'invalid_shape', 'invalid_status']);
+
+/**
+ * Quarantine an existing marker's bytes before rewriting.
+ * Destination: denies/quarantine/<name>.<reason>.<ts>
+ * @returns {boolean} true if quarantine succeeded (or file already gone)
+ */
+function quarantineExistingMarker(path, reason, fs) {
+  if (!fs.existsSync(path)) return true;
+  const dir = dirname(path);
+  const qDir = join(dir, 'quarantine');
+  const name = basename(path);
+  const ts = Date.now();
+  const dest = join(qDir, `${name}.${reason}.${ts}`);
+  try {
+    fs.mkdirSync(qDir, { recursive: true });
+    fs.renameSync(path, dest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ensure marker exists; on failure return processSticky recommendation.
  * Idempotent: never rewrite an already-valid open or consumed marker
  * (preserves host-repaired ticket_id/content_hash and consumed status).
  * Unreadable existing markers fail closed without clobber.
+ * session_id_mismatch: refuse overwrite (another session's durable state).
+ * Other invalid states: quarantine-before-write, then write fresh open.
  * @returns {{ ok: boolean, processSticky: boolean, reason: string }}
  */
 export function ensureDenyMarker(
@@ -104,8 +146,19 @@ export function ensureDenyMarker(
   if (existing.reason === 'unreadable_marker') {
     return { ok: false, processSticky: true, reason: 'unreadable_marker' };
   }
+  // Foreign session's durable state under this path — never overwrite.
+  if (existing.reason === 'session_id_mismatch') {
+    return { ok: false, processSticky: true, reason: 'session_id_mismatch' };
+  }
 
   const path = denyPath(root, sessionId);
+  // Corrupt / invalid existing file: quarantine bytes, then write fresh open.
+  if (QUARANTINE_BEFORE_WRITE.has(existing.reason) && fs.existsSync(path)) {
+    if (!quarantineExistingMarker(path, existing.reason, fs)) {
+      return { ok: false, processSticky: true, reason: `quarantine_failed:${existing.reason}` };
+    }
+  }
+
   const dir = dirname(path);
   const record = {
     session_id: sessionId,

@@ -16,3 +16,10 @@ import { evaluateMutationGate } from '@adlc/context-handoff/lib/mutation-gate.mj
 ```sh
 node --test packages/context-handoff/test/*.test.mjs
 ```
+
+## Deferred past slice-1
+
+Signed deny-manifest ledger anchoring (every deny creation recorded in the
+hash-chained manifest) is deferred past this pure-helpers slice; slice-1
+contracts the filesystem marker + gate predicates only.
+

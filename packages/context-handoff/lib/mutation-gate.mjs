@@ -3,7 +3,10 @@
  *
  * @typedef {{ session_id: string, ticket_id: string|null, content_hash: string|null, status: 'open'|'consumed' }} DenyRecord
  * @typedef {{ ticket_id: string, content_hash: string, verified: boolean }} ResumeAuth
+ * @typedef {boolean|null|{ unboundReason: string }} BypassGrant
  */
+
+import { isSafeSessionId } from './deny-marker.mjs';
 
 /** True when a bind field is a non-empty string (whitespace-only ≡ unbound). */
 export function isBoundField(value) {
@@ -11,28 +14,58 @@ export function isBoundField(value) {
 }
 
 /**
- * Fail-closed session identity for the gate.
+ * Fail-closed session identity for the gate — same rules as assertSafeSessionId.
  * @param {unknown} sessionId
  * @returns {boolean}
  */
 export function isUsableSessionId(sessionId) {
-  return typeof sessionId === 'string' && sessionId.trim().length > 0 && sessionId.trim() === sessionId;
+  return isSafeSessionId(sessionId);
+}
+
+/**
+ * Normalize bypass grant.
+ * - false/null/absent → no bypass
+ * - true → legacy bound-only (lifts D2 for current session; does NOT authorize unbound)
+ * - { unboundReason: non-empty string } → unbound operator override (bound + unbound; lifts D2)
+ * @param {BypassGrant} [bypassForSession]
+ * @returns {{ active: boolean, allowUnbound: boolean }}
+ */
+export function normalizeBypassGrant(bypassForSession) {
+  if (bypassForSession === true) {
+    return { active: true, allowUnbound: false };
+  }
+  if (
+    bypassForSession &&
+    typeof bypassForSession === 'object' &&
+    typeof bypassForSession.unboundReason === 'string' &&
+    bypassForSession.unboundReason.trim().length > 0
+  ) {
+    return { active: true, allowUnbound: true };
+  }
+  return { active: false, allowUnbound: false };
 }
 
 /**
  * Per-record authorization (spec: universal quantification over open denies).
- * TTY bypass authorizes the caller briefly (including null-ticket/null-hash).
+ * Legacy `true` authorizes bound open records only; unbound needs
+ * `{ unboundReason }` operator override.
  * @param {object} opts
  * @param {DenyRecord} opts.record
  * @param {ResumeAuth|null} [opts.resumeAuth]
- * @param {boolean} [opts.bypassForSession=false]
+ * @param {BypassGrant} [opts.bypassForSession=false]
  */
 export function authorized({ record, resumeAuth = null, bypassForSession = false } = {}) {
   if (!record) return false;
-  if (bypassForSession) return true;
+  const grant = normalizeBypassGrant(bypassForSession);
+  const unbound = !isBoundField(record.ticket_id) || !isBoundField(record.content_hash);
+
+  if (grant.active) {
+    if (unbound) return grant.allowUnbound === true;
+    return true;
+  }
 
   // Pre-bind / unbound: resume-auth never suffices (null OR empty/whitespace).
-  if (!isBoundField(record.ticket_id) || !isBoundField(record.content_hash)) return false;
+  if (unbound) return false;
 
   if (!resumeAuth || resumeAuth.verified !== true) return false;
   if (resumeAuth.ticket_id !== record.ticket_id) return false;
@@ -46,7 +79,7 @@ export function authorized({ record, resumeAuth = null, bypassForSession = false
  * @param {string} opts.currentSessionId
  * @param {DenyRecord[]} [opts.denyRecords=[]]
  * @param {ResumeAuth|null} [opts.resumeAuth=null]
- * @param {boolean} [opts.bypassForSession=false]
+ * @param {BypassGrant} [opts.bypassForSession=false]
  * @param {boolean} [opts.manifestVerifyFailed=false]
  * @returns {{ deny: boolean, reasons: string[] }}
  */
@@ -62,15 +95,16 @@ export function evaluateMutationGate({
   // D1 is independent of TTY bypass.
   if (processStickyDeny) reasons.push('D1:process_sticky');
 
-  // Missing/blank/padded session identity cannot evaluate D2 — fail closed.
+  // Missing/blank/padded/unsafe session identity cannot evaluate D2 — fail closed.
   if (!isUsableSessionId(currentSessionId)) {
     reasons.push('D0:invalid_session_id');
     return { deny: true, reasons };
   }
 
+  const grant = normalizeBypassGrant(bypassForSession);
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
-  // Spec: TTY bypass can authorize denier briefly — do not push D2 when bypassed.
-  if (self.length > 0 && !bypassForSession) reasons.push('D2:denier_session');
+  // Spec: active bypass can authorize denier briefly — do not push D2 when bypassed.
+  if (self.length > 0 && !grant.active) reasons.push('D2:denier_session');
 
   const effectiveAuth = manifestVerifyFailed ? null : resumeAuth;
   const open = denyRecords.filter((r) => r && r.status === 'open');

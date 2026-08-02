@@ -58,17 +58,3 @@ export function consumeDenyRecord(record, consumerSessionId) {
     record: { ...record, status: 'consumed' },
   };
 }
-
-/**
- * After consume: denier still D2; consumed R drops from D3.
- */
-export function postConsumeGateInput({ denierSessionId, consumerSessionId, records, resumeAuth }) {
-  return {
-    currentSessionId: consumerSessionId,
-    denyRecords: records,
-    resumeAuth,
-    processStickyDeny: false,
-    // helper for tests: is denier still sticky?
-    denierStillDenied: records.some((r) => r.session_id === denierSessionId),
-  };
-}

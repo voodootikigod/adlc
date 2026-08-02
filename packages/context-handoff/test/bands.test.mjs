@@ -29,11 +29,25 @@ test('absolute OR-join: bytes past handoff fires even if pct is low', () => {
   assert.equal(b.hard, false);
 });
 
-test('non-finite pct/depth/bytes are ignored', () => {
-  const b = evaluateBands({ pct: NaN, depth: Infinity, bytes: -Infinity });
-  assert.equal(b.warn, false);
-  assert.equal(b.handoff, false);
-  assert.equal(b.hard, false);
+test('absent signals ignored; present malformed fail closed as hard', () => {
+  const missing = evaluateBands({ pct: 10 });
+  assert.equal(missing.hard, false);
+  assert.equal(evaluateBands({}).hard, false);
+  assert.equal(evaluateBands({ pct: null, depth: undefined }).hard, false);
+
+  for (const observed of [
+    { pct: NaN },
+    { depth: Infinity },
+    { bytes: -Infinity },
+    { pct: '99' },
+    { bytes: '100000' },
+  ]) {
+    const b = evaluateBands(observed);
+    assert.equal(b.warn, true, JSON.stringify(observed));
+    assert.equal(b.handoff, true, JSON.stringify(observed));
+    assert.equal(b.hard, true, JSON.stringify(observed));
+    assert.equal(isHardDegraded(observed), true, JSON.stringify(observed));
+  }
 });
 
 test('no floor-delta: absolute bands ignore a floor field on observed', () => {

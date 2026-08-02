@@ -13,7 +13,23 @@ import {
 } from './thresholds.mjs';
 
 /**
+ * Classify a band signal value.
+ * - absent (undefined/null): ignore (missing kind)
+ * - present but non-finite / non-number (incl. numeric strings, NaN, ±Infinity): hard (fail closed)
+ * - finite number: compare against thresholds
+ *
+ * @param {unknown} value
+ * @returns {'absent'|'invalid'|'number'}
+ */
+export function classifyBandSignal(value) {
+  if (value === undefined || value === null) return 'absent';
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'invalid';
+  return 'number';
+}
+
+/**
  * Absolute OR-join across available signals. Missing kinds are ignored.
+ * Present-but-malformed signals fail closed as hard.
  * Floor is NEVER subtracted from band comparators (no floor-delta bands).
  * Extra keys such as `floor` on the observed object are ignored.
  *
@@ -24,8 +40,13 @@ import {
  */
 export function evaluateBands(observed = {}) {
   const past = (value, warnAt, handoffAt, hardAt) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
+    const kind = classifyBandSignal(value);
+    if (kind === 'absent') {
       return { warn: false, handoff: false, hard: false };
+    }
+    if (kind === 'invalid') {
+      // Present but malformed → fail closed (past every band).
+      return { warn: true, handoff: true, hard: true };
     }
     return {
       warn: value >= warnAt,
