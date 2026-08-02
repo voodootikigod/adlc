@@ -36,26 +36,44 @@ import { verifyEntrySig } from './sign.mjs';
  * carrying a verified v2 signature — v1 does not sign `branch`, so a v1
  * signature can never authenticate the identity claim being adopted.
  */
-// The ONE place a segment's entries are parsed. Returns null for an empty,
-// malformed, or unreadable file — which the branch filter below turns into
-// "not a candidate", the single observable consequence. (Keeping a second
-// emptiness/parse verdict inside the authenticator would be unreachable:
-// a segment whose first entry does not parse declares no branch, so the
-// wrong-branch refusal always fires first.)
+// The ONE place a segment's entries are parsed. Returns null when the file
+// is empty, unreadable, or its first/last entry is not a JSON OBJECT —
+// `JSON.parse('null')` succeeds and yields null, which would otherwise flow
+// on and throw when a caller reads `.branch` off it (the twin resolvers
+// guard this with `first?.branch`). A null here is REFUSED by the caller,
+// never silently excluded: recovery throws on an unreadable first entry
+// precisely because such a segment "cannot be safely excluded as a
+// candidate either", and adopt must not resolve a state recovery refuses.
 function readSegment(dir, name) {
   const lines = readRawLines(segmentPath(dir, name));
   try {
-    return { lines, first: JSON.parse(lines[0].line), last: JSON.parse(lines.at(-1).line) };
+    const first = JSON.parse(lines[0].line);
+    const last = JSON.parse(lines.at(-1).line);
+    if (!first || typeof first !== 'object' || Array.isArray(first)) return null;
+    return { lines, first, last: last && typeof last === 'object' ? last : {} };
   } catch {
     return null;
   }
 }
 
-/** Assumes a parsed first entry — see readSegment. */
+/**
+ * Assumes a parsed first entry — see readSegment.
+ *
+ * With a key: the full gate `resolveOpenSegment` applies to a recovered
+ * candidate — leniently valid chain AND a first entry carrying a verified
+ * v2 signature (v1 does not sign `branch`, so it can never authenticate the
+ * identity being adopted). Without a key in a forest that declares no keyed
+ * mode: chain intactness alone, because a token confers no trust there that
+ * the forest does not already grant — the keyless peeked reader skips
+ * signature verification by design. Refusing instead would leave keyless
+ * forests with no remediation at all for an outage they can genuinely
+ * reach, which is the hand-crafted-token status quo this command replaces.
+ */
 function authenticate({ lines, first }, key) {
-  if (key === null) return false; // nothing can be authenticated without a key
   const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
-  return chain.valid && first.sigVersion === 2 && verifyEntrySig(key, first);
+  if (!chain.valid) return false;
+  if (key === null) return true;
+  return first.sigVersion === 2 && verifyEntrySig(key, first);
 }
 
 function describeCandidate(name, parsed, key) {
@@ -94,13 +112,34 @@ export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, seg
     return { decision: 'refuse-keyed-forest', reason: 'this forest was activated in keyed mode, but no signing key is available to authenticate the segment being adopted; configure the manifest key' };
   }
 
-  const { valid } = discoverSegments(dir);
+  // Recovery's INTEGRITY gates, applied before anything else — adopt must
+  // not be able to resolve a state recovery would have refused. Once a
+  // token exists, `peekOpenSegment` short-circuits both the writer's
+  // recovery and the reader's, so a single adopt would convert these
+  // fail-closed refusals into permanent silence for this checkout.
+  const { valid, invalid } = discoverSegments(dir);
+  if (invalid.length > 0) {
+    return {
+      decision: 'refuse-nonconforming-store',
+      reason: `manifest.d/ contains ${invalid.length} non-conforming filesystem object(s) (${invalid.map((i) => i.name).sort().join(', ')}) — one could be a disguised or tampered segment belonging to this branch, so adopting a lineage now would hide it from every later write and read on this checkout; repair the store first`,
+      branch,
+    };
+  }
   const parsedByName = new Map();
+  const unreadable = [];
   for (const name of valid) {
     const parsed = readSegment(dir, name);
     if (parsed) parsedByName.set(name, parsed);
+    else unreadable.push(name);
   }
-  const mine = valid.filter((name) => parsedByName.get(name)?.first.branch === branch);
+  if (unreadable.length > 0) {
+    return {
+      decision: 'refuse-unreadable-segment',
+      reason: `segment(s) ${unreadable.sort().join(', ')} have an unreadable or malformed first entry, so their branch cannot be determined — they can be neither listed as candidates nor safely excluded from the choice; repair them first`,
+      branch,
+    };
+  }
+  const mine = valid.filter((name) => parsedByName.get(name)?.first?.branch === branch);
 
   if (segment === null) {
     return { decision: 'list', branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
@@ -113,7 +152,7 @@ export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, seg
     return { decision: 'refuse-unknown-segment', reason: `no segment named ${segment} exists in this store`, branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
   }
   if (!mine.includes(segment)) {
-    const declared = parsedByName.get(segment)?.first.branch ?? null;
+    const declared = parsedByName.get(segment)?.first?.branch ?? null;
     return { decision: 'refuse-wrong-branch', reason: `segment ${segment} declares branch ${JSON.stringify(declared)}, not ${JSON.stringify(branch)} — adopting it would bind this checkout to a different lineage`, branch };
   }
   if (!authenticate(parsedByName.get(segment), key)) {

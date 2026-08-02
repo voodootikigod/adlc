@@ -239,6 +239,85 @@ describe('adopt — refusals (AC3)', () => {
     } finally { clean(root); }
   });
 
+  // Recovery's INTEGRITY gates: adopt must not resolve a state recovery
+  // refuses, because a token short-circuits recovery forever afterwards.
+  it('refuses while a NON-CONFORMING object sits under manifest.d — adopting would hide it from every later write and read', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      twoCandidates(root, dir);
+      // The documented hiding attack: a real segment renamed to a name the
+      // grammar rejects, so discoverSegments classifies it as invalid.
+      writeFileSync(join(dir, 'manifest.d', 'disguised-segment.txt'), '{"seq":1}\n');
+      const out = adopt(dir, { cwd: root, key: KEY, segment: discoverSegments(dir).valid[0], write: true });
+      assert.equal(out.decision, 'refuse-nonconforming-store');
+      assert.equal(existsSync(lineagePath(dir)), false, 'no token may be written');
+      // List mode refuses too — the operator must not choose from a listing
+      // that silently omits a possible candidate.
+      assert.equal(planAdopt(dir, { cwd: root, key: KEY }).decision, 'refuse-nonconforming-store');
+    } finally { clean(root); }
+  });
+
+  it('refuses while any segment has an unreadable first entry — it can be neither listed nor safely excluded', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      const { a } = twoCandidates(root, dir);
+      const orphan = `${deriveSlug('feat/adopt')}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, orphan), 'not json at all\n');
+      const out = adopt(dir, { cwd: root, key: KEY, segment: a, write: true });
+      assert.equal(out.decision, 'refuse-unreadable-segment');
+      assert.equal(existsSync(lineagePath(dir)), false);
+    } finally { clean(root); }
+  });
+
+  it('refuses rather than CRASHES when a segment first line is the JSON literal null', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir);
+      twoCandidates(root, dir);
+      const nullish = `${deriveSlug('feat/adopt')}-${generateSegmentUlid()}.jsonl`;
+      writeFileSync(segmentPath(dir, nullish), 'null\n');
+      // Must be a clean refusal, not a TypeError reading .branch off null.
+      const plan = planAdopt(dir, { cwd: root, key: KEY });
+      assert.equal(plan.decision, 'refuse-unreadable-segment');
+      // ...and the CLI keeps its single-JSON-document contract.
+      const r = runBin(root, '--json');
+      assert.equal(r.status, 2);
+      assert.equal(JSON.parse(r.stdout).decision, 'refuse-unreadable-segment');
+    } finally { clean(root); }
+  });
+
+  // A keyless forest can genuinely reach the outage adopt exists to fix, so
+  // it must have a way out — a token confers no trust there that the forest
+  // does not already grant (the keyless reader skips verification anyway).
+  it('adopts in a KEYLESS-mode forest on chain-intactness alone, and the adopted lineage then accepts writes', () => {
+    const { root, dir } = gitRepo();
+    try {
+      activate(dir, 'keyless');
+      const stash = mkdtempSync(join(tmpdir(), 'adopt-keyless-stash-'));
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null });
+      const a = discoverSegments(dir).valid[0];
+      renameSync(segmentPath(dir, a), join(stash, a));
+      rmSync(lineagePath(dir), { force: true });
+      appendManifestEntry({ gate: 'evidence' }, dir, { cwd: root, key: null });
+      renameSync(join(stash, a), segmentPath(dir, a));
+      rmSync(lineagePath(dir), { force: true });
+      rmSync(stash, { recursive: true, force: true });
+
+      // Precondition: the keyless writer is genuinely blocked.
+      assert.throws(() => resolveOpenSegment(dir, { cwd: root, key: null }), /shadow|neither authenticate/);
+
+      const plan = planAdopt(dir, { cwd: root, key: null });
+      assert.equal(plan.decision, 'list');
+      assert.ok(plan.candidates.every((c) => c.authenticated), 'chain-intact candidates count as adoptable without a key');
+      const out = adopt(dir, { cwd: root, key: null, segment: a, write: true });
+      assert.equal(out.decision, 'adopted');
+      appendManifestEntry({ gate: 'evidence', data: { note: 'after-keyless-adopt' } }, dir, { cwd: root, key: null });
+      assert.equal(readRawLines(segmentPath(dir, a)).length, 2, 'writes resume on the adopted lineage');
+    } finally { clean(root); }
+  });
+
   it('refuses a non-segmented repo and a detached HEAD', () => {
     const { root, dir } = gitRepo();
     try {

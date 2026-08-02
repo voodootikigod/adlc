@@ -187,12 +187,25 @@ never edited**, and the segments you did not choose stay byte-identical.
 
 Because the token is a trust anchor (readers treat a token match as proof
 this checkout minted the segment and skip re-verification), adopt applies the
-same gate the writer applies to a recovered candidate: the chain must be
-intact and the branch-bearing **first entry** must carry a verified v2
-signature. Exit `2`, writing nothing, when: the repo is not segmented, HEAD
-is detached (no branch to bind to), the forest is keyed-mode but no key is
-available, the named segment is unknown, it declares a different branch, or
-it cannot be authenticated.
+same gates the writer applies to a recovered candidate — both halves:
+
+- **Integrity.** Adopt refuses while `manifest.d/` holds any non-conforming
+  object, or while any segment's first entry is unreadable. Recovery refuses
+  in both states; a token would short-circuit recovery forever afterwards,
+  so adopting there would convert a fail-closed anomaly into permanent
+  silence for that checkout.
+- **Authentication.** With a key: the chain must be intact and the
+  branch-bearing **first entry** must carry a verified v2 signature. In a
+  forest activated `--allow-keyless`: chain intactness alone, since a token
+  confers no trust there that the forest does not already grant — keyless
+  readers skip signature verification by design, and refusing would leave
+  keyless forests with no remedy for an outage they can genuinely reach.
+
+Exit `2`, writing nothing, when: the repo is not segmented, HEAD is detached
+(no branch to bind to), the forest is **keyed-mode** but no key is available,
+the store holds a non-conforming object or an unreadable segment, the named
+segment is unknown, it declares a different branch, or it fails the
+authentication gate above.
 
 ### attest
 
