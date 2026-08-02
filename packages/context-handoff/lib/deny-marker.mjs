@@ -357,8 +357,17 @@ export function loadDenyRecords(
   const dir = join(root, '.adlc', 'handoffs', 'denies');
   const records = [];
   const invalidRecords = [];
-  const expected =
-    storeExpected === undefined ? denyStoreExpectedBySentinel(root, fs) : storeExpected === true;
+  let expected;
+  if (storeExpected === undefined || storeExpected === null) {
+    expected = denyStoreExpectedBySentinel(root, fs);
+  } else if (storeExpected === true) {
+    expected = true;
+  } else if (storeExpected === false) {
+    expected = false;
+  } else {
+    // Non-boolean → fail closed (treat store as expected).
+    expected = true;
+  }
   if (!fs.existsSync(dir)) {
     if (expected) {
       invalidRecords.push({

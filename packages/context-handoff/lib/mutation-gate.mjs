@@ -44,27 +44,33 @@ export function isValidDenyRecord(record) {
  */
 export function normalizeBypassGrant(bypassForSession, currentSessionId = null) {
   if (bypassForSession === true) {
-    // Legacy true is bound-only and must be paired with a usable currentSessionId
-    // by the gate (session-scoped at evaluation time).
+    // Legacy true is bound-only and session-scoped at evaluation time.
     return { active: true, allowUnbound: false, sessionId: currentSessionId };
   }
-  if (bypassForSession && typeof bypassForSession === 'object') {
-    const sid =
-      typeof bypassForSession.sessionId === 'string' && bypassForSession.sessionId.trim().length > 0
-        ? bypassForSession.sessionId
-        : currentSessionId;
-    const unbound =
-      typeof bypassForSession.unboundReason === 'string' &&
-      bypassForSession.unboundReason.trim().length > 0;
-    if (unbound) {
-      return { active: true, allowUnbound: true, sessionId: sid };
-    }
-    // Object without unboundReason: treat as bound-only scoped grant when sessionId present.
-    if (typeof sid === 'string' && sid.trim().length > 0) {
-      return { active: true, allowUnbound: false, sessionId: sid };
-    }
+  if (
+    bypassForSession == null ||
+    bypassForSession === false ||
+    typeof bypassForSession !== 'object' ||
+    Array.isArray(bypassForSession)
+  ) {
+    return { active: false, allowUnbound: false, sessionId: null };
   }
-  return { active: false, allowUnbound: false, sessionId: null };
+  const unbound =
+    typeof bypassForSession.unboundReason === 'string' &&
+    bypassForSession.unboundReason.trim().length > 0;
+  const explicitSid =
+    typeof bypassForSession.sessionId === 'string' && bypassForSession.sessionId.trim().length > 0
+      ? bypassForSession.sessionId
+      : null;
+  // Require an explicit grant field — bare `{}` / garbage objects are not bypasses.
+  if (!unbound && !explicitSid) {
+    return { active: false, allowUnbound: false, sessionId: null };
+  }
+  const sid = explicitSid || currentSessionId;
+  if (typeof sid !== 'string' || sid.trim().length === 0) {
+    return { active: false, allowUnbound: false, sessionId: null };
+  }
+  return { active: true, allowUnbound: unbound, sessionId: sid };
 }
 
 /**

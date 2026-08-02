@@ -436,3 +436,16 @@ test('falsy denyRecords entries fail closed', () => {
   assert.equal(g.deny, true);
   assert.ok(g.reasons.includes('D3:invalid_record:?'));
 });
+
+
+test('empty object / array bypassForSession is not a bypass', () => {
+  for (const bad of [{}, [], 'yes', 1]) {
+    const g = evaluateMutationGate({
+      currentSessionId: 's1',
+      denyRecords: [open()],
+      bypassForSession: bad,
+    });
+    assert.equal(g.deny, true, JSON.stringify(bad));
+    assert.ok(g.reasons.some((r) => r.startsWith('D2') || r.startsWith('D3')));
+  }
+});
