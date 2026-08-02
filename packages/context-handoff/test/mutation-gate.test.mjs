@@ -449,3 +449,20 @@ test('empty object / array bypassForSession is not a bypass', () => {
     assert.ok(g.reasons.some((r) => r.startsWith('D2') || r.startsWith('D3')));
   }
 });
+
+test('unboundReason lifts D0:deny_store_unavailable; legacy true does not', () => {
+  const base = {
+    currentSessionId: 'op',
+    denyRecords: [],
+    denyStoreUnavailable: true,
+  };
+  const denied = evaluateMutationGate({ ...base, bypassForSession: true });
+  assert.equal(denied.deny, true);
+  assert.ok(denied.reasons.includes('D0:deny_store_unavailable'));
+  const lifted = evaluateMutationGate({
+    ...base,
+    bypassForSession: { unboundReason: 'host-repair' },
+  });
+  assert.equal(lifted.deny, false);
+  assert.ok(!lifted.reasons.includes('D0:deny_store_unavailable'));
+});

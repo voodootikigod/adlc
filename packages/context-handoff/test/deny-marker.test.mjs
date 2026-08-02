@@ -9,6 +9,7 @@ import {
   readFileSync,
   existsSync,
   readdirSync,
+  renameSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -645,13 +646,19 @@ test('sentinel + emptied denies/ (files deleted, dir kept) is unavailable', () =
 });
 
 
-test('sentinel alone makes cool reentry deny when marker vanished', () => {
+test('denyEverWritten makes cool reentry deny when marker vanished (not global sentinel)', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     ensureDenyMarker(root, { sessionId: 'vanish2', ticketId: null, contentHash: null });
     rmSync(denyPath(root, 'vanish2'), { force: true });
-    // denyEverWritten false — sentinel on disk must still fail closed.
-    const cool = evaluateMarkerOnReentry(root, 'vanish2', { absoluteHandoff: false });
+    // Global sentinel alone must NOT sticky-deny; session-scoped flag does.
+    const without = evaluateMarkerOnReentry(root, 'vanish2', { absoluteHandoff: false });
+    assert.equal(without.deny, false);
+    assert.equal(without.reason, 'no_handoff_no_marker');
+    const cool = evaluateMarkerOnReentry(root, 'vanish2', {
+      absoluteHandoff: false,
+      denyEverWritten: true,
+    });
     assert.equal(cool.deny, true);
     assert.equal(cool.reason, 'marker_vanished');
   } finally {
@@ -695,9 +702,16 @@ test('rm -rf handoffs/ still denies when .adlc/.deny-store remains', () => {
     );
     assert.equal(g.deny, true);
     assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+    // Reentry helper is session-scoped; whole-tree wipe is D0 via loadDenyRecords.
     const cool = evaluateMarkerOnReentry(root, 's1', { absoluteHandoff: false });
-    assert.equal(cool.deny, true);
-    assert.equal(cool.reason, 'marker_vanished');
+    assert.equal(cool.deny, false);
+    assert.equal(cool.reason, 'no_handoff_no_marker');
+    const sticky = evaluateMarkerOnReentry(root, 's1', {
+      absoluteHandoff: false,
+      denyEverWritten: true,
+    });
+    assert.equal(sticky.deny, true);
+    assert.equal(sticky.reason, 'marker_vanished');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -806,4 +820,65 @@ test('loadDenyRecords surfaces EACCES self-named marker as invalid:unreadable_ma
     g.reasons.some((r) => r.startsWith('D3:invalid_record:self')),
     `expected D3 invalid self, got ${g.reasons}`,
   );
+});
+
+
+test('non-denier cool reentry is not sticky-denied by live sentinel', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'A', ticketId: 'T154', contentHash: 'h' });
+    assert.equal(existsSync(join(root, '.adlc', '.deny-store')), true);
+    const cool = evaluateMarkerOnReentry(root, 'B', { absoluteHandoff: false });
+    assert.equal(cool.deny, false);
+    assert.equal(cool.reason, 'no_handoff_no_marker');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker write failure does not leave sentinel without marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const realFs = {
+      mkdirSync,
+      writeFileSync(path, data, enc) {
+        if (String(path).endsWith('.tmp')) {
+          throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+        }
+        return writeFileSync(path, data, enc);
+      },
+      renameSync,
+      existsSync,
+      readFileSync,
+    };
+    const r = ensureDenyMarker(
+      root,
+      { sessionId: 'partial', ticketId: 'T154', contentHash: 'h' },
+      { fs: realFs },
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /write_failed/);
+    assert.equal(existsSync(join(root, '.adlc', '.deny-store')), false);
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.denyStoreUnavailable, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('mutationGateInputFromLoad fails closed on malformed/absent load', () => {
+  for (const loaded of [undefined, null, {}, { records: 'x', ok: true }, { records: [], ok: true }]) {
+    const input = mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' });
+    assert.equal(input.denyStoreUnavailable, true, JSON.stringify(loaded));
+    const g = evaluateMutationGate(input);
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+  }
+  // Well-formed empty store still allows.
+  const ok = mutationGateInputFromLoad(
+    { ok: true, records: [], invalidRecords: [], denyStoreUnavailable: false },
+    { currentSessionId: 'fresh' },
+  );
+  assert.equal(ok.denyStoreUnavailable, false);
+  assert.equal(evaluateMutationGate(ok).deny, false);
 });

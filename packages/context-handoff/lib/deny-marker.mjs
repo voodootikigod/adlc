@@ -187,7 +187,6 @@ export function ensureDenyMarker(
   };
   try {
     fs.mkdirSync(dir, { recursive: true });
-    ensureDenyStoreSentinel(root, fs);
     const tmp = `${path}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, path);
@@ -202,6 +201,9 @@ export function ensureDenyMarker(
   if (!check.ok) {
     return { ok: false, processSticky: true, reason: check.reason };
   }
+  // Sentinel only after the marker is verified — avoids bricking the repo on
+  // a partial write (sentinel with empty denies/).
+  ensureDenyStoreSentinel(root, fs);
   return { ok: true, processSticky: false, reason: 'ok' };
 }
 
@@ -482,8 +484,19 @@ export function mutationGateInputFromLoad(
     manifestVerifyFailed = false,
   } = {},
 ) {
-  const records = Array.isArray(loaded?.records) ? loaded.records : [];
-  const invalid = Array.isArray(loaded?.invalidRecords) ? loaded.invalidRecords : [];
+  // Fail closed on anything that is not a well-formed loadDenyRecords result.
+  const wellFormed =
+    loaded != null &&
+    typeof loaded === 'object' &&
+    Array.isArray(loaded.records) &&
+    Array.isArray(loaded.invalidRecords) &&
+    typeof loaded.ok === 'boolean';
+  const records = wellFormed ? loaded.records : [];
+  const invalid = wellFormed ? loaded.invalidRecords : [];
+  const unavailable =
+    !wellFormed ||
+    loaded.ok === false ||
+    loaded.denyStoreUnavailable === true;
   return {
     currentSessionId,
     denyRecords: [...records, ...invalid],
@@ -491,7 +504,7 @@ export function mutationGateInputFromLoad(
     resumeAuth,
     bypassForSession,
     manifestVerifyFailed,
-    denyStoreUnavailable: loaded?.denyStoreUnavailable === true || loaded?.ok === false,
+    denyStoreUnavailable: unavailable,
   };
 }
 
@@ -501,8 +514,10 @@ export function evaluateMarkerOnReentry(
   { absoluteHandoff, fs, denyEverWritten = false } = {},
 ) {
   assertSafeSessionId(sessionId);
+  // Normalize once so sentinel probes and marker reads share one fs view.
+  const io = fs ?? { existsSync, readFileSync };
   if (!absoluteHandoff) {
-    const check = readDenyMarker(root, sessionId, { fs });
+    const check = readDenyMarker(root, sessionId, { fs: io });
     if (check.ok && check.record?.status === 'open') {
       return { deny: true, processSticky: false, reason: 'open_deny_persists' };
     }
@@ -510,14 +525,10 @@ export function evaluateMarkerOnReentry(
       return { deny: true, processSticky: false, reason: 'consumed_deny_persists' };
     }
     if (!check.ok && check.reason === 'missing_marker') {
-      // Distinguishes "never denied" from "marker vanished" without a ledger.
-      // Also honor the on-disk .deny-store sentinel (same as loadDenyRecords).
-      const storeExpected =
-        denyEverWritten ||
-        (fs?.existsSync
-          ? denyStoreExpectedBySentinel(root, fs)
-          : denyStoreExpectedBySentinel(root, { existsSync }));
-      if (storeExpected) {
+      // Per-session fact only: repo-global .deny-store must not sticky-deny
+      // never-denied sessions (contract test 8 / third session). Callers thread
+      // denyEverWritten; loadDenyRecords+D0 covers whole-tree wipe.
+      if (denyEverWritten) {
         return { deny: true, processSticky: true, reason: 'marker_vanished' };
       }
       return { deny: false, processSticky: false, reason: 'no_handoff_no_marker' };
@@ -525,7 +536,7 @@ export function evaluateMarkerOnReentry(
     if (!check.ok) return { deny: true, processSticky: true, reason: check.reason };
     return { deny: false, processSticky: false, reason: 'ok' };
   }
-  const check = readDenyMarker(root, sessionId, { fs });
+  const check = readDenyMarker(root, sessionId, { fs: io });
   if (!check.ok) {
     return { deny: true, processSticky: true, reason: check.reason, retryWrite: true };
   }

@@ -77,6 +77,15 @@ treat as DENY for **current** session if filename == current_session_id;
 ignore for D2 (still logged). Re-entry without readable self-marker: retry
 write + DENY until valid.
 
+Slice-1 durability for "deny store was initialized" is the filesystem sentinel
+`.adlc/.deny-store` (sibling of `handoffs/`, written only after a marker is
+verified on disk) plus the marker files under `denies/`. A signed per-deny
+manifest ledger is a later slice — until then, deleting `handoffs/` while the
+sentinel remains must surface store-unavailable (D0), and per-session
+marker-vanished sticky is caller-threaded (`denyEverWritten`), not the global
+sentinel. Absence of the sentinel must not be treated as proof of a clean store
+on any tier once adapters exist; hooks must protect the path.
+
 Null `ticket_id` at handoff: durable `open` deny persists across absolute
 cooling. Binding/ticket select uses §Host repair only (not agent Write).
 
@@ -102,13 +111,16 @@ only — never via agent Shell under deny):
 - Other sessions mutating: must satisfy `authorized` for **every open** deny.
   File cache ignored unless signature verifies; verify error ⇒ DENY.
 - Wrong-hash / stale resume-auth ⇒ DENY.
-- Hooks deny agent Write to denies/*, *.resume-auth.json, *.model-ok, *.lock.
+- Hooks deny agent Write to denies/*, `.adlc/.deny-store`, *.resume-auth.json, *.model-ok, *.lock.
 
 ### Bypass / unlock / PreCompact / missing-final
 
 TTY+key bypass one-shot (can authorize denier briefly); unlock TTY; PreCompact
 ≤1 model capture, final, deny stays; missing-final → host repair / unbound
-bypass.
+bypass. Unbound operator override (`{ unboundReason }`) may clear
+`D0:deny_store_unavailable` (host repair / unlock); legacy bound-only `true`
+bypass does not. Host repair may also remove a stale `.adlc/.deny-store` when
+restoring a never-initialized tree.
 
 ### Locks
 

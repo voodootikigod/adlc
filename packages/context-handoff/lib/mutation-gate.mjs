@@ -144,11 +144,12 @@ export function evaluateMutationGate({
   const reasons = [];
   // D1 is independent of TTY bypass.
   if (processStickyDeny) reasons.push('D1:process_sticky');
-  if (denyStoreUnavailable) reasons.push('D0:deny_store_unavailable');
 
   // Missing/blank/padded/unsafe session identity cannot evaluate D2 — fail closed.
   if (!isUsableSessionId(currentSessionId)) {
     reasons.push('D0:invalid_session_id');
+    // Store unavailable still reported when identity is bad.
+    if (denyStoreUnavailable) reasons.push('D0:deny_store_unavailable');
     return { deny: true, reasons };
   }
 
@@ -165,6 +166,12 @@ export function evaluateMutationGate({
   if (grant.active && grant.sessionId !== currentSessionId) {
     grant.active = false;
     grant.allowUnbound = false;
+  }
+
+  // D0: unbound operator override (host repair / TTY unlock) can clear store
+  // unavailability; legacy `true` bypass cannot.
+  if (denyStoreUnavailable && !(grant.active && grant.allowUnbound)) {
+    reasons.push('D0:deny_store_unavailable');
   }
 
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
