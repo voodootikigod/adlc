@@ -467,7 +467,13 @@ export function evaluateMarkerOnReentry(
     }
     if (!check.ok && check.reason === 'missing_marker') {
       // Distinguishes "never denied" from "marker vanished" without a ledger.
-      if (denyEverWritten) {
+      // Also honor the on-disk .deny-store sentinel (same as loadDenyRecords).
+      const storeExpected =
+        denyEverWritten ||
+        (fs?.existsSync
+          ? denyStoreExpectedBySentinel(root, fs)
+          : denyStoreExpectedBySentinel(root, { existsSync }));
+      if (storeExpected) {
         return { deny: true, processSticky: true, reason: 'marker_vanished' };
       }
       return { deny: false, processSticky: false, reason: 'no_handoff_no_marker' };

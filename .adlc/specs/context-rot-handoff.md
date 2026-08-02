@@ -133,7 +133,7 @@ Proven: harness-attested tool_calls; dead_end_influenced evidence-only.
 9. deny write-fail + re-entry ⇒ deny; corrupt self-marker ⇒ deny; junk quarantined.
 10. Checkpoint failure ≠ no-deny.
 
-> **Slice-1 package coverage:** items 1–10 are enforced by `@adlc/context-handoff` pure helpers + tests. Items 11–16 require harness adapters / host hooks (slices 4–6) and are listed here as the frozen contract those slices must meet; they are not implemented in this package.
+> **Slice-1 package coverage:** items 1–9 are enforced by `@adlc/context-handoff` pure helpers + tests. Items 10–16 require harness adapters / host hooks (slices 4–6) and are listed here as the frozen contract those slices must meet; they are not implemented in this package.
 
 11. Shell fail-closed-all under deny (incl. attempts to create deny/handoff files).
 12. Agent cannot invoke repair/write/bypass via Shell under deny.

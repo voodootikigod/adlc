@@ -417,3 +417,22 @@ test('resume-auth deny_session_id does not authorize a different open deny', () 
   assert.ok(!g.reasons.some((r) => r.includes(':a')));
 });
 
+
+
+test('bypass grant for another sessionId does not authorize', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open()],
+    bypassForSession: { sessionId: 'other', unboundReason: 'operator-override' },
+  });
+  assert.equal(g.deny, true);
+});
+
+test('falsy denyRecords entries fail closed', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [null, open({ status: 'consumed' })],
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.includes('D3:invalid_record:?'));
+});

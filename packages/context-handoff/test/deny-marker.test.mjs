@@ -643,3 +643,18 @@ test('sentinel + emptied denies/ (files deleted, dir kept) is unavailable', () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('sentinel alone makes cool reentry deny when marker vanished', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'vanish2', ticketId: null, contentHash: null });
+    rmSync(denyPath(root, 'vanish2'), { force: true });
+    // denyEverWritten false — sentinel on disk must still fail closed.
+    const cool = evaluateMarkerOnReentry(root, 'vanish2', { absoluteHandoff: false });
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'marker_vanished');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

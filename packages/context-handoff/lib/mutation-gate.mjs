@@ -42,19 +42,29 @@ export function isValidDenyRecord(record) {
  * @param {BypassGrant} [bypassForSession]
  * @returns {{ active: boolean, allowUnbound: boolean }}
  */
-export function normalizeBypassGrant(bypassForSession) {
+export function normalizeBypassGrant(bypassForSession, currentSessionId = null) {
   if (bypassForSession === true) {
-    return { active: true, allowUnbound: false };
+    // Legacy true is bound-only and must be paired with a usable currentSessionId
+    // by the gate (session-scoped at evaluation time).
+    return { active: true, allowUnbound: false, sessionId: currentSessionId };
   }
-  if (
-    bypassForSession &&
-    typeof bypassForSession === 'object' &&
-    typeof bypassForSession.unboundReason === 'string' &&
-    bypassForSession.unboundReason.trim().length > 0
-  ) {
-    return { active: true, allowUnbound: true };
+  if (bypassForSession && typeof bypassForSession === 'object') {
+    const sid =
+      typeof bypassForSession.sessionId === 'string' && bypassForSession.sessionId.trim().length > 0
+        ? bypassForSession.sessionId
+        : currentSessionId;
+    const unbound =
+      typeof bypassForSession.unboundReason === 'string' &&
+      bypassForSession.unboundReason.trim().length > 0;
+    if (unbound) {
+      return { active: true, allowUnbound: true, sessionId: sid };
+    }
+    // Object without unboundReason: treat as bound-only scoped grant when sessionId present.
+    if (typeof sid === 'string' && sid.trim().length > 0) {
+      return { active: true, allowUnbound: false, sessionId: sid };
+    }
   }
-  return { active: false, allowUnbound: false };
+  return { active: false, allowUnbound: false, sessionId: null };
 }
 
 /**
@@ -73,15 +83,18 @@ export function authorized({
   resumeAuth = null,
   bypassForSession = false,
   manifestVerifyFailed = false,
+  currentSessionId = null,
 } = {}) {
   if (!record) return false;
   // Spec: Unverifiable/missing manifest ⇒ not authorized.
   if (manifestVerifyFailed) return false;
 
-  const grant = normalizeBypassGrant(bypassForSession);
+  const grant = normalizeBypassGrant(bypassForSession, currentSessionId);
   const unbound = !isBoundField(record.ticket_id) || !isBoundField(record.content_hash);
 
   if (grant.active) {
+    // Bypass is for current_session_id only — never a free-floating grant.
+    if (!currentSessionId || grant.sessionId !== currentSessionId) return false;
     if (unbound) return grant.allowUnbound === true;
     return true;
   }
@@ -140,8 +153,13 @@ export function evaluateMutationGate({
 
   // Manifest failure inertifies bypass (authorized + D2 lift).
   const grant = manifestVerifyFailed
-    ? { active: false, allowUnbound: false }
-    : normalizeBypassGrant(bypassForSession);
+    ? { active: false, allowUnbound: false, sessionId: null }
+    : normalizeBypassGrant(bypassForSession, currentSessionId);
+  // Bypass grant must name this session (legacy `true` binds to currentSessionId above).
+  if (grant.active && grant.sessionId !== currentSessionId) {
+    grant.active = false;
+    grant.allowUnbound = false;
+  }
 
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
   // Spec: active bypass can authorize denier briefly — do not push D2 when bypassed.
@@ -149,7 +167,10 @@ export function evaluateMutationGate({
 
   const effectiveAuth = manifestVerifyFailed ? null : resumeAuth;
   for (const r of denyRecords) {
-    if (!r) continue;
+    if (!r) {
+      reasons.push('D3:invalid_record:?');
+      continue;
+    }
     if (!isValidDenyRecord(r)) {
       const label = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : '?';
       // Any invalid deny-store entry fails closed for every session (store integrity).
@@ -161,10 +182,9 @@ export function evaluateMutationGate({
       !authorized({
         record: r,
         resumeAuth: effectiveAuth,
-        bypassForSession: grant.active
-          ? bypassForSession
-          : false,
+        bypassForSession: grant.active ? bypassForSession : false,
         manifestVerifyFailed,
+        currentSessionId,
       })
     ) {
       reasons.push(`D3:unauthorized_open:${r.session_id}`);
