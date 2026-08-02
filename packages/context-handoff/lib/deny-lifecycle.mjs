@@ -35,7 +35,11 @@ export function requireSessionId(sessionId, label = 'session id') {
  * @param {{ resumeAuth?: { ticket_id: string, content_hash: string, verified: boolean }|null }} [opts]
  * @returns {{ ok: true, record: object } | { ok: false, error: string, exitCode?: number }}
  */
-export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null, manifestVerifyFailed = false } = {}) {
+export function consumeDenyRecord(
+  record,
+  consumerSessionId,
+  { resumeAuth = null, manifestVerifyFailed = false, now = () => new Date().toISOString() } = {},
+) {
   if (!record || typeof record !== 'object') {
     return { ok: false, error: 'missing deny record' };
   }
@@ -70,6 +74,11 @@ export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null
   }
   return {
     ok: true,
-    record: { ...record, status: 'consumed' },
+    record: {
+      ...record,
+      status: 'consumed',
+      consumed_by: consumer.id,
+      consumed_at: now(),
+    },
   };
 }

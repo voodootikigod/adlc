@@ -302,12 +302,29 @@ export function loadDenyRecords(
       readdirSync,
       readFileSync,
     },
+    /** When true, a missing denies/ directory is unavailable — not a clean empty store. */
+    storeExpected = false,
   } = {},
 ) {
   const dir = join(root, '.adlc', 'handoffs', 'denies');
   const records = [];
   const invalidRecords = [];
   if (!fs.existsSync(dir)) {
+    if (storeExpected) {
+      invalidRecords.push({
+        session_id: '__deny_store__',
+        status: 'invalid:missing_deny_store',
+        ticket_id: null,
+        content_hash: null,
+      });
+      return {
+        ok: false,
+        reason: 'missing_deny_store',
+        records,
+        invalidRecords,
+        denyStoreUnavailable: true,
+      };
+    }
     return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
   }
   let entries;
@@ -351,6 +368,34 @@ export function loadDenyRecords(
     });
   }
   return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
+}
+
+
+/**
+ * Compose loadDenyRecords output into evaluateMutationGate input.
+ * Prefer this over hand-spreading records so store-health cannot be dropped.
+ */
+export function mutationGateInputFromLoad(
+  loaded,
+  {
+    currentSessionId,
+    processStickyDeny = false,
+    resumeAuth = null,
+    bypassForSession = false,
+    manifestVerifyFailed = false,
+  } = {},
+) {
+  const records = Array.isArray(loaded?.records) ? loaded.records : [];
+  const invalid = Array.isArray(loaded?.invalidRecords) ? loaded.invalidRecords : [];
+  return {
+    currentSessionId,
+    denyRecords: [...records, ...invalid],
+    processStickyDeny,
+    resumeAuth,
+    bypassForSession,
+    manifestVerifyFailed,
+    denyStoreUnavailable: loaded?.denyStoreUnavailable === true || loaded?.ok === false,
+  };
 }
 
 export function evaluateMarkerOnReentry(

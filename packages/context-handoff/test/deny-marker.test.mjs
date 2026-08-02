@@ -21,6 +21,7 @@ import {
   assertSafeSessionId,
   isSafeSessionId,
   loadDenyRecords,
+  mutationGateInputFromLoad,
 } from '../lib/deny-marker.mjs';
 
 test('ensureDenyMarker writes readable open record', () => {
@@ -505,10 +506,9 @@ test('loadDenyRecords surfaces valid + invalid retained markers for the gate', (
     assert.ok(loaded.records.some((r) => r.session_id === 'open1' && r.status === 'open'));
     assert.ok(loaded.records.some((r) => r.session_id === 'consumed1' && r.status === 'consumed'));
     assert.ok(loaded.invalidRecords.some((r) => r.session_id === 'corrupt1'));
-    const g = evaluateMutationGate({
-      currentSessionId: 'fresh',
-      denyRecords: [...loaded.records, ...loaded.invalidRecords],
-    });
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
     assert.equal(g.deny, true);
     assert.ok(g.reasons.some((r) => r.includes('open1')));
     assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
@@ -534,5 +534,35 @@ test('loadDenyRecords readdir failure sets denyStoreUnavailable + sentinel', () 
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+});
+
+test('storeExpected missing denies/ ⇒ denyStoreUnavailable', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const loaded = loadDenyRecords(root, { storeExpected: true });
+    assert.equal(loaded.ok, false);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const input = mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' });
+    const g = evaluateMutationGate(input);
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('missing denies/ without storeExpected is a clean empty store', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.ok, true);
+    assert.equal(loaded.denyStoreUnavailable, false);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 

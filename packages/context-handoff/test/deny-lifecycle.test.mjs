@@ -19,6 +19,8 @@ test('consume transitions open → consumed; denier stays D2; consumer authorize
   const consumed = consumeDenyRecord(denier, 's2', { resumeAuth: auth });
   assert.equal(consumed.ok, true);
   assert.equal(consumed.record.status, 'consumed');
+  assert.equal(consumed.record.consumed_by, 's2');
+  assert.equal(typeof consumed.record.consumed_at, 'string');
 
   const denierGate = evaluateMutationGate({
     currentSessionId: 's1',

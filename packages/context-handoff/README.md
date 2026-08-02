@@ -26,3 +26,10 @@ exists, callers must thread process-local `processStickyDeny` /
 `denyEverWritten` into the gate and `evaluateMarkerOnReentry` so a deleted
 marker cannot silently clear a deny the process already wrote.
 
+## Spec-sanctioned post-consume D3
+
+After a verified other-session consume, that record leaves D3 (status=consumed).
+A third session with no other open denies is allowed without resume-auth — that
+is contract test 8 / the binding spec, not a silent unlock bug. `consumed_by` /
+`consumed_at` are stamped for forensics; denier remains D2.
+
