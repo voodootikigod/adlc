@@ -42,6 +42,6 @@ cannot clear expectation; full signed per-deny ledger is still deferred.
 Ticket-store presence alone does not expect denies. A legacy
 `.adlc/handoffs/.deny-store` is treated as expected and self-healed to the new
 path. `evaluateMarkerOnReentry` does **not** use the global sentinel for
-per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound
-operator bypass may clear `D0:deny_store_unavailable`.
+per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound operator bypass may clear `D0:deny_store_unavailable` and
+`D3:invalid_record`.
 

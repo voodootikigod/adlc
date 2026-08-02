@@ -186,8 +186,10 @@ export function evaluateMutationGate({
     }
     if (!isValidDenyRecord(r)) {
       const label = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : '?';
-      // Any invalid deny-store entry fails closed for every session (store integrity).
-      reasons.push(`D3:invalid_record:${label}`);
+      // Store integrity: fail closed unless unbound operator override (host repair).
+      if (!(grant.active && grant.allowUnbound)) {
+        reasons.push(`D3:invalid_record:${label}`);
+      }
       continue;
     }
     if (r.status !== 'open') continue;

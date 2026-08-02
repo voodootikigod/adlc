@@ -25,7 +25,7 @@ bytes 128/192/256 KiB (proxies provisional); cooldown 15; min remaining-to-hard
 only (`written_at`). Deny/open-handoff-deny **do not silently expire**.
 
 **Join (normative):** for each band, fire if **any** available signal is past
-its threshold (OR / worst-band). Missing signal kinds are ignored, not zero.
+its threshold (OR / worst-band). Missing signal kinds are ignored, not zero. Total signal absence (every kind absent) is treated the same as a healthy low-pressure session in slice-1 — fail-open by design so a dead telemetry source does not hard-lock the repo; adapters SHOULD surface a health warning when no signals are present.
 
 ## Tiers
 
@@ -118,9 +118,9 @@ only — never via agent Shell under deny):
 TTY+key bypass one-shot (can authorize denier briefly); unlock TTY; PreCompact
 ≤1 model capture, final, deny stays; missing-final → host repair / unbound
 bypass. Unbound operator override (`{ unboundReason }`) may clear
-`D0:deny_store_unavailable` (host repair / unlock); legacy bound-only `true`
-bypass does not. Host repair may also remove a stale `.adlc/.deny-store` when
-restoring a never-initialized tree.
+`D0:deny_store_unavailable` and `D3:invalid_record` (host repair / unlock);
+legacy bound-only `true` bypass does not. Host repair may also remove a stale
+`.adlc/.deny-store` when restoring a never-initialized tree.
 
 ### Locks
 

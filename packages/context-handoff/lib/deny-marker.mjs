@@ -492,7 +492,11 @@ export function mutationGateInputFromLoad(
     Array.isArray(loaded.invalidRecords) &&
     typeof loaded.ok === 'boolean';
   const records = wellFormed ? loaded.records : [];
-  const invalid = wellFormed ? loaded.invalidRecords : [];
+  // Store-health synthetics (__deny_store__) are carried by denyStoreUnavailable
+  // alone — duplicating them into denyRecords makes D0 unclearable via D3.
+  const invalid = wellFormed
+    ? loaded.invalidRecords.filter((r) => r?.session_id !== '__deny_store__')
+    : [];
   const unavailable =
     !wellFormed ||
     loaded.ok === false ||
@@ -516,6 +520,15 @@ export function evaluateMarkerOnReentry(
   assertSafeSessionId(sessionId);
   // Normalize once so sentinel probes and marker reads share one fs view.
   const io = fs ?? { existsSync, readFileSync };
+  // Strict boolean — omitted/string/null fail closed as handoff-active.
+  if (typeof absoluteHandoff !== 'boolean') {
+    return {
+      deny: true,
+      processSticky: true,
+      reason: 'invalid_handoff_signal',
+      retryWrite: true,
+    };
+  }
   if (!absoluteHandoff) {
     const check = readDenyMarker(root, sessionId, { fs: io });
     if (check.ok && check.record?.status === 'open') {

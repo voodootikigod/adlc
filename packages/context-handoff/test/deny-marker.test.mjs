@@ -882,3 +882,21 @@ test('mutationGateInputFromLoad fails closed on malformed/absent load', () => {
   assert.equal(ok.denyStoreUnavailable, false);
   assert.equal(evaluateMutationGate(ok).deny, false);
 });
+
+
+test('evaluateMarkerOnReentry requires strict boolean absoluteHandoff', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    for (const bad of [undefined, null, 'false', 1, {}]) {
+      const r = evaluateMarkerOnReentry(root, 'never', { absoluteHandoff: bad });
+      assert.equal(r.deny, true, JSON.stringify(bad));
+      assert.equal(r.reason, 'invalid_handoff_signal');
+      assert.equal(r.processSticky, true);
+    }
+    const cool = evaluateMarkerOnReentry(root, 'never', { absoluteHandoff: false });
+    assert.equal(cool.deny, false);
+    assert.equal(cool.reason, 'no_handoff_no_marker');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -1,3 +1,7 @@
+import { ensureDenyMarker, loadDenyRecords, mutationGateInputFromLoad } from '../lib/deny-marker.mjs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { authorized, evaluateMutationGate } from '../lib/mutation-gate.mjs';
@@ -465,4 +469,38 @@ test('unboundReason lifts D0:deny_store_unavailable; legacy true does not', () =
   });
   assert.equal(lifted.deny, false);
   assert.ok(!lifted.reasons.includes('D0:deny_store_unavailable'));
+});
+
+test('composed load after handoffs wipe: unbound clears D0 without sticky D3', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 's1', ticketId: 'T154', contentHash: 'h' });
+    rmSync(join(root, '.adlc', 'handoffs'), { recursive: true, force: true });
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const input = mutationGateInputFromLoad(loaded, { currentSessionId: 'op' });
+    assert.equal(input.denyStoreUnavailable, true);
+    assert.ok(!input.denyRecords.some((r) => r.session_id === '__deny_store__'));
+    const denied = evaluateMutationGate({ ...input, bypassForSession: true });
+    assert.equal(denied.deny, true);
+    assert.ok(denied.reasons.includes('D0:deny_store_unavailable'));
+    assert.ok(!denied.reasons.some((r) => r.startsWith('D3:invalid_record:__deny_store__')));
+    const lifted = evaluateMutationGate({
+      ...input,
+      bypassForSession: { unboundReason: 'operator-override' },
+    });
+    assert.equal(lifted.deny, false, JSON.stringify(lifted.reasons));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('unboundReason clears D3:invalid_record for corrupt foreign marker', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'op',
+    denyRecords: [{ session_id: 'ghost', status: 'invalid:corrupt_json' }],
+    bypassForSession: { unboundReason: 'host-repair' },
+  });
+  assert.equal(g.deny, false);
+  assert.ok(!g.reasons.some((r) => r.startsWith('D3:invalid_record')));
 });
