@@ -15,6 +15,7 @@ import {
 /**
  * Absolute OR-join across available signals. Missing kinds are ignored.
  * Floor is NEVER subtracted from band comparators (no floor-delta bands).
+ * Extra keys such as `floor` on the observed object are ignored.
  *
  * @param {object} observed
  * @param {number} [observed.pct]
@@ -42,6 +43,15 @@ export function evaluateBands(observed = {}) {
     handoff: pct.handoff || depth.handoff || bytes.handoff,
     hard: pct.hard || depth.hard || bytes.hard,
   };
+}
+
+/**
+ * Absolute hard-band predicate for build-gate consumers.
+ * @param {object} observed
+ * @returns {boolean}
+ */
+export function isHardDegraded(observed = {}) {
+  return evaluateBands(observed).hard === true;
 }
 
 /**

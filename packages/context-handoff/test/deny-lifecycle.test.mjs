@@ -10,6 +10,7 @@ test('same-session consume rejected', () => {
   );
   assert.equal(r.ok, false);
   assert.match(r.error, /same-session/);
+  assert.equal(r.exitCode, 2);
 });
 
 test('consume transitions open → consumed; denier stays D2; consumer authorized', () => {
@@ -49,8 +50,33 @@ test('null content_hash cannot consume', () => {
   assert.match(r.error, /cannot consume/);
 });
 
+test('empty-string ticket_id/content_hash cannot consume', () => {
+  assert.equal(
+    consumeDenyRecord(
+      { session_id: 's1', ticket_id: '', content_hash: 'h', status: 'open' },
+      's2',
+    ).ok,
+    false,
+  );
+  assert.equal(
+    consumeDenyRecord(
+      { session_id: 's1', ticket_id: 'T154', content_hash: '  ', status: 'open' },
+      's2',
+    ).ok,
+    false,
+  );
+});
+
 test('null/missing record cannot consume', () => {
   assert.equal(consumeDenyRecord(null, 's2').ok, false);
   assert.equal(consumeDenyRecord(undefined, 's2').ok, false);
   assert.match(consumeDenyRecord(null, 's2').error, /missing deny record/);
+});
+
+test('missing/empty consumer session id cannot consume', () => {
+  const open = { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'open' };
+  assert.equal(consumeDenyRecord(open, '').ok, false);
+  assert.equal(consumeDenyRecord(open, null).ok, false);
+  assert.equal(consumeDenyRecord(open, undefined).ok, false);
+  assert.match(consumeDenyRecord(open, '  ').error, /missing consumer session id/);
 });

@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateBands, nagSuppression, handoffDenyActive, remainingToHard } from '../lib/bands.mjs';
+import {
+  evaluateBands,
+  nagSuppression,
+  handoffDenyActive,
+  remainingToHard,
+  isHardDegraded,
+} from '../lib/bands.mjs';
 import {
   HANDOFF_PCT,
   HARD_PCT,
@@ -28,9 +34,9 @@ test('non-finite pct/depth/bytes are ignored', () => {
   assert.equal(b.hard, false);
 });
 
-test('no floor-delta: evaluateBands ignores floor; remainingToHard is separate', () => {
-  // Floor is unused by evaluateBands — absolute 65% is handoff regardless of floor.
-  const b = evaluateBands({ pct: 65 });
+test('no floor-delta: absolute bands ignore a floor field on observed', () => {
+  // Killer for floor-delta mutants: high floor must not pull absolute 65% below handoff.
+  const b = evaluateBands({ pct: 65, floor: 40 });
   assert.equal(b.handoff, true);
   assert.equal(b.hard, false);
   assert.ok(65 >= HANDOFF_PCT && 65 < HARD_PCT);
@@ -38,19 +44,21 @@ test('no floor-delta: evaluateBands ignores floor; remainingToHard is separate',
   assert.equal(remainingToHard({ pct: 35 }), (HARD_PCT - 35) / HARD_PCT);
 });
 
+test('isHardDegraded follows absolute hard OR-join', () => {
+  assert.equal(isHardDegraded({ pct: 79 }), false);
+  assert.equal(isHardDegraded({ pct: HARD_PCT }), true);
+});
+
 test('remaining-to-hard uses HARD_PCT ceiling', () => {
   assert.equal(remainingToHard({ pct: 40 }), (HARD_PCT - 40) / HARD_PCT);
 });
 
 test('headroom/cooldown suppress nags only — deny still follows absolute handoff', () => {
-  const bands = evaluateBands({ pct: 65 }); // ≥ handoff, < hard
+  const bands = evaluateBands({ pct: 65 });
   assert.equal(bands.handoff, true);
-
-  // Floor in [handoff, hard) ⇒ remaining-to-hard < 0.25 ⇒ nags suppressed
   assert.ok(65 >= HANDOFF_PCT && 65 < HARD_PCT);
   const nags = nagSuppression({ floor: { pct: 65 }, toolsSinceResume: 100 });
   assert.equal(nags.suppressNags, true);
-
   assert.equal(handoffDenyActive(bands, nags), true, 'deny must ignore nag suppression');
 });
 

@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -22,6 +30,19 @@ test('ensureDenyMarker writes readable open record', () => {
     assert.equal(check.ok, true);
     assert.equal(check.record.status, 'open');
     assert.equal(check.record.ticket_id, 'T154');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker normalizes empty bind fields to null', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const r = ensureDenyMarker(root, { sessionId: 'empty-bind', ticketId: '  ', contentHash: '' });
+    assert.equal(r.ok, true);
+    const check = readDenyMarker(root, 'empty-bind');
+    assert.equal(check.record.ticket_id, null);
+    assert.equal(check.record.content_hash, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -97,6 +118,53 @@ test('ensureDenyMarker does not clobber host-repaired ticket_id/content_hash', (
   }
 });
 
+test('ensureDenyMarker does not clobber unreadable existing marker', () => {
+  let reads = 0;
+  const fs = {
+    mkdirSync() {},
+    writeFileSync() {
+      throw new Error('should not write');
+    },
+    renameSync() {
+      throw new Error('should not rename');
+    },
+    existsSync() {
+      return true;
+    },
+    readFileSync() {
+      reads += 1;
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    },
+  };
+  const r = ensureDenyMarker('/x', { sessionId: 's', ticketId: 'T', contentHash: 'h' }, { fs });
+  assert.equal(r.ok, false);
+  assert.equal(r.processSticky, true);
+  assert.equal(r.reason, 'unreadable_marker');
+  assert.ok(reads >= 1);
+});
+
+test('ensureDenyMarker rewrites corrupt marker into valid open', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'corrupt-repair');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(path, '{not-json', 'utf8');
+    assert.equal(readDenyMarker(root, 'corrupt-repair').reason, 'corrupt_json');
+    const r = ensureDenyMarker(root, {
+      sessionId: 'corrupt-repair',
+      ticketId: 'T154',
+      contentHash: 'h1',
+    });
+    assert.equal(r.ok, true);
+    const check = readDenyMarker(root, 'corrupt-repair');
+    assert.equal(check.ok, true);
+    assert.equal(check.record.status, 'open');
+    assert.equal(check.record.ticket_id, 'T154');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('path traversal sessionId rejected', () => {
   assert.throws(() => assertSafeSessionId('../escape'), /unsafe sessionId/);
   assert.throws(() => assertSafeSessionId('a/b'), /unsafe sessionId/);
@@ -110,21 +178,42 @@ test('path traversal sessionId rejected', () => {
   );
 });
 
-test('quarantineJunkDenies moves junk, leaves valid marker', () => {
+test('quarantineJunkDenies moves junk on disk, leaves valid marker', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     const denies = join(root, '.adlc', 'handoffs', 'denies');
     mkdirSync(denies, { recursive: true });
     ensureDenyMarker(root, { sessionId: 'good', ticketId: 'T154', contentHash: 'h1' });
     writeFileSync(join(denies, 'notes.txt'), 'not json', 'utf8');
-    writeFileSync(join(denies, 'bad.json'), '{not-json', 'utf8');
     writeFileSync(join(denies, 'pending.tmp'), 'tmp', 'utf8');
     const result = quarantineJunkDenies(root);
+    assert.equal(result.ok, true);
     assert.ok(result.kept.includes('good.json'));
     assert.ok(result.quarantined.includes('notes.txt'));
-    assert.ok(result.quarantined.includes('bad.json'));
     assert.ok(!result.quarantined.includes('pending.tmp'));
+    assert.equal(existsSync(join(denies, 'notes.txt')), false);
+    assert.ok(existsSync(join(denies, 'quarantine')));
+    const qNames = readdirSync(join(denies, 'quarantine'));
+    assert.ok(qNames.some((n) => n.startsWith('notes.txt.')));
     assert.equal(readDenyMarker(root, 'good').ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('quarantineJunkDenies retains corrupt self-named marker for deny', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    mkdirSync(denies, { recursive: true });
+    writeFileSync(join(denies, 'self.json'), '{not-json', 'utf8');
+    const result = quarantineJunkDenies(root);
+    assert.ok(result.retainedForDeny.includes('self.json'));
+    assert.ok(!result.quarantined.includes('self.json'));
+    assert.equal(existsSync(join(denies, 'self.json')), true);
+    const cool = evaluateMarkerOnReentry(root, 'self', { absoluteHandoff: false });
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'corrupt_json');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

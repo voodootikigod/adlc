@@ -2,10 +2,12 @@
  * Deny record lifecycle: open → consumed. Denier session stays sticky (D2).
  */
 
+import { isBoundField } from './mutation-gate.mjs';
+
 /**
  * @param {object} record
  * @param {string} consumerSessionId
- * @returns {{ ok: true, record: object } | { ok: false, error: string }}
+ * @returns {{ ok: true, record: object } | { ok: false, error: string, exitCode?: number }}
  */
 export function consumeDenyRecord(record, consumerSessionId) {
   if (!record || typeof record !== 'object') {
@@ -14,10 +16,13 @@ export function consumeDenyRecord(record, consumerSessionId) {
   if (record.status !== 'open') {
     return { ok: false, error: 'deny record is not open' };
   }
-  if (consumerSessionId === record.session_id) {
-    return { ok: false, error: 'same-session consume forbidden' };
+  if (typeof consumerSessionId !== 'string' || consumerSessionId.trim().length === 0) {
+    return { ok: false, error: 'missing consumer session id' };
   }
-  if (record.content_hash == null || record.ticket_id == null) {
+  if (consumerSessionId === record.session_id) {
+    return { ok: false, error: 'same-session consume forbidden', exitCode: 2 };
+  }
+  if (!isBoundField(record.content_hash) || !isBoundField(record.ticket_id)) {
     return { ok: false, error: 'cannot consume without ticket_id and content_hash' };
   }
   return {

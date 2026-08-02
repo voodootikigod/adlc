@@ -31,6 +31,14 @@ export function assertSafeSessionId(sessionId) {
   return true;
 }
 
+/** Normalize bind fields: empty/whitespace → null (unbound). */
+export function normalizeBindField(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
 export function denyPath(root, sessionId) {
   assertSafeSessionId(sessionId);
   return join(root, '.adlc', 'handoffs', 'denies', `${sessionId}.json`);
@@ -73,6 +81,7 @@ export function readDenyMarker(root, sessionId, { fs = { readFileSync, existsSyn
  * Ensure marker exists; on failure return processSticky recommendation.
  * Idempotent: never rewrite an already-valid open or consumed marker
  * (preserves host-repaired ticket_id/content_hash and consumed status).
+ * Unreadable existing markers fail closed without clobber.
  * @returns {{ ok: boolean, processSticky: boolean, reason: string }}
  */
 export function ensureDenyMarker(
@@ -88,13 +97,17 @@ export function ensureDenyMarker(
   if (existing.ok) {
     return { ok: true, processSticky: false, reason: 'already_present' };
   }
+  // Exists but unreadable: never clobber durable state.
+  if (existing.reason === 'unreadable_marker') {
+    return { ok: false, processSticky: true, reason: 'unreadable_marker' };
+  }
 
   const path = denyPath(root, sessionId);
   const dir = dirname(path);
   const record = {
     session_id: sessionId,
-    ticket_id: ticketId,
-    content_hash: contentHash,
+    ticket_id: normalizeBindField(ticketId),
+    content_hash: normalizeBindField(contentHash),
     status: 'open',
     since: now(),
     host,
@@ -120,9 +133,12 @@ export function ensureDenyMarker(
 }
 
 /**
- * Move junk under denies/ into denies/quarantine/. Skips quarantine/ and *.tmp.
- * Junk: non-.json, unsafe session names, corrupt/mismatch markers.
- * @returns {{ quarantined: string[], kept: string[] }}
+ * Move unrelated junk under denies/ into denies/quarantine/.
+ * Skips quarantine/ and *.tmp.
+ * Junk: non-.json or unsafe session names ONLY.
+ * Well-named .json that fails validation stays in place so self-deny
+ * remains fail-closed (spec: corrupt self ⇒ DENY; unrelated junk quarantined).
+ * @returns {{ quarantined: string[], kept: string[], retainedForDeny: string[], ok: boolean, reason?: string }}
  */
 export function quarantineJunkDenies(
   root,
@@ -139,15 +155,22 @@ export function quarantineJunkDenies(
   const dir = join(root, '.adlc', 'handoffs', 'denies');
   const quarantined = [];
   const kept = [];
+  const retainedForDeny = [];
   if (!fs.existsSync(dir)) {
-    return { quarantined, kept };
+    return { ok: true, quarantined, kept, retainedForDeny };
   }
 
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return { quarantined, kept };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `readdir_failed:${err?.code || err?.message || 'error'}`,
+      quarantined,
+      kept,
+      retainedForDeny,
+    };
   }
 
   const qDir = join(dir, 'quarantine');
@@ -175,8 +198,9 @@ export function quarantineJunkDenies(
       if (!junk) {
         const check = readDenyMarker(root, sessionId, { fs });
         if (!check.ok) {
-          junk = true;
-          reason = check.reason;
+          // Keep corrupt/mismatch self-named markers for fail-closed DENY.
+          retainedForDeny.push(name);
+          continue;
         }
       }
     }
@@ -195,7 +219,7 @@ export function quarantineJunkDenies(
       // fail-closed callers still treat unreadables as deny; skip move errors
     }
   }
-  return { quarantined, kept };
+  return { ok: true, quarantined, kept, retainedForDeny };
 }
 
 /**

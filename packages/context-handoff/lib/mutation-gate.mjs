@@ -5,6 +5,11 @@
  * @typedef {{ ticket_id: string, content_hash: string, verified: boolean }} ResumeAuth
  */
 
+/** True when a bind field is a non-empty string (whitespace-only ≡ unbound). */
+export function isBoundField(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 /**
  * Per-record authorization (spec: universal quantification over open denies).
  * TTY bypass authorizes the caller briefly (including null-ticket/null-hash).
@@ -17,8 +22,8 @@ export function authorized({ record, resumeAuth = null, bypassForSession = false
   if (!record) return false;
   if (bypassForSession) return true;
 
-  // Pre-bind / null-hash: resume-auth never suffices.
-  if (record.ticket_id == null || record.content_hash == null) return false;
+  // Pre-bind / unbound: resume-auth never suffices (null OR empty/whitespace).
+  if (!isBoundField(record.ticket_id) || !isBoundField(record.content_hash)) return false;
 
   if (!resumeAuth || resumeAuth.verified !== true) return false;
   if (resumeAuth.ticket_id !== record.ticket_id) return false;

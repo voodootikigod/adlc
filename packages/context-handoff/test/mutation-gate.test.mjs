@@ -30,6 +30,23 @@ test('null-hash never authorized via resume-auth', () => {
   );
 });
 
+test('empty-string ticket_id/content_hash never authorized via resume-auth', () => {
+  assert.equal(
+    authorized({
+      record: open({ ticket_id: '', content_hash: '' }),
+      resumeAuth: { ticket_id: '', content_hash: '', verified: true },
+    }),
+    false,
+  );
+  assert.equal(
+    authorized({
+      record: open({ ticket_id: '  ', content_hash: 'abc' }),
+      resumeAuth: { ticket_id: '  ', content_hash: 'abc', verified: true },
+    }),
+    false,
+  );
+});
+
 test('authorized requires matching ticket_id and content_hash', () => {
   assert.equal(
     authorized({
@@ -42,6 +59,13 @@ test('authorized requires matching ticket_id and content_hash', () => {
     authorized({
       record: open(),
       resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true },
+    }),
+    false,
+  );
+  assert.equal(
+    authorized({
+      record: open(),
+      resumeAuth: { ticket_id: 'OTHER', content_hash: 'abc', verified: true },
     }),
     false,
   );
@@ -70,6 +94,15 @@ test('bypassForSession lifts D2 for denier', () => {
   });
   assert.equal(g.deny, false);
   assert.ok(!g.reasons.some((r) => r.startsWith('D2')));
+});
+
+test('bypass authorizes null-ticket/null-hash open for non-denier', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open({ ticket_id: null, content_hash: null })],
+    bypassForSession: true,
+  });
+  assert.equal(g.deny, false);
 });
 
 test('bypass does NOT lift D1', () => {
@@ -124,7 +157,6 @@ test('D3 cleared for consumed record when other open denies authorized', () => {
     denyRecords: records,
     resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: true },
   });
-  // s3 open is authorized; consumed s1 not in D3; s2 is not denier
   assert.equal(g.deny, false);
 });
 
@@ -147,6 +179,16 @@ test('wrong-hash resume-auth does not authorize', () => {
     currentSessionId: 'fresh',
     denyRecords: [open()],
     resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true },
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.some((r) => r.startsWith('D3')));
+});
+
+test('wrong-ticket resume-auth does not authorize', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open()],
+    resumeAuth: { ticket_id: 'OTHER', content_hash: 'abc', verified: true },
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.some((r) => r.startsWith('D3')));
