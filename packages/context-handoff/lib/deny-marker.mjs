@@ -104,15 +104,26 @@ const QUARANTINE_BEFORE_WRITE = new Set(['corrupt_json', 'invalid_shape']);
  * Destination: denies/quarantine/<name>.<reason>.<ts>
  * @returns {boolean} true if quarantine succeeded (or file already gone)
  */
+function uniqueQuarantineDest(qDir, name, reason, fs) {
+  const base = `${name}.${reason || 'junk'}.${Date.now()}`;
+  let dest = join(qDir, base);
+  let n = 0;
+  // Cap attempts so a pathological existsSync(true) cannot spin forever.
+  while (n < 1000 && fs.existsSync(dest)) {
+    n += 1;
+    dest = join(qDir, `${base}.${n}`);
+  }
+  return dest;
+}
+
 function quarantineExistingMarker(path, reason, fs) {
   if (!fs.existsSync(path)) return true;
   const dir = dirname(path);
   const qDir = join(dir, 'quarantine');
   const name = basename(path);
-  const ts = Date.now();
-  const dest = join(qDir, `${name}.${reason}.${ts}`);
   try {
     fs.mkdirSync(qDir, { recursive: true });
+    const dest = uniqueQuarantineDest(qDir, name, reason, fs);
     fs.renameSync(path, dest);
     return true;
   } catch {
@@ -272,11 +283,18 @@ export function quarantineJunkDenies(
 
     try {
       fs.mkdirSync(qDir, { recursive: true });
-      const dest = join(qDir, `${name}.${reason || 'junk'}.${Date.now()}`);
+      const dest = uniqueQuarantineDest(qDir, name, reason || 'junk', fs);
       fs.renameSync(full, dest);
       quarantined.push(name);
-    } catch {
-      // fail-closed callers still treat unreadables as deny; skip move errors
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `quarantine_failed:${err?.code || err?.message || 'error'}`,
+        quarantined,
+        kept,
+        retainedForDeny,
+        failed: [name],
+      };
     }
   }
   return { ok: true, quarantined, kept, retainedForDeny };
@@ -294,6 +312,14 @@ export function quarantineJunkDenies(
  * gate can fail closed (D3:invalid_record) rather than silently drop them.
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
+function adlcRepoMarkersPresent(root, fs) {
+  return (
+    fs.existsSync(join(root, '.adlc', 'tickets.json')) ||
+    fs.existsSync(join(root, '.adlc', 'config.json')) ||
+    fs.existsSync(join(root, '.adlc', 'handoffs'))
+  );
+}
+
 export function loadDenyRecords(
   root,
   {
@@ -302,15 +328,21 @@ export function loadDenyRecords(
       readdirSync,
       readFileSync,
     },
-    /** When true, a missing denies/ directory is unavailable — not a clean empty store. */
-    storeExpected = false,
+    /**
+     * When true, a missing denies/ directory is unavailable — not a clean empty store.
+     * Default: auto — expected when ADLC repo markers exist (.adlc/tickets.json,
+     * config.json, or handoffs/). Pass false only for known-fresh trees.
+     */
+    storeExpected,
   } = {},
 ) {
   const dir = join(root, '.adlc', 'handoffs', 'denies');
   const records = [];
   const invalidRecords = [];
+  const expected =
+    storeExpected === undefined ? adlcRepoMarkersPresent(root, fs) : storeExpected === true;
   if (!fs.existsSync(dir)) {
-    if (storeExpected) {
+    if (expected) {
       invalidRecords.push({
         session_id: '__deny_store__',
         status: 'invalid:missing_deny_store',

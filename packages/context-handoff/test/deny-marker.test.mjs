@@ -566,3 +566,41 @@ test('missing denies/ without storeExpected is a clean empty store', () => {
   }
 });
 
+test('ADLC repo markers make missing denies/ unavailable by default', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), '[]\n', 'utf8');
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.ok, false);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('quarantineJunkDenies reports failure when rename throws', () => {
+  const fs = {
+    existsSync(path) {
+      // Directory exists; quarantine destinations do not.
+      return !String(path).includes(`${'quarantine'}`);
+    },
+    readdirSync() {
+      return [{ name: 'notes.txt', isDirectory: () => false }];
+    },
+    mkdirSync() {},
+    renameSync() {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    },
+    readFileSync() { return ''; },
+  };
+  const result = quarantineJunkDenies('/x', { fs });
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /quarantine_failed/);
+});
+

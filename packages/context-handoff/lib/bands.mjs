@@ -87,10 +87,22 @@ export function isHardDegraded(observed = {}) {
  * @returns {number|null} min fraction across available signals, or null if none
  */
 export function remainingToHard(floor = {}) {
+  if (floor === null || typeof floor !== 'object' || Array.isArray(floor)) {
+    return 0; // fail closed: no headroom → suppress nags path sees depleted
+  }
   const fracs = [];
-  if (typeof floor.pct === 'number') fracs.push((HARD_PCT - floor.pct) / HARD_PCT);
-  if (typeof floor.depth === 'number') fracs.push((HARD_DEPTH - floor.depth) / HARD_DEPTH);
-  if (typeof floor.bytes === 'number') fracs.push((HARD_BYTES - floor.bytes) / HARD_BYTES);
+  for (const [key, hard] of [
+    ['pct', HARD_PCT],
+    ['depth', HARD_DEPTH],
+    ['bytes', HARD_BYTES],
+  ]) {
+    const value = floor[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return 0; // present-but-malformed floor → treat as depleted
+    }
+    fracs.push((hard - value) / hard);
+  }
   if (fracs.length === 0) return null;
   return Math.min(...fracs);
 }

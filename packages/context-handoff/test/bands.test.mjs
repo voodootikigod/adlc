@@ -119,3 +119,10 @@ test('exact HARD_* thresholds are inclusive (in-band)', () => {
   assert.equal(evaluateBands({ pct: HARD_PCT - 1 }).hard, false);
 });
 
+test('remainingToHard fails closed on non-finite floor signals', () => {
+  assert.equal(remainingToHard({ pct: NaN }), 0);
+  assert.equal(remainingToHard({ depth: Infinity }), 0);
+  assert.equal(remainingToHard({ bytes: '100' }), 0);
+  assert.equal(remainingToHard(null), 0);
+});
+
