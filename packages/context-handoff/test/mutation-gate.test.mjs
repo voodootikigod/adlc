@@ -318,25 +318,20 @@ test('single-character currentSessionId is usable (D0 off-by-one)', () => {
   assert.deepEqual(g.reasons, []);
 });
 
-test('invalid/missing status fails closed under D3 for that session', () => {
+test('invalid/missing status fails closed under D3 for every session', () => {
   for (const status of ['revoked', 'bogus', null, undefined]) {
     const record = open({ session_id: 'denier' });
     if (status === undefined) delete record.status;
     else record.status = status;
-    const self = evaluateMutationGate({
-      currentSessionId: 'denier',
-      denyRecords: [record],
-      resumeAuth: null,
-    });
-    assert.equal(self.deny, true, `status=${JSON.stringify(status)}`);
-    assert.ok(self.reasons.some((r) => r.startsWith('D3:invalid_record:') || r.startsWith('D2:')), self.reasons.join(','));
-    const foreign = evaluateMutationGate({
-      currentSessionId: 'fresh',
-      denyRecords: [record],
-      resumeAuth: null,
-    });
-    // Foreign invalid markers do not brick unrelated sessions.
-    assert.equal(foreign.deny, false, `foreign status=${JSON.stringify(status)}`);
+    for (const sid of ['denier', 'fresh']) {
+      const g = evaluateMutationGate({
+        currentSessionId: sid,
+        denyRecords: [record],
+        resumeAuth: null,
+      });
+      assert.equal(g.deny, true, `status=${JSON.stringify(status)} sid=${sid}`);
+      assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:')), g.reasons.join(','));
+    }
   }
 });
 

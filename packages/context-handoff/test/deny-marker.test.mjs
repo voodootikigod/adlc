@@ -511,13 +511,7 @@ test('loadDenyRecords surfaces valid + invalid retained markers for the gate', (
     );
     assert.equal(g.deny, true);
     assert.ok(g.reasons.some((r) => r.includes('open1')));
-    // Foreign corrupt markers no longer brick unrelated sessions.
-    assert.ok(!g.reasons.some((r) => r.includes('corrupt1')));
-    const selfBad = evaluateMutationGate(
-      mutationGateInputFromLoad(loaded, { currentSessionId: 'corrupt1' }),
-    );
-    assert.equal(selfBad.deny, true);
-    assert.ok(selfBad.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
+    assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:corrupt1')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -572,19 +566,18 @@ test('missing denies/ without storeExpected is a clean empty store', () => {
   }
 });
 
-test('ADLC repo markers make missing denies/ unavailable by default', () => {
+test('ticket-store markers alone do not expect a deny store', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
-    mkdirSync(join(root, '.adlc'), { recursive: true });
+    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
     writeFileSync(join(root, '.adlc', '.store.json'), '{}\n', 'utf8');
     const loaded = loadDenyRecords(root);
-    assert.equal(loaded.ok, false);
-    assert.equal(loaded.denyStoreUnavailable, true);
+    assert.equal(loaded.ok, true);
+    assert.equal(loaded.denyStoreUnavailable, false);
     const g = evaluateMutationGate(
       mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
     );
-    assert.equal(g.deny, true);
-    assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+    assert.equal(g.deny, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

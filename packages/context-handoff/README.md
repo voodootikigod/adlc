@@ -33,3 +33,11 @@ Contract test 8 / the binding spec allow a third session when no other open
 denies remain; `consumed_by` / `consumed_at` are stamped for forensics, and the
 denier remains D2.
 
+## Deny-store expectation
+
+`loadDenyRecords` treats a missing `denies/` as unavailable only when
+`.adlc/handoffs/.deny-store` exists (written by `ensureDenyMarker`). Ticket-store
+presence alone does not expect denies. Removing the entire `handoffs/` tree
+(including the sentinel) is still indistinguishable from "never handed off"
+until the deferred deny ledger lands.
+

@@ -316,16 +316,12 @@ export function quarantineJunkDenies(
  * gate can fail closed (D3:invalid_record) rather than silently drop them.
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
-function adlcRepoMarkersPresent(root, fs) {
-  const adlc = join(root, '.adlc');
-  return (
-    fs.existsSync(join(adlc, 'tickets.json')) ||
-    fs.existsSync(join(adlc, 'tickets')) ||
-    fs.existsSync(join(adlc, '.store.json')) ||
-    fs.existsSync(join(adlc, 'config.json')) ||
-    fs.existsSync(join(adlc, 'handoffs', '.deny-store')) ||
-    fs.existsSync(join(adlc, 'handoffs'))
-  );
+function denyStoreExpectedBySentinel(root, fs) {
+  // Only the handoff sentinel means a deny store was initialized. Ticket-store
+  // markers must not imply denies/ — otherwise every ADLC repo denies mutations
+  // before any handoff ever fires. Deleting handoffs/ including the sentinel is
+  // the deferred ledger gap (documented in README).
+  return fs.existsSync(join(root, '.adlc', 'handoffs', '.deny-store'));
 }
 
 export function loadDenyRecords(
@@ -348,7 +344,7 @@ export function loadDenyRecords(
   const records = [];
   const invalidRecords = [];
   const expected =
-    storeExpected === undefined ? adlcRepoMarkersPresent(root, fs) : storeExpected === true;
+    storeExpected === undefined ? denyStoreExpectedBySentinel(root, fs) : storeExpected === true;
   if (!fs.existsSync(dir)) {
     if (expected) {
       invalidRecords.push({

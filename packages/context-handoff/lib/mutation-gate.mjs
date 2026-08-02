@@ -152,14 +152,7 @@ export function evaluateMutationGate({
     if (!r) continue;
     if (!isValidDenyRecord(r)) {
       const label = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : '?';
-      // Store sentinel always fails closed for every session.
-      if (r.session_id === '__deny_store__') {
-        reasons.push(`D3:invalid_record:${label}`);
-        continue;
-      }
-      // Foreign invalid/corrupt markers fail closed for that session only (via D2
-      // when self). Do not brick every session on another session's bad file.
-      if (r.session_id !== currentSessionId) continue;
+      // Any invalid deny-store entry fails closed for every session (store integrity).
       reasons.push(`D3:invalid_record:${label}`);
       continue;
     }
