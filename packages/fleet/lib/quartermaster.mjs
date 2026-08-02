@@ -24,10 +24,12 @@ import {
   HARNESS_DEFAULT_MODEL,
   REGISTRY_ENV,
   deriveBuildJob,
+  escalationRungs,
   loadRegistry,
   resolveRegistryPath,
   resolveRoute,
   routeJob,
+  rungForAttempt,
 } from '@adlc/quartermaster';
 import { adapterCatalog, getAdapter } from './adapters/index.mjs';
 
@@ -189,9 +191,58 @@ export function planSeats({
     const job = deriveBuildJob({ assignment, ticket });
     const route = routeJob({ job, assignment, ticket });
     if (selected && !selected.has(ticket.id)) continue; // routed on the full DAG, reported for the subset
-    seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment, registryDigest });
+    // F8 escalation (issue #401): resolve the rungs a retry may climb to HERE,
+    // while the registry is in hand. Dispatch then needs no registry of its own,
+    // and the dry-run can show the whole ladder instead of implying one fixed
+    // model. A registry that validated has every §4a channel, so a rung that
+    // cannot resolve means the run already failed closed at load.
+    const escalation = escalationRungs({ job, mode: assignment.mode, channel: route.channel })
+      .map((channel) => ({ channel, seat: resolveRoute(registry, { channel }) }));
+    seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment, registryDigest, escalation });
   }
   return { registryPath, registryDigest, notices, seats };
+}
+
+/**
+ * The seat one ATTEMPT of a ticket must run on (§5, F8; issue #401).
+ *
+ * Attempt 1 takes the routed seat; a later attempt climbs the pre-resolved
+ * ladder. `rungForAttempt` is shared with the channel-level rule in
+ * `@adlc/quartermaster`, so the channel a record NAMES and the seat that
+ * actually dispatched cannot disagree — they are the same index computation.
+ *
+ * @param {{route: object, seat: object, escalation?: Array<{channel: string, seat: object}>}} entry
+ *   one `planSeats` seat entry
+ * @param {number} attempt 1-based strike number
+ * @returns {{channel: string|null, seat: object, escalatedFrom: string|null}}
+ */
+export function seatForAttempt(entry, attempt) {
+  const start = { channel: entry?.route?.channel ?? null, seat: entry?.seat };
+  const { value, escalated } = rungForAttempt(start, entry?.escalation ?? [], attempt);
+  return { channel: value.channel, seat: value.seat, escalatedFrom: escalated ? start.channel : null };
+}
+
+/**
+ * Every DISTINCT adapter this ticket could dispatch on, starting rung first.
+ *
+ * `provision` runs once per ticket, before the pipeline starts, but escalation
+ * can move a later strike onto a different harness — and `claude-code`'s
+ * provision writes the worktree allowlist its worker needs to run at all.
+ * Provisioning only the starting rung would leave an escalated strike running
+ * unprovisioned, which looks exactly like a model failure.
+ */
+export function ladderAdapters(entry) {
+  if (!entry) return [];
+  const seats = [entry.seat, ...(entry.escalation ?? []).map((rung) => rung.seat)];
+  const seen = new Set();
+  const names = [];
+  for (const seat of seats) {
+    const name = seat?.adapter;
+    if (typeof name !== 'string' || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
 }
 
 /**

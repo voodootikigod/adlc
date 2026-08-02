@@ -34,3 +34,5 @@ export { REGISTRY_SCHEMA_VERSION, RULE, RegistryValidationError, validateRegistr
 export { RegistryLoadError, loadRegistry, resolveRoute } from './lib/load.mjs';
 
 export { routeJob, deriveBuildJob } from './lib/route-job.mjs';
+
+export { LADDER_CHANNELS, channelForAttempt, escalationRungs, rungForAttempt } from './lib/escalate.mjs';

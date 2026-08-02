@@ -231,6 +231,16 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
       model: seat.model,
       transport: seat.transport,
       provider: seat.provider,
+      // F8 escalation (#401): a ladder-start seat is a STARTING point, and a
+      // plan that printed only it would imply one fixed model for the whole
+      // ticket. The rungs a retry may climb to are part of what this run may
+      // spend, so they belong in the plan the operator approves.
+      escalation: (entry.escalation ?? []).map((rung) => ({
+        channel: rung.channel,
+        adapter: rung.seat.adapter,
+        model: rung.seat.model,
+        transport: rung.seat.transport,
+      })),
       // The prompt is elided so the plan stays readable; every other argument is
       // verbatim, straight from the adapter's own dispatch.
       argv: { command: argv.cmd, args: argv.args.map((a) => (a === prompt ? '<prompt>' : a)) },
@@ -252,6 +262,12 @@ function printQuartermasterPlan(quartermaster) {
         `model=${seat.model} transport=${seat.transport}`
     );
     console.log(`           argv: ${seat.argv.command} ${JSON.stringify(seat.argv.args)}`);
+    // Printed only when the ladder can actually climb, so a direct-mode seat
+    // still reads as the single fixed model it is.
+    if (seat.escalation?.length > 0) {
+      const rungs = seat.escalation.map((r) => `${r.channel} (${r.adapter} ${r.model})`).join(' → ');
+      console.log(`           escalates on retry: ${rungs}`);
+    }
   }
 }
 

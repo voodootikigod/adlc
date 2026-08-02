@@ -15,6 +15,7 @@ import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
 import { usageEvidence } from './adapters/usage.mjs';
+import { ladderAdapters, seatForAttempt } from './quartermaster.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
 import { makeReviewRunner } from './review-runner.mjs';
 import { builderPrompt, fixPrompt } from './charters.mjs';
@@ -167,9 +168,17 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   // registry, the harness AND the model are per-ticket registry data, not a
   // single run-wide flag. `seats` is absent when the layer is not engaged, and
   // dispatch keeps its pre-quartermaster behavior.
-  const seatFor = (ticket) => seats?.get(ticket?.id)?.seat ?? null;
-  const adapterFor = (ticket) => {
-    const seat = seatFor(ticket);
+  const entryFor = (ticket) => seats?.get(ticket?.id) ?? null;
+
+  // F8 escalation (issue #401): the seat belongs to the ATTEMPT, not to the run.
+  // A ladder-start ticket in ladder mode climbs one rung per strike; everything
+  // else hands back its routed seat unchanged for every attempt.
+  const attemptFor = (ticket, attempt) => {
+    const entry = entryFor(ticket);
+    return entry ? seatForAttempt(entry, attempt) : null;
+  };
+
+  const adapterForSeat = (ticket, seat) => {
     if (seat) return getAdapter(seat.adapter);
     if (!legacyAdapter) {
       // Seats were present at assembly but this ticket has none — it was never
@@ -247,7 +256,21 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     // provision is OPTIONAL per the WorkerAdapter contract (§4): only claude-code
     // writes a settings file; codex/agy/opencode/pi/cursor have none (adversarial-review A1).
-    provision: ({ ticket, worktree }) => adapterFor(ticket).provision?.({ worktree, config, writeJson: io.writeJson }),
+    //
+    // EVERY rung of the ladder is provisioned, not just the starting one (#401).
+    // provision runs once, before the pipeline; escalation can move strike 2 onto
+    // a different harness, and claude-code's provision writes the allowlist its
+    // worker needs to run at all. Provisioning only the start would leave an
+    // escalated strike unprovisioned, which is indistinguishable from a model
+    // failure at the point it bites.
+    provision: ({ ticket, worktree }) => {
+      const entry = entryFor(ticket);
+      if (!entry) return adapterForSeat(ticket, null).provision?.({ worktree, config, writeJson: io.writeJson });
+      for (const name of ladderAdapters(entry)) {
+        getAdapter(name).provision?.({ worktree, config, writeJson: io.writeJson });
+      }
+      return undefined;
+    },
 
     dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
       const prompt = strike > 1 ? fixPrompt(ticket, config.gate, deadEnds) : builderPrompt(ticket, config.gate);
@@ -255,8 +278,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         modelAuthKey: config.modelAuthKey,
         extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
       });
-      const seat = seatFor(ticket);
-      const res = await adapterFor(ticket).dispatch({
+      const attempt = attemptFor(ticket, strike);
+      const seat = attempt?.seat ?? null;
+      const res = await adapterForSeat(ticket, seat).dispatch({
         worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
         exec: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
         // Operator-local binary override (A2) + non-executable data from config.
@@ -285,7 +309,14 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const logPath = fleetLogPath(statusDir, repo, ticket.id);
       let reset = strike === 1; // only the first write of strike 1 truncates
       const write = (text) => { io.appendLog(logPath, text, { reset }); reset = false; };
-      write(`=== ${ticket.id} strike ${strike} ===\n${res.output ?? ''}\n`);
+      // The header names the CHANNEL as well as the strike (#401): with
+      // escalation, two strikes of one ticket can be two different harnesses,
+      // and a transcript that says only "strike 2" cannot tell an operator
+      // which supply produced the output they are reading.
+      const where = attempt?.channel
+        ? ` channel=${attempt.channel}${attempt.escalatedFrom ? ` (escalated from ${attempt.escalatedFrom})` : ''}`
+        : '';
+      write(`=== ${ticket.id} strike ${strike}${where} ===\n${res.output ?? ''}\n`);
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
         try { worktrees.commitWorker(worktree, ticket.id, io.git(worktree)); }
@@ -422,26 +453,10 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
      * provenance claim — the same failure the no-fabrication rule forbids for
      * counters.
      */
-    recordDispatchUsage: ({ ticket, result }) => {
+    recordDispatchUsage: ({ ticket, result, strike = 1 }) => {
       const data = usageEvidence(result);
       if (!data) return;
       const entry = seats?.get(ticket?.id);
-      const seat = entry?.seat;
-      if (data.usage && seat) {
-        data.usage = {
-          ...data.usage,
-          ...(seat.provider ? { provider: seat.provider } : {}),
-          ...(seat.model ? { model: seat.model } : {}),
-          ...(entry?.assignment?.tier ? { tier: entry.assignment.tier } : {}),
-        };
-      }
-      if (entry?.route?.channel) data.channel = entry.route.channel;
-      if (seat?.transport) data.transport = seat.transport;
-      // Binds the charge to the registry BYTES in force at dispatch time. The
-      // operator registry is mutable, so channel/transport labels alone cannot
-      // prove which registry version chose them.
-      if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
-
       // Recording stays NON-BLOCKING — a recorder problem must never fail a
       // build — but it must not be SILENT. `io.adlc` is spawnSync-shaped, so an
       // ordinary CLI failure (missing binary, invalid chain, signing error)
@@ -454,6 +469,49 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         `warning: ${ticket.id} dispatch usage was NOT recorded (${why}). This call's spend is `
         + 'MISSING from the ledger, not zero — phase totals will under-report until it is re-recorded.'
       );
+
+      // The carrier must name the seat that ACTUALLY ran, not the one the run
+      // started on (#401). Recording the starting channel for an escalated
+      // strike is the same "the label proves nothing about what ran" failure
+      // §4c closed for `model` — and it would price the escalation at the cheap
+      // seat's transport. `strike` defaults to 1 so a caller with no attempt
+      // number gets the starting seat, which is what it was before escalation
+      // existed; run.mjs always passes the real one.
+      //
+      // An UNUSABLE strike resolves to no seat rather than propagating: this
+      // whole call is wrapped in a best-effort try/catch one layer up, so a
+      // throw here would discard the entire carrier and lose a real call's
+      // spend without a word — the exact silent-zero the warning above exists
+      // to prevent. Dropping only the provenance keeps the counters, and says
+      // so out loud.
+      let attempt = null;
+      try {
+        attempt = entry ? seatForAttempt(entry, strike) : null;
+      } catch (e) {
+        console.error(
+          `warning: ${ticket.id} dispatch usage recorded WITHOUT channel provenance (${e.message}). `
+          + 'The counters are real; the channel/transport that spent them is unknown for this entry.'
+        );
+      }
+      const seat = attempt?.seat;
+      if (data.usage && seat) {
+        data.usage = {
+          ...data.usage,
+          ...(seat.provider ? { provider: seat.provider } : {}),
+          ...(seat.model ? { model: seat.model } : {}),
+          ...(entry?.assignment?.tier ? { tier: entry.assignment.tier } : {}),
+        };
+      }
+      if (attempt?.channel) data.channel = attempt.channel;
+      // Present ONLY on a dispatch that actually climbed, so the absence of the
+      // key is itself evidence that this strike ran where routing put it.
+      if (attempt?.escalatedFrom) data.escalatedFrom = attempt.escalatedFrom;
+      if (seat?.transport) data.transport = seat.transport;
+      // Binds the charge to the registry BYTES in force at dispatch time. The
+      // operator registry is mutable, so channel/transport labels alone cannot
+      // prove which registry version chose them.
+      if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
+
       let res;
       try { res = io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
       catch (e) { warn(e.message); return; }

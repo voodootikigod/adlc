@@ -233,7 +233,7 @@ routeJob({ job, assignment, ticket }) -> { channel } | { reviewerGroup } | { det
 | --- | --- | --- |
 | `build.spec-class` (derived) | `frontier` | category ∈ {contract, spec, architecture} |
 | `build.critical-path` (derived) | `frontier` | `float === 0`; overrides assignment tier for channel purposes; assignment tier still governs budget |
-| `build.ladder-start` (derived) | assignment tier's channel (`cheap`/`mid`) | Escalation per F8 is a fresh attempt |
+| `build.ladder-start` (derived) | assignment tier's channel (`cheap`/`mid`) | Escalation per F8 is a fresh attempt — §5a |
 | `prosecute.lens` | `mid` | First-pass fan-out |
 | `prosecute.verdict` | `frontier` | The **only** overflow-eligible job (§7) |
 | `review.cross-model.routine` | group `cross-model-routine` | |
@@ -241,6 +241,40 @@ routeJob({ job, assignment, ticket }) -> { channel } | { reviewerGroup } | { det
 | `maintain.ratchet` / `maintain.mining` | `mid` | Scheduled, latency-irrelevant |
 | `maintain.calibration` | `frontier-metered` | Batch pricing |
 | `gate.deterministic.*` | `{deterministic: true}` | Asserting a channel here is an error |
+
+### 5a. Ladder escalation: the seat belongs to the ATTEMPT
+
+`build.ladder-start` names a **starting** rung, not the model a ticket runs on.
+F8 makes a failed strike a *fresh attempt*, and the ladder's economics depend on
+it: slack work starts cheap precisely because a failure escalates. Without
+escalation a cheap first attempt is only a cheaper way to fail — and
+`assign.mjs`'s ladder budget (starting tier **plus one frontier regeneration**)
+is provisioned for an attempt that would never happen.
+
+Implemented in `@adlc/quartermaster`'s `lib/escalate.mjs`, consumed by fleet's
+`planSeats` (which resolves every rung against the registry at planning time) and
+by `live-deps` dispatch (which selects the rung for the strike in hand).
+
+- **The ladder is `cheap → mid → frontier`**, derived from `LADDER_TIER_CHANNELS`
+  so it can only climb to channels routing already starts on. `frontier-metered`
+  is **not** on it — that channel is reached by a §7 fallback traversal (a
+  transport change), never by climbing.
+- **Attempt 1 is the routed channel**; each later attempt climbs exactly one rung
+  and **stops at `frontier`** rather than indexing past the top.
+- **Both `job` and `mode` gate escalation.** A ticket below the rail-density floor
+  is assigned `{tier: 'frontier', mode: 'direct'}` while still *deriving*
+  `build.ladder-start` from its non-zero float. Keying on the job alone would
+  escalate a ticket the router deliberately routed direct, so escalation requires
+  `job === 'build.ladder-start'` **and** `mode === 'ladder'`.
+- **Every rung is provisioned** before the pipeline starts. Escalation can move a
+  later strike onto a different harness, and an adapter's `provision` writes state
+  its worker needs to run at all; provisioning only the starting rung would leave
+  an escalated strike unprovisioned, which is indistinguishable from a model
+  failure at the point it bites.
+- **The §8a dispatch carrier names the channel that RAN**, plus `escalatedFrom`
+  when it climbed. A carrier naming the starting channel for an escalated strike
+  is the same "the label proves nothing about what ran" failure §4c closed for
+  `model`, and it would price the escalation at the starting seat's transport.
 
 ## 6. Cross-model attestations: quorum with gateway discounting
 
@@ -603,9 +637,17 @@ Ordered by dependency, each a candidate ticket:
 3. Cap-hit exit-code classification per subscription harness — probe per harness
    before enabling §8b's `cap-hit` producer; until probed, the cap-hit monitor
    reports **unknown** rather than quiet.
-4. Whether `build.ladder-start` escalation should emit a `fallback`-like event for
-   monitor visibility (it is an F8 fresh attempt, not a §7 traversal — likely a
-   distinct `kind: "escalation"` event; decide during build item 5).
+4. **RESOLVED (issue #401) — no separate escalation event.** Escalation is visible
+   on the §8a dispatch usage carrier instead: it already exists, is written
+   exactly once per dispatch, and already carries `channel`, `transport` and
+   `registryDigest`, so it now records the channel that actually ran plus an
+   `escalatedFrom` sibling when the strike climbed. A second producer for the
+   same fact would invite the double-counting §8a's one-carrier-per-call rule
+   exists to prevent, and no §8c monitor consumes a ladder-escalation event —
+   §8b's `fallback` covers §7 traversals, and `seatRole: "escalation"` is a
+   reviewer-seat property, not this. The transcript header names the channel too,
+   so the operator-facing log and the ledger agree. Revisit only if a monitor is
+   ever specified that needs escalation *counts* independent of spend.
 
 ## 12. Acceptance criteria
 

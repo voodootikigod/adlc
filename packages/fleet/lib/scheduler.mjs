@@ -90,7 +90,10 @@ export async function advanceTicket(ticket, effects, { maxStrikes = 2, log = () 
     // first strike that failed its gate followed by a 20k repair reported only
     // 20k (adversarial-review MEDIUM). This mirrors the P5 rule exactly —
     // exactly one carrier entry per model call.
-    effects.recordDispatchUsage?.(build);
+    // The STRIKE number rides along because F8 escalation makes the seat a
+    // property of the ATTEMPT (#401): the recorder has to name the channel this
+    // particular call ran on, and only the strike identifies which rung that was.
+    effects.recordDispatchUsage?.(build, strikes);
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the second strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', deadEnds };

@@ -27,7 +27,9 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
     // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
     record: (phase, ok, data) => { try { deps.recordGate?.({ ticket, phase, ok, data }); } catch { /* evidence is best-effort */ } },
     // §8a: one usage carrier per DISPATCH, independent of any later verdict.
-    recordDispatchUsage: (result) => { try { deps.recordDispatchUsage?.({ ticket, result }); } catch { /* evidence is best-effort */ } },
+    // `strike` identifies WHICH rung of the F8 ladder that dispatch ran on (#401),
+    // so the carrier can name the channel that actually spent the tokens.
+    recordDispatchUsage: (result, strike) => { try { deps.recordDispatchUsage?.({ ticket, result, strike }); } catch { /* evidence is best-effort */ } },
     merge: () => mergeMutex.runExclusive(async () => {
       // QUARANTINE: once a gate-rejected completion could not be withdrawn, the shared
       // integration branch carries an ungated commit. Nothing further may land on it —
