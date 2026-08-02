@@ -169,7 +169,9 @@ test('path traversal sessionId rejected', () => {
   assert.throws(() => assertSafeSessionId('../escape'), /unsafe sessionId/);
   assert.throws(() => assertSafeSessionId('a/b'), /unsafe sessionId/);
   assert.throws(() => assertSafeSessionId('a\\b'), /unsafe sessionId/);
-  assert.throws(() => assertSafeSessionId(''), /unsafe sessionId/);
+  assert.throws(() => assertSafeSessionId(''), /unsafe sessionId: empty/);
+  assert.throws(() => assertSafeSessionId(null), /unsafe sessionId: empty/);
+  assert.throws(() => assertSafeSessionId(1), /unsafe sessionId: empty/);
   assert.throws(() => denyPath('/tmp', '../escape'), /unsafe sessionId/);
   assert.throws(() => ensureDenyMarker('/tmp', { sessionId: '..' }), /unsafe sessionId/);
   assert.throws(
