@@ -229,6 +229,8 @@ export function quarantineJunkDenies(
   const quarantined = [];
   const kept = [];
   const retainedForDeny = [];
+  const failed = [];
+  let lastFail = '';
   if (!fs.existsSync(dir)) {
     return { ok: true, quarantined, kept, retainedForDeny };
   }
@@ -289,15 +291,12 @@ export function quarantineJunkDenies(
       fs.renameSync(full, dest);
       quarantined.push(name);
     } catch (err) {
-      return {
-        ok: false,
-        reason: `quarantine_failed:${err?.code || err?.message || 'error'}`,
-        quarantined,
-        kept,
-        retainedForDeny,
-        failed: [name],
-      };
+      failed.push(name);
+      lastFail = `quarantine_failed:${err?.code || err?.message || 'error'}`;
     }
+  }
+  if (failed.length > 0) {
+    return { ok: false, reason: lastFail, quarantined, kept, retainedForDeny, failed };
   }
   return { ok: true, quarantined, kept, retainedForDeny };
 }

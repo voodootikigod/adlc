@@ -6,6 +6,7 @@ import {
   handoffDenyActive,
   remainingToHard,
   isHardDegraded,
+  classifyBandSignal,
 } from '../lib/bands.mjs';
 import {
   HANDOFF_PCT,
@@ -133,4 +134,23 @@ test('out-of-domain finite signals fail closed as hard', () => {
   assert.equal(isHardDegraded({ pct: 101 }), true);
   assert.equal(isHardDegraded({ depth: -5 }), true);
   assert.equal(isHardDegraded({ bytes: -1 }), true);
+});
+
+
+test('pct 100 inclusive hard, 100.1 invalid hard; depth 0 is not hard alone', () => {
+  assert.equal(isHardDegraded({ pct: 100 }), true);
+  assert.equal(isHardDegraded({ pct: 100.1 }), true);
+  assert.equal(evaluateBands({ depth: 0 }).hard, false);
+  assert.equal(evaluateBands({ depth: 0 }).warn, false);
+});
+
+
+test('classifyBandSignal marks NaN/Infinity/non-numbers invalid (not absent)', () => {
+  assert.equal(classifyBandSignal(undefined), 'absent');
+  assert.equal(classifyBandSignal(null), 'absent');
+  assert.equal(classifyBandSignal(NaN), 'invalid');
+  assert.equal(classifyBandSignal(Infinity), 'invalid');
+  assert.equal(classifyBandSignal(-Infinity), 'invalid');
+  assert.equal(classifyBandSignal('99'), 'invalid');
+  assert.equal(classifyBandSignal(40), 'number');
 });
