@@ -417,8 +417,10 @@ When the repo is segmented (§4.7), `appendManifestEntry`:
       (refusing while any non-conforming object or unreadable first entry
       exists, so adoption cannot convert a fail-closed anomaly into
       permanent silence) and authentication (v2-verified first entry with a
-      key; chain intactness alone in a keyless-mode forest, which the
-      keyless reader's own contract already matches). It never touches
+      key; chain intactness alone only where the marker EXPLICITLY declares
+      `auth: "keyless"`, which the keyless reader's own contract already
+      matches — a forest declaring no mode requires a key, since a missing
+      key is far more often an oversight than a configuration). It never touches
       committed bytes. Minting a THIRD segment instead of refusing was
       considered and rejected: that is exactly gap 1's own bug, silently
       multiplying duplicates rather than surfacing the conflict.

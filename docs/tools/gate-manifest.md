@@ -196,13 +196,18 @@ same gates the writer applies to a recovered candidate — both halves:
   silence for that checkout.
 - **Authentication.** With a key: the chain must be intact and the
   branch-bearing **first entry** must carry a verified v2 signature. In a
-  forest activated `--allow-keyless`: chain intactness alone, since a token
-  confers no trust there that the forest does not already grant — keyless
-  readers skip signature verification by design, and refusing would leave
-  keyless forests with no remedy for an outage they can genuinely reach.
+  forest whose marker *explicitly* declares `auth: "keyless"` (activated
+  `--allow-keyless`): chain intactness alone, since a token confers no trust
+  there that the forest does not already grant — keyless readers skip
+  signature verification by design, and refusing would leave keyless forests
+  with no remedy for an outage they can genuinely reach. A forest that
+  declares **no** mode (no marker — e.g. cutover-only) requires a key:
+  "no key supplied" is far more often a forgotten environment variable than
+  a deliberate configuration, and accepting there would launder an unsigned
+  segment into the token-trusted path.
 
 Exit `2`, writing nothing, when: the repo is not segmented, HEAD is detached
-(no branch to bind to), the forest is **keyed-mode** but no key is available,
+(no branch to bind to), the forest is **keyed-mode** (or declares no mode) but no key is available,
 the store holds a non-conforming object or an unreadable segment, the named
 segment is unknown, it declares a different branch, or it fails the
 authentication gate above.

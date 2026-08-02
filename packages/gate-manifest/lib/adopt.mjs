@@ -29,13 +29,6 @@ import { segmentPath, discoverSegments, readRawLines, ulidOf } from './forest.mj
 import { verifyChain } from './verify.mjs';
 import { verifyEntrySig } from './sign.mjs';
 
-/**
- * The same acceptance `resolveOpenSegment` gives a recovered candidate:
- * leniently valid chain (an honest unsigned legacy prefix is tolerated;
- * tampered or unsigned-after-signed entries are not) AND a first entry
- * carrying a verified v2 signature — v1 does not sign `branch`, so a v1
- * signature can never authenticate the identity claim being adopted.
- */
 // The ONE place a segment's entries are parsed. Returns null when the file
 // is empty, unreadable, or its first/last entry is not a JSON OBJECT —
 // `JSON.parse('null')` succeeds and yields null, which would otherwise flow
@@ -62,27 +55,34 @@ function readSegment(dir, name) {
  * With a key: the full gate `resolveOpenSegment` applies to a recovered
  * candidate — leniently valid chain AND a first entry carrying a verified
  * v2 signature (v1 does not sign `branch`, so it can never authenticate the
- * identity being adopted). Without a key in a forest that declares no keyed
- * mode: chain intactness alone, because a token confers no trust there that
- * the forest does not already grant — the keyless peeked reader skips
- * signature verification by design. Refusing instead would leave keyless
- * forests with no remediation at all for an outage they can genuinely
- * reach, which is the hand-crafted-token status quo this command replaces.
+ * identity being adopted).
+ *
+ * Without a key, chain intactness alone suffices ONLY in a forest whose
+ * marker explicitly declares `auth: "keyless"` — there a token confers no
+ * trust the forest does not already grant, since keyless readers skip
+ * signature verification by design, and refusing would leave keyless
+ * forests with no remedy for an outage they genuinely reach. `allowChainOnly`
+ * is therefore driven by an EXPLICIT declaration, never by the absence of a
+ * key or the absence of a marker (adversarial-review finding): a
+ * cutover-only forest has no marker at all, so conflating "no key supplied"
+ * with "forest is legitimately keyless" would let an operator who merely
+ * forgot the env var launder an unsigned segment into the token-trusted
+ * fast path.
  */
-function authenticate({ lines, first }, key) {
+function authenticate({ lines, first }, key, allowChainOnly) {
   const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
   if (!chain.valid) return false;
-  if (key === null) return true;
+  if (key === null) return allowChainOnly;
   return first.sigVersion === 2 && verifyEntrySig(key, first);
 }
 
-function describeCandidate(name, parsed, key) {
+function describeCandidate(name, parsed, key, allowChainOnly) {
   return {
     name,
     entries: parsed.lines.length,
     firstTs: parsed.first.ts ?? null,
     lastTs: parsed.last.ts ?? null,
-    authenticated: authenticate(parsed, key),
+    authenticated: authenticate(parsed, key, allowChainOnly),
   };
 }
 
@@ -93,7 +93,7 @@ function describeCandidate(name, parsed, key) {
  * `recoverOpenSegment`, which throws on exactly the ambiguity adopt exists
  * to resolve — the remediation cannot depend on the thing it remediates.
  *
- * @returns {{ decision: 'list'|'adopted'|'refuse-not-segmented'|'refuse-detached-head'|'refuse-keyed-forest'|'refuse-unknown-segment'|'refuse-wrong-branch'|'refuse-unauthenticated', reason?: string, branch?: string, candidates?: object[], segment?: string, token?: object }}
+ * @returns {{ decision: 'list'|'adopted'|'refuse-not-segmented'|'refuse-detached-head'|'refuse-keyed-forest'|'refuse-undetermined-auth'|'refuse-nonconforming-store'|'refuse-unreadable-segment'|'refuse-unknown-segment'|'refuse-wrong-branch'|'refuse-unauthenticated', reason?: string, branch?: string, candidates?: object[], segment?: string, token?: object }}
  */
 export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, segment = null } = {}) {
   if (!isSegmentedRepo(dir)) {
@@ -107,9 +107,18 @@ export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, seg
   // persisted-auth enforcement: without the key nothing here can be
   // authenticated, and an unauthenticated token is precisely the bypass
   // this command must not become.
-  const marker = readBoundedJsonNoFollow(markerPath(dir));
-  if (marker && marker.auth === 'keyed' && key === null) {
-    return { decision: 'refuse-keyed-forest', reason: 'this forest was activated in keyed mode, but no signing key is available to authenticate the segment being adopted; configure the manifest key' };
+  const declaredAuth = readBoundedJsonNoFollow(markerPath(dir))?.auth ?? null;
+  if (declaredAuth === 'keyed' && key === null) {
+    return { decision: 'refuse-keyed-forest', reason: 'this forest was activated in keyed mode, but no signing key is available to authenticate the segment being adopted; configure the manifest key', branch };
+  }
+  // Only an EXPLICIT keyless declaration licenses chain-only acceptance. A
+  // forest with no marker (cutover-only, or pre-policy) has declared
+  // nothing, and "no key was supplied" is far more often a forgotten env
+  // var than a deliberate configuration — accepting there would launder an
+  // unsigned segment into the token-trusted fast path.
+  const allowChainOnly = declaredAuth === 'keyless';
+  if (!allowChainOnly && key === null) {
+    return { decision: 'refuse-undetermined-auth', reason: 'this forest does not declare an authentication mode (no activation marker), so an unsigned segment cannot be told apart from a legitimately keyless one — supply the manifest key to adopt here', branch };
   }
 
   // Recovery's INTEGRITY gates, applied before anything else — adopt must
@@ -142,20 +151,20 @@ export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, seg
   const mine = valid.filter((name) => parsedByName.get(name)?.first?.branch === branch);
 
   if (segment === null) {
-    return { decision: 'list', branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
+    return { decision: 'list', branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key, allowChainOnly)) };
   }
 
   // Named adoption. `valid` membership is the grammar/traversal check: a name
   // that discoverSegments did not classify as a real segment of THIS store
   // is never openable, so path escapes and malformed names refuse here.
   if (!valid.includes(segment) || !existsSync(segmentPath(dir, segment))) {
-    return { decision: 'refuse-unknown-segment', reason: `no segment named ${segment} exists in this store`, branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
+    return { decision: 'refuse-unknown-segment', reason: `no segment named ${segment} exists in this store`, branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key, allowChainOnly)) };
   }
   if (!mine.includes(segment)) {
     const declared = parsedByName.get(segment)?.first?.branch ?? null;
     return { decision: 'refuse-wrong-branch', reason: `segment ${segment} declares branch ${JSON.stringify(declared)}, not ${JSON.stringify(branch)} — adopting it would bind this checkout to a different lineage`, branch };
   }
-  if (!authenticate(parsedByName.get(segment), key)) {
+  if (!authenticate(parsedByName.get(segment), key, allowChainOnly)) {
     return { decision: 'refuse-unauthenticated', reason: `segment ${segment} cannot be authenticated with the available key (broken chain, or its branch-bearing first entry lacks a verified v2 signature) — a token makes downstream readers trust it without re-verifying, so adopt refuses`, branch };
   }
   const ulid = ulidOf(segment);

@@ -318,6 +318,26 @@ describe('adopt — refusals (AC3)', () => {
     } finally { clean(root); }
   });
 
+  // "No key supplied" must never be conflated with "forest is legitimately
+  // keyless": a cutover-only forest has no marker at all, so a forgotten env
+  // var would otherwise launder an unsigned segment into the trusted token.
+  it('refuses a keyless adopt in a forest that declares NO auth mode, even though the chain is intact', () => {
+    const { root, dir } = gitRepo();
+    try {
+      // Segmented via a cutover-tailed root — no activation marker exists.
+      mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+      writeFileSync(join(dir, 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      assert.equal(existsSync(markerPath(dir)), false, 'precondition: no marker declares a mode');
+      const { a } = twoCandidates(root, dir);
+
+      const out = adopt(dir, { cwd: root, key: null, segment: a, write: true });
+      assert.equal(out.decision, 'refuse-undetermined-auth');
+      assert.equal(existsSync(lineagePath(dir)), false, 'no token may be written');
+      // With the key, the same forest adopts normally.
+      assert.equal(adopt(dir, { cwd: root, key: KEY, segment: a, write: true }).decision, 'adopted');
+    } finally { clean(root); }
+  });
+
   it('refuses a non-segmented repo and a detached HEAD', () => {
     const { root, dir } = gitRepo();
     try {
