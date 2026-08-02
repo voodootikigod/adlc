@@ -151,7 +151,9 @@ export function ensureDenyMarker(
   assertSafeSessionId(sessionId);
   const existing = readDenyMarker(root, sessionId, { fs });
   if (existing.ok) {
-    ensureDenyStoreSentinel(root, fs);
+    if (!ensureDenyStoreSentinel(root, fs, sessionId)) {
+      return { ok: false, processSticky: true, reason: 'sentinel_write_failed' };
+    }
     return { ok: true, processSticky: false, reason: 'already_present' };
   }
   // Exists but unreadable: never clobber durable state.
@@ -202,8 +204,11 @@ export function ensureDenyMarker(
     return { ok: false, processSticky: true, reason: check.reason };
   }
   // Sentinel only after the marker is verified — avoids bricking the repo on
-  // a partial write (sentinel with empty denies/).
-  ensureDenyStoreSentinel(root, fs);
+  // a partial write (sentinel with empty denies/). Register this session so a
+  // later selective delete of the marker cannot clear D2 while others remain.
+  if (!ensureDenyStoreSentinel(root, fs, sessionId)) {
+    return { ok: false, processSticky: true, reason: 'sentinel_write_failed' };
+  }
   return { ok: true, processSticky: false, reason: 'ok' };
 }
 
@@ -315,7 +320,7 @@ export function quarantineJunkDenies(
  * gate can fail closed (D3:invalid_record) rather than silently drop them.
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
-/** Durable “deny store was initialized” bit — sibling of handoffs/, not inside it. */
+/** Durable deny-store sentinel — sibling of handoffs/, not inside it. */
 function denyStoreSentinelPath(root) {
   return join(root, '.adlc', '.deny-store');
 }
@@ -325,14 +330,64 @@ function legacyDenyStoreSentinelPath(root) {
   return join(root, '.adlc', 'handoffs', '.deny-store');
 }
 
-function ensureDenyStoreSentinel(root, fs) {
+/**
+ * Read sentinel. Shape: {"schema":1,"sessions":["id",...]} or legacy "1\n".
+ * @returns {{ expected: boolean, sessions: string[] }}
+ */
+function readDenyStoreSentinel(root, fs) {
+  const path = denyStoreSentinelPath(root);
+  const legacy = legacyDenyStoreSentinelPath(root);
+  let raw = null;
+  let fromLegacy = false;
+  if (fs.existsSync(path)) {
+    try {
+      raw = fs.readFileSync(path, 'utf8');
+    } catch {
+      // Unreadable sentinel ⇒ expected (fail closed) with unknown session set.
+      return { expected: true, sessions: [] };
+    }
+  } else if (fs.existsSync(legacy)) {
+    fromLegacy = true;
+    try {
+      raw = fs.readFileSync(legacy, 'utf8');
+    } catch {
+      return { expected: true, sessions: [] };
+    }
+  } else {
+    return { expected: false, sessions: [] };
+  }
+  const trimmed = String(raw).trim();
+  if (trimmed === '1' || trimmed === '') {
+    return { expected: true, sessions: [], legacy: fromLegacy };
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    const sessions = Array.isArray(parsed?.sessions)
+      ? parsed.sessions.filter((s) => typeof s === 'string' && isSafeSessionId(s))
+      : [];
+    return { expected: true, sessions, legacy: fromLegacy };
+  } catch {
+    // Corrupt sentinel still means the store was initialized.
+    return { expected: true, sessions: [] };
+  }
+}
+
+/**
+ * Persist sentinel, optionally registering sessionId in the denied-session set.
+ * @returns {boolean}
+ */
+function ensureDenyStoreSentinel(root, fs, sessionId = null) {
   const adlcDir = join(root, '.adlc');
   const sentinel = denyStoreSentinelPath(root);
   try {
     fs.mkdirSync(adlcDir, { recursive: true });
-    if (!fs.existsSync(sentinel)) {
-      fs.writeFileSync(sentinel, '1\n', 'utf8');
+    const cur = readDenyStoreSentinel(root, fs);
+    const set = new Set(cur.sessions);
+    if (typeof sessionId === 'string' && isSafeSessionId(sessionId)) {
+      set.add(sessionId);
     }
+    const body = `${JSON.stringify({ schema: 1, sessions: [...set].sort() })}\n`;
+    fs.writeFileSync(sentinel, body, 'utf8');
     return true;
   } catch {
     return false;
@@ -340,17 +395,12 @@ function ensureDenyStoreSentinel(root, fs) {
 }
 
 function denyStoreExpectedBySentinel(root, fs) {
-  // Only the handoff sentinel means a deny store was initialized. Ticket-store
-  // markers must not imply denies/ — otherwise every ADLC repo denies mutations
-  // before any handoff ever fires. Sentinel lives at `.adlc/.deny-store` so
-  // `rm -rf .adlc/handoffs` cannot clear expectation.
-  if (fs.existsSync(denyStoreSentinelPath(root))) return true;
-  // Migrate: old in-tree sentinel still means expected; rewrite to new location.
-  if (fs.existsSync(legacyDenyStoreSentinelPath(root))) {
-    ensureDenyStoreSentinel(root, fs);
-    return true;
-  }
-  return false;
+  return readDenyStoreSentinel(root, fs).expected;
+}
+
+function sessionRegisteredInDenyStore(root, fs, sessionId) {
+  if (!isSafeSessionId(sessionId)) return false;
+  return readDenyStoreSentinel(root, fs).sessions.includes(sessionId);
 }
 
 export function loadDenyRecords(
@@ -375,9 +425,14 @@ export function loadDenyRecords(
   const dir = join(root, '.adlc', 'handoffs', 'denies');
   const records = [];
   const invalidRecords = [];
+  const sentinelInfo = readDenyStoreSentinel(root, fs);
+  if (sentinelInfo.expected && sentinelInfo.legacy) {
+    ensureDenyStoreSentinel(root, fs);
+  }
+  const registeredSessions = readDenyStoreSentinel(root, fs).sessions;
   let expected;
   if (storeExpected === undefined || storeExpected === null) {
-    expected = denyStoreExpectedBySentinel(root, fs);
+    expected = sentinelInfo.expected;
   } else if (storeExpected === true) {
     expected = true;
   } else if (storeExpected === false) {
@@ -399,10 +454,11 @@ export function loadDenyRecords(
         reason: 'missing_deny_store',
         records,
         invalidRecords,
+        registeredSessions,
         denyStoreUnavailable: true,
       };
     }
-    return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
+    return { ok: true, records, invalidRecords, registeredSessions, denyStoreUnavailable: false };
   }
   let entries;
   try {
@@ -420,6 +476,7 @@ export function loadDenyRecords(
       reason: `readdir_failed:${err?.code || err?.message || 'error'}`,
       records,
       invalidRecords,
+      registeredSessions,
       denyStoreUnavailable: true,
     };
   }
@@ -444,9 +501,11 @@ export function loadDenyRecords(
       content_hash: null,
     });
   }
-  // Self-heal sentinel whenever any deny marker material exists.
-  if (records.length > 0 || invalidRecords.length > 0) {
-    ensureDenyStoreSentinel(root, fs);
+  // Self-heal sentinel from valid markers only (not invalid-only junk).
+  if (records.length > 0) {
+    for (const r of records) {
+      ensureDenyStoreSentinel(root, fs, r.session_id);
+    }
   }
 
   // Sentinel present but no marker files left → store was wiped in place.
@@ -462,10 +521,11 @@ export function loadDenyRecords(
       reason: 'emptied_deny_store',
       records,
       invalidRecords,
+      registeredSessions,
       denyStoreUnavailable: true,
     };
   }
-  return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
+  return { ok: true, records, invalidRecords, registeredSessions, denyStoreUnavailable: false };
 
 }
 
@@ -501,10 +561,21 @@ export function mutationGateInputFromLoad(
     !wellFormed ||
     loaded.ok === false ||
     loaded.denyStoreUnavailable === true;
+  const registered = wellFormed && Array.isArray(loaded.registeredSessions)
+    ? loaded.registeredSessions
+    : [];
+  const hasSelf = [...records, ...invalid].some(
+    (r) => r && r.session_id === currentSessionId,
+  );
+  const sticky =
+    processStickyDeny ||
+    (typeof currentSessionId === 'string' &&
+      registered.includes(currentSessionId) &&
+      !hasSelf);
   return {
     currentSessionId,
     denyRecords: [...records, ...invalid],
-    processStickyDeny,
+    processStickyDeny: sticky,
     resumeAuth,
     bypassForSession,
     manifestVerifyFailed,
@@ -538,10 +609,9 @@ export function evaluateMarkerOnReentry(
       return { deny: true, processSticky: false, reason: 'consumed_deny_persists' };
     }
     if (!check.ok && check.reason === 'missing_marker') {
-      // Per-session fact only: repo-global .deny-store must not sticky-deny
-      // never-denied sessions (contract test 8 / third session). Callers thread
-      // denyEverWritten; loadDenyRecords+D0 covers whole-tree wipe.
-      if (denyEverWritten) {
+      // Per-session fact: denyEverWritten OR session registered in sentinel.
+      // Repo-global sentinel presence alone must not sticky-deny strangers.
+      if (denyEverWritten || sessionRegisteredInDenyStore(root, io, sessionId)) {
         return { deny: true, processSticky: true, reason: 'marker_vanished' };
       }
       return { deny: false, processSticky: false, reason: 'no_handoff_no_marker' };

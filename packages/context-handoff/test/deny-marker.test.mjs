@@ -646,16 +646,20 @@ test('sentinel + emptied denies/ (files deleted, dir kept) is unavailable', () =
 });
 
 
-test('denyEverWritten makes cool reentry deny when marker vanished (not global sentinel)', () => {
+test('registered session or denyEverWritten makes cool reentry deny when marker vanished', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     ensureDenyMarker(root, { sessionId: 'vanish2', ticketId: null, contentHash: null });
     rmSync(denyPath(root, 'vanish2'), { force: true });
-    // Global sentinel alone must NOT sticky-deny; session-scoped flag does.
-    const without = evaluateMarkerOnReentry(root, 'vanish2', { absoluteHandoff: false });
-    assert.equal(without.deny, false);
-    assert.equal(without.reason, 'no_handoff_no_marker');
-    const cool = evaluateMarkerOnReentry(root, 'vanish2', {
+    // Session was registered in sentinel — selective delete still fails closed.
+    const registered = evaluateMarkerOnReentry(root, 'vanish2', { absoluteHandoff: false });
+    assert.equal(registered.deny, true);
+    assert.equal(registered.reason, 'marker_vanished');
+    // Never-denied stranger is not sticky-denied by the global bit alone.
+    const stranger = evaluateMarkerOnReentry(root, 'other', { absoluteHandoff: false });
+    assert.equal(stranger.deny, false);
+    assert.equal(stranger.reason, 'no_handoff_no_marker');
+    const cool = evaluateMarkerOnReentry(root, 'fresh', {
       absoluteHandoff: false,
       denyEverWritten: true,
     });
@@ -702,16 +706,13 @@ test('rm -rf handoffs/ still denies when .adlc/.deny-store remains', () => {
     );
     assert.equal(g.deny, true);
     assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
-    // Reentry helper is session-scoped; whole-tree wipe is D0 via loadDenyRecords.
+    // s1 was registered in the sentinel — selective/whole wipe still sticky-denies s1.
     const cool = evaluateMarkerOnReentry(root, 's1', { absoluteHandoff: false });
-    assert.equal(cool.deny, false);
-    assert.equal(cool.reason, 'no_handoff_no_marker');
-    const sticky = evaluateMarkerOnReentry(root, 's1', {
-      absoluteHandoff: false,
-      denyEverWritten: true,
-    });
-    assert.equal(sticky.deny, true);
-    assert.equal(sticky.reason, 'marker_vanished');
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'marker_vanished');
+    const stranger = evaluateMarkerOnReentry(root, 'stranger', { absoluteHandoff: false });
+    assert.equal(stranger.deny, false);
+    assert.equal(stranger.reason, 'no_handoff_no_marker');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -896,6 +897,57 @@ test('evaluateMarkerOnReentry requires strict boolean absoluteHandoff', () => {
     const cool = evaluateMarkerOnReentry(root, 'never', { absoluteHandoff: false });
     assert.equal(cool.deny, false);
     assert.equal(cool.reason, 'no_handoff_no_marker');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('selective delete of denier marker keeps D1 sticky via registeredSessions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'denier', ticketId: 'T154', contentHash: 'h' });
+    ensureDenyMarker(root, { sessionId: 'other', ticketId: 'T154', contentHash: 'h2' });
+    rmSync(denyPath(root, 'denier'), { force: true });
+    const loaded = loadDenyRecords(root);
+    assert.ok(loaded.registeredSessions.includes('denier'));
+    const input = mutationGateInputFromLoad(loaded, { currentSessionId: 'denier' });
+    assert.equal(input.processStickyDeny, true);
+    const g = evaluateMutationGate(input);
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.includes('D1:process_sticky'));
+    // Stranger session is not sticky from registration alone.
+    const other = mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' });
+    assert.equal(other.processStickyDeny, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker fails closed when sentinel write fails after marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const realWrite = writeFileSync;
+    const fs = {
+      mkdirSync,
+      renameSync,
+      existsSync,
+      readFileSync,
+      writeFileSync(path, data, enc) {
+        if (String(path).endsWith('.deny-store')) {
+          throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        }
+        return realWrite(path, data, enc);
+      },
+    };
+    const r = ensureDenyMarker(
+      root,
+      { sessionId: 's-sent', ticketId: 'T154', contentHash: 'h' },
+      { fs },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, 'sentinel_write_failed');
+    assert.equal(r.processSticky, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

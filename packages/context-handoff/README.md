@@ -36,8 +36,8 @@ denier remains D2.
 ## Deny-store expectation
 
 `loadDenyRecords` treats a missing `denies/` as unavailable only when
-`.adlc/.deny-store` exists (written by `ensureDenyMarker` after a verified
-marker). The sentinel is a sibling of `handoffs/` so deleting `handoffs/` alone
+`.adlc/.deny-store` exists (JSON `{schema,sessions}` written by `ensureDenyMarker`
+after a verified marker; sessions[] makes selective marker delete fail closed). The sentinel is a sibling of `handoffs/` so deleting `handoffs/` alone
 cannot clear expectation; full signed per-deny ledger is still deferred.
 Ticket-store presence alone does not expect denies. A legacy
 `.adlc/handoffs/.deny-store` is treated as expected and self-healed to the new

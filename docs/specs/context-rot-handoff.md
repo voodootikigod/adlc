@@ -78,8 +78,9 @@ ignore for D2 (still logged). Re-entry without readable self-marker: retry
 write + DENY until valid.
 
 Slice-1 durability for "deny store was initialized" is the filesystem sentinel
-`.adlc/.deny-store` (sibling of `handoffs/`, written only after a marker is
-verified on disk) plus the marker files under `denies/`. A signed per-deny
+`.adlc/.deny-store` (sibling of `handoffs/`, JSON `{schema,sessions}` written
+only after a marker is verified on disk; `sessions` lists denied session ids so
+selective marker delete cannot clear D2) plus the marker files under `denies/`. A signed per-deny
 manifest ledger is a later slice — until then, deleting `handoffs/` while the
 sentinel remains must surface store-unavailable (D0), and per-session
 marker-vanished sticky is caller-threaded (`denyEverWritten`), not the global
