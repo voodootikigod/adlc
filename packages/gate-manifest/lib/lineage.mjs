@@ -40,7 +40,7 @@ export function lineagePath(dir) {
 // `.lineage`'s read for the identical reason: `.gitignore` does not stop a
 // malicious branch from committing a file at an ignored path either.
 const MAX_LOCAL_JSON_BYTES = 4096;
-function readBoundedJsonNoFollow(path) {
+export function readBoundedJsonNoFollow(path) {
   // lstatSync FIRST, not just O_NOFOLLOW on the open (cross-platform finding):
   // O_NOFOLLOW's enforcement is not portable — it is not reliably honored by
   // Node's fs layer on Windows, where symlinks are reparse points handled
@@ -181,7 +181,7 @@ function readLineageToken(dir) {
   return token; // a corrupted/oversized/symlinked local token blocks nothing — mint a fresh segment instead
 }
 
-function writeLineageToken(dir, token) {
+export function writeLineageToken(dir, token) {
   mkdirSync(segmentDirPath(dir), { recursive: true });
   const p = lineagePath(dir);
   if (isSymlinkOrOtherNonRegular(p)) unlinkSync(p); // replace, never follow — see the SECURITY note above readLineageToken
@@ -385,7 +385,8 @@ export function recoverOpenSegment(dir = ADLC_DIR, { cwd = process.cwd() } = {})
   if (candidates.length > 1) {
     throw new Error(
       `ambiguous: ${candidates.length} committed segments declare branch "${branch}" as their own `
-      + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess`
+      + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess; `
+      + `run \`adlc gate-manifest adopt\` to see the candidates and choose which lineage this checkout continues`
     );
   }
   return { name: candidates[0], isNew: false };

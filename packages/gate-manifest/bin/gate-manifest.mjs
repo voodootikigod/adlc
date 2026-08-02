@@ -9,6 +9,7 @@ import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
 import { enable } from '../lib/enable.mjs';
+import { adopt } from '../lib/adopt.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
 import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
@@ -21,7 +22,8 @@ const USAGE =
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
-  '       enable [--write] [--json] [--allow-keyless]';
+  '       enable [--write] [--json] [--allow-keyless]\n' +
+  '       adopt  [<segment>] [--write] [--json]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -261,5 +263,34 @@ if (verb === 'enable') {
   pass(`dry-run: would write ${out.markerPath} to enable forest mode — re-run with --write to apply`);
 }
 
+// ── adopt ───────────────────────────────────────────────────────────────────
+// Operator remediation for an ambiguous lineage (spec §7.1(b)). With no
+// segment named, LISTS this branch's candidates; with one, adopts it after
+// applying the resolver's own authentication gate. Dry-run by default.
+if (verb === 'adopt') {
+  let out;
+  try {
+    out = adopt(flags.dir, { cwd: process.cwd(), key: getKey(process.env), segment: positionals[1] ?? null, write: flags.write });
+  } catch (err) {
+    opError(err.message);
+  }
+  const refused = out.decision.startsWith('refuse-');
+  if (flags.json) {
+    printJson(out); // exactly ONE JSON document on stdout, in every mode
+    process.exit(refused ? 2 : 0);
+  }
+  if (refused) gateFail(`adopt refused: ${out.reason}`);
+  if (out.decision === 'list') {
+    if (out.candidates.length === 0) pass(`no committed segments declare branch ${out.branch} — nothing to adopt`);
+    console.log(`candidate lineages for branch ${out.branch}:`);
+    for (const c of out.candidates) {
+      console.log(`  ${c.name}  entries=${c.entries}  first=${c.firstTs ?? '?'}  last=${c.lastTs ?? '?'}  authenticated=${c.authenticated}`);
+    }
+    pass('choose one and re-run: gate-manifest adopt <segment> --write');
+  }
+  if (out.written) pass(`adopted ${out.segment} — this checkout now extends that lineage`);
+  pass(`dry-run: would adopt ${out.segment} for branch ${out.branch} — re-run with --write to apply`);
+}
+
 // Unknown verb
-opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key | enable`);
+opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key | enable | adopt`);

@@ -846,7 +846,8 @@ export function recoverOpenSegment(dir, { cwd = dirname(dir) } = {}) {
   if (candidates.length > 1) {
     throw new Error(
       `ambiguous: ${candidates.length} committed segments declare branch "${branch}" as their own `
-      + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess`
+      + `(${candidates.sort().join(', ')}) and no local .lineage token disambiguates them — refusing to guess; `
+      + `run \`adlc gate-manifest adopt\` to see the candidates and choose which lineage this checkout continues`
     );
   }
   return { name: candidates[0], isNew: false };

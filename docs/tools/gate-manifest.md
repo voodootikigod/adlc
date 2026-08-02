@@ -33,7 +33,8 @@ gate-manifest verify [--json] [--dir path] [--allow-legacy-unsigned]
 gate-manifest show   [--ticket id] [--json] [--dir path]
 gate-manifest attest [--ticket id] [--dir path]
 gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
-gate-manifest enable [--write] [--json] [--dir path]
+gate-manifest enable [--write] [--json] [--dir path] [--allow-keyless]
+gate-manifest adopt  [<segment>] [--write] [--json] [--dir path]
 ```
 
 Prosecution, runner acceptance, rails evidence, and manual gate records use the
@@ -166,6 +167,32 @@ directory, the marker file, and a representative `*.jsonl` segment name). A
 rule targeting a specific branch-derived slug (e.g. `release-*.jsonl`) can
 still evade it — enforcing committability of each real segment at the moment
 it is minted belongs to the segment writer, deliberately outside `enable`.
+
+### adopt
+
+Choose which lineage this checkout continues, when more than one committed
+segment declares the current branch. Two clones of one branch that each write
+before seeing the other produce that state legitimately; every token-less
+write then fails closed rather than guess. `adopt` is the way out.
+
+```sh
+gate-manifest adopt                   # list this branch's candidate lineages
+gate-manifest adopt <segment> --write # bind this checkout to one of them
+```
+
+Listing shows each candidate's entry count, first/last timestamps, and
+whether it authenticates under the available key. Adopting writes only the
+gitignored local `.adlc/manifest.d/.lineage` token — **committed evidence is
+never edited**, and the segments you did not choose stay byte-identical.
+
+Because the token is a trust anchor (readers treat a token match as proof
+this checkout minted the segment and skip re-verification), adopt applies the
+same gate the writer applies to a recovered candidate: the chain must be
+intact and the branch-bearing **first entry** must carry a verified v2
+signature. Exit `2`, writing nothing, when: the repo is not segmented, HEAD
+is detached (no branch to bind to), the forest is keyed-mode but no key is
+available, the named segment is unknown, it declares a different branch, or
+it cannot be authenticated.
 
 ### attest
 
