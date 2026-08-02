@@ -235,33 +235,29 @@ export function resolveTarget(repoRoot, relFile) {
   if (!isContainedRelPath(relFile)) return null;
   const absolute = resolve(repoRoot, relFile);
   try {
-    // Containment is checked against REAL paths, and the parent is resolved so
-    // that EVERY intermediate component is followed. Checking only the leaf let a
-    // symlinked directory anywhere in the path smuggle the write outside the
-    // repo, while lstat on the leaf still reported an ordinary file.
     const rootReal = realpathSync(repoRoot);
-    const parentReal = realpathSync(dirname(absolute));
-    const rel = relative(rootReal, join(parentReal, basename(absolute)));
+    // FOLLOW SYMLINKS, because the mutation path does.
+    //
+    // Rejecting them here made recovery disagree with mutation: a symlinked
+    // source would be mutated through the link, and then the next run refused to
+    // recognise its own record and died on the dirty tree — leaving the mutant on
+    // disk. That is precisely the bug this feature exists to close, reopened for
+    // anyone whose source tree uses a symlink.
+    //
+    // Containment is enforced on the RESOLVED path, which is the one actually
+    // written, so a link that leaves the repository is still refused. realpathSync
+    // resolves every component, so an intermediate symlinked directory cannot
+    // smuggle the write out either.
+    const targetReal = realpathSync(absolute);
+    const rel = relative(rootReal, targetReal);
     if (rel.startsWith('..') || isAbsolute(rel)) return null;
-    // A symlink AT the target is likewise an arbitrary write.
-    if (lstatSync(absolute).isSymbolicLink()) return null;
+    return targetReal;
   } catch {
-    return null; // missing target, or a path we cannot resolve: never write it
+    // Missing, dangling, or unresolvable: there is nothing safe to restore.
+    return null;
   }
-  return absolute;
 }
 
-/**
- * Remove temp files a DEAD run left beside `target`.
- *
- * writeFileAtomic unlinks its own temp in a `finally`, which a SIGKILL never
- * runs. The orphan is untracked, and hollow-test refuses to run on a dirty tree,
- * so one leftover would wedge every later run — the same "clean up after us by
- * hand" failure this whole feature exists to remove.
- *
- * Only temps whose owning pid is definitely gone are swept, so a concurrent run's
- * in-progress write is never pulled out from under it.
- */
 export function sweepStaleTemps(target, { probe = probeOwner } = {}) {
   const dir = dirname(target);
   const prefix = `${basename(target)}.tmp-`;

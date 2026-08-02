@@ -16,6 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { symlinkSync as linkSync, lstatSync } from 'node:fs';
 
 // ── git helpers ──────────────────────────────────────────────────────────────
 
@@ -1887,5 +1888,79 @@ describe('CLI: in-flight record location and lifecycle', () => {
       'a finished run left its record behind — the next run would "recover" from stale state',
     );
     assert.equal(git(['status', '--porcelain'], dir).trim(), '');
+  });
+});
+
+describe('CLI: an interrupted run on a SYMLINKED source is still recovered', () => {
+  // Mutation writes THROUGH a symlink (replacing what it points at, so the link
+  // survives). Recovery therefore has to follow the link too. While it rejected
+  // symlinks outright the two disagreed: the mutation landed on the real file, and
+  // the next run refused to recognise its own record and died on the dirty tree —
+  // reopening the exact "interrupted run leaves a live mutant" bug for anyone
+  // whose source tree uses a symlink.
+  let dir;
+  let counter;
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-symrec-'));
+    counter = join(mkdtempSync(join(tmpdir(), 'hollow-count-')), 'trials');
+    initRepo(dir);
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'versions'));
+    mkdirSync(join(dir, 'test'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'symrec', type: 'module', private: true }));
+    writeFileSync(join(dir, 'versions', 'impl.mjs'), [
+      'export function classify(n) {',
+      "  if (n > 10) return 'big';",
+      "  if (n > 5) return 'mid';",
+      "  return 'small';",
+      '}',
+      '',
+    ].join('\n'));
+    linkSync(join(dir, 'versions', 'impl.mjs'), join(dir, 'src', 'alias.mjs'));
+    writeFileSync(join(dir, 'test', 'alias.test.mjs'), [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { classify } from '../src/alias.mjs';",
+      "test('classify', () => {",
+      "  assert.equal(classify(50), 'big');",
+      "  assert.equal(classify(7), 'mid');",
+      "  assert.equal(classify(1), 'small');",
+      '});',
+      "test('slow', async () => { await new Promise((r) => setTimeout(r, 900)); });",
+      '',
+    ].join('\n'));
+    commitAll(dir);
+    git(['checkout', '-b', 'feature'], dir);
+    writeFileSync(join(dir, 'versions', 'impl.mjs'),
+      `${readFileSync(join(dir, 'versions', 'impl.mjs'), 'utf8')}\nexport const TAG = 1;\n`);
+    commitAll(dir, 'change');
+  });
+  after(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('restores the link target and leaves the link itself intact', async () => {
+    // This repo's suite lives at test/alias.test.mjs, so it needs its own command
+    // rather than the shared counting helper (which names test/thing.test.mjs).
+    const testCmd = `node -e "require('node:fs').appendFileSync(process.argv[1], 'x')" ${counter} && node --test test/alias.test.mjs`;
+    const args = ['--base', 'main', '--target', 'src/alias.mjs', '--test-cmd', testCmd, '--max', '3'];
+    const child = spawn('node', [BIN, ...args], { cwd: dir, stdio: 'ignore' });
+    const exited = new Promise((r) => child.on('exit', r));
+    assert.ok(await waitForMutantOnDisk(dir), 'no mutant ever reached disk');
+    child.kill('SIGKILL');
+    await exited;
+    await sleep(300);
+    assert.notEqual(git(['status', '--porcelain'], dir).trim(), '', 'SIGKILL should have stranded a mutant');
+    assert.equal(lstatSync(join(dir, 'src', 'alias.mjs')).isSymbolicLink(), true, 'the run destroyed the symlink');
+
+    const result = runCli([...args, '--json'], dir);
+    assert.notEqual(result.status, 1, `refused to recover a symlinked target: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.ok(parsed.recovered, 'a symlinked target was not recovered');
+    // The record names the file that was actually WRITTEN — the link's target —
+    // not the alias it was reached through, which is the more precise thing to
+    // report and the path recovery has to restore.
+    assert.equal(parsed.recovered.file, 'versions/impl.mjs');
+
+    assert.equal(git(['status', '--porcelain'], dir).trim(), '', 'left the tree dirty');
+    assert.equal(lstatSync(join(dir, 'src', 'alias.mjs')).isSymbolicLink(), true, 'recovery destroyed the symlink');
   });
 });

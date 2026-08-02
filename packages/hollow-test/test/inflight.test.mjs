@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync, existsSync, readdirSync, statSync, chmodSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   probeOwner, isWellFormed, decideRecovery, isContainedRelPath, resolveTarget,
@@ -161,42 +162,46 @@ test('rejects any path that is absolute or climbs out of the repo', () => {
   assert.equal(isContainedRelPath(null), false);
 });
 
-test('resolveTarget refuses to hand back a path outside the repo or via a symlink', () => {
+test('resolveTarget follows symlinks but keeps the write inside the repo', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hollow-target-'));
+  const outside = mkdtempSync(join(tmpdir(), 'hollow-elsewhere-'));
   try {
     mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'versions'));
     writeFileSync(join(dir, 'src', 'thing.mjs'), 'x');
-    assert.equal(resolveTarget(dir, 'src/thing.mjs'), join(dir, 'src', 'thing.mjs'));
+    // realpath both sides: on macOS a temp dir is itself reached through a symlink.
+    assert.equal(resolveTarget(dir, 'src/thing.mjs'), realpathSync(join(dir, 'src', 'thing.mjs')));
 
-    // Escapes the repo.
+    // An IN-REPO symlink resolves to its target and is accepted — the mutation
+    // path writes through links, so recovery has to recognise them or an
+    // interrupted run on a symlinked source could never be recovered.
+    const real = join(dir, 'versions', 'impl.mjs');
+    writeFileSync(real, 'y');
+    symlinkSync(real, join(dir, 'src', 'alias.mjs'));
+    assert.equal(resolveTarget(dir, 'src/alias.mjs'), realpathSync(real));
+
+    // A link that LEAVES the repository is still refused: containment is checked
+    // on the resolved path, which is the one that actually gets written.
+    const victim = join(outside, 'victim.mjs');
+    writeFileSync(victim, 'do not touch');
+    symlinkSync(victim, join(dir, 'src', 'escape.mjs'));
+    assert.equal(resolveTarget(dir, 'src/escape.mjs'), null);
+
+    // An intermediate symlinked DIRECTORY cannot smuggle it out either.
+    symlinkSync(outside, join(dir, 'outdir'));
+    assert.equal(resolveTarget(dir, 'outdir/victim.mjs'), null);
+
+    // Lexical escapes and absolutes stay refused.
     assert.equal(resolveTarget(dir, '../escape.mjs'), null);
     assert.equal(resolveTarget(dir, '/etc/passwd'), null);
 
-    // A symlink at an in-repo path turns a contained write into an arbitrary one.
-    const outside = join(dir, 'outside.txt');
-    writeFileSync(outside, 'do not touch');
-    symlinkSync(outside, join(dir, 'src', 'link.mjs'));
-    assert.equal(resolveTarget(dir, 'src/link.mjs'), null);
-
-    // Nothing there to restore.
+    // Nothing there, or a dangling link: nothing safe to restore.
     assert.equal(resolveTarget(dir, 'src/missing.mjs'), null);
-
-    // An INTERMEDIATE symlink escapes just as effectively as a symlinked leaf,
-    // and lstat on the leaf still reports an ordinary file — so containment has
-    // to be checked against real paths, not the lexical ones.
-    const elsewhere = mkdtempSync(join(tmpdir(), 'hollow-elsewhere-'));
-    try {
-      writeFileSync(join(elsewhere, 'victim.mjs'), 'do not touch');
-      symlinkSync(elsewhere, join(dir, 'escape'));
-      assert.equal(
-        resolveTarget(dir, 'escape/victim.mjs'), null,
-        'a symlinked PARENT directory escaped containment',
-      );
-    } finally {
-      rmSync(elsewhere, { recursive: true, force: true });
-    }
+    symlinkSync(join(dir, 'src', 'nope.mjs'), join(dir, 'src', 'dangling.mjs'));
+    assert.equal(resolveTarget(dir, 'src/dangling.mjs'), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
