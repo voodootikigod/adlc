@@ -278,3 +278,59 @@ test('single-character currentSessionId is usable (D0 off-by-one)', () => {
   assert.deepEqual(g.reasons, []);
 });
 
+test('invalid/missing status fails closed under D3', () => {
+  for (const status of ['revoked', 'bogus', null, undefined]) {
+    const record = open({ session_id: 'denier' });
+    if (status === undefined) delete record.status;
+    else record.status = status;
+    const g = evaluateMutationGate({
+      currentSessionId: 'fresh',
+      denyRecords: [record],
+      resumeAuth: null,
+    });
+    assert.equal(g.deny, true, `status=${JSON.stringify(status)}`);
+    assert.ok(g.reasons.some((r) => r.startsWith('D3:invalid_record:')), g.reasons.join(','));
+  }
+});
+
+test('consumed status is valid and does not participate in D3', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open({ status: 'consumed' })],
+  });
+  assert.equal(g.deny, false);
+});
+
+test('bypass + manifestVerifyFailed does not authorize', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open()],
+    bypassForSession: true,
+    manifestVerifyFailed: true,
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.some((r) => r.startsWith('D3')));
+});
+
+test('bypass + manifestVerifyFailed does not lift D2', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 's1',
+    denyRecords: [open()],
+    bypassForSession: true,
+    manifestVerifyFailed: true,
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.includes('D2:denier_session'));
+});
+
+test('authorized() rejects when manifestVerifyFailed even with bypass', () => {
+  assert.equal(
+    authorized({
+      record: open(),
+      bypassForSession: true,
+      manifestVerifyFailed: true,
+    }),
+    false,
+  );
+});
+

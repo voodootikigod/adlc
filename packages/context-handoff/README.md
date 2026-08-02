@@ -21,5 +21,8 @@ node --test packages/context-handoff/test/*.test.mjs
 
 Signed deny-manifest ledger anchoring (every deny creation recorded in the
 hash-chained manifest) is deferred past this pure-helpers slice; slice-1
-contracts the filesystem marker + gate predicates only.
+contracts the filesystem marker + gate predicates only. Until that ledger
+exists, callers must thread process-local `processStickyDeny` /
+`denyEverWritten` into the gate and `evaluateMarkerOnReentry` so a deleted
+marker cannot silently clear a deny the process already wrote.
 

@@ -441,3 +441,35 @@ test('single-character sessionId is safe (kills length===0 off-by-one)', () => {
   assert.equal(isSafeSessionId(''), false);
 });
 
+test('denyEverWritten + missing marker ⇒ marker_vanished fail-closed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const r = evaluateMarkerOnReentry(root, 'gone', {
+      absoluteHandoff: false,
+      denyEverWritten: true,
+    });
+    assert.equal(r.deny, true);
+    assert.equal(r.processSticky, true);
+    assert.equal(r.reason, 'marker_vanished');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('write-then-delete with denyEverWritten stays denied on cool reentry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'vanish', ticketId: null, contentHash: null });
+    const path = denyPath(root, 'vanish');
+    rmSync(path, { force: true });
+    const cool = evaluateMarkerOnReentry(root, 'vanish', {
+      absoluteHandoff: false,
+      denyEverWritten: true,
+    });
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'marker_vanished');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

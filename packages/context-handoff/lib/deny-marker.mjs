@@ -268,7 +268,7 @@ export function quarantineJunkDenies(
 
     try {
       fs.mkdirSync(qDir, { recursive: true });
-      const dest = join(qDir, `${name}.${reason || 'junk'}`);
+      const dest = join(qDir, `${name}.${reason || 'junk'}.${Date.now()}`);
       fs.renameSync(full, dest);
       quarantined.push(name);
     } catch {
@@ -282,7 +282,11 @@ export function quarantineJunkDenies(
  * Re-entry: if absolute handoff still applies and marker missing/bad → sticky deny.
  * Cooling does not clear open or consumed self-deny (D2 sticky).
  */
-export function evaluateMarkerOnReentry(root, sessionId, { absoluteHandoff, fs } = {}) {
+export function evaluateMarkerOnReentry(
+  root,
+  sessionId,
+  { absoluteHandoff, fs, denyEverWritten = false } = {},
+) {
   assertSafeSessionId(sessionId);
   if (!absoluteHandoff) {
     const check = readDenyMarker(root, sessionId, { fs });
@@ -293,6 +297,10 @@ export function evaluateMarkerOnReentry(root, sessionId, { absoluteHandoff, fs }
       return { deny: true, processSticky: false, reason: 'consumed_deny_persists' };
     }
     if (!check.ok && check.reason === 'missing_marker') {
+      // Distinguishes "never denied" from "marker vanished" without a ledger.
+      if (denyEverWritten) {
+        return { deny: true, processSticky: true, reason: 'marker_vanished' };
+      }
       return { deny: false, processSticky: false, reason: 'no_handoff_no_marker' };
     }
     if (!check.ok) return { deny: true, processSticky: true, reason: check.reason };

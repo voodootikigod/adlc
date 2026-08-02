@@ -23,6 +23,18 @@ export function isUsableSessionId(sessionId) {
 }
 
 /**
+ * A deny record is shape-valid only when session_id is safe and status is
+ * exactly open|consumed. Anything else fails closed under D3.
+ * @param {unknown} record
+ * @returns {boolean}
+ */
+export function isValidDenyRecord(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (!isSafeSessionId(record.session_id)) return false;
+  return record.status === 'open' || record.status === 'consumed';
+}
+
+/**
  * Normalize bypass grant.
  * - false/null/absent → no bypass
  * - true → legacy bound-only (lifts D2 for current session; does NOT authorize unbound)
@@ -47,15 +59,25 @@ export function normalizeBypassGrant(bypassForSession) {
 
 /**
  * Per-record authorization (spec: universal quantification over open denies).
+ * Unverifiable/missing manifest ⇒ not authorized (including bypass).
  * Legacy `true` authorizes bound open records only; unbound needs
  * `{ unboundReason }` operator override.
  * @param {object} opts
  * @param {DenyRecord} opts.record
  * @param {ResumeAuth|null} [opts.resumeAuth]
  * @param {BypassGrant} [opts.bypassForSession=false]
+ * @param {boolean} [opts.manifestVerifyFailed=false]
  */
-export function authorized({ record, resumeAuth = null, bypassForSession = false } = {}) {
+export function authorized({
+  record,
+  resumeAuth = null,
+  bypassForSession = false,
+  manifestVerifyFailed = false,
+} = {}) {
   if (!record) return false;
+  // Spec: Unverifiable/missing manifest ⇒ not authorized.
+  if (manifestVerifyFailed) return false;
+
   const grant = normalizeBypassGrant(bypassForSession);
   const unbound = !isBoundField(record.ticket_id) || !isBoundField(record.content_hash);
 
@@ -101,15 +123,34 @@ export function evaluateMutationGate({
     return { deny: true, reasons };
   }
 
-  const grant = normalizeBypassGrant(bypassForSession);
+  // Manifest failure inertifies bypass (authorized + D2 lift).
+  const grant = manifestVerifyFailed
+    ? { active: false, allowUnbound: false }
+    : normalizeBypassGrant(bypassForSession);
+
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
   // Spec: active bypass can authorize denier briefly — do not push D2 when bypassed.
   if (self.length > 0 && !grant.active) reasons.push('D2:denier_session');
 
   const effectiveAuth = manifestVerifyFailed ? null : resumeAuth;
-  const open = denyRecords.filter((r) => r && r.status === 'open');
-  for (const r of open) {
-    if (!authorized({ record: r, resumeAuth: effectiveAuth, bypassForSession })) {
+  for (const r of denyRecords) {
+    if (!r) continue;
+    if (!isValidDenyRecord(r)) {
+      const label = typeof r.session_id === 'string' && r.session_id.length > 0 ? r.session_id : '?';
+      reasons.push(`D3:invalid_record:${label}`);
+      continue;
+    }
+    if (r.status !== 'open') continue;
+    if (
+      !authorized({
+        record: r,
+        resumeAuth: effectiveAuth,
+        bypassForSession: grant.active
+          ? bypassForSession
+          : false,
+        manifestVerifyFailed,
+      })
+    ) {
       reasons.push(`D3:unauthorized_open:${r.session_id}`);
     }
   }
