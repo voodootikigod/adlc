@@ -157,6 +157,12 @@ test('a diagnostic over unmeasured calls says it is counting CALLS, not spend', 
     unmeasured('flail-detector'), unmeasured('flail-detector'), unmeasured('flail-detector'),
     unmeasured('premortem'),
   ]));
+  // NON-VACUITY FIRST. Without this, `for (const d of found)` over an empty
+  // array runs zero assertions and reports success — which is exactly what this
+  // test did before review caught it, masking a diagnostics() that had never
+  // been updated at all.
+  assert.ok(found.length > 0, 'diagnostics must actually say something about an unmeasured ledger');
+  assert.ok(found.some((d) => /COUNTS, NOT SPEND/.test(d)), `the call-shape line is present: ${found}`);
   for (const d of found) {
     assert.match(d, /call/i, `a count-derived diagnostic must name itself: ${d}`);
     assert.ok(!/% of recorded spend/.test(d), `it must not claim to have measured spend: ${d}`);
@@ -165,7 +171,33 @@ test('a diagnostic over unmeasured calls says it is counting CALLS, not spend', 
 
 test('diagnostics never invent a token share for an unmeasured phase', () => {
   const found = diagnostics(aggregateSpend([unmeasured('flail-detector'), unmeasured('premortem')]));
+  assert.ok(found.length > 0, 'non-vacuity: there is something to check');
   for (const d of found) {
     assert.ok(!/\d+% of recorded spend/.test(d), `no spend percentage may be derived from counts: ${d}`);
   }
+});
+
+test('a phase whose P7 calls were merely UNMEASURED is not reported as missing P7', () => {
+  // "No P7 spend recorded — the compounding loop is broken" is a claim about
+  // work not happening. A P7 bucket holding unmeasured calls means the work DID
+  // happen and was not priced; saying it is broken would be the same
+  // unknown-read-as-zero this change exists to remove.
+  const found = diagnostics(aggregateSpend([
+    measured('prosecute', U(10_000, 1000)),
+    measured('spec-lint', U(1000, 100)),
+    unmeasured('lesson-foundry'),
+  ]));
+  assert.ok(!found.some((d) => /No P7/.test(d)), `P7 work happened, just unpriced: ${found}`);
+});
+
+test('a ledger with NO unmeasured calls produces no count-shape noise', () => {
+  // The new lines must not appear on a fully measured ledger — otherwise every
+  // existing operator gains a caveat that does not apply to them.
+  const found = diagnostics(aggregateSpend([
+    measured('flail-detector', U(10_000, 1000)),
+    measured('spec-lint', U(1000, 100)),
+  ]));
+  assert.ok(!found.some((d) => /COUNTS, NOT SPEND/.test(d)));
+  assert.ok(!found.some((d) => /MEASURED tokens only/.test(d)));
+  assert.ok(found.some((d) => /P4/.test(d)), 'the existing token diagnostics still fire');
 });

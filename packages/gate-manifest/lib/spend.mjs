@@ -183,10 +183,44 @@ export function aggregateSpend(entries) {
  */
 export function diagnostics(aggregate) {
   const { byPhase, total } = aggregate;
-  const phasesWithSpend = Object.keys(byPhase).filter((p) => p !== 'unphased');
-  if (phasesWithSpend.length < 2 || total.inputTokens + total.outputTokens === 0) return [];
-
+  const unmeasured = aggregate.unmeasuredCalls ?? 0;
   const out = [];
+
+  // A CALL-COUNT observation, kept rigidly separate from every spend claim
+  // below. It names itself as counting calls, and says why that is not a spend
+  // share, because a reader who mistakes one for the other gets a confident
+  // wrong answer: a P1 call against a frontier model and a P4 call on a cheap
+  // seat are one call each and can differ by orders of magnitude in cost.
+  const phasesWithCalls = Object.keys(byPhase).filter((p) => p !== 'unphased');
+  if (unmeasured > 0 && phasesWithCalls.length >= 2) {
+    const shape = phasesWithCalls
+      .sort()
+      .map((p) => `${p}=${byPhase[p].calls + byPhase[p].unmeasuredCalls}`)
+      .join(' ');
+    out.push(
+      `call(s) by phase — COUNTS, NOT SPEND: ${shape}. ${unmeasured} of these call(s) reported no ` +
+      'tokens, so this is the shape of where work happened, not a share of what it cost.'
+    );
+  }
+
+  const phasesWithSpend = Object.keys(byPhase).filter((p) => p !== 'unphased' && totalTokens(byPhase[p]) > 0);
+  if (phasesWithSpend.length < 2 || total.inputTokens + total.outputTokens === 0) {
+    // §8c: degraded data cannot silently pass. Saying nothing here is what let a
+    // ledger of real, unpriced calls look like a ledger of no activity.
+    if (unmeasured > 0) {
+      out.push(
+        `§6 spend shape is UNKNOWN: ${unmeasured} recorded call(s) reported no token counts, and fewer ` +
+        'than two phases have measured spend, so no share of spend can be computed from this ledger.'
+      );
+    }
+    return out;
+  }
+  if (unmeasured > 0) {
+    out.push(
+      `the §6 shares below are computed over MEASURED tokens only — ${unmeasured} further call(s) ` +
+      'reported none, so the true distribution may differ.'
+    );
+  }
   const share = (phase) => (byPhase[phase] ? totalTokens(byPhase[phase]) / (totalTokens(total) || 1) : 0);
 
   // "Spend concentrated in P4 → re-exploring the codebase every run" (ADLC.md §6).
@@ -211,6 +245,10 @@ export function diagnostics(aggregate) {
 
   // "Spend flat run-over-run → the compounding loop is broken" — same caveat: this
   // snapshot can't see run-over-run trend, only flag that P7 recorded nothing.
+  //
+  // A P7 bucket holding only UNMEASURED calls still means P7 work happened; the
+  // compounding loop is running and merely unpriced. Claiming it is broken there
+  // would be the same "unknown read as zero" this module now refuses.
   if (!byPhase.P7) {
     out.push(
       `No P7 (Distill) spend recorded — ADLC.md §6: "the compounding loop is broken" ` +
