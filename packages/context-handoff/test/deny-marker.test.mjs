@@ -434,3 +434,10 @@ test('isSafeSessionId matches assertSafeSessionId accept/reject set', () => {
     assert.throws(() => assertSafeSessionId(id), /unsafe sessionId/);
   }
 });
+
+test('single-character sessionId is safe (kills length===0 off-by-one)', () => {
+  assert.equal(isSafeSessionId('a'), true);
+  assert.equal(assertSafeSessionId('a'), true);
+  assert.equal(isSafeSessionId(''), false);
+});
+

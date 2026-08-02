@@ -268,3 +268,13 @@ test('path-separator and traversal sessionIds fail-closed D0', () => {
     assert.ok(g.reasons.includes('D0:invalid_session_id'));
   }
 });
+
+test('single-character currentSessionId is usable (D0 off-by-one)', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'a',
+    denyRecords: [],
+  });
+  assert.equal(g.deny, false);
+  assert.deepEqual(g.reasons, []);
+});
+
