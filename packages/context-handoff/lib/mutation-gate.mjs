@@ -11,6 +11,15 @@ export function isBoundField(value) {
 }
 
 /**
+ * Fail-closed session identity for the gate.
+ * @param {unknown} sessionId
+ * @returns {boolean}
+ */
+export function isUsableSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.trim().length > 0 && sessionId.trim() === sessionId;
+}
+
+/**
  * Per-record authorization (spec: universal quantification over open denies).
  * TTY bypass authorizes the caller briefly (including null-ticket/null-hash).
  * @param {object} opts
@@ -52,6 +61,12 @@ export function evaluateMutationGate({
   const reasons = [];
   // D1 is independent of TTY bypass.
   if (processStickyDeny) reasons.push('D1:process_sticky');
+
+  // Missing/blank/padded session identity cannot evaluate D2 — fail closed.
+  if (!isUsableSessionId(currentSessionId)) {
+    reasons.push('D0:invalid_session_id');
+    return { deny: true, reasons };
+  }
 
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
   // Spec: TTY bypass can authorize denier briefly — do not push D2 when bypassed.

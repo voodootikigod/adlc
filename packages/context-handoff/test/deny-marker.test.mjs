@@ -327,3 +327,37 @@ test('open deny persists when absolute cools below handoff', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('invalid_status marker denies on cool reentry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'bad-status');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({ session_id: 'bad-status', status: 'bogus', schema: 1 }),
+      'utf8',
+    );
+    const check = readDenyMarker(root, 'bad-status');
+    assert.equal(check.ok, false);
+    assert.equal(check.reason, 'invalid_status');
+    const cool = evaluateMarkerOnReentry(root, 'bad-status', { absoluteHandoff: false });
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'invalid_status');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('absolute handoff + valid marker ⇒ handoff_active deny', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'active', ticketId: 'T154', contentHash: 'h' });
+    const r = evaluateMarkerOnReentry(root, 'active', { absoluteHandoff: true });
+    assert.equal(r.deny, true);
+    assert.equal(r.processSticky, false);
+    assert.equal(r.reason, 'handoff_active');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

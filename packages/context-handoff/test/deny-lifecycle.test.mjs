@@ -80,3 +80,29 @@ test('missing/empty consumer session id cannot consume', () => {
   assert.equal(consumeDenyRecord(open, undefined).ok, false);
   assert.match(consumeDenyRecord(open, '  ').error, /missing consumer session id/);
 });
+
+
+test('whitespace-padded consumer session id rejected (same-session class)', () => {
+  const open = { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'open' };
+  assert.equal(consumeDenyRecord(open, 's1 ').ok, false);
+  assert.equal(consumeDenyRecord(open, ' s1').ok, false);
+  assert.equal(consumeDenyRecord(open, 's1\t').ok, false);
+  assert.match(consumeDenyRecord(open, 's1 ').error, /padded/);
+});
+
+test('cannot consume already-consumed or non-open record', () => {
+  assert.equal(
+    consumeDenyRecord(
+      { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'consumed' },
+      's2',
+    ).ok,
+    false,
+  );
+  assert.equal(
+    consumeDenyRecord(
+      { session_id: 's1', ticket_id: 'T154', content_hash: 'h', status: 'bogus' },
+      's2',
+    ).ok,
+    false,
+  );
+});

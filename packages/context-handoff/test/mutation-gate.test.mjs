@@ -213,3 +213,17 @@ test('D1 process sticky', () => {
   assert.equal(g.deny, true);
   assert.ok(g.reasons.includes('D1:process_sticky'));
 });
+
+
+test('missing/empty/padded currentSessionId fail-closed', () => {
+  const consumed = open({ status: 'consumed' });
+  for (const id of [undefined, null, '', '  ', 's1 ']) {
+    const g = evaluateMutationGate({
+      currentSessionId: id,
+      denyRecords: [consumed],
+      resumeAuth: null,
+    });
+    assert.equal(g.deny, true, `expected deny for currentSessionId=${JSON.stringify(id)}`);
+    assert.ok(g.reasons.includes('D0:invalid_session_id'));
+  }
+});

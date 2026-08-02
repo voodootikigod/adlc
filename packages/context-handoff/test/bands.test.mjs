@@ -11,6 +11,8 @@ import {
   HANDOFF_PCT,
   HARD_PCT,
   HANDOFF_BYTES,
+  HARD_DEPTH,
+  HARD_BYTES,
   HANDOFF_COOLDOWN_TOOLS,
 } from '../lib/thresholds.mjs';
 
@@ -79,4 +81,11 @@ test('cooldown suppresses nags but not deny', () => {
   });
   assert.equal(nags.suppressNags, true);
   assert.equal(handoffDenyActive(bands, nags), true);
+});
+
+test('hard OR-join via depth and bytes', () => {
+  assert.equal(evaluateBands({ pct: 10, depth: HARD_DEPTH }).hard, true);
+  assert.equal(isHardDegraded({ pct: 10, depth: HARD_DEPTH }), true);
+  assert.equal(evaluateBands({ pct: 10, bytes: HARD_BYTES }).hard, true);
+  assert.equal(isHardDegraded({ pct: 10, bytes: HARD_BYTES }), true);
 });
