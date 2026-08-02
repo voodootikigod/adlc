@@ -386,8 +386,21 @@ function ensureDenyStoreSentinel(root, fs, sessionId = null) {
     if (typeof sessionId === 'string' && isSafeSessionId(sessionId)) {
       set.add(sessionId);
     }
-    const body = `${JSON.stringify({ schema: 1, sessions: [...set].sort() })}\n`;
-    fs.writeFileSync(sentinel, body, 'utf8');
+    const next = [...set].sort();
+    // Skip rewrite when membership unchanged and new-format sentinel already present.
+    if (
+      cur.expected &&
+      !cur.legacy &&
+      next.length === cur.sessions.length &&
+      next.every((s, i) => s === [...cur.sessions].sort()[i]) &&
+      fs.existsSync(sentinel)
+    ) {
+      return true;
+    }
+    const body = `${JSON.stringify({ schema: 1, sessions: next })}\n`;
+    const tmp = `${sentinel}.tmp`;
+    fs.writeFileSync(tmp, body, 'utf8');
+    fs.renameSync(tmp, sentinel);
     return true;
   } catch {
     return false;
@@ -412,6 +425,7 @@ export function loadDenyRecords(
       readFileSync,
       mkdirSync,
       writeFileSync,
+      renameSync,
     },
     /**
      * When true, a missing/emptied denies/ directory is unavailable — not a clean store.
@@ -501,10 +515,18 @@ export function loadDenyRecords(
       content_hash: null,
     });
   }
-  // Self-heal sentinel from valid markers only (not invalid-only junk).
+  // Self-heal once if valid markers exist but sentinel membership is missing them.
   if (records.length > 0) {
-    for (const r of records) {
-      ensureDenyStoreSentinel(root, fs, r.session_id);
+    const need = records.map((r) => r.session_id).filter((id) => !registeredSessions.includes(id));
+    if (need.length > 0 || !fs.existsSync(denyStoreSentinelPath(root))) {
+      for (const id of records.map((r) => r.session_id)) {
+        ensureDenyStoreSentinel(root, fs, id);
+      }
+      registeredSessions.splice(
+        0,
+        registeredSessions.length,
+        ...readDenyStoreSentinel(root, fs).sessions,
+      );
     }
   }
 
@@ -525,6 +547,23 @@ export function loadDenyRecords(
       denyStoreUnavailable: true,
     };
   }
+
+  // Registered sessions with no on-disk marker: selective delete must not clear D3
+  // for other sessions (consumed markers alone must not hide a deleted open deny).
+  for (const sid of registeredSessions) {
+    const present =
+      records.some((r) => r.session_id === sid) ||
+      invalidRecords.some((r) => r.session_id === sid);
+    if (!present) {
+      invalidRecords.push({
+        session_id: sid,
+        status: 'invalid:missing_registered_marker',
+        ticket_id: null,
+        content_hash: null,
+      });
+    }
+  }
+
   return { ok: true, records, invalidRecords, registeredSessions, denyStoreUnavailable: false };
 
 }

@@ -903,7 +903,7 @@ test('evaluateMarkerOnReentry requires strict boolean absoluteHandoff', () => {
 });
 
 
-test('selective delete of denier marker keeps D1 sticky via registeredSessions', () => {
+test('selective delete of open deny keeps D3 for all sessions via registeredSessions', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     ensureDenyMarker(root, { sessionId: 'denier', ticketId: 'T154', contentHash: 'h' });
@@ -911,14 +911,26 @@ test('selective delete of denier marker keeps D1 sticky via registeredSessions',
     rmSync(denyPath(root, 'denier'), { force: true });
     const loaded = loadDenyRecords(root);
     assert.ok(loaded.registeredSessions.includes('denier'));
-    const input = mutationGateInputFromLoad(loaded, { currentSessionId: 'denier' });
-    assert.equal(input.processStickyDeny, true);
-    const g = evaluateMutationGate(input);
-    assert.equal(g.deny, true);
-    assert.ok(g.reasons.includes('D1:process_sticky'));
-    // Stranger session is not sticky from registration alone.
-    const other = mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' });
-    assert.equal(other.processStickyDeny, false);
+    assert.ok(
+      loaded.invalidRecords.some(
+        (r) => r.session_id === 'denier' && r.status === 'invalid:missing_registered_marker',
+      ),
+    );
+    const denierG = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'denier' }),
+    );
+    assert.equal(denierG.deny, true);
+    assert.ok(
+      denierG.reasons.includes('D2:denier_session') ||
+        denierG.reasons.some((r) => r.startsWith('D3:invalid_record:denier')),
+      JSON.stringify(denierG.reasons),
+    );
+    // Fresh session must still be denied (D3), not allowed because a consumed/other marker remains.
+    const freshG = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(freshG.deny, true);
+    assert.ok(freshG.reasons.some((r) => r.startsWith('D3:invalid_record:denier')));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -934,7 +946,7 @@ test('ensureDenyMarker fails closed when sentinel write fails after marker', () 
       existsSync,
       readFileSync,
       writeFileSync(path, data, enc) {
-        if (String(path).endsWith('.deny-store')) {
+        if (String(path).endsWith('.deny-store.tmp') || String(path).endsWith('.deny-store')) {
           throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
         }
         return realWrite(path, data, enc);
