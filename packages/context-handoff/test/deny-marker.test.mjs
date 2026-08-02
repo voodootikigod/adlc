@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,8 +8,9 @@ import {
   readDenyMarker,
   evaluateMarkerOnReentry,
   denyPath,
+  quarantineJunkDenies,
+  assertSafeSessionId,
 } from '../lib/deny-marker.mjs';
-import { writeFileSync, mkdirSync } from 'node:fs';
 
 test('ensureDenyMarker writes readable open record', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
@@ -21,6 +22,145 @@ test('ensureDenyMarker writes readable open record', () => {
     assert.equal(check.ok, true);
     assert.equal(check.record.status, 'open');
     assert.equal(check.record.ticket_id, 'T154');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker does not clobber consumed marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'sess-consumed');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        session_id: 'sess-consumed',
+        ticket_id: 'T154',
+        content_hash: 'bound-hash',
+        status: 'consumed',
+        since: '2026-01-01T00:00:00.000Z',
+        host: 'host',
+        schema: 1,
+      }),
+      'utf8',
+    );
+    const r = ensureDenyMarker(root, {
+      sessionId: 'sess-consumed',
+      ticketId: 'OTHER',
+      contentHash: 'clobber',
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.reason, 'already_present');
+    const check = readDenyMarker(root, 'sess-consumed');
+    assert.equal(check.record.status, 'consumed');
+    assert.equal(check.record.ticket_id, 'T154');
+    assert.equal(check.record.content_hash, 'bound-hash');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ensureDenyMarker does not clobber host-repaired ticket_id/content_hash', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'sess-repaired');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        session_id: 'sess-repaired',
+        ticket_id: 'T154',
+        content_hash: 'host-bound',
+        status: 'open',
+        since: '2026-01-01T00:00:00.000Z',
+        host: 'repair',
+        schema: 1,
+      }),
+      'utf8',
+    );
+    const before = readFileSync(path, 'utf8');
+    const r = ensureDenyMarker(root, {
+      sessionId: 'sess-repaired',
+      ticketId: null,
+      contentHash: null,
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.reason, 'already_present');
+    assert.equal(readFileSync(path, 'utf8'), before);
+    const check = readDenyMarker(root, 'sess-repaired');
+    assert.equal(check.record.ticket_id, 'T154');
+    assert.equal(check.record.content_hash, 'host-bound');
+    assert.equal(check.record.status, 'open');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('path traversal sessionId rejected', () => {
+  assert.throws(() => assertSafeSessionId('../escape'), /unsafe sessionId/);
+  assert.throws(() => assertSafeSessionId('a/b'), /unsafe sessionId/);
+  assert.throws(() => assertSafeSessionId('a\\b'), /unsafe sessionId/);
+  assert.throws(() => assertSafeSessionId(''), /unsafe sessionId/);
+  assert.throws(() => denyPath('/tmp', '../escape'), /unsafe sessionId/);
+  assert.throws(() => ensureDenyMarker('/tmp', { sessionId: '..' }), /unsafe sessionId/);
+  assert.throws(
+    () => evaluateMarkerOnReentry('/tmp', 'foo/../bar', { absoluteHandoff: false }),
+    /unsafe sessionId/,
+  );
+});
+
+test('quarantineJunkDenies moves junk, leaves valid marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    mkdirSync(denies, { recursive: true });
+    ensureDenyMarker(root, { sessionId: 'good', ticketId: 'T154', contentHash: 'h1' });
+    writeFileSync(join(denies, 'notes.txt'), 'not json', 'utf8');
+    writeFileSync(join(denies, 'bad.json'), '{not-json', 'utf8');
+    writeFileSync(join(denies, 'pending.tmp'), 'tmp', 'utf8');
+    const result = quarantineJunkDenies(root);
+    assert.ok(result.kept.includes('good.json'));
+    assert.ok(result.quarantined.includes('notes.txt'));
+    assert.ok(result.quarantined.includes('bad.json'));
+    assert.ok(!result.quarantined.includes('pending.tmp'));
+    assert.equal(readDenyMarker(root, 'good').ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('consumed marker still denies on cooling reentry', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const path = denyPath(root, 'cool-consumed');
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        session_id: 'cool-consumed',
+        ticket_id: 'T154',
+        content_hash: 'h',
+        status: 'consumed',
+        schema: 1,
+      }),
+      'utf8',
+    );
+    const r = evaluateMarkerOnReentry(root, 'cool-consumed', { absoluteHandoff: false });
+    assert.equal(r.deny, true);
+    assert.equal(r.reason, 'consumed_deny_persists');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('missing marker reason is exactly missing_marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    const check = readDenyMarker(root, 'absent');
+    assert.equal(check.ok, false);
+    assert.equal(check.deny, true);
+    assert.equal(check.reason, 'missing_marker');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -81,6 +221,7 @@ test('re-entry with absolute handoff + missing marker ⇒ sticky deny + retry', 
     assert.equal(r.deny, true);
     assert.equal(r.processSticky, true);
     assert.equal(r.retryWrite, true);
+    assert.equal(r.reason, 'missing_marker');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

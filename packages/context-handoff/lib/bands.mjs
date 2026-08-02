@@ -9,6 +9,7 @@ import {
   HANDOFF_BYTES,
   HARD_BYTES,
   MIN_REMAINING_TO_HARD,
+  HANDOFF_COOLDOWN_TOOLS,
 } from './thresholds.mjs';
 
 /**
@@ -19,7 +20,6 @@ import {
  * @param {number} [observed.pct]
  * @param {number} [observed.depth]
  * @param {number} [observed.bytes]
- * @param {boolean} [observed.compacted]
  */
 export function evaluateBands(observed = {}) {
   const past = (value, warnAt, handoffAt, hardAt) => {
@@ -36,12 +36,11 @@ export function evaluateBands(observed = {}) {
   const pct = past(observed.pct, WARN_PCT, HANDOFF_PCT, HARD_PCT);
   const depth = past(observed.depth, WARN_DEPTH, HANDOFF_DEPTH, HARD_DEPTH);
   const bytes = past(observed.bytes, WARN_BYTES, HANDOFF_BYTES, HARD_BYTES);
-  const compactedHard = observed.compacted === true;
 
   return {
     warn: pct.warn || depth.warn || bytes.warn,
     handoff: pct.handoff || depth.handoff || bytes.handoff,
-    hard: pct.hard || depth.hard || bytes.hard || compactedHard,
+    hard: pct.hard || depth.hard || bytes.hard,
   };
 }
 
@@ -65,14 +64,14 @@ export function remainingToHard(floor = {}) {
  * @param {object} [opts.floor]
  * @param {number} [opts.minRemaining=MIN_REMAINING_TO_HARD]
  * @param {number} [opts.toolsSinceResume=0]
- * @param {number} [opts.cooldownTools]
+ * @param {number} [opts.cooldownTools=HANDOFF_COOLDOWN_TOOLS]
  * @returns {{ suppressNags: boolean, reason: string }}
  */
 export function nagSuppression({
   floor = {},
   minRemaining = MIN_REMAINING_TO_HARD,
   toolsSinceResume = 0,
-  cooldownTools = 15,
+  cooldownTools = HANDOFF_COOLDOWN_TOOLS,
 } = {}) {
   const rem = remainingToHard(floor);
   if (rem !== null && rem < minRemaining) {

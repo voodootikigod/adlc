@@ -1,11 +1,38 @@
-import { mkdirSync, writeFileSync, readFileSync, renameSync, existsSync } from 'node:fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  existsSync,
+  readdirSync,
+} from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 
 /**
  * Fail-closed deny marker helpers. Injectable fs for tests.
  */
 
+/**
+ * Reject empty / path-separators / `..` / basename mismatch so deny paths
+ * cannot escape `.adlc/handoffs/denies/`.
+ * @param {unknown} sessionId
+ * @returns {true}
+ */
+export function assertSafeSessionId(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throw new Error('unsafe sessionId: empty');
+  }
+  if (sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('..')) {
+    throw new Error('unsafe sessionId: path traversal');
+  }
+  if (basename(sessionId) !== sessionId) {
+    throw new Error('unsafe sessionId: basename mismatch');
+  }
+  return true;
+}
+
 export function denyPath(root, sessionId) {
+  assertSafeSessionId(sessionId);
   return join(root, '.adlc', 'handoffs', 'denies', `${sessionId}.json`);
 }
 
@@ -44,6 +71,8 @@ export function readDenyMarker(root, sessionId, { fs = { readFileSync, existsSyn
 
 /**
  * Ensure marker exists; on failure return processSticky recommendation.
+ * Idempotent: never rewrite an already-valid open or consumed marker
+ * (preserves host-repaired ticket_id/content_hash and consumed status).
  * @returns {{ ok: boolean, processSticky: boolean, reason: string }}
  */
 export function ensureDenyMarker(
@@ -54,6 +83,12 @@ export function ensureDenyMarker(
     now = () => new Date().toISOString(),
   } = {},
 ) {
+  assertSafeSessionId(sessionId);
+  const existing = readDenyMarker(root, sessionId, { fs });
+  if (existing.ok) {
+    return { ok: true, processSticky: false, reason: 'already_present' };
+  }
+
   const path = denyPath(root, sessionId);
   const dir = dirname(path);
   const record = {
@@ -85,14 +120,97 @@ export function ensureDenyMarker(
 }
 
 /**
+ * Move junk under denies/ into denies/quarantine/. Skips quarantine/ and *.tmp.
+ * Junk: non-.json, unsafe session names, corrupt/mismatch markers.
+ * @returns {{ quarantined: string[], kept: string[] }}
+ */
+export function quarantineJunkDenies(
+  root,
+  {
+    fs = {
+      mkdirSync,
+      renameSync,
+      existsSync,
+      readdirSync,
+      readFileSync,
+    },
+  } = {},
+) {
+  const dir = join(root, '.adlc', 'handoffs', 'denies');
+  const quarantined = [];
+  const kept = [];
+  if (!fs.existsSync(dir)) {
+    return { quarantined, kept };
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return { quarantined, kept };
+  }
+
+  const qDir = join(dir, 'quarantine');
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    const isDir = typeof entry === 'string' ? false : entry.isDirectory();
+    if (name === 'quarantine' || isDir) continue;
+    if (name.endsWith('.tmp')) continue;
+
+    const full = join(dir, name);
+    let junk = false;
+    let reason = '';
+
+    if (!name.endsWith('.json')) {
+      junk = true;
+      reason = 'non_json';
+    } else {
+      const sessionId = name.slice(0, -'.json'.length);
+      try {
+        assertSafeSessionId(sessionId);
+      } catch {
+        junk = true;
+        reason = 'unsafe_session_id';
+      }
+      if (!junk) {
+        const check = readDenyMarker(root, sessionId, { fs });
+        if (!check.ok) {
+          junk = true;
+          reason = check.reason;
+        }
+      }
+    }
+
+    if (!junk) {
+      kept.push(name);
+      continue;
+    }
+
+    try {
+      fs.mkdirSync(qDir, { recursive: true });
+      const dest = join(qDir, `${name}.${reason || 'junk'}`);
+      fs.renameSync(full, dest);
+      quarantined.push(name);
+    } catch {
+      // fail-closed callers still treat unreadables as deny; skip move errors
+    }
+  }
+  return { quarantined, kept };
+}
+
+/**
  * Re-entry: if absolute handoff still applies and marker missing/bad → sticky deny.
+ * Cooling does not clear open or consumed self-deny (D2 sticky).
  */
 export function evaluateMarkerOnReentry(root, sessionId, { absoluteHandoff, fs } = {}) {
+  assertSafeSessionId(sessionId);
   if (!absoluteHandoff) {
     const check = readDenyMarker(root, sessionId, { fs });
-    // Cooling does not clear open deny if marker exists
     if (check.ok && check.record?.status === 'open') {
       return { deny: true, processSticky: false, reason: 'open_deny_persists' };
+    }
+    if (check.ok && check.record?.status === 'consumed') {
+      return { deny: true, processSticky: false, reason: 'consumed_deny_persists' };
     }
     if (!check.ok && check.reason === 'missing_marker') {
       return { deny: false, processSticky: false, reason: 'no_handoff_no_marker' };

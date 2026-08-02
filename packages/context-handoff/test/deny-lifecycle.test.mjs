@@ -39,3 +39,18 @@ test('cannot consume without hash/ticket', () => {
     false,
   );
 });
+
+test('null content_hash cannot consume', () => {
+  const r = consumeDenyRecord(
+    { session_id: 's1', ticket_id: 'T154', content_hash: null, status: 'open' },
+    's2',
+  );
+  assert.equal(r.ok, false);
+  assert.match(r.error, /cannot consume/);
+});
+
+test('null/missing record cannot consume', () => {
+  assert.equal(consumeDenyRecord(null, 's2').ok, false);
+  assert.equal(consumeDenyRecord(undefined, 's2').ok, false);
+  assert.match(consumeDenyRecord(null, 's2').error, /missing deny record/);
+});

@@ -47,6 +47,43 @@ test('authorized requires matching ticket_id and content_hash', () => {
   );
 });
 
+test('authorized(null record) === false', () => {
+  assert.equal(authorized({ record: null }), false);
+  assert.equal(authorized({}), false);
+});
+
+test('verified:false resume-auth does not authorize', () => {
+  assert.equal(
+    authorized({
+      record: open(),
+      resumeAuth: { ticket_id: 'T154', content_hash: 'abc', verified: false },
+    }),
+    false,
+  );
+});
+
+test('bypassForSession lifts D2 for denier', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 's1',
+    denyRecords: [open()],
+    bypassForSession: true,
+  });
+  assert.equal(g.deny, false);
+  assert.ok(!g.reasons.some((r) => r.startsWith('D2')));
+});
+
+test('bypass does NOT lift D1', () => {
+  const g = evaluateMutationGate({
+    processStickyDeny: true,
+    currentSessionId: 's1',
+    denyRecords: [open()],
+    bypassForSession: true,
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.includes('D1:process_sticky'));
+  assert.ok(!g.reasons.some((r) => r.startsWith('D2')));
+});
+
 test('D2: denier session always denied even with resume-auth', () => {
   const g = evaluateMutationGate({
     currentSessionId: 's1',
@@ -65,6 +102,16 @@ test('D3: fresh session denied without auth for open record', () => {
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.some((r) => r.startsWith('D3')));
+});
+
+test('D3 cleared for ONLY consumed records WITHOUT resume-auth', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open({ session_id: 's1', status: 'consumed' })],
+    resumeAuth: null,
+  });
+  assert.equal(g.deny, false);
+  assert.deepEqual(g.reasons, []);
 });
 
 test('D3 cleared for consumed record when other open denies authorized', () => {
@@ -93,6 +140,16 @@ test('multi-open-deny: must authorize every open record', () => {
   });
   assert.equal(g.deny, true);
   assert.ok(g.reasons.some((r) => r.includes('b')));
+});
+
+test('wrong-hash resume-auth does not authorize', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [open()],
+    resumeAuth: { ticket_id: 'T154', content_hash: 'WRONG', verified: true },
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.some((r) => r.startsWith('D3')));
 });
 
 test('manifest verify failure treats resume-auth as absent', () => {

@@ -7,6 +7,7 @@
 
 /**
  * Per-record authorization (spec: universal quantification over open denies).
+ * TTY bypass authorizes the caller briefly (including null-ticket/null-hash).
  * @param {object} opts
  * @param {DenyRecord} opts.record
  * @param {ResumeAuth|null} [opts.resumeAuth]
@@ -44,10 +45,12 @@ export function evaluateMutationGate({
   manifestVerifyFailed = false,
 } = {}) {
   const reasons = [];
+  // D1 is independent of TTY bypass.
   if (processStickyDeny) reasons.push('D1:process_sticky');
 
   const self = denyRecords.filter((r) => r && r.session_id === currentSessionId);
-  if (self.length > 0) reasons.push('D2:denier_session');
+  // Spec: TTY bypass can authorize denier briefly — do not push D2 when bypassed.
+  if (self.length > 0 && !bypassForSession) reasons.push('D2:denier_session');
 
   const effectiveAuth = manifestVerifyFailed ? null : resumeAuth;
   const open = denyRecords.filter((r) => r && r.status === 'open');
