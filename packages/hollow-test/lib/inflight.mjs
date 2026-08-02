@@ -10,7 +10,7 @@
 // package's tests once per mutant.
 
 import {
-  openSync, closeSync, writeFileSync, renameSync, unlinkSync, readdirSync,
+  openSync, closeSync, writeFileSync, fchmodSync, renameSync, unlinkSync, readdirSync,
   readFileSync, existsSync, lstatSync, statSync, chmodSync, realpathSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
@@ -181,14 +181,27 @@ export function writeFileAtomic(path, contents, { tempPath = null } = {}) {
   // 'wx' is O_CREAT|O_EXCL: refuses an existing path rather than following it.
   const fd = openSync(tmp, 'wx');
   let created = true;
+  let open = true;
   try {
+    // EVERYTHING THROUGH THE DESCRIPTOR, never by re-opening the path.
+    //
+    // Closing the fd and reopening `tmp` by name leaves a window in which another
+    // process can unlink our temp and drop a symlink in its place — after which we
+    // would write the bytes straight through it, reopening the very outside-repo
+    // clobber O_EXCL was added to close. The descriptor is bound to the inode we
+    // created, so path games after this point cannot redirect the write.
+    //
+    // writeFileSync accepts an fd and loops internally, so a short write cannot
+    // silently truncate either.
+    writeFileSync(fd, contents);
+    if (mode !== null) fchmodSync(fd, mode);
     closeSync(fd);
-    // writeFileSync loops internally, so a short write cannot silently truncate.
-    writeFileSync(tmp, contents);
-    if (mode !== null) chmodSync(tmp, mode);
+    open = false;
     renameSync(tmp, realPath);
     created = false; // renamed away; nothing left to clean up
   } finally {
+    // A throw before the close above would otherwise leak the descriptor.
+    if (open) { try { closeSync(fd); } catch { /* ignore */ } }
     // Never leave litter: an orphaned *.tmp-* is untracked, and hollow-test
     // refuses to run on a dirty tree — so a failure here would wedge the NEXT run.
     if (created) {

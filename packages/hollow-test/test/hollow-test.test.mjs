@@ -1931,9 +1931,14 @@ describe('CLI: an interrupted run on a SYMLINKED source is still recovered', () 
     ].join('\n'));
     commitAll(dir);
     git(['checkout', '-b', 'feature'], dir);
-    writeFileSync(join(dir, 'versions', 'impl.mjs'),
-      `${readFileSync(join(dir, 'versions', 'impl.mjs'), 'utf8')}\nexport const TAG = 1;\n`);
-    commitAll(dir, 'change');
+    // TEST-ONLY diff, deliberately. If the real file behind the link were
+    // diff-eligible it would become a target in its own right (diff-derived
+    // targets are prepended before an explicit --target), and this case would then
+    // exercise the ORDINARY path while appearing to cover the symlinked one — it
+    // would keep passing even if resolveTarget regressed to rejecting symlinks.
+    writeFileSync(join(dir, 'test', 'alias.test.mjs'),
+      `${readFileSync(join(dir, 'test', 'alias.test.mjs'), 'utf8')}\ntest('extra', () => {});\n`);
+    commitAll(dir, 'test-only change');
   });
   after(() => { rmSync(dir, { recursive: true, force: true }); });
 
@@ -1948,17 +1953,21 @@ describe('CLI: an interrupted run on a SYMLINKED source is still recovered', () 
     child.kill('SIGKILL');
     await exited;
     await sleep(300);
-    assert.notEqual(git(['status', '--porcelain'], dir).trim(), '', 'SIGKILL should have stranded a mutant');
+    // The mutation lands on what the link POINTS AT, and the link survives.
+    assert.match(
+      git(['status', '--porcelain'], dir), /versions\/impl\.mjs/,
+      'the mutation did not go through the symlink to its target',
+    );
     assert.equal(lstatSync(join(dir, 'src', 'alias.mjs')).isSymbolicLink(), true, 'the run destroyed the symlink');
 
     const result = runCli([...args, '--json'], dir);
     assert.notEqual(result.status, 1, `refused to recover a symlinked target: ${result.stderr}`);
     const parsed = JSON.parse(result.stdout);
     assert.ok(parsed.recovered, 'a symlinked target was not recovered');
-    // The record names the file that was actually WRITTEN — the link's target —
-    // not the alias it was reached through, which is the more precise thing to
-    // report and the path recovery has to restore.
-    assert.equal(parsed.recovered.file, 'versions/impl.mjs');
+    // The record names the SYMLINK path, which is what makes this case
+    // load-bearing: recovery has to resolve it. A regression that rejects
+    // symlinked records fails right here.
+    assert.equal(parsed.recovered.file, 'src/alias.mjs');
 
     assert.equal(git(['status', '--porcelain'], dir).trim(), '', 'left the tree dirty');
     assert.equal(lstatSync(join(dir, 'src', 'alias.mjs')).isSymbolicLink(), true, 'recovery destroyed the symlink');
