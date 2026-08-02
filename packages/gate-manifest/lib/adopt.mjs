@@ -36,32 +36,35 @@ import { verifyEntrySig } from './sign.mjs';
  * carrying a verified v2 signature — v1 does not sign `branch`, so a v1
  * signature can never authenticate the identity claim being adopted.
  */
-function authenticate(dir, name, key) {
+// The ONE place a segment's entries are parsed. Returns null for an empty,
+// malformed, or unreadable file — which the branch filter below turns into
+// "not a candidate", the single observable consequence. (Keeping a second
+// emptiness/parse verdict inside the authenticator would be unreachable:
+// a segment whose first entry does not parse declares no branch, so the
+// wrong-branch refusal always fires first.)
+function readSegment(dir, name) {
   const lines = readRawLines(segmentPath(dir, name));
-  let first = null;
-  // An empty segment file lands here too: lines[0] is undefined, so reading
-  // .line throws into this same catch. One refusal path, not two — a
-  // separate emptiness guard would be unreachable behind the wrong-branch
-  // check below (an empty file declares no branch), i.e. untestable.
-  try { first = JSON.parse(lines[0].line); } catch { return { ok: false, first: null }; }
-  if (key === null) return { ok: false, first }; // keyless: nothing can be authenticated
-  const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
-  const firstAuthenticated = first.sigVersion === 2 && verifyEntrySig(key, first);
-  return { ok: chain.valid && firstAuthenticated, first };
+  try {
+    return { lines, first: JSON.parse(lines[0].line), last: JSON.parse(lines.at(-1).line) };
+  } catch {
+    return null;
+  }
 }
 
-function describeCandidate(dir, name, key) {
-  const lines = readRawLines(segmentPath(dir, name));
-  let firstTs = null;
-  let lastTs = null;
-  try { firstTs = JSON.parse(lines[0].line).ts ?? null; } catch { /* reported as null */ }
-  try { lastTs = JSON.parse(lines.at(-1).line).ts ?? null; } catch { /* reported as null */ }
+/** Assumes a parsed first entry — see readSegment. */
+function authenticate({ lines, first }, key) {
+  if (key === null) return false; // nothing can be authenticated without a key
+  const chain = verifyChain(lines, { key, requireSignatures: false, anchorOnFirst: true });
+  return chain.valid && first.sigVersion === 2 && verifyEntrySig(key, first);
+}
+
+function describeCandidate(name, parsed, key) {
   return {
     name,
-    entries: lines.length,
-    firstTs,
-    lastTs,
-    authenticated: authenticate(dir, name, key).ok,
+    entries: parsed.lines.length,
+    firstTs: parsed.first.ts ?? null,
+    lastTs: parsed.last.ts ?? null,
+    authenticated: authenticate(parsed, key),
   };
 }
 
@@ -92,27 +95,28 @@ export function planAdopt(dir = ADLC_DIR, { cwd = process.cwd(), key = null, seg
   }
 
   const { valid } = discoverSegments(dir);
-  const mine = valid.filter((name) => {
-    const lines = readRawLines(segmentPath(dir, name));
-    if (lines.length === 0) return false;
-    try { return JSON.parse(lines[0].line).branch === branch; } catch { return false; }
-  });
+  const parsedByName = new Map();
+  for (const name of valid) {
+    const parsed = readSegment(dir, name);
+    if (parsed) parsedByName.set(name, parsed);
+  }
+  const mine = valid.filter((name) => parsedByName.get(name)?.first.branch === branch);
 
   if (segment === null) {
-    return { decision: 'list', branch, candidates: mine.map((name) => describeCandidate(dir, name, key)) };
+    return { decision: 'list', branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
   }
 
   // Named adoption. `valid` membership is the grammar/traversal check: a name
   // that discoverSegments did not classify as a real segment of THIS store
   // is never openable, so path escapes and malformed names refuse here.
   if (!valid.includes(segment) || !existsSync(segmentPath(dir, segment))) {
-    return { decision: 'refuse-unknown-segment', reason: `no segment named ${segment} exists in this store`, branch, candidates: mine.map((name) => describeCandidate(dir, name, key)) };
+    return { decision: 'refuse-unknown-segment', reason: `no segment named ${segment} exists in this store`, branch, candidates: mine.map((name) => describeCandidate(name, parsedByName.get(name), key)) };
   }
-  const { ok, first } = authenticate(dir, segment, key);
   if (!mine.includes(segment)) {
-    return { decision: 'refuse-wrong-branch', reason: `segment ${segment} declares branch ${JSON.stringify(first?.branch ?? null)}, not ${JSON.stringify(branch)} — adopting it would bind this checkout to a different lineage`, branch };
+    const declared = parsedByName.get(segment)?.first.branch ?? null;
+    return { decision: 'refuse-wrong-branch', reason: `segment ${segment} declares branch ${JSON.stringify(declared)}, not ${JSON.stringify(branch)} — adopting it would bind this checkout to a different lineage`, branch };
   }
-  if (!ok) {
+  if (!authenticate(parsedByName.get(segment), key)) {
     return { decision: 'refuse-unauthenticated', reason: `segment ${segment} cannot be authenticated with the available key (broken chain, or its branch-bearing first entry lacks a verified v2 signature) — a token makes downstream readers trust it without re-verifying, so adopt refuses`, branch };
   }
   const ulid = ulidOf(segment);
