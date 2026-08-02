@@ -1,0 +1,45 @@
+{
+  "name": "@adlc/context-handoff",
+  "version": "1.7.0",
+  "description": "Proactive context-rot handoff — absolute band signals, session-terminal deny (D1–D3), and contract helpers for F3 continuity (slice 1).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/context-handoff"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/context-handoff#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "context-rot",
+    "handoff",
+    "f3"
+  ],
+  "files": [
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./lib/index.mjs",
+    "./lib/thresholds.mjs": "./lib/thresholds.mjs",
+    "./lib/bands.mjs": "./lib/bands.mjs",
+    "./lib/mutation-gate.mjs": "./lib/mutation-gate.mjs",
+    "./lib/deny-lifecycle.mjs": "./lib/deny-lifecycle.mjs",
+    "./lib/deny-marker.mjs": "./lib/deny-marker.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

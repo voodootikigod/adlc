@@ -1,0 +1,18 @@
+# @adlc/context-handoff
+
+**ADLC phase: P4 continuity (F3)** — pure helpers for absolute context bands and
+session-terminal mutation deny (D1–D3). Binding design:
+[`docs/specs/context-rot-handoff.md`](../../docs/specs/context-rot-handoff.md).
+
+Slice 1: thresholds, bands, mutation gate, deny lifecycle, deny-marker
+fail-closed semantics. Harness adapters and build-gate migration are later slices.
+
+```js
+import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
+import { evaluateBands } from '@adlc/context-handoff/lib/bands.mjs';
+import { evaluateMutationGate } from '@adlc/context-handoff/lib/mutation-gate.mjs';
+```
+
+```sh
+node --test packages/context-handoff/test/*.test.mjs
+```
