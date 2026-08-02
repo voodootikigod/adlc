@@ -54,6 +54,13 @@ export async function readVerdictSource(source) {
  * @returns the recorded manifest entry
  */
 export function recordVerdict({ verdict, extra = {}, dir, key } = {}) {
-  const data = { promptOnly: true, verdict, ...extra };
+  // `usageStatus: 'unreported'` is the T152 vocabulary, and it is literally true
+  // here: a real model call was made — by the operator's harness, answering the
+  // prompt this gate printed — and its token count is not knowable to this tool.
+  // Without it the entry carries no evidence that a call happened at all, and
+  // `aggregateSpend` discards it, which is why a --prompt-only workflow used to
+  // aggregate to "no recorded usage" after months of real work. NO counters are
+  // invented: the entry has no `usage` key, so nothing is booked as free.
+  const data = { promptOnly: true, usageStatus: 'unreported', verdict, ...extra };
   return record({ gate: GATE_NAME, rawData: JSON.stringify(data), dir, key });
 }

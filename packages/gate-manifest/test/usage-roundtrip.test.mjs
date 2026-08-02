@@ -78,14 +78,33 @@ describe('unknown is not zero (T152 no-fabrication rule)', () => {
     }
   });
 
-  it('an unreported entry contributes no phase bucket of its own', () => {
+  it('an unreported entry contributes a bucket that is EXPLICITLY unmeasured, never a zeroed one', () => {
+    // This assertion was inverted deliberately. It used to require NO bucket,
+    // on the reasoning that "nothing measured means no bucket, not a zeroed
+    // one" — correct at the time, when the only alternatives were suppressing
+    // the bucket or emitting one whose 0 tokens read as "this phase was free".
+    //
+    // A bucket can now say what it does not know (`unmeasuredCalls`), so the
+    // hazard is addressed directly instead of by suppression — and suppression
+    // was itself a defect: it made a --prompt-only workflow, where the harness
+    // makes the model call and the tool never sees the tokens, aggregate to
+    // literally nothing. The property below is STRICTER than the old one: the
+    // bucket must exist AND prove it is unmeasured AND contribute no tokens.
     const dir = makeTmp();
     try {
       recordGate(dir, 'prosecute', { usageStatus: 'unreported' });
       const { aggregate } = loadSpend({ dir });
-      assert.equal(aggregate.entriesWithUsage, 0);
-      assert.equal(aggregate.total.calls, 0);
-      assert.deepEqual(aggregate.byPhase, {}, 'nothing measured means no bucket, not a zeroed one');
+      assert.equal(aggregate.entriesWithUsage, 0, 'still nothing MEASURED');
+      assert.equal(aggregate.total.calls, 0, '`calls` still counts measured calls only');
+      assert.equal(aggregate.unmeasuredCalls, 1, 'and the call is visible as unmeasured');
+
+      const p5 = aggregate.byPhase.P5;
+      assert.ok(p5, 'the phase appears, so the shape of the work is visible');
+      assert.equal(p5.unmeasuredCalls, 1);
+      assert.equal(p5.calls, 0);
+      assert.equal(p5.inputTokens, 0);
+      assert.equal(p5.outputTokens, 0);
+      assert.equal(p5.cachedTokens, 0);
     } finally {
       cleanTmp(dir);
     }

@@ -496,7 +496,7 @@ describe('P4 spend round trip — real dispatch to real aggregate', () => {
       // 3. REAL loader + aggregator.
       const { aggregate } = loadSpend({ dir });
       assert.deepEqual(aggregate.byPhase.P4, {
-        calls: 1, inputTokens: 53458, outputTokens: 3, cachedTokens: 0,
+        calls: 1, inputTokens: 53458, outputTokens: 3, cachedTokens: 0, unmeasuredCalls: 0,
       });
       assert.equal(aggregate.byPhase.unphased, undefined, 'the whole point: no longer unphased');
       assert.equal(aggregate.total.calls, 1);
@@ -505,7 +505,19 @@ describe('P4 spend round trip — real dispatch to real aggregate', () => {
     }
   });
 
-  it('an unreported dispatch records status only and is counted by nothing', async () => {
+  it('an unreported dispatch records status only, and is counted as a call with UNKNOWN cost', async () => {
+    // This assertion was inverted deliberately. It used to require that the
+    // entry be "counted by nothing" and produce no bucket, on the reasoning that
+    // "unknown spend creates no bucket, not a zeroed one" — right at the time,
+    // when the alternatives were suppressing the bucket or emitting one whose
+    // zeros would read as a measured free call.
+    //
+    // A bucket can now state what it does not know (`unmeasuredCalls`), so the
+    // hazard is met head-on instead of by suppression. Suppression was itself
+    // costing us the thing the barbell exists to show: a real dispatch that the
+    // harness could not price disappeared from the phase distribution entirely.
+    // The replacement is STRICTER — the call is visible, AND provably not
+    // credited with any tokens.
     const dir = mkdtempSync(join(tmpdir(), 'fleet-p4-roundtrip-'));
     try {
       const { result } = await dispatchWith('opencode', { stdout: plainCapture() });
@@ -515,8 +527,17 @@ describe('P4 spend round trip — real dispatch to real aggregate', () => {
 
       const { aggregate } = loadSpend({ dir });
       assert.equal(aggregate.entriesTotal, 1, 'the entry exists — the call happened');
-      assert.equal(aggregate.entriesWithUsage, 0, 'but nothing is counted from it');
-      assert.deepEqual(aggregate.byPhase, {}, 'unknown spend creates no bucket, not a zeroed one');
+      assert.equal(aggregate.entriesWithUsage, 0, 'and nothing MEASURED is counted from it');
+      assert.equal(aggregate.total.calls, 0, '`calls` still means measured calls');
+      assert.equal(aggregate.unmeasuredCalls, 1, 'but the dispatch is visible as an unmeasured call');
+
+      const p4 = aggregate.byPhase.P4;
+      assert.ok(p4, 'the phase appears, so a run of unpriceable dispatches still has a shape');
+      assert.equal(p4.unmeasuredCalls, 1);
+      assert.equal(p4.calls, 0);
+      assert.equal(p4.inputTokens, 0, 'no tokens are credited to a call nobody measured');
+      assert.equal(p4.outputTokens, 0);
+      assert.equal(p4.cachedTokens, 0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -530,7 +551,7 @@ describe('P4 spend round trip — real dispatch to real aggregate', () => {
 
       const { aggregate } = loadSpend({ dir });
       assert.deepEqual(aggregate.byPhase.P5, {
-        calls: 1, inputTokens: 10, outputTokens: 54, cachedTokens: 38947,
+        calls: 1, inputTokens: 10, outputTokens: 54, cachedTokens: 38947, unmeasuredCalls: 0,
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });

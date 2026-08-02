@@ -28,7 +28,7 @@ describe('aggregateSpend', () => {
     const agg = aggregateSpend([{ gate: 'build', ts: '2026-01-01T00:00:00Z' }]);
     assert.equal(agg.entriesWithUsage, 0);
     assert.equal(agg.entriesTotal, 1);
-    assert.deepEqual(agg.total, { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 });
+    assert.deepEqual(agg.total, { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, unmeasuredCalls: 0 });
   });
 
   it('attributes a known gate to its ADLC.md phase', () => {
@@ -96,11 +96,11 @@ describe('aggregateSpend', () => {
     // fell to 'unphased', so P4 was the one phase whose spend could not be
     // attributed at all. Exact numbers, not merely nonzero.
     const p4 = aggregateSpend([{ gate: 'p4', data: { usage: usage({ inputTokens: 100, outputTokens: 20 }) } }]);
-    assert.deepEqual(p4.byPhase.P4, { calls: 1, inputTokens: 100, outputTokens: 20, cachedTokens: 0 });
+    assert.deepEqual(p4.byPhase.P4, { calls: 1, inputTokens: 100, outputTokens: 20, cachedTokens: 0, unmeasuredCalls: 0 });
     assert.equal(p4.byPhase.unphased, undefined, 'nothing may be left in unphased');
 
     const p5 = aggregateSpend([{ gate: 'p5', data: { usage: usage({ inputTokens: 7, outputTokens: 3, cachedTokens: 1 }) } }]);
-    assert.deepEqual(p5.byPhase.P5, { calls: 1, inputTokens: 7, outputTokens: 3, cachedTokens: 1 });
+    assert.deepEqual(p5.byPhase.P5, { calls: 1, inputTokens: 7, outputTokens: 3, cachedTokens: 1, unmeasuredCalls: 0 });
     assert.equal(p5.byPhase.unphased, undefined);
   });
 
@@ -184,7 +184,10 @@ describe('renderSpendReport', () => {
   it('reports zero usage clearly when no entries carry data.usage', () => {
     const agg = aggregateSpend([{ gate: 'build' }, { gate: 'test' }]);
     const lines = renderSpendReport(agg).join('\n');
-    assert.match(lines, /no recorded usage/);
+    // The dead end is now keyed on "no counted CALLS" rather than "no usage":
+    // an entry carrying only `usageStatus` is a call that happened, and reporting
+    // it as "no recorded usage" taught the operator the gate was broken.
+    assert.match(lines, /no recorded calls/);
     assert.match(lines, /0 of 2/);
   });
 

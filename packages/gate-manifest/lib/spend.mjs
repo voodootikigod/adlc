@@ -73,7 +73,11 @@ function phaseForGate(gate) {
 }
 
 function emptyBucket() {
-  return { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  // `unmeasuredCalls` makes a bucket SELF-DESCRIBING. Without it, "0 tokens" is
+  // ambiguous between a phase that cost nothing and a phase whose calls we could
+  // not measure — the same collapse of "unknown" into "free" that T152's
+  // no-fabrication rule exists to prevent, one layer up.
+  return { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, unmeasuredCalls: 0 };
 }
 
 function addUsage(bucket, usage) {
@@ -81,6 +85,40 @@ function addUsage(bucket, usage) {
   bucket.inputTokens += usage.inputTokens ?? 0;
   bucket.outputTokens += usage.outputTokens ?? 0;
   bucket.cachedTokens += usage.cachedTokens ?? 0;
+}
+
+/**
+ * A call that HAPPENED and was NOT measured.
+ *
+ * It moves `unmeasuredCalls` and NOTHING else — deliberately not `calls`, which
+ * keeps its established meaning of MEASURED calls because it is the denominator
+ * every per-call token average divides by. Diluting it would change the meaning
+ * of existing arithmetic in every consumer (T152's roundtrip test pins exactly
+ * this). No token counter is touched either, not even `+= 0`: a bucket that
+ * quietly gained a zero is indistinguishable from a measured free one.
+ */
+function addUnmeasured(bucket) {
+  bucket.unmeasuredCalls += 1;
+}
+
+/**
+ * Is this entry evidence of a model call whose tokens we do not have?
+ *
+ * `usageStatus` is the T152 vocabulary — its presence means a producer went out
+ * of its way to say "a call happened here". Most ledger entries (ticket-complete,
+ * rails-frozen, a bare printed-prompt verdict) carry no status and were never a
+ * model call; they stay uncounted.
+ *
+ * An idempotent REPLAY is excluded: `packages/prosecute/lib/run.mjs` records a
+ * replayed pass as `{usageStatus, usageReplayOf}` with NO usage precisely so the
+ * counters are not recorded twice. That is exactly the shape checked here, so
+ * counting it would multiply one model call by its retry count — the failure
+ * T152's one-carrier-per-call rule prevents for tokens, arriving instead in a
+ * counter with no total to make it visible.
+ */
+function isUnmeasuredCall(data) {
+  if (typeof data?.usageStatus !== 'string' || data.usageStatus.length === 0) return false;
+  return !(typeof data.usageReplayOf === 'string' && data.usageReplayOf.length > 0);
 }
 
 function totalTokens(bucket) {
@@ -105,22 +143,35 @@ export function aggregateSpend(entries) {
   const total = emptyBucket();
   let entriesWithUsage = 0;
 
+  let unmeasuredCalls = 0;
+
   for (const entry of entries) {
-    const usage = entry?.data?.usage;
-    if (!usage || typeof usage !== 'object') continue;
-    entriesWithUsage++;
+    const data = entry?.data;
+    const usage = data?.usage;
+    const measured = usage !== null && typeof usage === 'object';
+    // A replay is already counted; it is never a call of its own, measured or not.
+    const replay = typeof data?.usageReplayOf === 'string' && data.usageReplayOf.length > 0;
+    const unmeasured = !measured && !replay && isUnmeasuredCall(data);
+    if (replay || (!measured && !unmeasured)) continue;
 
     const phase = phaseForGate(entry.gate);
     byPhase[phase] ??= emptyBucket();
-    addUsage(byPhase[phase], usage);
-
     byGate[entry.gate] ??= { ...emptyBucket(), phase };
-    addUsage(byGate[entry.gate], usage);
 
-    addUsage(total, usage);
+    if (measured) {
+      entriesWithUsage++;
+      addUsage(byPhase[phase], usage);
+      addUsage(byGate[entry.gate], usage);
+      addUsage(total, usage);
+    } else {
+      unmeasuredCalls++;
+      addUnmeasured(byPhase[phase]);
+      addUnmeasured(byGate[entry.gate]);
+      addUnmeasured(total);
+    }
   }
 
-  return { byPhase, byGate, total, entriesWithUsage, entriesTotal: entries.length };
+  return { byPhase, byGate, total, entriesWithUsage, unmeasuredCalls, entriesTotal: entries.length };
 }
 
 /**
@@ -179,33 +230,74 @@ export function renderSpendReport(aggregate) {
   const PHASE_ORDER = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'maintenance', 'unphased'];
   const lines = [];
 
-  if (aggregate.entriesWithUsage === 0) {
+  // Only a ledger with NO counted calls at all is a dead end. A ledger full of
+  // unmeasured calls has a real shape — which phases the work happened in — and
+  // saying "no recorded usage" there taught the operator the gate was broken
+  // when it was reporting faithfully about calls it could not price.
+  if (aggregate.total.calls === 0 && (aggregate.unmeasuredCalls ?? 0) === 0) {
     lines.push(
-      `no recorded usage (0 of ${aggregate.entriesTotal} manifest entries carry data.usage).`,
+      `no recorded calls (0 of ${aggregate.entriesTotal} manifest entries carry data.usage or data.usageStatus).`,
       'gates report usage by threading complete()\'s onUsage callback into their own',
       'gate-manifest record() call as data.usage — see packages/gate-manifest/lib/spend.mjs.'
     );
     return lines;
   }
 
-  lines.push(`spend by phase (${aggregate.entriesWithUsage} of ${aggregate.entriesTotal} entries carry usage):`, '');
+  const anyUnmeasured = (aggregate.unmeasuredCalls ?? 0) > 0;
+  lines.push(
+    `spend by phase (${aggregate.entriesWithUsage} of ${aggregate.entriesTotal} entries carry usage` +
+      (anyUnmeasured ? `; ${aggregate.unmeasuredCalls} call(s) happened with tokens UNKNOWN` : '') +
+      '):',
+    ''
+  );
   const totalAll = totalTokens(aggregate.total) || 1;
   for (const phase of PHASE_ORDER) {
     const bucket = aggregate.byPhase[phase];
     if (!bucket) continue;
     const tokens = totalTokens(bucket);
+    // A phase whose calls were ALL unmeasured gets NO percentage and NO bar.
+    // The barbell is a claim about spend, and one P1 call against a frontier
+    // model and one P4 call on a cheap seat are both "one call" — presenting a
+    // call share in the same shape as a token share would be a confident wrong
+    // number, which is worse than the silence it replaced.
+    if (bucket.calls === 0 && bucket.unmeasuredCalls > 0) {
+      lines.push(
+        `  ${phase.padEnd(12)} ${''.padEnd(20)} ${'—'.padStart(5)}   ` +
+        `${bucket.unmeasuredCalls} call(s), tokens unknown (unmeasured)`
+      );
+      continue;
+    }
     const share = ((tokens / totalAll) * 100).toFixed(1);
     const bar = '█'.repeat(Math.max(1, Math.round((tokens / totalAll) * 20)));
+    const caveat = bucket.unmeasuredCalls > 0 ? ` [+${bucket.unmeasuredCalls} unmeasured call(s)]` : '';
     lines.push(
       `  ${phase.padEnd(12)} ${bar.padEnd(20)} ${share.padStart(5)}%  ` +
-      `${bucket.calls} call(s), ${tokens} tokens (in=${bucket.inputTokens} out=${bucket.outputTokens} cached=${bucket.cachedTokens})`
+      `${bucket.calls} call(s), ${tokens} tokens (in=${bucket.inputTokens} out=${bucket.outputTokens} cached=${bucket.cachedTokens})${caveat}`
+    );
+  }
+  if (anyUnmeasured) {
+    lines.push(
+      '',
+      'shares are over MEASURED tokens only; a phase marked unmeasured made real calls',
+      'whose cost this tool cannot see (e.g. a gate whose printed prompt your harness answered).'
     );
   }
   lines.push('');
-  lines.push(
-    `total: ${aggregate.total.calls} call(s), ${totalTokens(aggregate.total)} tokens ` +
-    `(in=${aggregate.total.inputTokens} out=${aggregate.total.outputTokens} cached=${aggregate.total.cachedTokens})`
-  );
+  // The TOTAL line has the same hazard as a phase line: printing "0 tokens" over
+  // a ledger of unmeasured calls states a cost this tool does not know. When
+  // nothing was measured it must say so; when some was, it must scope the number
+  // to the calls it actually covers.
+  if (totalTokens(aggregate.total) === 0 && anyUnmeasured) {
+    lines.push(`total: ${aggregate.unmeasuredCalls} call(s), tokens unknown (none of these calls reported usage)`);
+  } else {
+    const scope = anyUnmeasured
+      ? ` across ${aggregate.total.calls} measured call(s); ${aggregate.unmeasuredCalls} further call(s) unmeasured`
+      : '';
+    lines.push(
+      `total: ${aggregate.total.calls} call(s), ${totalTokens(aggregate.total)} tokens ` +
+      `(in=${aggregate.total.inputTokens} out=${aggregate.total.outputTokens} cached=${aggregate.total.cachedTokens})${scope}`
+    );
+  }
 
   const diag = diagnostics(aggregate);
   if (diag.length > 0) {
