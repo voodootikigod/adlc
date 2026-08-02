@@ -620,3 +620,26 @@ test('.deny-store sentinel keeps storeExpected after denies/ removal', () => {
   }
 });
 
+
+
+test('sentinel + emptied denies/ (files deleted, dir kept) is unavailable', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 's1', ticketId: 'T154', contentHash: 'h' });
+    const denies = join(root, '.adlc', 'handoffs', 'denies');
+    for (const name of readdirSync(denies)) {
+      if (name === 'quarantine') continue;
+      rmSync(join(denies, name), { force: true, recursive: true });
+    }
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.ok, false);
+    assert.equal(loaded.reason, 'emptied_deny_store');
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

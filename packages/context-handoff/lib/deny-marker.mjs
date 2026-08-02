@@ -333,9 +333,9 @@ export function loadDenyRecords(
       readFileSync,
     },
     /**
-     * When true, a missing denies/ directory is unavailable — not a clean empty store.
-     * Default: auto — expected when ADLC repo markers exist (.adlc/tickets.json,
-     * config.json, or handoffs/). Pass false only for known-fresh trees.
+     * When true, a missing/emptied denies/ directory is unavailable — not a clean store.
+     * Default: auto — expected only when `.adlc/handoffs/.deny-store` exists
+     * (written by ensureDenyMarker). Pass false for known-fresh trees.
      */
     storeExpected,
   } = {},
@@ -403,7 +403,24 @@ export function loadDenyRecords(
       content_hash: null,
     });
   }
+  // Sentinel present but no marker files left → store was wiped in place.
+  if (expected && records.length === 0 && invalidRecords.length === 0) {
+    invalidRecords.push({
+      session_id: '__deny_store__',
+      status: 'invalid:emptied_deny_store',
+      ticket_id: null,
+      content_hash: null,
+    });
+    return {
+      ok: false,
+      reason: 'emptied_deny_store',
+      records,
+      invalidRecords,
+      denyStoreUnavailable: true,
+    };
+  }
   return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
+
 }
 
 
