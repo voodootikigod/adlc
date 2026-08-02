@@ -345,3 +345,33 @@ test('non-array denyRecords fails closed D0', () => {
   }
 });
 
+test('denyStoreUnavailable fails closed D0', () => {
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [],
+    denyStoreUnavailable: true,
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+});
+
+test('resume-auth deny_session_id does not authorize a different open deny', () => {
+  const records = [
+    open({ session_id: 'a', content_hash: 'h' }),
+    open({ session_id: 'b', content_hash: 'h' }),
+  ];
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: records,
+    resumeAuth: {
+      ticket_id: 'T154',
+      content_hash: 'h',
+      verified: true,
+      deny_session_id: 'a',
+    },
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.some((r) => r.includes('b')));
+  assert.ok(!g.reasons.some((r) => r.includes(':a')));
+});
+

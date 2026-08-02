@@ -92,6 +92,14 @@ export function authorized({
   if (!resumeAuth || resumeAuth.verified !== true) return false;
   if (resumeAuth.ticket_id !== record.ticket_id) return false;
   if (resumeAuth.content_hash !== record.content_hash) return false;
+  // Optional record bind: when present, resume-auth is not a cross-deny bearer.
+  if (
+    typeof resumeAuth.deny_session_id === 'string' &&
+    resumeAuth.deny_session_id.trim().length > 0 &&
+    resumeAuth.deny_session_id !== record.session_id
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -112,10 +120,12 @@ export function evaluateMutationGate({
   resumeAuth = null,
   bypassForSession = false,
   manifestVerifyFailed = false,
+  denyStoreUnavailable = false,
 } = {}) {
   const reasons = [];
   // D1 is independent of TTY bypass.
   if (processStickyDeny) reasons.push('D1:process_sticky');
+  if (denyStoreUnavailable) reasons.push('D0:deny_store_unavailable');
 
   // Missing/blank/padded/unsafe session identity cannot evaluate D2 — fail closed.
   if (!isUsableSessionId(currentSessionId)) {

@@ -517,3 +517,22 @@ test('loadDenyRecords surfaces valid + invalid retained markers for the gate', (
   }
 });
 
+test('loadDenyRecords readdir failure sets denyStoreUnavailable + sentinel', () => {
+  const fs = {
+    existsSync() { return true; },
+    readdirSync() { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); },
+    readFileSync() { throw new Error('nope'); },
+  };
+  const loaded = loadDenyRecords('/x', { fs });
+  assert.equal(loaded.ok, false);
+  assert.equal(loaded.denyStoreUnavailable, true);
+  assert.ok(loaded.invalidRecords.some((r) => r.session_id === '__deny_store__'));
+  const g = evaluateMutationGate({
+    currentSessionId: 'fresh',
+    denyRecords: [...loaded.records, ...loaded.invalidRecords],
+    denyStoreUnavailable: loaded.denyStoreUnavailable,
+  });
+  assert.equal(g.deny, true);
+  assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+});
+

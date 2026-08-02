@@ -39,6 +39,10 @@ export function classifyBandSignal(value) {
  * @param {number} [observed.bytes]
  */
 export function evaluateBands(observed = {}) {
+  // Non-object / array / null container: fail closed (same as per-field invalid).
+  if (observed === null || typeof observed !== 'object' || Array.isArray(observed)) {
+    return { warn: true, handoff: true, hard: true };
+  }
   const past = (value, warnAt, handoffAt, hardAt) => {
     const kind = classifyBandSignal(value);
     if (kind === 'absent') {
@@ -48,6 +52,8 @@ export function evaluateBands(observed = {}) {
       // Present but malformed → fail closed (past every band).
       return { warn: true, handoff: true, hard: true };
     }
+    // Inclusive (>=): at-threshold is in-band. build-gate today uses strict >
+    // for depth/bytes; slice-3 migration must adopt inclusive or document a flip.
     return {
       warn: value >= warnAt,
       handoff: value >= handoffAt,

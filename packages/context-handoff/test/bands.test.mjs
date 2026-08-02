@@ -103,3 +103,19 @@ test('hard OR-join via depth and bytes', () => {
   assert.equal(evaluateBands({ pct: 10, bytes: HARD_BYTES }).hard, true);
   assert.equal(isHardDegraded({ pct: 10, bytes: HARD_BYTES }), true);
 });
+
+test('non-object observed payloads fail closed as hard (no throw)', () => {
+  for (const observed of [null, '99', [90], 42, true]) {
+    const b = evaluateBands(observed);
+    assert.equal(b.hard, true, JSON.stringify(observed));
+    assert.equal(isHardDegraded(observed), true, JSON.stringify(observed));
+  }
+});
+
+test('exact HARD_* thresholds are inclusive (in-band)', () => {
+  assert.equal(isHardDegraded({ pct: HARD_PCT }), true);
+  assert.equal(isHardDegraded({ depth: HARD_DEPTH }), true);
+  assert.equal(isHardDegraded({ bytes: HARD_BYTES }), true);
+  assert.equal(evaluateBands({ pct: HARD_PCT - 1 }).hard, false);
+});
+

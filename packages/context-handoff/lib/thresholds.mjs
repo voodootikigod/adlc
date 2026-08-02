@@ -1,4 +1,5 @@
-// Shared absolute band thresholds. Adapters MUST import these — CI bans literals.
+// Shared absolute band thresholds. Adapters MUST import these (no local copies).
+// Inclusive band edges (>=) are intentional in evaluateBands; see bands.mjs.
 
 export const WARN_PCT = 50;
 export const HANDOFF_PCT = 60;

@@ -308,17 +308,25 @@ export function loadDenyRecords(
   const records = [];
   const invalidRecords = [];
   if (!fs.existsSync(dir)) {
-    return { ok: true, records, invalidRecords };
+    return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
   }
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch (err) {
+    // Sentinel so spread-into-gate patterns fail closed even if ok is ignored.
+    invalidRecords.push({
+      session_id: '__deny_store__',
+      status: 'invalid:readdir_failed',
+      ticket_id: null,
+      content_hash: null,
+    });
     return {
       ok: false,
       reason: `readdir_failed:${err?.code || err?.message || 'error'}`,
       records,
       invalidRecords,
+      denyStoreUnavailable: true,
     };
   }
   for (const entry of entries) {
@@ -342,7 +350,7 @@ export function loadDenyRecords(
       content_hash: null,
     });
   }
-  return { ok: true, records, invalidRecords };
+  return { ok: true, records, invalidRecords, denyStoreUnavailable: false };
 }
 
 export function evaluateMarkerOnReentry(

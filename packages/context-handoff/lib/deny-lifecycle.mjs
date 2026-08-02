@@ -35,7 +35,7 @@ export function requireSessionId(sessionId, label = 'session id') {
  * @param {{ resumeAuth?: { ticket_id: string, content_hash: string, verified: boolean }|null }} [opts]
  * @returns {{ ok: true, record: object } | { ok: false, error: string, exitCode?: number }}
  */
-export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null } = {}) {
+export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null, manifestVerifyFailed = false } = {}) {
   if (!record || typeof record !== 'object') {
     return { ok: false, error: 'missing deny record' };
   }
@@ -56,8 +56,16 @@ export function consumeDenyRecord(record, consumerSessionId, { resumeAuth = null
   if (!isBoundField(record.content_hash) || !isBoundField(record.ticket_id)) {
     return { ok: false, error: 'cannot consume without ticket_id and content_hash' };
   }
+  // Consume is record-specific: resume-auth must name this denier session.
+  if (
+    !resumeAuth ||
+    typeof resumeAuth.deny_session_id !== 'string' ||
+    resumeAuth.deny_session_id !== record.session_id
+  ) {
+    return { ok: false, error: 'consume requires resume-auth.deny_session_id matching the deny record' };
+  }
   // Spec: other-session consume requires final with non-null hash / resume-auth.
-  if (!authorized({ record, resumeAuth, bypassForSession: false })) {
+  if (!authorized({ record, resumeAuth, bypassForSession: false, manifestVerifyFailed })) {
     return { ok: false, error: 'consume requires verified resume-auth matching ticket_id/content_hash' };
   }
   return {
