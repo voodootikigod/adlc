@@ -74,26 +74,74 @@ to the worktree and a synthetic home, auth material mounted read-only) while
 keeping network egress. That is a change to fleet's containment architecture, not
 to this schema, and is tracked in [#395](https://github.com/voodootikigod/adlc/issues/395).
 
-## `transport` is not yet load-bearing at dispatch
+## `transport` selects the credential — with an asymmetric guarantee
 
-`transport` currently constrains **validation** (rule 3's distinct fallback
-transports, rule 4's closed taxonomy, §6's gateway family-collapse) and is
-**reported** in the dry-run plan. It does **not** select credentials: dispatch
-passes the seat's `adapter` and `model` to the harness and lets it use whatever
-auth it finds ambiently.
+`transport` constrains **validation** (rule 3's distinct fallback transports,
+rule 4's closed taxonomy, §6's gateway family-collapse), is **reported** in the
+dry-run plan and the §8a spend carrier, and **selects the credential context the
+worker is dispatched with**.
 
-The practical consequence, using the reference registry above: `frontier`
-(`subscription:anthropic-max`) and `frontier-metered` (`api:anthropic-batch`) are
-the same adapter and the same model, so **both execute identically today**. Work
-routed to `frontier-metered` expecting batch-API pricing may consume the
-subscription instead, and nothing surfaces the discrepancy. The §7 fallback edge —
-whose only purpose is to change transport — is correspondingly inert.
+Each adapter declares which transport CLASSES it can serve — the prefix, not the
+full string, since the suffix names *your* account. A seat bound to a class its
+adapter does not declare is **rejected at load** (rule 2), because such a seat
+would run on whatever ambient auth the host carries while every record claimed
+the declared transport.
 
-§4c solved this for `model` (force it onto the command line, attest what
-resolved). The equivalent for `transport` is tracked in
-[#396](https://github.com/voodootikigod/adlc/issues/396). Until then, treat a
-declared transport as an operator's *intent* and a validation constraint, not as
-a guarantee about which credential paid for the call.
+| class | what dispatch does |
+| --- | --- |
+| `subscription:` | **every provider API key is withheld** from the worker, so the harness has no metered path available and must use its own session |
+| `api:` | the adapter's declared credential variable is supplied |
+| `gateway:` | only the adapter's declared gateway credential is supplied; the **endpoint lives in the harness's own provider config**, never in this file |
+
+### The guarantee is asymmetric — read this before trusting a label
+
+**Withholding a credential is provable.** A `subscription:` seat that never
+receives a provider key *cannot* have been metered: absence is a fact about the
+worker's environment, not a claim about harness behaviour. This is the direction
+that protects a subscriptions-first operator from paying metered rates for
+capacity they already bought.
+
+**Supplying one is not.** A harness handed an API key may still prefer a stored
+session, so an `api:` seat's label describes what was *offered*, never what
+served the call.
+
+Accordingly, a recorded dispatch carries `transportStatus: "selected"` — this
+credential context was chosen for the call. `"attested"` is reserved for the
+*attest* half (the harness reporting which transport actually served it), which
+is **not built yet** and is tracked in
+[#396](https://github.com/voodootikigod/adlc/issues/396). Until it exists, treat
+an `api:` or `gateway:` label as intent plus a credential grant, and only a
+`subscription:` label as a guarantee — of the negative kind.
+
+This mirrors §4c's split for `model` (force it onto the command line, attest what
+resolved) and T152's `usageStatus` for token counters, which exists because shape
+validation cannot prove a provider reported anything.
+
+### Scope: reviewer-group members are validated, not dispatched
+
+The serving rule above applies to reviewer-group members at **load** — §6's quorum
+discounting reads the transport prefix, so a member bound to a class its adapter
+cannot serve is rejected exactly like a channel seat.
+
+It does **not** extend to review *execution*. Fleet never dispatches a reviewer
+member through an adapter: cross-model prosecution spawns the `adversarial-review`
+binary once, and that tool selects its own provider. So a reviewer member's
+transport constrains validation and quorum accounting, not the credentials the
+review subprocess runs with. Tightening that subprocess's environment is a
+property of the prosecution path rather than of seat dispatch, and is tracked in
+[#446](https://github.com/voodootikigod/adlc/issues/446).
+
+### Local and open-weights providers
+
+A local model server is *mediated* in §4b's sense, so it is expressed as
+`gateway:<name>` — e.g. `gateway:ollama-local` — with **no schema change**. The
+endpoint and credential live in the harness's own provider configuration; this
+file only names the transport.
+
+One consequence is intended: §6 collapses every member sharing a `gateway:*`
+transport into a single family for quorum, so a local seat can never count as an
+independent cross-model reviewer. Build channels are unaffected (§6 only governs
+reviewer groups), and for a trust-root review that conservatism is correct.
 
 ## Annotated example
 

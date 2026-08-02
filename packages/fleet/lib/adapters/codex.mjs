@@ -31,6 +31,19 @@ export const forcesModel = true;
  */
 export const attestsResolvedModel = false;
 
+/**
+ * §4b transport classes this harness can serve (issue #396).
+ *
+ * `subscription` only: `codex login` / `codex logout` manage a stored
+ * credential, which is the path this repo actually drives. A metered `api`
+ * path is NOT declared — it is not verified here, and a declaration the harness
+ * ignores is worse than a load failure, because dispatch would hand over a key,
+ * the subscription would serve the call, and the ledger would record `api:`.
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+});
+
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command = 'codex', args, model }) {
   // `codex exec [OPTIONS] [PROMPT]` — options precede the positional prompt.
   const argv = args ?? ['exec', ...modelArgs('-m', model), prompt];

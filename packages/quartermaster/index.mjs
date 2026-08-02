@@ -15,6 +15,7 @@ export {
   isDeterministicJob,
   hasKnownTransportPrefix,
   isDirectTransport,
+  transportClass,
 } from './lib/channels.mjs';
 
 export { normalizeProviderName, isNormalizedProvider } from './lib/provider.mjs';

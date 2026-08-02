@@ -26,6 +26,14 @@ export const forcesModel = false;
  */
 export const attestsResolvedModel = false;
 
+/**
+ * §4b transport classes this harness can serve (issue #396).
+ * Session-based; no metered path is verified here, so none is declared.
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+});
+
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command = 'cursor-agent', args }) {
   const argv = args ?? ['-p', prompt];
   const res = await exec(command, argv, { cwd: worktree, env, timeout: timeoutMs });

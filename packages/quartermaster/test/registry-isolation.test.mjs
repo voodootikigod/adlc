@@ -18,7 +18,13 @@ import { loadRegistry } from '../lib/load.mjs';
 
 // Minimal adapter catalog for the direct loadRegistry tests below (the CLI path
 // supplies the real one from fleet; quartermaster itself declares no deps).
-const CATALOG = { opencode: { aliases: ['default'], forcesModel: true }, codex: { aliases: ['default'], forcesModel: true } };
+// `transports` mirrors the real adapters' declarations (#396). Without it the
+// stub serves NO transport class and every seat is rejected — which is the
+// fail-closed default behaving correctly, not a bug in these tests.
+const CATALOG = {
+  opencode: { aliases: ['default'], forcesModel: true, transports: { subscription: {}, gateway: {} } },
+  codex: { aliases: ['default'], forcesModel: true, transports: { subscription: {} } },
+};
 
 const FLEET_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fleet', 'bin', 'fleet.mjs');
 
@@ -70,7 +76,9 @@ function operatorRegistry() {
     version: 3,
     channels: {
       frontier: { adapter: 'opencode', model: 'operator/frontier-model', transport: 'subscription:anthropic-max', provider: 'anthropic' },
-      'frontier-metered': { adapter: 'opencode', model: 'operator/frontier-model', transport: 'api:anthropic-batch', provider: 'anthropic' },
+      // A SECOND gateway account, not an api: transport — opencode does not declare
+      // the api class (#396), and the fallback edge only needs the two to differ.
+      'frontier-metered': { adapter: 'opencode', model: 'operator/frontier-model', transport: 'gateway:opencode-metered', provider: 'anthropic' },
       mid: { adapter: 'opencode', model: 'zai/glm-5.2', transport: 'gateway:opencode-go', provider: 'zai' },
       cheap: { adapter: 'opencode', model: 'deepseek/v4-flash', transport: 'gateway:opencode-go', provider: 'deepseek' },
     },

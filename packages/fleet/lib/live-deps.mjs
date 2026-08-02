@@ -15,6 +15,7 @@ import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
 import { usageEvidence } from './adapters/usage.mjs';
+import { transportCredential, transportEvidence } from './adapters/transport-credential.mjs';
 import { ladderAdapters, seatForAttempt } from './quartermaster.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
 import { makeReviewRunner } from './review-runner.mjs';
@@ -274,13 +275,21 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
       const prompt = strike > 1 ? fixPrompt(ticket, config.gate, deadEnds) : builderPrompt(ticket, config.gate);
-      const env = modelPlaneEnv(io.env, {
-        modelAuthKey: config.modelAuthKey,
-        extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
-      });
       const attempt = attemptFor(ticket, strike);
       const seat = attempt?.seat ?? null;
-      const res = await adapterForSeat(ticket, seat).dispatch({
+      const adapter = adapterForSeat(ticket, seat);
+      // §4b transport is load-bearing HERE (#396): a seat's credential comes
+      // from its transport class, not from the run-wide `config.modelAuthKey`.
+      // A `subscription:` seat resolves to null — keep NO provider key — so the
+      // harness has no metered path available and must use its own session.
+      // That withholding is what stops an operator being billed metered rates
+      // for capacity a subscription already covers. The un-engaged path (no
+      // seat) keeps `config.modelAuthKey` exactly as it was.
+      const env = modelPlaneEnv(io.env, {
+        modelAuthKey: seat ? transportCredential(adapter, seat.transport) : config.modelAuthKey,
+        extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
+      });
+      const res = await adapter.dispatch({
         worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
         exec: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
         // Operator-local binary override (A2) + non-executable data from config.
@@ -506,7 +515,11 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // Present ONLY on a dispatch that actually climbed, so the absence of the
       // key is itself evidence that this strike ran where routing put it.
       if (attempt?.escalatedFrom) data.escalatedFrom = attempt.escalatedFrom;
-      if (seat?.transport) data.transport = seat.transport;
+      // §4b transport, plus the status that keeps it honest (#396): `selected`
+      // says this credential context was CHOSEN for the call, never that the
+      // harness confirmed it served it — the same discipline T152 applied to
+      // token counters with `usageStatus`.
+      Object.assign(data, transportEvidence(seat?.transport));
       // Binds the charge to the registry BYTES in force at dispatch time. The
       // operator registry is mutable, so channel/transport labels alone cannot
       // prove which registry version chose them.

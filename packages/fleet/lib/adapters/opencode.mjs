@@ -32,6 +32,24 @@ export const forcesModel = true;
 export const attestsResolvedModel = false;
 
 /**
+ * §4b transport classes this harness can serve (issue #396).
+ *
+ * `gateway` — `opencode providers` manages the provider endpoints and
+ * credentials itself, so a gateway seat names the transport and the HARNESS
+ * knows where it lives. No endpoint is read from the registry: that keeps an
+ * operator-controlled URL out of the dispatch path and needs no §4b schema
+ * change. This is also how a LOCAL open-weights server is expressed —
+ * `gateway:<name>`, mediated, with the endpoint in harness config.
+ *
+ * No `env` is declared for it: the credential lives in that same harness
+ * config, so the worker needs no provider key in its environment at all.
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+  gateway: Object.freeze({}),
+});
+
+/**
  * Parse usage out of `opencode run --format json` output (T152, §8a).
  *
  * `--format json` is documented as "raw JSON events" and emits JSONL — one

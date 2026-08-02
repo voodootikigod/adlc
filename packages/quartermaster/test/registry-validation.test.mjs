@@ -158,6 +158,10 @@ test('rule 2: every adapter that can force a model is accepted on a concrete-mod
       r.channels.mid.adapter = adapterName;
       r.channels.mid.model = 'concrete/model-id';
       r.channels.mid.provider = 'someprovider';
+      // A seat needs BOTH capabilities now (#396): the adapter must force the
+      // model AND serve the transport class. Pick one this adapter declares, so
+      // the test still isolates the FORCE rule instead of tripping the new one.
+      r.channels.mid.transport = `${Object.keys(adapters[adapterName].transports)[0]}:test-account`;
       // MERGE, don't replace: `codex` already maps the trust-root member's model.
       r.modelProviders[adapterName] = { ...(r.modelProviders[adapterName] ?? {}), 'concrete/model-id': 'someprovider' };
     });
@@ -448,7 +452,7 @@ test('quorum: two direct members on the SAME provider are one family', () => {
       group.quorum = 2;
       group.members = [
         { adapter: 'codex', model: 'gpt-5.3-codex', transport: 'subscription:chatgpt-plus', provider: 'openai', directAuth: true },
-        { adapter: 'codex', model: 'gpt-5.3-mini', transport: 'api:openai-batch', provider: 'openai', directAuth: true },
+        { adapter: 'codex', model: 'gpt-5.3-mini', transport: 'subscription:chatgpt-team', provider: 'openai', directAuth: true },
       ];
       r.modelProviders.codex['gpt-5.3-mini'] = 'openai';
     }),
@@ -576,4 +580,91 @@ test('every violation is reported at once, so one fix does not merely reveal the
   assert.ok(rules.has(RULE.ADAPTER_ALLOWLIST));
   assert.ok(rules.has(RULE.TRANSPORT_TAXONOMY));
   assert.ok(rules.has(RULE.CLOSED_NAMES));
+});
+
+// ---------------------------------------------------------------------------
+// §4b + issue #396 — an adapter must SERVE the transport class it is bound to.
+//
+// The twin of the FORCE_MODEL rule above, and for the same reason: a seat bound
+// to a transport its adapter cannot serve would run on whatever ambient auth the
+// host carries while the plan, the usage records and the signed ledger all
+// claimed this transport.
+// ---------------------------------------------------------------------------
+
+test('rule 2 (§4b): a CHANNEL seat whose adapter cannot serve its transport class is rejected at load', () => {
+  // opencode declares subscription + gateway; it does not declare api.
+  assertRejected(
+    withMutation((r) => {
+      r.channels.mid.adapter = 'opencode';
+      r.channels.mid.transport = 'api:some-metered-account';
+    }),
+    RULE.SERVE_TRANSPORT,
+    { messageMatch: /needs the "api" class, which adapter "opencode" does not declare/ }
+  );
+});
+
+test('rule 2 (§4b): a REVIEWER MEMBER whose adapter cannot serve its transport is rejected too', () => {
+  // §6's quorum discounting reads the transport prefix, so a member running on
+  // ambient auth while claiming a direct transport would let the trust-root gate
+  // believe it had two independent families when it had one.
+  assertRejected(
+    withMutation((r) => {
+      r.reviewerGroups['cross-model-trust-root'].members[1] = {
+        adapter: 'codex', model: 'gpt-5.3-codex', transport: 'api:openai-batch', provider: 'openai', directAuth: true,
+      };
+    }),
+    RULE.SERVE_TRANSPORT,
+    { messageMatch: /adapter "codex" does not declare/ }
+  );
+});
+
+test('rule 2 (§4b): the error names the adapter, the transport AND what it does declare', () => {
+  // An operator hitting this needs to know which way to fix it — change the
+  // seat, or use a different adapter.
+  try {
+    validateRegistry(
+      withMutation((r) => { r.channels.mid.adapter = 'opencode'; r.channels.mid.transport = 'api:x'; }),
+      { adapters }
+    );
+    assert.fail('expected a validation error');
+  } catch (err) {
+    assert.ok(err instanceof RegistryValidationError);
+    const msg = err.violations.map((v) => v.message).join('\n');
+    assert.match(msg, /opencode/);
+    assert.match(msg, /api:x/);
+    assert.match(msg, /declares: subscription, gateway/);
+    // The rule NUMBER is the operator's index into §4b, so it has to be the
+    // right one. This is an adapter-CAPABILITY rule — the same family as
+    // FORCE_MODEL, i.e. rule 2 — not rule 3 (distinct fallback transports) or
+    // rule 4 (closed taxonomy). Citing the wrong number sends a stuck operator
+    // to the wrong paragraph of the spec, so it is part of the diagnostic
+    // contract rather than incidental prose.
+    const cited = err.violations.map((v) => v.rule).join('\n');
+    assert.match(cited, /^rule 2 /m, `SERVE_TRANSPORT must cite rule 2, got: ${cited}`);
+    assert.match(RULE.FORCE_MODEL, /^rule 2 /, 'its sibling adapter-capability rule is rule 2 too');
+  }
+});
+
+test('rule 2 (§4b): an adapter declaring NO transports serves none — the fail-closed default is real', () => {
+  // capabilitiesOf() defaults `transports` to {}. This exercises that default
+  // rather than merely asserting it: a catalog entry with every OTHER capability
+  // still cannot satisfy a seat, because it declared no class.
+  const crippled = {
+    ...adapters,
+    opencode: { ...adapters.opencode, transports: {} },
+  };
+  assert.throws(
+    () => validateRegistry(baseRegistry(), { adapters: crippled }),
+    (err) => err instanceof RegistryValidationError
+      && err.violations.some((v) => v.rule === RULE.SERVE_TRANSPORT && /declares: none/.test(v.message)),
+    'an adapter that declares no transport class must not satisfy any seat'
+  );
+});
+
+test('every adapter in the REAL catalog declares at least one transport class', () => {
+  // The fail-closed default is a flag day: an adapter that ships without a
+  // declaration silently stops loading every seat bound to it. This is the test
+  // that converts "I remembered all of them" into a check.
+  const undeclared = Object.keys(adapters).filter((a) => Object.keys(adapters[a].transports ?? {}).length === 0);
+  assert.deepEqual(undeclared, [], `these adapters would reject every seat bound to them: ${undeclared.join(', ')}`);
 });

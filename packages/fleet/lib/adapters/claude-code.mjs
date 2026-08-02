@@ -45,6 +45,25 @@ export const forcesModel = true;
 export const attestsResolvedModel = false;
 
 /**
+ * §4b transport classes this harness can serve (issue #396).
+ *
+ * `subscription` — the harness's own OAuth/keychain session, read from HOME.
+ * `api` — the CLI documents a mode in which "Anthropic auth is strictly
+ * ANTHROPIC_API_KEY ... OAuth and keychain are never read", so a metered path
+ * exists and is nameable.
+ *
+ * THE GUARANTEE IS ASYMMETRIC. Withholding the key is provable: a subscription
+ * seat that never receives ANTHROPIC_API_KEY cannot have been metered. Supplying
+ * it is not: a harness handed a key may still prefer a stored session. That is
+ * why a recorded transport is `selected`, never `attested` — proving what
+ * actually served a call is the deferred half (§9.3's twin for transport).
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+  api: Object.freeze({ env: 'ANTHROPIC_API_KEY' }),
+});
+
+/**
  * Translate a config command string into a Claude Code permission rule. A raw
  * string allowlists NOTHING (premortem F1), so each becomes `Bash(<cmd>)`; a
  * command already carrying a `:*` wildcard is preserved.

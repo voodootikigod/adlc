@@ -41,6 +41,14 @@ export const forcesModel = false;
  */
 export const attestsResolvedModel = false;
 
+/**
+ * §4b transport classes this harness can serve (issue #396).
+ * Session-based; no metered path is verified here, so none is declared.
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+});
+
 // Tools a worker needs to make progress unattended. Reads are auto-allowed by
 // the CLI; `write` covers edit/create, `shell` covers command execution. The
 // rails-guard hook still gates rail PATHS within these tools.

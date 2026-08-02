@@ -16,6 +16,7 @@ import {
   REVIEWER_GROUP_NAMES,
   TRANSPORT_PREFIXES,
   hasKnownTransportPrefix,
+  transportClass,
   isDirectTransport,
 } from './channels.mjs';
 import { isNormalizedProvider, normalizeProviderName } from './provider.mjs';
@@ -35,6 +36,7 @@ export const RULE = Object.freeze({
   DIRECT_AUTH: 'rule 4 (§6 — directAuth required on non-gateway members)',
   REVIEWER_ALIAS: 'rule 6 (no mutable aliases for reviewer-group members)',
   MODEL_PROVIDERS: 'rule 7 (concrete-model provider mapping)',
+  SERVE_TRANSPORT: 'rule 2 (§4b — adapter must serve the transport class it is bound to)',
 });
 
 /**
@@ -79,6 +81,11 @@ function normalizeCatalog(adapters) {
         aliases: new Set(meta?.aliases ?? []),
         forcesModel: meta?.forcesModel === true,
         attestsResolvedModel: meta?.attestsResolvedModel === true,
+        // §4b transport classes this adapter declares it can serve (#396).
+        // Absent → `{}` → serves none, which is the fail-closed direction: a
+        // catalog entry that says nothing about transports cannot satisfy a
+        // seat that declares one.
+        transports: { ...(meta?.transports ?? {}) },
       },
     ])
   );
@@ -194,6 +201,26 @@ function checkSeat(seat, label, { catalog, violations, isReviewerMember }) {
           `${TRANSPORT_PREFIXES.join(', ')}. The prefix is load-bearing for §6 gateway discounting, so an ` +
           'unrecognized transport is rejected rather than treated as non-gateway.',
       });
+    } else if (hasAdapter && catalog.get(seat.adapter)) {
+      // §4b + issue #396: the adapter must declare it can SERVE this transport
+      // class. Same shape as the FORCE_MODEL rule above, and for the same
+      // reason — a seat bound to a transport its adapter cannot serve would run
+      // on whatever ambient auth the host carries while the plan, the usage
+      // records and the signed ledger all claimed this transport. The
+      // declaration defaults to "serves none", so an adapter that forgets to
+      // declare fails closed here instead of silently inheriting.
+      const klass = transportClass(seat.transport);
+      const served = catalog.get(seat.adapter).transports ?? {};
+      if (!Object.prototype.hasOwnProperty.call(served, klass)) {
+        const known = Object.keys(served);
+        violations.push({
+          rule: RULE.SERVE_TRANSPORT,
+          message:
+            `${label}.transport "${seat.transport}" needs the "${klass}" class, which adapter ` +
+            `"${seat.adapter}" does not declare it can serve (declares: ${known.length ? known.join(', ') : 'none'}). ` +
+            'The seat would run on ambient auth while every record claimed this transport.',
+        });
+      }
     }
   }
 

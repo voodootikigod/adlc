@@ -84,3 +84,19 @@ export function isDirectTransport(transport) {
   if (typeof transport !== 'string') return false;
   return DIRECT_TRANSPORT_PREFIXES.some((prefix) => transport.startsWith(prefix) && transport.length > prefix.length);
 }
+
+/**
+ * The §4b CLASS of a transport — its prefix without the colon — or null when the
+ * string carries no known prefix (issue #396).
+ *
+ * The class, not the full string, is what an adapter declares it can serve: the
+ * suffix names an OPERATOR'S ACCOUNT (`anthropic-max`, `opencode-go`, a local
+ * server), which is theirs to choose and no adapter could enumerate. Dispatch
+ * selects a credential context by class; validation checks the adapter declared
+ * that class.
+ */
+export function transportClass(transport) {
+  if (typeof transport !== 'string') return null;
+  const prefix = TRANSPORT_PREFIXES.find((p) => transport.startsWith(p) && transport.length > p.length);
+  return prefix ? prefix.slice(0, -1) : null;
+}

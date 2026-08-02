@@ -44,7 +44,12 @@ function capabilitiesOf(mod) {
   const aliases = [...(mod.aliases ?? [])];
   const forcesModel = mod.forcesModel === true;
   const attestsResolvedModel = mod.attestsResolvedModel === true;
-  return { aliases, forcesModel, attestsResolvedModel };
+  // §4b transport classes (issue #396). Defaults to SERVES NONE — the same
+  // fail-closed direction as the booleans above: an adapter that forgets to
+  // declare a class cannot be bound to a seat that needs it, rather than
+  // silently inheriting whatever ambient auth the host happens to carry.
+  const transports = { ...(mod.transports ?? {}) };
+  return { aliases, forcesModel, attestsResolvedModel, transports };
 }
 
 export function adapterCatalog() {
