@@ -607,7 +607,7 @@ test('.deny-store sentinel keeps storeExpected after denies/ removal', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     ensureDenyMarker(root, { sessionId: 's1', ticketId: 'T154', contentHash: 'h' });
-    assert.equal(existsSync(join(root, '.adlc', 'handoffs', '.deny-store')), true);
+    assert.equal(existsSync(join(root, '.adlc', '.deny-store')), true);
     rmSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true, force: true });
     const loaded = loadDenyRecords(root);
     assert.equal(loaded.denyStoreUnavailable, true);
@@ -664,7 +664,7 @@ test('sentinel self-heals when markers exist but sentinel was deleted', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
   try {
     ensureDenyMarker(root, { sessionId: 'heal', ticketId: 'T154', contentHash: 'h' });
-    const sentinel = join(root, '.adlc', 'handoffs', '.deny-store');
+    const sentinel = join(root, '.adlc', '.deny-store');
     rmSync(sentinel, { force: true });
     assert.equal(existsSync(sentinel), false);
     const loaded = loadDenyRecords(root);
@@ -677,4 +677,133 @@ test('sentinel self-heals when markers exist but sentinel was deleted', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('rm -rf handoffs/ still denies when .adlc/.deny-store remains', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 's1', ticketId: 'T154', contentHash: 'h' });
+    assert.equal(existsSync(join(root, '.adlc', '.deny-store')), true);
+    rmSync(join(root, '.adlc', 'handoffs'), { recursive: true, force: true });
+    assert.equal(existsSync(join(root, '.adlc', 'handoffs')), false);
+    assert.equal(existsSync(join(root, '.adlc', '.deny-store')), true);
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, true);
+    assert.ok(g.reasons.includes('D0:deny_store_unavailable'));
+    const cool = evaluateMarkerOnReentry(root, 's1', { absoluteHandoff: false });
+    assert.equal(cool.deny, true);
+    assert.equal(cool.reason, 'marker_vanished');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy handoffs/.deny-store migrates to .adlc/.deny-store', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  try {
+    mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n', 'utf8');
+    const newSentinel = join(root, '.adlc', '.deny-store');
+    assert.equal(existsSync(newSentinel), false);
+    const loaded = loadDenyRecords(root);
+    assert.equal(loaded.denyStoreUnavailable, true);
+    assert.equal(existsSync(newSentinel), true);
+    const g = evaluateMutationGate(
+      mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+    );
+    assert.equal(g.deny, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('quarantineJunkDenies continues after first rename failure', () => {
+  const quarantinedDests = [];
+  const fs = {
+    existsSync(path) {
+      const s = String(path);
+      // Quarantine destination uniqueness probe — none exist yet.
+      if (s.includes('/quarantine/')) return quarantinedDests.includes(s);
+      return true;
+    },
+    readdirSync() {
+      return [
+        { name: 'a-locked.bin', isDirectory: () => false },
+        { name: 'b-junk.txt', isDirectory: () => false },
+        { name: 'c-valid.json', isDirectory: () => false },
+      ];
+    },
+    mkdirSync() {},
+    renameSync(from, to) {
+      if (String(from).endsWith('a-locked.bin')) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      quarantinedDests.push(String(to));
+    },
+    readFileSync(path) {
+      if (String(path).endsWith('c-valid.json')) {
+        return JSON.stringify({
+          session_id: 'c-valid',
+          ticket_id: 'T154',
+          content_hash: 'h',
+          status: 'open',
+          schema: 1,
+        });
+      }
+      return '';
+    },
+  };
+  const result = quarantineJunkDenies('/x', { fs });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failed, ['a-locked.bin']);
+  assert.ok(result.quarantined.includes('b-junk.txt'), `expected b-junk quarantined, got ${result.quarantined}`);
+  assert.ok(result.kept.includes('c-valid.json'));
+  assert.ok(!result.quarantined.includes('a-locked.bin'));
+});
+
+test('loadDenyRecords surfaces EACCES self-named marker as invalid:unreadable_marker', () => {
+  const fs = {
+    existsSync() {
+      return true;
+    },
+    readdirSync() {
+      return [
+        { name: 'self.json', isDirectory: () => false },
+        { name: 'good.json', isDirectory: () => false },
+      ];
+    },
+    readFileSync(path) {
+      if (String(path).endsWith('self.json')) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return JSON.stringify({
+        session_id: 'good',
+        ticket_id: 'T154',
+        content_hash: 'h',
+        status: 'open',
+        schema: 1,
+      });
+    },
+    mkdirSync() {},
+    writeFileSync() {},
+  };
+  const loaded = loadDenyRecords('/x', { fs });
+  assert.equal(loaded.ok, true);
+  assert.ok(loaded.records.some((r) => r.session_id === 'good'));
+  const bad = loaded.invalidRecords.find((r) => r.session_id === 'self');
+  assert.ok(bad, 'expected invalid record for self');
+  assert.equal(bad.status, 'invalid:unreadable_marker');
+  const g = evaluateMutationGate(
+    mutationGateInputFromLoad(loaded, { currentSessionId: 'fresh' }),
+  );
+  assert.equal(g.deny, true);
+  assert.ok(
+    g.reasons.some((r) => r.startsWith('D3:invalid_record:self')),
+    `expected D3 invalid self, got ${g.reasons}`,
+  );
 });

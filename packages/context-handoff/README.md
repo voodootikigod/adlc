@@ -36,8 +36,9 @@ denier remains D2.
 ## Deny-store expectation
 
 `loadDenyRecords` treats a missing `denies/` as unavailable only when
-`.adlc/handoffs/.deny-store` exists (written by `ensureDenyMarker`). Ticket-store
-presence alone does not expect denies. Removing the entire `handoffs/` tree
-(including the sentinel) is still indistinguishable from "never handed off"
-until the deferred deny ledger lands.
+`.adlc/.deny-store` exists (written by `ensureDenyMarker`). The sentinel is a
+sibling of `handoffs/` so deleting `handoffs/` alone cannot clear expectation;
+full signed per-deny ledger is still deferred. Ticket-store presence alone does
+not expect denies. A legacy `.adlc/handoffs/.deny-store` is treated as expected
+and self-healed to the new path.
 

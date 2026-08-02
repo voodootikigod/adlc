@@ -313,11 +313,21 @@ export function quarantineJunkDenies(
  * gate can fail closed (D3:invalid_record) rather than silently drop them.
  * @returns {{ ok: boolean, records: object[], invalidRecords: object[], reason?: string }}
  */
+/** Durable “deny store was initialized” bit — sibling of handoffs/, not inside it. */
+function denyStoreSentinelPath(root) {
+  return join(root, '.adlc', '.deny-store');
+}
+
+/** Pre-slice migration path (inside handoffs/); still honored and self-healed. */
+function legacyDenyStoreSentinelPath(root) {
+  return join(root, '.adlc', 'handoffs', '.deny-store');
+}
+
 function ensureDenyStoreSentinel(root, fs) {
-  const handoffsDir = join(root, '.adlc', 'handoffs');
-  const sentinel = join(handoffsDir, '.deny-store');
+  const adlcDir = join(root, '.adlc');
+  const sentinel = denyStoreSentinelPath(root);
   try {
-    fs.mkdirSync(handoffsDir, { recursive: true });
+    fs.mkdirSync(adlcDir, { recursive: true });
     if (!fs.existsSync(sentinel)) {
       fs.writeFileSync(sentinel, '1\n', 'utf8');
     }
@@ -330,9 +340,15 @@ function ensureDenyStoreSentinel(root, fs) {
 function denyStoreExpectedBySentinel(root, fs) {
   // Only the handoff sentinel means a deny store was initialized. Ticket-store
   // markers must not imply denies/ — otherwise every ADLC repo denies mutations
-  // before any handoff ever fires. Deleting handoffs/ including the sentinel is
-  // the deferred ledger gap (documented in README).
-  return fs.existsSync(join(root, '.adlc', 'handoffs', '.deny-store'));
+  // before any handoff ever fires. Sentinel lives at `.adlc/.deny-store` so
+  // `rm -rf .adlc/handoffs` cannot clear expectation.
+  if (fs.existsSync(denyStoreSentinelPath(root))) return true;
+  // Migrate: old in-tree sentinel still means expected; rewrite to new location.
+  if (fs.existsSync(legacyDenyStoreSentinelPath(root))) {
+    ensureDenyStoreSentinel(root, fs);
+    return true;
+  }
+  return false;
 }
 
 export function loadDenyRecords(
@@ -347,8 +363,9 @@ export function loadDenyRecords(
     },
     /**
      * When true, a missing/emptied denies/ directory is unavailable — not a clean store.
-     * Default: auto — expected only when `.adlc/handoffs/.deny-store` exists
-     * (written by ensureDenyMarker). Pass false for known-fresh trees.
+     * Default: auto — expected only when `.adlc/.deny-store` exists
+     * (written by ensureDenyMarker; legacy `.adlc/handoffs/.deny-store` migrates).
+     * Pass false for known-fresh trees.
      */
     storeExpected,
   } = {},
