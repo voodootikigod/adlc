@@ -192,13 +192,18 @@ export function diagnostics(aggregate) {
   // wrong answer: a P1 call against a frontier model and a P4 call on a cheap
   // seat are one call each and can differ by orders of magnitude in cost.
   const phasesWithCalls = Object.keys(byPhase).filter((p) => p !== 'unphased');
-  if (unmeasured > 0 && phasesWithCalls.length >= 2) {
+  // The count MUST describe exactly the calls the shape lists. `unmeasuredCalls`
+  // is a whole-ledger total including `unphased`, so quoting it beside a
+  // phase-only shape attributes unphased calls to the phases shown — and can
+  // state a number larger than the calls listed (adversarial-review).
+  const shownUnmeasured = phasesWithCalls.reduce((n, p) => n + byPhase[p].unmeasuredCalls, 0);
+  if (shownUnmeasured > 0 && phasesWithCalls.length >= 2) {
     const shape = phasesWithCalls
       .sort()
       .map((p) => `${p}=${byPhase[p].calls + byPhase[p].unmeasuredCalls}`)
       .join(' ');
     out.push(
-      `call(s) by phase — COUNTS, NOT SPEND: ${shape}. ${unmeasured} of these call(s) reported no ` +
+      `call(s) by phase — COUNTS, NOT SPEND: ${shape}. ${shownUnmeasured} of these call(s) reported no ` +
       'tokens, so this is the shape of where work happened, not a share of what it cost.'
     );
   }
@@ -325,7 +330,7 @@ export function renderSpendReport(aggregate) {
   // a ledger of unmeasured calls states a cost this tool does not know. When
   // nothing was measured it must say so; when some was, it must scope the number
   // to the calls it actually covers.
-  if (totalTokens(aggregate.total) === 0 && anyUnmeasured) {
+  if (aggregate.total.calls === 0 && anyUnmeasured) {
     lines.push(`total: ${aggregate.unmeasuredCalls} call(s), tokens unknown (none of these calls reported usage)`);
   } else {
     const scope = anyUnmeasured

@@ -201,3 +201,38 @@ test('a ledger with NO unmeasured calls produces no count-shape noise', () => {
   assert.ok(!found.some((d) => /MEASURED tokens only/.test(d)));
   assert.ok(found.some((d) => /P4/.test(d)), 'the existing token diagnostics still fire');
 });
+
+// ---------------------------------------------------------------------------
+// Regressions found by adversarial review
+// ---------------------------------------------------------------------------
+
+test('the call-shape count describes exactly the phases it lists, never unphased ones', () => {
+  // `unmeasuredCalls` is a whole-ledger total. Quoting it beside a shape that
+  // excludes `unphased` attributed unphased calls to the phases shown — and
+  // could state a number LARGER than the calls listed.
+  const found = diagnostics(aggregateSpend([
+    measured('premortem', U(100, 50)),
+    measured('coldstart', U(100, 50)),
+    { gate: 'some-unmapped-tool', data: { usageStatus: 'unreported' } },
+    { gate: 'some-unmapped-tool', data: { usageStatus: 'unreported' } },
+  ]));
+  const shapeLine = found.find((d) => /COUNTS, NOT SPEND/.test(d));
+  // Both phased calls were MEASURED, so there is no honest count-shape claim to
+  // make about them at all.
+  assert.equal(shapeLine, undefined, `no phased call was unmeasured: ${found}`);
+});
+
+test('a measured CACHE-HIT call is never erased by the "tokens unknown" total', () => {
+  // totalTokens() sums input+output only. A real measured call with 0 in, 0 out
+  // and 500 cached would have made the total line claim "none of these calls
+  // reported usage", discarding a measured call and its cached tokens.
+  const lines = renderSpendReport(aggregateSpend([
+    measured('premortem', U(0, 0, 500)),
+    unmeasured('flail-detector'),
+  ])).join('\n');
+  assert.ok(
+    !/none of these calls reported usage/.test(lines),
+    `a measured call exists, so this claim is false:\n${lines}`,
+  );
+  assert.match(lines, /cached=500/, 'the cached tokens survive into the total');
+});
