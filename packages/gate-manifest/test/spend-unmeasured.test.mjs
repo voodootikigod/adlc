@@ -355,3 +355,29 @@ test('every status the closed vocabulary DOES define still counts', () => {
   ]);
   assert.equal(agg.byPhase.P1.unmeasuredCalls, 3);
 });
+
+test('the TOTAL line states the true total, and never a count that contradicts it', () => {
+  // `total: 3 call(s) ... 2 further call(s) unmeasured` said 3 where 5 calls
+  // happened. Anything scraping the familiar `total: N call(s)` shape — a human
+  // included — would record the wrong number.
+  const lines = renderSpendReport(aggregateSpend([
+    measured('premortem', U(1000, 500)),
+    measured('premortem', U(0, 0, 10)),
+    measured('hollow-test', U(10, 5)),
+    unmeasured('flail-detector'),
+    unmeasured('lesson-foundry'),
+  ])).join('\n');
+
+  const totalLine = lines.split('\n').find((l) => l.startsWith('total:'));
+  assert.ok(totalLine, `there is a total line:\n${lines}`);
+  assert.match(totalLine, /^total: 5 call\(s\)/, `5 calls happened: ${totalLine}`);
+  assert.match(totalLine, /3 measured/, 'and the breakdown is explicit');
+  assert.match(totalLine, /2 unmeasured/);
+});
+
+test('a fully measured ledger keeps the original, unqualified total line', () => {
+  const lines = renderSpendReport(aggregateSpend([measured('premortem', U(100, 50))])).join('\n');
+  const totalLine = lines.split('\n').find((l) => l.startsWith('total:'));
+  assert.match(totalLine, /^total: 1 call\(s\), 150 tokens/, `no new caveats for a measured ledger: ${totalLine}`);
+  assert.ok(!/unmeasured/.test(totalLine));
+});

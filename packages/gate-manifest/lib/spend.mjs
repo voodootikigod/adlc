@@ -355,11 +355,17 @@ export function renderSpendReport(aggregate) {
   if (aggregate.total.calls === 0 && anyUnmeasured) {
     lines.push(`total: ${aggregate.unmeasuredCalls} call(s), tokens unknown (none of these calls reported usage)`);
   } else {
-    const scope = anyUnmeasured
-      ? ` across ${aggregate.total.calls} measured call(s); ${aggregate.unmeasuredCalls} further call(s) unmeasured`
-      : '';
+    // "total" must mean TOTAL. Leading with the measured count while a further
+    // N calls went unmeasured contradicts itself, and anything scraping the
+    // familiar `total: N call(s)` shape would record the wrong number
+    // (adversarial-review). The breakdown follows the true total instead.
+    const measured = aggregate.total.calls;
+    const head = anyUnmeasured
+      ? `total: ${measured + aggregate.unmeasuredCalls} call(s) — ${measured} measured, ${aggregate.unmeasuredCalls} unmeasured`
+      : `total: ${measured} call(s)`;
+    const scope = anyUnmeasured ? ` across the ${measured} measured` : '';
     lines.push(
-      `total: ${aggregate.total.calls} call(s), ${totalTokens(aggregate.total)} tokens ` +
+      `${head}, ${totalTokens(aggregate.total)} tokens ` +
       `(in=${aggregate.total.inputTokens} out=${aggregate.total.outputTokens} cached=${aggregate.total.cachedTokens})${scope}`
     );
   }
