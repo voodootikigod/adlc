@@ -17,10 +17,10 @@
       "category": "Developer Tools"
     },
     {
-      "name": "adlc-antigravity",
+      "name": "adlc-gemini",
       "source": {
         "source": "local",
-        "path": "./plugins/adlc-antigravity"
+        "path": "./plugins/adlc-gemini"
       },
       "policy": {
         "installation": "AVAILABLE",

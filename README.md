@@ -171,7 +171,7 @@ your only rail control — wire it and make it a required check.
 | `packages/` | The toolkit: 22 zero-dependency, gate-shaped CLIs |
 | `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
 | `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
-| `plugins/adlc-antigravity/` | Google Antigravity integration (native plugin system, skills, hooks) |
+| `plugins/adlc-gemini/` | Google Gemini integration — Antigravity and JetSki (native plugin system, skills, hooks) |
 | `plugins/adlc-pi/` | Pi harness integration package (TypeScript, skills, tests) |
 | `docs/` | Lifecycle thesis, integration guides, ADRs, CI templates |
 | `.claude/commands/` | Maintainer commands for this repo (release workflow) |

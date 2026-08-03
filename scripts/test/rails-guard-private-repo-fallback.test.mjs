@@ -83,7 +83,7 @@ test('docs/ci/rails-guard.yml itself is untouched (it is an immutable ADLC trust
 const INTEGRATION_DOCS_WITH_REQUIRED_CHECK_ADVICE = [
   'docs/integrations/claude-code.md',
   'docs/integrations/opencode.md',
-  'docs/integrations/antigravity.md',
+  'docs/integrations/gemini.md',
   'docs/integrations/cursor.md',
 ];
 

@@ -18,7 +18,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const CHECK = join(HERE, '..', 'router', 'check-consolidation.mjs');
 
-const { parseRouting, parseFrontmatter, compareRouting } = await import('../router/check-consolidation.mjs');
+const { parseRouting, parseFrontmatter, compareRouting, run } = await import('../router/check-consolidation.mjs');
 
 const PROSE = `---
 name: adlc
@@ -127,4 +127,104 @@ test('AC8 integration — --frontmatter passes against the real baseline', () =>
   }).trim();
   const r = spawnSync(process.execPath, [CHECK, base, '--frontmatter'], { encoding: 'utf8', cwd: REPO });
   assert.equal(r.status, 0, `no FRONTMATTER DRIFT vs baseline:\n${r.stdout}\n${r.stderr}`);
+});
+
+// ------------------------------------------------- renamed routers (baselinePath)
+//
+// A router that moved since the baseline has no file at its current path in the
+// baseline tree. Without `baselinePath` the check cannot resolve it and aborts,
+// which would take the whole comparison out of service exactly when a rename is
+// the thing most worth comparing.
+
+const BASE = execSync('git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD', {
+  cwd: REPO, encoding: 'utf8',
+}).trim();
+const MOVED = 'plugins/adlc-gemini/skills/adlc/SKILL.md';
+const MOVED_FROM = 'plugins/adlc-antigravity/skills/adlc/SKILL.md';
+const baselineRouter = () => execSync(`git show ${BASE}:${MOVED_FROM}`, {
+  cwd: REPO, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+});
+
+test('a router with no baseline at its current path is an operational error without baselinePath', () => {
+  assert.throws(
+    () => run(BASE, {
+      harnesses: { moved: { path: MOVED, format: 'prose' } },
+      readWork: () => baselineRouter(),
+    }),
+    (e) => e.op === true && /baseline unresolved/.test(e.msg),
+    'a missing baseline must abort, not silently pass'
+  );
+});
+
+test('baselinePath follows the rename so the routing comparison still runs', () => {
+  const drift = run(BASE, {
+    harnesses: { moved: { path: MOVED, baselinePath: MOVED_FROM, format: 'prose' } },
+    readWork: () => baselineRouter(),
+  });
+  assert.deepEqual(drift, [], 'identical content across the rename is not drift');
+});
+
+test('baselinePath does not disable the routing check — a gate swap is still caught', () => {
+  const drift = run(BASE, {
+    harnesses: { moved: { path: MOVED, baselinePath: MOVED_FROM, format: 'prose' } },
+    readWork: () => baselineRouter().replace(/adlc spec-lint/g, 'adlc totally-different-gate'),
+  });
+  assert.equal(drift.length > 0, true, 'a routing swap across a rename must still report');
+  assert.match(drift.join('\n'), /ROUTING DRIFT/);
+});
+
+// --------------------------------- superseded frontmatter (supersedesBaselineFrontmatter)
+
+test('a replaced frontmatter is reported when the harness pins nothing', () => {
+  const drift = run(BASE, {
+    frontmatter: true,
+    harnesses: { moved: { path: MOVED, baselinePath: MOVED_FROM, format: 'prose' } },
+    readWork: () => baselineRouter().replace('name: adlc', 'name: adlc-renamed'),
+  });
+  assert.match(drift.join('\n'), /FRONTMATTER DRIFT/);
+});
+
+test('supersedesBaselineFrontmatter accepts the replacement only against the exact pinned baseline', () => {
+  const superseded = parseFrontmatter(baselineRouter());
+  assert.match(superseded, /^---\n/, 'fixture sanity: the baseline router has frontmatter');
+
+  const accepted = run(BASE, {
+    frontmatter: true,
+    harnesses: {
+      moved: {
+        path: MOVED, baselinePath: MOVED_FROM, format: 'prose',
+        supersedesBaselineFrontmatter: superseded,
+      },
+    },
+    readWork: () => baselineRouter().replace('name: adlc', 'name: adlc-renamed'),
+  });
+  assert.deepEqual(accepted, [], 'the reviewed replacement is accepted');
+
+  // The pin is load-bearing: if the baseline ever stops reading exactly the
+  // recorded block, the acceptance lapses instead of silently covering it.
+  const stalePin = run(BASE, {
+    frontmatter: true,
+    harnesses: {
+      moved: {
+        path: MOVED, baselinePath: MOVED_FROM, format: 'prose',
+        supersedesBaselineFrontmatter: superseded.replace('name: adlc', 'name: something-else'),
+      },
+    },
+    readWork: () => baselineRouter().replace('name: adlc', 'name: adlc-renamed'),
+  });
+  assert.match(stalePin.join('\n'), /FRONTMATTER DRIFT/, 'a pin that no longer matches the baseline must report');
+});
+
+test('supersedesBaselineFrontmatter does not suppress the routing check', () => {
+  const drift = run(BASE, {
+    frontmatter: true,
+    harnesses: {
+      moved: {
+        path: MOVED, baselinePath: MOVED_FROM, format: 'prose',
+        supersedesBaselineFrontmatter: parseFrontmatter(baselineRouter()),
+      },
+    },
+    readWork: () => baselineRouter().replace(/adlc spec-lint/g, 'adlc totally-different-gate'),
+  });
+  assert.match(drift.join('\n'), /ROUTING DRIFT/, 'frontmatter supersede must not blanket-exempt the harness');
 });

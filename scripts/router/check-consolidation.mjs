@@ -125,18 +125,31 @@ function resolveBase(base) {
   return base;
 }
 
-export function run(base, { frontmatter = false } = {}) {
+/**
+ * `harnesses` and `readWork` are injectable so the rename/supersede branches can
+ * be driven by fixtures instead of only by whatever the real model happens to
+ * declare today — otherwise those branches go untested the moment no router is
+ * mid-rename.
+ */
+export function run(base, {
+  frontmatter = false,
+  harnesses = routerModel.harnesses,
+  readWork = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8'),
+} = {}) {
   const resolved = resolveBase(base);
   const drift = [];
-  for (const harness of Object.values(routerModel.harnesses)) {
+  for (const harness of Object.values(harnesses)) {
     const rel = harness.path;
+    // A router that moved since the baseline declares where it used to live, so
+    // the comparison follows the rename instead of failing to resolve.
+    const baseRel = harness.baselinePath ?? rel;
     let baseContent;
     try {
-      baseContent = gitShow(resolved, rel);
+      baseContent = gitShow(resolved, baseRel);
     } catch {
-      throw { op: true, msg: `baseline unresolved: ${rel} does not exist at ${resolved}.` };
+      throw { op: true, msg: `baseline unresolved: ${baseRel} does not exist at ${resolved}.` };
     }
-    const workContent = readFileSync(join(REPO_ROOT, rel), 'utf8');
+    const workContent = readWork(rel);
 
     const routeDrift = compareRouting(
       parseRouting(baseContent, harness.format),
@@ -147,7 +160,13 @@ export function run(base, { frontmatter = false } = {}) {
     if (frontmatter) {
       const a = parseFrontmatter(baseContent);
       const b = parseFrontmatter(workContent);
-      if (a !== b) drift.push(`FRONTMATTER DRIFT ${rel} — leading --- block changed vs baseline`);
+      // A harness that deliberately replaced its frontmatter pins the exact block
+      // it superseded. The drift is accepted only while the baseline still reads
+      // that block — any other baseline, or any further edit, still reports.
+      const superseded = harness.supersedesBaselineFrontmatter;
+      if (a !== b && !(superseded !== undefined && a === superseded)) {
+        drift.push(`FRONTMATTER DRIFT ${rel} — leading --- block changed vs baseline`);
+      }
     }
   }
   return drift;
