@@ -13,7 +13,7 @@ test('self-contained harness ticket readers match the canonical generated source
   for (const output of [
     'plugins/adlc-codex/hooks/generated-ticket-reader.mjs',
     'plugins/adlc-claude-code/hooks/generated-ticket-reader.mjs',
-    'plugins/adlc-antigravity/generated-ticket-reader.mjs',
+    'plugins/adlc-gemini/generated-ticket-reader.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 

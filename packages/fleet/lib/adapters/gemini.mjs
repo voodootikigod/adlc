@@ -28,8 +28,16 @@ export const forcesModel = true;
  */
 export const attestsResolvedModel = false;
 
+/**
+ * §4b transport classes this harness can serve (issue #396).
+ * Session-based; no metered path is verified here, so none is declared. The
+ * `agy`/`jetski` wrappers front the same binaries and declare the same class.
+ */
+export const transports = Object.freeze({
+  subscription: Object.freeze({}),
+});
+
 function detectBinary(targets = ['jetski', 'agy']) {
-  const npmInjected = join('node_modules', '.bin');
   const delimiter = process.platform === 'win32' ? ';' : ':';
   const extensions = process.platform === 'win32'
     ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => e.toLowerCase())

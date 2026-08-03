@@ -52,6 +52,17 @@ export const routerModel = {
     },
     "gemini": {
       path: "plugins/adlc-gemini/skills/adlc/SKILL.md",
+      // This router moved when the Antigravity and JetSki plugins were unified
+      // into adlc-gemini. The consolidation check reads the baseline from here
+      // so the routing/frontmatter comparison still runs across the rename
+      // instead of skipping a router it cannot resolve.
+      baselinePath: "plugins/adlc-antigravity/skills/adlc/SKILL.md",
+      // The unified plugin serves both Antigravity and JetSki, so its description
+      // names both hosts. That supersedes the Antigravity-only text below. Pinning
+      // the exact superseded block keeps the baseline frontmatter check active:
+      // the drift is accepted only while the baseline still reads exactly this,
+      // and the replacing text stays pinned to disk byte-for-byte by `frontmatter`.
+      supersedesBaselineFrontmatter: "---\nname: adlc\ndescription: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Antigravity. Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on \"shape this spec\", \"is this ticket ready\", \"freeze these tests\", \"prosecute this change\", \"is this safe to merge\", \"ADLC\", \"which gate\", \"spec-lint\", \"premortem\", \"coldstart\", \"rails-guard\", \"hollow-test\", \"behavior-diff\".\n---\n",
       format: "prose",
       frontmatter: "---\nname: adlc\ndescription: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Gemini (Antigravity/JetSki). Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on \"shape this spec\", \"is this ticket ready\", \"freeze these tests\", \"prosecute this change\", \"is this safe to merge\", \"ADLC\", \"which gate\", \"spec-lint\", \"premortem\", \"coldstart\", \"rails-guard\", \"hollow-test\", \"behavior-diff\".\n---\n",
       // Gemini has no plugin-namespace command convention (commands/ are auto-converted to

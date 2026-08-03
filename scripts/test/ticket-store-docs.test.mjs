@@ -56,7 +56,7 @@ test('every integration doc that offers the pointer links its schema', () => {
   // Each harness used to describe the pointer in its own words while showing the
   // schema nowhere — which is how three different read semantics shipped. One
   // canonical page, linked; no per-harness copy to drift.
-  const harnesses = ['cursor', 'antigravity', 'opencode', 'claude-code', 'codex'];
+  const harnesses = ['cursor', 'gemini', 'opencode', 'claude-code', 'codex'];
   for (const harness of harnesses) {
     const path = `docs/integrations/${harness}.md`;
     const body = readFileSync(join(ROOT, path), 'utf8');

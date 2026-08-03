@@ -25,9 +25,9 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
  *
  * Two layouts ship a prosecute workflow. Command-layout harnesses (claude-code,
  * cursor, opencode, pi) keep it in command/commands/prompts/adlc-prosecute.md.
- * Skills-layout harnesses (codex, copilot, antigravity) express the same
+ * Skills-layout harnesses (codex, copilot, gemini) express the same
  * loop as a SKILL.md under skills/<name>/ where <name> matches /prosecut/
- * (adlc-prosecute, antigravity's adlc-prosecutor). We consult the skills layout
+ * (adlc-prosecute, gemini's adlc-prosecutor). We consult the skills layout
  * only when a harness ships no command-layout doc, so a harness like pi — whose
  * skills-layout adlc-prosecute is an evidence-recording helper that does NOT run
  * the finding-surfacing loop — stays covered by its command-layout (prompts/)
@@ -72,7 +72,7 @@ test('the harness prosecute docs are actually discovered', async () => {
   const harnesses = new Set(DOCS.map((d) => d.path.split('/')[1]));
   for (const h of [
     'adlc-claude-code', 'adlc-cursor', 'adlc-opencode', 'adlc-pi',
-    'adlc-codex', 'adlc-copilot', 'adlc-antigravity',
+    'adlc-codex', 'adlc-copilot', 'adlc-gemini',
   ]) {
     assert.ok(harnesses.has(h), `${h} must have a discoverable prosecute workflow`);
   }
