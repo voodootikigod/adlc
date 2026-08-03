@@ -236,3 +236,73 @@ test('a measured CACHE-HIT call is never erased by the "tokens unknown" total', 
   );
   assert.match(lines, /cached=500/, 'the cached tokens survive into the total');
 });
+
+// ---------------------------------------------------------------------------
+// Hostile / malformed ledger entries
+//
+// A manifest is append-only evidence read long after it was written, by a
+// version of this code that did not exist then. Every branch below is a DECISION
+// rather than an accident, pinned so it stays one.
+// ---------------------------------------------------------------------------
+
+const HOSTILE = [
+  null,
+  undefined,
+  {},
+  { gate: 'premortem' },
+  { gate: 'premortem', data: null },
+  { gate: 'premortem', data: { usageStatus: '' } },
+  { gate: 'premortem', data: { usageStatus: 42 } },
+  { gate: 'premortem', data: { usage: 'not-an-object', usageStatus: 'reported' } },
+  { gate: 'premortem', data: { usage: null, usageStatus: 'unreported' } },
+  { data: { usageStatus: 'unreported' } },
+  { gate: 'a-gate-this-version-never-heard-of', data: { usageStatus: 'unreported' } },
+];
+
+test('malformed entries never throw, in aggregation OR rendering', () => {
+  const agg = aggregateSpend(HOSTILE);
+  assert.doesNotThrow(() => renderSpendReport(agg));
+  assert.doesNotThrow(() => diagnostics(agg));
+});
+
+test('an unusable usage VALUE is treated as unmeasured, never trusted', () => {
+  // `usage: 'not-an-object'` and `usage: null` both mean the counters cannot be
+  // read. Counting them as measured would put garbage into token totals; the
+  // call still happened, so it lands in the unmeasured column instead.
+  const agg = aggregateSpend([
+    { gate: 'premortem', data: { usage: 'not-an-object', usageStatus: 'reported' } },
+    { gate: 'premortem', data: { usage: null, usageStatus: 'unreported' } },
+  ]);
+  assert.equal(agg.entriesWithUsage, 0, 'nothing unusable is counted as measured');
+  assert.equal(agg.byPhase.P1.unmeasuredCalls, 2);
+  assert.equal(agg.byPhase.P1.inputTokens, 0, 'no garbage reaches the token totals');
+});
+
+test('a status that is not a non-empty string is not evidence of a call', () => {
+  const agg = aggregateSpend([
+    { gate: 'premortem', data: { usageStatus: '' } },
+    { gate: 'premortem', data: { usageStatus: 42 } },
+  ]);
+  assert.deepEqual(agg.byPhase, {}, 'an unreadable status claims nothing');
+  assert.equal(agg.unmeasuredCalls, 0);
+});
+
+test('an unknown or missing gate lands in unphased, never dropped and never mis-attributed', () => {
+  // A ledger outlives the PHASE_BY_GATE table that reads it. A gate this
+  // version does not know is still a call that happened; `unphased` is where it
+  // is visible without being credited to a phase it may not belong to.
+  const agg = aggregateSpend([
+    { data: { usageStatus: 'unreported' } },
+    { gate: 'a-gate-this-version-never-heard-of', data: { usageStatus: 'unreported' } },
+  ]);
+  assert.equal(agg.byPhase.unphased.unmeasuredCalls, 2);
+  assert.equal(agg.unmeasuredCalls, 2);
+});
+
+test('aggregation is order-independent', () => {
+  const a = aggregateSpend(HOSTILE);
+  const b = aggregateSpend([...HOSTILE].reverse());
+  assert.deepEqual(a.byPhase, b.byPhase);
+  assert.equal(a.unmeasuredCalls, b.unmeasuredCalls);
+  assert.deepEqual(a.total, b.total);
+});
