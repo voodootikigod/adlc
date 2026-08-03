@@ -25,7 +25,7 @@ const model = (await import('../router/router-model.mjs')).routerModel;
 
 const SIX = [
   'plugins/adlc-claude-code/skills/adlc/SKILL.md',
-  'plugins/adlc-antigravity/skills/adlc/SKILL.md',
+  'plugins/adlc-gemini/skills/adlc/SKILL.md',
   'plugins/adlc-codex/skills/adlc/SKILL.md',
   'plugins/adlc-pi/skills/adlc/SKILL.md',
   'plugins/adlc-opencode/skill/adlc.md',
@@ -59,23 +59,23 @@ test('AC4 — adversarial-review discoverability survives in all six generated r
   }
 });
 
-test('T14 — antigravity gains adversarial-review at P1, P3 and P5', () => {
+test('T14 — gemini gains adversarial-review at P1, P3 and P5', () => {
   const out = generateAll();
-  const agy = out['plugins/adlc-antigravity/skills/adlc/SKILL.md'];
+  const gemini = out['plugins/adlc-gemini/skills/adlc/SKILL.md'];
   // Discoverability block + phase-level references, mirroring claude-code.
-  assert.match(agy, /adlc spec-lint · premortem · parallax · adversarial-review/, 'P1 row references adversarial-review');
-  assert.match(agy, /adlc rails-guard · adversarial-review/, 'P3 row references adversarial-review');
-  assert.match(agy, /adlc hollow-test · behavior-diff · review-calibration · adversarial-review/, 'P5 row references adversarial-review');
-  assert.match(agy, /Rail-set adequacy review/, 'P3 detail carries the rail-set adequacy review');
-  assert.match(agy, /adversarial-review --providers/, 'P5 detail runs adversarial-review with providers');
+  assert.match(gemini, /adlc spec-lint · premortem · parallax · adversarial-review/, 'P1 row references adversarial-review');
+  assert.match(gemini, /adlc rails-guard · adversarial-review/, 'P3 row references adversarial-review');
+  assert.match(gemini, /adlc hollow-test · behavior-diff · review-calibration · adversarial-review/, 'P5 row references adversarial-review');
+  assert.match(gemini, /Rail-set adequacy review/, 'P3 detail carries the rail-set adequacy review');
+  assert.match(gemini, /adversarial-review --providers/, 'P5 detail runs adversarial-review with providers');
   // No unsupported syntax (T14 AC3).
-  assert.doesNotMatch(agy, /adversarial-review +<?spec/, 'no positional spec arg');
-  assert.doesNotMatch(agy, /adversarial-review --loop\b/, 'no --loop command claim');
-  // Frontmatter intact (T14 AC4) — antigravity keeps its own frontmatter verbatim.
-  assert.match(agy, /^---\nname: adlc\n/, 'antigravity frontmatter preserved');
+  assert.doesNotMatch(gemini, /adversarial-review +<?spec/, 'no positional spec arg');
+  assert.doesNotMatch(gemini, /adversarial-review --loop\b/, 'no --loop command claim');
+  // Frontmatter intact (T14 AC4) — gemini keeps its own frontmatter verbatim.
+  assert.match(gemini, /^---\nname: adlc\n/, 'gemini frontmatter preserved');
   // Harness-specific content preserved.
-  assert.match(agy, /## Rails in Antigravity \(agy\)/, 'antigravity rails section preserved');
-  assert.match(agy, /ADLC_AGY_SENTINEL_PHASE_ROUTER_V1/, 'antigravity sentinel preserved');
+  assert.match(gemini, /## Rails in Gemini \(Antigravity\/JetSki\)/, 'gemini rails section preserved');
+  assert.match(gemini, /ADLC_GEMINI_SENTINEL_PHASE_ROUTER_V1/, 'gemini sentinel preserved');
 });
 
 test('AC3 — gen-routers.mjs --check exits 0 on a clean tree', () => {

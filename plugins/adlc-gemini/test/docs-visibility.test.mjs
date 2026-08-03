@@ -103,10 +103,10 @@ test('no shipped surface tells a user to run `agy plugin install <path>` directl
     scanned += 1;
     for (const [, block] of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
       for (const line of block.split('\n')) {
-        const match = line.match(/agy\s+plugin\s+install\s+(\S+)/);
+        const match = line.match(/(?:agy|jetski|\[agent\])\s+plugin\s+install\s+(\S+)/);
         if (!match) continue;
         assert.fail(
-          `${relative} instructs a user to pass a path to agy directly: "${line.trim()}"\n` +
+          `${relative} instructs a user to pass a path to the agent directly: "${line.trim()}"\n` +
             'Route it through the helper (bin/cli.mjs install), which stages under an @-free path.'
         );
       }

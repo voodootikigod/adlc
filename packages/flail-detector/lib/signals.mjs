@@ -80,13 +80,27 @@ export function extractPath(line) {
  * @param {number} maxRepeat
  * @returns {{ signature: string, count: number }[]}
  */
-export function detectRepeatedErrors(lines, maxRepeat) {
+export function detectRepeatedErrors(steps, maxRepeat) {
   const counts = new Map();
-  for (const line of lines) {
-    if (!ERROR_LINE_RE.test(line)) continue;
-    const sig = normalizeError(line);
-    if (!sig) continue;
-    counts.set(sig, (counts.get(sig) ?? 0) + 1);
+  const normalizedSteps = steps.map(item => {
+    if (typeof item === 'string') return [item];
+    if (Array.isArray(item)) return item;
+    return [];
+  });
+
+  for (const stepLines of normalizedSteps) {
+    if (!Array.isArray(stepLines)) continue;
+    const stepSigs = new Set();
+    for (const line of stepLines) {
+      if (typeof line !== 'string' || !ERROR_LINE_RE.test(line)) continue;
+      const sig = normalizeError(line);
+      if (!sig || sig.length < 5) continue;
+      if (/^created at:?$/.test(sig) || /^completed at:?$/.test(sig)) continue;
+      stepSigs.add(sig);
+    }
+    for (const sig of stepSigs) {
+      counts.set(sig, (counts.get(sig) ?? 0) + 1);
+    }
   }
   const results = [];
   for (const [signature, count] of counts) {

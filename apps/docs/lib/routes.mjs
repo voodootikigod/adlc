@@ -35,7 +35,7 @@ export const MARKETING_ROUTES = [
     path: '/integrations',
     title: 'Integrations: Native to Your Agent',
     summary:
-      'Install the ADLC natively in Claude Code, Codex, Cursor, OpenCode, Pi, or Google Antigravity.',
+      'Install the ADLC natively in Claude Code, Codex, Cursor, OpenCode, Pi, or Google Gemini.',
   },
   {
     path: '/enterprise',

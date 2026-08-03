@@ -44,7 +44,7 @@ const HARNESSES = [
   { bin: 'codex', label: 'Codex' },
   { bin: 'opencode', label: 'OpenCode' },
   { bin: 'pi', label: 'pi' },
-  { bin: 'agy', label: 'Google Antigravity' },
+  { bin: 'agy', label: 'Google Gemini' },
   { bin: 'herdr', label: 'herdr' },
   { bin: 'copilot', label: 'GitHub Copilot' },
 ];
@@ -92,7 +92,7 @@ function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath
       // `node -v` has to answer; anything else just logs.
       shim('node', `if [ "$1" = "-v" ]; then printf '${nodeVersion}\\n'; fi\nexit 0`);
     } else if (name === 'npm') {
-      // `npm root -g` locates the Antigravity plugin on disk; `npm prefix -g` is
+      // `npm root -g` locates the Gemini plugin on disk; `npm prefix -g` is
       // how the installer checks whether the `adlc` it just ran is the one npm
       // wrote. npmPrefix defaults to a path the shimmed adlc is NOT under, so
       // the shadow warning is exercised; pass the bin dir to model a match.
@@ -493,10 +493,10 @@ test('install.sh stays quiet when the adlc on PATH IS the one npm installed', ()
   }
 });
 
-test('install.sh verifies the Antigravity plugin path instead of assuming it', () => {
-  // `agy plugin install` takes a filesystem path, and with version managers or a
+test('install.sh verifies the Gemini plugin path instead of assuming it', () => {
+  // `[agent] plugin install` takes a filesystem path, and with version managers or a
   // custom prefix `npm install -g` can write somewhere `npm root -g` does not
-  // report. Passing an unverified path hands agy a non-existent directory and
+  // report. Passing an unverified path hands the agent a non-existent directory and
   // produces a confusing downstream error instead of a clear one here.
   const box = sandbox({ bins: ['node', 'npm', 'agy'] });
   try {
@@ -504,8 +504,8 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     const result = runInstaller(box);
     assert.equal(result.status, 0, 'a bad plugin path must not fail the whole install');
     assert.ok(
-      !box.commands().includes('agy plugin install'),
-      'agy must not be invoked with a path that does not exist',
+      !box.commands().includes('agy plugin install') && !box.commands().includes('jetski plugin install'),
+      'agent must not be invoked with a path that does not exist',
     );
     assert.match(result.stdout, /not found at/, 'the missing path must be reported');
     assert.match(result.stdout, /npm root -g/, 'the user needs an actionable next step');
@@ -514,35 +514,35 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
     // the user nothing about what to do with it.
     assert.match(
       result.stdout,
-      /manual step needed for: .*Antigravity/,
+      /manual step needed for: .*Gemini/,
       'the harness must appear in the manual summary',
     );
     assert.match(
       result.stdout,
-      /Antigravity:.*npx @adlc\/antigravity@latest install/s,
+      /Gemini:.*npx --package=@adlc\/gemini adlc-gemini install/s,
       'a harness in MANUAL must get its own printed instruction',
     );
     // The version spec is load-bearing, not decoration: npx resolves a BARE name
-    // against the current project first, so `npx @adlc/antigravity` inside a repo
+    // against the current project first, so `npx @adlc/gemini` inside a repo
     // shipping a workspace of that name runs THAT binary. Same hazard this script
     // already pins for the `plugins` package.
     assert.ok(
-      !/npx @adlc\/antigravity(?!@)/.test(result.stdout),
+      !/npx @adlc\/gemini(?!@)/.test(result.stdout),
       `an npx instruction lacks a version spec and can be shadowed locally:\n${result.stdout}`,
     );
     // The instruction must not hand the user the very command that fails: a bare
-    // `agy plugin install <path>/@adlc/antigravity` is rejected by agy's
+    // `agy plugin install <path>/@adlc/gemini` is rejected by agy's
     // marketplace parser (see the @-free staging test below).
     assert.ok(
-      !/agy plugin install \S*@/.test(result.stdout),
+      !/(?:agy|jetski) plugin install \S*@/.test(result.stdout),
       `the fallback instruction still tells the user to pass an @ path:\n${result.stdout}`,
     );
-    // Nor may it name a package that does not exist. `adlc-agy` is a BIN name
-    // inside @adlc/antigravity, not a package: `npx adlc-agy install` resolves
+    // Nor may it name a package that does not exist. `adlc-gemini` is a BIN name
+    // inside @adlc/gemini, not a package: `npx adlc-gemini install` resolves
     // against the registry on any machine without the global install and 404s —
     // and leaves an unclaimed name that someone else's code could answer to.
     assert.ok(
-      !/npx adlc-agy/.test(result.stdout),
+      !/npx adlc-agy/.test(result.stdout) && !/npx adlc-jetski/.test(result.stdout),
       `the instruction names an unpublished npm package:\n${result.stdout}`,
     );
   } finally {
@@ -550,7 +550,7 @@ test('install.sh verifies the Antigravity plugin path instead of assuming it', (
   }
 });
 
-test('install.sh delegates the Antigravity install to the package helper, never agy directly', () => {
+test('install.sh delegates the Gemini install to the package helper, never agy/jetski directly', () => {
   // install.sh USED to stage the plugin and call `agy plugin install` itself, a
   // second copy of logic the shipped helper already owns: @-free staging, agy
   // resolution that ignores npm-injected bin dirs, a subprocess timeout, and
@@ -559,13 +559,13 @@ test('install.sh delegates the Antigravity install to the package helper, never 
   // installer past its own summary and exit status.
   //
   // So the property this test pins is DELEGATION, not staging: staging is proved
-  // where it now lives, in plugins/adlc-antigravity/test/packaging.test.mjs
+  // where it now lives, in plugins/adlc-gemini/test/packaging.test.mjs
   // (including the hostile-TMPDIR case). Asserting it in both places would
   // recreate the duplication in the tests.
   const box = sandbox({ bins: ['node', 'npm', 'agy'] });
   try {
     // Give the stub `npm root -g` a real helper to find.
-    const helperDir = path.join(box.root, 'npmroot', '@adlc', 'antigravity', 'bin');
+    const helperDir = path.join(box.root, 'npmroot', '@adlc', 'gemini', 'bin');
     mkdirSync(helperDir, { recursive: true });
     writeFileSync(path.join(helperDir, 'cli.mjs'), '// helper\n');
 
@@ -581,10 +581,10 @@ test('install.sh delegates the Antigravity install to the package helper, never 
 
     // And agy must NOT be driven from here any more — that is the whole point.
     assert.ok(
-      !/(^|\n)agy /.test(commands),
+      !/(^|\n)agy /.test(commands) && !/(^|\n)jetski /.test(commands),
       `install.sh must not invoke agy directly; it delegates:\n${commands}`,
     );
-    assert.match(result.stdout, /installed for: .*Antigravity/);
+    assert.match(result.stdout, /installed for: .*Google Gemini/);
   } finally {
     box.cleanup();
   }

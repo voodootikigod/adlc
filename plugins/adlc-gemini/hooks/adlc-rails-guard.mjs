@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
-import { flailMessage, resolveTranscriptPath, parseTranscriptLines, analyzeFlail } from '../flail-inline.mjs';
+import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -140,8 +140,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       // Record edit for flail tracking & inspect session transcript for repeated errors / edit churn
       if (cls === 'mutating' && pathTracker?.recordEdit) {
         const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-        const transcriptLines = transcriptPath ? parseTranscriptLines(transcriptPath) : [];
-        const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptLines });
+        const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
+        const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptSteps });
 
         const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
         const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';

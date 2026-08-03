@@ -40,6 +40,38 @@ test('detectRepeatedErrors detects error signatures repeating >= maxRepeat times
   assert.equal(detected[0].signature, 'error: failed to compile at line');
 });
 
+test('detectRepeatedErrors supports step-based deduplication and cross-step counts', () => {
+  const steps = [
+    [
+      'Error: Failed to compile src/a.js at line 10',
+      'Error: Failed to compile src/a.js at line 10', // duplicate in same step
+    ],
+    [
+      'Error: Failed to compile src/b.js at line 20', // identical error in different step
+    ]
+  ];
+  const detected = detectRepeatedErrors(steps, 2);
+  assert.equal(detected.length, 1);
+  assert.equal(detected[0].count, 2);
+  assert.equal(detected[0].signature, 'error: failed to compile at line');
+
+  const notDetected = detectRepeatedErrors(steps, 3);
+  assert.equal(notDetected.length, 0);
+});
+
+test('detectRepeatedErrors supports mixed arrays of strings and steps without skipping elements', () => {
+  const mixed = [
+    'Error: Failed to compile src/a.js at line 10', // top-level string
+    [
+      'Error: Failed to compile src/b.js at line 20', // step array
+    ]
+  ];
+  const detected = detectRepeatedErrors(mixed, 2);
+  assert.equal(detected.length, 1);
+  assert.equal(detected[0].count, 2);
+  assert.equal(detected[0].signature, 'error: failed to compile at line');
+});
+
 test('detectEditChurn identifies files edited >= threshold times', () => {
   const logs = ['Editing src/foo.ts', 'Editing src/bar.ts', 'Editing src/foo.ts', 'Editing src/foo.ts'];
   const churning = detectEditChurn(logs, 3);

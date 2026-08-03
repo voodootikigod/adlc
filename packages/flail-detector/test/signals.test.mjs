@@ -93,6 +93,38 @@ test('detectRepeatedErrors: triggers on exact maxRepeat', () => {
   assert.equal(result[0].count, 2);
 });
 
+test('detectRepeatedErrors: supports step-based deduplication and cross-step counts', () => {
+  const steps = [
+    [
+      'Error: cannot find module "lodash" at line 42',
+      'Error: cannot find module "lodash" at line 42',
+    ],
+    [
+      'Error: cannot find module "express" at line 99',
+    ]
+  ];
+  const result = detectRepeatedErrors(steps, 2);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].count, 2);
+  assert.equal(result[0].signature, 'error: cannot find module at line');
+
+  const result3 = detectRepeatedErrors(steps, 3);
+  assert.equal(result3.length, 0);
+});
+
+test('detectRepeatedErrors: supports mixed arrays of strings and steps without skipping elements', () => {
+  const mixed = [
+    'Error: cannot find module "lodash" at line 42',
+    [
+      'Error: cannot find module "express" at line 99',
+    ]
+  ];
+  const result = detectRepeatedErrors(mixed, 2);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].count, 2);
+  assert.equal(result[0].signature, 'error: cannot find module at line');
+});
+
 test('detectRepeatedErrors: normalizes variants of same error to same signature', () => {
   const lines = [
     'Error: cannot find module "lodash" at line 42',

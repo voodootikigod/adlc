@@ -4,7 +4,9 @@
 
 import * as claudeCode from './claude-code.mjs';
 import * as codex from './codex.mjs';
+import * as gemini from './gemini.mjs';
 import * as agy from './agy.mjs';
+import * as jetski from './jetski.mjs';
 import * as opencode from './opencode.mjs';
 import * as pi from './pi.mjs';
 import * as cursor from './cursor.mjs';
@@ -13,7 +15,9 @@ import * as copilot from './copilot.mjs';
 const REGISTRY = new Map([
   [claudeCode.name, claudeCode],
   [codex.name, codex],
+  [gemini.name, gemini],
   [agy.name, agy],
+  [jetski.name, jetski],
   [opencode.name, opencode],
   [pi.name, pi],
   [cursor.name, cursor],

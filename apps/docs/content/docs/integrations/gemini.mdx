@@ -18,7 +18,7 @@ Native ADLC integration for the Google Gemini agent harnesses (Antigravity `agy`
 **One-liner via npx (recommended).** The helper CLI fetches the package and registers it in one step:
 
 ```sh
-(cd "$(mktemp -d)" && npx @adlc/gemini@latest install)
+(cd "$(mktemp -d)" && npx --package=@adlc/gemini adlc-gemini install)
 ```
 
 **Global npm install.** Install `@adlc/gemini` globally, then let the bundled helper register it:

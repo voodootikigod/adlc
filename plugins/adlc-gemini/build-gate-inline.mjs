@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSyn
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
-import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptLines } from './flail-inline.mjs';
+import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
@@ -97,7 +97,7 @@ export function createDepthTracker() {
  * Universal session ID resolution for hooks and status display.
  */
 export function resolveSessionId({ payload, env = process.env } = {}) {
-  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID;
+  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.GEMINI_CONVERSATION_ID ?? env?.JETSKI_CONVERSATION_ID ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID;
   if (typeof candidate === 'string' && candidate.trim().length > 0) {
     return candidate.trim();
   }
@@ -249,7 +249,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         writeStore(store);
       });
     },
-    recordEdit(sessionID, filePath, { transcriptLines = [] } = {}) {
+    recordEdit(sessionID, filePath, { transcriptSteps = [], transcriptLines = [] } = {}) {
       if (!sessionID || !ticketStoreExists(root, env)) return { churning: [], repeatedErrors: [], verdict: 'clean', summary: '' };
       return withLock(sessionID, () => {
         const store = readStore();
@@ -261,7 +261,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (s.edits.length > 200) s.edits = s.edits.slice(-200);
         }
 
-        const analysis = analyzeFlail({ edits: s.edits, transcriptLines });
+        const analysis = analyzeFlail({ edits: s.edits, transcriptSteps, transcriptLines });
         const hashKey = `${analysis.verdict}:${analysis.summary}`;
         const isNew = analysis.verdict === 'flail' && !s.warned.includes(hashKey);
         if (isNew) {
@@ -319,9 +319,9 @@ export function checkFlail({ sessionID, tracker, root = process.cwd(), env = pro
     return { verdict: 'clean', signals: [], summary: '', recommendation: 'Session clean' };
   }
   const transcriptPath = resolveTranscriptPath({ conversationId: sessionID, env });
-  const transcriptLines = transcriptPath ? parseTranscriptLines(transcriptPath) : [];
+  const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
   const storeEdits = tracker?.edits?.(sessionID) ?? [];
-  return analyzeFlail({ edits: storeEdits, transcriptLines });
+  return analyzeFlail({ edits: storeEdits, transcriptSteps });
 }
 
 export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) {

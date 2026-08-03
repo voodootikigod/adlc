@@ -9,7 +9,9 @@ const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 's
 // the prompt on stdin (agy).
 const EXPECTED = {
   codex: { cmd: 'codex', args: ['exec', PROMPT], stdin: false },
+  gemini: { cmd: null, args: ['--print'], stdin: true },
   agy: { cmd: 'agy', args: ['--print'], stdin: true },
+  jetski: { cmd: 'jetski', args: ['--print'], stdin: true },
   // `--format json` is load-bearing, not cosmetic: it is the only mode that
   // emits the step_finish token events T152's usage parser reads. Dropping it
   // silently downgrades every opencode dispatch to usageStatus 'unreported'.
@@ -30,7 +32,11 @@ for (const [adapterName, exp] of Object.entries(EXPECTED)) {
       worktree: '/wt/T1', prompt: PROMPT, timeoutMs: 60000, env: ENV, exec: stubExec(rec),
     });
     assert.equal(rec.length, 1);
-    assert.equal(rec[0].cmd, exp.cmd, `${adapterName}: command`);
+    if (exp.cmd === null) {
+      assert.ok(rec[0].cmd.endsWith('agy') || rec[0].cmd.endsWith('jetski'), `${adapterName}: command must end with agy or jetski, got "${rec[0].cmd}"`);
+    } else {
+      assert.ok(rec[0].cmd === exp.cmd || rec[0].cmd.endsWith(`/${exp.cmd}`) || rec[0].cmd.endsWith(`\\${exp.cmd}`), `${adapterName}: command must match or end with "${exp.cmd}", got "${rec[0].cmd}"`);
+    }
     assert.deepEqual(rec[0].args, exp.args, `${adapterName}: default args`);
     assert.equal(rec[0].opts.cwd, '/wt/T1', `${adapterName}: cwd is the worktree`);
     assert.equal(rec[0].opts.env, ENV, `${adapterName}: env passed through (model plane)`);
