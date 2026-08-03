@@ -50,19 +50,19 @@ export const routerModel = {
       },
       layout: ["sentinel","prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes"],
     },
-    "antigravity": {
-      path: "plugins/adlc-antigravity/skills/adlc/SKILL.md",
+    "gemini": {
+      path: "plugins/adlc-gemini/skills/adlc/SKILL.md",
       format: "prose",
-      frontmatter: "---\nname: adlc\ndescription: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Antigravity. Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on \"shape this spec\", \"is this ticket ready\", \"freeze these tests\", \"prosecute this change\", \"is this safe to merge\", \"ADLC\", \"which gate\", \"spec-lint\", \"premortem\", \"coldstart\", \"rails-guard\", \"hollow-test\", \"behavior-diff\".\n---\n",
-      // agy has no plugin-namespace command convention (commands/ are auto-converted to
-      // skills, invoked bare) — keep these unscoped. See docs/integrations/antigravity.md.
-      slots: {"P3_NOTE":". **Antigravity note:** In this `agy` plugin the in-session\n  PreToolUse hook is **advisory** — agy fails OPEN on a non-zero hook exit, so it\n  is best-effort, not a guarantee. The unbypassable control is the CI diff gate\n  (`scripts/rails-guard-ci.mjs`). See the \"Rails in Antigravity (agy)\" section\n  below. It ","CMD_INIT":"/adlc-init","CMD_TICKET":"/adlc-ticket","CMD_DISTILL":"/adlc-distill","CMD_MAINTAIN":"/adlc-maintain"},
+      frontmatter: "---\nname: adlc\ndescription: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Gemini (Antigravity/JetSki). Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on \"shape this spec\", \"is this ticket ready\", \"freeze these tests\", \"prosecute this change\", \"is this safe to merge\", \"ADLC\", \"which gate\", \"spec-lint\", \"premortem\", \"coldstart\", \"rails-guard\", \"hollow-test\", \"behavior-diff\".\n---\n",
+      // Gemini has no plugin-namespace command convention (commands/ are auto-converted to
+      // skills, invoked bare) — keep these unscoped. See docs/integrations/gemini.md.
+      slots: {"P3_NOTE":". **Gemini note:** In this plugin the in-session\n  PreToolUse hook is **advisory** — the host (agy/jetski) fails OPEN on a non-zero hook exit, so it\n  is best-effort, not a guarantee. The unbypassable control is the CI diff gate\n  (`scripts/rails-guard-ci.mjs`). See the \"Rails in Gemini (Antigravity/JetSki)\" section\n  below. It ","CMD_INIT":"/adlc-init","CMD_TICKET":"/adlc-ticket","CMD_DISTILL":"/adlc-distill","CMD_MAINTAIN":"/adlc-maintain"},
       includes: ["prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes"],
       local: {
-        "sentinel": "<!-- ADLC_AGY_SENTINEL_PHASE_ROUTER_V1 -->\n",
-        "rails-antigravity": "\n## Rails in Antigravity (agy)\n\nThis plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —\nagy fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook\ncrash/timeout. **The unbypassable guarantee is the commit-time CI gate**\n(`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`\nand an active ticket declares `rails[]`. Shell (`run_command`) writes are not gated\nin-session; the CI gate catches them.\n",
+        "sentinel": "<!-- ADLC_GEMINI_SENTINEL_PHASE_ROUTER_V1 -->\n",
+        "rails-gemini": "\n## Rails in Gemini (Antigravity/JetSki)\n\nThis plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —\nthe host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook\ncrash/timeout. **The unbypassable guarantee is the commit-time CI gate**\n(`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`\nand an active ticket declares `rails[]`. Shell (`run_command`) writes are not gated\nin-session; the CI gate catches them.\n",
       },
-      layout: ["sentinel","prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes","rails-antigravity"],
+      layout: ["sentinel","prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes","rails-gemini"],
     },
     "codex": {
       path: "plugins/adlc-codex/skills/adlc/SKILL.md",

@@ -125,8 +125,8 @@ const SEGMENTS = [
   ['opencode', 'node --test plugins/adlc-opencode/test/*.test.mjs'],
   ['cursor', 'node --test plugins/adlc-cursor/test/*.test.mjs'],
   ['cursor install smoke', 'node scripts/cursor-install-smoke.mjs .'],
-  ['antigravity', 'node --test plugins/adlc-antigravity/test/*.test.mjs'],
-  ['antigravity install smoke', 'node scripts/antigravity-install-smoke.mjs .'],
+  ['gemini', 'node --test plugins/adlc-gemini/test/*.test.mjs'],
+  ['gemini install smoke', 'node scripts/gemini-install-smoke.mjs .'],
   ['herdr', 'node --test plugins/adlc-herdr/test/*.test.mjs'],
   ['docs app', 'node --test apps/docs/test/*.test.mjs'],
 ];

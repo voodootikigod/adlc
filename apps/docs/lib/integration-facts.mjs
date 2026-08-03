@@ -715,33 +715,33 @@ export const PI_INTEGRATION = {
 };
 
 /** @type {IntegrationFact} */
-export const ANTIGRAVITY_INTEGRATION = {
-  slug: 'antigravity',
-  name: 'Google Antigravity',
+export const GEMINI_INTEGRATION = {
+  slug: 'gemini',
+  name: 'Google Gemini (Antigravity & JetSki)',
   status: 'local',
   tagline: 'Advisory PreToolUse rails-guard for agy, plus skills and a prosecutor agent. The unbypassable CI rail-freeze gate is the real control.',
   // Two hazards are encoded in these commands; neither is cosmetic.
   //
   // 1. `agy plugin install <path>` cannot be handed the npm location: agy resolves
   //    its target as `plugin@marketplace` BEFORE treating it as a path, so the `@`
-  //    in `.../@adlc/antigravity` is read as that separator and the install dies
+  //    in `.../@adlc/gemini` is read as that separator and the install dies
   //    with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
   //    under an @-free path, so it is the npm path that actually works.
-  // 2. The `@latest` is REQUIRED, not decorative. `npx @adlc/antigravity` resolves
+  // 2. The `@latest` is REQUIRED, not decorative. `npx @adlc/gemini` resolves
   //    a bare name against the CURRENT PROJECT first, so a repo shipping a
-  //    workspace or dependency named `@adlc/antigravity` gets ITS binary executed
+  //    workspace or dependency named `@adlc/gemini` gets ITS binary executed
   //    instead (reproduced against a real local install). A version spec forces
   //    registry resolution; it pins nothing, it only refuses local shadowing.
   install: [
-    '(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)',
-    'npm install -g @adlc/antigravity',
-    'adlc-agy install',
+    '(cd "$(mktemp -d)" && npx @adlc/gemini@latest install)',
+    'npm install -g @adlc/gemini',
+    'adlc-gemini install',
   ],
-  note: 'Recommended: (cd "$(mktemp -d)" && npx @adlc/antigravity@latest install) — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
-  pluginDir: 'plugins/adlc-antigravity',
+  note: 'Recommended: (cd "$(mktemp -d)" && npx @adlc/gemini@latest install) — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  pluginDir: 'plugins/adlc-gemini',
   hero: {
-    kicker: 'Antigravity integration',
-    title: 'ADLC for Google Antigravity',
+    kicker: 'Gemini integration',
+    title: 'ADLC for Google Gemini',
     identity: 'In-session rails are advisory. agy fails open on hook failure, so CI is the guarantee, not an optional extra.',
     badges: [
       { label: 'Global npm & npx install', accent: true },
@@ -749,9 +749,9 @@ export const ANTIGRAVITY_INTEGRATION = {
     ],
   },
   bundle: {
-    title: 'adlc-antigravity / native bundle',
-    ariaLabel: 'Native Antigravity plugin payload',
-    root: 'adlc-antigravity/',
+    title: 'adlc-gemini / native bundle',
+    ariaLabel: 'Native Gemini plugin payload',
+    root: 'adlc-gemini/',
     entries: [
       { path: '├─ plugin.json', note: 'agy manifest' },
       { path: '├─ hooks/', surfaceKey: 'hooks', note: 'PreToolUse event' },
@@ -835,19 +835,19 @@ export const ANTIGRAVITY_INTEGRATION = {
     title: 'operate: Antigravity plugin',
     lines: [
       '# Recommended one-liner via npx',
-      '(cd "$(mktemp -d)" && npx @adlc/antigravity@latest install)',
+      '(cd "$(mktemp -d)" && npx @adlc/gemini@latest install)',
       '',
       '# Or install globally, then register',
-      'npm install -g @adlc/antigravity',
-      'adlc-agy install',
+      'npm install -g @adlc/gemini',
+      'adlc-gemini install',
       '',
       '# Arm enforcement for an active ticket',
       'export ADLC_P4_ENFORCEMENT=1',
     ],
   },
   resources: [
-    { href: '/docs/integrations/antigravity', label: 'Read the complete integration guide →' },
-    { href: 'https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-antigravity', label: 'Inspect the plugin source →', external: true },
+    { href: '/docs/integrations/gemini', label: 'Read the complete integration guide →' },
+    { href: 'https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-gemini', label: 'Inspect the plugin source →', external: true },
   ],
 };
 
@@ -995,7 +995,7 @@ export const INTEGRATIONS = [
   CURSOR_INTEGRATION,
   OPENCODE_INTEGRATION,
   PI_INTEGRATION,
-  ANTIGRAVITY_INTEGRATION,
+  GEMINI_INTEGRATION,
   COPILOT_INTEGRATION,
 ];
 

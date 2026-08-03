@@ -10,7 +10,7 @@ Display the active ADLC session context, ticket state, frozen rails, and build-g
 Run the status check:
 
 ```sh
-node plugins/adlc-antigravity/hooks/adlc-rails-guard.cjs status
+node plugins/adlc-gemini/hooks/adlc-rails-guard.cjs status
 ```
 
 ## Summary Checklist

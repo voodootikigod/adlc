@@ -70,7 +70,7 @@ test('Codex marketing page exposes the native surfaces instead of the generic in
 
 test('every marketing integration page uses the shared rich detail layout', () => {
   assert.match(marketingRoute, /IntegrationDetailPage integration=\{integration\}/);
-  for (const slug of ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'antigravity']) {
+  for (const slug of ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'gemini']) {
     const fact = integrationFor(slug);
     assert.ok(fact?.surfaces?.length >= 3, `${slug} surfaces`);
     assert.ok(fact?.phaseRoutes?.length >= 4, `${slug} phaseRoutes`);

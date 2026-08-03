@@ -1,8 +1,8 @@
 ---
 name: adlc
-description: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Antigravity. Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on "shape this spec", "is this ticket ready", "freeze these tests", "prosecute this change", "is this safe to merge", "ADLC", "which gate", "spec-lint", "premortem", "coldstart", "rails-guard", "hollow-test", "behavior-diff".
+description: Routes agentic development work to the right Agentic Development Lifecycle (ADLC) gate in Gemini (Antigravity/JetSki). Use when shaping a spec or ticket, deciding how to fan out work to models, protecting frozen rails during a build, prosecuting a change before merge, or distilling repeated review findings into defenses. Triggers on "shape this spec", "is this ticket ready", "freeze these tests", "prosecute this change", "is this safe to merge", "ADLC", "which gate", "spec-lint", "premortem", "coldstart", "rails-guard", "hollow-test", "behavior-diff".
 ---
-<!-- ADLC_AGY_SENTINEL_PHASE_ROUTER_V1 -->
+<!-- ADLC_GEMINI_SENTINEL_PHASE_ROUTER_V1 -->
 
 # ADLC — phase routing
 
@@ -82,10 +82,10 @@ downstream reads the logical store.
   committed change touched a frozen rail (exit 2 = a rail was edited). This is the
   **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
   rail hook** is the in-session layer: it precisely denies Edit/Write/MultiEdit to
-  declared rail paths. **Antigravity note:** In this `agy` plugin the in-session
-  PreToolUse hook is **advisory** — agy fails OPEN on a non-zero hook exit, so it
+  declared rail paths. **Gemini note:** In this plugin the in-session
+  PreToolUse hook is **advisory** — the host (agy/jetski) fails OPEN on a non-zero hook exit, so it
   is best-effort, not a guarantee. The unbypassable control is the CI diff gate
-  (`scripts/rails-guard-ci.mjs`). See the "Rails in Antigravity (agy)" section
+  (`scripts/rails-guard-ci.mjs`). See the "Rails in Gemini (Antigravity/JetSki)" section
   below. It freezes the active ticket store itself once rails exist.
   **Bash is not gated in-session** — a shell can't be reliably parsed, so rail
   mutations via Bash are caught by the CI diff gate (any spelling), not the hook.
@@ -165,10 +165,10 @@ findings) for reusable capabilities:
   flag to actually mutate.
 - Run `adlc <tool> --help` for a tool's exact flags and exit-code specifics.
 
-## Rails in Antigravity (agy)
+## Rails in Gemini (Antigravity/JetSki)
 
 This plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —
-agy fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook
+the host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook
 crash/timeout. **The unbypassable guarantee is the commit-time CI gate**
 (`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`
 and an active ticket declares `rails[]`. Shell (`run_command`) writes are not gated

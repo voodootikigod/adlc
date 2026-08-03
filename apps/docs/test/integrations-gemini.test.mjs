@@ -7,15 +7,15 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const integrationsDir = path.join(__dirname, '..', 'content', 'docs', 'integrations');
 
-const HARNESSES = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'antigravity'];
+const HARNESSES = ['claude-code', 'codex', 'cursor', 'opencode', 'pi', 'gemini'];
 
-test('antigravity.mdx exists in the integrations directory', () => {
-  const p = path.join(integrationsDir, 'antigravity.mdx');
-  assert.ok(existsSync(p), 'apps/docs/content/docs/integrations/antigravity.mdx should exist');
+test('gemini.mdx exists in the integrations directory', () => {
+  const p = path.join(integrationsDir, 'gemini.mdx');
+  assert.ok(existsSync(p), 'apps/docs/content/docs/integrations/gemini.mdx should exist');
 });
 
-test('antigravity.mdx has real frontmatter (title + description) and is not a stub', () => {
-  const p = path.join(integrationsDir, 'antigravity.mdx');
+test('gemini.mdx has real frontmatter (title + description) and is not a stub', () => {
+  const p = path.join(integrationsDir, 'gemini.mdx');
   const content = readFileSync(p, 'utf8');
 
   assert.match(content, /^---\n/, 'file should start with frontmatter');
@@ -25,25 +25,25 @@ test('antigravity.mdx has real frontmatter (title + description) and is not a st
   assert.doesNotMatch(
     content,
     /coming soon/i,
-    'antigravity.mdx should be real content, not the "coming soon" stub'
+    'gemini.mdx should be real content, not the "coming soon" stub'
   );
   assert.doesNotMatch(
     content,
     /This page is being written/i,
-    'antigravity.mdx should be real content, not the stub body'
+    'gemini.mdx should be real content, not the stub body'
   );
 
-  // Spot-check a couple of facts that must survive the port from docs/integrations/antigravity.md
+  // Spot-check a couple of facts that must survive the port from docs/integrations/gemini.md
   assert.match(content, /rails-guard-ci\.mjs/, 'should mention the CI rail-freeze gate script');
   assert.match(content, /ADLC_P4_ENFORCEMENT/, 'should mention the enforcement env var');
 });
 
-test("meta.json's pages array includes antigravity alongside the other five harnesses", () => {
+test("meta.json's pages array includes gemini alongside the other five harnesses", () => {
   const p = path.join(integrationsDir, 'meta.json');
   const meta = JSON.parse(readFileSync(p, 'utf8'));
 
   assert.ok(Array.isArray(meta.pages), 'meta.json should have a pages array');
-  assert.ok(meta.pages.includes('antigravity'), 'pages array should include "antigravity"');
+  assert.ok(meta.pages.includes('gemini'), 'pages array should include "gemini"');
 
   for (const harness of HARNESSES) {
     assert.ok(meta.pages.includes(harness), `pages array should include "${harness}"`);

@@ -1,4 +1,4 @@
-// flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-antigravity.
+// flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';

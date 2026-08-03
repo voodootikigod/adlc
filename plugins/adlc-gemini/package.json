@@ -1,16 +1,16 @@
 {
-  "name": "@adlc/antigravity",
+  "name": "@adlc/gemini",
   "type": "module",
   "version": "1.7.0",
-  "description": "ADLC native integration for Google Antigravity (agy)",
+  "description": "ADLC native integration for Google Gemini (antigravity/jetski)",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/voodootikigod/adlc.git",
-    "directory": "plugins/adlc-antigravity"
+    "directory": "plugins/adlc-gemini"
   },
-  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-antigravity#readme",
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/plugins/adlc-gemini#readme",
   "bugs": "https://github.com/voodootikigod/adlc/issues",
   "keywords": [
     "adlc",
@@ -18,6 +18,8 @@
     "ai",
     "antigravity",
     "agy",
+    "jetski",
+    "gemini",
     "rails"
   ],
   "publishConfig": {
@@ -29,10 +31,12 @@
   },
   "bin": {
     "adlc-agy": "bin/cli.mjs",
-    "adlc-antigravity": "bin/cli.mjs"
+    "adlc-antigravity": "bin/cli.mjs",
+    "adlc-jetski": "bin/cli.mjs",
+    "adlc-gemini": "bin/cli.mjs"
   },
   "dependencies": {},
-  "agy": {
+  "gemini": {
     "hooks": "./hooks.json",
     "skills": "./skills/",
     "command": "./commands/adlc-init.md"
