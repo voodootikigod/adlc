@@ -102,6 +102,19 @@ function addUnmeasured(bucket) {
 }
 
 /**
+ * The CLOSED status vocabulary T152 established. Each of these asserts that a
+ * model call happened — `reported` and `claimed` say its counters are on the
+ * entry, `unreported` says they are not knowable.
+ *
+ * Membership is checked rather than "any non-empty string" because the ledger is
+ * append-only and read by versions of this code that do not exist yet. A future
+ * status meaning the OPPOSITE — `skipped`, `failed`, `disabled` — would
+ * otherwise be counted as a call and silently inflate a phase
+ * (adversarial-review). An unrecognized status is not evidence of anything.
+ */
+const USAGE_STATUSES = new Set(['reported', 'claimed', 'unreported']);
+
+/**
  * Is this entry evidence of a model call whose tokens we do not have?
  *
  * `usageStatus` is the T152 vocabulary — its presence means a producer went out
@@ -117,7 +130,7 @@ function addUnmeasured(bucket) {
  * counter with no total to make it visible.
  */
 function isUnmeasuredCall(data) {
-  if (typeof data?.usageStatus !== 'string' || data.usageStatus.length === 0) return false;
+  if (!USAGE_STATUSES.has(data?.usageStatus)) return false;
   return !(typeof data.usageReplayOf === 'string' && data.usageReplayOf.length > 0);
 }
 
@@ -197,7 +210,17 @@ export function diagnostics(aggregate) {
   // phase-only shape attributes unphased calls to the phases shown — and can
   // state a number larger than the calls listed (adversarial-review).
   const shownUnmeasured = phasesWithCalls.reduce((n, p) => n + byPhase[p].unmeasuredCalls, 0);
-  if (shownUnmeasured > 0 && phasesWithCalls.length >= 2) {
+
+  const phasesWithSpend = Object.keys(byPhase).filter((p) => p !== 'unphased' && totalTokens(byPhase[p]) > 0);
+  const sharesComputable = phasesWithSpend.length >= 2 && total.inputTokens + total.outputTokens > 0;
+
+  // The call-count shape is the FALLBACK view, emitted only when no share of
+  // spend can be computed. Printing it beside real token shares contradicts
+  // them: one unmeasured call among ten thousand measured ones would announce
+  // that the whole distribution is "counts, not spend" while accurate shares sat
+  // directly beneath it (adversarial-review). Where shares ARE computable, the
+  // caveat below states the same limitation without discrediting them.
+  if (!sharesComputable && shownUnmeasured > 0 && phasesWithCalls.length >= 2) {
     const shape = phasesWithCalls
       .sort()
       .map((p) => `${p}=${byPhase[p].calls + byPhase[p].unmeasuredCalls}`)
@@ -208,8 +231,7 @@ export function diagnostics(aggregate) {
     );
   }
 
-  const phasesWithSpend = Object.keys(byPhase).filter((p) => p !== 'unphased' && totalTokens(byPhase[p]) > 0);
-  if (phasesWithSpend.length < 2 || total.inputTokens + total.outputTokens === 0) {
+  if (!sharesComputable) {
     // §8c: degraded data cannot silently pass. Saying nothing here is what let a
     // ledger of real, unpriced calls look like a ledger of no activity.
     if (unmeasured > 0) {

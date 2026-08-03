@@ -306,3 +306,52 @@ test('aggregation is order-independent', () => {
   assert.equal(a.unmeasuredCalls, b.unmeasuredCalls);
   assert.deepEqual(a.total, b.total);
 });
+
+// ---------------------------------------------------------------------------
+// Round-5 regressions
+// ---------------------------------------------------------------------------
+
+test('a mostly-measured ledger keeps its spend shares and does NOT get a counts-not-spend header', () => {
+  // One unmeasured call among many measured ones used to announce that the whole
+  // distribution was "COUNTS, NOT SPEND" while accurate token shares sat right
+  // beneath it — self-contradicting, and it discredits real figures. The
+  // measured-only caveat says the same thing without doing that.
+  const found = diagnostics(aggregateSpend([
+    measured('flail-detector', U(10_000, 1000)),
+    measured('spec-lint', U(1000, 100)),
+    measured('prosecute', U(5000, 500)),
+    unmeasured('lesson-foundry'),
+  ]));
+  assert.ok(!found.some((d) => /COUNTS, NOT SPEND/.test(d)), `shares are computable here: ${found}`);
+  assert.ok(found.some((d) => /MEASURED tokens only/.test(d)), 'but the limitation is still stated');
+  assert.ok(found.some((d) => /P4/.test(d)), 'and the real token diagnostics still fire');
+});
+
+test('the counts-not-spend view appears only when no share of spend can be computed', () => {
+  const found = diagnostics(aggregateSpend([unmeasured('premortem'), unmeasured('flail-detector')]));
+  assert.ok(found.some((d) => /COUNTS, NOT SPEND/.test(d)), `nothing is measured here: ${found}`);
+});
+
+test('a status outside the closed vocabulary is NOT evidence of a call', () => {
+  // The ledger is append-only and outlives this code. A future status meaning
+  // the opposite — a gate that was skipped, disabled, or failed before calling
+  // anything — must not be counted as a call and inflate its phase.
+  const agg = aggregateSpend([
+    { gate: 'premortem', data: { usageStatus: 'skipped' } },
+    { gate: 'premortem', data: { usageStatus: 'failed' } },
+    { gate: 'premortem', data: { usageStatus: 'disabled' } },
+  ]);
+  assert.deepEqual(agg.byPhase, {}, 'none of these asserts a model call happened');
+  assert.equal(agg.unmeasuredCalls, 0);
+});
+
+test('every status the closed vocabulary DOES define still counts', () => {
+  // The guard must not be so strict that it drops real calls: `reported` with an
+  // unusable usage value, and `unreported`, are both real calls.
+  const agg = aggregateSpend([
+    { gate: 'premortem', data: { usageStatus: 'unreported' } },
+    { gate: 'premortem', data: { usage: 'unusable', usageStatus: 'reported' } },
+    { gate: 'premortem', data: { usage: null, usageStatus: 'claimed' } },
+  ]);
+  assert.equal(agg.byPhase.P1.unmeasuredCalls, 3);
+});
