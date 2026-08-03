@@ -29,6 +29,11 @@ const GITIGNORE_STANZA = [
   '!.adlc/ticket-archive/**',
   '!.adlc/specs/',
   '!.adlc/manifest.jsonl',
+  '!.adlc/manifest.d/',
+  '!.adlc/manifest.d/**',
+  '.adlc/manifest.d/.lineage',
+  '.adlc/manifest.d/*.lock',
+  '.adlc/manifest.d/*.tmp-*',
 ];
 
 // The blanket rule whose position decides whether any `.adlc/` negation works at

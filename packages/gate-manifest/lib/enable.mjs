@@ -43,6 +43,7 @@ export const MARKER_NEGATION_LINES = Object.freeze([
   '!.adlc/manifest.d/**',
   '.adlc/manifest.d/.lineage',
   '.adlc/manifest.d/*.lock',
+  '.adlc/manifest.d/*.tmp-*',
 ]);
 
 // The probe child needs no secrets and must answer for the repository that

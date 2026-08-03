@@ -47,6 +47,7 @@ node_modules/
 !.adlc/manifest.d/**
 .adlc/manifest.d/.lineage
 .adlc/manifest.d/*.lock
+.adlc/manifest.d/*.tmp-*
 # P7 findings ledger (ADR 0014). Tracked like the manifest above so the P5→P7
 # bridge survives fleet worktrees and CI and the lesson-foundry gate can run
 # against real data. Entries are CURATED PROSE finding records — never raw tool

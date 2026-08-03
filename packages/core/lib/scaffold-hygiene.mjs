@@ -16,6 +16,14 @@ import { initializeTicketStores } from '@adlc/tickets';
 // from an existing stanza.
 // ---------------------------------------------------------------------------
 
+// Keep in step with @adlc/init's ADLC_GITIGNORE_LINES: this is the stanza
+// plugins/adlc-cursor, plugins/adlc-opencode and plugins/adlc-pi emit, so a
+// drift here leaves every repo scaffolded through those harnesses unable to
+// commit its C11 evidence ledger — invisible to CI, clones and reviewers —
+// and `gate-manifest enable` refuses such a repo outright.
+//
+// Order is last-match-wins: anchor, then negations, then the checkout-local
+// re-ignores that must outrank them.
 const GITIGNORE_STANZA = [
   '.adlc/*',
   '!.adlc/tickets.json',
@@ -24,6 +32,12 @@ const GITIGNORE_STANZA = [
   '!.adlc/ticket-archive/',
   '!.adlc/ticket-archive/**',
   '!.adlc/specs/',
+  '!.adlc/manifest.jsonl',
+  '!.adlc/manifest.d/',
+  '!.adlc/manifest.d/**',
+  '.adlc/manifest.d/.lineage',
+  '.adlc/manifest.d/*.lock',
+  '.adlc/manifest.d/*.tmp-*',
 ];
 
 /** Initialize sharded stores for a new repo; preserve a legacy store for consent-based migration. */

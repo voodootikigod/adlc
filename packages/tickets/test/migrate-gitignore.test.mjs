@@ -102,6 +102,11 @@ test('a .gitignore that already satisfies the stanza is left byte-identical', ()
     '!.adlc/ticket-archive/**',
     '!.adlc/specs/',
     '!.adlc/manifest.jsonl',
+    '!.adlc/manifest.d/',
+    '!.adlc/manifest.d/**',
+    '.adlc/manifest.d/.lineage',
+    '.adlc/manifest.d/*.lock',
+    '.adlc/manifest.d/*.tmp-*',
     '',
   ].join('\n');
   const { dir } = legacyRepo(complete);

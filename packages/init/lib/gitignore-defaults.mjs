@@ -1,3 +1,13 @@
+// Three sibling copies must stay in step — @adlc/core's GITIGNORE_STANZA
+// (what the cursor/opencode/pi scaffolders emit), @adlc/tickets'
+// migrationGitignoreText, and gate-manifest enable's printed advice.
+// packages/init/test/gitignore-parity.test.mjs binds them; a drift silently
+// leaves one path unable to commit its evidence ledger.
+//
+// `*.tmp-*` covers gate-manifest enable's atomic-write residue: a committed
+// .store.json.tmp-<hex> lands in discoverSegments().invalid, which both
+// recoverOpenSegment and `gate-manifest adopt` refuse on.
+//
 // Single-line array literal: the mutation gate's array-literal-shrink operator
 // only matches a `[...]` that fits on one line, and this constant has no
 // branches/comparisons an operator could otherwise catch a silent drop with.
@@ -12,4 +22,4 @@
 // negations because they are checkout-local: a committed lineage token
 // recreates the very merge conflict the segmented format exists to remove.
 // `gate-manifest enable` enforces this same two-sided contract at activation.
-export const ADLC_GITIGNORE_LINES = Object.freeze(['.adlc/*', '!.adlc/config.json', '!.adlc/tickets.json', '!.adlc/tickets/', '!.adlc/tickets/**', '!.adlc/ticket-archive/', '!.adlc/ticket-archive/**', '!.adlc/specs/', '!.adlc/manifest.jsonl', '!.adlc/manifest.d/', '!.adlc/manifest.d/**', '.adlc/manifest.d/.lineage', '.adlc/manifest.d/*.lock']);
+export const ADLC_GITIGNORE_LINES = Object.freeze(['.adlc/*', '!.adlc/config.json', '!.adlc/tickets.json', '!.adlc/tickets/', '!.adlc/tickets/**', '!.adlc/ticket-archive/', '!.adlc/ticket-archive/**', '!.adlc/specs/', '!.adlc/manifest.jsonl', '!.adlc/manifest.d/', '!.adlc/manifest.d/**', '.adlc/manifest.d/.lineage', '.adlc/manifest.d/*.lock', '.adlc/manifest.d/*.tmp-*']);

@@ -17,6 +17,7 @@ test('ADLC_GITIGNORE_LINES pins its exact, frozen contents', () => {
     '!.adlc/manifest.d/**',
     '.adlc/manifest.d/.lineage',
     '.adlc/manifest.d/*.lock',
+    '.adlc/manifest.d/*.tmp-*',
   ]);
   assert.ok(Object.isFrozen(ADLC_GITIGNORE_LINES));
 });
