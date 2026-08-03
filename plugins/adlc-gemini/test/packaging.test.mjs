@@ -1,6 +1,6 @@
 // packaging.test.mjs — release-readiness (T37 AC1/AC2/AC3).
 //
-// AC1/AC2 prove @adlc/antigravity publishes only its runtime surface
+// AC1/AC2 prove @adlc/gemini publishes only its runtime surface
 // (never test/, and plugin.json — agy's own manifest — MUST ship, since agy
 // identifies an installed plugin by its presence) and carries the fields the
 // lockstep release requires. AC3 proves the package stays self-contained: no
@@ -26,18 +26,18 @@ const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 // package.json 'name' field; pi/antigravity had no such guard, so a stale
 // -package suffix regressing back in would ship silently.
 test('T38: package.json name is the renamed short form', () => {
-  assert.equal(pkg.name, '@adlc/antigravity');
+  assert.equal(pkg.name, '@adlc/gemini');
 });
 
 test('AC1: package.json is publishable (not private, licensed, sourced)', () => {
   assert.notEqual(pkg.private, true, 'package must not be private');
   assert.equal(pkg.license, 'MIT');
-  assert.equal(pkg.repository?.directory, 'plugins/adlc-antigravity');
+  assert.equal(pkg.repository?.directory, 'plugins/adlc-gemini');
   assert.match(pkg.repository?.url ?? '', /github\.com\/voodootikigod\/adlc/);
   assert.ok(pkg.homepage, 'homepage required');
   assert.ok(pkg.bugs, 'bugs required');
   assert.ok(pkg.author, 'author required');
-  assert.ok(Array.isArray(pkg.keywords) && pkg.keywords.includes('antigravity'), 'keywords must include "antigravity"');
+  assert.ok(Array.isArray(pkg.keywords) && pkg.keywords.includes('gemini'), 'keywords must include "gemini"');
 });
 
 // P5 finding 1 (release-blocking): scripts/release.mjs:136 runs
@@ -108,7 +108,7 @@ test('AC2: npm pack --dry-run ships the runtime surface, plugin.json, and NO tes
 
 test('AC2: plugin.json version is untouched by this ticket (still agy-native, not lockstep)', () => {
   const pluginManifest = JSON.parse(readFileSync(join(pkgDir, 'plugin.json'), 'utf8'));
-  assert.equal(pluginManifest.name, 'adlc-antigravity');
+  assert.equal(pluginManifest.name, 'adlc-gemini');
   // Not asserting an exact version — only that it exists and is independent of
   // package.json's lockstep version (proves the two are not accidentally synced).
   assert.ok(pluginManifest.version, 'plugin.json keeps its own version field');
@@ -147,7 +147,7 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
 
     // Every module the plugin's own manifest points agy at must both ship and
     // resolve — including each module they import transitively.
-    const entryPoints = ['rails-checker.mjs', 'core-inline.mjs', pkg.agy.hooks.replace(/^\.\//, '')];
+    const entryPoints = ['rails-checker.mjs', 'core-inline.mjs', pkg.gemini.hooks.replace(/^\.\//, '')];
     for (const entry of entryPoints) {
       assert.ok(existsSync(join(pkgRoot, entry)), `tarball must ship ${entry}`);
     }
@@ -193,7 +193,7 @@ function sealedEnv(home, pathValue) {
  *
  * This is a containment control, not tidiness. cli.mjs installs for real: it
  * spawns the ambient `agy`, and when agy is missing or reports failure it falls
- * back to `cpSync(packageRoot, ~/.gemini/config/plugins/adlc-antigravity)`. Run
+ * back to `cpSync(packageRoot, ~/.gemini/config/plugins/adlc-gemini)`. Run
  * with the inherited environment, that writes into the developer's LIVE plugin.
  *
  * That is not hypothetical. The mutation gate mutates cli.mjs in place, and the
@@ -216,7 +216,7 @@ function runCliSealed(args, { agyScript, seedTarget, extraEnv } = {}) {
   // Pre-populate the live plugin directory to model an UPGRADE over an install
   // that already exists.
   for (const [relative, contents] of Object.entries(seedTarget ?? {})) {
-    const abs = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity', relative);
+    const abs = join(home, '.gemini', 'config', 'plugins', 'adlc-gemini', relative);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, contents);
   }
@@ -246,8 +246,8 @@ test('AC4: bin/cli.mjs executable displays help output on --help', () => {
   const { res, cleanup } = runCliSealed(['--help']);
   try {
     assert.equal(res.status, 0);
-    assert.match(res.stdout, /adlc-agy install/);
-    assert.match(res.stdout, /agy plugin install <path>/);
+    assert.match(res.stdout, /adlc-gemini install/);
+    assert.match(res.stdout, /\[agent\] plugin install <path>/);
   } finally {
     cleanup();
   }
@@ -256,13 +256,13 @@ test('AC4: bin/cli.mjs executable displays help output on --help', () => {
 test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () => {
   const { res, home, cleanup } = runCliSealed(['install']);
   try {
-    assert.match(res.stdout, /Installing @adlc\/antigravity plugin from:/);
-    assert.doesNotMatch(res.stdout, /ADLC Google Antigravity Plugin Helper/);
+    assert.match(res.stdout, /Installing @adlc\/gemini plugin from:/);
+    assert.doesNotMatch(res.stdout, /ADLC Google Gemini Plugin Helper/);
     // CONTAINMENT, asserted rather than assumed: with no agy on PATH the helper
     // takes its direct-copy fallback, and that copy must land under the sandbox
     // HOME. If this file ever escapes again, this assertion is what notices.
     assert.ok(
-      existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity', 'plugin.json')),
+      existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-gemini', 'plugin.json')),
       'the fallback copy must land under the sandboxed HOME, not the real one',
     );
   } finally {
@@ -271,7 +271,7 @@ test('AC4: bin/cli.mjs runs install command and does not trigger help mode', () 
 });
 
 test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)', () => {
-  // `npx @adlc/antigravity@latest install` runs through npm exec, which PREPENDS
+  // `npx @adlc/gemini@latest install` runs through npm exec, which PREPENDS
   // the current project's node_modules/.bin to the child PATH. Pinning the npx
   // spec protects which helper is fetched; it does nothing about which `agy` that
   // helper then runs. A repo shipping a dependency with a bin named `agy` gets
@@ -324,7 +324,7 @@ test('bin/cli.mjs direct-copy REPLACES an existing install, dropping removed fil
   });
   try {
     assert.equal(res.status, 0, `install failed: ${res.stdout}\n${res.stderr}`);
-    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity');
+    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-gemini');
     assert.ok(existsSync(join(target, 'plugin.json')), 'the new payload must be installed');
     assert.ok(
       !existsSync(join(target, 'skills', 'retired-skill.md')),
@@ -336,17 +336,17 @@ test('bin/cli.mjs direct-copy REPLACES an existing install, dropping removed fil
 });
 
 test('bin/cli.mjs self-reinstall from the installed copy does not erase the plugin', () => {
-  // `node ~/.gemini/config/plugins/adlc-antigravity/bin/cli.mjs install` from a
+  // `node ~/.gemini/config/plugins/adlc-gemini/bin/cli.mjs install` from a
   // session with no agy on PATH makes packageRoot === targetDir. A replace-first
   // fallback deletes the directory it is about to copy FROM, so the advertised
   // idempotent reinstall would erase the plugin and its hooks outright.
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-self-'));
   try {
     const home = join(work, 'home');
-    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity');
+    const target = join(home, '.gemini', 'config', 'plugins', 'adlc-gemini');
     mkdirSync(join(target, 'bin'), { recursive: true });
     writeFileSync(join(target, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
-    writeFileSync(join(target, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+    writeFileSync(join(target, 'plugin.json'), '{"name":"adlc-gemini"}\n');
 
     const res = spawnSync(process.execPath, [join(target, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
@@ -841,7 +841,7 @@ test('bin/cli.mjs does not hang forever on a wedged agy', () => {
     assert.match(res.stderr, /did not complete/);
     // Fail closed still applies: a hang is a PRESENT agy that did not install.
     assert.ok(
-      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-gemini')),
       'a hung agy must not be papered over by copying the files anyway',
     );
   } finally {
@@ -874,7 +874,7 @@ test('bin/cli.mjs fails closed when a PRESENT agy fails its version probe', () =
     assert.equal(res.status, 1, `a broken agy must exit non-zero:\n${res.stdout}\n${res.stderr}`);
     assert.match(res.stderr, /agy --version` failed/);
     assert.ok(
-      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-gemini')),
       'a broken agy must NOT be papered over by copying the files anyway',
     );
   } finally {
@@ -896,7 +896,7 @@ test('bin/cli.mjs fails closed when a PRESENT agy rejects the plugin', () => {
     assert.doesNotMatch(res.stdout, /Successfully installed/);
     // The load-bearing half: no silent direct copy behind agy's back.
     assert.ok(
-      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-antigravity')),
+      !existsSync(join(home, '.gemini', 'config', 'plugins', 'adlc-gemini')),
       'a rejected install must NOT be papered over by copying the files anyway',
     );
   } finally {
@@ -908,8 +908,8 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
   // agy resolves `plugin install <target>` as `plugin@marketplace` BEFORE
   // deciding whether the target is a filesystem path, so an `@` anywhere in the
   // argument is read as that separator. This package's only npm install
-  // locations — `<npm root -g>/@adlc/antigravity` and
-  // `node_modules/@adlc/antigravity` — both contain one, so passing packageRoot
+  // locations — `<npm root -g>/@adlc/gemini` and
+  // `node_modules/@adlc/gemini` — both contain one, so passing packageRoot
   // straight through made agy answer `unknown marketplace: adlc/antigravity`
   // and fall through to the manual copy path on every single run.
   //
@@ -920,7 +920,7 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
     const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
     mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
     writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
-    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-gemini"}\n');
 
     // A stub agy that records its argv. HOME is redirected too, so the fallback
     // copy path can never touch the developer's real ~/.gemini.
@@ -964,7 +964,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
     const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
     mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
     writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
-    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-antigravity"}\n');
+    writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-gemini"}\n');
 
     const binDir = join(work, 'bin');
     const log = join(work, 'agy.log');

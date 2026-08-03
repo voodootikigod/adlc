@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/.gemini/config/plugins/adlc-antigravity/hooks/adlc-rails-guard.cjs",
+            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
             "timeout": 20
           }
         ]

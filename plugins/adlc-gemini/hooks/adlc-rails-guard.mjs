@@ -226,7 +226,7 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   const sessionID = resolveSessionId({ payload, env });
   const flail = checkFlail({ sessionID, tracker, root: resolvedRoot, env });
 
-  console.log(`--- ADLC Antigravity Status ---`);
+  console.log(`--- ADLC Gemini Status ---`);
   console.log(`Root: ${resolvedRoot}`);
   console.log(`Active Ticket: ${active.id ?? (active.conflict ? 'CONFLICT' : 'NONE')}`);
   console.log(`Enforcement (ADLC_P4_ENFORCEMENT): ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE'}`);
@@ -241,7 +241,7 @@ export function printDoctor(root = process.cwd(), env = process.env) {
   const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
   const active = resolveActiveTicketId(resolvedRoot, env);
 
-  console.log(`--- ADLC Antigravity Doctor ---`);
+  console.log(`--- ADLC Gemini Doctor ---`);
   console.log(`Node Version: ${process.version}`);
   console.log(`Root Directory: ${resolvedRoot}`);
   console.log(`ADLC Ticket Store Present: ${existsSync(join(resolvedRoot, '.adlc/tickets.json')) || existsSync(join(resolvedRoot, '.adlc/tickets/.store.json'))}`);

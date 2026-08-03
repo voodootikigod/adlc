@@ -67,7 +67,7 @@ package READMEs.
   distinct plugin manifests, not duplicates: the former is the Claude Code plugin
   marketplace format (lists `plugins/adlc-claude-code`), the latter is the generic
   agents marketplace format used by other hosts (lists `plugins/adlc-codex` and
-  `plugins/adlc-antigravity`).
+  `plugins/adlc-gemini`).
 
 ## Runtime baseline
 

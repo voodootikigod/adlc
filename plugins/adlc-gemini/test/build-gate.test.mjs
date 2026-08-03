@@ -154,10 +154,10 @@ test('printStatus & printDoctor: execute subcommand displays without crashing an
 test('CLI subcommand end-to-end: adlc-rails-guard.cjs status and doctor subcommands execute via subprocess', () => {
   const cjsPath = fileURLToPath(new URL('../hooks/adlc-rails-guard.cjs', import.meta.url));
   const statusOut = execSync(`node "${cjsPath}" status`, { encoding: 'utf8' });
-  assert.ok(statusOut.includes('ADLC Antigravity Status'));
+  assert.ok(statusOut.includes('ADLC Gemini Status'));
 
   const doctorOut = execSync(`node "${cjsPath}" doctor`, { encoding: 'utf8' });
-  assert.ok(doctorOut.includes('ADLC Antigravity Doctor'));
+  assert.ok(doctorOut.includes('ADLC Gemini Doctor'));
 });
 
 test('checkBuildGate: denies when active ticket ID is absent from tickets.json under enforcement', () => {

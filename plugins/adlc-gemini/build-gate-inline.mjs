@@ -1,4 +1,4 @@
-// build-gate-inline.mjs — self-contained build-gate backstop for adlc-antigravity.
+// build-gate-inline.mjs — self-contained build-gate backstop for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync } from 'node:fs';

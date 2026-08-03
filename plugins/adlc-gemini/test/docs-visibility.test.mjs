@@ -23,9 +23,9 @@ function section(markdown, heading) {
   return (endIdx === -1 ? rest : rest.slice(0, endIdx)).join('\n');
 }
 
-test('antigravity.md Install section foregrounds the fail-open risk near the top', () => {
+test('gemini.md Install section foregrounds the fail-open risk near the top', () => {
   const doc = readFileSync(
-    join(REPO_ROOT, 'docs', 'integrations', 'antigravity.md'),
+    join(REPO_ROOT, 'docs', 'integrations', 'gemini.md'),
     'utf8'
   );
   const install = section(doc, '## Install');
@@ -41,14 +41,14 @@ test('antigravity.md Install section foregrounds the fail-open risk near the top
   );
 });
 
-test('antigravity.md Install section callout appears before the install commands, not buried after them', () => {
+test('gemini.md Install section callout appears before the install commands, not buried after them', () => {
   const doc = readFileSync(
-    join(REPO_ROOT, 'docs', 'integrations', 'antigravity.md'),
+    join(REPO_ROOT, 'docs', 'integrations', 'gemini.md'),
     'utf8'
   );
   const install = section(doc, '## Install');
   const calloutIdx = install.search(/fail(s)?\s*\*{0,2}open/i);
-  const firstCommandIdx = install.indexOf('agy plugin install');
+  const firstCommandIdx = install.indexOf('npx @adlc/gemini@latest install');
   assert.ok(calloutIdx !== -1, 'callout not found');
   assert.ok(firstCommandIdx !== -1, 'install command not found');
   assert.ok(
@@ -57,12 +57,12 @@ test('antigravity.md Install section callout appears before the install commands
   );
 });
 
-test('the Antigravity plugin points at scripts/rails-guard-ci.mjs as a required-check recommendation', () => {
-  // plugins/adlc-antigravity has no README.md (matches the rest of the plugins/
+test('the Gemini plugin points at scripts/rails-guard-ci.mjs as a required-check recommendation', () => {
+  // plugins/adlc-gemini has no README.md (matches the rest of the plugins/
   // directory, none of which have one) -- commands/adlc-init.md is the closest
   // equivalent (it is the plugin's own install/bootstrap doc).
   const initDoc = readFileSync(
-    join(REPO_ROOT, 'plugins', 'adlc-antigravity', 'commands', 'adlc-init.md'),
+    join(REPO_ROOT, 'plugins', 'adlc-gemini', 'commands', 'adlc-init.md'),
     'utf8'
   );
   assert.match(
@@ -91,10 +91,10 @@ test('no shipped surface tells a user to run `agy plugin install <path>` directl
   // This caught the shipped /adlc-init command still teaching the raw-path form
   // while every guide around it warned against exactly that.
   const SURFACES = [
-    'plugins/adlc-antigravity/commands/adlc-init.md',
-    'plugins/adlc-antigravity/README.md',
-    'docs/integrations/antigravity.md',
-    'apps/docs/content/docs/integrations/antigravity.mdx',
+    'plugins/adlc-gemini/commands/adlc-init.md',
+    'plugins/adlc-gemini/README.md',
+    'docs/integrations/gemini.md',
+    'apps/docs/content/docs/integrations/gemini.mdx',
   ];
 
   let scanned = 0;
@@ -122,10 +122,10 @@ test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', 
   // published command forever. So every surface that tells someone how to install
   // has to name it, and so does the failure message itself.
   const SURFACES = [
-    'plugins/adlc-antigravity/README.md',
-    'docs/integrations/antigravity.md',
-    'apps/docs/content/docs/integrations/antigravity.mdx',
-    'plugins/adlc-antigravity/bin/cli.mjs',
+    'plugins/adlc-gemini/README.md',
+    'docs/integrations/gemini.md',
+    'apps/docs/content/docs/integrations/gemini.mdx',
+    'plugins/adlc-gemini/bin/cli.mjs',
   ];
   for (const relative of SURFACES) {
     const text = readFileSync(join(REPO_ROOT, relative), 'utf8');
@@ -139,7 +139,7 @@ test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', 
 
   // And the error a user actually sees must point at it, since that is the moment
   // they need it.
-  const cli = readFileSync(join(REPO_ROOT, 'plugins/adlc-antigravity/bin/cli.mjs'), 'utf8');
+  const cli = readFileSync(join(REPO_ROOT, 'plugins/adlc-gemini/bin/cli.mjs'), 'utf8');
   assert.match(
     cli,
     /timed out after[\s\S]{0,200}ADLC_AGY_TIMEOUT_MS/,

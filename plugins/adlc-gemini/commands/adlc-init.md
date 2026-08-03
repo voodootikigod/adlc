@@ -15,8 +15,8 @@ Bootstrap the ADLC runtime for use with `agy`.
    with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
    under an `@`-free path first:
    ```sh
-   node /absolute/path/to/plugins/adlc-antigravity/bin/cli.mjs install
-   agy plugin list   # confirm "adlc-antigravity" with a "hooks" component
+   node /absolute/path/to/plugins/adlc-gemini/bin/cli.mjs install
+   agy plugin list   # confirm "adlc-gemini" with a "hooks" component
    ```
 2. **Initialize the ADLC workspace** (creates `.adlc/`). This one *must* run
    inside the target repository, so the neutral-directory trick used for the

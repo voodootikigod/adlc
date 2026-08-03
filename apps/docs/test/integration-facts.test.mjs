@@ -191,11 +191,11 @@ test('filesystem-derived surface counts match marketing facts for every harness'
   assert.ok(piCommands.includes('adlc-ticket'));
 
   // Antigravity — prosecutor is an agent, not a second command
-  const ag = integrationFor('antigravity');
-  assert.equal(surfaceCount(ag, 'commands'), listEntries('plugins/adlc-antigravity/commands', { files: true, ext: '.md' }).length);
-  assert.equal(surfaceCount(ag, 'agents'), listEntries('plugins/adlc-antigravity/agents', { files: true, ext: '.md' }).length);
-  assert.equal(surfaceCount(ag, 'skills'), listEntries('plugins/adlc-antigravity/skills', { dirs: true }).length);
-  assert.equal(surfaceCount(ag, 'hooks'), hookEventCount('plugins/adlc-antigravity'));
+  const ag = integrationFor('gemini');
+  assert.equal(surfaceCount(ag, 'commands'), listEntries('plugins/adlc-gemini/commands', { files: true, ext: '.md' }).length);
+  assert.equal(surfaceCount(ag, 'agents'), listEntries('plugins/adlc-gemini/agents', { files: true, ext: '.md' }).length);
+  assert.equal(surfaceCount(ag, 'skills'), listEntries('plugins/adlc-gemini/skills', { dirs: true }).length);
+  assert.equal(surfaceCount(ag, 'hooks'), hookEventCount('plugins/adlc-gemini'));
   assert.equal(surfaceCount(ag, 'commands'), 3);
   assert.deepEqual(ag.surfaces.find((s) => s.key === 'commands')?.items, ['/adlc-init', '/adlc-status', '/adlc-doctor']);
 
@@ -270,8 +270,8 @@ test('Pi marketing facts emphasize proactive/reactive gates and team install', (
   assert.match(pi?.note ?? '', /npx adlc-pi install/);
 });
 
-test('Antigravity marketing facts keep CI as the real backstop', () => {
-  const ag = integrationFor('antigravity');
+test('Gemini marketing facts keep CI as the real backstop', () => {
+  const ag = integrationFor('gemini');
   assert.equal(ag?.status, 'local');
   assert.match(ag?.enforcement.session.body ?? '', /fail-open|Advisory/i);
   assert.match(ag?.enforcement.ci.body ?? '', /unbypassable|rails-guard-ci/i);
@@ -279,15 +279,15 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
   // The note used to recommend `npm install -g` + pointing agy at the resulting
   // path. That path CANNOT work: agy resolves its target as `plugin@marketplace`
   // before treating it as a filesystem path, so the `@` in
-  // `.../@adlc/antigravity` is read as the separator and the install dies with
+  // `.../@adlc/gemini` is read as the separator and the install dies with
   // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
   // plugin under an @-free path, actually registers the plugin.
-  assert.match(ag?.note ?? "", /npx @adlc\/antigravity@latest install/);
+  assert.match(ag?.note ?? "", /npx @adlc\/gemini@latest install/);
 
   const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
 
   // Every npx invocation must carry a VERSION SPEC. npx resolves a bare name
-  // against the current project first, so `npx @adlc/antigravity` in a repo that
+  // against the current project first, so `npx @adlc/gemini` in a repo that
   // ships a workspace or dependency of that name executes THAT binary instead —
   // reproduced against a real local install. A scoped name is no protection. This
   // is the same hazard install.sh already pins for the `plugins` package.
@@ -326,12 +326,12 @@ test('Antigravity marketing facts keep CI as the real backstop', () => {
     !advertised.some((line) => /agy plugin install \S*@/.test(line)),
     `an advertised command hands agy a path it parses as plugin@marketplace: ${advertised.join(' | ')}`,
   );
-  // `adlc-agy` is a BIN name inside @adlc/antigravity, not a package name.
-  // `npx adlc-agy install` resolves against the registry on any machine without
+  // `adlc-gemini` is a BIN name inside @adlc/gemini, not a package name.
+  // `npx adlc-gemini install` resolves against the registry on any machine without
   // the global install and 404s — and it points at an unclaimed npm name that
   // someone else's package could answer to.
   assert.ok(
-    !advertised.some((line) => /npx adlc-agy/.test(line)),
+    !advertised.some((line) => /npx adlc-gemini/.test(line)),
     `an advertised command names an unpublished npm package: ${advertised.join(' | ')}`,
   );
 });
