@@ -16,6 +16,7 @@
 import { isAbsolute, join, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import { spawnAsync } from './spawn-async.mjs';
+import { NEVER_EXEMPT } from './env-scrub.mjs';
 
 /**
  * Resolve a review binary to an ABSOLUTE trusted path (adversarial-review L1/M2).
@@ -37,6 +38,8 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
 }
 
 /**
+ * @param opts.env       the environment to derive the child's from (default process.env);
+ *                       injectable so a test never has to mutate the real one
  * @param opts.spawn     (cmd, args, options) => { status, stdout, stderr, error }
  * @param opts.reviewBin the trusted review command (default 'adversarial-review',
  *                       resolved against the orchestrator PATH — NOT via npx)
@@ -46,11 +49,11 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
  * @param opts.timeoutMs per-review timeout
  * @returns a runReview({ worktree, startSha, ticket }) => { ok, findings?, reason? }
  */
-export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000 } = {}) {
+export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000, env: source = process.env } = {}) {
   return async ({ worktree, startSha }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
-    const path = trustedPath ?? process.env.PATH;
+    const path = trustedPath ?? source.PATH;
     // Pre-resolve to an ABSOLUTE trusted path so exec never resolves relative to
     // cwd=worktree (M2). Fail closed if no trusted binary is found.
     const bin = resolveBin(reviewBin, path, worktree);
@@ -59,7 +62,25 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
     }
     // Sanitize PATH to absolute, non-worktree dirs for the child too.
     const safePath = String(path ?? '').split(delimiter).filter((d) => d && d !== '.' && isAbsolute(d) && !(d === worktree || d.startsWith(worktree + '/'))).join(delimiter);
-    const env = { ...process.env, PATH: safePath };
+
+    // #446: the PROSECUTOR must not hold the credential that could forge its own
+    // verdict. `NEVER_EXEMPT` exists because a process with the ledger signing
+    // key can mint the cross-model attestations the trust-root merge gate is
+    // built on — the build worker is scrubbed for exactly that reason, and the
+    // process whose verdict that gate TRUSTS was not scrubbed at all.
+    //
+    // This is a targeted DENY of that one small set, deliberately NOT a reuse of
+    // `modelPlaneEnv`: that keeps only PATH/HOME/ADLC_* plus ONE named provider
+    // key, while the reviewer needs whatever credential its configured model
+    // uses. Swapping this for the allow-list scrubber would fail every
+    // prosecution — and prosecution fails CLOSED, so that reads as "nothing can
+    // merge" rather than a visible error.
+    //
+    // The set is ITERATED, never restated: a second copy of its members is a
+    // second thing to forget when it grows, and the reviewer would silently stop
+    // being protected while the worker still was.
+    const env = { ...source, PATH: safePath };
+    for (const name of NEVER_EXEMPT) delete env[name];
 
     let res;
     try {
