@@ -88,10 +88,10 @@ function makeRepo({ stranded = '0.2.0', current = '1.0.0' } = {}) {
   mkdirSync(join(pluginsDir, 'adlc-claude-code', '.claude-plugin'), { recursive: true });
   write(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json'), { name: 'adlc', version: stranded });
 
-  // Antigravity: FLAT plugin.json carrying a protocol number that must survive.
-  mkdirSync(join(pluginsDir, 'adlc-antigravity'), { recursive: true });
-  write(join(pluginsDir, 'adlc-antigravity', 'package.json'), { name: '@adlc/antigravity', version: current, private: true });
-  write(join(pluginsDir, 'adlc-antigravity', 'plugin.json'), { name: 'adlc-antigravity', version: stranded, adlcContract: 1 });
+  // Gemini: FLAT plugin.json carrying a protocol number that must survive.
+  mkdirSync(join(pluginsDir, 'adlc-gemini'), { recursive: true });
+  write(join(pluginsDir, 'adlc-gemini', 'package.json'), { name: '@adlc/gemini', version: current, private: true });
+  write(join(pluginsDir, 'adlc-gemini', 'plugin.json'), { name: 'adlc-gemini', version: stranded, adlcContract: 1 });
 
   // Root Claude Code marketplace — metadata.version AND every plugins[].version.
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
@@ -149,8 +149,8 @@ test('claude-plugin bump reaches every host manifest shape and preserves adlcCon
 
     assert.equal(ver(join(pluginsDir, 'adlc-claude-code', '.claude-plugin', 'plugin.json')), '9.9.9',
       'nested .claude-plugin/plugin.json must bump — this is the Defect A miss');
-    assert.equal(ver(join(pluginsDir, 'adlc-antigravity', 'plugin.json')), '9.9.9',
-      'FLAT plugin.json (antigravity shape) must bump');
+    assert.equal(ver(join(pluginsDir, 'adlc-gemini', 'plugin.json')), '9.9.9',
+      'FLAT plugin.json (gemini shape) must bump');
     assert.equal(ver(join(pluginsDir, 'adlc-codex', '.codex-plugin', 'plugin.json')), '9.9.9',
       'codex must not regress');
 
@@ -158,7 +158,7 @@ test('claude-plugin bump reaches every host manifest shape and preserves adlcCon
     assert.equal(mkt.metadata.version, '9.9.9', 'marketplace metadata.version must bump');
     assert.equal(mkt.plugins[0].version, '9.9.9', 'marketplace plugins[].version must bump');
 
-    assert.equal(readJson(join(pluginsDir, 'adlc-antigravity', 'plugin.json')).adlcContract, 1,
+    assert.equal(readJson(join(pluginsDir, 'adlc-gemini', 'plugin.json')).adlcContract, 1,
       'adlcContract is a protocol number, not a release version — it must survive the bump');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -201,7 +201,7 @@ test('drift gate flags every stranded host manifest the bumper touches', () => {
     assert.match(blob, /adlc-claude-code[/\\]\.claude-plugin[/\\]plugin\.json/, 'must flag the stranded Claude Code plugin.json');
     assert.match(blob, /\.claude-plugin[/\\]marketplace\.json metadata\.version/, 'must flag stranded marketplace metadata.version');
     assert.match(blob, /\.claude-plugin[/\\]marketplace\.json plugin adlc/, 'must flag the stranded marketplace plugin entry');
-    assert.match(blob, /adlc-antigravity[/\\]plugin\.json/, 'must flag the stranded FLAT plugin.json');
+    assert.match(blob, /adlc-gemini[/\\]plugin\.json/, 'must flag the stranded FLAT plugin.json');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -753,12 +753,12 @@ test('an unparseable marketplace.json aborts the preflight with the tree untouch
 });
 
 test('a malformed FLAT plugin.json is reported, not silently skipped', () => {
-  // Round three added this check for NESTED manifests only, leaving the flat
-  // shape — antigravity's, the very layout the fix was written for — invisible
+  // second copy of logic the shipped helper already owns.
+  // shape — gemini's, the very layout the fix was written for — invisible
   // to bumper, gate and near-miss alike.
   const { root, packagesDir, pluginsDir } = makeRepo();
   try {
-    writeFileSync(join(pluginsDir, 'adlc-antigravity', 'plugin.json'), '{ "name": "x", "version": "1.0",, }\n');
+    writeFileSync(join(pluginsDir, 'adlc-gemini', 'plugin.json'), '{ "name": "x", "version": "1.0",, }\n');
     const misses = hostDiscoveryNearMisses({ root, pluginsDir });
     assert.ok(misses.some((m) => m.includes('flat host manifest')),
       'a malformed flat manifest must be reported');
@@ -995,8 +995,8 @@ test('the real repo is in host-manifest lockstep at the root version (with a dis
   const marketplaces = hostMarketplacePaths(REPO_ROOT);
   assert.ok(manifests.some((p) => p.includes(join('adlc-claude-code', '.claude-plugin'))),
     'the Claude Code manifest — the one that was stranded — must be discovered');
-  assert.ok(manifests.some((p) => p.endsWith(join('adlc-antigravity', 'plugin.json'))),
-    'the flat antigravity manifest must be discovered');
+  assert.ok(manifests.some((p) => p.endsWith(join('adlc-gemini', 'plugin.json'))),
+    'the flat gemini manifest must be discovered');
   assert.ok(marketplaces.some((p) => p.includes('.claude-plugin')),
     'the root Claude Code marketplace must be discovered');
 

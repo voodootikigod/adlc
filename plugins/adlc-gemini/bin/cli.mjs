@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, cpSync, renameSync, rmSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, cpSync, renameSync, rmSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
@@ -142,28 +142,45 @@ function runBounded(command, args, { inherit = false } = {}) {
 }
 
 /**
- * Resolve the agent binary (`agy` or `jetski`) to an ABSOLUTE path, ignoring npm-injected bin dirs.
+ * Resolve the agent binaries to ABSOLUTE paths, ignoring npm-injected bin dirs.
  *
- * @returns {{path: string, name: string} | null} absolute path and name of agent binary, or null if not found.
+ * @param {string[]} targets Binary names to search for (e.g. ['agy', 'jetski']).
+ * @returns {{path: string, name: string}[]} absolute paths and names of agent binaries found.
  */
-function resolveAgentBin() {
+function resolveAgentBins(targets) {
   const npmInjected = join('node_modules', '.bin');
-  const binNames = ['agy', 'jetski'];
+  const resolved = [];
+  const seenPaths = new Set();
+  const seenNames = new Set();
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => e.toLowerCase())
+    : [''];
+
   for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
     if (!isAbsolute(dir)) continue;
-    const normalized = dir.replace(/[\\/]+$/, '');
-    if (normalized.endsWith(npmInjected) || normalized.endsWith('node-gyp-bin')) continue;
-    for (const name of binNames) {
-      const candidate = join(dir, name);
-      try {
-        accessSync(candidate, constants.X_OK);
-        return { path: candidate, name };
-      } catch {
-        // keep looking
+    const normalized = dir.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+    if (normalized.endsWith('node_modules/.bin') || normalized.endsWith('node-gyp-bin')) continue;
+    for (const name of targets) {
+      if (seenNames.has(name)) continue;
+      for (const ext of extensions) {
+        const candidate = join(dir, name + ext);
+        if (seenPaths.has(candidate)) continue;
+        try {
+          const stat = statSync(candidate);
+          if (stat.isFile()) {
+            accessSync(candidate, constants.X_OK);
+            resolved.push({ path: candidate, name });
+            seenPaths.add(candidate);
+            seenNames.add(name);
+            break;
+          }
+        } catch {
+          // keep looking
+        }
       }
     }
   }
-  return null;
+  return resolved;
 }
 
 /**
@@ -177,7 +194,10 @@ async function agentInstallFromStagedCopy(sourceDir, agentBin) {
   let stage;
   try {
     let root = tmpdir();
-    if (root.includes('@')) root = '/tmp';
+    if (root.includes('@')) {
+      root = process.platform === 'win32' ? join(process.env.PUBLIC ?? 'C:\\Users\\Public', 'tmp') : '/tmp';
+    }
+    mkdirSync(root, { recursive: true });
     stage = mkdtempSync(join(root, 'adlc-gemini-'));
     activeStages.add(stage);
     if (stage.includes('@')) {
@@ -236,31 +256,68 @@ Description:
 if (command === 'install' || command === '--install') {
   console.log(`Installing @adlc/gemini plugin from: ${packageRoot}`);
 
-  const agentBin = resolveAgentBin();
-  if (agentBin) {
-    const probe = await runBounded(agentBin.path, ['--version']);
-    if (probe.status !== 0) {
-      console.error(`Found ${agentBin.name} at ${agentBin.path}, but \`${agentBin.name} --version\` failed${probe.error ? `: ${probe.error.message}` : ` (exit ${probe.status})`}.`);
-      console.error(`Not falling back to a direct copy: a ${agentBin.name} this broken cannot register the plugin.`);
-      await exitAfterCancellation(failureExitStatus());
+  const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
+  const legacyDir = join(pluginsDir, 'adlc-antigravity');
+  if (existsSync(legacyDir)) {
+    console.log(`Detected legacy Antigravity plugin directory at ${legacyDir}. Cleaning it up...`);
+    try {
+      rmSync(legacyDir, { recursive: true, force: true });
+      console.log('✓ Legacy Antigravity plugin directory removed.');
+    } catch (err) {
+      console.warn(`Warning: Failed to clean up legacy directory ${legacyDir}: ${err.message}`);
     }
-
-    console.log(`Google Gemini (${agentBin.name}) detected. Running ${agentBin.name} plugin install...`);
-    const status = await agentInstallFromStagedCopy(packageRoot, agentBin);
-    if (status === 0) {
-      console.log(`✓ Successfully installed @adlc/gemini plugin via ${agentBin.name}!`);
-      await exitAfterCancellation(0);
-    }
-    console.error(
-      status === null
-        ? `\`${agentBin.name} plugin install\` did not complete — see the reason above.`
-        : `\`${agentBin.name} plugin install\` failed (exit ${status}); see ${agentBin.name}'s output above.`,
-    );
-    console.error(`Not falling back to a direct copy: ${agentBin.name} is installed and rejected this plugin.`);
-    await exitAfterCancellation(failureExitStatus());
   }
 
-  const pluginsDir = join(homedir(), '.gemini', 'config', 'plugins');
+  const basename = process.argv[1] ? process.argv[1].split(/[\\/]/).pop() : '';
+  let targets = ['agy', 'jetski'];
+  if (basename.includes('adlc-agy') || basename.includes('adlc-antigravity')) {
+    targets = ['agy'];
+  } else if (basename.includes('adlc-jetski')) {
+    targets = ['jetski'];
+  }
+
+  const agentBins = resolveAgentBins(targets);
+  if (agentBins.length > 0) {
+    let installedAny = false;
+    let hasFailure = false;
+    for (const agentBin of agentBins) {
+      if (interruptSignal) break;
+      const probe = await runBounded(agentBin.path, ['--version']);
+      if (probe.status !== 0) {
+        console.error(`Found ${agentBin.name} at ${agentBin.path}, but \`${agentBin.name} --version\` failed${probe.error ? `: ${probe.error.message}` : ` (exit ${probe.status})`}.`);
+        console.error(`Skipping ${agentBin.name} registration.`);
+        hasFailure = true;
+        continue;
+      }
+
+      console.log(`Google Gemini (${agentBin.name}) detected. Running ${agentBin.name} plugin install...`);
+      const status = await agentInstallFromStagedCopy(packageRoot, agentBin);
+      if (status === 0) {
+        console.log(`✓ Successfully installed @adlc/gemini plugin via ${agentBin.name}!`);
+        installedAny = true;
+      } else {
+        console.error(
+          status === null
+            ? `\`${agentBin.name} plugin install\` did not complete — see the reason above.`
+            : `\`${agentBin.name} plugin install\` failed (exit ${status}); see ${agentBin.name}'s output above.`,
+        );
+        hasFailure = true;
+      }
+    }
+    if (installedAny && !hasFailure && !interruptSignal) {
+      await exitAfterCancellation(0);
+    } else {
+      console.error(
+        interruptSignal
+          ? 'Installation was interrupted.'
+          : hasFailure
+          ? 'Registration failed for one or more detected hosts. Not falling back to a direct copy.'
+          : 'Not falling back to a direct copy: hosts are present but registration failed.'
+      );
+      await exitAfterCancellation(failureExitStatus());
+    }
+  }
+
   const targetDir = join(pluginsDir, PLUGIN_NAME);
 
   console.log(`Copying plugin files directly to ${targetDir}...`);

@@ -725,7 +725,7 @@ export const GEMINI_INTEGRATION = {
   // 1. `agy plugin install <path>` cannot be handed the npm location: agy resolves
   //    its target as `plugin@marketplace` BEFORE treating it as a path, so the `@`
   //    in `.../@adlc/gemini` is read as that separator and the install dies
-  //    with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
+  //    with `unknown marketplace: adlc/gemini`. The helper stages the plugin
   //    under an @-free path, so it is the npm path that actually works.
   // 2. The `@latest` is REQUIRED, not decorative. `npx @adlc/gemini` resolves
   //    a bare name against the CURRENT PROJECT first, so a repo shipping a
@@ -733,11 +733,11 @@ export const GEMINI_INTEGRATION = {
   //    instead (reproduced against a real local install). A version spec forces
   //    registry resolution; it pins nothing, it only refuses local shadowing.
   install: [
-    '(cd "$(mktemp -d)" && npx @adlc/gemini@latest install)',
+    '(cd "$(mktemp -d)" && npx --package=@adlc/gemini adlc-gemini install)',
     'npm install -g @adlc/gemini',
     'adlc-gemini install',
   ],
-  note: 'Recommended: (cd "$(mktemp -d)" && npx @adlc/gemini@latest install) — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
+  note: 'Recommended: (cd "$(mktemp -d)" && npx --package=@adlc/gemini adlc-gemini install) — it fetches the package and registers it with agy. Export ADLC_P4_ENFORCEMENT=1 with an active ticket.',
   pluginDir: 'plugins/adlc-gemini',
   hero: {
     kicker: 'Gemini integration',
@@ -835,7 +835,7 @@ export const GEMINI_INTEGRATION = {
     title: 'operate: Antigravity plugin',
     lines: [
       '# Recommended one-liner via npx',
-      '(cd "$(mktemp -d)" && npx @adlc/gemini@latest install)',
+      '(cd "$(mktemp -d)" && npx --package=@adlc/gemini adlc-gemini install)',
       '',
       '# Or install globally, then register',
       'npm install -g @adlc/gemini',

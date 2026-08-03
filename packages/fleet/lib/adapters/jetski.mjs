@@ -1,7 +1,7 @@
-// WorkerAdapter: Google Antigravity CLI wrapper delegation.
+// WorkerAdapter: Google JetSki CLI wrapper delegation.
 import { dispatch as geminiDispatch } from './gemini.mjs';
 
-export const name = 'agy';
+export const name = 'jetski';
 export const pool = 'default';
 export const aliases = Object.freeze(['default']);
 export const forcesModel = true;
@@ -16,5 +16,5 @@ export const transports = Object.freeze({
 });
 
 export function dispatch(opts) {
-  return geminiDispatch({ command: 'agy', ...opts });
+  return geminiDispatch({ command: 'jetski', ...opts });
 }

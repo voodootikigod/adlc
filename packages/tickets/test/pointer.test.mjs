@@ -31,7 +31,7 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const GENERATED_READERS = [
   'plugins/adlc-codex/hooks/generated-active-ticket.mjs',
   'plugins/adlc-claude-code/hooks/generated-active-ticket.mjs',
-  'plugins/adlc-antigravity/generated-active-ticket.mjs',
+  'plugins/adlc-gemini/generated-active-ticket.mjs',
   'plugins/adlc-opencode/generated-active-ticket.mjs',
   'plugins/adlc-cursor/generated-active-ticket.mjs',
   'plugins/adlc-pi/lib/generated-active-ticket.mjs',
@@ -288,14 +288,14 @@ test('reader agreement: bridge vectors agree across every reader in both modes',
  * Every adapter that reduces the canonical result to the {id, conflict} shape.
  *
  * All four are in the set because a hollow-test mutation proved they needed to be:
- * flipping `conflict: true` -> `conflict: false` on antigravity's deny path
+ * flipping `conflict: true` -> `conflict: false` on gemini's deny path
  * SURVIVED the whole suite. That mutation IS the bug this ticket exists to kill --
  * a harness reporting "nothing wrong here" for a pointer it cannot understand --
  * so every adapter's deny path is now pinned, not just build-gate's.
  */
 const CONFLICT_ADAPTERS = [
   { name: '@adlc/build-gate', path: 'packages/build-gate/lib/active-ticket.mjs', call: (fn, root, env) => fn({ dir: root, env }) },
-  { name: 'adlc-antigravity', path: 'plugins/adlc-antigravity/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
+  { name: 'adlc-gemini', path: 'plugins/adlc-gemini/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
   { name: 'adlc-cursor', path: 'plugins/adlc-cursor/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
   { name: 'adlc-opencode', path: 'plugins/adlc-opencode/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
 ];

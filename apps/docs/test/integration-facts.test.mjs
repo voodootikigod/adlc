@@ -280,18 +280,18 @@ test('Gemini marketing facts keep CI as the real backstop', () => {
   // path. That path CANNOT work: agy resolves its target as `plugin@marketplace`
   // before treating it as a filesystem path, so the `@` in
   // `.../@adlc/gemini` is read as the separator and the install dies with
-  // `unknown marketplace: adlc/antigravity`. Only the helper, which stages the
+  // `unknown marketplace: adlc/gemini`. Only the helper, which stages the
   // plugin under an @-free path, actually registers the plugin.
-  assert.match(ag?.note ?? "", /npx @adlc\/gemini@latest install/);
+  assert.match(ag?.note ?? "", /npx --package=@adlc\/gemini adlc-gemini install/);
 
   const advertised = [ag.note ?? '', ...ag.install, ...ag.operate.lines];
 
-  // Every npx invocation must carry a VERSION SPEC. npx resolves a bare name
-  // against the current project first, so `npx @adlc/gemini` in a repo that
-  // ships a workspace or dependency of that name executes THAT binary instead —
-  // reproduced against a real local install. A scoped name is no protection. This
-  // is the same hazard install.sh already pins for the `plugins` package.
+  // Every npx invocation must carry a VERSION SPEC or specify --package explicitly.
+  // npx resolves a bare name against the current project first, so `npx @adlc/gemini`
+  // in a repo that ships a workspace or dependency of that name executes THAT binary
+  // instead. Specifying --package prevents this shadowing.
   for (const line of advertised) {
+    if (line.includes('--package')) continue;
     for (const [, spec] of line.matchAll(/npx\s+(?:--\S+\s+)*(@?[\w./@-]+)/g)) {
       assert.ok(
         spec.includes('@', 1),

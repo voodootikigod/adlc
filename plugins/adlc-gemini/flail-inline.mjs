@@ -33,14 +33,27 @@ export function normalizeError(line) {
 /**
  * Find error-line signatures that appear >= maxRepeat times.
  */
-export function detectRepeatedErrors(lines, maxRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD) {
+export function detectRepeatedErrors(steps, maxRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD) {
   const counts = new Map();
-  for (const line of lines) {
-    if (typeof line !== 'string' || !ERROR_LINE_RE.test(line)) continue;
-    const sig = normalizeError(line);
-    if (!sig || sig.length < 5) continue;
-    if (/^created at:?$/.test(sig) || /^completed at:?$/.test(sig)) continue;
-    counts.set(sig, (counts.get(sig) ?? 0) + 1);
+  const normalizedSteps = steps.map(item => {
+    if (typeof item === 'string') return [item];
+    if (Array.isArray(item)) return item;
+    return [];
+  });
+
+  for (const stepLines of normalizedSteps) {
+    if (!Array.isArray(stepLines)) continue;
+    const stepSigs = new Set();
+    for (const line of stepLines) {
+      if (typeof line !== 'string' || !ERROR_LINE_RE.test(line)) continue;
+      const sig = normalizeError(line);
+      if (!sig || sig.length < 5) continue;
+      if (/^created at:?$/.test(sig) || /^completed at:?$/.test(sig)) continue;
+      stepSigs.add(sig);
+    }
+    for (const sig of stepSigs) {
+      counts.set(sig, (counts.get(sig) ?? 0) + 1);
+    }
   }
   const results = [];
   for (const [signature, count] of counts.entries()) {
@@ -93,7 +106,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 /**
  * Safely parse recent lines from an agy transcript JSONL file.
  */
-export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
   if (!filePath || !existsSync(filePath)) return [];
   try {
     const stat = statSync(filePath);
@@ -109,37 +122,48 @@ export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
     } else {
       content = readFileSync(filePath, 'utf8');
     }
-    const extracted = [];
+    const steps = [];
     for (const rawLine of content.split('\n')) {
       if (!rawLine.trim()) continue;
       try {
         const obj = JSON.parse(rawLine);
+        const stepLines = [];
         if (obj.content && typeof obj.content === 'string') {
-          extracted.push(...obj.content.split('\n'));
+          stepLines.push(...obj.content.split('\n'));
         }
         if (obj.text && typeof obj.text === 'string') {
-          extracted.push(...obj.text.split('\n'));
+          stepLines.push(...obj.text.split('\n'));
         }
         if (obj.message && typeof obj.message === 'string') {
-          extracted.push(...obj.message.split('\n'));
+          stepLines.push(...obj.message.split('\n'));
+        }
+        if (stepLines.length > 0) {
+          steps.push(stepLines);
         }
       } catch {
-        extracted.push(rawLine);
+        steps.push([rawLine]);
       }
     }
-    return extracted;
+    return steps;
   } catch {
     return [];
   }
 }
 
+export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+  return parseTranscriptSteps(filePath, maxScanBytes).flat();
+}
+
 /**
  * Unified flail analysis across file edit churn, repeated errors, and transcript logs.
  */
-export function analyzeFlail({ edits = [], transcriptLines = [], threshold = DEFAULT_FLAIL_THRESHOLD, maxErrorRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD } = {}) {
+export function analyzeFlail({ edits = [], transcriptSteps = [], transcriptLines = [], threshold = DEFAULT_FLAIL_THRESHOLD, maxErrorRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD } = {}) {
   const churning = detectEditChurn(edits, threshold);
-  const errorLines = [...edits, ...transcriptLines];
-  const repeatedErrors = detectRepeatedErrors(errorLines, maxErrorRepeat);
+  const steps = [...edits.map(edit => [edit]), ...transcriptSteps];
+  if (transcriptLines.length > 0 && transcriptSteps.length === 0) {
+    steps.push(...transcriptLines.map(line => [line]));
+  }
+  const repeatedErrors = detectRepeatedErrors(steps, maxErrorRepeat);
 
   const signals = [];
   if (churning.length > 0) {
@@ -177,7 +201,7 @@ export function createFlailTracker({ window = DEFAULT_WINDOW, threshold = DEFAUL
   const warned = new Map();
 
   return {
-    record({ sessionID, tool, filePath, transcriptLines = [] }) {
+    record({ sessionID, tool, filePath, transcriptSteps = [], transcriptLines = [] }) {
       if (!sessionID) return { churning: [], repeatedErrors: [], verdict: 'clean', summary: '' };
       const buf = lines.get(sessionID) ?? [];
       if (filePath) {
@@ -186,7 +210,7 @@ export function createFlailTracker({ window = DEFAULT_WINDOW, threshold = DEFAUL
         lines.set(sessionID, buf);
       }
 
-      const analysis = analyzeFlail({ edits: buf, transcriptLines, threshold, maxErrorRepeat });
+      const analysis = analyzeFlail({ edits: buf, transcriptSteps, transcriptLines, threshold, maxErrorRepeat });
       const hashKey = createHash('sha1').update(JSON.stringify(analysis.signals)).digest('hex').slice(0, 16);
 
       const seenHashes = warned.get(sessionID) ?? new Set();
@@ -197,7 +221,11 @@ export function createFlailTracker({ window = DEFAULT_WINDOW, threshold = DEFAUL
       }
 
       const churning = detectEditChurn(buf, threshold);
-      const repeatedErrors = detectRepeatedErrors([...buf, ...transcriptLines], maxErrorRepeat);
+      const steps = [...buf.map(edit => [edit]), ...transcriptSteps];
+      if (transcriptLines.length > 0 && transcriptSteps.length === 0) {
+        steps.push(...transcriptLines.map(line => [line]));
+      }
+      const repeatedErrors = detectRepeatedErrors(steps, maxErrorRepeat);
 
       return {
         churning,
