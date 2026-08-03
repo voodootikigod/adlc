@@ -45,3 +45,6 @@ path. `evaluateMarkerOnReentry` does **not** use the global sentinel for
 per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound operator bypass may clear `D0:deny_store_unavailable` and
 `D3:invalid_record`.
 
+Advisory nags (`nagSuppression`) are suppressed when remaining-to-hard is below
+`MIN_REMAINING_TO_HARD` (near-hard / handoff zone) so deny/handoff owns the
+signal; this never affects mutation deny.

@@ -82,7 +82,8 @@ export function isHardDegraded(observed = {}) {
 }
 
 /**
- * Remaining-to-hard fraction for nag suppression only.
+ * Remaining-to-hard fraction for advisory nag suppression only (never deny).
+ * Fraction of HARD_* headroom still left from the floor snapshot.
  * @param {object} floor
  * @returns {number|null} min fraction across available signals, or null if none
  */
@@ -109,6 +110,12 @@ export function remainingToHard(floor = {}) {
 
 /**
  * Headroom/cooldown suppress **advisory nags** only — never deny.
+ *
+ * Suppress advisories when remaining-to-hard is BELOW `minRemaining`
+ * (near-hard / handoff territory): absolute deny/handoff already owns the
+ * signal, so nags are for earlier advisory pressure only. This path never
+ * affects mutation deny (`handoffDenyActive` ignores nags).
+ *
  * @param {object} opts
  * @param {object} [opts.floor]
  * @param {number} [opts.minRemaining=MIN_REMAINING_TO_HARD]
@@ -124,7 +131,10 @@ export function nagSuppression({
 } = {}) {
   const rem = remainingToHard(floor);
   if (rem !== null && rem < minRemaining) {
-    return { suppressNags: true, reason: 'remaining-to-hard below minimum' };
+    return {
+      suppressNags: true,
+      reason: 'near-hard headroom: advisory nags deferred to deny',
+    };
   }
   if (toolsSinceResume < cooldownTools) {
     return { suppressNags: true, reason: 'post-resume cooldown' };

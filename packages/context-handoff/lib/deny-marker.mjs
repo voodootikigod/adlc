@@ -5,8 +5,30 @@ import {
   renameSync,
   existsSync,
   readdirSync,
+  unlinkSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, join, basename } from 'node:path';
+
+/**
+ * Process-unique temp sibling for atomic write-then-rename.
+ * Avoids fixed `${final}.tmp` collisions across concurrent writers.
+ * @param {string} finalPath
+ * @returns {string}
+ */
+function uniqueTmpPath(finalPath) {
+  return `${finalPath}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+}
+
+/** Best-effort cleanup of a unique tmp left behind after write/rename failure. */
+function tryUnlinkTmp(tmp, fs) {
+  if (!tmp) return;
+  try {
+    if (typeof fs.unlinkSync === 'function') fs.unlinkSync(tmp);
+  } catch {
+    // best-effort
+  }
+}
 
 /**
  * Fail-closed deny marker helpers. Injectable fs for tests.
@@ -144,7 +166,7 @@ export function ensureDenyMarker(
   root,
   { sessionId, ticketId = null, contentHash = null, host = 'local' },
   {
-    fs = { mkdirSync, writeFileSync, renameSync, existsSync, readFileSync },
+    fs = { mkdirSync, writeFileSync, renameSync, existsSync, readFileSync, unlinkSync },
     now = () => new Date().toISOString(),
   } = {},
 ) {
@@ -187,12 +209,13 @@ export function ensureDenyMarker(
     host,
     schema: 1,
   };
+  const tmp = uniqueTmpPath(path);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    const tmp = `${path}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, path);
   } catch (err) {
+    tryUnlinkTmp(tmp, fs);
     return {
       ok: false,
       processSticky: true,
@@ -379,6 +402,7 @@ function readDenyStoreSentinel(root, fs) {
 function ensureDenyStoreSentinel(root, fs, sessionId = null) {
   const adlcDir = join(root, '.adlc');
   const sentinel = denyStoreSentinelPath(root);
+  let tmp = null;
   try {
     fs.mkdirSync(adlcDir, { recursive: true });
     const cur = readDenyStoreSentinel(root, fs);
@@ -398,11 +422,12 @@ function ensureDenyStoreSentinel(root, fs, sessionId = null) {
       return true;
     }
     const body = `${JSON.stringify({ schema: 1, sessions: next })}\n`;
-    const tmp = `${sentinel}.tmp`;
+    tmp = uniqueTmpPath(sentinel);
     fs.writeFileSync(tmp, body, 'utf8');
     fs.renameSync(tmp, sentinel);
     return true;
   } catch {
+    tryUnlinkTmp(tmp, fs);
     return false;
   }
 }
@@ -426,6 +451,7 @@ export function loadDenyRecords(
       mkdirSync,
       writeFileSync,
       renameSync,
+      unlinkSync,
     },
     /**
      * When true, a missing/emptied denies/ directory is unavailable — not a clean store.

@@ -76,7 +76,31 @@ test('headroom/cooldown suppress nags only — deny still follows absolute hando
   assert.ok(65 >= HANDOFF_PCT && 65 < HARD_PCT);
   const nags = nagSuppression({ floor: { pct: 65 }, toolsSinceResume: 100 });
   assert.equal(nags.suppressNags, true);
+  assert.equal(
+    nags.reason,
+    'near-hard headroom: advisory nags deferred to deny',
+  );
   assert.equal(handoffDenyActive(bands, nags), true, 'deny must ignore nag suppression');
+});
+
+test('near-hard floor suppresses nags; healthy headroom alone does not', () => {
+  // pct=65 handoff zone: rem=(80-65)/80=0.1875 < MIN_REMAINING_TO_HARD → suppress
+  const nearHard = nagSuppression({ floor: { pct: 65 }, toolsSinceResume: 100 });
+  assert.equal(nearHard.suppressNags, true);
+  assert.equal(
+    nearHard.reason,
+    'near-hard headroom: advisory nags deferred to deny',
+  );
+
+  // pct=40 healthy: rem=(80-40)/80=0.5 ≥ 0.25 → headroom alone does not suppress
+  // (cooldown cleared via toolsSinceResume ≥ HANDOFF_COOLDOWN_TOOLS)
+  const healthy = nagSuppression({ floor: { pct: 40 }, toolsSinceResume: 100 });
+  assert.equal(healthy.suppressNags, false);
+  assert.equal(healthy.reason, 'nags allowed');
+  // cooldown may still suppress when toolsSinceResume is low
+  const cooldown = nagSuppression({ floor: { pct: 40 }, toolsSinceResume: 0 });
+  assert.equal(cooldown.suppressNags, true);
+  assert.equal(cooldown.reason, 'post-resume cooldown');
 });
 
 test('handoffDenyActive false when below handoff even if nags suppressed', () => {

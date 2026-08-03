@@ -14,7 +14,10 @@ export const HANDOFF_BYTES = 192 * 1024;
 export const HARD_BYTES = 256 * 1024;
 
 export const HANDOFF_COOLDOWN_TOOLS = 15;
-/** Suppress advisory nags only — never mutation deny. */
+/**
+ * Suppress advisory nags when remaining-to-hard is BELOW this fraction
+ * (near-hard / handoff zone — deny/handoff owns the signal). Never mutation deny.
+ */
 export const MIN_REMAINING_TO_HARD = 0.25;
 export const HANDOFF_MAX_AGE_HOURS = 72;
 

@@ -11,7 +11,7 @@ import {
   readdirSync,
   renameSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   ensureDenyMarker,
@@ -945,8 +945,11 @@ test('ensureDenyMarker fails closed when sentinel write fails after marker', () 
       renameSync,
       existsSync,
       readFileSync,
+      unlinkSync() {},
       writeFileSync(path, data, enc) {
-        if (String(path).endsWith('.deny-store.tmp') || String(path).endsWith('.deny-store')) {
+        const base = basename(String(path));
+        // Unique tmp: `.deny-store.<pid>.<hex>.tmp` (or legacy `.deny-store`)
+        if (base === '.deny-store' || (base.startsWith('.deny-store.') && base.endsWith('.tmp'))) {
           throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
         }
         return realWrite(path, data, enc);
@@ -962,5 +965,52 @@ test('ensureDenyMarker fails closed when sentinel write fails after marker', () 
     assert.equal(r.processSticky, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('overlapping ensureDenyMarker writes use distinct unique tmp paths', () => {
+  const tmpWrites = [];
+  const files = new Map();
+  const dirs = new Set();
+  const fs = {
+    mkdirSync(path) {
+      dirs.add(String(path));
+    },
+    existsSync(path) {
+      const s = String(path);
+      return files.has(s) || dirs.has(s);
+    },
+    writeFileSync(path, data) {
+      const s = String(path);
+      if (s.endsWith('.tmp')) tmpWrites.push(s);
+      files.set(s, String(data));
+    },
+    renameSync(from, to) {
+      const f = String(from);
+      const t = String(to);
+      assert.ok(files.has(f), `rename from missing tmp ${f}`);
+      files.set(t, files.get(f));
+      files.delete(f);
+    },
+    readFileSync(path) {
+      const s = String(path);
+      if (!files.has(s)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return files.get(s);
+    },
+    unlinkSync(path) {
+      files.delete(String(path));
+    },
+  };
+
+  const a = ensureDenyMarker('/root', { sessionId: 'sess-a', ticketId: 'T154', contentHash: 'h1' }, { fs });
+  const b = ensureDenyMarker('/root', { sessionId: 'sess-b', ticketId: 'T154', contentHash: 'h2' }, { fs });
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.ok(tmpWrites.length >= 4, `expected marker+sentinel tmps per call, got ${tmpWrites.length}`);
+  const unique = new Set(tmpWrites);
+  assert.equal(unique.size, tmpWrites.length, `tmp paths must be distinct: ${tmpWrites.join(',')}`);
+  // Marker and sentinel temps share the pid+hex unique pattern (not fixed `.tmp`).
+  for (const t of tmpWrites) {
+    assert.match(t, /\.\d+\.[0-9a-f]{16}\.tmp$/);
   }
 });
