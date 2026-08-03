@@ -1,0 +1,75 @@
+---
+title: context-handoff
+description: Pure helpers for absolute context-band signals and session-terminal mutation deny (D1–D3) — the slice-1 library behind F3 continuity handoff.
+---
+
+# context-handoff
+
+**ADLC phase: P4 continuity (F3)** · **Library:** absolute context bands + session-terminal mutation deny (D1–D3).
+
+<PhaseDiagram phase="P4" />
+
+## What it defends against
+
+Long sessions rot: depth, transcript size, and context-window fill climb past the
+point where the agent still holds the plot. `context-handoff` freezes the
+**absolute** band thresholds and the **session-terminal deny** contracts that
+later harness adapters and `build-gate` will share — so no local copy of the
+numbers can drift, and a deny written once cannot silently clear when a marker
+file disappears.
+
+Slice 1 is a **pure library** (no `adlc context-handoff` CLI yet). Callers import
+helpers; harness adapters and build-gate migration land in later slices.
+
+## Absolute bands
+
+Signals are OR-joined across available kinds (`pct`, `depth`, `bytes`). Missing
+kinds are ignored; present-but-malformed or out-of-domain values fail closed as
+hard. Floor is never subtracted from band comparators (no floor-delta bands).
+
+| Band | pct | depth | bytes |
+| --- | --- | --- | --- |
+| warn | ≥ 50 | ≥ 20 | ≥ 128 KiB |
+| handoff | ≥ 60 | ≥ 30 | ≥ 192 KiB |
+| hard | ≥ 80 | ≥ 40 | ≥ 256 KiB |
+
+Advisory nags (`nagSuppression`) may be suppressed near hard so deny/handoff
+owns the signal; that path never affects mutation deny.
+
+## Deny lifecycle (D1–D3)
+
+| Code | Meaning |
+| --- | --- |
+| **D1** | Deny active for the denier session — mutations blocked. |
+| **D2** | Deny sticky across re-entry for that session until a verified consume. |
+| **D3** | Other open denies in the store also block mutations for non-denier sessions. |
+
+After a verified other-session consume, that record leaves D3 (`status=consumed`);
+the denier remains D2. Marker vanish / store-unavailable paths fail closed unless
+an unbound operator bypass clears the recoverable codes.
+
+## Usage
+
+Import from the package — there is no CLI bin in slice 1:
+
+```js
+import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
+import { evaluateBands, nagSuppression } from '@adlc/context-handoff/lib/bands.mjs';
+import { evaluateMutationGate } from '@adlc/context-handoff/lib/mutation-gate.mjs';
+import { ensureDenyMarker, loadDenyRecords } from '@adlc/context-handoff/lib/deny-marker.mjs';
+
+const bands = evaluateBands({ pct: 65, depth: 12 });
+// → { warn: true, handoff: true, hard: false }
+```
+
+```sh
+node --test packages/context-handoff/test/*.test.mjs
+```
+
+Binding design:
+[`docs/specs/context-rot-handoff.md`](https://github.com/voodootikigod/adlc/blob/main/docs/specs/context-rot-handoff.md)
+and the package README.
+
+## Go deeper
+
+[packages/context-handoff](https://github.com/voodootikigod/adlc/tree/main/packages/context-handoff)

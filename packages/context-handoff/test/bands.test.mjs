@@ -151,7 +151,15 @@ test('remainingToHard fails closed on non-finite floor signals', () => {
   assert.equal(remainingToHard(null), 0);
 });
 
-
+test('remainingToHard treats out-of-domain finite floors as depleted', () => {
+  assert.equal(remainingToHard({ pct: -1 }), 0);
+  assert.equal(remainingToHard({ pct: 101 }), 0);
+  assert.equal(remainingToHard({ depth: -5 }), 0);
+  assert.equal(remainingToHard({ bytes: -1 }), 0);
+  // Near-hard suppress still uses in-domain remaining; domain mismatch → depleted.
+  const nags = nagSuppression({ floor: { pct: 101 }, toolsSinceResume: 100 });
+  assert.equal(nags.suppressNags, true);
+});
 
 test('out-of-domain finite signals fail closed as hard', () => {
   assert.equal(isHardDegraded({ pct: -1 }), true);

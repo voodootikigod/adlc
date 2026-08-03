@@ -102,6 +102,12 @@ export function remainingToHard(floor = {}) {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
       return 0; // present-but-malformed floor → treat as depleted
     }
+    // Match evaluateBands domain: out-of-domain finite → depleted (no headroom).
+    const inDomain =
+      key === 'pct' ? value >= 0 && value <= 100 : value >= 0;
+    if (!inDomain) {
+      return 0;
+    }
     fracs.push((hard - value) / hard);
   }
   if (fracs.length === 0) return null;
