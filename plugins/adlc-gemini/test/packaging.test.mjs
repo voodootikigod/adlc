@@ -910,14 +910,14 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
   // argument is read as that separator. This package's only npm install
   // locations — `<npm root -g>/@adlc/gemini` and
   // `node_modules/@adlc/gemini` — both contain one, so passing packageRoot
-  // straight through made agy answer `unknown marketplace: adlc/antigravity`
+  // straight through made agy answer `unknown marketplace: adlc/gemini`
   // and fall through to the manual copy path on every single run.
   //
   // The package root here is deliberately shaped like a real npm install: the
   // bug is invisible from a source checkout, whose path has no `@`.
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-cli-'));
   try {
-    const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
+    const scopedRoot = join(work, 'node_modules', '@adlc', 'gemini');
     mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
     writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
     writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-gemini"}\n');
@@ -961,7 +961,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
   // staging code sitting right there looking like it had handled it.
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-cli-'));
   try {
-    const scopedRoot = join(work, 'node_modules', '@adlc', 'antigravity');
+    const scopedRoot = join(work, 'node_modules', '@adlc', 'gemini');
     mkdirSync(join(scopedRoot, 'bin'), { recursive: true });
     writeFileSync(join(scopedRoot, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
     writeFileSync(join(scopedRoot, 'plugin.json'), '{"name":"adlc-gemini"}\n');
