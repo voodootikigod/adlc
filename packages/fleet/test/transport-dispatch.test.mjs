@@ -271,20 +271,45 @@ test('EVERY transport class records "selected" — "attested" is unreachable, no
   const deps = depsFor([], { ioExtra: { adlc: (argv) => { adlcCalls.push(argv); return { status: 0, stdout: '{}' }; } } });
   const seats = realSeats();
 
+  // The default fixture routes only to subscription and gateway seats — no
+  // ticket lands on frontier-metered — so sweeping it alone would leave the
+  // `api` class untested while the title claimed otherwise. The swapped
+  // registry puts the api transport on the channel a ticket DOES route to.
   const seen = new Set();
-  for (const [id, entry] of seats) {
-    deps.recordDispatchUsage({
-      ticket: byId(id),
-      result: { exitCode: 0, output: 'ok', usageStatus: 'unreported' },
-      strike: 1,
-    });
-    seen.add(entry.seat.transport.split(':')[0]);
-  }
+  const sweep = (seatMap, d) => {
+    for (const [id, entry] of seatMap) {
+      d.recordDispatchUsage({
+        ticket: byId(id),
+        result: { exitCode: 0, output: 'ok', usageStatus: 'unreported' },
+        strike: 1,
+      });
+      seen.add(entry.seat.transport.split(':')[0]);
+    }
+  };
+  sweep(seats, deps);
+
+  const swapped = {
+    ...REGISTRY,
+    channels: {
+      ...REGISTRY.channels,
+      frontier: REGISTRY.channels['frontier-metered'],
+      'frontier-metered': REGISTRY.channels.frontier,
+    },
+  };
+  const apiSeats = realSeats(swapped);
+  sweep(apiSeats, depsFor([], {
+    seats: apiSeats,
+    ioExtra: { adlc: (argv) => { adlcCalls.push(argv); return { status: 0, stdout: '{}' }; } },
+  }));
 
   const statuses = recordedData(adlcCalls).map((d) => d.transportStatus);
   assert.ok(statuses.length > 0, 'the sweep actually recorded something');
   assert.deepEqual([...new Set(statuses)], ['selected'], `every recorded dispatch is "selected": ${statuses}`);
-  assert.ok(seen.has('subscription') && seen.has('gateway'), `the sweep covered more than one class: ${[...seen]}`);
+  // EVERY class in the §4b taxonomy that a build channel can carry — asserted
+  // individually so a fixture change that silently drops one fails here.
+  for (const klass of ['subscription', 'gateway', 'api']) {
+    assert.ok(seen.has(klass), `the sweep must exercise the "${klass}" class; saw: ${[...seen]}`);
+  }
 });
 
 // ---------------------------------------------------------------------------
