@@ -1,0 +1,26 @@
+{
+  "body": "Both the Antigravity and JetSki harness integrations wrap the same underlying Gemini-family CLI, and were maintained as two separate plugin/adapter trees (plugins/adlc-antigravity, ad-hoc jetski wiring) with duplicated docs, install-script branches, and fleet-adapter logic. Merge them into a single @adlc/gemini surface.\n\n=== TASK ===\n1. Rename plugins/adlc-antigravity -> plugins/adlc-gemini (package.json, plugin.json, hooks, skills, agents, tests) and rebrand its README.\n2. Add a packages/fleet/lib/adapters/gemini.mjs fleet adapter (subscription transport, matching the pattern of sibling adapters) and a thin packages/fleet/lib/adapters/jetski.mjs wrapper so existing jetski-labeled seats keep working.\n3. Update packages/flail-detector/lib/signals.mjs and downstream docs/tests (apps/docs, docs/integrations, scripts/*) so no reference to the old antigravity-only or jetski-only naming survives where it matters (install.sh, marketplace.json, integration-facts, docs pages).\n4. Keep the router-consolidation check working across the rename (baselinePath / supersedesBaselineFrontmatter) so historical router baselines are still comparable.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: `npm test` is green across every workspace segment. VERIFY: `npm test` exit 0.\n- AC2: No source, docs, or install-script reference to `adlc-antigravity` remains outside historical/changelog context. VERIFY: `grep -r antigravity apps/docs packages/fleet docs/integrations apps/docs/public/install.sh` shows only expected/legacy mentions.\n- AC3: The gemini fleet adapter declares a transport and is accepted by the quartermaster registry validator. VERIFY: `node --test packages/fleet/test/adapters-all.test.mjs`.\n- AC4: The docs-site integrations index and gemini.mdx page are real content (no stub). VERIFY: `node --test apps/docs/test/integration-facts.test.mjs`.\n\nRetroactively filed: implementation was already complete across 5 commits (9d2bbaa..7f85d1d on review/jetski-integration) when this ticket was authored, to back the PR's cross-model attestation with a real ticket id rather than an unticketed one.",
+  "category": "refactor",
+  "completed": true,
+  "duration": 3,
+  "id": "T-01KZ4V1YEB3PST7HREBBBZF4N7",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-antigravity/**",
+    "plugins/adlc-gemini/**",
+    "packages/fleet/lib/adapters/**",
+    "packages/fleet/test/**",
+    "packages/flail-detector/lib/signals.mjs",
+    "packages/flail-detector/test/signals.test.mjs",
+    "apps/docs/**",
+    "docs/integrations/**",
+    "docs/README.md",
+    "apps/docs/public/install.sh",
+    "scripts/**",
+    ".agents/plugins/marketplace.json",
+    "README.md",
+    "packages/tickets/test/pointer.test.mjs",
+    "packages/hollow-test/**"
+  ],
+  "title": "Unify Antigravity and JetSki integrations into @adlc/gemini"
+}
