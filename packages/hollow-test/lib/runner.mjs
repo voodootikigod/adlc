@@ -15,12 +15,20 @@ function childEnv() {
   return env;
 }
 
+// spawnSync's default maxBuffer is 1 MiB, and it does not truncate: once the
+// child's stdout crosses it, Node SIGTERMs the child and reports ENOBUFS. A
+// whole-repo suite emits far more TAP than that, so the run died mid-flight and
+// the baseline check reported it as "exit null" — a suite that never finished,
+// wearing the shape of a suite that failed. The cap has to be larger than any
+// suite we would legitimately point --test-cmd at.
+const MAX_TEST_OUTPUT_BYTES = 256 * 1024 * 1024;
+
 /**
  * Run the test command once against whatever is currently on disk. Does NOT
  * mutate or restore any file — the caller controls file state. Used both for
  * the green-baseline check (unmutated code) and inside runMutant (mutated
  * code), so baseline and mutant runs are byte-for-byte identical in their
- * spawn settings (shell, env, timeout, cwd).
+ * spawn settings (shell, env, timeout, cwd, maxBuffer).
  *
  * @param {string} testCmd   - Shell command to run the test suite.
  * @param {number} timeoutMs - Maximum time in ms to wait for the test command.
@@ -34,6 +42,7 @@ export function runTest(testCmd, timeoutMs, cwd) {
     timeout: timeoutMs,
     encoding: 'utf8',
     stdio: 'pipe',
+    maxBuffer: MAX_TEST_OUTPUT_BYTES,
     env: childEnv(),
   });
   return classifyTestResult(result);

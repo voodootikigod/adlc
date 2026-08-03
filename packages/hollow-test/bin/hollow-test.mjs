@@ -278,7 +278,14 @@ if (base === undefined) {
 
 const baseline = runTest(testCmd, timeoutMs, cwd);
 if (baseline.status !== 0) {
-  const reason = baseline.timedOut ? 'timed out' : `exit ${baseline.status}`;
+  // Report `reason` when the command could not be run to completion. Without it
+  // a launch/buffer failure prints as "exit null", which reads as a failing
+  // suite and sends the reader looking for a broken test that does not exist.
+  const reason = baseline.timedOut
+    ? 'timed out'
+    : baseline.spawnFailed
+      ? `could not run the test command: ${baseline.reason}`
+      : `exit ${baseline.status}`;
   opError(
     `baseline suite is not green (${reason}) — cannot measure mutation kill; ` +
     'fix the suite / --test-cmd first'

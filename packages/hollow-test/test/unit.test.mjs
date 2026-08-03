@@ -12,7 +12,7 @@ import {
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
 import { buildJsonReport, printTable } from '../lib/report.mjs';
-import { checkSyntax, classifyTestResult } from '../lib/runner.mjs';
+import { checkSyntax, classifyTestResult, runTest } from '../lib/runner.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -444,6 +444,28 @@ describe('classifyTestResult', () => {
       assert.equal(classifyTestResult({ status, signal: null }).spawnFailed, false,
         `exit ${status} is a genuine test failure`);
     }
+  });
+
+  // Unlike EAGAIN/ENOMEM above, this one IS provokable — and it was live: the
+  // whole-repo suite emits ~1.5 MB of TAP, spawnSync's default maxBuffer is
+  // 1 MiB, and crossing it makes Node SIGTERM the child with ENOBUFS. The
+  // mutation gate's full-suite fallback died there every run, reported as a
+  // baseline that "is not green (exit null)" — a suite that never finished,
+  // wearing the shape of a suite that failed.
+  it('a chatty but PASSING suite is green, not a dead baseline', () => {
+    // ~4 MiB of stdout, then exit 0. Comfortably over the 1 MiB default.
+    const chatty = `node -e "for(let i=0;i<65536;i++)console.log('x'.repeat(63))"`;
+    const c = runTest(chatty, 120000, process.cwd());
+    assert.equal(c.status, 0, 'a passing suite must report exit 0 however much it printed');
+    assert.equal(c.spawnFailed, false, 'output volume is not a launch failure');
+    assert.equal(c.timedOut, false);
+  });
+
+  it('a chatty FAILING suite still reports its real non-zero exit', () => {
+    const chatty = `node -e "for(let i=0;i<65536;i++)console.log('x'.repeat(63));process.exit(1)"`;
+    const c = runTest(chatty, 120000, process.cwd());
+    assert.equal(c.status, 1, 'a real failure must survive the volume, not become null');
+    assert.equal(c.spawnFailed, false);
   });
 
   it('a missing exit status with no error or signal is undetermined', () => {
