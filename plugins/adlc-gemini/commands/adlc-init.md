@@ -1,22 +1,22 @@
 ---
 name: adlc-init
-description: Bootstrap ADLC in this repo for Antigravity — install the plugin into agy and scaffold .adlc/.
+description: Bootstrap ADLC in this repo for Gemini — install the plugin into the host and scaffold .adlc/.
 ---
 
-# /adlc-init (Antigravity)
+# /adlc-init (Gemini)
 
-Bootstrap the ADLC runtime for use with `agy`.
+Bootstrap the ADLC runtime for use with `agy` or `jetski`.
 
-1. **Install this plugin into agy** (idempotent). Always go through the bundled
-   helper — never hand `agy` the plugin directory yourself. `agy` reads its
+1. **Install this plugin into the Gemini host** (idempotent). Always go through the bundled
+   helper — never hand the host the plugin directory yourself. The host reads its
    install target as `plugin@marketplace` *before* treating it as a path, so an
    `@` anywhere in the argument (an npm scope, or a checkout under
    `/home/user@example.com/…`) is parsed as a marketplace and the install fails
-   with `unknown marketplace: adlc/antigravity`. The helper stages the plugin
+   with `unknown marketplace: adlc/gemini`. The helper stages the plugin
    under an `@`-free path first:
    ```sh
    node /absolute/path/to/plugins/adlc-gemini/bin/cli.mjs install
-   agy plugin list   # confirm "adlc-gemini" with a "hooks" component
+   agy plugin list   # (or jetski plugin list) confirm "adlc-gemini" with a "hooks" component
    ```
 2. **Initialize the ADLC workspace** (creates `.adlc/`). This one *must* run
    inside the target repository, so the neutral-directory trick used for the
@@ -66,7 +66,7 @@ Bootstrap the ADLC runtime for use with `agy`.
    none of these are present, or the repo uses a different tool, document the
    manual fallback and move on.
 6. **Wire the CI gate** (the real guarantee): copy `docs/ci/rails-guard.yml` into your
-   pipeline and make it a required check. The in-session hook is advisory — `agy`
+   pipeline and make it a required check. The in-session hook is advisory — the host (agy/jetski)
    fails **open** on a non-zero hook exit, so it cannot substitute for CI. The
    workflow template runs `scripts/rails-guard-ci.mjs` directly; treat that script
    as a required check in branch protection, not just an informational job.

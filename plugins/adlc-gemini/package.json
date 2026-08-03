@@ -41,6 +41,16 @@
     "skills": "./skills/",
     "command": "./commands/adlc-init.md"
   },
+  "agy": {
+    "hooks": "./hooks.json",
+    "skills": "./skills/",
+    "command": "./commands/adlc-init.md"
+  },
+  "jetski": {
+    "hooks": "./hooks.json",
+    "skills": "./skills/",
+    "command": "./commands/adlc-init.md"
+  },
   "files": [
     "agents/",
     "bin/",
