@@ -151,3 +151,17 @@ test('denyNeverExempt scales with the SET, not with its current single member', 
   assert.equal(out.KEEP, 'yes', 'nothing else is touched');
   assert.equal(source.SECRET_A, 'a', 'the source is copied, never mutated');
 });
+
+test('makeReviewRunner() constructs with ALL defaults, evaluating every default parameter', () => {
+  // Every other test here injects `spawn`, `env` and `resolveBin`, so none of
+  // them evaluates the default-parameter list. An adversarial round read the
+  // diff alone and concluded `spawn = defaultSpawn` was an undeclared
+  // identifier — it is a hoisted function declaration further down the file, so
+  // the claim was false, but nothing in the suite would have caught it if it
+  // were true. This closes that: construction alone forces every default to
+  // resolve, and it spawns nothing.
+  assert.doesNotThrow(() => {
+    const run = makeReviewRunner();
+    assert.equal(typeof run, 'function', 'it returns the runner');
+  });
+});
