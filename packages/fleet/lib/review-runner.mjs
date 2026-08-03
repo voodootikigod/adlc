@@ -16,7 +16,7 @@
 import { isAbsolute, join, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
 import { spawnAsync } from './spawn-async.mjs';
-import { NEVER_EXEMPT } from './env-scrub.mjs';
+import { denyNeverExempt } from './env-scrub.mjs';
 
 /**
  * Resolve a review binary to an ABSOLUTE trusted path (adversarial-review L1/M2).
@@ -79,8 +79,7 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
     // The set is ITERATED, never restated: a second copy of its members is a
     // second thing to forget when it grows, and the reviewer would silently stop
     // being protected while the worker still was.
-    const env = { ...source, PATH: safePath };
-    for (const name of NEVER_EXEMPT) delete env[name];
+    const env = { ...denyNeverExempt(source), PATH: safePath };
 
     let res;
     try {

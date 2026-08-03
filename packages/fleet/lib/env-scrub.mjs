@@ -46,6 +46,25 @@ function isSecretName(name) {
  */
 export const NEVER_EXEMPT = new Set(['ADLC_MANIFEST_KEY']);
 
+/**
+ * Remove every never-exempt name from a COPY of `source` (issue #446).
+ *
+ * Takes the name set as a parameter for one reason: with `NEVER_EXEMPT` holding a
+ * single member, "iterate the set" and "delete the one member" are behaviourally
+ * identical, so the property that actually matters — that this scales when the
+ * set GROWS — cannot be tested through the production constant. A test can pass a
+ * two-member set here and prove it; production passes the real one.
+ *
+ * Always copies. The production caller hands in `process.env`, and deleting in
+ * place would strip the signing key from the ORCHESTRATOR, which needs it to sign
+ * manifest entries.
+ */
+export function denyNeverExempt(source, names = NEVER_EXEMPT) {
+  const out = { ...source };
+  for (const name of names) delete out[name];
+  return out;
+}
+
 function isAdlcControl(name) {
   return name.startsWith('ADLC_');
 }

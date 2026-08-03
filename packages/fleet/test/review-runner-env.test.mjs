@@ -129,3 +129,25 @@ test('the scrub applies on the path that actually spawns, not merely somewhere',
   assert.ok(Object.prototype.hasOwnProperty.call(captured.opts, 'env'), 'an env was passed at all');
   assert.equal(captured.opts.env.ADLC_MANIFEST_KEY, undefined);
 });
+
+// ---------------------------------------------------------------------------
+// The property that only becomes observable once the set grows
+// ---------------------------------------------------------------------------
+
+test('denyNeverExempt scales with the SET, not with its current single member', async () => {
+  // `NEVER_EXEMPT` holds one name today, which makes "iterate the set" and
+  // "delete that one name" behaviourally identical — a hand-planted mutant that
+  // denies only the first member is EQUIVALENT right now, and the drift the
+  // premortem warned about (the set grows, the reviewer silently stops being
+  // protected) is untestable through the production constant.
+  //
+  // The helper takes the set as a parameter precisely so this can be proven.
+  const { denyNeverExempt } = await import('../lib/env-scrub.mjs');
+  const source = { KEEP: 'yes', SECRET_A: 'a', SECRET_B: 'b', SECRET_C: 'c' };
+  const out = denyNeverExempt(source, new Set(['SECRET_A', 'SECRET_B', 'SECRET_C']));
+  assert.equal(out.SECRET_A, undefined, 'first member denied');
+  assert.equal(out.SECRET_B, undefined, 'second member denied — this is the one that drifts');
+  assert.equal(out.SECRET_C, undefined, 'and the third');
+  assert.equal(out.KEEP, 'yes', 'nothing else is touched');
+  assert.equal(source.SECRET_A, 'a', 'the source is copied, never mutated');
+});
