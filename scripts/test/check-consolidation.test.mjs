@@ -157,8 +157,10 @@ test('a router with no baseline at its current path is an operational error with
       harnesses: { moved: { path: NEVER_EXISTED, format: 'prose' } },
       readWork: () => baselineRouter(),
     }),
-    (e) => e.op === true && /baseline unresolved/.test(e.msg),
-    'a missing baseline must abort, not silently pass'
+    // The message must name what was actually tried: one path when there is
+    // no shim, so an operator is not sent hunting for a second location.
+    (e) => e.op === true && e.msg.includes(NEVER_EXISTED) && !/ nor /.test(e.msg),
+    'a missing baseline must abort naming the one path it tried'
   );
 });
 
@@ -265,7 +267,11 @@ test('neither path resolving is still an operational error, not a silent pass', 
       harnesses: { gone: { path: NEVER_EXISTED, baselinePath: 'plugins/adlc-vanished/skills/adlc/SKILL.md', format: 'prose' } },
       readWork: () => baselineRouter(),
     }),
-    (e) => /baseline unresolved/.test(e.msg ?? ''),
-    'a harness resolvable at neither path must fail closed',
+    // Both paths named — an operator debugging this needs to know the shim was
+    // tried too, not just the current location.
+    (e) => e.msg.includes('plugins/adlc-vanished/skills/adlc/SKILL.md')
+      && e.msg.includes(NEVER_EXISTED)
+      && / nor /.test(e.msg),
+    'a harness resolvable at neither path must fail closed, naming both',
   );
 });
