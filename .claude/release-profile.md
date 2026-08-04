@@ -11,6 +11,7 @@ landing: pr
 publishTrigger: tag
 publishEnvironment: npm-publish
 publishWorkflow: .github/workflows/publish.yml
+releaseNotes: awk '/^## \[{{version}}\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md
 tokenException: |
   Applies to: any @adlc/* package being published for the FIRST time in this release.
   Reason: npm trusted publishing is configured against an existing package, so it cannot
@@ -55,6 +56,16 @@ checks run, and let a human merge.
 environment with required reviewers. Pushing the tag starts the run *waiting*, not running — the
 maintainer must approve the deployment. Hand over the run URL and STOP (R1). The retired release
 command never mentioned the gate and told the operator the workflow publishes automatically.
+
+**The GitHub Release is a separate step here, and it was missed twice.** `publishTrigger` is
+`tag`, so nothing about publishing needs a Release — and so v1.6.0 and v1.7.0 shipped to npm
+while the Releases page still showed v1.5.1 as latest. The skill now creates it in Step 12, after
+`verify` passes. `releaseNotes` above extracts this version's `CHANGELOG.md` section so the
+Release body matches the changelog, which is what v1.5.1's body is; `--generate-notes` would
+replace a written entry with a commit list. `publish.yml` triggers on `push.tags` only, so
+creating the Release does not fire a second publish run — confirmed when the two missing
+Releases were backfilled from their changelog sections on 2026-08-04, which added no run to
+the publish workflow.
 
 All packages are lockstep, so any package's version is authoritative; `packages/core` is the
 convention.
