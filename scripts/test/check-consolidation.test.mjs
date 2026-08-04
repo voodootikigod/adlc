@@ -140,7 +140,13 @@ const BASE = execSync('git merge-base origin/main HEAD 2>/dev/null || git merge-
   cwd: REPO, encoding: 'utf8',
 }).trim();
 const MOVED = 'plugins/adlc-gemini/skills/adlc/SKILL.md';
-const MOVED_FROM = 'plugins/adlc-antigravity/skills/adlc/SKILL.md';
+// A rename fixture needs an old path that STILL EXISTS at the baseline. The
+// real Antigravity -> gemini rename is now in the baseline itself, so it can
+// no longer play that role — any router present at BASE can, and using a live
+// one keeps these fixtures from expiring the same way the shim did.
+const MOVED_FROM = 'plugins/adlc-claude-code/skills/adlc/SKILL.md';
+// A path that exists in NO commit — for asserting the fail-closed branch.
+const NEVER_EXISTED = 'plugins/adlc-nowhere/skills/adlc/SKILL.md';
 const baselineRouter = () => execSync(`git show ${BASE}:${MOVED_FROM}`, {
   cwd: REPO, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
 });
@@ -148,7 +154,7 @@ const baselineRouter = () => execSync(`git show ${BASE}:${MOVED_FROM}`, {
 test('a router with no baseline at its current path is an operational error without baselinePath', () => {
   assert.throws(
     () => run(BASE, {
-      harnesses: { moved: { path: MOVED, format: 'prose' } },
+      harnesses: { moved: { path: NEVER_EXISTED, format: 'prose' } },
       readWork: () => baselineRouter(),
     }),
     (e) => e.op === true && /baseline unresolved/.test(e.msg),
@@ -227,4 +233,39 @@ test('supersedesBaselineFrontmatter does not suppress the routing check', () => 
     readWork: () => baselineRouter().replace(/adlc spec-lint/g, 'adlc totally-different-gate'),
   });
   assert.match(drift.join('\n'), /ROUTING DRIFT/, 'frontmatter supersede must not blanket-exempt the harness');
+});
+
+// A baselinePath is a RENAME SHIM, and a shim that never expires is a time bomb:
+// it resolves only while the baseline PREDATES the rename. The moment the
+// renaming commit becomes the baseline — which happens as soon as it lands on
+// main, since `merge-base origin/main HEAD` is then that very commit — the old
+// path is gone and the check throws on every run, for every consumer. #452
+// (Antigravity+JetSki -> gemini) did exactly this to main.
+test('baselinePath expires: once the baseline holds the rename, the CURRENT path is compared', () => {
+  // MOVED exists at BASE; MOVED_FROM does not (the rename is already in the
+  // baseline). The shim must fall through rather than fail to resolve.
+  const drift = run(BASE, {
+    harnesses: { moved: { path: MOVED, baselinePath: 'plugins/adlc-vanished/skills/adlc/SKILL.md', format: 'prose' } },
+    readWork: () => execSync(`git show ${BASE}:${MOVED}`, { cwd: REPO, encoding: 'utf8', maxBuffer: 1 << 24 }),
+  });
+  assert.deepEqual(drift, [], 'an expired shim compares against the current path, not an error');
+});
+
+test('an expired shim still CATCHES drift — falling through is not a free pass', () => {
+  const drift = run(BASE, {
+    harnesses: { moved: { path: MOVED, baselinePath: 'plugins/adlc-vanished/skills/adlc/SKILL.md', format: 'prose' } },
+    readWork: () => '<!-- ADLC_CC_SENTINEL_PHASE_ROUTER_V1 -->\n\n## Where am I?\n\nSomething else entirely ─→ P9 /nope\n',
+  });
+  assert.ok(drift.length > 0, 'a real routing change must still report after the shim expires');
+});
+
+test('neither path resolving is still an operational error, not a silent pass', () => {
+  assert.throws(
+    () => run(BASE, {
+      harnesses: { gone: { path: NEVER_EXISTED, baselinePath: 'plugins/adlc-vanished/skills/adlc/SKILL.md', format: 'prose' } },
+      readWork: () => baselineRouter(),
+    }),
+    (e) => /baseline unresolved/.test(e.msg ?? ''),
+    'a harness resolvable at neither path must fail closed',
+  );
 });

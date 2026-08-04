@@ -142,12 +142,27 @@ export function run(base, {
     const rel = harness.path;
     // A router that moved since the baseline declares where it used to live, so
     // the comparison follows the rename instead of failing to resolve.
+    // `baselinePath` is a rename SHIM, and it has to expire on its own. It
+    // resolves only while the baseline predates the rename; the moment the
+    // renaming commit becomes the baseline — which is immediately, since
+    // `git merge-base origin/main HEAD` on main IS that commit — the old path
+    // no longer exists and an unconditional read throws for every consumer,
+    // permanently. So: try the old path, and when it is gone fall through to
+    // the current one, which is what the baseline now holds. Falling through
+    // is not a free pass — the comparison still runs against real content, so
+    // genuine drift is still reported. Only a harness resolvable at NEITHER
+    // path is an operational error.
     const baseRel = harness.baselinePath ?? rel;
     let baseContent;
     try {
       baseContent = gitShow(resolved, baseRel);
     } catch {
-      throw { op: true, msg: `baseline unresolved: ${baseRel} does not exist at ${resolved}.` };
+      try {
+        baseContent = gitShow(resolved, rel);
+      } catch {
+        const tried = baseRel === rel ? baseRel : `${baseRel} nor ${rel}`;
+        throw { op: true, msg: `baseline unresolved: ${tried} does not exist at ${resolved}.` };
+      }
     }
     const workContent = readWork(rel);
 
