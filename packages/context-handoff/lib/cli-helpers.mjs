@@ -12,15 +12,28 @@ export { printJson, opError, gateFail };
 /**
  * Parse common flags shared by every subcommand.
  * @param {Record<string, unknown>} values
+ * @returns {{ ok: true, root: string, adlcDir: string, write: boolean, json: boolean } | { ok: false, error: string }}
  */
 export function commonFromValues(values, cwd = process.cwd()) {
-  const { root, adlcDir } = resolveHandoffDirs(values.dir ?? '.adlc', cwd);
+  const dirs = resolveHandoffDirs(values.dir ?? '.adlc', cwd);
+  if (!dirs.ok) return { ok: false, error: dirs.error };
   return {
-    root,
-    adlcDir,
+    ok: true,
+    root: dirs.root,
+    adlcDir: dirs.adlcDir,
     write: values.write === true,
     json: values.json === true,
   };
+}
+
+/**
+ * Resolve common flags or exit 1 with the reason.
+ * @returns {{ root: string, adlcDir: string, write: boolean, json: boolean }}
+ */
+export function commonOrExit(values, cwd = process.cwd()) {
+  const common = commonFromValues(values, cwd);
+  if (!common.ok) opError(common.error);
+  return common;
 }
 
 /**
@@ -35,14 +48,30 @@ export function requireSafeSession(sessionId, label = 'session') {
 }
 
 /**
- * For --write paths: require key and record evidence. Dry-run skips both.
- * @returns {{ key: string|null, recorded: object|null }}
+ * Require the signing key before any mutation, so a missing key cannot leave
+ * half-written state behind.
+ * @returns {string}
  */
-export function maybeRecord({ write, gate, ticket, data, adlcDir, env = process.env }) {
-  if (!write) return { key: null, recorded: null };
-  const key = requireManifestKey(env);
-  const recorded = recordHandoffEvidence({ gate, ticket, data, dir: adlcDir, key });
-  return { key, recorded };
+export function requireKeyOrExit(env = process.env) {
+  try {
+    return requireManifestKey(env);
+  } catch (err) {
+    return opError(err.message);
+  }
+}
+
+/**
+ * Append durable evidence, or exit 1. `onFailure` runs before exiting so a
+ * caller can roll back what it already wrote.
+ * @returns {object}
+ */
+export function recordOrExit({ gate, ticket, data, adlcDir, key }, onFailure = null) {
+  try {
+    return recordHandoffEvidence({ gate, ticket, data, dir: adlcDir, key });
+  } catch (err) {
+    if (typeof onFailure === 'function') onFailure();
+    return opError(`failed to record evidence: ${err.message}`);
+  }
 }
 
 /**
@@ -59,7 +88,7 @@ export function finish({ json, payload, human, code = 0 }) {
  */
 export function exitFrom(err) {
   const code = typeof err?.exitCode === 'number' ? err.exitCode : 1;
-  const msg = err?.message || String(err);
+  const msg = err?.message || err?.error || String(err);
   if (code === 2) {
     console.error(msg);
     process.exit(2);

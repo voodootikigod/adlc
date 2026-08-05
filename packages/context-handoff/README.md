@@ -15,6 +15,14 @@ adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --non
 
 Mutating `--write` requires `ADLC_MANIFEST_KEY` (never silent success).
 
+`--dir` names the ledger directory and its final path segment must be `.adlc`:
+artifacts and manifest evidence share that tree, and any other name is refused
+rather than splitting them. `repair` binds a deny that already exists and is
+still open — it never creates one. `unlock` reclaims only a lock minted on this
+host, so a dead-looking PID from another machine cannot evict a live session.
+A `bypass` grant on stdout is scoped to the calling adapter invocation; the
+durable proof is the `context-handoff-bypass` manifest entry.
+
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
 import { evaluateBands } from '@adlc/context-handoff/lib/bands.mjs';

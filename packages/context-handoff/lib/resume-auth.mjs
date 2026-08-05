@@ -6,6 +6,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { existsSync, unlinkSync } from 'node:fs';
 import { canonicalJson } from '@adlc/core';
 import { resumeAuthPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
@@ -73,7 +74,9 @@ export function buildResumeAuthDoc({
 
 /**
  * Read resume-auth for a consumer session. Unverifiable ⇒ verified:false (treat as absent).
- * @returns {{ ticket_id: string, content_hash: string, deny_session_id: string, verified: boolean } | null}
+ * The document names the session it was minted for: a valid signature over another
+ * session's fields must not authorize this one, so a mismatch reads as absent.
+ * @returns {{ ticket_id: string, content_hash: string, deny_session_id: string, consumer_session_id: string, verified: boolean } | null}
  */
 export function readResumeAuth(root, sessionId, { key = null, fs } = {}) {
   const got = readJsonFile(resumeAuthPath(root, sessionId), fs ? { fs } : {});
@@ -82,18 +85,22 @@ export function readResumeAuth(root, sessionId, { key = null, fs } = {}) {
   const ticket_id = doc.ticket_id;
   const content_hash = doc.content_hash;
   const deny_session_id = doc.deny_session_id;
+  const consumer_session_id = doc.consumer_session_id;
   if (
     typeof ticket_id !== 'string' ||
     typeof content_hash !== 'string' ||
-    typeof deny_session_id !== 'string'
+    typeof deny_session_id !== 'string' ||
+    typeof consumer_session_id !== 'string'
   ) {
     return null;
   }
+  if (consumer_session_id !== sessionId) return null;
   const verified = key != null && verifyResumeAuthSig(key, doc) === true;
   return {
     ticket_id,
     content_hash,
     deny_session_id,
+    consumer_session_id,
     verified,
   };
 }
@@ -110,4 +117,18 @@ export function writeResumeAuth(root, consumerSessionId, fields, { key, fs } = {
   const wrote = writeJsonAtomic(path, doc, fs ? { fs } : {});
   if (!wrote.ok) return { ok: false, error: wrote.error };
   return { ok: true, path, doc, resumeAuth: readResumeAuth(root, consumerSessionId, { key, fs }) };
+}
+
+/**
+ * Best-effort removal of a resume-auth cache — used to roll back a partial resume.
+ * @returns {boolean} true when the cache is gone afterwards
+ */
+export function removeResumeAuth(root, consumerSessionId, { fs = { existsSync, unlinkSync } } = {}) {
+  const path = resumeAuthPath(root, consumerSessionId);
+  try {
+    if (fs.existsSync(path)) fs.unlinkSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

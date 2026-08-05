@@ -68,10 +68,18 @@ adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --non
 | **write** | Final checkpoint + ensure deny marker / `.adlc/.deny-store` |
 | **resume** | Other-session consume (same-session exits 2); writes resume-auth cache |
 | **bypass** | Bound (session only) vs unbound (`--unbound-reason`) one-shot grant |
-| **repair** | Privileged host bind of open deny `ticket_id`+`content_hash` |
-| **unlock** | Reclaim lock only when PID is dead and all lock fields match |
+| **repair** | Privileged host bind of an **existing open** deny `ticket_id`+`content_hash` |
+| **unlock** | Reclaim lock only when the PID is dead, the lock is this host's, and all fields match |
 
-Artifact paths (under the repo root; `--dir` names the `.adlc` directory):
+`repair` never creates a deny: a missing or already-consumed marker exits 1,
+so the command that relaxes a deny cannot arm one. `resume` makes the manifest
+entry durable before it flips the record, and rolls the resume-auth cache back
+if anything fails — a failed resume leaves the deny open. The bypass grant
+printed on stdout is scoped to the calling adapter invocation; the durable
+proof is the `context-handoff-bypass` manifest entry.
+
+Artifact paths (under the repo root; `--dir` names the `.adlc` directory, and
+its final path segment must be `.adlc` so artifacts and evidence stay together):
 
 - Final: `.adlc/handoffs/finals/<session_id>.json`
 - Deny: `.adlc/handoffs/denies/<session_id>.json` + `.adlc/.deny-store`

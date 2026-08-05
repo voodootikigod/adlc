@@ -7,17 +7,23 @@
  * Mutating `--write` requires ADLC_MANIFEST_KEY (never silent success).
  */
 
-import { parseArgs, opError, printJson } from '@adlc/core';
+import { parseArgs } from '@adlc/core';
 import { ensureDenyMarker, readDenyMarker, normalizeBindField } from '../lib/deny-marker.mjs';
 import { consumeDenyRecord } from '../lib/deny-lifecycle.mjs';
 import { normalizeBypassGrant, authorized } from '../lib/mutation-gate.mjs';
 import { writeFinal, readFinal, buildFinal } from '../lib/final.mjs';
-import { writeResumeAuth } from '../lib/resume-auth.mjs';
+import { writeResumeAuth, removeResumeAuth } from '../lib/resume-auth.mjs';
 import { writeDenyRecord, repairDenyBinds } from '../lib/deny-persist.mjs';
 import { unlockSession } from '../lib/lock.mjs';
-import { resolveHandoffDirs } from '../lib/paths.mjs';
-import { requireManifestKey, recordHandoffEvidence } from '../lib/evidence.mjs';
-import { requireSessionId } from '../lib/deny-lifecycle.mjs';
+import {
+  commonOrExit,
+  exitFrom,
+  finish,
+  opError,
+  recordOrExit,
+  requireKeyOrExit,
+  requireSafeSession,
+} from '../lib/cli-helpers.mjs';
 
 const USAGE = `handoff <subcommand> [options]
 
@@ -29,10 +35,11 @@ Subcommands:
   resume    Other-session consume of an open deny (writes resume-auth)
   bypass    One-shot TTY+key bypass grant (bound or unbound)
   repair    Privileged host bind: update open deny ticket_id+content_hash
-  unlock    Reclaim a session lock (dead PID + full field match)
+  unlock    Reclaim a session lock (dead PID + same host + full field match)
 
 Common options:
-  --dir <path>     .adlc ledger directory (default: .adlc)
+  --dir <path>     ledger directory (default: .adlc). Its final path segment
+                   must be ".adlc" — artifacts and manifest evidence share it.
   --write          Persist changes (default: dry-run)
   --json           Machine-readable JSON output
   --help           Show this help
@@ -40,7 +47,7 @@ Common options:
 Exit codes:
   0  success
   1  operational error (missing args/key, I/O)
-  2  gate reject (same-session resume, lock mismatch / live PID)
+  2  gate reject (same-session resume, lock mismatch / foreign host / live PID)
 
 ADLC phase: P4 continuity (F3)
 `;
@@ -48,21 +55,6 @@ ADLC phase: P4 continuity (F3)
 function helpAndExit() {
   console.log(USAGE);
   process.exit(0);
-}
-
-function requireSafe(sessionId, label) {
-  const got = requireSessionId(sessionId, label);
-  if (!got.ok) opError(got.error);
-  return got.id;
-}
-
-function dirsFrom(values) {
-  return resolveHandoffDirs(values.dir ?? '.adlc', process.cwd());
-}
-
-function emit(values, payload, human) {
-  if (values.json) printJson(payload);
-  else if (human) console.log(human);
 }
 
 function runWrite(argv) {
@@ -87,18 +79,18 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
 `);
     process.exit(0);
   }
-  const sessionId = requireSafe(values.session, '--session');
-  const { root, adlcDir } = dirsFrom(values);
+  const sessionId = requireSafeSession(values.session, '--session');
+  const { root, adlcDir, write, json } = commonOrExit(values);
   const ticketId = values.ticket ?? null;
   const host = values.host ?? 'local';
   const contentHash = values['content-hash'] ?? null;
 
   const planned = buildFinal({ sessionId, ticketId, contentHash, host });
 
-  if (!values.write) {
-    emit(
-      values,
-      {
+  if (!write) {
+    finish({
+      json,
+      payload: {
         tool: 'handoff',
         command: 'write',
         dryRun: true,
@@ -110,17 +102,11 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
           status: 'open',
         },
       },
-      `handoff write: dry-run session=${sessionId} content_hash=${planned.content_hash} (pass --write to persist)`,
-    );
-    process.exit(0);
+      human: `handoff write: dry-run session=${sessionId} content_hash=${planned.content_hash} (pass --write to persist)`,
+    });
   }
 
-  let key;
-  try {
-    key = requireManifestKey();
-  } catch (err) {
-    opError(err.message);
-  }
+  const key = requireKeyOrExit();
 
   const written = writeFinal(root, {
     sessionId,
@@ -138,26 +124,21 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
   });
   if (!deny.ok) opError(`failed to ensure deny marker: ${deny.reason}`);
 
-  let recorded;
-  try {
-    recorded = recordHandoffEvidence({
-      gate: 'context-handoff-write',
-      ticket: planned.ticket_id ?? undefined,
-      data: {
-        session_id: sessionId,
-        content_hash: planned.content_hash,
-        deny_reason: deny.reason,
-      },
-      dir: adlcDir,
-      key,
-    });
-  } catch (err) {
-    opError(`failed to record evidence: ${err.message}`);
-  }
+  const recorded = recordOrExit({
+    gate: 'context-handoff-write',
+    ticket: planned.ticket_id ?? undefined,
+    data: {
+      session_id: sessionId,
+      content_hash: planned.content_hash,
+      deny_reason: deny.reason,
+    },
+    adlcDir,
+    key,
+  });
 
-  emit(
-    values,
-    {
+  finish({
+    json,
+    payload: {
       tool: 'handoff',
       command: 'write',
       dryRun: false,
@@ -165,9 +146,8 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
       deny: { ok: true, reason: deny.reason },
       evidence: { gate: 'context-handoff-write', seq: recorded?.seq },
     },
-    `handoff write: wrote final+deny for session=${sessionId} content_hash=${written.final.content_hash}`,
-  );
-  process.exit(0);
+    human: `handoff write: wrote final+deny for session=${sessionId} content_hash=${written.final.content_hash}`,
+  });
 }
 
 function runResume(argv) {
@@ -190,9 +170,9 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
 `);
     process.exit(0);
   }
-  const consumerId = requireSafe(values.session, '--session');
-  const denySessionId = requireSafe(values['deny-session'], '--deny-session');
-  const { root, adlcDir } = dirsFrom(values);
+  const consumerId = requireSafeSession(values.session, '--session');
+  const denySessionId = requireSafeSession(values['deny-session'], '--deny-session');
+  const { root, adlcDir, write, json } = commonOrExit(values);
 
   const marker = readDenyMarker(root, denySessionId);
   if (!marker.ok || !marker.record) {
@@ -206,50 +186,42 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
   if (!contentHash) opError('final content_hash is null — cannot resume (use repair / unbound bypass)');
   if (!ticketId) opError('ticket_id is null — cannot resume (use host repair)');
 
-  const resumeAuth = {
+  // The auth this run would mint — used to reject same-session / unbound consumes
+  // before anything is written.
+  const plannedAuth = {
     ticket_id: ticketId,
     content_hash: contentHash,
     deny_session_id: denySessionId,
+    consumer_session_id: consumerId,
     verified: true,
   };
 
-  const consumed = consumeDenyRecord(marker.record, consumerId, { resumeAuth });
-  if (!consumed.ok) {
-    const code = consumed.exitCode === 2 ? 2 : 1;
-    if (code === 2) {
-      console.error(consumed.error);
-      process.exit(2);
-    }
-    opError(consumed.error);
-  }
+  const preflight = consumeDenyRecord(marker.record, consumerId, { resumeAuth: plannedAuth });
+  if (!preflight.ok) exitFrom(preflight);
 
-  if (!values.write) {
-    emit(
-      values,
-      {
+  if (!write) {
+    finish({
+      json,
+      payload: {
         tool: 'handoff',
         command: 'resume',
         dryRun: true,
         consumer: consumerId,
         deny_session: denySessionId,
-        record: consumed.record,
-        resumeAuth: { ...resumeAuth, verified: true },
+        record: preflight.record,
+        // Nothing is signed in a dry run, so this is the plan, not a credential:
+        // `resumeAuth` is reserved for the document that was actually minted.
+        plannedResumeAuth: plannedAuth,
       },
-      `handoff resume: dry-run consumer=${consumerId} deny=${denySessionId} → consumed (pass --write to persist)`,
-    );
-    process.exit(0);
+      human: `handoff resume: dry-run consumer=${consumerId} deny=${denySessionId} → consumed (pass --write to persist)`,
+    });
   }
 
-  let key;
-  try {
-    key = requireManifestKey();
-  } catch (err) {
-    opError(err.message);
-  }
+  const key = requireKeyOrExit();
 
-  const persisted = writeDenyRecord(root, consumed.record);
-  if (!persisted.ok) opError(`failed to persist consumed deny: ${persisted.error}`);
-
+  // Order matters: mint the signed auth, make the evidence durable, and only
+  // then consume the deny. A failure at any step leaves the deny open, and the
+  // resume-auth is rolled back so nothing half-authorized survives.
   const authWrote = writeResumeAuth(
     root,
     consumerId,
@@ -257,10 +229,24 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
     { key },
   );
   if (!authWrote.ok) opError(`failed to write resume-auth: ${authWrote.error}`);
+  const rollbackAuth = () => removeResumeAuth(root, consumerId);
 
-  let recorded;
-  try {
-    recorded = recordHandoffEvidence({
+  // Authorize the consume with the document that was actually signed and read
+  // back, not with a hand-built verified:true.
+  const verifiedAuth = authWrote.resumeAuth;
+  if (!verifiedAuth?.verified) {
+    rollbackAuth();
+    opError('resume-auth failed HMAC verification after write');
+  }
+
+  const consumed = consumeDenyRecord(marker.record, consumerId, { resumeAuth: verifiedAuth });
+  if (!consumed.ok) {
+    rollbackAuth();
+    exitFrom(consumed);
+  }
+
+  const recorded = recordOrExit(
+    {
       gate: 'context-handoff-resume',
       ticket: ticketId,
       data: {
@@ -268,26 +254,30 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
         deny_session_id: denySessionId,
         content_hash: contentHash,
       },
-      dir: adlcDir,
+      adlcDir,
       key,
-    });
-  } catch (err) {
-    opError(`failed to record evidence: ${err.message}`);
+    },
+    rollbackAuth,
+  );
+
+  const persisted = writeDenyRecord(root, consumed.record);
+  if (!persisted.ok) {
+    rollbackAuth();
+    opError(`failed to persist consumed deny: ${persisted.error}`);
   }
 
-  emit(
-    values,
-    {
+  finish({
+    json,
+    payload: {
       tool: 'handoff',
       command: 'resume',
       dryRun: false,
       record: persisted.record,
-      resumeAuth: authWrote.resumeAuth,
+      resumeAuth: verifiedAuth,
       evidence: { gate: 'context-handoff-resume', seq: recorded?.seq },
     },
-    `handoff resume: consumed deny=${denySessionId} for consumer=${consumerId}`,
-  );
-  process.exit(0);
+    human: `handoff resume: consumed deny=${denySessionId} for consumer=${consumerId}`,
+  });
 }
 
 function runBypass(argv) {
@@ -309,10 +299,14 @@ function runBypass(argv) {
 One-shot bypass grant for adapters. Bound (no --unbound-reason) lifts D2 for
 bound denies only. Unbound (--unbound-reason=…) also authorizes null-ticket /
 null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
+
+The grant printed on stdout is for the calling adapter invocation only; it is
+not a stored credential. The durable proof of the bypass is the manifest
+context-handoff-bypass entry written by --write.
 `);
     process.exit(0);
   }
-  const sessionId = requireSafe(values.session, '--session');
+  const sessionId = requireSafeSession(values.session, '--session');
   const unboundReason = values['unbound-reason'];
   const unbound =
     typeof unboundReason === 'string' && unboundReason.trim().length > 0
@@ -340,10 +334,12 @@ null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
     currentSessionId: sessionId,
   });
 
-  if (!values.write) {
-    emit(
-      values,
-      {
+  const { adlcDir, write, json } = commonOrExit(values);
+
+  if (!write) {
+    finish({
+      json,
+      payload: {
         tool: 'handoff',
         command: 'bypass',
         dryRun: true,
@@ -352,40 +348,28 @@ null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
         allowsUnboundRecord: allowsUnbound,
         normalized,
       },
-      `handoff bypass: dry-run session=${sessionId} bound=${!unbound} allowsUnbound=${allowsUnbound} (pass --write to record)`,
-    );
-    process.exit(0);
-  }
-
-  let key;
-  try {
-    key = requireManifestKey();
-  } catch (err) {
-    opError(err.message);
-  }
-
-  const { adlcDir } = dirsFrom(values);
-  let recorded;
-  try {
-    recorded = recordHandoffEvidence({
-      gate: 'context-handoff-bypass',
-      ticket: values.ticket ?? undefined,
-      data: {
-        session_id: sessionId,
-        unbound_reason: unbound,
-        bound: !unbound,
-        grant,
-      },
-      dir: adlcDir,
-      key,
+      human: `handoff bypass: dry-run session=${sessionId} bound=${!unbound} allowsUnbound=${allowsUnbound} (pass --write to record)`,
     });
-  } catch (err) {
-    opError(`failed to record evidence: ${err.message}`);
   }
 
-  emit(
-    values,
-    {
+  const key = requireKeyOrExit();
+
+  const recorded = recordOrExit({
+    gate: 'context-handoff-bypass',
+    ticket: values.ticket ?? undefined,
+    data: {
+      session_id: sessionId,
+      unbound_reason: unbound,
+      bound: !unbound,
+      grant,
+    },
+    adlcDir,
+    key,
+  });
+
+  finish({
+    json,
+    payload: {
       tool: 'handoff',
       command: 'bypass',
       dryRun: false,
@@ -394,9 +378,8 @@ null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
       allowsUnboundRecord: allowsUnbound,
       evidence: { gate: 'context-handoff-bypass', seq: recorded?.seq },
     },
-    `handoff bypass: recorded ${unbound ? 'unbound' : 'bound'} grant for session=${sessionId}`,
-  );
-  process.exit(0);
+    human: `handoff bypass: recorded ${unbound ? 'unbound' : 'bound'} grant for session=${sessionId}`,
+  });
 }
 
 function runRepair(argv) {
@@ -417,41 +400,49 @@ function runRepair(argv) {
     console.log(`handoff repair --session <id> --ticket <id> --content-hash <h> [--dir .adlc] [--write] [--json]
 
 Privileged host repair: refresh final and bind an open deny's ticket_id+content_hash.
-Agent Shell under deny must not invoke this. --write requires ADLC_MANIFEST_KEY.
+Requires an existing open deny marker — repair never creates one. Agent Shell
+under deny must not invoke this. --write requires ADLC_MANIFEST_KEY.
 `);
     process.exit(0);
   }
-  const sessionId = requireSafe(values.session, '--session');
+  const sessionId = requireSafeSession(values.session, '--session');
   const ticketId = normalizeBindField(values.ticket);
   const contentHash = normalizeBindField(values['content-hash']);
   if (!ticketId) opError('--ticket is required');
   if (!contentHash) opError('--content-hash is required');
   const host = values.host ?? 'local';
-  const { root, adlcDir } = dirsFrom(values);
+  const { root, adlcDir, write, json } = commonOrExit(values);
 
   const plannedFinal = buildFinal({ sessionId, ticketId, contentHash, host });
 
-  if (!values.write) {
-    emit(
-      values,
-      {
+  // Repair binds a deny that already exists; minting one here would arm a fresh
+  // repo-wide deny from a command whose job is to relax one.
+  const marker = readDenyMarker(root, sessionId);
+  if (!marker.ok || !marker.record) {
+    opError(
+      `no deny marker for session=${sessionId} (${marker.reason || 'missing'}) — repair binds an existing open deny, it does not create one`,
+    );
+  }
+  if (marker.record.status !== 'open') {
+    opError(`deny marker for session=${sessionId} is ${marker.record.status} — repair only binds an open deny`);
+  }
+
+  if (!write) {
+    finish({
+      json,
+      payload: {
         tool: 'handoff',
         command: 'repair',
         dryRun: true,
         final: plannedFinal,
+        deny: marker.record,
         denyBinds: { ticket_id: ticketId, content_hash: contentHash },
       },
-      `handoff repair: dry-run session=${sessionId} ticket=${ticketId} (pass --write to persist)`,
-    );
-    process.exit(0);
+      human: `handoff repair: dry-run session=${sessionId} ticket=${ticketId} (pass --write to persist)`,
+    });
   }
 
-  let key;
-  try {
-    key = requireManifestKey();
-  } catch (err) {
-    opError(err.message);
-  }
+  const key = requireKeyOrExit();
 
   const written = writeFinal(root, {
     sessionId,
@@ -461,53 +452,32 @@ Agent Shell under deny must not invoke this. --write requires ADLC_MANIFEST_KEY.
   });
   if (!written.ok) opError(`failed to write final: ${written.error}`);
 
-  // Ensure a marker exists, then bind it.
-  const ensured = ensureDenyMarker(root, { sessionId, ticketId, contentHash, host });
-  if (!ensured.ok) opError(`failed to ensure deny marker: ${ensured.reason}`);
-
   const repaired = repairDenyBinds(root, sessionId, { ticketId, contentHash, host });
-  if (!repaired.ok) {
-    // Fresh marker from ensure may already carry binds — accept that.
-    const check = readDenyMarker(root, sessionId);
-    if (
-      !check.ok ||
-      normalizeBindField(check.record?.ticket_id) !== ticketId ||
-      normalizeBindField(check.record?.content_hash) !== contentHash
-    ) {
-      opError(`failed to repair deny binds: ${repaired.error}`);
-    }
-  }
+  if (!repaired.ok) opError(`failed to repair deny binds: ${repaired.error}`);
 
-  let recorded;
-  try {
-    recorded = recordHandoffEvidence({
-      gate: 'context-handoff-repair',
-      ticket: ticketId,
-      data: {
-        session_id: sessionId,
-        content_hash: contentHash,
-      },
-      dir: adlcDir,
-      key,
-    });
-  } catch (err) {
-    opError(`failed to record evidence: ${err.message}`);
-  }
+  const recorded = recordOrExit({
+    gate: 'context-handoff-repair',
+    ticket: ticketId,
+    data: {
+      session_id: sessionId,
+      content_hash: contentHash,
+    },
+    adlcDir,
+    key,
+  });
 
-  const marker = readDenyMarker(root, sessionId);
-  emit(
-    values,
-    {
+  finish({
+    json,
+    payload: {
       tool: 'handoff',
       command: 'repair',
       dryRun: false,
       final: written.final,
-      deny: marker.record,
+      deny: repaired.record,
       evidence: { gate: 'context-handoff-repair', seq: recorded?.seq },
     },
-    `handoff repair: bound session=${sessionId} ticket=${ticketId}`,
-  );
-  process.exit(0);
+    human: `handoff repair: bound session=${sessionId} ticket=${ticketId}`,
+  });
 }
 
 function runUnlock(argv) {
@@ -528,12 +498,12 @@ function runUnlock(argv) {
   if (values.help) {
     console.log(`handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --nonce <n> [--dir .adlc] [--write] [--json]
 
-Reclaim a session lock only when the PID is dead and all lock fields match.
-Live PID or any field mismatch exits 2.
+Reclaim a session lock only when the PID is dead, the lock belongs to this host,
+and all lock fields match. Live PID, foreign host, or any field mismatch exits 2.
 `);
     process.exit(0);
   }
-  const sessionId = requireSafe(values.session, '--session');
+  const sessionId = requireSafeSession(values.session, '--session');
   if (values.pid === undefined) opError('--pid is required');
   if (values['started-at'] === undefined) opError('--started-at is required');
   if (values.host === undefined) opError('--host is required');
@@ -541,38 +511,31 @@ Live PID or any field mismatch exits 2.
   const pid = Number(values.pid);
   if (!Number.isInteger(pid) || pid <= 0) opError('--pid must be a positive integer');
 
-  const { root } = dirsFrom(values);
+  const { root, write, json } = commonOrExit(values);
   const result = unlockSession(root, {
     sessionId,
     pid,
     startedAt: values['started-at'],
     host: values.host,
     nonce: values.nonce,
-    write: values.write === true,
+    write,
   });
 
-  if (!result.ok) {
-    if (result.exitCode === 2) {
-      console.error(result.error);
-      process.exit(2);
-    }
-    opError(result.error);
-  }
+  if (!result.ok) exitFrom(result);
 
-  emit(
-    values,
-    {
+  finish({
+    json,
+    payload: {
       tool: 'handoff',
       command: 'unlock',
       dryRun: result.dryRun === true,
       session: sessionId,
       lock: result.lock,
     },
-    result.dryRun
+    human: result.dryRun
       ? `handoff unlock: dry-run session=${sessionId} reclaimable (pass --write to remove lock)`
       : `handoff unlock: reclaimed lock for session=${sessionId}`,
-  );
-  process.exit(0);
+  });
 }
 
 // --- dispatch ---
