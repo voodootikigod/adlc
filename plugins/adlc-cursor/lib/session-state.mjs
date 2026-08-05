@@ -1,6 +1,17 @@
 // session-state.mjs — user-scoped per-session control state (T64).
-// Depth, seen tool_use_ids, and P5 markers live under ~/.adlc (or ADLC_CURSOR_STATE_DIR),
-// not under the consumer workspace.
+// Depth, seen tool_use_ids, and P5 markers live under ~/.cursor/adlc (or
+// ADLC_CURSOR_STATE_DIR), not under the consumer workspace.
+//
+// WHY OUTSIDE THE WORKSPACE: unlike every other host, Cursor hands hooks a LIST
+// of workspace roots that may be empty, multiple, or unresolvable — and one of
+// the files kept here (cursor-session-workspaces.json) is the session→workspace
+// index itself, so it cannot live in a workspace we have not resolved yet.
+//
+// WHY NOT ~/.adlc: `.adlc/` is the marker that says "this directory is an ADLC
+// repo". A `~/.adlc` therefore made $HOME look like a repo to every ancestor
+// walk, capturing unrelated projects underneath it. State that belongs to a
+// specific host goes in that host's namespace — the same convention
+// @adlc/gemini follows with ~/.gemini/antigravity-cli.
 
 import {
   existsSync,
@@ -19,7 +30,7 @@ export function resolveStateDir(env = process.env) {
   const override = typeof env.ADLC_CURSOR_STATE_DIR === 'string' && env.ADLC_CURSOR_STATE_DIR.trim()
     ? env.ADLC_CURSOR_STATE_DIR.trim()
     : null;
-  return override || join(homedir(), '.adlc');
+  return override || join(homedir(), '.cursor', 'adlc');
 }
 
 function ensureDir(dir) {

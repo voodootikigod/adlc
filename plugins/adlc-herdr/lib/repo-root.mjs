@@ -4,19 +4,42 @@
 // null (pane excluded from the map, never a crash).
 import { execFileSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, delimiter, dirname, resolve } from 'node:path';
 
 const cache = new Map(); // dir -> { root, at }
 
 /**
+ * True when `dir` carries an ADLC ticket store — the ONLY marker that means
+ * "this directory is an ADLC repo".
+ *
+ * A bare `.adlc/` deliberately does NOT qualify. Plugins keep user-scoped state
+ * in directories that are not repos, and installs predating that convention left
+ * a stale `~/.adlc/` behind; accepting a bare directory made every non-git
+ * directory under `$HOME` resolve to `$HOME` itself. Kept in sync with
+ * `ticketStoreExists` in @adlc/core — inlined rather than imported because this
+ * plugin ships with zero dependencies.
+ */
+function hasTicketStore(dir) {
+  return existsSync(join(dir, '.adlc', 'tickets.json'))
+    || existsSync(join(dir, '.adlc', 'tickets', '.store.json'));
+}
+
+/**
  * Resolve a repo root from a starting directory by a PURE upward filesystem
- * walk — the first ancestor containing `.adlc` or `.git`, or null. Unlike
- * `resolveRepoRoot` (which shells out to `git` INSIDE the directory), this
- * spawns no subprocess, so it is safe to run against an UNTRUSTED cwd: a
+ * walk — the first ancestor carrying an ADLC ticket store or a `.git`, or null.
+ * Unlike `resolveRepoRoot` (which shells out to `git` INSIDE the directory),
+ * this spawns no subprocess, so it is safe to run against an UNTRUSTED cwd: a
  * malicious `.git/config` (e.g. an fsmonitor hook) can't be triggered by a
  * plain existence check. Use this for event-driven paths where the cwd comes
  * from an event payload. Bounded to `maxLevels` ancestors (required; counts
  * the start directory itself as the first level) so it always terminates.
+ *
+ * `$HOME` is examined only when it is plausibly a project in its own right:
+ * when it is where the walk STARTED, or when it is itself a git repo (a real
+ * dotfiles repo, which must keep resolving from its own subdirectories). A
+ * `$HOME` that merely CONTAINS a stray `~/.adlc` matches neither, so it cannot
+ * capture the directories below it. The walk never continues ABOVE `$HOME`.
  */
 export function repoRootFromCwd(startDir, maxLevels) {
   if (typeof startDir !== 'string' || startDir.length === 0) return null;
@@ -30,10 +53,15 @@ export function repoRootFromCwd(startDir, maxLevels) {
   } catch {
     return null; // nonexistent/unreadable start → fail closed
   }
+  let home;
+  try { home = realpathSync(homedir()); } catch { home = homedir(); }
+  const origin = dir;
   for (let level = 0; level < maxLevels; level += 1) {
-    if (existsSync(join(dir, '.adlc')) || existsSync(join(dir, '.git'))) return dir;
+    const atHome = dir === home;
+    const examine = !atHome || dir === origin || existsSync(join(dir, '.git'));
+    if (examine && (hasTicketStore(dir) || existsSync(join(dir, '.git')))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) break; // filesystem root
+    if (parent === dir || atHome) break; // filesystem root, or never ascend above $HOME
     dir = parent;
   }
   return null;

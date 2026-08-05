@@ -835,3 +835,221 @@ test('#204: a wildcard-only scope (=** / =* / =**/*) is refused — session-wide
     assert.doesNotMatch(r.out, /ADLC_RAILS_BYPASS active/i); // refused, not honored
   }
 });
+
+// ---- root resolution must stay inside the user's project (~/.adlc collision) ----
+//
+// The upward walk that finds the ADLC root used to accept a bare `.adlc/`
+// directory and to ascend without bound. Both let a directory in `$HOME` become
+// the "root": the hook `chdir`'d there, escaping the repo the user was actually
+// editing and resolving every rail path against `$HOME`. Two guards, two tests.
+
+/** Run the rails hook against `startDir` with a synthetic `$HOME`. */
+function runRailsIn(startDir, filePath, home) {
+  const input = JSON.stringify({ cwd: startDir, tool_input: { file_path: filePath } });
+  const env = { ...process.env, HOME: home };
+  delete env.CLAUDE_PROJECT_DIR; // must not short-circuit the walk
+  delete env.ADLC_RAILS_BYPASS;
+  delete env.ADLC_TICKET_STORE;
+  delete env.ADLC_TICKETS;
+  let out = '';
+  try {
+    out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env });
+  } catch (e) {
+    out = e.stdout ?? '';
+  }
+  return { verdict: out.includes('"permissionDecision":"deny"') ? 'deny' : 'allow', out };
+}
+
+// Observed through `manifest` mode: it reports on whichever directory the hook
+// adopted as the root, so adopting a stray one is directly visible. `rails` mode
+// cannot show this — it allows either way once no ticket store is found.
+test('a bare .adlc directory above a repo is not adopted as the ADLC root', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-home-bare-'));
+  try {
+    // Stray plugin state — a `.adlc/` with no ticket store. It carries a corrupt
+    // manifest so that adopting it would be loudly visible on stdout.
+    const stray = join(home, 'work');
+    mkdirSync(join(stray, '.adlc'), { recursive: true });
+    writeFileSync(join(stray, '.adlc', 'cursor-buildgate-depth-anonymous.json'), '{"count":6}');
+    writeFileSync(
+      join(stray, '.adlc', 'manifest.jsonl'),
+      '{"seq":1,"phase":"P4","prev":"bogus","sig":"nope"}\n',
+    );
+    const project = join(stray, 'project');
+    mkdirSync(join(project, '.git'), { recursive: true });
+    mkdirSync(join(project, 'src'), { recursive: true });
+
+    const env = { ...process.env, HOME: home, PATH: WITH_ADLC, CLAUDE_PROJECT_DIR: '' };
+    delete env.ADLC_TICKET_STORE;
+    delete env.ADLC_TICKETS;
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'manifest'], {
+        input: JSON.stringify({ cwd: join(project, 'src') }),
+        encoding: 'utf8',
+        env,
+      });
+    } catch (e) {
+      out = e.stdout ?? '';
+    }
+    // Adopting the stray dir would surface ITS manifest as an invalid chain.
+    assert.equal(out.trim(), '', `hook reported on a directory it should not have adopted: ${out}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a ticket store that LANDS at ~/.adlc cannot capture a repo below it', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-home-store-'));
+  try {
+    // The real accident: a scaffolder run from $HOME leaves a genuine store here,
+    // with rails that would freeze everything underneath.
+    mkdirSync(join(home, '.adlc'));
+    writeFileSync(
+      join(home, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'stray', rails: ['**'] }] }),
+    );
+    const project = join(home, 'unrelated-project');
+    mkdirSync(join(project, '.git'), { recursive: true });
+    mkdirSync(join(project, 'src'), { recursive: true });
+    const r = runRailsIn(join(project, 'src'), join(project, 'src', 'app.js'), home);
+    assert.equal(r.verdict, 'allow', "$HOME's rails must not govern an unrelated repo");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a repo rooted AT $HOME still enforces its own rails', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-home-dotfiles-'));
+  try {
+    mkdirSync(join(home, '.adlc'));
+    writeFileSync(
+      join(home, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'dotfiles', rails: ['zsh/**'] }] }),
+    );
+    mkdirSync(join(home, 'zsh'), { recursive: true });
+    const r = runRailsIn(home, join(home, 'zsh', '.zshrc'), home);
+    assert.equal(r.verdict, 'deny', 'a dotfiles repo rooted at $HOME is still a real ADLC repo');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Bounding the walk at $HOME must not disarm a repo that legitimately IS $HOME.
+// A dotfiles repo has to keep enforcing its rails from its own subdirectories
+// (adversarial-review finding), while a $HOME that merely CONTAINS a stray
+// .adlc still must not capture anything.
+test('a dotfiles repo rooted at $HOME enforces rails from a SUBDIRECTORY', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-home-dotfiles-sub-'));
+  try {
+    mkdirSync(join(home, '.git'), { recursive: true }); // a real repo rooted at $HOME
+    mkdirSync(join(home, '.adlc'), { recursive: true });
+    writeFileSync(
+      join(home, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'dotfiles', rails: ['zsh/**'] }] }),
+    );
+    mkdirSync(join(home, 'zsh'), { recursive: true });
+    const r = runRailsIn(join(home, 'zsh'), join(home, 'zsh', '.zshrc'), home);
+    assert.equal(r.verdict, 'deny', 'rails of a $HOME-rooted repo must apply in its subdirs');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a stray store at $HOME is still ignored even when $HOME is a git repo below it', () => {
+  // $HOME is NOT a git repo here — only the nested project is. The store at
+  // $HOME must not reach down into it.
+  const home = mkdtempSync(join(tmpdir(), 'adlc-home-stray-sub-'));
+  try {
+    mkdirSync(join(home, '.adlc'), { recursive: true });
+    writeFileSync(
+      join(home, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'stray', rails: ['**'] }] }),
+    );
+    const project = join(home, 'proj');
+    mkdirSync(join(project, '.git'), { recursive: true });
+    mkdirSync(join(project, 'src'), { recursive: true });
+    const r = runRailsIn(join(project, 'src'), join(project, 'src', 'app.js'), home);
+    assert.equal(r.verdict, 'allow');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// With no enclosing git repo, the NEAREST ancestor store wins — the fallback the
+// walk documents. Pins `adlcRoot === null && …`: relaxing that condition lets a
+// HIGHER ancestor's store overwrite the nearer one, so the wrong ticket's rails
+// would govern the edit.
+test('the nearest-ancestor store wins over a higher one when there is no git root', () => {
+  const box = mkdtempSync(join(tmpdir(), 'adlc-nested-store-'));
+  try {
+    const outer = join(box, 'outer');
+    const inner = join(outer, 'inner');
+    mkdirSync(join(outer, '.adlc'), { recursive: true });
+    mkdirSync(join(inner, '.adlc'), { recursive: true });
+    mkdirSync(join(inner, 'secret'), { recursive: true });
+    // The far store freezes something the edit does NOT touch...
+    writeFileSync(
+      join(outer, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'OUTER', title: 'outer', rails: ['untouched/**'] }] }),
+    );
+    // ...while the NEAR one freezes exactly what is being edited.
+    writeFileSync(
+      join(inner, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'INNER', title: 'inner', rails: ['secret/**'] }] }),
+    );
+    // $HOME is elsewhere, so the home guard plays no part here.
+    const r = runRailsIn(inner, join(inner, 'secret', 'x.js'), join(box, 'home'));
+    assert.equal(r.verdict, 'deny', "the nearest store's rails must govern the edit");
+    assert.match(r.out, /INNER/, 'and it must be the NEAR ticket that denies, not the far one');
+  } finally {
+    rmSync(box, { recursive: true, force: true });
+  }
+});
+
+// The ancestor fallback must never reach OUTSIDE the enclosing git repo. The
+// $HOME guard alone only covered a store sitting exactly at $HOME; a store in
+// any intermediate ancestor captured the repo below it just the same
+// (adversarial-review finding).
+test('a store in an ancestor ABOVE a non-ADLC git repo does not capture it', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-ancestor-store-'));
+  try {
+    const work = join(home, 'work');
+    mkdirSync(join(work, '.adlc'), { recursive: true });
+    writeFileSync(
+      join(work, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'ANCESTOR', title: 'stray', rails: ['**'] }] }),
+    );
+    const repo = join(work, 'my-repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    const r = runRailsIn(join(repo, 'src'), join(repo, 'src', 'app.js'), home);
+    assert.equal(r.verdict, 'allow', "an ancestor's rails must not govern an unrelated repo");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ...but a store at or BELOW the git root is still honored, so a package-level
+// store in a monorepo keeps enforcing (guards against over-correcting above).
+test('a package-level store BELOW the git root still enforces its rails', () => {
+  const home = mkdtempSync(join(tmpdir(), 'adlc-monorepo-store-'));
+  try {
+    const mono = join(home, 'mono');
+    mkdirSync(join(mono, '.git'), { recursive: true });
+    const pkg = join(mono, 'pkg');
+    mkdirSync(join(pkg, '.adlc'), { recursive: true });
+    mkdirSync(join(pkg, 'secret'), { recursive: true });
+    writeFileSync(
+      join(pkg, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'PKG', title: 'pkg', rails: ['secret/**'] }] }),
+    );
+    // Start BELOW the package root. Starting at `pkg` itself would prove nothing:
+    // the hook already chdir'd there, so the walk's answer could be discarded
+    // entirely and the rail would still be found.
+    const r = runRailsIn(join(pkg, 'secret'), join(pkg, 'secret', 'x.js'), home);
+    assert.equal(r.verdict, 'deny');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

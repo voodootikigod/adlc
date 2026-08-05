@@ -6,7 +6,9 @@
 //
 // Idempotent; prints a human summary of what was created vs already present.
 
-import { resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { scaffold } from './scaffold.mjs';
 
 // stop / beforeSubmitPrompt are ON by default (T47; Cursor-documented events).
@@ -16,7 +18,40 @@ const args = process.argv.slice(2);
 const wireUnpinned = args.includes('--no-unpinned') || process.env.ADLC_CURSOR_WIRE_UNPINNED === '0'
   ? false
   : true;
+const force = args.includes('--force');
 const projectRoot = resolve(args.filter((a) => !a.startsWith('--'))[0] ?? '.');
+
+/**
+ * Guard the scaffold target.
+ *
+ * The target defaults to `.`, so running init from the wrong directory silently
+ * wrote a `.adlc/` — config AND a ticket store — wherever the shell happened to
+ * be. In `$HOME` that is especially costly: `.adlc/` is the marker meaning "this
+ * directory is an ADLC repo", so a `~/.adlc` makes `$HOME` read as a repo and
+ * captures every project beneath it. That is a hard REFUSAL (`--force` to
+ * override), because there is no plausible reason to root a project at `$HOME`
+ * by accident.
+ *
+ * A target that is not (yet) a git repository only WARNS: scaffolding an empty
+ * directory and running `git init` afterwards is a legitimate order of
+ * operations, so this stays visible without blocking it.
+ */
+function guardTarget(dir) {
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  if (real(dir) === real(homedir()) && !force) {
+    console.error(
+      `adlc-cursor: refusing to scaffold into ${dir} — it is your home directory.\n` +
+      'A `.adlc/` there marks $HOME as an ADLC repo and captures every project beneath it.\n' +
+      'Pass an explicit project path, or --force if this really is the target.',
+    );
+    process.exit(1);
+  }
+  if (!existsSync(join(dir, '.git'))) {
+    console.error(`adlc-cursor: note — ${dir} is not a git repository yet.`);
+  }
+}
+
+guardTarget(projectRoot);
 const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(projectRoot, { wireUnpinned });
 
 const tag = (r) => (r.created ? 'created' : 'present');

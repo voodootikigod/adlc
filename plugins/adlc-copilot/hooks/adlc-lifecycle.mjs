@@ -15,9 +15,10 @@
 // pins the inline copy against packages/core/lib/risk-tier.mjs's real exports.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { readActiveTicketPointer, resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 async function stdinJson() {
@@ -306,6 +307,52 @@ function reviewOutput(root) {
   return warning ? { systemMessage: warning } : null;
 }
 
+/**
+ * Where flail state may be written, or null when there is nowhere legitimate.
+ *
+ * An explicit PLUGIN_DATA is honored unconditionally — the host chose it. The
+ * DEFAULT lives inside the repo's own `.adlc/`, so it is usable only when this
+ * actually IS an ADLC repo. Writing it unconditionally made the hook `mkdir -p`
+ * a `.adlc/` in whatever directory the agent happened to be standing in — for a
+ * tool failure with cwd=$HOME, that created `~/.adlc`, which then read back as
+ * an ADLC repo marker to every ancestor walk and captured unrelated projects.
+ * Flail detection is advisory, so skipping it outside a repo costs nothing.
+ */
+function flailDataRoot(root, env = process.env) {
+  if (env.PLUGIN_DATA) return env.PLUGIN_DATA;
+  const adlcRoot = enclosingAdlcRoot(root, env);
+  return adlcRoot ? join(adlcRoot, '.adlc/.plugin-data') : null;
+}
+
+/**
+ * Nearest ancestor of `startDir` that carries an ADLC ticket store, or null.
+ *
+ * A hook often runs with cwd set to a SUBDIRECTORY (`packages/app`), so testing
+ * `startDir` alone would silently disable flail detection for most of a repo.
+ * The walk stops at a `.git` boundary: a nested independent repo must not write
+ * its flail state into an ancestor project's `.adlc/`. `$HOME` is examined only
+ * when it is where we started or is itself a git repo, and the walk never
+ * continues above it — so a stray `~/.adlc` cannot make every directory beneath
+ * $HOME look like a repo.
+ */
+function enclosingAdlcRoot(startDir, env = process.env, maxLevels = 64) {
+  const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const home = real(homedir());
+  let dir = real(startDir);
+  const start = dir;
+  for (let i = 0; i < maxLevels; i += 1) {
+    const atHome = dir === home;
+    const examine = !atHome || dir === start || existsSync(join(dir, '.git'));
+    if (examine && ticketStoreExists(dir, env)) return dir;
+    // A repo root without a store is the end of the search, not a waypoint.
+    if (existsSync(join(dir, '.git'))) return null;
+    const parent = dirname(dir);
+    if (parent === dir || atHome) return null;
+    dir = parent;
+  }
+  return null;
+}
+
 async function main() {
   const mode = process.argv[2] ?? 'context';
   const payload = await stdinJson();
@@ -313,7 +360,10 @@ async function main() {
   const event = payload.hook_event_name ?? payload.hookEventName ?? 'SessionStart';
   let output;
   if (mode === 'context') output = hookOutput(event, stateContext(root));
-  else if (mode === 'flail') output = flailOutput(payload, process.env.PLUGIN_DATA ?? join(root, '.adlc/.plugin-data'));
+  else if (mode === 'flail') {
+    const dataRoot = flailDataRoot(root);
+    output = dataRoot ? flailOutput(payload, dataRoot) : null;
+  }
   else if (mode === 'verify') output = verifyOutput(root);
   else if (mode === 'review') output = reviewOutput(root);
   else throw new Error(`unknown lifecycle mode: ${mode}`);

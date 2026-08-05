@@ -172,13 +172,27 @@ Recorded 2026-07-05 (ticket T18, cursor-native-parity spec decisions 4–8).
    `@adlc/build-gate` deep lib subpaths — the package has no exports map, so
    `lib/*.mjs` subpaths are the sanctioned import form).
 3. **Depth session-scoping (T64):** per-session counters under the user-scoped
-   ADLC state dir (`~/.adlc/` or `ADLC_CURSOR_STATE_DIR`), keyed by SHA-256 of
+   Cursor state dir (`~/.cursor/adlc/` or `ADLC_CURSOR_STATE_DIR`), keyed by SHA-256 of
    the unified session id. Session identity accepts docs-pinned `session_id` /
    `conversation_id` and env `ADLC_CURSOR_SESSION_ID` only (rejects
    `thread_id` / `generation_id` as session keys). Env≠payload is conflict
    (no named-state mutation). Increments are idempotent on `tool_use_id`.
    TTL (`SESSION_TTL_MS`) still expires stale session files; anonymous (no id)
    uses a TTL singleton fallback.
+
+   This state sits **outside any workspace** because Cursor — alone among the
+   supported hosts — hands hooks a *list* of workspace roots that may be empty,
+   multiple, or unresolvable, and `cursor-session-workspaces.json` is the
+   session→workspace index itself, so it cannot live in a workspace that has not
+   been resolved yet.
+
+   It originally sat in `~/.adlc/`, which was a mistake: `.adlc/` is the marker
+   meaning "this directory is an ADLC repo", so a `~/.adlc` made `$HOME` read as
+   a repo to every ancestor walk and captured unrelated projects beneath it.
+   Host-specific state now goes in the host's own namespace, matching the
+   convention `@adlc/gemini` already follows with `~/.gemini/antigravity-cli`.
+   Nothing in ADLC writes to `~/.adlc`; a repo-root walk additionally refuses to
+   adopt a bare `.adlc/` or to ascend into `$HOME`.
 4. **`stop` / `beforeSubmitPrompt` are default-on (T47).** They are documented
    Cursor events; the scaffolder wires them unless opted out
    (`wireUnpinned: false` / `--no-unpinned` / `ADLC_CURSOR_WIRE_UNPINNED=0`).

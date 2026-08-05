@@ -74,10 +74,16 @@ test('resolveOnPath returns null when the binary is nowhere on PATH (fail closed
   assert.equal(resolveOnPath('nope-not-here', undefined), null);
 });
 
-test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure walk (no subprocess)', () => {
+/** An ADLC-bearing root: a `.adlc/` that actually carries a ticket store. */
+function mkAdlcRoot(root) {
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'tickets.json'), '{"tickets":[]}\n');
+}
+
+test('repoRootFromCwd finds the nearest ADLC-bearing or .git ancestor by a pure walk (no subprocess)', () => {
   const root = join(dir, 'proj');
   const deep = join(root, 'a', 'b', 'c');
-  mkdirSync(join(root, '.adlc'), { recursive: true });
+  mkAdlcRoot(root);
   mkdirSync(deep, { recursive: true });
   assert.equal(realpathSync(repoRootFromCwd(deep, 64)), realpathSync(root));
   // a .git-only root is also recognized
@@ -86,9 +92,70 @@ test('repoRootFromCwd finds the nearest ancestor with .adlc or .git by a pure wa
   assert.equal(realpathSync(repoRootFromCwd(join(gitRoot, '.git'), 64)), realpathSync(gitRoot));
 });
 
+test('the directory-backed ticket store is also recognized as ADLC-bearing', () => {
+  const root = join(dir, 'dirstore');
+  mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'tickets', '.store.json'), '{"tickets":[]}\n');
+  const deep = join(root, 'x');
+  mkdirSync(deep, { recursive: true });
+  assert.equal(realpathSync(repoRootFromCwd(deep, 64)), realpathSync(root));
+});
+
+// A bare `.adlc/` is NOT an opt-in marker. Plugins keep user-scoped state in
+// directories that are not repos (and a stale `~/.adlc` exists on installs
+// predating that move); treating one as a root made every non-git directory
+// under $HOME resolve to $HOME. Only a ticket store means "ADLC repo".
+test('a bare .adlc directory carrying no ticket store is NOT a root', () => {
+  const notARoot = join(dir, 'homelike');
+  mkdirSync(join(notARoot, '.adlc'), { recursive: true });
+  writeFileSync(join(notARoot, '.adlc', 'some-state.json'), '{}\n');
+  const deep = join(notARoot, 'unrelated', 'src');
+  mkdirSync(deep, { recursive: true });
+  assert.equal(repoRootFromCwd(deep, 64), null);
+});
+
+test('a bare .adlc ancestor cannot shadow a real .git root below it', () => {
+  const home = join(dir, 'home2');
+  mkdirSync(join(home, '.adlc'), { recursive: true });
+  const repo = join(home, 'project');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const deep = join(repo, 'src');
+  mkdirSync(deep, { recursive: true });
+  assert.equal(realpathSync(repoRootFromCwd(deep, 64)), realpathSync(repo));
+});
+
+// Guard 1 (ticket-store marker) alone does not stop a store that actually LANDS
+// at ~/.adlc — a scaffolder run from the wrong directory. Ascending must stop
+// before $HOME so such a store cannot capture every directory below it.
+test('a ticket store at $HOME does not capture repos below it', () => {
+  const home = join(dir, 'home');
+  mkAdlcRoot(home); // the accident: a real store at ~/.adlc
+  const deep = join(home, 'projects', 'unrelated', 'src');
+  mkdirSync(deep, { recursive: true });
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.equal(repoRootFromCwd(deep, 64), null);
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
+test('a repo rooted AT $HOME still resolves when that is the starting dir', () => {
+  const home = join(dir, 'dotfiles');
+  mkAdlcRoot(home);
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.equal(realpathSync(repoRootFromCwd(home, 64)), realpathSync(home));
+  } finally {
+    process.env.HOME = realHome;
+  }
+});
+
 test('repoRootFromCwd follows symlinks to the PHYSICAL repo root', () => {
   const real = join(dir, 'realproj');
-  mkdirSync(join(real, '.adlc'), { recursive: true });
+  mkAdlcRoot(real);
   const sub = join(real, 'a', 'b');
   mkdirSync(sub, { recursive: true });
   const link = join(dir, 'link-to-sub');
@@ -106,10 +173,10 @@ test('repoRootFromCwd returns null outside any repo, and fails closed on a bad s
 
 test('repoRootFromCwd honors maxLevels precisely (counts the start dir as level 1)', () => {
   const root = join(dir, 'lvl');
-  mkdirSync(join(root, '.adlc'), { recursive: true });
+  mkAdlcRoot(root);
   const child = join(root, 'sub');
   mkdirSync(child, { recursive: true });
-  // maxLevels=1 checks ONLY the start dir: found when .adlc is right there...
+  // maxLevels=1 checks ONLY the start dir: found when the store is right there...
   assert.equal(realpathSync(repoRootFromCwd(root, 1)), realpathSync(root));
   // ...but not when the root is one level up and only 1 level is allowed.
   assert.equal(repoRootFromCwd(child, 1), null);
@@ -123,4 +190,22 @@ test('evictIfFull drops the oldest entry at/over the bound, and is a no-op below
   assert.deepEqual([...m.keys()], ['b', 'c']);
   evictIfFull(m, 5); // below the bound → no change
   assert.deepEqual([...m.keys()], ['b', 'c']);
+});
+
+// The $HOME bound must not disarm a repo that legitimately IS $HOME: a dotfiles
+// repo has to keep resolving from its own subdirectories (adversarial-review
+// finding), while a $HOME that merely CONTAINS a stray .adlc still must not.
+test('a dotfiles repo rooted at $HOME resolves from a SUBDIRECTORY', () => {
+  const home = join(dir, 'dotfiles-sub');
+  mkAdlcRoot(home);
+  mkdirSync(join(home, '.git'), { recursive: true }); // a real repo rooted at $HOME
+  const sub = join(home, 'zsh');
+  mkdirSync(sub, { recursive: true });
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.equal(realpathSync(repoRootFromCwd(sub, 64)), realpathSync(home));
+  } finally {
+    process.env.HOME = realHome;
+  }
 });

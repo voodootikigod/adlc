@@ -54,13 +54,26 @@ import {
   realpathSync,
   readlinkSync,
 } from 'node:fs';
-import { join, relative, resolve, dirname, basename } from 'node:path';
-import { tmpdir } from 'node:os';
+import { join, relative, resolve, dirname, basename, isAbsolute } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 const MODE = process.argv[2];
+
+/** Symlink-resolved form of a path, or the path itself when unresolvable.
+ *  Used to compare a walked ancestor against `$HOME` when either side may be
+ *  reached through a symlink (`/home/x` → `/mnt/users/x`). */
+function realOrSelf(p) {
+  try { return realpathSync(p); } catch { return p; }
+}
+
+/** True when `child` IS `parent` or sits underneath it (symlink-resolved). */
+function isInside(child, parent) {
+  const rel = relative(realOrSelf(parent), realOrSelf(child));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
 
 // The tool's invocation directory (where relative `file_path`s are anchored),
 // captured BEFORE we walk up to the repo root. Relative edit targets must resolve
@@ -177,20 +190,53 @@ function main() {
   // The starting dir may be a SUBDIRECTORY of the repo (CLAUDE_PROJECT_DIR unset,
   // cwd = src/). Find the ADLC root and operate there, so a frozen-rail edit can't
   // slip past just because the hook ran from a subdir (which would otherwise find
-  // no `.adlc/` and no-op = fail open). Anchor to the GIT ROOT first so a nested
-  // `.adlc/` in a subdirectory can't shadow the repo-wide config; only fall back
-  // to the nearest-ancestor `.adlc/` when there is no enclosing git repo.
+  // no store and no-op = fail open). Anchor to the GIT ROOT first so a nested
+  // store in a subdirectory can't shadow the repo-wide config; only fall back
+  // to the nearest-ancestor ADLC root when there is no enclosing git repo.
+  //
+  // TWO independent guards keep this walk inside the user's project.
+  //
+  // 1. The marker is a TICKET STORE, never a bare `.adlc/` directory. Plugins
+  //    keep user-scoped state outside any repo, and installs predating that
+  //    convention left a stale `~/.adlc/` behind. Accepting a bare directory
+  //    meant an ordinary non-ADLC repo under `$HOME` found `gitRoot` (no store),
+  //    fell through to the `$HOME` ancestor, and `chdir`'d THERE — escaping the
+  //    user's repo and resolving every later rail path against `$HOME`.
+  // 2. `$HOME` is examined only when it is plausibly a project in its own right.
+  //    Guard 1 alone still lets a ticket store that lands at `~/.adlc/tickets.json`
+  //    (e.g. a scaffolder run from the wrong directory) capture every repo below
+  //    it. `$HOME` therefore counts only when it is where we STARTED (you are
+  //    working in it directly) or when it is itself a git repo — i.e. a real
+  //    dotfiles repo, which must keep enforcing its rails from its own
+  //    subdirectories. A `$HOME` that merely CONTAINS a stray `.adlc` matches
+  //    neither and is skipped. The walk never continues ABOVE `$HOME`.
+  const homeDir = realOrSelf(homedir());
+  const startDir = realOrSelf(process.cwd());
   let adlcRoot = null;
   let gitRoot = null;
   for (let cur = process.cwd(), i = 0; i < 256; i++) {
-    if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
-    if (adlcRoot === null && existsSync(join(cur, '.adlc'))) adlcRoot = cur;
+    const real = realOrSelf(cur);
+    const atHome = real === homeDir;
+    const examine = !atHome || real === startDir || existsSync(join(cur, '.git'));
+    if (examine) {
+      if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
+      if (adlcRoot === null && ticketStoreExists(cur, process.env)) adlcRoot = cur;
+    }
     const parent = dirname(cur);
-    if (parent === cur) break;
+    if (parent === cur || atHome) break; // filesystem root, or never ascend above $HOME
     cur = parent;
   }
-  // Prefer the .adlc at the git root; else the nearest-ancestor .adlc.
-  const root = gitRoot && existsSync(join(gitRoot, '.adlc')) ? gitRoot : adlcRoot;
+  // Prefer the store at the git root; else the nearest-ancestor ADLC root — but
+  // NEVER one that sits OUTSIDE the enclosing git repo. The fallback previously
+  // applied even when a gitRoot was found, so a store in any ancestor above a
+  // non-ADLC repo (`~/work/.adlc` over `~/work/my-repo`) captured that repo and
+  // chdir'd out of it. That is the same escape the $HOME guard blocks, one level
+  // down, and it contradicted this walk's own contract ("only fall back … when
+  // there is no enclosing git repo"). A store at or BELOW the git root is still
+  // honored, so a package-level store in a monorepo keeps working.
+  const root = gitRoot && ticketStoreExists(gitRoot, process.env)
+    ? gitRoot
+    : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
   if (root) {
     try {
       process.chdir(root);

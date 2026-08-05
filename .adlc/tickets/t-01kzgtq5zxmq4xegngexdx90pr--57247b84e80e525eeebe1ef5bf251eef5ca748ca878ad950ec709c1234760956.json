@@ -1,0 +1,15 @@
+{
+  "body": "`.adlc/` means both \"this repo opted into ADLC\" and \"scratch space for user-scoped plugin state\". Three code paths created the second kind in $HOME (adlc-cursor session state, the codex/copilot flail hooks, the cursor scaffolder) and two read any ancestor `.adlc/` as the first kind (the claude-code root walk, herdr's repoRootFromCwd), so a directory in $HOME captured every project beneath it.\n\nCreators: cursor state moves to ~/.cursor/adlc (host namespace, matching @adlc/gemini); the flail default path is used only inside a real ADLC repo; the scaffolder refuses $HOME.\n\nConsumers: the root marker is a ticket store rather than a bare directory; the walk never adopts $HOME by ascending; and the ancestor fallback never reaches outside the enclosing git repo.",
+  "category": "fix",
+  "id": "T-01KZGTQ5ZXMQ4XEGNGEXDX90PR",
+  "scope": [
+    "plugins/adlc-cursor/**",
+    "plugins/adlc-claude-code/**",
+    "plugins/adlc-codex/**",
+    "plugins/adlc-copilot/**",
+    "plugins/adlc-herdr/**",
+    "scripts/test/**",
+    "docs/**"
+  ],
+  "title": "Stop ADLC creating or trusting ~/.adlc"
+}

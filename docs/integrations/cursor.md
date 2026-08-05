@@ -46,7 +46,7 @@ against a real Cursor binary remains the one GA honesty gate (see
 The **buildgate is advisory, disabled by default** (opt in with
 `ADLC_BUILD_GATE_ENFORCEMENT=1`), and has **NO unbypassable backstop** — unlike
 the rails guard, nothing at commit time enforces its verdict (its depth signal is
-an agent-writable file under `~/.adlc/` / `ADLC_CURSOR_STATE_DIR`). It exists to slow a flailing session, not to gate
+an agent-writable file under `~/.cursor/adlc/` / `ADLC_CURSOR_STATE_DIR`). It exists to slow a flailing session, not to gate
 merges. The `stop`-audit and `preflight` hooks are **on by default** (Cursor-
 documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 `ADLC_CURSOR_WIRE_UNPINNED=0`.
