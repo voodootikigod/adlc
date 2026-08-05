@@ -542,7 +542,12 @@ test('testTargetFor maps a NESTED scripts/ source to its same-basename test when
     ['scripts/router', 'scripts/other', 'scripts/test'],
     [
       'scripts/router/check-consolidation.mjs',
+      // TWO unrelated siblings, not one: with a single sibling, a predicate
+      // that counted every source whose basename DIFFERS would also see
+      // exactly one and pass. Two makes the correct and inverted counts
+      // differ (1 vs 2), so only the correct one maps.
       'scripts/other/unrelated.mjs',
+      'scripts/other/also-unrelated.mjs',
       'scripts/test/check-consolidation.test.mjs',
     ],
   );
