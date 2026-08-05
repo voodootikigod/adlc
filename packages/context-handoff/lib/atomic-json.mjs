@@ -13,8 +13,11 @@ import {
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
+/** Hex byte count for unique tmp suffixes (load-bearing for hollow coverage). */
+export const TMP_HEX_BYTES = 8;
+
 function uniqueTmpPath(finalPath) {
-  return `${finalPath}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  return `${finalPath}.${process.pid}.${randomBytes(TMP_HEX_BYTES).toString('hex')}.tmp`;
 }
 
 function tryUnlinkTmp(tmp, fs) {
