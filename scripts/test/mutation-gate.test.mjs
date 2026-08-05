@@ -534,9 +534,17 @@ test('#329: an added/modified source file is unaffected — still covered', () =
 // exists to prevent. So the mapping fires only when the basename identifies
 // exactly ONE source under scripts/**.
 test('testTargetFor maps a NESTED scripts/ source to its same-basename test when the basename is unique', () => {
+  // An UNRELATED sibling source must be present: with only one .mjs in the
+  // tree, a predicate that counted every source rather than only same-basename
+  // ones would still see exactly one and pass. The fixture has to be able to
+  // tell "one file named X" from "one file, period".
   const root = fixtureRoot(
-    ['scripts/router', 'scripts/test'],
-    ['scripts/router/check-consolidation.mjs', 'scripts/test/check-consolidation.test.mjs'],
+    ['scripts/router', 'scripts/other', 'scripts/test'],
+    [
+      'scripts/router/check-consolidation.mjs',
+      'scripts/other/unrelated.mjs',
+      'scripts/test/check-consolidation.test.mjs',
+    ],
   );
   try {
     assert.equal(
