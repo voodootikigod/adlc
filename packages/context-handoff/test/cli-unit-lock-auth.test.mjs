@@ -1,11 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { isPidAlive, unlockSession, writeLock } from '../lib/lock.mjs';
+import {
+  LOCK_SCHEMA,
+  NONCE_HEX_BYTES,
+  acquireSessionLock,
+  isPidAlive,
+  releaseSessionLock,
+  unlockSession,
+  writeLock,
+} from '../lib/lock.mjs';
 import {
   SCHEMA,
   buildResumeAuthDoc,
@@ -16,7 +24,7 @@ import {
 } from '../lib/resume-auth.mjs';
 import { lockPath, resolveHandoffDirs, resumeAuthPath } from '../lib/paths.mjs';
 import { commonFromValues } from '../lib/cli-helpers.mjs';
-import { writeDenyRecord } from '../lib/deny-persist.mjs';
+import { markerUnchanged, writeDenyRecord } from '../lib/deny-persist.mjs';
 import { TMP_HEX_BYTES, writeJsonAtomic } from '../lib/atomic-json.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
@@ -52,6 +60,103 @@ test('isPidAlive treats EPERM as alive and ESRCH as dead', () => {
     }),
     false,
   );
+});
+
+test('acquireSessionLock admits one holder and refuses the second', () => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-acq-'));
+  try {
+    const first = acquireSessionLock(root, 's-acq', { host: 'h', pid: 4242 }, { alive: () => true });
+    assert.equal(first.ok, true);
+    assert.equal(existsSync(lockPath(root, 's-acq')), true);
+
+    // `unlock` and humans both read this file, so its bytes are the contract:
+    // schema 1, pretty-printed, one nonce wide enough not to be guessed at.
+    assert.equal(LOCK_SCHEMA, 1);
+    assert.equal(NONCE_HEX_BYTES, 8);
+    assert.equal(first.lock.schema, 1);
+    assert.equal(first.lock.nonce.length, NONCE_HEX_BYTES * 2);
+    assert.equal(
+      readFileSync(lockPath(root, 's-acq'), 'utf8'),
+      `${JSON.stringify(first.lock, null, 2)}\n`,
+    );
+
+    // Exclusive create, not write-then-rename: a rename lets both writers win.
+    const second = acquireSessionLock(root, 's-acq', { host: 'h', pid: 99 }, { alive: () => true });
+    assert.equal(second.ok, false);
+    assert.equal(second.exitCode, 2);
+    assert.match(second.error, /live pid 4242/);
+
+    // The loser must not evict the holder it just lost to.
+    assert.equal(releaseSessionLock(root, 's-acq', second.lock?.nonce ?? 'wrong'), false);
+    assert.equal(existsSync(lockPath(root, 's-acq')), true);
+    assert.equal(releaseSessionLock(root, 's-acq', first.lock.nonce), true);
+    assert.equal(existsSync(lockPath(root, 's-acq')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acquireSessionLock fails closed on an unreadable lock and on a write error', () => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-acq-err-'));
+  try {
+    // A lock we cannot parse is not a lock we may steal — its owner may be live.
+    mkdirSync(dirname(lockPath(root, 's-junk')), { recursive: true });
+    writeFileSync(lockPath(root, 's-junk'), 'not json at all\n', 'utf8');
+    const junk = acquireSessionLock(root, 's-junk', { host: 'h' }, { alive: () => false });
+    assert.equal(junk.ok, false);
+    assert.equal(junk.exitCode, 2);
+    assert.match(junk.error, /unreadable \(corrupt_json\)/);
+
+    // An I/O failure is the operator's problem (1), not a contended lock (2).
+    const denied = acquireSessionLock(
+      root,
+      's-io',
+      { host: 'h' },
+      {
+        fs: {
+          mkdirSync() {},
+          writeFileSync() {
+            const err = new Error('read-only file system');
+            err.code = 'EACCES';
+            throw err;
+          },
+          existsSync: () => false,
+          readFileSync: () => '',
+          unlinkSync() {},
+        },
+      },
+    );
+    assert.equal(denied.ok, false);
+    assert.equal(denied.exitCode, 1);
+    assert.equal(denied.error, 'EACCES');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('acquireSessionLock reclaims a dead lock from this host but never a foreign one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-acq2-'));
+  try {
+    acquireSessionLock(root, 's-dead', { host: 'h', pid: 4242 }, { alive: () => true });
+    const reclaimed = acquireSessionLock(root, 's-dead', { host: 'h', pid: 7 }, { alive: () => false });
+    assert.equal(reclaimed.ok, true);
+    assert.equal(JSON.parse(readFileSync(lockPath(root, 's-dead'), 'utf8')).pid, 7);
+
+    // A PID is only meaningful on the host that minted it.
+    writeLock(root, 's-foreign', {
+      pid: 4242,
+      started_at: '2026-01-01T00:00:00.000Z',
+      host: 'other-host',
+      nonce: 'n',
+    });
+    const foreign = acquireSessionLock(root, 's-foreign', { host: 'h' }, { alive: () => false });
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.exitCode, 2);
+    assert.match(foreign.error, /other-host/);
+    assert.equal(JSON.parse(readFileSync(lockPath(root, 's-foreign'), 'utf8')).nonce, 'n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('resume-auth schema is exactly 1 and binds the signature', () => {
@@ -261,6 +366,45 @@ test('writeDenyRecord rejects null/non-object records', () => {
   }
 });
 
+test('markerUnchanged refuses every way a marker can move under a caller', () => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-cas-'));
+  try {
+    const open = {
+      session_id: 's-cas',
+      ticket_id: 'T155',
+      content_hash: 'hash-1',
+      status: 'open',
+      schema: 1,
+    };
+    assert.equal(writeDenyRecord(root, open).ok, true);
+    assert.equal(markerUnchanged(root, 's-cas', open).ok, true);
+
+    // Each field the caller preflighted on is load-bearing: a consume that
+    // landed first, or a repair that rebound the deny, must not be clobbered.
+    for (const moved of [
+      { ...open, status: 'consumed', consumed_by: 'someone-else' },
+      { ...open, ticket_id: 'T900' },
+      { ...open, content_hash: 'hash-2' },
+    ]) {
+      assert.equal(writeDenyRecord(root, moved).ok, true);
+      const got = markerUnchanged(root, 's-cas', open);
+      assert.equal(got.ok, false, JSON.stringify(moved));
+      assert.equal(got.exitCode, 2);
+      assert.match(got.error, /changed under this command/);
+    }
+
+    rmSync(join(root, '.adlc', 'handoffs', 'denies', 's-cas.json'));
+    const gone = markerUnchanged(root, 's-cas', open);
+    assert.equal(gone.ok, false);
+    assert.equal(gone.exitCode, 2);
+    // Name why it could not be read — "unreadable" alone sends the operator
+    // hunting for a permissions problem when the marker simply vanished.
+    assert.match(gone.error, /unreadable \(missing_marker\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('TMP_HEX_BYTES is 8 and unique tmp uses that width', () => {
   assert.equal(TMP_HEX_BYTES, 8);
   const root = mkdtempSync(join(tmpdir(), 'handoff-tmp-'));
@@ -294,4 +438,15 @@ test('help usage keeps angle-bracket placeholders', () => {
   assert.match(stdout, /--dir <path>/);
   assert.doesNotMatch(stdout, /handoff >=subcommand>/);
   assert.doesNotMatch(stdout, /--dir >=path>/);
+});
+
+test('write and resume --help state the exit code a locked session actually gets', () => {
+  // Operators script against these codes, so the help has to track the gate:
+  // a live lock holder is a reject (2), not an operational error (1).
+  const write = execFileSync(process.execPath, [BIN, 'write', '--help'], { encoding: 'utf8' });
+  assert.match(write, /session lock and exits 2 while a live session holds it/);
+  assert.match(write, /rebinds an open marker/);
+
+  const resume = execFileSync(process.execPath, [BIN, 'resume', '--help'], { encoding: 'utf8' });
+  assert.match(resume, /session lock: a second resume racing the first\nexits 2/);
 });

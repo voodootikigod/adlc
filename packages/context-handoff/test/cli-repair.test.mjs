@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeLock } from '../lib/lock.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
 const TEST_KEY = 'd'.repeat(64);
@@ -153,6 +154,65 @@ test('repair refuses a consumed deny instead of reporting success', () => {
 
     const after = readDeny(cwd, 'rep-consumed');
     assert.deepEqual(after, consumed, 'a consumed record must be left untouched');
+  });
+});
+
+test('repair rolls back the rebind and the final when evidence fails', () => {
+  withTempRepo((cwd) => {
+    seedDeny(cwd, 'rep-ev');
+    const denyBefore = readDeny(cwd, 'rep-ev');
+    const finalBefore = JSON.parse(
+      readFileSync(join(cwd, '.adlc', 'handoffs', 'finals', 'rep-ev.json'), 'utf8'),
+    );
+    appendFileSync(join(cwd, '.adlc', 'manifest.jsonl'), '{not-json\n', 'utf8');
+
+    const r = run(
+      ['repair', '--session', 'rep-ev', '--ticket', 'T900', '--content-hash', 'cafe', '--write', '--json'],
+      { cwd, env: { ADLC_MANIFEST_KEY: TEST_KEY }, expectOk: false },
+    );
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /failed to record evidence/);
+
+    // A rebind the manifest never attested is a bind nobody can audit: both
+    // files go back to what the last recorded command left.
+    assert.deepEqual(readDeny(cwd, 'rep-ev'), denyBefore);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(cwd, '.adlc', 'handoffs', 'finals', 'rep-ev.json'), 'utf8')),
+      finalBefore,
+    );
+  });
+});
+
+test('repair refuses while a live session holds the lock', () => {
+  withTempRepo((cwd) => {
+    seedDeny(cwd, 'rep-locked');
+    const before = readDeny(cwd, 'rep-locked');
+    writeLock(cwd, 'rep-locked', {
+      schema: 1,
+      session_id: 'rep-locked',
+      pid: process.pid,
+      started_at: new Date().toISOString(),
+      host: hostname(),
+      nonce: 'held',
+    });
+
+    const r = run(
+      [
+        'repair',
+        '--session',
+        'rep-locked',
+        '--ticket',
+        'T900',
+        '--content-hash',
+        'deadbeef',
+        '--write',
+        '--json',
+      ],
+      { cwd, env: { ADLC_MANIFEST_KEY: TEST_KEY }, expectOk: false },
+    );
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /live pid/);
+    assert.deepEqual(readDeny(cwd, 'rep-locked'), before);
   });
 });
 

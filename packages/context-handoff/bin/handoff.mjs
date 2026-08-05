@@ -7,18 +7,22 @@
  * Mutating `--write` requires ADLC_MANIFEST_KEY (never silent success).
  */
 
+import { existsSync, unlinkSync } from 'node:fs';
 import { parseArgs } from '@adlc/core';
 import { ensureDenyMarker, readDenyMarker, normalizeBindField } from '../lib/deny-marker.mjs';
 import { consumeDenyRecord } from '../lib/deny-lifecycle.mjs';
 import { normalizeBypassGrant, authorized } from '../lib/mutation-gate.mjs';
 import { writeFinal, readFinal, buildFinal } from '../lib/final.mjs';
 import { writeResumeAuth, removeResumeAuth } from '../lib/resume-auth.mjs';
-import { writeDenyRecord, repairDenyBinds } from '../lib/deny-persist.mjs';
+import { writeDenyRecord, repairDenyBinds, markerUnchanged } from '../lib/deny-persist.mjs';
 import { unlockSession } from '../lib/lock.mjs';
+import { writeJsonAtomic } from '../lib/atomic-json.mjs';
+import { finalPath } from '../lib/paths.mjs';
 import {
   commonOrExit,
   exitFrom,
   finish,
+  lockOrExit,
   opError,
   recordOrExit,
   requireKeyOrExit,
@@ -57,6 +61,47 @@ function helpAndExit() {
   process.exit(0);
 }
 
+/**
+ * Put a final back the way we found it. Evidence is what makes a mutation
+ * legible, so a final whose evidence never landed is state nobody can audit.
+ * @param {{ ok: boolean, final?: object }} prior — readFinal() from before the write
+ */
+function restoreFinal(root, sessionId, prior) {
+  const path = finalPath(root, sessionId);
+  try {
+    if (prior.ok) writeJsonAtomic(path, prior.final);
+    else if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // best-effort: the operator already sees the evidence failure
+  }
+}
+
+/**
+ * Point an open deny at the binds of the final we just wrote. `ensureDenyMarker`
+ * is idempotent by contract and never rebinds, so a refresh without this leaves
+ * the marker on the previous hash and every later resume is refused.
+ * @returns {{ ok: true, record: object } | { ok: false, error: string }}
+ */
+function rebindOpenDeny(root, sessionId, record, planned) {
+  if (planned.ticket_id != null) {
+    return repairDenyBinds(root, sessionId, {
+      ticketId: planned.ticket_id,
+      contentHash: planned.content_hash,
+      host: planned.host,
+    });
+  }
+  // Still-unbound refresh: repairDenyBinds demands both binds, and an unbound
+  // deny is the stricter state (only an unbound bypass clears it), so persist
+  // the marker directly rather than refusing a legitimate no-ticket refresh.
+  return writeDenyRecord(root, {
+    ...record,
+    ticket_id: null,
+    content_hash: planned.content_hash,
+    host: planned.host,
+    status: 'open',
+  });
+}
+
 function runWrite(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -76,6 +121,10 @@ function runWrite(argv) {
 
 Create/refresh a final handoff checkpoint and ensure a deny marker for the session.
 Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-handoff-write.
+
+A refresh rebinds an open marker onto the new final so resume stays possible.
+Dropping --ticket from a ticket-bound deny, or refreshing a consumed one, exits 1.
+--write runs under the session lock and exits 2 while a live session holds it.
 `);
     process.exit(0);
   }
@@ -107,14 +156,23 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
   }
 
   const key = requireKeyOrExit();
+  lockOrExit(root, sessionId);
 
-  const written = writeFinal(root, {
-    sessionId,
-    ticketId: planned.ticket_id,
-    contentHash: planned.content_hash,
-    host: planned.host,
-  });
-  if (!written.ok) opError(`failed to write final: ${written.error}`);
+  // `write` is the refresh path, so the deny has to end up bound to the final
+  // this run writes. Decide that before touching either file: ensureDenyMarker
+  // leaves an existing marker alone, and a final written against binds the
+  // marker still disagrees with wedges resume until a host runs `repair`.
+  const existing = readDenyMarker(root, sessionId);
+  if (existing.ok && existing.record.status === 'consumed') {
+    opError(
+      `deny marker for session=${sessionId} is consumed — a consumed handoff cannot be refreshed (start a new session)`,
+    );
+  }
+  if (existing.ok && existing.record.ticket_id != null && planned.ticket_id == null) {
+    opError(
+      `deny marker for session=${sessionId} is bound to ticket ${existing.record.ticket_id} — pass --ticket to refresh (refusing to unbind an open deny)`,
+    );
+  }
 
   const deny = ensureDenyMarker(root, {
     sessionId,
@@ -124,17 +182,50 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
   });
   if (!deny.ok) opError(`failed to ensure deny marker: ${deny.reason}`);
 
-  const recorded = recordOrExit({
-    gate: 'context-handoff-write',
-    ticket: planned.ticket_id ?? undefined,
-    data: {
-      session_id: sessionId,
-      content_hash: planned.content_hash,
-      deny_reason: deny.reason,
-    },
-    adlcDir,
-    key,
+  // Rebind whatever ensure left in place, so final and marker agree.
+  const marker = readDenyMarker(root, sessionId);
+  if (!marker.ok) opError(`deny marker unreadable after ensure: ${marker.reason}`);
+  const stale =
+    marker.record.ticket_id !== planned.ticket_id ||
+    marker.record.content_hash !== planned.content_hash;
+  let priorRecord = null;
+  if (stale) {
+    const rebound = rebindOpenDeny(root, sessionId, marker.record, planned);
+    if (!rebound.ok) opError(`failed to rebind deny marker: ${rebound.error}`);
+    priorRecord = marker.record;
+  }
+
+  const priorFinal = readFinal(root, sessionId);
+  const written = writeFinal(root, {
+    sessionId,
+    ticketId: planned.ticket_id,
+    contentHash: planned.content_hash,
+    host: planned.host,
   });
+  if (!written.ok) opError(`failed to write final: ${written.error}`);
+
+  const recorded = recordOrExit(
+    {
+      gate: 'context-handoff-write',
+      ticket: planned.ticket_id ?? undefined,
+      data: {
+        session_id: sessionId,
+        content_hash: planned.content_hash,
+        deny_reason: deny.reason,
+        rebound: stale,
+      },
+      adlcDir,
+      key,
+    },
+    // Un-evidenced state is un-auditable state: undo this run's final and, if we
+    // moved an existing marker's binds, put those back too. A marker created
+    // fresh this run stays — the sentinel already names the session, so deleting
+    // it trades an open deny for an unclearable D3.
+    () => {
+      restoreFinal(root, sessionId, priorFinal);
+      if (priorRecord) writeDenyRecord(root, priorRecord);
+    },
+  );
 
   finish({
     json,
@@ -143,7 +234,7 @@ Dry-run by default. --write requires ADLC_MANIFEST_KEY and records context-hando
       command: 'write',
       dryRun: false,
       final: written.final,
-      deny: { ok: true, reason: deny.reason },
+      deny: { ok: true, reason: deny.reason, rebound: stale },
       evidence: { gate: 'context-handoff-write', seq: recorded?.seq },
     },
     human: `handoff write: wrote final+deny for session=${sessionId} content_hash=${written.final.content_hash}`,
@@ -167,6 +258,9 @@ function runResume(argv) {
 
 Other-session consume of an open deny. Requires a final with non-null content_hash.
 Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
+
+--write runs under the denier's session lock: a second resume racing the first
+exits 2 rather than minting a second verified resume-auth for one deny.
 `);
     process.exit(0);
   }
@@ -219,6 +313,13 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
 
   const key = requireKeyOrExit();
 
+  // One deny authorizes exactly one successor, so the read-modify-write of the
+  // marker runs under the denier's lock. Without it two racing resumes both
+  // preflight an open record and both mint a verified resume-auth.
+  lockOrExit(root, denySessionId);
+  const claimed = markerUnchanged(root, denySessionId, marker.record);
+  if (!claimed.ok) exitFrom(claimed);
+
   // Order matters: mint the signed auth, make the evidence durable, and only
   // then consume the deny. A failure at any step leaves the deny open, and the
   // resume-auth is rolled back so nothing half-authorized survives.
@@ -253,12 +354,25 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
         consumer_session_id: consumerId,
         deny_session_id: denySessionId,
         content_hash: contentHash,
+        // This entry is durable before the marker flips, so it attests the
+        // authorization, not the consume. An aborted persist leaves the deny
+        // open with `outcome: authorized` and no `consumed` entry — that pair
+        // is how an auditor tells an aborted resume from a completed one.
+        outcome: 'authorized',
       },
       adlcDir,
       key,
     },
     rollbackAuth,
   );
+
+  // Last check before the clobber: the lock covers handoff processes, this
+  // covers anything that wrote the marker without taking it.
+  const stillOurs = markerUnchanged(root, denySessionId, marker.record);
+  if (!stillOurs.ok) {
+    rollbackAuth();
+    exitFrom(stillOurs);
+  }
 
   const persisted = writeDenyRecord(root, consumed.record);
   if (!persisted.ok) {
@@ -274,7 +388,8 @@ Same-session consume exits 2. --write requires ADLC_MANIFEST_KEY.
       dryRun: false,
       record: persisted.record,
       resumeAuth: verifiedAuth,
-      evidence: { gate: 'context-handoff-resume', seq: recorded?.seq },
+      consumePersisted: true,
+      evidence: { gate: 'context-handoff-resume', seq: recorded?.seq, outcome: 'authorized' },
     },
     human: `handoff resume: consumed deny=${denySessionId} for consumer=${consumerId}`,
   });
@@ -308,6 +423,12 @@ context-handoff-bypass entry written by --write.
   }
   const sessionId = requireSafeSession(values.session, '--session');
   const unboundReason = values['unbound-reason'];
+  // Flag absent and flag present-but-empty are different requests. Falling
+  // through would hand back a bound grant — which cannot clear the D0/D3 the
+  // operator asked to override — and record it as if it were what they wanted.
+  if (typeof unboundReason === 'string' && unboundReason.trim().length === 0) {
+    opError('--unbound-reason must be a non-empty reason (omit the flag for a bound grant)');
+  }
   const unbound =
     typeof unboundReason === 'string' && unboundReason.trim().length > 0
       ? unboundReason.trim()
@@ -443,7 +564,13 @@ under deny must not invoke this. --write requires ADLC_MANIFEST_KEY.
   }
 
   const key = requireKeyOrExit();
+  lockOrExit(root, sessionId);
 
+  // Re-read under the lock: the marker read above happened before we held it.
+  const claimed = markerUnchanged(root, sessionId, marker.record);
+  if (!claimed.ok) exitFrom(claimed);
+
+  const priorFinal = readFinal(root, sessionId);
   const written = writeFinal(root, {
     sessionId,
     ticketId,
@@ -453,18 +580,29 @@ under deny must not invoke this. --write requires ADLC_MANIFEST_KEY.
   if (!written.ok) opError(`failed to write final: ${written.error}`);
 
   const repaired = repairDenyBinds(root, sessionId, { ticketId, contentHash, host });
-  if (!repaired.ok) opError(`failed to repair deny binds: ${repaired.error}`);
+  if (!repaired.ok) {
+    restoreFinal(root, sessionId, priorFinal);
+    opError(`failed to repair deny binds: ${repaired.error}`);
+  }
 
-  const recorded = recordOrExit({
-    gate: 'context-handoff-repair',
-    ticket: ticketId,
-    data: {
-      session_id: sessionId,
-      content_hash: contentHash,
+  const recorded = recordOrExit(
+    {
+      gate: 'context-handoff-repair',
+      ticket: ticketId,
+      data: {
+        session_id: sessionId,
+        content_hash: contentHash,
+      },
+      adlcDir,
+      key,
     },
-    adlcDir,
-    key,
-  });
+    // Both mutations are un-evidenced if the append fails, and repair always has
+    // a prior marker to restore — put the binds and the final back.
+    () => {
+      restoreFinal(root, sessionId, priorFinal);
+      writeDenyRecord(root, marker.record);
+    },
+  );
 
   finish({
     json,

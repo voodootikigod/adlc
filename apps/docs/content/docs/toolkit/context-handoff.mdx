@@ -73,10 +73,22 @@ adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --non
 
 `repair` never creates a deny: a missing or already-consumed marker exits 1,
 so the command that relaxes a deny cannot arm one. `resume` makes the manifest
-entry durable before it flips the record, and rolls the resume-auth cache back
+entry durable before it flips the record (`outcome: authorized` attests the
+authorization, not the persisted consume), and rolls the resume-auth cache back
 if anything fails — a failed resume leaves the deny open. The bypass grant
 printed on stdout is scoped to the calling adapter invocation; the durable
-proof is the `context-handoff-bypass` manifest entry.
+proof is the `context-handoff-bypass` manifest entry. An explicitly empty
+`--unbound-reason` exits 1 rather than handing back the bound grant that cannot
+clear what the operator asked to override.
+
+`write` is the refresh path, so it rebinds an open marker onto the final it
+writes; a refresh that would *unbind* one (dropping `--ticket`) or refresh a
+consumed one exits 1 instead of leaving a final and a deny that disagree. Every
+command that mutates a marker — `write`, `resume`, `repair` — runs under that
+session's `.lock` and exits 2 when a live session on this host holds it, so one
+deny authorizes exactly one successor. If evidence cannot be appended, the
+files written in that run are rolled back: un-evidenced state is un-auditable
+state. A hard-killed process leaves its lock behind for `unlock` to reclaim.
 
 Artifact paths (under the repo root; `--dir` names the `.adlc` directory, and
 its final path segment must be `.adlc` so artifacts and evidence stay together):

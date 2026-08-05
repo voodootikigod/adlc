@@ -21,7 +21,16 @@ rather than splitting them. `repair` binds a deny that already exists and is
 still open — it never creates one. `unlock` reclaims only a lock minted on this
 host, so a dead-looking PID from another machine cannot evict a live session.
 A `bypass` grant on stdout is scoped to the calling adapter invocation; the
-durable proof is the `context-handoff-bypass` manifest entry.
+durable proof is the `context-handoff-bypass` manifest entry; an explicitly
+empty `--unbound-reason` is refused rather than degraded to a bound grant.
+
+`write`, `resume`, and `repair` all read-modify-write a deny marker, so each
+holds that session's `.adlc/handoffs/<id>.lock` (O_EXCL, released on exit) and
+exits 2 when a live session on this host holds it. `write` rebinds the marker
+onto the final it writes — `ensureDenyMarker` is idempotent, so without that a
+refreshed hash would wedge every later resume — and refuses to unbind or to
+refresh a consumed deny. When the manifest append fails, the run's file
+mutations are rolled back so no bind survives that nothing attests.
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';

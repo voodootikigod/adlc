@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -107,6 +107,23 @@ test('bypass bound cannot authorize null-ticket; unbound with reason can', () =>
 
     const manifest = readFileSync(join(cwd, '.adlc', 'manifest.jsonl'), 'utf8');
     assert.match(manifest, /context-handoff-bypass/);
+  });
+});
+
+test('bypass refuses an empty --unbound-reason rather than degrading to bound', () => {
+  withTempRepo((cwd) => {
+    for (const reason of ['', '   ']) {
+      const r = run(['bypass', '--session', 'sess-e', '--unbound-reason', reason, '--write', '--json'], {
+        cwd,
+        env: { ADLC_MANIFEST_KEY: TEST_KEY },
+        expectOk: false,
+      });
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /--unbound-reason/);
+    }
+    // An operator asking for the only grant that clears D0/D3 must not be handed
+    // a bound one, and no grant may be recorded as if it were what they asked for.
+    assert.equal(existsSync(join(cwd, '.adlc', 'manifest.jsonl')), false);
   });
 });
 

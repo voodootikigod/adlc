@@ -37,6 +37,38 @@ export function writeDenyRecord(root, record, opts = {}) {
 }
 
 /**
+ * Refuse to write over a marker that moved since the caller read it. The
+ * session lock keeps handoff processes off each other; this catches a writer
+ * that never took it (older CLI, hand-edited marker) before the clobber.
+ * @param {object} expected — the record the caller preflighted on
+ * @returns {{ ok: true, record: object } | { ok: false, error: string, exitCode: number }}
+ */
+export function markerUnchanged(root, sessionId, expected, opts = {}) {
+  // readDenyMarker carries a record whenever ok — the reason names why not.
+  const fresh = readDenyMarker(root, sessionId, opts);
+  if (!fresh.ok) {
+    return {
+      ok: false,
+      error: `deny marker for session=${sessionId} became unreadable (${fresh.reason})`,
+      exitCode: 2,
+    };
+  }
+  const r = fresh.record;
+  if (
+    r.status !== expected?.status ||
+    r.ticket_id !== normalizeBindField(expected?.ticket_id) ||
+    r.content_hash !== normalizeBindField(expected?.content_hash)
+  ) {
+    return {
+      ok: false,
+      error: `deny marker for session=${sessionId} changed under this command (concurrent consume or repair) — re-read and re-run`,
+      exitCode: 2,
+    };
+  }
+  return { ok: true, record: r };
+}
+
+/**
  * Update an open deny's ticket_id + content_hash (host repair). Leaves status=open.
  * @returns {{ ok: true, record: object } | { ok: false, error: string }}
  */

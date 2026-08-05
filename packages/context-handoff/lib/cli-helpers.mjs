@@ -6,6 +6,7 @@ import { opError, printJson, gateFail } from '@adlc/core';
 import { requireSessionId } from './deny-lifecycle.mjs';
 import { resolveHandoffDirs } from './paths.mjs';
 import { requireManifestKey, recordHandoffEvidence } from './evidence.mjs';
+import { acquireSessionLock, releaseSessionLock } from './lock.mjs';
 
 export { printJson, opError, gateFail };
 
@@ -58,6 +59,18 @@ export function requireKeyOrExit(env = process.env) {
   } catch (err) {
     return opError(err.message);
   }
+}
+
+/**
+ * Hold the session's lock for the rest of this process, or exit with the
+ * acquire code (2 when another live session owns it). Release is registered on
+ * `exit` so it also covers the process.exit() paths in `finish`/`opError`; a
+ * hard kill leaves the lock for `handoff unlock` to reclaim.
+ */
+export function lockOrExit(root, sessionId) {
+  const got = acquireSessionLock(root, sessionId);
+  if (!got.ok) exitFrom(got);
+  process.on('exit', () => releaseSessionLock(root, sessionId, got.lock.nonce));
 }
 
 /**
