@@ -29,6 +29,7 @@ export const GROUPS = [
       { name: 'rails-guard', packageName: '@adlc/rails-guard', summary: 'Enforce frozen rails, declared suppressions, and manifest recording.' },
       { name: 'rails-guard-ci', packageName: '@adlc/rails-guard', binName: 'rails-guard-ci', summary: 'The CI rail-freeze backstop — the commit-time gate behind the in-session rail hook. Also runs the bootstrap-acknowledgement check (`rails-guard-ci bootstrap`).' },
       { name: 'build-gate', packageName: '@adlc/build-gate', summary: 'Deny starting a high-risk ticket build in a degraded (context-rot) session unless audited.' },
+      { name: 'handoff', packageName: '@adlc/context-handoff', summary: 'Operator CLI for context-rot handoff — write/resume/bypass/repair/unlock final checkpoints and deny markers.' },
       { name: 'flail-detector', packageName: '@adlc/flail-detector', summary: 'Detect repeated errors, scope violations, edit churn, and oversized logs.' },
       { name: 'consensus-fix', packageName: '@adlc/consensus-fix', summary: 'Fan out candidate fixes and select the gated consensus winner.' },
       { name: 'fleet', packageName: '@adlc/fleet', binName: 'adlc-fleet', summary: 'Orchestrate parallel ticket execution — dispatch ready tickets to sandboxed workers, gate, prosecute, and merge to an integration branch.' },

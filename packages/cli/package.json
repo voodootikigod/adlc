@@ -35,6 +35,7 @@
     "@adlc/build-gate": "1.8.0",
     "@adlc/coldstart": "1.8.0",
     "@adlc/consensus-fix": "1.8.0",
+    "@adlc/context-handoff": "1.8.0",
     "@adlc/flail-detector": "1.8.0",
     "@adlc/fleet": "1.8.0",
     "@adlc/gate-fuzzing": "1.8.0",

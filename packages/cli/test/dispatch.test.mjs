@@ -41,15 +41,16 @@ function withTempSpec(contents, fn) {
 }
 
 test('registry exposes the suite tools and omits internal packages', () => {
-  // 28 as of rails-guard-ci's registration (issue #140) — bump deliberately when a
+  // 29 as of handoff's registration (T155) — bump deliberately when a
   // tool is intentionally added/removed from the registry.
-  assert.equal(TOOLS.length, 28);
+  assert.equal(TOOLS.length, 29);
   assert.equal(isTool('spec-lint'), true);
   assert.equal(isTool('prosecute'), true);
   assert.equal(isTool('ticket'), true);
   assert.equal(isTool('review'), true);
   assert.equal(isTool('ticket-prune'), true);
   assert.equal(isTool('build-gate'), true);
+  assert.equal(isTool('handoff'), true);
   assert.equal(isTool('fleet'), true);
   assert.equal(isTool('init'), true);
   assert.equal(isTool('spend'), true);
@@ -69,6 +70,7 @@ test('resolves package-local tool bins without PATH lookup', () => {
   assert.match(resolveBin('prosecute') ?? '', /packages\/prosecute\/bin\/adlc-prosecute\.mjs$/);
   assert.match(resolveBin('ticket') ?? '', /packages\/tickets\/bin\/adlc-tickets\.mjs$/);
   assert.match(resolveBin('ticket-prune') ?? '', /packages\/ticket-prune\/bin\/ticket-prune\.mjs$/);
+  assert.match(resolveBin('handoff') ?? '', /packages\/context-handoff\/bin\/handoff\.mjs$/);
   assert.match(resolveBin('init') ?? '', /packages\/init\/bin\/adlc-init\.mjs$/);
   // spend shares the gate-manifest package but resolves to its OWN bin entry
   // (binName: 'adlc-spend'), not gate-manifest's default 'gate-manifest' bin —

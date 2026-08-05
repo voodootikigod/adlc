@@ -1,11 +1,11 @@
 ---
 title: context-handoff
-description: Pure helpers for absolute context-band signals and session-terminal mutation deny (D1–D3) — the slice-1 library behind F3 continuity handoff.
+description: Absolute context-band signals, session-terminal mutation deny (D1–D3), and the operator CLI for write/resume/bypass/repair/unlock — F3 continuity handoff.
 ---
 
 # context-handoff
 
-**ADLC phase: P4 continuity (F3)** · **Library:** absolute context bands + session-terminal mutation deny (D1–D3).
+**ADLC phase: P4 continuity (F3)** · **Library + CLI:** absolute context bands, session-terminal mutation deny (D1–D3), and operator handoff commands.
 
 <PhaseDiagram phase="P4" />
 
@@ -18,8 +18,9 @@ later harness adapters and `build-gate` will share — so no local copy of the
 numbers can drift, and a deny written once cannot silently clear when a marker
 file disappears.
 
-Slice 1 is a **pure library** (no `adlc context-handoff` CLI yet). Callers import
-helpers; harness adapters and build-gate migration land in later slices.
+Slice 2 adds the **operator/host CLI** (`adlc handoff …`) that adapters and
+humans call to write finals, resume/consume denies, bypass, repair binds, and
+unlock. Harness adapters and build-gate migration land in later slices.
 
 ## Absolute bands
 
@@ -48,9 +49,36 @@ After a verified other-session consume, that record leaves D3 (`status=consumed`
 the denier remains D2. Marker vanish / store-unavailable paths fail closed unless
 an unbound operator bypass clears the recoverable codes.
 
-## Usage
+## CLI (`adlc handoff`)
 
-Import from the package — there is no CLI bin in slice 1:
+Dry-run by default. Pass `--write` to mutate. Mutating commands require
+`ADLC_MANIFEST_KEY` and append durable evidence to `.adlc/manifest.jsonl` —
+missing key exits 1 (never silent success).
+
+```sh
+adlc handoff write --session <id> [--ticket <id>] [--host <h>] [--content-hash <h>] [--write] [--json]
+adlc handoff resume --session <consumer> --deny-session <denier> [--write] [--json]
+adlc handoff bypass --session <id> [--unbound-reason <text>] [--write] [--json]
+adlc handoff repair --session <id> --ticket <id> --content-hash <h> [--write] [--json]
+adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --nonce <n> [--write] [--json]
+```
+
+| Command | Role |
+| --- | --- |
+| **write** | Final checkpoint + ensure deny marker / `.adlc/.deny-store` |
+| **resume** | Other-session consume (same-session exits 2); writes resume-auth cache |
+| **bypass** | Bound (session only) vs unbound (`--unbound-reason`) one-shot grant |
+| **repair** | Privileged host bind of open deny `ticket_id`+`content_hash` |
+| **unlock** | Reclaim lock only when PID is dead and all lock fields match |
+
+Artifact paths (under the repo root; `--dir` names the `.adlc` directory):
+
+- Final: `.adlc/handoffs/finals/<session_id>.json`
+- Deny: `.adlc/handoffs/denies/<session_id>.json` + `.adlc/.deny-store`
+- Resume-auth: `.adlc/handoffs/<session_id>.resume-auth.json`
+- Lock: `.adlc/handoffs/<session_id>.lock`
+
+## Library usage
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
