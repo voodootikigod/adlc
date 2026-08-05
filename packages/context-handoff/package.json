@@ -1,7 +1,7 @@
 {
   "name": "@adlc/context-handoff",
   "version": "1.8.0",
-  "description": "Proactive context-rot handoff — absolute band signals, session-terminal deny (D1–D3), and contract helpers for F3 continuity (slice 1).",
+  "description": "Context-rot handoff — absolute band signals, session-terminal deny (D1–D3), and operator CLI for write/resume/bypass/repair/unlock (F3 continuity).",
   "type": "module",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
@@ -19,7 +19,11 @@
     "handoff",
     "f3"
   ],
+  "bin": {
+    "handoff": "./bin/handoff.mjs"
+  },
   "files": [
+    "bin/",
     "lib/",
     "README.md",
     "LICENSE"
@@ -30,7 +34,16 @@
     "./lib/bands.mjs": "./lib/bands.mjs",
     "./lib/mutation-gate.mjs": "./lib/mutation-gate.mjs",
     "./lib/deny-lifecycle.mjs": "./lib/deny-lifecycle.mjs",
-    "./lib/deny-marker.mjs": "./lib/deny-marker.mjs"
+    "./lib/deny-marker.mjs": "./lib/deny-marker.mjs",
+    "./lib/paths.mjs": "./lib/paths.mjs",
+    "./lib/final.mjs": "./lib/final.mjs",
+    "./lib/lock.mjs": "./lib/lock.mjs",
+    "./lib/resume-auth.mjs": "./lib/resume-auth.mjs",
+    "./lib/deny-persist.mjs": "./lib/deny-persist.mjs"
+  },
+  "dependencies": {
+    "@adlc/core": "1.8.0",
+    "@adlc/gate-manifest": "1.8.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

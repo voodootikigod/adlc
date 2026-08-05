@@ -1,11 +1,19 @@
 # @adlc/context-handoff
 
-**ADLC phase: P4 continuity (F3)** — pure helpers for absolute context bands and
-session-terminal mutation deny (D1–D3). Binding design:
+**ADLC phase: P4 continuity (F3)** — absolute context bands, session-terminal
+mutation deny (D1–D3), and the operator CLI for write/resume/bypass/repair/unlock.
+Binding design:
 [`docs/specs/context-rot-handoff.md`](../../docs/specs/context-rot-handoff.md).
 
-Slice 1: thresholds, bands, mutation gate, deny lifecycle, deny-marker
-fail-closed semantics. Harness adapters and build-gate migration are later slices.
+```sh
+adlc handoff write --session <id> [--ticket <id>] [--write] [--json]
+adlc handoff resume --session <consumer> --deny-session <denier> [--write]
+adlc handoff bypass --session <id> [--unbound-reason <text>] [--write]
+adlc handoff repair --session <id> --ticket <id> --content-hash <h> [--write]
+adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --nonce <n> [--write]
+```
+
+Mutating `--write` requires `ADLC_MANIFEST_KEY` (never silent success).
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
@@ -16,22 +24,6 @@ import { evaluateMutationGate } from '@adlc/context-handoff/lib/mutation-gate.mj
 ```sh
 node --test packages/context-handoff/test/*.test.mjs
 ```
-
-## Deferred past slice-1
-
-Signed deny-manifest ledger anchoring (every deny creation recorded in the
-hash-chained manifest) is deferred past this pure-helpers slice; slice-1
-contracts the filesystem marker + gate predicates only. Until that ledger
-exists, callers must thread process-local `processStickyDeny` /
-`denyEverWritten` into the gate and `evaluateMarkerOnReentry` so a deleted
-marker cannot silently clear a deny the process already wrote.
-
-## Post-consume D3
-
-After a verified other-session consume, that record leaves D3 (`status=consumed`).
-Contract test 8 / the binding spec allow a third session when no other open
-denies remain; `consumed_by` / `consumed_at` are stamped for forensics, and the
-denier remains D2.
 
 ## Deny-store expectation
 

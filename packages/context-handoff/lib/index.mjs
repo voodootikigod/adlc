@@ -3,3 +3,8 @@ export * from './bands.mjs';
 export * from './mutation-gate.mjs';
 export * from './deny-lifecycle.mjs';
 export * from './deny-marker.mjs';
+export * from './paths.mjs';
+export * from './final.mjs';
+export * from './lock.mjs';
+export * from './resume-auth.mjs';
+export * from './deny-persist.mjs';
