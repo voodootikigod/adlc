@@ -6,7 +6,11 @@
   "edges": [],
   "id": "T155",
   "rails": [
-    "packages/context-handoff/test/**/*.test.mjs",
+    "packages/context-handoff/test/thresholds.test.mjs",
+    "packages/context-handoff/test/bands.test.mjs",
+    "packages/context-handoff/test/mutation-gate.test.mjs",
+    "packages/context-handoff/test/deny-lifecycle.test.mjs",
+    "packages/context-handoff/test/deny-marker.test.mjs",
     "docs/specs/context-rot-handoff.md",
     ".adlc/specs/context-rot-handoff.md"
   ],
