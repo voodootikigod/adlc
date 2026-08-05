@@ -10,7 +10,7 @@ import { canonicalJson } from '@adlc/core';
 import { resumeAuthPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
 
-const SCHEMA = 1;
+export const SCHEMA = 1;
 
 function payloadBytes({ ticket_id, content_hash, deny_session_id, consumer_session_id }) {
   return canonicalJson({
