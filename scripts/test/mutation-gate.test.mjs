@@ -519,3 +519,66 @@ test('#329: an added/modified source file is unaffected — still covered', () =
     assert.equal(classify(changed, 12, root).kind, 'fast', 'present source stays mutated');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// A source in a scripts/ SUBDIRECTORY could not reach the same-basename
+// convention at all: the pattern matched only files sitting directly in
+// scripts/. scripts/router/check-consolidation.mjs is fully covered by
+// scripts/test/check-consolidation.test.mjs, yet took the FULL-suite slow
+// path — one whole monorepo suite per mutant, which blew the wrapper's
+// 30-minute budget and failed the gate on an operational timeout rather than
+// on any finding.
+//
+// The fix must NOT be "widen the pattern": two files sharing a basename are
+// still different files, and mapping one to the other's test claims coverage
+// that does not exist — the "reports green by not looking" failure this file
+// exists to prevent. So the mapping fires only when the basename identifies
+// exactly ONE source under scripts/**.
+test('testTargetFor maps a NESTED scripts/ source to its same-basename test when the basename is unique', () => {
+  const root = fixtureRoot(
+    ['scripts/router', 'scripts/test'],
+    ['scripts/router/check-consolidation.mjs', 'scripts/test/check-consolidation.test.mjs'],
+  );
+  try {
+    assert.equal(
+      testTargetFor('scripts/router/check-consolidation.mjs', root),
+      'scripts/test/check-consolidation.test.mjs',
+      'a uniquely-named nested source must reach its test instead of the slow path',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a nested source does NOT claim a top-level file\'s test when both share a basename', () => {
+  const root = fixtureRoot(
+    ['scripts/sub', 'scripts/test'],
+    ['scripts/mutation-gate.mjs', 'scripts/sub/mutation-gate.mjs', 'scripts/test/mutation-gate.test.mjs'],
+  );
+  try {
+    assert.equal(
+      testTargetFor('scripts/sub/mutation-gate.mjs', root), null,
+      'a colliding basename must map to nothing — the test covers the OTHER file',
+    );
+    assert.equal(
+      testTargetFor('scripts/mutation-gate.mjs', root), 'scripts/test/mutation-gate.test.mjs',
+      'the top-level file it actually covers still maps',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('two NESTED sources sharing a basename both map to nothing', () => {
+  const root = fixtureRoot(
+    ['scripts/a', 'scripts/b', 'scripts/test'],
+    ['scripts/a/dup.mjs', 'scripts/b/dup.mjs', 'scripts/test/dup.test.mjs'],
+  );
+  try {
+    assert.equal(testTargetFor('scripts/a/dup.mjs', root), null, 'ambiguous basename maps to nothing');
+    assert.equal(testTargetFor('scripts/b/dup.mjs', root), null, 'ambiguous basename maps to nothing');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a nested source with no same-basename test still falls through to the slow path', () => {
+  const root = fixtureRoot(['scripts/router', 'scripts/test'], ['scripts/router/no-coverage.mjs']);
+  try {
+    assert.equal(testTargetFor('scripts/router/no-coverage.mjs', root), null,
+      'absent coverage must map to nothing, never to a test that does not cover it');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

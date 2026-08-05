@@ -66,12 +66,38 @@
 //       1 = operational error.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMutableSource } from '../packages/hollow-test/lib/targets.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+
+/**
+ * Every source under scripts/** whose basename is `base`, excluding the test
+ * tree. Used to refuse the same-basename mapping when it would be ambiguous —
+ * see testTargetFor. Walks the tree rather than consulting git so it stays
+ * unit-testable against a fixture root.
+ */
+function sourcesNamed(base, root) {
+  const out = [];
+  const walk = (relDir) => {
+    let entries;
+    try { entries = readdirSync(join(root, relDir), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const rel = relDir === '' ? e.name : `${relDir}/${e.name}`;
+      if (e.isDirectory()) {
+        if (rel === 'scripts/test') continue; // tests are not sources
+        walk(rel);
+      } else if (/\.(?:mjs|cjs|js)$/.test(e.name) && e.name.replace(/\.(?:mjs|cjs|js)$/, '') === base) {
+        out.push(rel);
+      }
+    }
+  };
+  walk('scripts');
+  return out;
+}
 
 /**
  * Map a changed file to the fast test TARGET that covers it — a directory glob
@@ -106,10 +132,19 @@ export function testTargetFor(file, root = ROOT) {
     const d = `plugins/${m[1]}/test`;
     return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
-  if ((m = /^scripts\/([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
-    const f = `scripts/test/${m[1]}.test.mjs`;
+  if ((m = /^scripts\/(?:.+\/)?([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
+    const base = m[1];
+    // A NESTED source may use the same-basename convention only when that
+    // basename identifies exactly one source under scripts/**. Two files
+    // sharing a name are still different files, and handing one the other's
+    // test claims coverage that does not exist — the "gate reports green by
+    // not looking" failure this file exists to prevent. Ambiguity therefore
+    // maps to nothing and falls through to the slow path: under-claiming
+    // coverage is safe, over-claiming is the bug.
+    if (file !== `scripts/${base}.mjs` && sourcesNamed(base, root).length !== 1) return null;
+    const f = `scripts/test/${base}.test.mjs`;
     if (existsSync(join(root, f))) return f;
-    if (m[1] === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
+    if (base === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
     return null;
   }
   return null;
