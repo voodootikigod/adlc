@@ -115,9 +115,13 @@ test('commonFromValues treats write as true only when exactly true', () => {
 test('writeDenyRecord rejects null/non-object records', () => {
   const root = mkdtempSync(join(tmpdir(), 'handoff-wdr-'));
   try {
-    assert.equal(writeDenyRecord(root, null).ok, false);
-    assert.equal(writeDenyRecord(root, undefined).ok, false);
-    assert.equal(writeDenyRecord(root, 'nope').ok, false);
+    // Exact error distinguishes the early guard from later try/catch on
+    // null.session_id (which would also return ok:false under a ||→&& swap).
+    for (const bad of [null, undefined, 'nope', 42, true]) {
+      const r = writeDenyRecord(root, bad);
+      assert.equal(r.ok, false);
+      assert.equal(r.error, 'missing record');
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
