@@ -1,6 +1,6 @@
 {
   "name": "@adlc/context-handoff",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Proactive context-rot handoff — absolute band signals, session-terminal deny (D1–D3), and contract helpers for F3 continuity (slice 1).",
   "type": "module",
   "license": "MIT",

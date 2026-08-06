@@ -9,6 +9,46 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-08-06
+
+### Added
+- **gate-manifest:** the segmented ("forest") evidence store is now **reachable and
+  supported**. `adlc gate-manifest enable` activates it on a greenfield repo and
+  `adlc gate-manifest adopt` is the supported remediation for an ambiguous lineage;
+  the segment writer, generation descriptor, and adoption-record schema complete the
+  write side. Single-file storage remains a permanent, fully supported mode — this is
+  a documented dual-mode adapter, not a migration with a deadline (#439, #440, #420, #411)
+- **gemini:** the Antigravity and JetSki integrations are unified into a single
+  `@adlc/gemini` integration (#452)
+- **quartermaster:** new `@adlc/quartermaster` package — an operator-local channel
+  registry and `routeJob` (T151) (#402)
+- **context-handoff:** new `@adlc/context-handoff` package — the slice-1 deny gate
+  and its contract tests (T154) (#448)
+- **trust-root:** the manifest signing key is an explicit, validated, required
+  parameter at every library boundary, and the test runner scrubs it from spawned
+  segments — a gate can no longer sign with a key it merely inherited (#410, #406)
+- **fleet:** per-phase token spend is now recorded on the P4/P5 write side (#422)
+- **distill / hygiene:** deterministic P7 gate for authority-smuggling source
+  comments, plus a declare-and-neutralize guard for ADLC entrypoint spawns (#432, #414)
+
+### Fixed
+- **fleet:** the transport now selects the credential, so a subscription seat cannot
+  be silently metered; the dispatch seat is re-derived per attempt so a failed strike
+  climbs the ladder; and the ledger signing key is denied to the review subprocess
+  (#447, #444, #453)
+- **gate-manifest:** lineage recovery survives fresh clones and branch switches; an
+  UNMEASURED call is counted rather than discarded, so the barbell has a shape; and
+  fleet's phase gates map correctly, so P4 spend is attributed to P4 (#415, #449, #426)
+- **core, tickets, gate-manifest:** the manifest `.gitignore` contract now reaches all
+  four copies, so scaffolded repos can commit their manifest evidence (#450, #442)
+- **cli:** termination signals are forwarded to the tool child instead of orphaning it
+  (#431)
+- **hollow-test:** a mutant stranded by an interrupted run can be recovered (#430)
+- **install:** Antigravity install no longer fails on `agy` parsing the plugin path as
+  `plugin@marketplace` (#394)
+- **router:** a rename shim expires once the baseline holds the rename (#461)
+- **docs:** Vercel Skew Protection no longer breaks the Twitter card image (#392)
+
 ## [1.7.0] - 2026-07-29
 
 ### Added

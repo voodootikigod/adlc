@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "ADLC plugins for Cursor — Agentic Development Lifecycle gates, hooks, skills, and commands.",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
@@ -15,7 +15,7 @@
       "source": "adlc-cursor",
       "displayName": "ADLC for Cursor",
       "description": "ADLC for Cursor: rails-guard hooks, phase skills, and /adlc-* commands. Requires @adlc/cli (npm i -g @adlc/cli).",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "logo": "plugins/adlc-cursor/assets/logo.png",
       "keywords": [
         "adlc",

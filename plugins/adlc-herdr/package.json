@@ -1,7 +1,7 @@
 {
   "name": "@adlc/herdr",
   "type": "module",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "ADLC surfaced at the terminal-multiplexer layer: a herdr plugin showing per-pane ticket/phase/gate state, a backlog board, and gate actions. Published for discovery — herdr itself installs this plugin from the GitHub subdirectory, not from npm.",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",

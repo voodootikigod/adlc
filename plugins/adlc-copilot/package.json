@@ -1,6 +1,6 @@
 {
   "name": "@adlc/copilot",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Native ADLC plugin for the GitHub Copilot CLI: skills, hooks, MCP tools, and read-only prosecution agents.",
   "type": "module",
   "license": "MIT",
@@ -36,8 +36,8 @@
     "test": "node --test test/*.test.mjs hooks/test/*.test.mjs"
   },
   "dependencies": {
-    "@adlc/cli": "1.7.0",
-    "@adlc/core": "1.7.0"
+    "@adlc/cli": "1.8.0",
+    "@adlc/core": "1.8.0"
   },
   "engines": {
     "node": ">=18"
