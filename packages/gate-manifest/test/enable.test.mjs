@@ -873,6 +873,12 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
       ['evidence only', `${JSON.stringify({ seq: 1, gate: 'evidence', prev: null })}\n`],
       ['empty root', ''],
       ['cutover not last', `${cutoverLine}${JSON.stringify({ seq: 2, gate: 'evidence', prev: 'x' })}\n`],
+      // Blank-line tails: production filters blanks across the WHOLE file, so
+      // a run of newlines longer than the window hides the real last entry
+      // from a naive tail read while production still sees it.
+      ['cutover behind a short blank tail', `${cutoverLine}${'\n'.repeat(20)}`],
+      ['cutover behind a blank tail longer than the window', `${cutoverLine}${'\n'.repeat(70000)}`],
+      ['blank tail with no cutover', `${JSON.stringify({ seq: 1, gate: 'evidence', prev: null })}\n${'\n'.repeat(70000)}`],
     ];
     for (const [label, content] of roots) {
       const { root, dir } = gitRepo({ gitignore: NEGATED });

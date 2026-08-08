@@ -222,7 +222,13 @@ function rootTailIsCutover(dir) {
     // final line alone exceeds it and cannot be parsed: undecidable.
     if (size > window && !text.includes('\n')) return 'unknown';
     const lines = text.split('\n').filter((line) => line.trim());
-    if (lines.length === 0) return 'no';
+    if (lines.length === 0) {
+      // Nothing but blank lines in the window. Determinate ONLY if the window
+      // was the whole file; otherwise a trailing run of newlines longer than
+      // the window hides the real last entry, which the production predicate
+      // finds because it filters blanks across the entire file.
+      return size > window ? 'unknown' : 'no';
+    }
     return JSON.parse(lines.at(-1))?.gate === 'manifest-cutover' ? 'yes' : 'no';
   } catch {
     return 'unknown';
