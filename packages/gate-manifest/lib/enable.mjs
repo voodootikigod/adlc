@@ -173,18 +173,18 @@ const TAIL_PROBE_BYTES = 8192;
  * Whether the root manifest's LAST line is the cutover entry, read within a
  * fixed window from one no-follow descriptor.
  *
- * The second half of the segmented-mode invariant (spec §4.7: marker OR
- * cutover-tailed root). lineage.mjs answers it by passing the ENTIRE file
- * through readRawLines, which is fine for a writer already committed to
- * working with the ledger, but not for the CLI's keyless refusal — that path
- * must not be convertible into an unbounded read. Here the file is opened
- * once with O_NOFOLLOW, sized via fstat on THAT descriptor (never a second
- * lstat, whose answer could describe a different inode), and only the final
- * window is read.
+ * Tri-state: 'yes' | 'no' | 'unknown'. The bound makes some roots
+ * undecidable — a final line longer than the window, an unreadable or
+ * non-regular file — and collapsing those to 'no' is what makes a bounded
+ * probe silently disagree with the production predicate, which has no such
+ * limit and will happily route writes to segments.
  *
- * Returns false rather than guessing when the window holds no line boundary:
- * a final line longer than TAIL_PROBE_BYTES cannot be parsed from it, and
- * under-reporting a disclosure is the safe direction. Never throws.
+ * lineage.mjs answers this by passing the ENTIRE file through readRawLines,
+ * which is fine for a writer already committed to the ledger but not for the
+ * CLI's keyless refusal — that path must not be convertible into an unbounded
+ * read. So the file is opened once with O_NOFOLLOW, sized via fstat on THAT
+ * descriptor (never a second lstat, whose answer could describe a different
+ * inode), and only the final window is read. Never throws.
  */
 function rootTailIsCutover(dir) {
   const root = ledgerPath('manifest', dir);
@@ -192,46 +192,55 @@ function rootTailIsCutover(dir) {
   try {
     stats = lstatSync(root);
   } catch {
-    return false; // absent
+    return 'no'; // absent: determinate, this repo has no root at all
   }
-  if (!stats.isFile()) return false; // symlink, fifo, device — never followed
+  if (!stats.isFile()) return 'unknown'; // symlink/fifo/device — undecidable without following, which we will not do
   let fd;
   try {
     fd = openSync(root, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch {
-    return false;
+    return 'unknown';
   }
   try {
     const size = fstatSync(fd).size;
-    if (size === 0) return false;
+    if (size === 0) return 'no';
     const window = Math.min(size, TAIL_PROBE_BYTES);
     const buf = Buffer.alloc(window);
     const bytesRead = readSync(fd, buf, 0, window, size - window);
     const text = buf.subarray(0, bytesRead).toString('utf8');
+    // A truncated window whose FIRST line is a fragment is fine — only the
+    // last line is inspected. But with no boundary anywhere in the window the
+    // final line alone exceeds it and cannot be parsed: undecidable.
+    if (size > window && !text.includes('\n')) return 'unknown';
     const lines = text.split('\n').filter((line) => line.trim());
-    if (lines.length === 0) return false;
-    // A truncated window whose first line is a fragment is fine — only the
-    // LAST line is inspected, and it is whole unless the file's final line
-    // alone exceeds the window, in which case no boundary precedes it.
-    if (size > window && !text.includes('\n')) return false;
-    const last = JSON.parse(lines.at(-1));
-    return last?.gate === 'manifest-cutover';
+    if (lines.length === 0) return 'no';
+    return JSON.parse(lines.at(-1))?.gate === 'manifest-cutover' ? 'yes' : 'no';
   } catch {
-    return false;
+    return 'unknown';
   } finally {
     closeSync(fd);
   }
 }
 
 /**
- * The COMPLETE segmented-mode invariant, answered within bounded, no-follow
- * reads: the activation marker OR a cutover-tailed root. A repository cut over
- * by hand — `gate-manifest record manifest-cutover` accepts free-form gate
- * names, so this takes one command — has a cutover tail and NO marker, and the
- * marker check alone would call it single-file and stay silent about it.
+ * The COMPLETE segmented-mode invariant (spec §4.7: marker OR cutover-tailed
+ * root), answered within bounded, no-follow reads, with undecidable roots
+ * resolving to TRUE.
+ *
+ * That direction is deliberate and specific to what this answer drives: a
+ * warning, not a gate. A spurious warning costs one line of output; a missing
+ * one costs the operator the disclosure this whole path exists to deliver. So
+ * the probe may over-report against the production predicate but must never
+ * under-report it — which is the property the differential test pins.
+ *
+ * Both halves matter. A repository cut over by hand has a cutover tail and NO
+ * marker — `gate-manifest record manifest-cutover` accepts free-form gate
+ * names, so that is one command — and a marker-only probe would call it
+ * single-file and stay silent about it.
  */
 export function isSegmentedBounded(dir = ADLC_DIR) {
-  return isMarkerActivated(dir) || rootTailIsCutover(dir);
+  if (isMarkerActivated(dir)) return true;
+  return rootTailIsCutover(dir) !== 'no';
 }
 
 /**

@@ -826,29 +826,63 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
     } finally { clean(root); }
   });
 
-  it('AC9g: the tail probe is bounded and no-follow', () => {
+  it('AC9g: bounded and no-follow, and an UNDECIDABLE root warns rather than going silent', () => {
     const bigPad = 'x'.repeat(20000);
     const cases = [
+      // Undecidable → true. A bounded probe cannot rule these out without
+      // following a link or reading past its window, and staying silent is
+      // the failure this disclosure exists to prevent.
       ['symlinked root manifest', (root, dir) => {
         const decoy = join(root, 'decoy-root.jsonl');
         writeFileSync(decoy, cutoverLine);
         symlinkSync(decoy, join(dir, 'manifest.jsonl'));
-      }, false],
+      }, true],
       ['a final line larger than the window', (root, dir) => {
         writeFileSync(join(dir, 'manifest.jsonl'),
           `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', pad: bigPad, prev: null })}\n`);
-      }, false],
+      }, true],
+      // Decidable → the real answer.
       ['a cutover tail after a large prefix', (root, dir) => {
         const filler = Array.from({ length: 200 }, (_, i) =>
           JSON.stringify({ seq: i + 1, gate: 'evidence', pad: 'y'.repeat(200), prev: null })).join('\n');
         writeFileSync(join(dir, 'manifest.jsonl'), `${filler}\n${cutoverLine}`);
       }, true],
+      ['an ordinary single-file root', (root, dir) => {
+        writeFileSync(join(dir, 'manifest.jsonl'),
+          `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      }, false],
+      ['no root at all', () => {}, false],
     ];
     for (const [label, plant, expected] of cases) {
       const { root, dir } = gitRepo({ gitignore: NEGATED });
       try {
         plant(root, dir);
         assert.equal(isSegmentedBounded(dir), expected, label);
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC9h: the bounded probe NEVER under-reports against the production predicate', () => {
+    // The one invariant that matters: whatever isSegmentedRepo considers
+    // segmented — and therefore routes writes to segments for — the bounded
+    // probe must also disclose. Over-reporting is permitted; under-reporting
+    // is the defect.
+    const roots = [
+      ['cutover tail', cutoverLine],
+      ['cutover tail after evidence', `${JSON.stringify({ seq: 1, gate: 'evidence', prev: null })}\n${cutoverLine}`],
+      ['evidence only', `${JSON.stringify({ seq: 1, gate: 'evidence', prev: null })}\n`],
+      ['empty root', ''],
+      ['cutover not last', `${cutoverLine}${JSON.stringify({ seq: 2, gate: 'evidence', prev: 'x' })}\n`],
+    ];
+    for (const [label, content] of roots) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        writeFileSync(join(dir, 'manifest.jsonl'), content);
+        const production = isSegmentedRepo(dir);
+        const bounded = isSegmentedBounded(dir);
+        if (production) {
+          assert.equal(bounded, true, `${label}: production says segmented, so the probe must disclose`);
+        }
       } finally { clean(root); }
     }
   });
