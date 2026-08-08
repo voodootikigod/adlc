@@ -258,6 +258,9 @@ if (verb === 'enable') {
     process.exit(refused ? 2 : 0);
   }
   if (refused) gateFail(`enable refused: ${out.reason}`);
+  // Human mode must surface what --json already carries. Printed BEFORE the
+  // pass() calls below, each of which exits.
+  for (const warning of out.warnings ?? []) console.log(`warning [${warning.code}]: ${warning.message}`);
   if (out.decision === 'already-enabled') pass(out.reason);
   if (out.written) pass(`forest mode enabled — wrote ${out.markerPath}`);
   pass(`dry-run: would write ${out.markerPath} to enable forest mode — re-run with --write to apply`);

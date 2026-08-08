@@ -27,6 +27,21 @@ import { segmentDirPath } from './forest.mjs';
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
 const AUTH_MODES = Object.freeze(['keyed', 'keyless']);
 
+// Forest mode is reachable before the CI gate that guards it exists:
+// packages/rails-guard/lib/ci/manifest.mjs reads only .adlc/manifest.jsonl, so
+// committed segment files get none of the append-only enforcement the root
+// gets. That is not a regression — forest mode never had the coverage — but an
+// operator who is never shown the tradeoff cannot weigh it, so activation
+// discloses it. `code` is the contract that callers and tests key on; `message`
+// is human text and free to be reworded. Removed by the forest CI gate
+// (T-MANIFEST-FOREST slice 6), which is what closes the gap.
+export const CI_COVERAGE_WARNING = Object.freeze({
+  code: 'ci-cannot-guard-segments',
+  message: 'rails-guard does not yet validate .adlc/manifest.d/ segment files, so rewriting or deleting committed '
+    + 'segment evidence in a pull request is not currently detected by CI. The root manifest remains guarded. '
+    + 'This closes when the forest CI gate ships.',
+});
+
 // The .gitignore contract forest mode needs is TWO-SIDED (adversarial-review
 // findings, verified empirically by the apply-the-advice tests): the marker
 // and segments must be COMMITTABLE (both negation lines — re-including the
@@ -132,7 +147,10 @@ function lstatIsSymlink(p) {
  *   5. gitignored marker   → refuse (see markerWouldBeIgnored)
  *   6. greenfield          → plan the marker write
  *
- * @returns {{ decision: 'refuse-no-workspace'|'already-enabled'|'refuse-broken-manifest-dir'|'refuse-live-root'|'refuse-ignored'|'greenfield', reason?: string, markerPath?: string, marker?: object }}
+ * `warnings` is present only on the two segmented outcomes (greenfield,
+ * already-enabled) — see CI_COVERAGE_WARNING.
+ *
+ * @returns {{ decision: 'refuse-no-workspace'|'already-enabled'|'refuse-broken-manifest-dir'|'refuse-live-root'|'refuse-ignored'|'greenfield', reason?: string, markerPath?: string, marker?: object, warnings?: Array<{code: string, message: string}> }}
  */
 export function planEnable(dir = ADLC_DIR) {
   if (!existsSync(dir) && !lstatIsSymlink(dir)) {
@@ -194,7 +212,13 @@ export function planEnable(dir = ADLC_DIR) {
         reason: `forest mode is already active, BUT ${enabledViolation}; restore this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
       };
     }
-    return { decision: 'already-enabled', reason: 'forest mode is already active for this repository' };
+    // Already segmented means segments are being written RIGHT NOW, so this
+    // path needs the disclosure every bit as much as a fresh activation.
+    return {
+      decision: 'already-enabled',
+      reason: 'forest mode is already active for this repository',
+      warnings: [CI_COVERAGE_WARNING],
+    };
   }
   if (existsSync(segDir) && readdirSync(segDir).length > 0) {
     return {
@@ -218,7 +242,10 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${violation}; add this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
     };
   }
-  return { decision: 'greenfield', markerPath: markerPath(dir), marker: { ...MARKER } };
+  // Refusals deliberately carry NO warning: a refused repository is not in
+  // forest mode, and a warning attached to every outcome is noise that trains
+  // operators to skip warnings entirely.
+  return { decision: 'greenfield', markerPath: markerPath(dir), marker: { ...MARKER }, warnings: [CI_COVERAGE_WARNING] };
 }
 
 /**

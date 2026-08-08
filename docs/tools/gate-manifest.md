@@ -162,6 +162,21 @@ writing nothing, when:
 
 `--json` emits exactly one JSON document on stdout in every mode.
 
+#### CI does not yet guard segment files
+
+Activation warns with the code `ci-cannot-guard-segments`, and the limitation
+is real: rails-guard's committed-tree reader validates `.adlc/manifest.jsonl`
+only, so the append-only enforcement the root gets does **not** extend to
+`.adlc/manifest.d/*.jsonl`. A pull request that rewrites, truncates, reorders
+or deletes committed segment evidence is not currently detected by CI.
+
+This is a missing guard, not a lost one — forest mode never had the coverage,
+and single-file repositories are unaffected. It closes when the forest CI gate
+ships (spec §9.1–9.3), after which the warning goes away. Until then, weigh it
+against the merge-conflict relief forest mode buys you: if your evidence
+ledger is a compliance artifact rather than a working record, stay on
+single-file mode for now.
+
 The gitignore probe is best-effort over the common rule shapes (the
 directory, the marker file, and a representative `*.jsonl` segment name). A
 rule targeting a specific branch-derived slug (e.g. `release-*.jsonl`) can

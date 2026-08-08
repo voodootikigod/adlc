@@ -556,3 +556,97 @@ describe('gate-manifest enable CLI (AC2, AC3, AC10, AC11)', () => {
     }
   });
 });
+
+// ── CI-coverage disclosure (T-01KZGVFER3QSB85J03QNM80KPS) ───────────────────
+// 1.8.0 made forest mode reachable (`enable`) without shipping rails-guard's
+// forest awareness: packages/rails-guard/lib/ci/manifest.mjs reads only
+// .adlc/manifest.jsonl, so committed segment files are not append-only
+// enforced in PRs. That is not a regression — forest mode never had CI
+// guarding — but `enable` said nothing, so an operator adopted the tradeoff
+// without being shown it. These tests pin the disclosure, NOT its wording:
+// the mutation gate mutates string literals, so asserting the sentence would
+// make every future rewording a red gate. The `code` is the contract.
+const CI_WARNING_CODE = 'ci-cannot-guard-segments';
+const hasCiWarning = (result) =>
+  Array.isArray(result.warnings) && result.warnings.some((w) => w?.code === CI_WARNING_CODE);
+
+describe('enable discloses that CI cannot yet guard segments', () => {
+  it('AC1: a greenfield activation carries the warning', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      const plan = planEnable(dir, { cwd: root });
+      assert.equal(plan.decision, 'greenfield');
+      assert.ok(hasCiWarning(plan), 'greenfield must disclose that segments are unguarded in CI');
+    } finally { clean(root); }
+  });
+
+  it('AC2: a repo already in forest mode carries the warning too — it is writing segments right now', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      enable(dir, { write: true });
+      const plan = planEnable(dir, { cwd: root });
+      assert.equal(plan.decision, 'already-enabled');
+      assert.ok(hasCiWarning(plan), 'already-enabled must disclose it too');
+    } finally { clean(root); }
+  });
+
+  it('AC3: refusals do NOT carry it — a refused repo is not in forest mode, and noise trains operators to ignore warnings', () => {
+    const live = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(live.dir, 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      const plan = planEnable(live.dir, { cwd: live.root });
+      assert.equal(plan.decision, 'refuse-live-root');
+      assert.ok(!hasCiWarning(plan), 'refuse-live-root must not warn');
+    } finally { clean(live.root); }
+
+    const ignored = gitRepo({ gitignore: IGNORED });
+    try {
+      const plan = planEnable(ignored.dir, { cwd: ignored.root });
+      assert.equal(plan.decision, 'refuse-ignored');
+      assert.ok(!hasCiWarning(plan), 'refuse-ignored must not warn');
+    } finally { clean(ignored.root); }
+
+    const none = gitRepo({ gitignore: NEGATED });
+    try {
+      rmSync(join(none.root, '.adlc'), { recursive: true });
+      const plan = planEnable(join(none.root, '.adlc'), { cwd: none.root });
+      assert.equal(plan.decision, 'refuse-no-workspace');
+      assert.ok(!hasCiWarning(plan), 'refuse-no-workspace must not warn');
+    } finally { clean(none.root); }
+  });
+
+  it('AC4: disclosure changes no decision and no write behavior', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      const dry = enable(dir, { write: false });
+      assert.equal(dry.decision, 'greenfield');
+      assert.equal(dry.written, false);
+      assert.equal(existsSync(markerPath(dir)), false, 'dry-run must still write nothing');
+
+      const applied = enable(dir, { write: true });
+      assert.equal(applied.decision, 'greenfield');
+      assert.equal(applied.written, true);
+      assert.ok(isSegmentedRepo(dir), 'the marker must still activate forest mode');
+    } finally { clean(root); }
+  });
+
+  it('AC5: --json still emits exactly ONE document, and it carries the warning', () => {
+    const { root } = gitRepo({ gitignore: NEGATED });
+    try {
+      const r = runBin(root, '--json');
+      assert.equal(r.status, 0, r.stderr);
+      let parsed;
+      assert.doesNotThrow(() => { parsed = JSON.parse(r.stdout); }, 'FULL stdout must remain one JSON document');
+      assert.ok(hasCiWarning(parsed), '--json must carry the warning inside the single document');
+    } finally { clean(root); }
+  });
+
+  it('AC6: human mode surfaces the warning code visibly', () => {
+    const { root } = gitRepo({ gitignore: NEGATED });
+    try {
+      const r = runBin(root);
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(`${r.stdout}${r.stderr}`.includes(CI_WARNING_CODE), 'human output must name the warning code');
+    } finally { clean(root); }
+  });
+});
