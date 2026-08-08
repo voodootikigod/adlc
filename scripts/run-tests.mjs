@@ -98,7 +98,7 @@ export function buildSegmentEnv(baseEnv = process.env, { platform = process.plat
 const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck true';
 
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
-function packageSegments() {
+export function packageSegments() {
   return readdirSync('packages', { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && (
       existsSync(join('packages', entry.name, 'test'))

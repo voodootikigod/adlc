@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSegmentEnv, SCRUBBED_ENV_VARS } from '../run-tests.mjs';
+import { buildSegmentEnv, packageSegments, SCRUBBED_ENV_VARS } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -159,4 +159,20 @@ test('gate-bypass and mock-seam variables are scrubbed like the key', () => {
     assert.equal(Object.hasOwn(env, name), false, `${name} must not reach test segments ambiently`);
   }
   assert.equal(scrubbed.length, 3);
+});
+
+test('packageSegments includes cli-test globs for packages that have them', () => {
+  const segs = packageSegments();
+  const handoff = segs.find(([name]) => name === 'packages/context-handoff');
+  assert.ok(handoff, 'context-handoff must be a segment');
+  assert.match(handoff[1], /packages\/context-handoff\/test\/\*\.test\.mjs/);
+  assert.match(handoff[1], /packages\/context-handoff\/cli-test\/\*\.test\.mjs/);
+});
+
+test('packageSegments keeps packages that only have test/ and not cli-test', () => {
+  const segs = packageSegments();
+  const core = segs.find(([name]) => name === 'packages/core');
+  assert.ok(core, 'core must remain a segment');
+  assert.match(core[1], /packages\/core\/test\/\*\.test\.mjs/);
+  assert.doesNotMatch(core[1], /cli-test/);
 });

@@ -117,8 +117,14 @@ function sourcesNamed(base, root) {
 export function testTargetFor(file, root = ROOT) {
   let m;
   if ((m = /^packages\/([^/]+)\//.exec(file))) {
-    const d = `packages/${m[1]}/test`;
-    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+    const globs = [];
+    const testDir = `packages/${m[1]}/test`;
+    const cliTestDir = `packages/${m[1]}/cli-test`;
+    if (existsSync(join(root, testDir))) globs.push(`${testDir}/*.test.mjs`);
+    // CLI contract suites may live outside test/ so they do not match a frozen
+    // `test/**/*.test.mjs` rail from an earlier ticket (T154 / context-handoff).
+    if (existsSync(join(root, cliTestDir))) globs.push(`${cliTestDir}/*.test.mjs`);
+    return globs.length > 0 ? globs.join(' ') : null;
   }
   if ((m = /^apps\/([^/]+)\//.exec(file))) {
     const d = `apps/${m[1]}/test`;
