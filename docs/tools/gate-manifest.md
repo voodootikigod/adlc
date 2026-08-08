@@ -174,11 +174,14 @@ The warning is carried by every outcome that describes a repository actually
 in forest mode — a fresh activation, an already-enabled run, an already-active
 run refused for gitignore drift, and a run refused for a missing
 `ADLC_MANIFEST_KEY`. That last one matters for repositories activated with
-`--allow-keyless`, which meet that refusal on every subsequent run. It is
-detected by a bounded, no-follow read of the activation marker alone, so the
-refusal cannot be turned into an unbounded read of a hostile root; a
-cutover-tailed repository whose marker was lost therefore reads as
-not-activated and stays silent.
+`--allow-keyless`, which meet that refusal on every subsequent run.
+
+On that refusal the mode is detected without reading the whole ledger: the
+activation marker, or the root's final line, each read within a fixed window
+from a single no-follow descriptor. Both halves of the mode signal are covered
+— including a repository cut over by hand, which has a cutover-tailed root and
+no marker — while the refusal stays immune to being turned into an unbounded
+read of a hostile root.
 
 This is a missing guard, not a lost one — forest mode never had the coverage,
 and single-file repositories are unaffected. It closes when the forest CI gate

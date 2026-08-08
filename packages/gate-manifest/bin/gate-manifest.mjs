@@ -8,7 +8,7 @@ import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
-import { enable, isMarkerActivated, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
+import { enable, isSegmentedBounded, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
 import { adopt } from '../lib/adopt.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
@@ -246,7 +246,7 @@ if (verb === 'enable') {
     // bounded, no-follow, never-throwing probe for exactly this position —
     // keyless adopters (activated with --allow-keyless) would otherwise hit
     // this refusal on every run and never hear the disclosure at all.
-    const keylessWarnings = isMarkerActivated(flags.dir) ? [CI_COVERAGE_WARNING] : [];
+    const keylessWarnings = isSegmentedBounded(flags.dir) ? [CI_COVERAGE_WARNING] : [];
     if (flags.json) {
       printJson({ decision: 'refuse-keyless', reason: keylessReason, ...(keylessWarnings.length ? { warnings: keylessWarnings } : {}) });
       process.exit(2);

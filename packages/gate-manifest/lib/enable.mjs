@@ -12,12 +12,12 @@
 // from lineage.mjs, changes no dispatch site (those files are this ticket's
 // frozen rails).
 
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
-import { ADLC_DIR, withLedgerLock } from '@adlc/core';
-import { isSegmentedRepo, markerPath } from './lineage.mjs';
+import { ADLC_DIR, ledgerPath, withLedgerLock } from '@adlc/core';
+import { isSegmentedRepo, markerPath, readBoundedJsonNoFollow } from './lineage.mjs';
 import { segmentDirPath } from './forest.mjs';
 
 // Duplicated from lineage.mjs's module-local constants (that file is a frozen
@@ -134,11 +134,6 @@ function lstatIsSymlink(p) {
   try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
 }
 
-// The most a bounded marker read may consume. The marker is a two-field JSON
-// object; anything larger is not one, so refusing to open it costs nothing
-// real and removes "attacker picks the read size" from the question.
-const MARKER_READ_LIMIT = 4096;
-
 /**
  * A BOUNDED, no-follow answer to "is this repository already in forest mode",
  * for callers that must not perform open-ended work — notably the CLI's
@@ -146,35 +141,97 @@ const MARKER_READ_LIMIT = 4096;
  *
  * Deliberately narrower than lineage.mjs's isSegmentedRepo. That predicate is
  * marker OR cutover-tailed-root, and the second half reads the ENTIRE root
- * manifest through readRawLines, following symlinks: unbounded work, on a
- * path an attacker can point at a huge file or a non-terminating device.
- * Here every component is lstat-ed rather than followed, and the marker must
- * be a regular file within MARKER_READ_LIMIT before it is opened at all.
+ * manifest through readRawLines, following symlinks: unbounded work on a path
+ * an attacker can point at a huge file or a non-terminating device.
+ *
+ * The marker read delegates to lineage.mjs's readBoundedJsonNoFollow, which
+ * is lstat + O_NOFOLLOW + a single capped read from ONE descriptor. Doing the
+ * check with lstat and then reopening via readFileSync would be a TOCTOU
+ * window: the path can be replaced between the two calls, so the size that
+ * was validated and the bytes that are read need not describe the same
+ * inode. The containing directories keep their own no-follow checks.
  *
  * The tradeoff is explicit: a cutover-tailed repo whose marker was lost reads
  * as false. That is the safe direction — it under-reports a disclosure rather
- * than reading a hostile root, and the cutover ceremony writes the marker, so
- * a missing one is the degraded case and not the norm. Never throws; a caller
- * on a refusal path must not have its exit code changed by this probe.
+ * than reading an unbounded root — and the cutover ceremony writes the marker,
+ * so a missing one is the degraded case and not the norm. Never throws; a
+ * caller on a refusal path must not have its exit code changed by this probe.
  */
 export function isMarkerActivated(dir = ADLC_DIR) {
-  const marker = markerPath(dir);
-  for (const path of [dir, segmentDirPath(dir), marker]) {
+  for (const path of [dir, segmentDirPath(dir)]) {
     if (lstatIsSymlink(path)) return false;
   }
+  const parsed = readBoundedJsonNoFollow(markerPath(dir));
+  return parsed?.format === MARKER.format && parsed?.version === MARKER.version;
+}
+
+// How much of the root's tail a bounded cutover probe may read. The cutover
+// entry is a single JSON line; a window this size holds it many times over.
+const TAIL_PROBE_BYTES = 8192;
+
+/**
+ * Whether the root manifest's LAST line is the cutover entry, read within a
+ * fixed window from one no-follow descriptor.
+ *
+ * The second half of the segmented-mode invariant (spec §4.7: marker OR
+ * cutover-tailed root). lineage.mjs answers it by passing the ENTIRE file
+ * through readRawLines, which is fine for a writer already committed to
+ * working with the ledger, but not for the CLI's keyless refusal — that path
+ * must not be convertible into an unbounded read. Here the file is opened
+ * once with O_NOFOLLOW, sized via fstat on THAT descriptor (never a second
+ * lstat, whose answer could describe a different inode), and only the final
+ * window is read.
+ *
+ * Returns false rather than guessing when the window holds no line boundary:
+ * a final line longer than TAIL_PROBE_BYTES cannot be parsed from it, and
+ * under-reporting a disclosure is the safe direction. Never throws.
+ */
+function rootTailIsCutover(dir) {
+  const root = ledgerPath('manifest', dir);
   let stats;
   try {
-    stats = lstatSync(marker);
+    stats = lstatSync(root);
   } catch {
-    return false;
+    return false; // absent
   }
-  if (!stats.isFile() || stats.size > MARKER_READ_LIMIT) return false;
+  if (!stats.isFile()) return false; // symlink, fifo, device — never followed
+  let fd;
   try {
-    const parsed = JSON.parse(readFileSync(marker, 'utf8'));
-    return parsed?.format === MARKER.format && parsed?.version === MARKER.version;
+    fd = openSync(root, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch {
     return false;
   }
+  try {
+    const size = fstatSync(fd).size;
+    if (size === 0) return false;
+    const window = Math.min(size, TAIL_PROBE_BYTES);
+    const buf = Buffer.alloc(window);
+    const bytesRead = readSync(fd, buf, 0, window, size - window);
+    const text = buf.subarray(0, bytesRead).toString('utf8');
+    const lines = text.split('\n').filter((line) => line.trim());
+    if (lines.length === 0) return false;
+    // A truncated window whose first line is a fragment is fine — only the
+    // LAST line is inspected, and it is whole unless the file's final line
+    // alone exceeds the window, in which case no boundary precedes it.
+    if (size > window && !text.includes('\n')) return false;
+    const last = JSON.parse(lines.at(-1));
+    return last?.gate === 'manifest-cutover';
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * The COMPLETE segmented-mode invariant, answered within bounded, no-follow
+ * reads: the activation marker OR a cutover-tailed root. A repository cut over
+ * by hand — `gate-manifest record manifest-cutover` accepts free-form gate
+ * names, so this takes one command — has a cutover tail and NO marker, and the
+ * marker check alone would call it single-file and stay silent about it.
+ */
+export function isSegmentedBounded(dir = ADLC_DIR) {
+  return isMarkerActivated(dir) || rootTailIsCutover(dir);
 }
 
 /**

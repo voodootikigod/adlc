@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planEnable, enable, isMarkerActivated, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
+import { planEnable, enable, isMarkerActivated, isSegmentedBounded, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
 import { isSegmentedRepo, markerPath, lineagePath } from '../lib/lineage.mjs';
 import { appendManifestEntry } from '../lib/record.mjs';
 import { readRawLines } from '../lib/forest.mjs';
@@ -794,5 +794,62 @@ describe('segmentation is never inferred through a symlink', () => {
       assert.match(plan.decision, /^refuse-/, 'a symlinked root must refuse');
       assert.ok(!hasCiWarning(plan), 'and no disclosure derived from it');
     } finally { clean(root); }
+  });
+});
+
+// The segmented-mode invariant is marker OR cutover-tailed root (spec §4.7).
+// A repository cut over by hand has the tail and NO marker — `gate-manifest
+// record manifest-cutover` accepts free-form gate names, so that is one
+// command — and a marker-only probe calls it single-file and stays silent
+// about the very state it is supposed to disclose.
+describe('the bounded probe covers the whole segmented-mode invariant', () => {
+  const cutoverLine = `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`;
+
+  it('AC9e: a cutover-tailed root with NO marker is segmented, and a keyless run discloses', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'), cutoverLine);
+      assert.equal(isMarkerActivated(dir), false, 'no marker exists — the marker half must say false');
+      assert.equal(isSegmentedBounded(dir), true, 'but the cutover tail makes it segmented');
+      const r = runBinKeyless(root, '--json');
+      assert.equal(r.status, 2);
+      assert.ok(hasCiWarning(JSON.parse(r.stdout)), 'a hand cut-over repo must hear the disclosure');
+    } finally { clean(root); }
+  });
+
+  it('AC9f: a NON-cutover tail is not segmented — the probe reads the last entry, not any entry', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        cutoverLine + `${JSON.stringify({ seq: 2, gate: 'evidence', ts: '2026-01-02T00:00:00.000Z', files: {}, prev: 'x' })}\n`);
+      assert.equal(isSegmentedBounded(dir), false, 'a cutover entry that is not LAST does not segment the repo');
+    } finally { clean(root); }
+  });
+
+  it('AC9g: the tail probe is bounded and no-follow', () => {
+    const bigPad = 'x'.repeat(20000);
+    const cases = [
+      ['symlinked root manifest', (root, dir) => {
+        const decoy = join(root, 'decoy-root.jsonl');
+        writeFileSync(decoy, cutoverLine);
+        symlinkSync(decoy, join(dir, 'manifest.jsonl'));
+      }, false],
+      ['a final line larger than the window', (root, dir) => {
+        writeFileSync(join(dir, 'manifest.jsonl'),
+          `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', pad: bigPad, prev: null })}\n`);
+      }, false],
+      ['a cutover tail after a large prefix', (root, dir) => {
+        const filler = Array.from({ length: 200 }, (_, i) =>
+          JSON.stringify({ seq: i + 1, gate: 'evidence', pad: 'y'.repeat(200), prev: null })).join('\n');
+        writeFileSync(join(dir, 'manifest.jsonl'), `${filler}\n${cutoverLine}`);
+      }, true],
+    ];
+    for (const [label, plant, expected] of cases) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        plant(root, dir);
+        assert.equal(isSegmentedBounded(dir), expected, label);
+      } finally { clean(root); }
+    }
   });
 });
