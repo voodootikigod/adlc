@@ -269,10 +269,17 @@ function rootTailIsCutover(dir) {
  */
 export function boundedSegmentationState(dir = ADLC_DIR) {
   if (isMarkerActivated(dir)) return 'segmented';
-  const tail = rootTailIsCutover(dir);
-  if (tail === 'yes') return 'segmented';
-  if (tail === 'unknown') return 'undetermined';
-  return 'single-file';
+  switch (rootTailIsCutover(dir)) {
+    case 'yes': return 'segmented';
+    case 'no': return 'single-file';
+    case 'unknown': return 'undetermined';
+    // An unrecognized probe result must NOT fall through to 'single-file':
+    // that is the one answer which asserts a fact and stays silent, so a
+    // future edit returning something unexpected would silently suppress the
+    // disclosure. Unrecognized means undetermined, like any other read this
+    // function could not decide.
+    default: return 'undetermined';
+  }
 }
 
 /**

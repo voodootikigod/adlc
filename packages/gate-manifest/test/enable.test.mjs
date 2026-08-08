@@ -967,3 +967,51 @@ describe('the emitted code matches what the bounded read proved', () => {
     } finally { clean(root); }
   });
 });
+
+// Mutation-gate survivors: three changed lines had no test that noticed them
+// changing. Each is a real gap, not a gate to placate.
+describe('the probe’s decision boundaries are pinned', () => {
+  it('AC9n: a marker must match BOTH format and version, not either', () => {
+    const cases = [
+      ['right format, wrong version', { format: 'adlc-manifest-segments', version: 99 }],
+      ['wrong format, right version', { format: 'not-an-adlc-marker', version: 1 }],
+      ['neither', { format: 'x', version: 99 }],
+    ];
+    for (const [label, marker] of cases) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+        writeFileSync(markerPath(dir), JSON.stringify(marker));
+        assert.equal(isMarkerActivated(dir), false, `${label}: a partial match is not an activation`);
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC9o: the tail window boundary is exact — a final line of exactly the window size is undecidable', () => {
+    // With no newline inside the window there is no line boundary to parse
+    // from, so the answer is undetermined. One byte more of window would
+    // reach the preceding newline and decide it, which is what makes this
+    // pin the constant rather than merely exercise it.
+    const WINDOW = 65536;
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      const base = { seq: 2, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: 'x', pad: '' };
+      const overhead = JSON.stringify(base).length;
+      const finalLine = JSON.stringify({ ...base, pad: 'p'.repeat(WINDOW - overhead) });
+      assert.equal(Buffer.byteLength(finalLine), WINDOW, 'fixture must be exactly the window size');
+      // No trailing newline: the window then holds the final line and nothing else.
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        `${JSON.stringify({ seq: 1, gate: 'evidence', prev: null })}\n${finalLine}`);
+      assert.equal(boundedSegmentationState(dir), 'undetermined');
+    } finally { clean(root); }
+  });
+
+  it('AC9p: an absent root is single-file, and only a recognized result may say so', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      assert.equal(existsSync(join(dir, 'manifest.jsonl')), false);
+      assert.equal(boundedSegmentationState(dir), 'single-file',
+        'an absent root is a determinate answer, distinct from undetermined');
+    } finally { clean(root); }
+  });
+});
