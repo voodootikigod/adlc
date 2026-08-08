@@ -122,8 +122,10 @@ export function computeDepthSignal({ text, bytes } = {}) {
 }
 
 export function isDegraded({ depth, sessionBytes, depthThreshold = DEFAULT_DEPTH_THRESHOLD, bytesThreshold = DEFAULT_BYTES_THRESHOLD }) {
-  const depthDegraded = typeof depth === 'number' && depth > depthThreshold;
-  const bytesDegraded = typeof sessionBytes === 'number' && sessionBytes > bytesThreshold;
+  // Inclusive >= — KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs
+  // (default path uses @adlc/context-handoff isHardDegraded).
+  const depthDegraded = typeof depth === 'number' && depth >= depthThreshold;
+  const bytesDegraded = typeof sessionBytes === 'number' && sessionBytes >= bytesThreshold;
   return depthDegraded || bytesDegraded;
 }
 

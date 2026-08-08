@@ -6,10 +6,19 @@
 // for a --depth/--session-bytes input. Pure functions — no filesystem I/O here
 // (that lives in the CLI / hook, which stage a bounded window and pass the raw
 // text in).
+//
+// Hard-band edges are inclusive (`>=`) via `@adlc/context-handoff` isHardDegraded.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { countToolCalls, computeDepthSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD, DEFAULT_BYTES_THRESHOLD } from '../lib/depth-signal.mjs';
+import { HARD_BYTES, HARD_DEPTH, isHardDegraded } from '@adlc/context-handoff';
+import {
+  countToolCalls,
+  computeDepthSignal,
+  isDegraded,
+  DEFAULT_DEPTH_THRESHOLD,
+  DEFAULT_BYTES_THRESHOLD,
+} from '../lib/depth-signal.mjs';
 
 test('countToolCalls: plain prose has zero tool calls', () => {
   assert.equal(countToolCalls('just some words\nmore words\n'), 0);
@@ -53,13 +62,37 @@ test('isDegraded: bytes exceeding threshold → degraded (even with low depth)',
   assert.equal(isDegraded({ depth: 1, sessionBytes: 300_000, depthThreshold: 40, bytesThreshold: 262_144 }), true);
 });
 
-test('isDegraded: exactly AT threshold is not yet degraded (strictly greater-than, mirrors flail-detector detectSizeExceeded)', () => {
-  assert.equal(isDegraded({ depth: 40, sessionBytes: 262_144, depthThreshold: 40, bytesThreshold: 262_144 }), false);
+test('isDegraded: exactly AT threshold is degraded (inclusive >=, context-handoff hard band)', () => {
+  assert.equal(isDegraded({ depth: HARD_DEPTH, sessionBytes: 0 }), true);
+  assert.equal(isDegraded({ depth: 0, sessionBytes: HARD_BYTES }), true);
+  assert.equal(
+    isDegraded({
+      depth: HARD_DEPTH,
+      sessionBytes: HARD_BYTES,
+      depthThreshold: HARD_DEPTH,
+      bytesThreshold: HARD_BYTES,
+    }),
+    true,
+  );
 });
 
-test('isDegraded: defaults are exported and sane', () => {
-  assert.equal(typeof DEFAULT_DEPTH_THRESHOLD, 'number');
-  assert.equal(typeof DEFAULT_BYTES_THRESHOLD, 'number');
-  assert.ok(DEFAULT_DEPTH_THRESHOLD > 0);
-  assert.ok(DEFAULT_BYTES_THRESHOLD > 0);
+test('isDegraded: custom thresholds also use inclusive >= at the edge', () => {
+  assert.equal(isDegraded({ depth: 10, sessionBytes: 0, depthThreshold: 10, bytesThreshold: 1_000_000 }), true);
+  assert.equal(isDegraded({ depth: 9, sessionBytes: 500, depthThreshold: 10, bytesThreshold: 500 }), true);
+  assert.equal(isDegraded({ depth: 9, sessionBytes: 499, depthThreshold: 10, bytesThreshold: 500 }), false);
+});
+
+test('isDegraded: defaults alias HARD_* from context-handoff', () => {
+  assert.equal(DEFAULT_DEPTH_THRESHOLD, HARD_DEPTH);
+  assert.equal(DEFAULT_BYTES_THRESHOLD, HARD_BYTES);
+});
+
+test('isDegraded: default path matches isHardDegraded for depth and bytes', () => {
+  assert.equal(isDegraded({ depth: HARD_DEPTH, sessionBytes: 0 }), isHardDegraded({ depth: HARD_DEPTH }));
+  assert.equal(isDegraded({ depth: 0, sessionBytes: HARD_BYTES }), isHardDegraded({ bytes: HARD_BYTES }));
+  assert.equal(isDegraded({ depth: HARD_DEPTH - 1, sessionBytes: HARD_BYTES - 1 }), isHardDegraded({
+    depth: HARD_DEPTH - 1,
+    bytes: HARD_BYTES - 1,
+  }));
+  assert.equal(isDegraded({ depth: 5, sessionBytes: 100 }), isHardDegraded({ depth: 5, bytes: 100 }));
 });

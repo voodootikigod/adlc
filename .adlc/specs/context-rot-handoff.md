@@ -15,7 +15,7 @@ Doctrine F3/E4/P2/P4; absolute build-gate hard; host compactors non-goal.
 ## Package
 
 Signal owner `@adlc/context-handoff`; build-gate consumes absolute
-`isHardDegraded()`. Thresholds only via `lib/thresholds.mjs` (adapters MUST import; literal-ban CI is a later slice). Band edges are inclusive (`>=`); build-gate today uses strict `>` for depth/bytes — slice-3 migration must adopt inclusive or document a flip.
+`isHardDegraded()`. Thresholds only via `lib/thresholds.mjs` (adapters MUST import; literal-ban CI is a later slice). Band edges are inclusive (`>=`); `@adlc/build-gate` consumes `isHardDegraded()` and uses the same inclusive hard edges (slice-3 adopted).
 
 ### Absolute bands & multi-signal join
 

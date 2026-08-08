@@ -84,7 +84,7 @@ cannot be recorded is refused, never silently allowed.
 ## Toolkit modules (Path A — reusable by any harness)
 
 - `lib/risk.mjs` — `computeRiskTier(ticket)` / `deriveRiskSignals(ticket)`
-- `lib/depth-signal.mjs` — `computeDepthSignal({ text, bytes })` / `isDegraded({...})`
+- `lib/depth-signal.mjs` — `computeDepthSignal({ text, bytes })` / `isDegraded({...})` (absolute hard band via `@adlc/context-handoff` `isHardDegraded`; inclusive `>=` at `HARD_DEPTH` / `HARD_BYTES`)
 - `lib/decide.mjs` — `decideBuildGate({ riskTier, degraded, bypass, recordBypass })`
 - `lib/override.mjs` — `recordOverride({...})`
 - `lib/active-ticket.mjs` — `resolveActiveTicketId({ dir, env })`, the shared
