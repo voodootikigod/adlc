@@ -9,6 +9,28 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-08-08
+
+### Added
+- **context-handoff:** the slice-2 CLI — `write`, `resume`, `bypass`, `repair`,
+  and `unlock` verbs on `@adlc/context-handoff` (T155) (#460)
+
+### Fixed
+- **gate-manifest:** `enable` now discloses that rails-guard cannot yet validate
+  `.adlc/manifest.d/` segment files, on every outcome that describes a repository
+  actually in forest mode — activation, already-enabled, the already-active
+  gitignore-drift refusal, and the keyless refusal (via a bounded, no-follow
+  probe). When a bounded read cannot decide, the warning says so
+  (`segmentation-undetermined`) instead of claiming forest mode it never
+  established. The gap itself closes with the forest CI gate
+  (T-MANIFEST-FOREST slice 6), which removes the warning. (#465)
+- **integrations:** ADLC no longer creates or trusts `~/.adlc` — a home-directory
+  workspace silently captured every project below it (#463)
+- **release:** packages now publish in true dependency order — the previous
+  core-first/directory order had 17 inversions (including `@adlc/core` pinning
+  `@adlc/tickets` 29 slots later), so a mid-run publish failure could strand
+  already-published packages uninstallable (#468)
+
 ## [1.8.0] - 2026-08-06
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@adlc/prosecute",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "P5 review-evidence recorder for ticket- and revision-bound findings and dry-pass completion.",
   "type": "module",
   "license": "MIT",
@@ -31,9 +31,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.8.0",
-    "@adlc/gate-manifest": "1.8.0",
-    "@adlc/tickets": "1.8.0"
+    "@adlc/core": "1.9.0",
+    "@adlc/gate-manifest": "1.9.0",
+    "@adlc/tickets": "1.9.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

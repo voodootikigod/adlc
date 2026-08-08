@@ -1,6 +1,6 @@
 {
   "name": "@adlc/fleet",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Parallel, gated ADLC ticket orchestration across supported agent harnesses.",
   "type": "module",
   "license": "MIT",
@@ -28,11 +28,11 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.8.0",
-    "@adlc/gate-manifest": "1.8.0",
-    "@adlc/model-router": "1.8.0",
-    "@adlc/quartermaster": "1.8.0",
-    "@adlc/tickets": "1.8.0"
+    "@adlc/core": "1.9.0",
+    "@adlc/gate-manifest": "1.9.0",
+    "@adlc/model-router": "1.9.0",
+    "@adlc/quartermaster": "1.9.0",
+    "@adlc/tickets": "1.9.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

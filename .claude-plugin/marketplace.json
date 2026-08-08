@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "The Agentic Development Lifecycle toolkit, packaged for Claude Code.",
-    "version": "1.8.0"
+    "version": "1.9.0"
   },
   "plugins": [
     {
       "name": "adlc",
       "description": "Embrace the ADLC from inside Claude Code: a phase-routing discovery skill and commands to bootstrap (.adlc/) and author tickets (P0). Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
-      "version": "1.8.0",
+      "version": "1.9.0",
       "author": {
         "name": "Chris Williams"
       },
