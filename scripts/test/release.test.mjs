@@ -394,6 +394,22 @@ test('publishTargets: a dependency cycle fails closed, naming the packages', () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('publishTargets: an optionalDependencies edge constrains order like a runtime dep', () => {
+  // optionalDependencies install by default, so a dependent published before
+  // its optional dep is just as stranded as with a hard dep. This fixture's
+  // ONLY edge is optional, and the names are chosen so alphabetical order
+  // gets it wrong — dropping 'optionalDependencies' from the kind list
+  // reverts to alphabetical and fails here.
+  const { root, packagesDir, pluginsDir } = depsRepo({
+    aopt: { name: '@adlc/aopt', version: '1.0.0', optionalDependencies: { '@adlc/zopt': '1.0.0' } },
+    zopt: { name: '@adlc/zopt', version: '1.0.0' },
+  });
+  try {
+    const names = publishTargets({ packagesDir, pluginsDir }).map((t) => t.name);
+    assert.deepEqual(names, ['@adlc/zopt', '@adlc/aopt']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('publishTargets: devDependencies do not constrain order — a dev-only cycle is not a cycle', () => {
   const { root, packagesDir, pluginsDir } = depsRepo({
     app: { name: '@adlc/app', version: '1.0.0', dependencies: { '@adlc/lib': '1.0.0' } },
