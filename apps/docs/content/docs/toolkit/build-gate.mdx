@@ -34,8 +34,8 @@ adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <p
 | `--depth <n>` | — | Precomputed tool-call-count depth signal. |
 | `--session-bytes <n>` | — | Precomputed transcript byte-size signal. |
 | `--transcript <path>` | — | Derive depth / session-bytes from this transcript file. |
-| `--depth-threshold <n>` | `40` | Tool-call count past which a session is degraded. |
-| `--bytes-threshold <n>` | `262144` | Transcript bytes (256 KiB) past which a session is degraded. |
+| `--depth-threshold <n>` | `40` | Tool-call count at or past which a session is degraded (inclusive; `HARD_DEPTH`). |
+| `--bytes-threshold <n>` | `262144` | Transcript bytes (256 KiB) at or past which a session is degraded (inclusive; `HARD_BYTES`). |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
 | `--reason <text>` | — | Free-text reason recorded with an override. |
 | `--json` | off | Machine-readable JSON result. |
