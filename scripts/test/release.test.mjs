@@ -308,3 +308,113 @@ test('releaseMain --publish fails closed and publishes NOTHING when a target lac
     assert.equal(published.length, 0, `nothing should publish; got: ${published}`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// ---- T-01KZGT27XA: publish order must be DEPENDENCY order --------------------
+// publishTargets documented "dependency order" while implementing directory
+// order. npm publish does not validate dependencies, so a complete run hides
+// it — the defect fires on a PARTIAL failure, stranding an already-published
+// dependent whose exact-pinned dependency never shipped (the v1.4.0 shape).
+// Found at 17 violations on the real tree, including core (slot 0) pinning
+// tickets (slot 29).
+
+import { fileURLToPath } from 'node:url';
+const REAL_REPO = fileURLToPath(new URL('../../', import.meta.url));
+
+/** Bare fixture: a packages/ tree with exactly the given manifests. */
+function depsRepo(packages, plugins = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-order-'));
+  const packagesDir = join(root, 'packages');
+  const pluginsDir = join(root, 'plugins');
+  mkdirSync(packagesDir, { recursive: true });
+  mkdirSync(pluginsDir, { recursive: true });
+  for (const [dir, pkg] of Object.entries(packages)) {
+    mkdirSync(join(packagesDir, dir));
+    writeFileSync(join(packagesDir, dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+  }
+  for (const [dir, pkg] of Object.entries(plugins)) {
+    mkdirSync(join(pluginsDir, dir));
+    writeFileSync(join(pluginsDir, dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+  }
+  return { root, packagesDir, pluginsDir };
+}
+
+test('publishTargets: the REAL tree publishes every runtime dependency before its dependents', () => {
+  const targets = publishTargets({
+    packagesDir: join(REAL_REPO, 'packages'),
+    pluginsDir: join(REAL_REPO, 'plugins'),
+  });
+  const idx = new Map(targets.map((t, i) => [t.name, i]));
+  for (const [i, t] of targets.entries()) {
+    const pkg = JSON.parse(readFileSync(join(t.dir, 'package.json'), 'utf8'));
+    const deps = { ...pkg.dependencies, ...pkg.peerDependencies, ...pkg.optionalDependencies };
+    for (const name of Object.keys(deps)) {
+      if (!idx.has(name)) continue;
+      assert.ok(idx.get(name) < i, `${t.name} (slot ${i}) publishes before its dependency ${name} (slot ${idx.get(name)})`);
+    }
+  }
+});
+
+test('publishTargets: quartermaster precedes fleet — the 1.8.0 near-miss, pinned', () => {
+  const names = publishTargets({
+    packagesDir: join(REAL_REPO, 'packages'),
+    pluginsDir: join(REAL_REPO, 'plugins'),
+  }).map((t) => t.name);
+  assert.ok(
+    names.indexOf('@adlc/quartermaster') < names.indexOf('@adlc/fleet'),
+    'fleet exact-pins quartermaster; a partial run publishing fleet first strands it uninstallable'
+  );
+});
+
+test('publishTargets: order does not follow directory names — a dependency later in the alphabet still goes first', () => {
+  const { root, packagesDir, pluginsDir } = depsRepo({
+    aa: { name: '@adlc/aa', version: '1.0.0', dependencies: { '@adlc/zz': '1.0.0' } },
+    mm: { name: '@adlc/mm', version: '1.0.0', dependencies: { '@adlc/aa': '1.0.0' } },
+    zz: { name: '@adlc/zz', version: '1.0.0' },
+  });
+  try {
+    const first = publishTargets({ packagesDir, pluginsDir }).map((t) => t.name);
+    assert.deepEqual(first, ['@adlc/zz', '@adlc/aa', '@adlc/mm']);
+    // Determinism: a second call yields the identical order.
+    const second = publishTargets({ packagesDir, pluginsDir }).map((t) => t.name);
+    assert.deepEqual(second, first);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('publishTargets: a dependency cycle fails closed, naming the packages', () => {
+  const { root, packagesDir, pluginsDir } = depsRepo({
+    ping: { name: '@adlc/ping', version: '1.0.0', dependencies: { '@adlc/pong': '1.0.0' } },
+    pong: { name: '@adlc/pong', version: '1.0.0', dependencies: { '@adlc/ping': '1.0.0' } },
+  });
+  try {
+    assert.throws(
+      () => publishTargets({ packagesDir, pluginsDir }),
+      (err) => /@adlc\/ping/.test(err.message) && /@adlc\/pong/.test(err.message),
+      'an arbitrary order on a cycle is a coin flip; the release must stop instead'
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('publishTargets: devDependencies do not constrain order — a dev-only cycle is not a cycle', () => {
+  const { root, packagesDir, pluginsDir } = depsRepo({
+    app: { name: '@adlc/app', version: '1.0.0', dependencies: { '@adlc/lib': '1.0.0' } },
+    lib: { name: '@adlc/lib', version: '1.0.0', devDependencies: { '@adlc/app': '1.0.0' } },
+  });
+  try {
+    const names = publishTargets({ packagesDir, pluginsDir }).map((t) => t.name);
+    assert.deepEqual(names, ['@adlc/lib', '@adlc/app'], 'runtime edge app→lib holds; the dev back-edge must not create a cycle');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('publishTargets: plugins still publish after all packages, in dependency order among themselves', () => {
+  const { root, packagesDir, pluginsDir } = depsRepo(
+    { core: { name: '@adlc/core', version: '1.0.0' } },
+    {
+      'adlc-early': { name: '@adlc/early', version: '1.0.0', dependencies: { '@adlc/late': '1.0.0' } },
+      'adlc-late': { name: '@adlc/late', version: '1.0.0', dependencies: { '@adlc/core': '1.0.0' } },
+    }
+  );
+  try {
+    const names = publishTargets({ packagesDir, pluginsDir }).map((t) => t.name);
+    assert.deepEqual(names, ['@adlc/core', '@adlc/late', '@adlc/early']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

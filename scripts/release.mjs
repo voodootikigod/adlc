@@ -58,29 +58,88 @@ export function packagePublishOrder(names) {
 }
 
 /**
- * Every directory `--publish` must publish, in dependency order: packages/* in
- * the core-first/cli-last order, THEN each non-private plugin package (plugins
- * consume the packages, so they publish after them). Skipping publishable
- * plugins is exactly how @adlc/opencode ended up registered in user
- * opencode.json files while not existing on npm (T30).
+ * Topologically sort publish targets so every runtime dependency publishes
+ * before its dependents. `deps` maps each target name to its internal
+ * dependency names; ties break alphabetically so the order is stable across
+ * machines and enumeration orders. A cycle throws: npm publish does not
+ * validate dependencies, so an arbitrary order on a cycle would be a coin
+ * flip whose losing side is a stranded, uninstallable partial release.
+ */
+function topologicalOrder(targets, deps) {
+  const remaining = new Map(targets.map((t) => [t.name, t]));
+  const ordered = [];
+  while (remaining.size > 0) {
+    const ready = [...remaining.keys()]
+      .filter((name) => [...(deps.get(name) ?? [])].every((d) => !remaining.has(d)))
+      .sort();
+    if (ready.length === 0) {
+      const stuck = [...remaining.keys()].sort().join(', ');
+      throw new Error(`publish order: dependency cycle among ${stuck} — refusing to guess an order`);
+    }
+    for (const name of ready) {
+      ordered.push(remaining.get(name));
+      remaining.delete(name);
+    }
+  }
+  return ordered;
+}
+
+/** The internal @adlc/* RUNTIME dependencies of one manifest. devDependencies
+ *  are deliberately excluded: they are not needed to install the published
+ *  artifact, and treating them as edges manufactures cycles that do not exist
+ *  at install time. */
+function internalRuntimeDeps(pkg) {
+  const deps = new Set();
+  for (const kind of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
+    for (const name of Object.keys(pkg[kind] ?? {})) {
+      if (name.startsWith('@adlc/')) deps.add(name);
+    }
+  }
+  return deps;
+}
+
+/**
+ * Every directory `--publish` must publish, in TRUE dependency order: each
+ * group (packages/*, then non-private plugins) is topologically sorted over
+ * its internal @adlc/* runtime dependencies, so a dependency always publishes
+ * before its dependents. This is load-bearing precisely when a run FAILS
+ * part-way: npm never validates dependencies at publish time, so a dependent
+ * published before its exact-pinned dependency is live and uninstallable the
+ * moment the run dies between them (the v1.4.0 incident shape; the earlier
+ * core-first/cli-last directory order had 17 such inversions, including core
+ * itself pinning tickets 29 slots later). Plugins consume the packages, so
+ * they still publish after all of packages/* — skipping publishable plugins
+ * is exactly how @adlc/opencode ended up registered in user opencode.json
+ * files while not existing on npm (T30).
  * Returns [{ dir, name, private }].
  */
 export function publishTargets({ packagesDir = PKGS, pluginsDir = PLUGINS } = {}) {
-  const targets = [];
-  for (const name of packagePublishOrder(workspacePackageNames(packagesDir))) {
-    const dir = join(packagesDir, name);
+  const load = (dir) => {
     const pkg = readJson(join(dir, 'package.json'));
-    targets.push({ dir, name: pkg.name, private: pkg.private === true });
-  }
+    return { dir, name: pkg.name, private: pkg.private === true, deps: internalRuntimeDeps(pkg) };
+  };
+  const packages = workspacePackageNames(packagesDir)
+    .map((name) => load(join(packagesDir, name)))
+    .filter((t) => !t.private);
+  const plugins = [];
   if (existsSync(pluginsDir)) {
     for (const name of readdirSync(pluginsDir).sort()) {
-      const pj = join(pluginsDir, name, 'package.json');
-      if (!existsSync(pj)) continue;
-      const pkg = readJson(pj);
-      targets.push({ dir: join(pluginsDir, name), name: pkg.name, private: pkg.private === true });
+      if (!existsSync(join(pluginsDir, name, 'package.json'))) continue;
+      const t = load(join(pluginsDir, name));
+      if (!t.private) plugins.push(t);
     }
   }
-  return targets.filter((t) => !t.private);
+  // Each group only orders against members of the SAME group: a plugin's
+  // package dependencies are all satisfied by the time its group starts, and
+  // no package depends on a plugin, so the group boundary never fights the
+  // graph.
+  const order = [];
+  for (const group of [packages, plugins]) {
+    const names = new Set(group.map((t) => t.name));
+    const deps = new Map(group.map((t) => [t.name, [...t.deps].filter((d) => names.has(d))]));
+    order.push(...topologicalOrder(group, deps));
+  }
+  return order.map(({ dir, name, private: priv }) => ({ dir, name, private: priv }));
 }
 
 export function repinInternalDependencies(pkg, version) {
@@ -779,7 +838,8 @@ export function releaseMain(
     return 1;
   }
 
-  // core publishes first; cli publishes last because it depends on every routed tool.
+  // Order here only sequences the version WRITES (cosmetic); the publish loop
+  // gets its own dependency-ordered list from publishTargets().
   const order = packagePublishOrder(workspacePackageNames(packagesDir));
 
   // 1. Set version everywhere and repin every internal @adlc/* dependency to match.
