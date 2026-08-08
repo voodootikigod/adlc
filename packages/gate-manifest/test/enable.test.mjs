@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planEnable, enable, isMarkerActivated, isSegmentedBounded, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
+import { planEnable, enable, isMarkerActivated, boundedSegmentationState, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
 import { isSegmentedRepo, markerPath, lineagePath } from '../lib/lineage.mjs';
 import { appendManifestEntry } from '../lib/record.mjs';
 import { readRawLines } from '../lib/forest.mjs';
@@ -810,7 +810,7 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
     try {
       writeFileSync(join(dir, 'manifest.jsonl'), cutoverLine);
       assert.equal(isMarkerActivated(dir), false, 'no marker exists — the marker half must say false');
-      assert.equal(isSegmentedBounded(dir), true, 'but the cutover tail makes it segmented');
+      assert.equal(boundedSegmentationState(dir), 'segmented', 'but the cutover tail makes it segmented');
       const r = runBinKeyless(root, '--json');
       assert.equal(r.status, 2);
       assert.ok(hasCiWarning(JSON.parse(r.stdout)), 'a hand cut-over repo must hear the disclosure');
@@ -822,42 +822,45 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
     try {
       writeFileSync(join(dir, 'manifest.jsonl'),
         cutoverLine + `${JSON.stringify({ seq: 2, gate: 'evidence', ts: '2026-01-02T00:00:00.000Z', files: {}, prev: 'x' })}\n`);
-      assert.equal(isSegmentedBounded(dir), false, 'a cutover entry that is not LAST does not segment the repo');
+      assert.equal(boundedSegmentationState(dir), 'single-file', 'a cutover entry that is not LAST does not segment the repo');
     } finally { clean(root); }
   });
 
-  it('AC9g: bounded and no-follow, and an UNDECIDABLE root warns rather than going silent', () => {
-    const bigPad = 'x'.repeat(20000);
+  it('AC9g: bounded and no-follow, and an UNDECIDABLE root is reported as such', () => {
+    // Must exceed TAIL_PROBE_BYTES (64 KiB) to be undecidable — this fixture
+    // went stale once when the window widened, so it is sized well past it.
+    const bigPad = 'x'.repeat(90000);
     const cases = [
-      // Undecidable → true. A bounded probe cannot rule these out without
-      // following a link or reading past its window, and staying silent is
-      // the failure this disclosure exists to prevent.
+      // Undecidable → 'undetermined'. A bounded probe cannot rule these out
+      // without following a link or reading past its window. Claiming
+      // 'segmented' would assert a fact the read never established; claiming
+      // 'single-file' would stay silent about a repo that may be segmented.
       ['symlinked root manifest', (root, dir) => {
         const decoy = join(root, 'decoy-root.jsonl');
         writeFileSync(decoy, cutoverLine);
         symlinkSync(decoy, join(dir, 'manifest.jsonl'));
-      }, true],
+      }, 'undetermined'],
       ['a final line larger than the window', (root, dir) => {
         writeFileSync(join(dir, 'manifest.jsonl'),
           `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', pad: bigPad, prev: null })}\n`);
-      }, true],
+      }, 'undetermined'],
       // Decidable → the real answer.
       ['a cutover tail after a large prefix', (root, dir) => {
         const filler = Array.from({ length: 200 }, (_, i) =>
           JSON.stringify({ seq: i + 1, gate: 'evidence', pad: 'y'.repeat(200), prev: null })).join('\n');
         writeFileSync(join(dir, 'manifest.jsonl'), `${filler}\n${cutoverLine}`);
-      }, true],
+      }, 'segmented'],
       ['an ordinary single-file root', (root, dir) => {
         writeFileSync(join(dir, 'manifest.jsonl'),
           `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
-      }, false],
-      ['no root at all', () => {}, false],
+      }, 'single-file'],
+      ['no root at all', () => {}, 'single-file'],
     ];
     for (const [label, plant, expected] of cases) {
       const { root, dir } = gitRepo({ gitignore: NEGATED });
       try {
         plant(root, dir);
-        assert.equal(isSegmentedBounded(dir), expected, label);
+        assert.equal(boundedSegmentationState(dir), expected, label);
       } finally { clean(root); }
     }
   });
@@ -885,9 +888,9 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
       try {
         writeFileSync(join(dir, 'manifest.jsonl'), content);
         const production = isSegmentedRepo(dir);
-        const bounded = isSegmentedBounded(dir);
+        const bounded = boundedSegmentationState(dir);
         if (production) {
-          assert.equal(bounded, true, `${label}: production says segmented, so the probe must disclose`);
+          assert.notEqual(bounded, 'single-file', `${label}: production says segmented, so the probe must never claim single-file`);
         }
       } finally { clean(root); }
     }
@@ -906,7 +909,7 @@ describe('the tail window is sized so ordinary ledgers stay decidable', () => {
         JSON.stringify({ seq: i + 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', pad: 'z'.repeat(6700), prev: 'x' }));
       writeFileSync(join(dir, 'manifest.jsonl'), `${entries.join('\n')}\n`);
       assert.equal(isSegmentedRepo(dir), false, 'production agrees this is single-file');
-      assert.equal(isSegmentedBounded(dir), false, 'so the probe must not warn about it');
+      assert.equal(boundedSegmentationState(dir), 'single-file', 'so the probe must not claim segmentation');
     } finally { clean(root); }
   });
 
@@ -918,7 +921,49 @@ describe('the tail window is sized so ordinary ledgers stay decidable', () => {
       writeFileSync(join(dir, 'manifest.jsonl'),
         `${entries.join('\n')}\n${JSON.stringify({ seq: 51, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: 'x' })}\n`);
       assert.equal(isSegmentedRepo(dir), true);
-      assert.equal(isSegmentedBounded(dir), true, 'and the probe must agree');
+      assert.equal(boundedSegmentationState(dir), 'segmented', 'and the probe must agree');
+    } finally { clean(root); }
+  });
+});
+
+// The disclosure must say only what the read established. A bounded probe has
+// three possible answers, so the CLI has three possible outputs — collapsing
+// them means either claiming forest mode for an ordinary single-file repo, or
+// staying silent about one that may be segmented.
+describe('the emitted code matches what the bounded read proved', () => {
+  const UNDETERMINED_CODE = 'segmentation-undetermined';
+  const codesOf = (parsed) => (parsed.warnings ?? []).map((w) => w.code);
+
+  it('AC9k: an oversized NON-cutover final entry is undetermined, never claimed as segmented', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', pad: 'q'.repeat(80000), prev: null })}\n`);
+      assert.equal(isSegmentedRepo(dir), false, 'production reads the whole entry and keeps it single-file');
+      const r = runBinKeyless(root, '--json');
+      assert.equal(r.status, 2);
+      const codes = codesOf(JSON.parse(r.stdout));
+      assert.ok(!codes.includes(CI_WARNING_CODE), 'must NOT claim the repository is segmented');
+      assert.ok(codes.includes(UNDETERMINED_CODE), 'but must say the answer is undetermined');
+    } finally { clean(root); }
+  });
+
+  it('AC9l: a definite cutover tail emits the segmented code, not the uncertainty one', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      const codes = codesOf(JSON.parse(runBinKeyless(root, '--json').stdout));
+      assert.deepEqual(codes, [CI_WARNING_CODE], 'a definite answer gets the definite code');
+    } finally { clean(root); }
+  });
+
+  it('AC9m: an ordinary single-file repo emits neither code', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      assert.deepEqual(codesOf(JSON.parse(runBinKeyless(root, '--json').stdout)), []);
     } finally { clean(root); }
   });
 });

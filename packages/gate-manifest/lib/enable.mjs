@@ -42,6 +42,20 @@ export const CI_COVERAGE_WARNING = Object.freeze({
     + 'This closes when the forest CI gate ships.',
 });
 
+// The honest answer when a BOUNDED read cannot decide whether a repository is
+// in forest mode. Distinct from CI_COVERAGE_WARNING because that code asserts
+// a fact — this repository IS segmented — which an undecidable read has not
+// established. Collapsing the two would either claim segmentation for an
+// ordinary single-file repo with an enormous trailing entry, or say nothing
+// at all about a repo that may well be segmented. Neither is true; this is.
+export const SEGMENTATION_UNDETERMINED_WARNING = Object.freeze({
+  code: 'segmentation-undetermined',
+  message: 'could not determine within a bounded read whether this repository uses segmented (forest) evidence '
+    + 'storage, because the root manifest\'s final entry could not be read within the probe window. If it IS '
+    + 'segmented, note that rails-guard does not yet validate .adlc/manifest.d/ segment files. Run this command '
+    + 'with a signing key configured for a definite answer.',
+});
+
 // The .gitignore contract forest mode needs is TWO-SIDED (adversarial-review
 // findings, verified empirically by the apply-the-advice tests): the marker
 // and segments must be COMMITTABLE (both negation lines — re-including the
@@ -238,24 +252,27 @@ function rootTailIsCutover(dir) {
 }
 
 /**
- * The COMPLETE segmented-mode invariant (spec §4.7: marker OR cutover-tailed
- * root), answered within bounded, no-follow reads, with undecidable roots
- * resolving to TRUE.
+ * Which disclosure a bounded, no-follow look at this repository justifies:
+ * 'segmented' | 'single-file' | 'undetermined'.
  *
- * That direction is deliberate and specific to what this answer drives: a
- * warning, not a gate. A spurious warning costs one line of output; a missing
- * one costs the operator the disclosure this whole path exists to deliver. So
- * the probe may over-report against the production predicate but must never
- * under-report it — which is the property the differential test pins.
+ * TRI-STATE on purpose. An earlier binary version had to map undecidable
+ * roots to one side or the other, and both were false statements: mapping to
+ * segmented claims forest mode for an ordinary single-file repo whose final
+ * entry exceeds the window, and mapping to single-file stays silent about a
+ * repo that may well be segmented. The read is uncertain, so the answer is.
  *
- * Both halves matter. A repository cut over by hand has a cutover tail and NO
- * marker — `gate-manifest record manifest-cutover` accepts free-form gate
- * names, so that is one command — and a marker-only probe would call it
- * single-file and stay silent about it.
+ * Both halves of spec §4.7 are covered — a repository cut over by hand has a
+ * cutover tail and NO marker, since `gate-manifest record manifest-cutover`
+ * accepts free-form gate names, and a marker-only probe would call it
+ * single-file. Never throws: callers sit on a refusal path whose exit code
+ * must not change.
  */
-export function isSegmentedBounded(dir = ADLC_DIR) {
-  if (isMarkerActivated(dir)) return true;
-  return rootTailIsCutover(dir) !== 'no';
+export function boundedSegmentationState(dir = ADLC_DIR) {
+  if (isMarkerActivated(dir)) return 'segmented';
+  const tail = rootTailIsCutover(dir);
+  if (tail === 'yes') return 'segmented';
+  if (tail === 'unknown') return 'undetermined';
+  return 'single-file';
 }
 
 /**

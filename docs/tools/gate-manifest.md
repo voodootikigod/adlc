@@ -183,6 +183,14 @@ from a single no-follow descriptor. Both halves of the mode signal are covered
 no marker — while the refusal stays immune to being turned into an unbounded
 read of a hostile root.
 
+A bounded read has three possible answers, so the command has three possible
+outputs. When the window cannot decide — a final entry larger than it, a
+non-regular file, a trailing run of blank lines longer than the window — the
+refusal carries `segmentation-undetermined` rather than
+`ci-cannot-guard-segments`. The distinction is deliberate: the second asserts
+that the repository IS in forest mode, and an undecidable read has not
+established that. Configuring a signing key gets a definite answer.
+
 This is a missing guard, not a lost one — forest mode never had the coverage,
 and single-file repositories are unaffected. It closes when the forest CI gate
 ships (spec §9.1–9.3), after which the warning goes away. Until then, weigh it
