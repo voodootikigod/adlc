@@ -211,11 +211,8 @@ export function planEnable(dir = ADLC_DIR) {
       // so the repository is in forest mode and exposed right now. Keying
       // disclosure off the decision would let an operator fix the ignore drift
       // and keep writing segments having never been told CI cannot guard them.
-      // `segmented` states the fact the CLI needs without re-deriving it — a
-      // second probe would read the root before the no-follow checks above.
       return {
         decision: 'refuse-ignored',
-        segmented: true,
         reason: `forest mode is already active, BUT ${enabledViolation}; restore this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
         warnings: [CI_COVERAGE_WARNING],
       };
@@ -224,7 +221,6 @@ export function planEnable(dir = ADLC_DIR) {
     // path needs the disclosure every bit as much as a fresh activation.
     return {
       decision: 'already-enabled',
-      segmented: true,
       reason: 'forest mode is already active for this repository',
       warnings: [CI_COVERAGE_WARNING],
     };

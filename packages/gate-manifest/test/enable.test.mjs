@@ -682,21 +682,26 @@ describe('disclosure follows segmentation, not the decision', () => {
     } finally { clean(root); }
   });
 
-  it('AC9: a keyless refusal on an ALREADY-segmented repo discloses, in both modes', () => {
-    for (const args of [[], ['--json']]) {
+  it('AC9: the keyless refusal stays FIRST and does no repository work — a documented disclosure gap', () => {
+    // Deriving the disclosure here would require determining segmentation, and
+    // every safe way to do that reads the root: it turns an immediate refusal
+    // into an unbounded read of a large manifest, and downgrades a planning
+    // error from this gate failure (exit 2) to an operational one (exit 1).
+    // Precedence over EVERY plan refusal is the observable proof that no
+    // planning ran: a repo with no workspace at all still refuses keyless.
+    for (const [label, setup] of [
+      ['already segmented', (root, dir) => { enable(dir, { write: true }); }],
+      ['no workspace', (root) => { rmSync(join(root, '.adlc'), { recursive: true }); }],
+      ['live root', (root, dir) => { writeFileSync(join(dir, 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`); }],
+    ]) {
       const { root, dir } = gitRepo({ gitignore: NEGATED });
       try {
-        enable(dir, { write: true });
-        const r = runBinKeyless(root, ...args);
-        assert.equal(r.status, 2, `keyless must still refuse (${args.join(' ') || 'human'})`);
-        if (args.includes('--json')) {
-          let parsed;
-          assert.doesNotThrow(() => { parsed = JSON.parse(r.stdout); }, 'still exactly one JSON document');
-          assert.equal(parsed.decision, 'refuse-keyless');
-          assert.ok(hasCiWarning(parsed), 'keyless refusal on a segmented repo must disclose');
-        } else {
-          assert.ok(`${r.stdout}${r.stderr}`.includes(CI_WARNING_CODE), 'human keyless refusal must disclose');
-        }
+        setup(root, dir);
+        const r = runBinKeyless(root, '--json');
+        assert.equal(r.status, 2, `${label}: keyless must refuse with the gate exit code, never an operational one`);
+        const parsed = JSON.parse(r.stdout);
+        assert.equal(parsed.decision, 'refuse-keyless', `${label}: keyless outranks every plan refusal`);
+        assert.ok(!hasCiWarning(parsed), `${label}: the keyless path deliberately does not disclose`);
       } finally { clean(root); }
     }
   });
@@ -719,31 +724,7 @@ describe('disclosure follows segmentation, not the decision', () => {
 // pointing at a huge file or a non-terminating device would be consumed before
 // the refusal it exists to trigger. The plan's own validated `segmented` is
 // the only safe source.
-describe('the keyless disclosure never reads through a symlink', () => {
-  const symlinkCases = [
-    ['root manifest', (dir, target) => symlinkSync(target, join(dir, 'manifest.jsonl'))],
-    ['manifest.d', (dir, target) => symlinkSync(target, join(dir, 'manifest.d'))],
-  ];
-
-  for (const [label, plant] of symlinkCases) {
-    it(`AC11: refuses a symlinked ${label} under a keyless run without following it`, () => {
-      const { root, dir } = gitRepo({ gitignore: NEGATED });
-      const decoy = join(root, 'decoy-target');
-      try {
-        writeFileSync(decoy, 'x'.repeat(1024));
-        plant(dir, decoy);
-        const r = runBinKeyless(root, '--json');
-        assert.notEqual(r.status, 0, `a symlinked ${label} must never succeed`);
-        // Whatever it refuses with, it must not claim the repo is segmented —
-        // that claim could only come from reading through the link.
-        if (r.stdout.trim()) {
-          const parsed = JSON.parse(r.stdout);
-          assert.ok(!hasCiWarning(parsed), `a symlinked ${label} must not produce a segmentation-derived warning`);
-        }
-      } finally { clean(root); }
-    });
-  }
-
+describe('segmentation is never inferred through a symlink', () => {
   it('AC12: planEnable itself refuses a symlinked root before any content read', () => {
     const { root, dir } = gitRepo({ gitignore: NEGATED });
     const decoy = join(root, 'decoy-target');
@@ -752,7 +733,6 @@ describe('the keyless disclosure never reads through a symlink', () => {
       symlinkSync(decoy, join(dir, 'manifest.jsonl'));
       const plan = planEnable(dir, { cwd: root });
       assert.match(plan.decision, /^refuse-/, 'a symlinked root must refuse');
-      assert.ok(!plan.segmented, 'segmentation must never be inferred through a symlink');
       assert.ok(!hasCiWarning(plan), 'and no disclosure derived from it');
     } finally { clean(root); }
   });

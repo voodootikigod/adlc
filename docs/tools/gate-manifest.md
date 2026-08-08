@@ -170,6 +170,14 @@ only, so the append-only enforcement the root gets does **not** extend to
 `.adlc/manifest.d/*.jsonl`. A pull request that rewrites, truncates, reorders
 or deletes committed segment evidence is not currently detected by CI.
 
+One gap in the disclosure itself: a run refused for a missing
+`ADLC_MANIFEST_KEY` does **not** carry the warning, even on a repository
+already in forest mode. That refusal deliberately returns before reading
+anything, and determining segmentation would mean reading the root manifest —
+turning an immediate refusal into an unbounded read and downgrading a planning
+error from a gate failure to an operational one. The warning is still heard at
+activation and on every keyed run.
+
 This is a missing guard, not a lost one — forest mode never had the coverage,
 and single-file repositories are unaffected. It closes when the forest CI gate
 ships (spec §9.1–9.3), after which the warning goes away. Until then, weigh it
