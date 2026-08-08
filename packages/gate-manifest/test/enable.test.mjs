@@ -651,14 +651,13 @@ describe('enable discloses that CI cannot yet guard segments', () => {
   });
 });
 
-// Cross-model review finding (codex, medium, confidence 0.99): the disclosure
-// keyed off the DECISION, but `refuse-ignored` is returned from inside
-// `if (isSegmentedRepo(dir))` when ignore rules drift after activation — a
-// repository that is in forest mode RIGHT NOW and therefore exposed. The
-// keyless precheck refuses even earlier, before enable() is called at all.
-// In both states the operator fixes the immediate complaint and keeps writing
-// segments, never told that committed segment rewrites are invisible to CI.
-// Disclosure must follow "is this repo segmented", not "did this run succeed".
+// Disclosure must follow "is this repository segmented", not "did this run
+// succeed". Keying it off the decision misses two states: `refuse-ignored` is
+// returned from inside `if (isSegmentedRepo(dir))` when ignore rules drift
+// after activation, and the CLI's keyless precheck returns before enable() is
+// called at all. Both describe a repository in forest mode, writing segments
+// right now. In each the operator fixes the immediate complaint and continues,
+// never told that committed segment rewrites are invisible to CI.
 describe('disclosure follows segmentation, not the decision', () => {
   it('AC7: already-enabled WITH gitignore drift still discloses — it is segmented and exposed', () => {
     const { root, dir } = gitRepo({ gitignore: NEGATED });
@@ -710,6 +709,51 @@ describe('disclosure follows segmentation, not the decision', () => {
       const parsed = JSON.parse(r.stdout);
       assert.equal(parsed.decision, 'refuse-keyless');
       assert.ok(!hasCiWarning(parsed), 'a repo that is not segmented is not exposed, so no warning');
+    } finally { clean(root); }
+  });
+});
+
+// The keyless refusal returns before enable() runs, so the disclosure needs
+// segmentation from somewhere. Deriving it from a second, direct probe reads
+// the root manifest BEFORE planEnable's no-follow refusals — a symlinked root
+// pointing at a huge file or a non-terminating device would be consumed before
+// the refusal it exists to trigger. The plan's own validated `segmented` is
+// the only safe source.
+describe('the keyless disclosure never reads through a symlink', () => {
+  const symlinkCases = [
+    ['root manifest', (dir, target) => symlinkSync(target, join(dir, 'manifest.jsonl'))],
+    ['manifest.d', (dir, target) => symlinkSync(target, join(dir, 'manifest.d'))],
+  ];
+
+  for (const [label, plant] of symlinkCases) {
+    it(`AC11: refuses a symlinked ${label} under a keyless run without following it`, () => {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      const decoy = join(root, 'decoy-target');
+      try {
+        writeFileSync(decoy, 'x'.repeat(1024));
+        plant(dir, decoy);
+        const r = runBinKeyless(root, '--json');
+        assert.notEqual(r.status, 0, `a symlinked ${label} must never succeed`);
+        // Whatever it refuses with, it must not claim the repo is segmented —
+        // that claim could only come from reading through the link.
+        if (r.stdout.trim()) {
+          const parsed = JSON.parse(r.stdout);
+          assert.ok(!hasCiWarning(parsed), `a symlinked ${label} must not produce a segmentation-derived warning`);
+        }
+      } finally { clean(root); }
+    });
+  }
+
+  it('AC12: planEnable itself refuses a symlinked root before any content read', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    const decoy = join(root, 'decoy-target');
+    try {
+      writeFileSync(decoy, `${JSON.stringify({ seq: 1, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`);
+      symlinkSync(decoy, join(dir, 'manifest.jsonl'));
+      const plan = planEnable(dir, { cwd: root });
+      assert.match(plan.decision, /^refuse-/, 'a symlinked root must refuse');
+      assert.ok(!plan.segmented, 'segmentation must never be inferred through a symlink');
+      assert.ok(!hasCiWarning(plan), 'and no disclosure derived from it');
     } finally { clean(root); }
   });
 });

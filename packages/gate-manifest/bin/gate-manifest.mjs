@@ -8,8 +8,7 @@ import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
-import { enable, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
-import { isSegmentedRepo } from '../lib/lineage.mjs';
+import { enable, planEnable, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
 import { adopt } from '../lib/adopt.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
@@ -236,16 +235,28 @@ if (verb === 'enable') {
   // the moment to surface that — refuse unless the operator opts into
   // single-checkout keyless mode deliberately. Key resolution is a bin
   // concern (key-hermeticity: libraries never read the environment).
+  // Planned BEFORE the keyless precheck so the disclosure below reads a
+  // VALIDATED repository. planEnable writes nothing and performs the
+  // workspace, root-manifest and manifest.d lstat refusals first, so a
+  // symlinked root is rejected rather than followed. Probing segmentation
+  // directly here instead would read manifest.jsonl through that symlink —
+  // an attacker-controlled target (a huge file or a non-terminating device)
+  // would be consumed before the refusal it was supposed to trigger.
+  let plan;
+  try {
+    plan = planEnable(flags.dir);
+  } catch (err) {
+    opError(err.message);
+  }
   if (getKey(process.env) === null && !flags['allow-keyless']) {
     const keylessReason = 'no ADLC_MANIFEST_KEY is configured. Keyless forest mode is single-checkout only, PERMANENTLY: '
       + 'keyless-minted segments can never be authenticated by a later key, so every other clone of a branch fails closed on '
       + 'its first write. Configure the signing key first, or re-run with --allow-keyless to accept single-checkout mode deliberately.';
-    // This precheck refuses BEFORE enable() is ever called, so an
-    // already-segmented repository would otherwise never hear the CI-coverage
-    // disclosure (cross-model review finding). Segmentation is the trigger,
-    // not the decision — asking the resolver directly costs one cheap read and
-    // leaves the refusal precedence untouched.
-    const keylessWarnings = isSegmentedRepo(flags.dir) ? [CI_COVERAGE_WARNING] : [];
+    // This refusal returns before enable() runs, so an ALREADY-segmented repo
+    // would otherwise never hear the disclosure. `segmented` is the plan's own
+    // validated answer; greenfield deliberately does not qualify, because a
+    // refused activation leaves the repo single-file and unexposed.
+    const keylessWarnings = plan.segmented ? [CI_COVERAGE_WARNING] : [];
     if (flags.json) {
       printJson({ decision: 'refuse-keyless', reason: keylessReason, ...(keylessWarnings.length ? { warnings: keylessWarnings } : {}) });
       process.exit(2);
