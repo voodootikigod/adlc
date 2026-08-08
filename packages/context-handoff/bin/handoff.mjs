@@ -158,10 +158,9 @@ Dropping --ticket from a ticket-bound deny, or refreshing a consumed one, exits 
   const key = requireKeyOrExit();
   lockOrExit(root, sessionId);
 
-  // `write` is the refresh path, so the deny has to end up bound to the final
-  // this run writes. Decide that before touching either file: ensureDenyMarker
-  // leaves an existing marker alone, and a final written against binds the
-  // marker still disagrees with wedges resume until a host runs `repair`.
+  // Validate marker policy before mutating anything. Deny binds must end up on
+  // the final this run writes, but we write the final FIRST so a failed final
+  // cannot leave a rebound/created deny with no checkpoint.
   const existing = readDenyMarker(root, sessionId);
   if (existing.ok && existing.record.status === 'consumed') {
     opError(
@@ -174,27 +173,6 @@ Dropping --ticket from a ticket-bound deny, or refreshing a consumed one, exits 
     );
   }
 
-  const deny = ensureDenyMarker(root, {
-    sessionId,
-    ticketId: planned.ticket_id,
-    contentHash: planned.content_hash,
-    host: planned.host,
-  });
-  if (!deny.ok) opError(`failed to ensure deny marker: ${deny.reason}`);
-
-  // Rebind whatever ensure left in place, so final and marker agree.
-  const marker = readDenyMarker(root, sessionId);
-  if (!marker.ok) opError(`deny marker unreadable after ensure: ${marker.reason}`);
-  const stale =
-    marker.record.ticket_id !== planned.ticket_id ||
-    marker.record.content_hash !== planned.content_hash;
-  let priorRecord = null;
-  if (stale) {
-    const rebound = rebindOpenDeny(root, sessionId, marker.record, planned);
-    if (!rebound.ok) opError(`failed to rebind deny marker: ${rebound.error}`);
-    priorRecord = marker.record;
-  }
-
   const priorFinal = readFinal(root, sessionId);
   const written = writeFinal(root, {
     sessionId,
@@ -203,6 +181,36 @@ Dropping --ticket from a ticket-bound deny, or refreshing a consumed one, exits 
     host: planned.host,
   });
   if (!written.ok) opError(`failed to write final: ${written.error}`);
+
+  const deny = ensureDenyMarker(root, {
+    sessionId,
+    ticketId: planned.ticket_id,
+    contentHash: planned.content_hash,
+    host: planned.host,
+  });
+  if (!deny.ok) {
+    restoreFinal(root, sessionId, priorFinal);
+    opError(`failed to ensure deny marker: ${deny.reason}`);
+  }
+
+  // Rebind whatever ensure left in place, so final and marker agree.
+  const marker = readDenyMarker(root, sessionId);
+  if (!marker.ok) {
+    restoreFinal(root, sessionId, priorFinal);
+    opError(`deny marker unreadable after ensure: ${marker.reason}`);
+  }
+  const stale =
+    marker.record.ticket_id !== planned.ticket_id ||
+    marker.record.content_hash !== planned.content_hash;
+  let priorRecord = null;
+  if (stale) {
+    const rebound = rebindOpenDeny(root, sessionId, marker.record, planned);
+    if (!rebound.ok) {
+      restoreFinal(root, sessionId, priorFinal);
+      opError(`failed to rebind deny marker: ${rebound.error}`);
+    }
+    priorRecord = marker.record;
+  }
 
   const recorded = recordOrExit(
     {

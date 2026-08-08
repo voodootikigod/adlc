@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -226,6 +226,40 @@ test('write removes the final it created when the first evidence append fails', 
     // The marker stays: the sentinel already names s-fresh, so deleting it
     // would trade an open deny for a D3 nobody can clear.
     assert.equal(readDeny(cwd, 's-fresh').status, 'open');
+  });
+});
+
+
+test('a failed final write leaves an existing deny\'s binds alone', () => {
+  withTempRepo((cwd) => {
+    run(['write', '--session', 's-final-fail', '--ticket', 'T155', '--write', '--json'], {
+      cwd,
+      env: KEYED,
+    });
+    const denyBefore = readDeny(cwd, 's-final-fail');
+    const finalPath = join(cwd, '.adlc', 'handoffs', 'finals', 's-final-fail.json');
+    // Turn the final path into a directory so the atomic rename fails (EISDIR)
+    // after the prior successful write — deny must not rebind ahead of that.
+    unlinkSync(finalPath);
+    mkdirSync(finalPath);
+
+    const r = run(
+      [
+        'write',
+        '--session',
+        's-final-fail',
+        '--ticket',
+        'T155',
+        '--content-hash',
+        'never-landed',
+        '--write',
+        '--json',
+      ],
+      { cwd, env: KEYED, expectOk: false },
+    );
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /failed to write final/);
+    assert.deepEqual(readDeny(cwd, 's-final-fail'), denyBefore);
   });
 });
 
