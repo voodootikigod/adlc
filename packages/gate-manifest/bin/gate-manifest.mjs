@@ -8,7 +8,7 @@ import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
-import { enable } from '../lib/enable.mjs';
+import { enable, isMarkerActivated, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
 import { adopt } from '../lib/adopt.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
@@ -239,19 +239,19 @@ if (verb === 'enable') {
     const keylessReason = 'no ADLC_MANIFEST_KEY is configured. Keyless forest mode is single-checkout only, PERMANENTLY: '
       + 'keyless-minted segments can never be authenticated by a later key, so every other clone of a branch fails closed on '
       + 'its first write. Configure the signing key first, or re-run with --allow-keyless to accept single-checkout mode deliberately.';
-    // This refusal stays FIRST and does no repository work. Deriving the
-    // CI-coverage disclosure here would mean determining segmentation, and
-    // every safe way to do that reads the root: a full plan turns an
-    // immediate refusal into an unbounded read of a large manifest and
-    // downgrades a planning error from this gate failure (exit 2) to an
-    // operational one (exit 1). An already-segmented repo run without a key
-    // therefore does NOT hear the disclosure — a deliberate gap, accepted
-    // because it is heard at activation and on every keyed run, and because
-    // the disclosure is interim: the forest CI gate removes it entirely.
+    // This refusal stays FIRST and must not gain a failure mode: a full plan
+    // here would turn an immediate refusal into an unbounded read of a large
+    // root manifest, and a planning error would downgrade this gate failure
+    // (exit 2) to an operational one (exit 1). isMarkerActivated is the
+    // bounded, no-follow, never-throwing probe for exactly this position —
+    // keyless adopters (activated with --allow-keyless) would otherwise hit
+    // this refusal on every run and never hear the disclosure at all.
+    const keylessWarnings = isMarkerActivated(flags.dir) ? [CI_COVERAGE_WARNING] : [];
     if (flags.json) {
-      printJson({ decision: 'refuse-keyless', reason: keylessReason });
+      printJson({ decision: 'refuse-keyless', reason: keylessReason, ...(keylessWarnings.length ? { warnings: keylessWarnings } : {}) });
       process.exit(2);
     }
+    for (const warning of keylessWarnings) console.log(`warning [${warning.code}]: ${warning.message}`);
     gateFail(`enable refused: ${keylessReason}`);
   }
   let out;

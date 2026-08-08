@@ -12,7 +12,7 @@
 // from lineage.mjs, changes no dispatch site (those files are this ticket's
 // frozen rails).
 
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, relative, sep } from 'node:path';
@@ -132,6 +132,49 @@ function gitignoreContractViolation(dir) {
 // no-follow refusal below needs its own look at the link itself.
 function lstatIsSymlink(p) {
   try { return lstatSync(p).isSymbolicLink(); } catch { return false; }
+}
+
+// The most a bounded marker read may consume. The marker is a two-field JSON
+// object; anything larger is not one, so refusing to open it costs nothing
+// real and removes "attacker picks the read size" from the question.
+const MARKER_READ_LIMIT = 4096;
+
+/**
+ * A BOUNDED, no-follow answer to "is this repository already in forest mode",
+ * for callers that must not perform open-ended work — notably the CLI's
+ * keyless refusal, which returns before any planning happens.
+ *
+ * Deliberately narrower than lineage.mjs's isSegmentedRepo. That predicate is
+ * marker OR cutover-tailed-root, and the second half reads the ENTIRE root
+ * manifest through readRawLines, following symlinks: unbounded work, on a
+ * path an attacker can point at a huge file or a non-terminating device.
+ * Here every component is lstat-ed rather than followed, and the marker must
+ * be a regular file within MARKER_READ_LIMIT before it is opened at all.
+ *
+ * The tradeoff is explicit: a cutover-tailed repo whose marker was lost reads
+ * as false. That is the safe direction — it under-reports a disclosure rather
+ * than reading a hostile root, and the cutover ceremony writes the marker, so
+ * a missing one is the degraded case and not the norm. Never throws; a caller
+ * on a refusal path must not have its exit code changed by this probe.
+ */
+export function isMarkerActivated(dir = ADLC_DIR) {
+  const marker = markerPath(dir);
+  for (const path of [dir, segmentDirPath(dir), marker]) {
+    if (lstatIsSymlink(path)) return false;
+  }
+  let stats;
+  try {
+    stats = lstatSync(marker);
+  } catch {
+    return false;
+  }
+  if (!stats.isFile() || stats.size > MARKER_READ_LIMIT) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(marker, 'utf8'));
+    return parsed?.format === MARKER.format && parsed?.version === MARKER.version;
+  } catch {
+    return false;
+  }
 }
 
 /**

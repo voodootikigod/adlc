@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { planEnable, enable, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
+import { planEnable, enable, isMarkerActivated, MARKER_NEGATION_LINES } from '../lib/enable.mjs';
 import { isSegmentedRepo, markerPath, lineagePath } from '../lib/lineage.mjs';
 import { appendManifestEntry } from '../lib/record.mjs';
 import { readRawLines } from '../lib/forest.mjs';
@@ -682,15 +682,33 @@ describe('disclosure follows segmentation, not the decision', () => {
     } finally { clean(root); }
   });
 
-  it('AC9: the keyless refusal stays FIRST and does no repository work — a documented disclosure gap', () => {
-    // Deriving the disclosure here would require determining segmentation, and
-    // every safe way to do that reads the root: it turns an immediate refusal
-    // into an unbounded read of a large manifest, and downgrades a planning
-    // error from this gate failure (exit 2) to an operational one (exit 1).
-    // Precedence over EVERY plan refusal is the observable proof that no
-    // planning ran: a repo with no workspace at all still refuses keyless.
+  it('AC9: a keyless refusal on an ALREADY-segmented repo discloses, in both modes', () => {
+    // Keyless adopters (activated with --allow-keyless) hit this refusal on
+    // every subsequent run, so omitting the disclosure here would mean they
+    // never hear it at all.
+    for (const args of [[], ['--json']]) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        enable(dir, { write: true });
+        const r = runBinKeyless(root, ...args);
+        assert.equal(r.status, 2, `keyless must still refuse (${args.join(' ') || 'human'})`);
+        if (args.includes('--json')) {
+          let parsed;
+          assert.doesNotThrow(() => { parsed = JSON.parse(r.stdout); }, 'still exactly one JSON document');
+          assert.equal(parsed.decision, 'refuse-keyless');
+          assert.ok(hasCiWarning(parsed), 'keyless refusal on a segmented repo must disclose');
+        } else {
+          assert.ok(`${r.stdout}${r.stderr}`.includes(CI_WARNING_CODE), 'human keyless refusal must disclose');
+        }
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC9b: the keyless refusal still outranks every plan refusal, at exit 2', () => {
+    // The probe must not become a planning step: a repo with no workspace at
+    // all still refuses keyless, and a planning-shaped problem never
+    // downgrades this gate failure to an operational exit 1.
     for (const [label, setup] of [
-      ['already segmented', (root, dir) => { enable(dir, { write: true }); }],
       ['no workspace', (root) => { rmSync(join(root, '.adlc'), { recursive: true }); }],
       ['live root', (root, dir) => { writeFileSync(join(dir, 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null })}\n`); }],
     ]) {
@@ -698,12 +716,53 @@ describe('disclosure follows segmentation, not the decision', () => {
       try {
         setup(root, dir);
         const r = runBinKeyless(root, '--json');
-        assert.equal(r.status, 2, `${label}: keyless must refuse with the gate exit code, never an operational one`);
+        assert.equal(r.status, 2, `${label}: keyless refusal is a gate failure, never operational`);
         const parsed = JSON.parse(r.stdout);
         assert.equal(parsed.decision, 'refuse-keyless', `${label}: keyless outranks every plan refusal`);
-        assert.ok(!hasCiWarning(parsed), `${label}: the keyless path deliberately does not disclose`);
+        assert.ok(!hasCiWarning(parsed), `${label}: not segmented, so no disclosure`);
       } finally { clean(root); }
     }
+  });
+
+  it('AC9c: the probe is no-follow and bounded — it never reads a hostile marker path', () => {
+    const cases = [
+      ['symlinked manifest.d', (root, dir) => {
+        const decoy = join(root, 'decoy-dir');
+        mkdirSync(decoy, { recursive: true });
+        writeFileSync(join(decoy, '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+        symlinkSync(decoy, join(dir, 'manifest.d'));
+      }],
+      ['symlinked marker file', (root, dir) => {
+        const decoy = join(root, 'decoy-marker.json');
+        writeFileSync(decoy, JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+        mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+        symlinkSync(decoy, join(dir, 'manifest.d', '.store.json'));
+      }],
+      ['oversized marker', (root, dir) => {
+        mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+        writeFileSync(join(dir, 'manifest.d', '.store.json'),
+          `${JSON.stringify({ format: 'adlc-manifest-segments', version: 1, pad: 'x'.repeat(8192) })}`);
+      }],
+    ];
+    for (const [label, plant] of cases) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        plant(root, dir);
+        assert.equal(isMarkerActivated(dir), false, `${label}: must not report activated`);
+        const r = runBinKeyless(root, '--json');
+        assert.equal(r.status, 2, `${label}: still refuses`);
+        assert.ok(!hasCiWarning(JSON.parse(r.stdout)), `${label}: no disclosure derived from it`);
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC9d: the probe recognizes a genuine marker and never throws on a missing one', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      assert.equal(isMarkerActivated(dir), false, 'absent marker is simply false, not a throw');
+      enable(dir, { write: true });
+      assert.equal(isMarkerActivated(dir), true, 'a real activation is recognized');
+    } finally { clean(root); }
   });
 
   it('AC10: a keyless refusal on a NON-segmented repo still does not disclose', () => {

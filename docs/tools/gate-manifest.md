@@ -170,13 +170,15 @@ only, so the append-only enforcement the root gets does **not** extend to
 `.adlc/manifest.d/*.jsonl`. A pull request that rewrites, truncates, reorders
 or deletes committed segment evidence is not currently detected by CI.
 
-One gap in the disclosure itself: a run refused for a missing
-`ADLC_MANIFEST_KEY` does **not** carry the warning, even on a repository
-already in forest mode. That refusal deliberately returns before reading
-anything, and determining segmentation would mean reading the root manifest —
-turning an immediate refusal into an unbounded read and downgrading a planning
-error from a gate failure to an operational one. The warning is still heard at
-activation and on every keyed run.
+The warning is carried by every outcome that describes a repository actually
+in forest mode — a fresh activation, an already-enabled run, an already-active
+run refused for gitignore drift, and a run refused for a missing
+`ADLC_MANIFEST_KEY`. That last one matters for repositories activated with
+`--allow-keyless`, which meet that refusal on every subsequent run. It is
+detected by a bounded, no-follow read of the activation marker alone, so the
+refusal cannot be turned into an unbounded read of a hostile root; a
+cutover-tailed repository whose marker was lost therefore reads as
+not-activated and stays silent.
 
 This is a missing guard, not a lost one — forest mode never had the coverage,
 and single-file repositories are unaffected. It closes when the forest CI gate
