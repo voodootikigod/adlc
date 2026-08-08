@@ -10,19 +10,24 @@
 // bounded window of its own transcript and calls computeDepthSignal() on the
 // raw text, then isDegraded() against a threshold.
 //
+// Absolute hard-band denial consumes `@adlc/context-handoff` `isHardDegraded`
+// (inclusive `>=` against HARD_*). Local DEFAULT_* aliases are re-exports of
+// HARD_DEPTH / HARD_BYTES so plugins cannot drift from thresholds.mjs.
+//
 // Deliberately NO filesystem I/O here — staging a bounded window (so this
 // stays cheap on an arbitrarily long transcript) is the caller's job, exactly
 // as it already is in plugins/adlc-claude-code/hooks/adlc-hook.mjs's flail()
 // mode (tailBytes/fileSize). Keeping I/O out of this module makes it trivially
 // unit-testable and reusable by any Path-A harness with its own I/O primitives.
 
-/** Tool-call count past which a session is considered context-degraded. */
-export const DEFAULT_DEPTH_THRESHOLD = 40;
+import { HARD_BYTES, HARD_DEPTH, isHardDegraded } from '@adlc/context-handoff';
 
-/** Transcript byte count past which a session is considered context-degraded
- * (mirrors the 256 KiB MAX_SCAN_BYTES window flail-detector's CC hook already
- * scans, per issue #48's "reuse flail-detector's existing ... approach"). */
-export const DEFAULT_BYTES_THRESHOLD = 256 * 1024;
+/** Tool-call count at which a session is considered context-degraded (HARD_DEPTH). */
+export const DEFAULT_DEPTH_THRESHOLD = HARD_DEPTH;
+
+/** Transcript byte count at which a session is considered context-degraded
+ * (HARD_BYTES — 256 KiB). */
+export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
 
 /**
  * Count tool-invocation occurrences in transcript text. Two shapes are
@@ -63,13 +68,17 @@ export function computeDepthSignal({ text, bytes } = {}) {
 }
 
 /**
- * Is the session context-degraded? True when EITHER signal is strictly past
- * its threshold (mirrors flail-detector's detectSizeExceeded: `bytes >
- * maxBytes`, not `>=` — exactly at the threshold is not yet degraded).
+ * Is the session context-degraded? True when any available hard-band signal is
+ * at or past its threshold (inclusive `>=`, matching context-handoff
+ * `evaluateBands` / `isHardDegraded`).
+ *
+ * Default thresholds use `isHardDegraded` directly. Custom CLI/env thresholds
+ * keep the same inclusive edge rule locally (no strict `>`).
  *
  * @param {object} opts
- * @param {number} opts.depth
- * @param {number} opts.sessionBytes
+ * @param {number} [opts.depth]
+ * @param {number} [opts.sessionBytes]
+ * @param {number} [opts.pct] - optional percent signal (defaults path only)
  * @param {number} [opts.depthThreshold]
  * @param {number} [opts.bytesThreshold]
  * @returns {boolean}
@@ -77,10 +86,16 @@ export function computeDepthSignal({ text, bytes } = {}) {
 export function isDegraded({
   depth,
   sessionBytes,
+  pct,
   depthThreshold = DEFAULT_DEPTH_THRESHOLD,
   bytesThreshold = DEFAULT_BYTES_THRESHOLD,
-}) {
-  const depthDegraded = typeof depth === 'number' && depth > depthThreshold;
-  const bytesDegraded = typeof sessionBytes === 'number' && sessionBytes > bytesThreshold;
+} = {}) {
+  const usingDefaults =
+    depthThreshold === DEFAULT_DEPTH_THRESHOLD && bytesThreshold === DEFAULT_BYTES_THRESHOLD;
+  if (usingDefaults) {
+    return isHardDegraded({ depth, bytes: sessionBytes, pct });
+  }
+  const depthDegraded = typeof depth === 'number' && depth >= depthThreshold;
+  const bytesDegraded = typeof sessionBytes === 'number' && sessionBytes >= bytesThreshold;
   return depthDegraded || bytesDegraded;
 }

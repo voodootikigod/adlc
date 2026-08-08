@@ -1525,7 +1525,9 @@ function buildgate(input) {
   }
   const depth = countToolCallsForBuildGate(windowText);
 
-  const degraded = depth > BUILD_GATE_DEPTH_THRESHOLD || sessionBytes > BUILD_GATE_BYTES_THRESHOLD;
+  // Inclusive >= — KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs /
+  // @adlc/context-handoff isHardDegraded (HARD_DEPTH / HARD_BYTES).
+  const degraded = depth >= BUILD_GATE_DEPTH_THRESHOLD || sessionBytes >= BUILD_GATE_BYTES_THRESHOLD;
   if (!degraded) return; // high-risk, but this session isn't deep yet → allow
 
   const bypass = process.env.ADLC_BUILD_GATE_BYPASS === '1';
