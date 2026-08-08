@@ -78,6 +78,7 @@ export function computeDepthSignal({ text, bytes } = {}) {
  * @param {object} opts
  * @param {number} [opts.depth]
  * @param {number} [opts.sessionBytes]
+ * @param {number} [opts.bytes] - alias for sessionBytes (computeDepthSignal field)
  * @param {number} [opts.pct] - optional percent signal (defaults path only)
  * @param {number} [opts.depthThreshold]
  * @param {number} [opts.bytesThreshold]
@@ -86,16 +87,19 @@ export function computeDepthSignal({ text, bytes } = {}) {
 export function isDegraded({
   depth,
   sessionBytes,
+  bytes,
   pct,
   depthThreshold = DEFAULT_DEPTH_THRESHOLD,
   bytesThreshold = DEFAULT_BYTES_THRESHOLD,
 } = {}) {
+  // Prefer explicit sessionBytes; accept computeDepthSignal()'s `bytes` field too.
+  const resolvedBytes = typeof sessionBytes === 'number' ? sessionBytes : bytes;
   const usingDefaults =
     depthThreshold === DEFAULT_DEPTH_THRESHOLD && bytesThreshold === DEFAULT_BYTES_THRESHOLD;
   if (usingDefaults) {
-    return isHardDegraded({ depth, bytes: sessionBytes, pct });
+    return isHardDegraded({ depth, bytes: resolvedBytes, pct });
   }
   const depthDegraded = typeof depth === 'number' && depth >= depthThreshold;
-  const bytesDegraded = typeof sessionBytes === 'number' && sessionBytes >= bytesThreshold;
+  const bytesDegraded = typeof resolvedBytes === 'number' && resolvedBytes >= bytesThreshold;
   return depthDegraded || bytesDegraded;
 }

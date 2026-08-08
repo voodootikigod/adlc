@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { HARD_BYTES, HARD_DEPTH } from '@adlc/context-handoff';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -334,4 +335,34 @@ test('the PreToolUse matcher includes a buildgate hook entry (excludes Bash)', (
   );
   assert.ok(entry, 'a PreToolUse buildgate hook entry exists');
   assert.equal(/\bBash\b/.test(entry.matcher), false);
+});
+
+test('KEEP-IN-SYNC: BUILD_GATE_* literals track HARD_DEPTH / HARD_BYTES', () => {
+  const src = readFileSync(HOOK, 'utf8');
+  const depth = src.match(/const BUILD_GATE_DEPTH_THRESHOLD = (\d+);/);
+  const bytes = src.match(/const BUILD_GATE_BYTES_THRESHOLD = ([^;]+);/);
+  assert.ok(depth, 'depth constant present');
+  assert.ok(bytes, 'bytes constant present');
+  assert.equal(Number(depth[1]), HARD_DEPTH);
+  assert.equal(Function(`"use strict"; return (${bytes[1]});`)(), HARD_BYTES);
+  assert.match(src, /depth >= BUILD_GATE_DEPTH_THRESHOLD/);
+  assert.match(src, /sessionBytes >= BUILD_GATE_BYTES_THRESHOLD/);
+});
+
+test('high-risk ticket at exact HARD_DEPTH is denied (inclusive edge)', () => {
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: HARD_DEPTH,
+  });
+  assert.equal(r.verdict, 'deny');
+});
+
+test('high-risk ticket just under HARD_DEPTH is allowed', () => {
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: HARD_DEPTH - 1,
+  });
+  assert.equal(r.verdict, 'allow');
 });
