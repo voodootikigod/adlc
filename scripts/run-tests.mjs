@@ -100,8 +100,22 @@ const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --module
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
 function packageSegments() {
   return readdirSync('packages', { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && existsSync(join('packages', entry.name, 'test')))
-    .map((entry) => [`packages/${entry.name}`, `node --test packages/${entry.name}/test/*.test.mjs`]);
+    .filter((entry) => entry.isDirectory() && (
+      existsSync(join('packages', entry.name, 'test'))
+      || existsSync(join('packages', entry.name, 'cli-test'))
+    ))
+    .map((entry) => {
+      const globs = [];
+      if (existsSync(join('packages', entry.name, 'test'))) {
+        globs.push(`packages/${entry.name}/test/*.test.mjs`);
+      }
+      // Slice-2+ CLI contract tests live outside test/ so they do not match
+      // T154's frozen `packages/context-handoff/test/**/*.test.mjs` rail glob.
+      if (existsSync(join('packages', entry.name, 'cli-test'))) {
+        globs.push(`packages/${entry.name}/cli-test/*.test.mjs`);
+      }
+      return [`packages/${entry.name}`, `node --test ${globs.join(' ')}`];
+    });
 }
 
 const SEGMENTS = [

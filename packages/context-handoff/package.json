@@ -1,7 +1,7 @@
 {
   "name": "@adlc/context-handoff",
   "version": "1.8.0",
-  "description": "Context-rot handoff — absolute band signals, session-terminal deny (D1–D3), and operator CLI for write/resume/bypass/repair/unlock (F3 continuity).",
+  "description": "Context-rot handoff \u2014 absolute band signals, session-terminal deny (D1\u2013D3), and operator CLI for write/resume/bypass/repair/unlock (F3 continuity).",
   "type": "module",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
@@ -46,7 +46,7 @@
     "@adlc/gate-manifest": "1.8.0"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs cli-test/*.test.mjs"
   },
   "engines": {
     "node": ">=18"
