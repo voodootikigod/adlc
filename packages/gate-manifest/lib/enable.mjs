@@ -165,9 +165,18 @@ export function isMarkerActivated(dir = ADLC_DIR) {
   return parsed?.format === MARKER.format && parsed?.version === MARKER.version;
 }
 
-// How much of the root's tail a bounded cutover probe may read. The cutover
-// entry is a single JSON line; a window this size holds it many times over.
-const TAIL_PROBE_BYTES = 8192;
+// How much of the root's tail a bounded cutover probe may read.
+//
+// Sized against the real distribution, not a guess: this repository's own
+// 99 KB / 176-entry ledger has a longest entry of ~6.7 KB, so an 8 KB window
+// left only a 20% margin before a final entry became undecidable. 64 KB gives
+// roughly an order of magnitude of headroom while staying a single bounded
+// read of fixed memory.
+//
+// The size matters because undecidable resolves to "warn" (see
+// isSegmentedBounded): too small a window turns ordinary ledgers with large
+// trailing entries into spurious warnings, and too large stops being a bound.
+const TAIL_PROBE_BYTES = 65536;
 
 /**
  * Whether the root manifest's LAST line is the cutover entry, read within a

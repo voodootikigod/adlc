@@ -887,3 +887,32 @@ describe('the bounded probe covers the whole segmented-mode invariant', () => {
     }
   });
 });
+
+// The undecidable region resolves to "warn", so its SIZE is a correctness
+// property: too narrow a window turns ordinary ledgers with large trailing
+// entries into spurious warnings. Pinned against the real distribution —
+// this repository's own ledger carries entries up to ~6.7 KB.
+describe('the tail window is sized so ordinary ledgers stay decidable', () => {
+  it('AC9i: a large single-file ledger with realistic entry sizes does not warn', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      const entries = Array.from({ length: 400 }, (_, i) =>
+        JSON.stringify({ seq: i + 1, gate: 'evidence', ts: '2026-01-01T00:00:00.000Z', pad: 'z'.repeat(6700), prev: 'x' }));
+      writeFileSync(join(dir, 'manifest.jsonl'), `${entries.join('\n')}\n`);
+      assert.equal(isSegmentedRepo(dir), false, 'production agrees this is single-file');
+      assert.equal(isSegmentedBounded(dir), false, 'so the probe must not warn about it');
+    } finally { clean(root); }
+  });
+
+  it('AC9j: a cutover tail is still found when the preceding entries are large', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      const entries = Array.from({ length: 50 }, (_, i) =>
+        JSON.stringify({ seq: i + 1, gate: 'evidence', pad: 'z'.repeat(6700), prev: 'x' }));
+      writeFileSync(join(dir, 'manifest.jsonl'),
+        `${entries.join('\n')}\n${JSON.stringify({ seq: 51, gate: 'manifest-cutover', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: 'x' })}\n`);
+      assert.equal(isSegmentedRepo(dir), true);
+      assert.equal(isSegmentedBounded(dir), true, 'and the probe must agree');
+    } finally { clean(root); }
+  });
+});
