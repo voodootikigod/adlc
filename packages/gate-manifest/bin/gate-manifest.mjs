@@ -8,7 +8,8 @@ import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
-import { enable } from '../lib/enable.mjs';
+import { enable, CI_COVERAGE_WARNING } from '../lib/enable.mjs';
+import { isSegmentedRepo } from '../lib/lineage.mjs';
 import { adopt } from '../lib/adopt.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
@@ -239,10 +240,17 @@ if (verb === 'enable') {
     const keylessReason = 'no ADLC_MANIFEST_KEY is configured. Keyless forest mode is single-checkout only, PERMANENTLY: '
       + 'keyless-minted segments can never be authenticated by a later key, so every other clone of a branch fails closed on '
       + 'its first write. Configure the signing key first, or re-run with --allow-keyless to accept single-checkout mode deliberately.';
+    // This precheck refuses BEFORE enable() is ever called, so an
+    // already-segmented repository would otherwise never hear the CI-coverage
+    // disclosure (cross-model review finding). Segmentation is the trigger,
+    // not the decision — asking the resolver directly costs one cheap read and
+    // leaves the refusal precedence untouched.
+    const keylessWarnings = isSegmentedRepo(flags.dir) ? [CI_COVERAGE_WARNING] : [];
     if (flags.json) {
-      printJson({ decision: 'refuse-keyless', reason: keylessReason });
+      printJson({ decision: 'refuse-keyless', reason: keylessReason, ...(keylessWarnings.length ? { warnings: keylessWarnings } : {}) });
       process.exit(2);
     }
+    for (const warning of keylessWarnings) console.log(`warning [${warning.code}]: ${warning.message}`);
     gateFail(`enable refused: ${keylessReason}`);
   }
   let out;
@@ -257,10 +265,13 @@ if (verb === 'enable') {
     printJson(out);
     process.exit(refused ? 2 : 0);
   }
-  if (refused) gateFail(`enable refused: ${out.reason}`);
-  // Human mode must surface what --json already carries. Printed BEFORE the
-  // pass() calls below, each of which exits.
+  // Human mode must surface what --json already carries, and this must run
+  // BEFORE both exits below: gateFail() for a refusal and pass() for success
+  // each terminate the process. An already-segmented repo can refuse (ignore
+  // drift) while still needing the disclosure, so printing after the refusal
+  // check would drop it exactly where it matters.
   for (const warning of out.warnings ?? []) console.log(`warning [${warning.code}]: ${warning.message}`);
+  if (refused) gateFail(`enable refused: ${out.reason}`);
   if (out.decision === 'already-enabled') pass(out.reason);
   if (out.written) pass(`forest mode enabled — wrote ${out.markerPath}`);
   pass(`dry-run: would write ${out.markerPath} to enable forest mode — re-run with --write to apply`);

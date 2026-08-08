@@ -207,9 +207,15 @@ export function planEnable(dir = ADLC_DIR) {
     // exists to enforce.
     const enabledViolation = gitignoreContractViolation(dir);
     if (enabledViolation !== null) {
+      // Warned despite being a REFUSAL (cross-model review finding): this
+      // branch is inside isSegmentedRepo, so the repository is in forest mode
+      // and exposed right now. Keying disclosure off the decision would let an
+      // operator fix the ignore drift and keep writing segments having never
+      // been told CI cannot guard them. Disclosure follows segmentation.
       return {
         decision: 'refuse-ignored',
         reason: `forest mode is already active, BUT ${enabledViolation}; restore this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
+        warnings: [CI_COVERAGE_WARNING],
       };
     }
     // Already segmented means segments are being written RIGHT NOW, so this
@@ -242,9 +248,10 @@ export function planEnable(dir = ADLC_DIR) {
       reason: `${violation}; add this block (order matters): ${MARKER_NEGATION_LINES.join(' , ')}`,
     };
   }
-  // Refusals deliberately carry NO warning: a refused repository is not in
-  // forest mode, and a warning attached to every outcome is noise that trains
-  // operators to skip warnings entirely.
+  // Refusals on a NON-segmented repository carry no warning: nothing is
+  // writing segments there, and a warning on every outcome is noise that
+  // trains operators to skip warnings entirely. The already-segmented
+  // refusal above is the deliberate exception.
   return { decision: 'greenfield', markerPath: markerPath(dir), marker: { ...MARKER }, warnings: [CI_COVERAGE_WARNING] };
 }
 

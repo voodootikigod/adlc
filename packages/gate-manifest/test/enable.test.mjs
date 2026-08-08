@@ -650,3 +650,66 @@ describe('enable discloses that CI cannot yet guard segments', () => {
     } finally { clean(root); }
   });
 });
+
+// Cross-model review finding (codex, medium, confidence 0.99): the disclosure
+// keyed off the DECISION, but `refuse-ignored` is returned from inside
+// `if (isSegmentedRepo(dir))` when ignore rules drift after activation — a
+// repository that is in forest mode RIGHT NOW and therefore exposed. The
+// keyless precheck refuses even earlier, before enable() is called at all.
+// In both states the operator fixes the immediate complaint and keeps writing
+// segments, never told that committed segment rewrites are invisible to CI.
+// Disclosure must follow "is this repo segmented", not "did this run succeed".
+describe('disclosure follows segmentation, not the decision', () => {
+  it('AC7: already-enabled WITH gitignore drift still discloses — it is segmented and exposed', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      enable(dir, { write: true });
+      writeFileSync(join(root, '.gitignore'), IGNORED);
+      const plan = planEnable(dir, { cwd: root });
+      assert.equal(plan.decision, 'refuse-ignored');
+      assert.match(plan.reason, /already active/, 'fixture must hit the already-segmented refusal, not the greenfield one');
+      assert.ok(hasCiWarning(plan), 'a segmented repo must disclose even when the run refuses');
+    } finally { clean(root); }
+  });
+
+  it('AC8: human mode prints the warning even when the run refuses', () => {
+    const { root, dir } = gitRepo({ gitignore: NEGATED });
+    try {
+      enable(dir, { write: true });
+      writeFileSync(join(root, '.gitignore'), IGNORED);
+      const r = runBin(root);
+      assert.equal(r.status, 2, 'still a gate failure');
+      assert.ok(`${r.stdout}${r.stderr}`.includes(CI_WARNING_CODE), 'the warning must survive the refusal path');
+    } finally { clean(root); }
+  });
+
+  it('AC9: a keyless refusal on an ALREADY-segmented repo discloses, in both modes', () => {
+    for (const args of [[], ['--json']]) {
+      const { root, dir } = gitRepo({ gitignore: NEGATED });
+      try {
+        enable(dir, { write: true });
+        const r = runBinKeyless(root, ...args);
+        assert.equal(r.status, 2, `keyless must still refuse (${args.join(' ') || 'human'})`);
+        if (args.includes('--json')) {
+          let parsed;
+          assert.doesNotThrow(() => { parsed = JSON.parse(r.stdout); }, 'still exactly one JSON document');
+          assert.equal(parsed.decision, 'refuse-keyless');
+          assert.ok(hasCiWarning(parsed), 'keyless refusal on a segmented repo must disclose');
+        } else {
+          assert.ok(`${r.stdout}${r.stderr}`.includes(CI_WARNING_CODE), 'human keyless refusal must disclose');
+        }
+      } finally { clean(root); }
+    }
+  });
+
+  it('AC10: a keyless refusal on a NON-segmented repo still does not disclose', () => {
+    const { root } = gitRepo({ gitignore: NEGATED });
+    try {
+      const r = runBinKeyless(root, '--json');
+      assert.equal(r.status, 2);
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.decision, 'refuse-keyless');
+      assert.ok(!hasCiWarning(parsed), 'a repo that is not segmented is not exposed, so no warning');
+    } finally { clean(root); }
+  });
+});
