@@ -97,21 +97,27 @@ export function buildSegmentEnv(baseEnv = process.env, { platform = process.plat
 
 const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck true';
 
+/**
+ * True when a workspace package has a runnable test suite directory.
+ * Inject `existsSync` in tests so the directory/file filter polarity is observable.
+ */
+export function packageHasTests(name, { existsSync: exists = existsSync, packagesDir = 'packages' } = {}) {
+  return exists(join(packagesDir, name, 'test')) || exists(join(packagesDir, name, 'cli-test'));
+}
+
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
-export function packageSegments() {
-  return readdirSync('packages', { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && (
-      existsSync(join('packages', entry.name, 'test'))
-      || existsSync(join('packages', entry.name, 'cli-test'))
-    ))
+export function packageSegments({ existsSync: exists = existsSync, readdirSync: readDir = readdirSync } = {}) {
+  return readDir('packages', { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .filter((entry) => packageHasTests(entry.name, { existsSync: exists }))
     .map((entry) => {
       const globs = [];
-      if (existsSync(join('packages', entry.name, 'test'))) {
+      if (exists(join('packages', entry.name, 'test'))) {
         globs.push(`packages/${entry.name}/test/*.test.mjs`);
       }
       // Slice-2+ CLI contract tests live outside test/ so they do not match
       // T154's frozen `packages/context-handoff/test/**/*.test.mjs` rail glob.
-      if (existsSync(join('packages', entry.name, 'cli-test'))) {
+      if (exists(join('packages', entry.name, 'cli-test'))) {
         globs.push(`packages/${entry.name}/cli-test/*.test.mjs`);
       }
       return [`packages/${entry.name}`, `node --test ${globs.join(' ')}`];
