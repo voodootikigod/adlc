@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -406,5 +406,46 @@ describe('backup-path and durability hardening', () => {
     const src = readFileSync(new URL('../lib/migrate.mjs', import.meta.url), 'utf8');
     assert.ok(!/delete \$\{segmentDirPath\(dir\)\} to roll back/.test(src), 'unconditional manifest.d deletion advice must not exist');
     assert.match(src, /ONLY \.store\.json/, 'deletion advice must be conditional on the directory holding only the marker');
+  });
+});
+
+describe('CLI surface and normalization discrimination', () => {
+  const BIN = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+
+  it('the migrate verb: refusal exits 2 with one JSON document; dry-run exits 0', () => {
+    const { root } = liveRepo({ entries: [evidence()] });
+    try {
+      const env = { ...process.env, ADLC_MANIFEST_KEY: KEY };
+      // refusal: short reason
+      const refused = spawnSync(process.execPath, [BIN, 'migrate', '--reason', 'short', '--json'], { cwd: root, encoding: 'utf8', env });
+      assert.equal(refused.status, 2, refused.stderr);
+      const parsed = JSON.parse(refused.stdout);
+      assert.match(parsed.decision, /^refuse-/);
+      // dry-run success: exit 0, human mode
+      const dry = spawnSync(process.execPath, [BIN, 'migrate', '--reason', 'cutover to forest mode'], { cwd: root, encoding: 'utf8', env });
+      assert.equal(dry.status, 0, dry.stderr);
+      assert.match(dry.stdout, /dry-run plan/);
+    } finally { clean(root); }
+  });
+
+  it('distinct providers at one revision stay DISTINCT tuples; whitespace/case variants of one provider MERGE', () => {
+    // Kills the normalizeProvider guard mutants: inverting the typeof branch
+    // maps every string to '' and collapses distinct providers into one
+    // tuple — this fixture then seals 2 instead of 3.
+    const entries = [
+      evidence(),
+      approve({ data: { provider: 'codex', revision: 'git-change:base:multi' } }),
+      approve({ data: { provider: 'openai', revision: 'git-change:base:multi' } }),
+      approve({ data: { provider: ' CODEX ', revision: 'git-change:base:multi' } }), // variant of codex — merges
+      approve({ data: { provider: 'gemini', revision: 'git-change:base:solo' } }),
+    ];
+    const { root, dir } = liveRepo({ entries });
+    try {
+      const plan = planMigrate(dir, { key: KEY, reason: REASON });
+      assert.equal(plan.decision, 'plan');
+      assert.equal(plan.seals.length, 3, JSON.stringify(plan.seals.map((s) => s.provider)));
+      const providers = new Set(plan.seals.map((s) => s.provider.trim().toLowerCase()));
+      assert.deepEqual([...providers].sort(), ['codex', 'gemini', 'openai']);
+    } finally { clean(root); }
   });
 });
