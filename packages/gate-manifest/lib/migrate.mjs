@@ -14,7 +14,7 @@
 // to parity by validating the ceremony's output with rails-guard's own
 // validators — a census divergence fails there, not on migration day.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { ADLC_DIR, ledgerPath, withLedgerLock } from '@adlc/core';
@@ -103,7 +103,7 @@ function unsignedEntries(text) {
  * the two pure input checks (reason, gitignore contract) folded in where
  * they cost nothing.
  *
- * @returns {{ decision: 'refuse-keyless'|'refuse-reason'|'refuse-invalid'|'refuse-unsigned'|'refuse-already-segmented'|'refuse-ignored'|'plan',
+ * @returns {{ decision: 'refuse-keyless'|'refuse-reason'|'refuse-symlink'|'refuse-invalid'|'refuse-unsigned'|'refuse-already-segmented'|'refuse-ignored'|'plan',
  *             reason?: string, seals?: object[], unsignedEntries?: object[],
  *             cutover?: {reason: string, sealedApprovals: number, rootLines: number},
  *             backupPath?: string, markerPath?: string, followUps?: string[] }}
@@ -118,6 +118,19 @@ export function planMigrate(dir = ADLC_DIR, { key = null, reason = '', attestUns
 
   if (typeof reason !== 'string' || reason.length < 8) {
     return { decision: 'refuse-reason', reason: 'the cutover entry requires an operator reason of at least 8 characters (spec §4.5)' };
+  }
+
+  // No-follow discipline before ANY read: a repository-controlled symlink at
+  // the root (or at manifest.d) would redirect the ceremony's reads and
+  // writes outside the workspace — the same smuggling vector every other
+  // trust-surface reader in this suite lstat-guards against.
+  const lstatIsSymlink = (path) => {
+    try { return lstatSync(path).isSymbolicLink(); } catch { return false; }
+  };
+  for (const path of [dir, ledgerPath('manifest', dir), segmentDirPath(dir)]) {
+    if (lstatIsSymlink(path)) {
+      return { decision: 'refuse-symlink', reason: `${path} is a symlink — the ceremony refuses to read or write through repository-controlled links` };
+    }
   }
 
   // Step 4 checked EARLY as well as in spec position: everything below reads
@@ -216,6 +229,12 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
   // exactly as record.mjs chains them: seq +1, prev over the DECODED tail
   // line, v2 signature over every field via signEntry.
   const applied = withLedgerLock(rootPath, () => {
+    // Re-check the segmented state UNDER the lock: a concurrent migration
+    // that completed between planning and locking would otherwise get
+    // duplicate seals and a duplicate cutover appended to its frozen root.
+    if (isSegmentedRepo(dir)) {
+      throw new Error('another migration completed while this one waited for the lock — the repository is already segmented');
+    }
     const originalBytes = readFileSync(rootPath);
     const originalText = originalBytes.toString('utf8');
 
@@ -270,9 +289,10 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
       });
     }
 
-    // §4.5 bindings computed over base + seals, exactly the bytes that will
-    // precede the cutover line in the file.
-    const preCutoverBytes = Buffer.concat([originalBytes, Buffer.from(appendix, 'utf8')]);
+    // §4.5 bindings computed over base (+ newline repair) + seals — exactly
+    // the bytes that will precede the cutover line in the file.
+    const newlineRepair = originalBytes.length > 0 && originalBytes[originalBytes.length - 1] !== 0x0a ? '\n' : '';
+    const preCutoverBytes = Buffer.concat([originalBytes, Buffer.from(newlineRepair + appendix, 'utf8')]);
     appendEntry({
       gate: 'manifest-cutover',
       data: {
@@ -286,9 +306,12 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
       },
     });
 
-    // One full-buffer write: the lock guarantees exclusivity, and writing
-    // original + appendix in a single call keeps the prefix byte-exact.
-    writeFileSync(rootPath, Buffer.concat([originalBytes, Buffer.from(appendix, 'utf8')]));
+    // APPEND-mode, never a full rewrite: a crash mid-write must leave the
+    // original region intact (a whole-root rewrite would truncate history at
+    // whatever byte the crash hit). A root whose final line lacks its
+    // trailing newline gets one first, or the first seal would concatenate
+    // onto the old tail line and corrupt both.
+    writeFileSync(rootPath, newlineRepair + appendix, { flag: 'a' });
 
     // Marker (§4.7) inside the SAME lock — the unit is not done until the
     // repo carries both signals. Temp file cleanup on EVERY failure path:
