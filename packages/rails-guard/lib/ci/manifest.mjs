@@ -636,6 +636,22 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
     deny(`.adlc/manifest.d anchor cycle detected at ${cycle.segment} — the forest must be a forest`);
   }
 
+  // Reader coherence across the WHOLE head forest, not just new segments:
+  // the production verifier resolves every segment's anchor with
+  // rootExists = root.count > 0 at read time, so a root gaining its first
+  // entries beside ANY null-anchored segment (legitimately minted pre-root)
+  // makes every clone's verify fail forever. Reject the composition here —
+  // each piece alone is legal, and only the merge assembles the brick.
+  const headRootHasEntries = headRootText !== null && headRootText !== undefined
+    && manifestRawLines(headRootText).length > 0;
+  if (headRootHasEntries && !baseRootPresent) {
+    for (const [name, anchor] of anchorBySegment) {
+      if (anchor === null) {
+        deny(`.adlc/manifest.d/${name} carries anchor: null while this PR gives the root its first entries — the merged forest would fail verification for every reader`);
+      }
+    }
+  }
+
   for (const name of newNames) {
     if (!CI_SEGMENT_NAME_RE.test(name)) {
       deny(`.adlc/manifest.d/${name} violates the segment filename grammar (spec §4.2)`);
@@ -771,4 +787,34 @@ export function rootTextEndsInCutover(text) {
   const lines = manifestRawLines(text ?? '');
   if (lines.length === 0) return false;
   return isCutoverEntry(tryParse(lines.at(-1)));
+}
+
+/**
+ * The ticket-store migration's manifest evidence, located in SEGMENTS: once
+ * a repo is segmented, appendManifestEntry routes evidence there and the
+ * frozen root cannot carry it — validating only the root would let a
+ * "migration" PR restructure the store with no bound evidence at all
+ * (fail-open), while demanding root evidence would make the supported
+ * migration impossible (fail-closed against legitimate work). Exactly one
+ * segment must carry the ticket-migrate set in its appended region, and
+ * that region is held to the same binding/chain rules the root path uses.
+ */
+export function validateSegmentedMigrationEvidence({ baseSegments, headSegments, storeHash, archiveHash }) {
+  const carriers = [];
+  for (const [name, headBytes] of headSegments) {
+    const baseBytes = baseSegments.get(name);
+    const baseText = baseBytes === undefined ? '' : baseBytes.toString('utf8');
+    const headText = headBytes.toString('utf8');
+    const appended = manifestRawLines(headText).slice(manifestRawLines(baseText).length);
+    if (appended.some((line) => tryParse(line)?.gate === 'ticket-migrate')) {
+      carriers.push({ name, baseText, headText });
+    }
+  }
+  if (carriers.length === 0) {
+    deny('ticket-store migration evidence was not found in any segment — a segmented repo records it there, and a migration without bound evidence cannot merge');
+  }
+  if (carriers.length > 1) {
+    deny(`ticket-store migration evidence must live in exactly one segment, found it in: ${carriers.map((c) => c.name).join(', ')}`);
+  }
+  validateMigrationEvidence(carriers[0].baseText, carriers[0].headText, storeHash, archiveHash);
 }

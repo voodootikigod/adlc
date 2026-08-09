@@ -29,6 +29,7 @@ import {
   validateNewSegments,
   validateReservedFiles,
   validateSegmentAppendOnly,
+  validateSegmentedMigrationEvidence,
   rootTextEndsInCutover,
 } from './manifest.mjs';
 import { assertArraySuperset, assertExistingSignersUnchanged, rejectNewSigners, stable } from './json-contract.mjs';
@@ -360,20 +361,36 @@ function verifyManifest({ git, trustedBase, base, migration }) {
     forestAuth,
   });
 
+  // Once the BASE is segmented, evidence — including the ticket-store
+  // migration's — lives in segments: the frozen root cannot carry it, and
+  // assertRootTransition's frozen path deliberately does not look for it.
+  const baseSegmented = baseSegments.marker !== null || rootTextEndsInCutover(baseRootText);
+  if (migration.verified && baseSegmented) {
+    validateSegmentedMigrationEvidence({
+      baseSegments: baseSegments.segments,
+      headSegments: snapshot.segments,
+      storeHash: migration.storeHash,
+      archiveHash: migration.archiveHash,
+    });
+  }
+
   if (baseHasManifest) {
     // §9.1 — byte-prefix pre-cutover (ordinary appends stay legal; a region
     // containing cutover/seal entries must be a valid set), byte-identical
-    // after. Migration evidence keeps its existing conditional validation.
+    // after. Root-carried migration evidence keeps its existing conditional
+    // validation for repos that are NOT yet segmented.
     assertRootTransition({
       basePresent: true,
       baseBytes: baseRootBytes,
       headPresent: snapshot.root.present,
       headBytes: snapshot.root.bytes ?? null,
-      migration,
+      migration: baseSegmented ? { verified: false } : migration,
       baseMarkerPresent: baseSegments.marker !== null,
     });
     return;
   }
+
+  if (migration.verified && baseSegmented) return; // validated against segments above
 
   if (migration.verified) {
     // One snapshot for presence AND validation (#314 round 4) — and the SAME

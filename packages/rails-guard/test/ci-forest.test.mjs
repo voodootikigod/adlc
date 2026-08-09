@@ -19,6 +19,7 @@ import {
   baseForestBytes,
   validateReservedFiles,
   validateSegmentAppendOnly,
+  validateSegmentedMigrationEvidence,
   validateNewSegments,
   committedEvidenceAtHead,
 } from '../lib/ci/manifest.mjs';
@@ -1015,5 +1016,78 @@ test('an explicit keyless marker does not downgrade a cutover forest — cutover
       forestAuth: 'keyed',
     })),
     (e) => e instanceof GateDeny && /sig/.test(e.message)
+  );
+});
+
+// ---- forest-wide reader coherence and segmented migrations -----------------
+
+test('creating a root with entries while ANY null-anchored segment exists DENIES — the merged forest would fail every reader', () => {
+  // The production verifier resolves every segment anchor with
+  // rootExists = root.count > 0 at READ time. Land a root with entries next
+  // to a null-anchored segment (minted legitimately pre-root) and every
+  // clone's verify returns invalid forever. The gate must reject the
+  // composition, not each piece.
+  const nullSeg = segmentText({ anchor: null });
+  assert.throws(
+    () => validateNewSegments(newSegArgs({
+      headSegments: new Map([[SEG_A, Buffer.from(nullSeg)]]),
+      baseSegmentNames: new Set([SEG_A]), // existing, not new — §9.3 alone never looks at it
+      baseRootPresent: false,
+      headRootText: BASE_ROOT, // root with entries arriving in this PR
+    })),
+    (e) => e instanceof GateDeny && /null/.test(e.message)
+  );
+  // an EMPTY root arriving is fine — readers resolve rootExists=false
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(nullSeg)]]),
+    baseSegmentNames: new Set([SEG_A]),
+    baseRootPresent: false,
+    headRootText: '',
+  })));
+});
+
+test('a segmented repo validates ticket-migration evidence in its SEGMENTS — the frozen root cannot carry it', () => {
+  // appendManifestEntry routes to segments once the repo is segmented, so
+  // the supported ticket-store migration's evidence lands in a segment; the
+  // root is frozen and must stay byte-identical. Skipping validation there
+  // would let a 'migration' PR restructure the store with no bound evidence.
+  const mkEntry = (over) => JSON.stringify(over);
+  const apply = { seq: 1, gate: 'ticket-migrate', anchor: null, branch: 'feat-x', ts: '2026-01-01T00:00:00.000Z', files: {}, data: { operation: 'migrate', action: 'apply', bindingScope: 'store', storeHash: 'SH', archiveHash: 'AH', transactionId: 'tx1' }, prev: null };
+  const applyLine = mkEntry(apply);
+  const migSeg = applyLine + '\n';
+
+  // evidence present in exactly one segment: passes
+  assert.doesNotThrow(() => validateSegmentedMigrationEvidence({
+    baseSegments: new Map(),
+    headSegments: new Map([[SEG_A, Buffer.from(migSeg)]]),
+    storeHash: 'SH', archiveHash: 'AH',
+  }));
+  // absent everywhere: denies (fail-closed, not fail-open)
+  assert.throws(
+    () => validateSegmentedMigrationEvidence({
+      baseSegments: new Map(),
+      headSegments: new Map([[SEG_A, Buffer.from(segmentText({ anchor: null }))]]),
+      storeHash: 'SH', archiveHash: 'AH',
+    }),
+    (e) => e instanceof GateDeny && /migration/.test(e.message)
+  );
+  // wrong binding: denies via the existing evidence validator
+  assert.throws(
+    () => validateSegmentedMigrationEvidence({
+      baseSegments: new Map(),
+      headSegments: new Map([[SEG_A, Buffer.from(migSeg)]]),
+      storeHash: 'DIFFERENT', archiveHash: 'AH',
+    }),
+    (e) => e instanceof GateDeny
+  );
+  // split across two segments: denies (one ceremony, one chain)
+  const applyB = mkEntry({ ...apply, branch: 'feat-b' });
+  assert.throws(
+    () => validateSegmentedMigrationEvidence({
+      baseSegments: new Map(),
+      headSegments: new Map([[SEG_A, Buffer.from(migSeg)], [SEG_B, Buffer.from(applyB + '\n')]]),
+      storeHash: 'SH', archiveHash: 'AH',
+    }),
+    (e) => e instanceof GateDeny && /exactly one/.test(e.message)
   );
 });
