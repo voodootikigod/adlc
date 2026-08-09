@@ -26,6 +26,16 @@ import { GateDeny, GateFail } from '../lib/ci/errors.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 
+const sha256Buf = (buf) => createHash('sha256').update(buf).digest('hex');
+/** Raw bytes of the last non-empty line (no trailing newline) of a buffer. */
+function lastLineOf(buf) {
+  let end = buf.length;
+  while (end > 0 && buf[end - 1] === 0x0a) end -= 1;
+  let start = end;
+  while (start > 0 && buf[start - 1] !== 0x0a) start -= 1;
+  return buf.subarray(start, end);
+}
+
 // ---- fixture builders -------------------------------------------------------
 
 /** Chain entries into raw JSONL text: seq/prev computed over the REAL lines. */
@@ -553,7 +563,7 @@ test('AC19 pin: NON-JSON appended root bytes keep their pre-forest meaning — o
   assert.doesNotThrow(() => assertRootTransition(rootArgs(opaqueBase, opaqueHead)));
 });
 
-// ---- cross-model review findings: three fail-opens -------------------------
+// ---- bootstrap, reserved-file, and seal-coverage invariants ----------------
 
 test('a cutover whose seals do not cover the base root standing approves DENIES', () => {
   // §4.6: for EVERY standing approve, one seal. A cutover freezing the root
@@ -640,7 +650,7 @@ test('baseForestBytes: a base with NO manifest.d returns the same shape as one w
   assert.equal(base.marker, null);
 });
 
-// ---- round-2 findings ------------------------------------------------------
+// ---- marker activation, seal tuples, and seq contiguity --------------------
 
 test('a NEW marker on a LIVE (non-cutover) root DENIES — forest activation cannot bypass the cutover', () => {
   // A marker landed by PR flips isSegmentedRepo for every clone: writers
@@ -706,7 +716,7 @@ test('a new segment whose FIRST seq is not 1 DENIES', () => {
   );
 });
 
-// ---- round-3 findings ------------------------------------------------------
+// ---- freeze signals and revocation semantics -------------------------------
 
 test('a base with the marker FREEZES the root even without a cutover tail — empty-root forests included', () => {
   // Greenfield enable leaves the root absent or empty and writes the marker.
@@ -749,7 +759,7 @@ test('seal matching is keyed as the reader matches — authorProvider is not par
   assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
 });
 
-// ---- round-4 findings ------------------------------------------------------
+// ---- continuations, empty roots, and provider normalization ----------------
 
 test('an append to an EXISTING segment must chain-verify — a corrupt continuation DENIES', () => {
   // §9.2's letter is byte-prefix only, but a corrupt tail landing at merge
@@ -797,4 +807,93 @@ test('cutover seal matching normalizes providers as the reader does', () => {
   const base = chainText([evidence(), approve]);
   const sealed = withSealCutover(base, { sealCount: 1 }); // seal() uses lowercase 'codex'
   assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
+});
+
+// ---- keyed-forest signature presence, activation seeding, raw-byte bindings --
+
+test('a KEYED forest requires sig presence on new-segment entries — keyless containment is for keyless forests', () => {
+  // The gate holds no key, so this is presence-only, exactly the posture the
+  // seal/cutover entries already get: a keyed forest's writer always signs,
+  // so an unsigned entry is either a refused keyless write or a forgery, and
+  // catching it before merge beats every clone failing closed after.
+  const unsigned = segmentText({ anchor: rootAnchor(BASE_ROOT) });
+  assert.throws(
+    () => validateNewSegments(newSegArgs({
+      headSegments: new Map([[SEG_A, Buffer.from(unsigned)]]),
+      forestAuth: 'keyed',
+    })),
+    (e) => e instanceof GateDeny && /sig/.test(e.message)
+  );
+  // keyless forest: unsigned entries are the declared mode
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(unsigned)]]),
+    forestAuth: 'keyless',
+  })));
+  // no marker / pre-policy: no mode to enforce
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(unsigned)]]),
+  })));
+});
+
+test('a KEYED forest requires sig presence on segment CONTINUATIONS too', () => {
+  const signedEntry = (extra = {}) => ({ ...evidence(extra), sigVersion: 2, sig: 'a'.repeat(64) });
+  const first = JSON.stringify({ seq: 1, ...signedEntry({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-x' }), prev: null });
+  const base = first + '\n';
+  const unsignedAppend = base + JSON.stringify({ seq: 2, ...evidence(), prev: sha256(first) }) + '\n';
+  assert.throws(
+    () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(unsignedAppend)]]), { forestAuth: 'keyed' }),
+    (e) => e instanceof GateDeny && /sig/.test(e.message)
+  );
+  const signedAppend = base + JSON.stringify({ seq: 2, ...signedEntry(), prev: sha256(first) }) + '\n';
+  assert.doesNotThrow(
+    () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(signedAppend)]]), { forestAuth: 'keyed' })
+  );
+});
+
+test('a PR cannot seed the root WHILE introducing the marker — activation and evidence do not mix', () => {
+  // Base: empty tracked root, no marker (the bootstrap shape). A PR adding
+  // the marker AND root entries manufactures a segmented repo with a live
+  // non-cutover root — the half-state enable refuses, assembled at merge.
+  const marker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+  assert.throws(
+    () => validateReservedFiles({
+      baseMarker: null, headMarker: marker,
+      baseRootHasEntries: false, headRootCutover: false,
+      headRootGainedEntries: true,
+    }),
+    (e) => e instanceof GateDeny && /marker/.test(e.message)
+  );
+  // marker alone (root untouched) stays legal
+  assert.doesNotThrow(() => validateReservedFiles({
+    baseMarker: null, headMarker: marker,
+    baseRootHasEntries: false, headRootCutover: false,
+    headRootGainedEntries: false,
+  }));
+});
+
+test('the cutover rootSha256 binding hashes RAW bytes — invalid utf8 in the legacy region must not launder', () => {
+  // Base carries a byte sequence that is not valid utf8 (0xFF). Hashing the
+  // DECODED text re-encodes U+FFFD and diverges from the ceremony's
+  // hash-of-raw-bytes — a valid cutover would be denied (and a laundered
+  // collision accepted). The binding must be computed over the buffer.
+  const opaque = Buffer.concat([Buffer.from('{"seq":1,"gate":"evidence","prev":null,"blob":"'), Buffer.from([0xff]), Buffer.from('"}\n')]);
+  const baseBytes = opaque; // one opaque line; lenient detection sees no cutover
+  const sealLine = (() => {
+    const e = { seq: 2, ...seal(), prev: sha256Buf(baseBytes.subarray(0, baseBytes.length - 1)) };
+    return e;
+  })();
+  // build head = base + cutover (0 seals), binding computed over RAW bytes
+  const cutEntry = {
+    seq: 2,
+    gate: 'manifest-cutover',
+    ts: '2026-01-02T00:00:01.000Z',
+    data: { reason: 'operator-migration', rootLines: 1, rootSha256: sha256Buf(baseBytes), sealedApprovals: 0 },
+    files: {}, sigVersion: 2, sig: 'e'.repeat(64),
+    prev: sha256Buf(lastLineOf(baseBytes)),
+  };
+  void sealLine;
+  const headBytes = Buffer.concat([baseBytes, Buffer.from(JSON.stringify(cutEntry) + '\n')]);
+  assert.doesNotThrow(() => assertRootTransition({
+    basePresent: true, baseBytes, headPresent: true, headBytes, migration: NO_MIGRATION,
+  }));
 });

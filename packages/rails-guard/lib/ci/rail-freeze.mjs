@@ -82,9 +82,9 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
       // Nothing is frozen yet, so the only thing left to check is that this PR is not
       // seeding evidence — via the ROOT or via SEGMENTS. Same diff-not-filesystem
       // rule as the main manifest block (#314): an untracked gitignored manifest is
-      // in zero commits and does not count. Cross-model review finding: the root
-      // check alone left segments as an unguarded seeding vector in exactly the
-      // branch a hostile bootstrap PR would arrive through.
+      // in zero commits and does not count. The root check alone leaves
+      // segments as a seeding vector in exactly the branch a hostile
+      // bootstrap PR would arrive through, so both are checked.
       const bootstrap = committedEvidenceAtHead(git);
       if (bootstrap.root.text.trim()) {
         fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
@@ -320,15 +320,25 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   // a NEW one may only arrive greenfield (no base evidence) or alongside a
   // cutover in this same PR (a committed .lineage was already denied inside
   // the snapshot read).
+  const headRootCutover = snapshot.root.present && rootTextEndsInCutover(snapshot.root.text);
   validateReservedFiles({
     baseMarker: baseSegments.marker,
     headMarker: snapshot.marker,
     baseRootHasEntries: baseRootText.trim().length > 0,
-    headRootCutover: snapshot.root.present && rootTextEndsInCutover(snapshot.root.text),
+    headRootCutover,
+    headRootGainedEntries: (snapshot.root.bytes?.length ?? 0) > (baseRootBytes?.length ?? 0),
   });
 
+  // The forest's declared authentication mode, read leniently from the HEAD
+  // marker (frozen equal to base above once one exists). 'keyed' turns on
+  // presence-only signature discipline for new segments and continuations.
+  let forestAuth = null;
+  if (snapshot.marker !== null) {
+    try { forestAuth = JSON.parse(snapshot.marker.toString('utf8'))?.auth ?? null; } catch { forestAuth = null; }
+  }
+
   // §9.2 — committed segments are append-only, per file; deletion/rename denies.
-  validateSegmentAppendOnly(baseSegments.segments, snapshot.segments);
+  validateSegmentAppendOnly(baseSegments.segments, snapshot.segments, { forestAuth });
 
   // §9.3 — segments new in this PR: grammar, internal chain, anchor
   // resolution within the HEAD forest, cycle check. anchor:null is judged
@@ -341,6 +351,7 @@ function verifyManifest({ git, trustedBase, base, migration }) {
     // line to anchor to — an empty tracked root must not deny it.
     baseRootPresent: baseRootText.trim().length > 0,
     headRootText: snapshot.root.present ? snapshot.root.text : null,
+    forestAuth,
   });
 
   if (baseHasManifest) {

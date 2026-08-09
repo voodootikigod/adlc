@@ -317,7 +317,7 @@ export function baseForestBytes(git, trustedBase) {
  * bytes as a byte prefix. Byte-level for the same non-injective-utf8 reason
  * as assertAppendOnly; per-file because each segment is its own chain.
  */
-export function validateSegmentAppendOnly(baseSegments, headSegments) {
+export function validateSegmentAppendOnly(baseSegments, headSegments, { forestAuth = null } = {}) {
   for (const [name, baseBytes] of baseSegments) {
     const headBytes = headSegments.get(name);
     if (headBytes === undefined) {
@@ -344,6 +344,35 @@ export function validateSegmentAppendOnly(baseSegments, headSegments) {
         deny(`.adlc/manifest.d/${name} seq must be contiguous from 1 (spec §4.3): expected ${expectedSeq}, found ${entry.seq}`);
       }
       expectedSeq += 1;
+    }
+    if (forestAuth === 'keyed') {
+      const baseLineCount = manifestRawLines(baseBytes.toString('utf8')).length;
+      assertEntriesCarrySigs(manifestRawLines(text).slice(baseLineCount), `.adlc/manifest.d/${name} continuation`);
+    }
+  }
+}
+
+/** Raw bytes of the last non-empty line of a buffer, no trailing newline. */
+function rawLastLine(buf) {
+  let end = buf.length;
+  while (end > 0 && buf[end - 1] === 0x0a) end -= 1;
+  let start = end;
+  while (start > 0 && buf[start - 1] !== 0x0a) start -= 1;
+  return buf.subarray(start, end);
+}
+
+/** Presence-only signature discipline for a keyed forest. The gate holds no
+ *  key, so this is the same posture the seal/cutover entries get: a keyed
+ *  forest's writer always signs, so an unsigned entry is either a refused
+ *  keyless write or a forgery — catching it before merge beats every clone
+ *  failing the forest closed after. Keyless and pre-policy forests have no
+ *  mode to enforce. */
+function assertEntriesCarrySigs(rawLines, label) {
+  for (const raw of rawLines) {
+    const entry = tryParse(raw);
+    if (entry === null) continue;
+    if (entry.sigVersion !== 2 || typeof entry.sig !== 'string' || entry.sig === '') {
+      deny(`${label} carries an entry without a v2 signature — this forest declares auth "keyed", and an unsigned entry strands every keyed reader`);
     }
   }
 }
@@ -393,7 +422,7 @@ function assertSealCutoverSignatureShape(entry, label) {
  * keyless author can fake it wholesale, which is §9.1's stated containment
  * tradeoff, not a gap in this check.
  */
-export function validateSealCutoverAppend(baseText, headText) {
+export function validateSealCutoverAppend(baseText, headText, headBytes = Buffer.from(headText, 'utf8'), baseBytes = Buffer.from(baseText, 'utf8')) {
   const baseRaw = manifestRawLines(baseText);
   const headRaw = manifestRawLines(headText);
   const appendedRaw = headRaw.slice(baseRaw.length);
@@ -417,19 +446,32 @@ export function validateSealCutoverAppend(baseText, headText) {
     deny('the cutover entry must carry an operator reason of at least 8 characters');
   }
 
-  // Chain over the ACTUAL raw lines (the #363 round-4 rule).
-  let previousLine = baseRaw.at(-1) ?? null;
-  let previousSeq = baseRaw.length ? parseJson(baseRaw.at(-1), 'base manifest tail').seq : 0;
+  // Chain over the ACTUAL raw lines — as BYTES for the base tail, whose
+  // legacy region may not decode losslessly; appended lines are strict JSON
+  // and decode round-trip clean, so their utf8 re-encoding is byte-exact.
+  const baseTailEntry = baseRaw.length ? tryParse(baseRaw.at(-1)) : null;
+  let previousLineBytes = baseBytes !== null && manifestRawLines(baseBytes.toString('utf8')).length > 0
+    ? rawLastLine(baseBytes)
+    : null;
+  let previousSeq = Number.isInteger(baseTailEntry?.seq) ? baseTailEntry.seq : baseRaw.length;
   for (const [i, entry] of appended.entries()) {
-    const expectedPrev = previousLine ? createHash('sha256').update(previousLine).digest('hex') : null;
+    const expectedPrev = previousLineBytes ? createHash('sha256').update(previousLineBytes).digest('hex') : null;
     if (entry.prev !== expectedPrev) deny('the seal+cutover append does not extend the manifest hash chain');
     if (entry.seq !== previousSeq + 1) deny('the seal+cutover append sequence does not extend the manifest');
-    previousLine = appendedRaw[i];
+    previousLineBytes = Buffer.from(appendedRaw[i], 'utf8');
     previousSeq = entry.seq;
   }
 
-  // Cutover bindings: everything before the cutover LINE, as exact bytes.
-  const priorBytes = headText.slice(0, headText.lastIndexOf(appendedRaw.at(-1)));
+  // Cutover bindings: everything before the cutover LINE, as RAW bytes.
+  // Hashing the decoded text would re-encode U+FFFD for any invalid utf8 in
+  // the legacy region and diverge from the ceremony's hash-of-raw-bytes —
+  // denying valid cutovers and laundering byte-level differences alike. The
+  // cutover line itself is strict-parsed JSON, so its bytes decode
+  // losslessly and locate exactly in the raw buffer.
+  const cutLineBytes = Buffer.from(appendedRaw.at(-1), 'utf8');
+  const cutStart = headBytes.lastIndexOf(cutLineBytes);
+  if (cutStart < 0) fail('cutover line could not be located in the raw head bytes (operational error) — failing closed.');
+  const priorBytes = headBytes.subarray(0, cutStart);
   if (cut.data.rootSha256 !== createHash('sha256').update(priorBytes).digest('hex')) {
     deny('the cutover entry rootSha256 does not hash the prior root bytes');
   }
@@ -490,7 +532,7 @@ export function assertRootTransition({ basePresent, baseBytes, headPresent, head
   const headText = headBytes.toString('utf8');
   const appended = manifestRawLines(headText).slice(baseRaw.length).map(tryParse);
   if (appended.some((entry) => isCutoverEntry(entry) || isSealEntry(entry))) {
-    validateSealCutoverAppend(baseText, headText);
+    validateSealCutoverAppend(baseText, headText, headBytes, baseBytes);
   }
   if (migration?.verified) {
     validateMigrationEvidence(baseText, headText, migration.storeHash, migration.archiveHash);
@@ -539,7 +581,7 @@ function firstAnchorOf(text) {
  * anchor-position rules, signature checks left to keyed readers — §9.1's
  * containment note, applied to segments.
  */
-export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPresent, headRootText }) {
+export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPresent, headRootText, forestAuth = null }) {
   // Case-collision guard spans the ENTIRE head set (base names included):
   // grammar forbids uppercase slugs, so a collision implies a grammar break
   // somewhere, but the check must not depend on that coupling surviving.
@@ -605,6 +647,9 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
     if (!resolution.ok) {
       deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
     }
+    if (forestAuth === 'keyed') {
+      assertEntriesCarrySigs(manifestRawLines(text), `.adlc/manifest.d/${name}`);
+    }
   }
 }
 
@@ -615,7 +660,7 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
  * marker exists at base it is frozen byte-identical; a NEW marker (the
  * enable/migration PR) must carry exactly the §4.7 shape.
  */
-export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntries = false, headRootCutover = false }) {
+export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntries = false, headRootCutover = false, headRootGainedEntries = false }) {
   if (baseMarker !== null && baseMarker !== undefined) {
     if (headMarker === null || headMarker === undefined) {
       deny('.adlc/manifest.d/.store.json exists at base and cannot be removed in a PR');
@@ -635,6 +680,9 @@ export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntri
   // writers route to segments while the root never froze.
   if (baseRootHasEntries && !headRootCutover) {
     deny('.adlc/manifest.d/.store.json cannot be introduced while the root manifest holds evidence and no cutover entry — forest activation on a live root is the migration ceremony, not a marker add');
+  }
+  if (headRootGainedEntries && !headRootCutover) {
+    deny('.adlc/manifest.d/.store.json marker cannot be introduced in the same PR that appends root evidence — activation and evidence do not mix outside the cutover ceremony');
   }
   let parsed;
   try {
