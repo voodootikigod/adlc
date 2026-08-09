@@ -25,9 +25,9 @@ import {
   baseForestBytes,
   baseManifestBytes,
   committedEvidenceAtHead,
-  committedManifestAtHead,
   validateMigrationEvidence,
   validateNewSegments,
+  validateReservedFiles,
   validateSegmentAppendOnly,
 } from './manifest.mjs';
 import { assertArraySuperset, assertExistingSignersUnchanged, rejectNewSigners, stable } from './json-contract.mjs';
@@ -79,11 +79,19 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
       messages.push(`no ticket store at ${base} — protecting ADLC trust roots only.`);
     } else {
       // Nothing is frozen yet, so the only thing left to check is that this PR is not
-      // seeding evidence. Same diff-not-filesystem rule as the main manifest block
-      // (#314): an untracked gitignored manifest is in zero commits and does not count.
-      if (committedManifestAtHead(git).text.trim()) {
+      // seeding evidence — via the ROOT or via SEGMENTS. Same diff-not-filesystem
+      // rule as the main manifest block (#314): an untracked gitignored manifest is
+      // in zero commits and does not count. Cross-model review finding: the root
+      // check alone left segments as an unguarded seeding vector in exactly the
+      // branch a hostile bootstrap PR would arrive through.
+      const bootstrap = committedEvidenceAtHead(git);
+      if (bootstrap.root.text.trim()) {
         fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.jsonl evidence');
       }
+      if (bootstrap.segments.size > 0) {
+        fail('first bootstrap PR cannot introduce pre-populated .adlc/manifest.d/ segment evidence');
+      }
+      validateReservedFiles({ baseMarker: null, headMarker: bootstrap.marker });
       messages.push(`no ticket store at ${base} — nothing was frozen.`);
       return { messages, status: 0 };
     }
@@ -302,15 +310,20 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   const snapshot = committedEvidenceAtHead(git);
   const baseSegments = baseForestBytes(git, trustedBase);
 
+  // The marker is a trust file: frozen byte-identical once it exists at base;
+  // a new one must carry exactly the §4.7 shape (a committed .lineage was
+  // already denied inside the snapshot read).
+  validateReservedFiles({ baseMarker: baseSegments.marker, headMarker: snapshot.marker });
+
   // §9.2 — committed segments are append-only, per file; deletion/rename denies.
-  validateSegmentAppendOnly(baseSegments, snapshot.segments);
+  validateSegmentAppendOnly(baseSegments.segments, snapshot.segments);
 
   // §9.3 — segments new in this PR: grammar, internal chain, anchor
   // resolution within the HEAD forest, cycle check. anchor:null is judged
   // against the BASE tree's root (§7.1's two-branch fork rule).
   validateNewSegments({
     headSegments: snapshot.segments,
-    baseSegmentNames: new Set(baseSegments.keys()),
+    baseSegmentNames: new Set(baseSegments.segments.keys()),
     baseRootPresent: baseHasManifest,
     headRootText: snapshot.root.present ? snapshot.root.text : null,
   });

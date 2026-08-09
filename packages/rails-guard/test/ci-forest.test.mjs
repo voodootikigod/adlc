@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import {
   assertRootTransition,
   baseForestBytes,
+  validateReservedFiles,
   validateSegmentAppendOnly,
   validateNewSegments,
   committedEvidenceAtHead,
@@ -467,9 +468,11 @@ test('reserved names (.store.json, .lineage) are not treated as segments, but mu
     [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.jsonl$/, ok('')],
     [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.d$/, ok(`040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n`)],
     [/^ls-tree [a-f0-9]+ \.adlc\/manifest\.d\/$/, ok(`100644 blob ${'d'.repeat(40)}\t.adlc/manifest.d/.store.json\n`)],
+    [/^cat-file blob d+$/, okRaw(Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1 })))],
   ]);
   const snapshot = committedEvidenceAtHead(git);
   assert.equal(snapshot.segments.size, 0, 'the marker is not a segment');
+  assert.ok(snapshot.marker !== null, 'but its bytes are captured for the trust-file check');
 
   const gitSym = stubGit([
     [/^rev-parse HEAD$/, ok(`${REV}\n`)],
@@ -518,6 +521,7 @@ test('baseForestBytes: reserved names and non-blob rows are excluded; blobs are 
   const BASE_REV = 'f'.repeat(40);
   const git = stubGit([
     [/^ls-tree f+ -- \.adlc\/manifest\.d$/, ok(`040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n`)],
+    [/^cat-file blob a+$/, okRaw(Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1 })))],
     [/^ls-tree f+ \.adlc\/manifest\.d\/$/, ok([
       `100644 blob ${'a'.repeat(40)}\t.adlc/manifest.d/.store.json`,
       `040000 tree ${'b'.repeat(40)}\t.adlc/manifest.d/nested`,
@@ -526,8 +530,9 @@ test('baseForestBytes: reserved names and non-blob rows are excluded; blobs are 
     [/^cat-file blob d+$/, okRaw(segBytes)],
   ]);
   const base = baseForestBytes(git, BASE_REV);
-  assert.equal(base.size, 1, 'only the real segment');
-  assert.ok(base.get(SEG_A).equals(segBytes));
+  assert.equal(base.segments.size, 1, 'only the real segment');
+  assert.ok(base.segments.get(SEG_A).equals(segBytes));
+  assert.ok(base.marker !== null, 'the base marker is captured for the trust-file check');
 });
 
 test('baseForestBytes: a git failure FAILS closed', () => {
@@ -546,4 +551,91 @@ test('AC19 pin: NON-JSON appended root bytes keep their pre-forest meaning — o
   const opaqueBase = 'x'.repeat(2048) + '\n';
   const opaqueHead = opaqueBase + 'appended-not-json\n';
   assert.doesNotThrow(() => assertRootTransition(rootArgs(opaqueBase, opaqueHead)));
+});
+
+// ---- cross-model review findings: three fail-opens -------------------------
+
+test('a cutover whose seals do not cover the base root standing approves DENIES', () => {
+  // §4.6: for EVERY standing approve, one seal. A cutover freezing the root
+  // while leaving approves standing grandfathers pre-forest trust across the
+  // cutover — the exact reset §4.6 exists to force.
+  const approve = {
+    gate: 'cross-model-review',
+    ts: '2026-01-01T01:00:00.000Z',
+    data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' },
+    files: {},
+  };
+  const baseWithApprove = chainText([evidence(), approve]);
+  const zeroSeals = withSealCutover(baseWithApprove, { sealCount: 0 });
+  assert.throws(
+    () => assertRootTransition(rootArgs(baseWithApprove, zeroSeals.text)),
+    (e) => e instanceof GateDeny && /standing approve/.test(e.message)
+  );
+});
+
+test('a cutover over a base whose approve was ALREADY revoked needs no seal for it', () => {
+  const tuple = { provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' };
+  const approve = { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', data: { verdict: 'approve', ...tuple }, files: {} };
+  const revoke = { gate: 'cross-model-review', ts: '2026-01-01T02:00:00.000Z', data: { verdict: 'needs-attention', ...tuple }, files: {} };
+  const base = chainText([evidence(), approve, revoke]);
+  const zeroSeals = withSealCutover(base, { sealCount: 0 });
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, zeroSeals.text)));
+});
+
+test('a cutover whose seal covers the standing approve tuple passes', () => {
+  const tuple = { provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' };
+  const approve = { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', data: { verdict: 'approve', ...tuple }, files: {} };
+  const base = chainText([evidence(), approve]);
+  // the default seal() fixture carries the same (provider, revision) tuple
+  const sealed = withSealCutover(base, { sealCount: 1 });
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
+});
+
+test('a committed .lineage DENIES — the token is checkout-local by contract, never committed', () => {
+  const git = stubGit([
+    [/^rev-parse HEAD$/, ok(`${REV}\n`)],
+    [/^ls-tree [a-f0-9]+ -- \.adlc$/, ok(`040000 tree ${'b'.repeat(40)}\t.adlc\n`)],
+    [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.jsonl$/, ok('')],
+    [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.d$/, ok(`040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n`)],
+    [/^ls-tree [a-f0-9]+ \.adlc\/manifest\.d\/$/, ok(`100644 blob ${'d'.repeat(40)}\t.adlc/manifest.d/.lineage\n`)],
+  ]);
+  assert.throws(
+    () => committedEvidenceAtHead(git),
+    (e) => e instanceof GateDeny && /\.lineage/.test(e.message)
+  );
+});
+
+test('a marker mutation DENIES — flipping auth keyed→keyless would silently downgrade every reader', () => {
+  const baseMarker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+  const headMarker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyless' }));
+  assert.throws(
+    () => validateReservedFiles({ baseMarker, headMarker }),
+    (e) => e instanceof GateDeny && /\.store\.json/.test(e.message)
+  );
+  // byte-identical marker passes; a NEW marker (absent at base) with a valid shape passes
+  assert.doesNotThrow(() => validateReservedFiles({ baseMarker, headMarker: baseMarker }));
+  assert.doesNotThrow(() => validateReservedFiles({ baseMarker: null, headMarker: baseMarker }));
+});
+
+test('a NEW marker with an unrecognized shape DENIES', () => {
+  for (const bad of ['not json', JSON.stringify({ format: 'other', version: 1 }), JSON.stringify({ format: 'adlc-manifest-segments', version: 99 }), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'maybe' })]) {
+    assert.throws(
+      () => validateReservedFiles({ baseMarker: null, headMarker: Buffer.from(bad) }),
+      (e) => e instanceof GateDeny,
+      `expected denial for marker ${bad.slice(0, 30)}`
+    );
+  }
+});
+
+test('baseForestBytes: a base with NO manifest.d returns the same shape as one with — the early return must not change the contract', () => {
+  // Caught live: the no-manifest.d early return kept returning a bare Map
+  // after the main path moved to {segments, marker}, so EVERY pre-forest
+  // fixture crashed the gate with "baseSegments is not iterable". The
+  // pre-forest base is the overwhelmingly common case; it gets its own test.
+  const git = stubGit([
+    [/^ls-tree f+ -- \.adlc\/manifest\.d$/, ok('')],
+  ]);
+  const base = baseForestBytes(git, 'f'.repeat(40));
+  assert.equal(base.segments.size, 0);
+  assert.equal(base.marker, null);
 });

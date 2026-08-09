@@ -242,7 +242,7 @@ export function committedEvidenceAtHead(git) {
   const dirRow = git(['ls-tree', rev, '--', '.adlc/manifest.d'], 'git ls-tree manifest.d');
   if (dirRow.status !== 0) fail('git ls-tree failed for the HEAD manifest.d (operational error) — failing closed.');
   const dirLine = dirRow.stdout.toString().trim();
-  if (!dirLine) return { rev, root, manifestDPresent: false, segments: new Map() };
+  if (!dirLine) return { rev, root, manifestDPresent: false, segments: new Map(), marker: null };
   if (dirLine.split(/\s+/)[0] !== '040000') {
     deny('.adlc/manifest.d must be a directory, not a symlink or submodule');
   }
@@ -250,6 +250,7 @@ export function committedEvidenceAtHead(git) {
   const listing = git(['ls-tree', rev, '.adlc/manifest.d/'], 'git ls-tree manifest.d contents');
   if (listing.status !== 0) fail('git ls-tree failed for the HEAD manifest.d contents (operational error) — failing closed.');
   const segments = new Map();
+  let marker = null;
   for (const row of listing.stdout.toString().split('\n')) {
     if (!row.trim()) continue;
     const tab = row.indexOf('\t');
@@ -259,10 +260,20 @@ export function committedEvidenceAtHead(git) {
     if (type !== 'blob' || mode !== '100644') {
       deny(`.adlc/manifest.d/${name} must be a regular tracked file, not a symlink or submodule`);
     }
-    if (CI_RESERVED_NAMES.has(name)) continue; // marker/token: mode-checked above, never a segment
+    if (name === '.lineage') {
+      // §4.8: the lineage token is checkout-local and NEVER committed. A
+      // committed token makes every clone treat its segment as self-minted,
+      // poisoning the peeked keyless fast path's trust assumption — the
+      // reader merely skips it, but the GATE must refuse to let it land.
+      deny('.adlc/manifest.d/.lineage is checkout-local and must never be committed');
+    }
+    if (name === '.store.json') {
+      marker = readBlob(hash, 'HEAD activation marker');
+      continue; // mode-checked above; the marker is not a segment
+    }
     segments.set(name, readBlob(hash, `HEAD segment blob ${name}`));
   }
-  return { rev, root, manifestDPresent: true, segments };
+  return { rev, root, manifestDPresent: true, segments, marker };
 }
 
 /**
@@ -275,21 +286,30 @@ export function committedEvidenceAtHead(git) {
 export function baseForestBytes(git, trustedBase) {
   const dirRow = git(['ls-tree', trustedBase, '--', '.adlc/manifest.d'], 'git ls-tree base manifest.d');
   if (dirRow.status !== 0) fail('git ls-tree failed for the base manifest.d (operational error) — failing closed.');
-  if (!dirRow.stdout.toString().trim()) return new Map();
+  if (!dirRow.stdout.toString().trim()) return { segments: new Map(), marker: null };
   const listing = git(['ls-tree', trustedBase, '.adlc/manifest.d/'], 'git ls-tree base manifest.d contents');
   if (listing.status !== 0) fail('git ls-tree failed for the base manifest.d contents (operational error) — failing closed.');
   const segments = new Map();
+  let marker = null;
   for (const row of listing.stdout.toString().split('\n')) {
     if (!row.trim()) continue;
     const tab = row.indexOf('\t');
     const [, type, hash] = row.slice(0, tab).split(/\s+/);
     const name = row.slice(tab + 1).replace(/^\.adlc\/manifest\.d\//, '');
-    if (type !== 'blob' || CI_RESERVED_NAMES.has(name)) continue;
+    if (type !== 'blob') continue;
+    if (CI_RESERVED_NAMES.has(name)) {
+      if (name === '.store.json') {
+        const blob = git(['cat-file', 'blob', hash], 'base activation marker', { raw: true });
+        if (blob.status !== 0) fail('git cat-file failed for the base activation marker (operational error) — failing closed.');
+        marker = Buffer.from(blob.stdout);
+      }
+      continue;
+    }
     const blob = git(['cat-file', 'blob', hash], `base segment blob ${name}`, { raw: true });
     if (blob.status !== 0) fail(`git cat-file failed for base segment ${name} (operational error) — failing closed.`);
     segments.set(name, Buffer.from(blob.stdout));
   }
-  return segments;
+  return { segments, marker };
 }
 
 /**
@@ -399,6 +419,20 @@ export function validateSealCutoverAppend(baseText, headText) {
   }
   if (cut.data.sealedApprovals !== seals.length) {
     deny('the cutover entry sealedApprovals does not match the seal entries appended');
+  }
+
+  // §4.6: for EVERY standing approve in the root, one seal. A cutover that
+  // freezes the root while leaving approves standing grandfathers pre-forest
+  // trust across the cutover — the reset §4.6 exists to force. Standing is
+  // computed per §3 over the base text: (provider, revision) tuples whose
+  // last cross-model verdict is approve.
+  const standing = standingApproveTuples(baseText);
+  const sealed = new Set(seals.map((entry) => `${entry.data?.provider}\u0000${entry.data?.revision}`));
+  for (const tuple of standing) {
+    if (!sealed.has(tuple)) {
+      const [provider, revision] = tuple.split('\u0000');
+      deny(`the cutover leaves a standing approve unsealed (provider ${provider}, revision ${revision}) — §4.6 requires one seal per standing approve`);
+    }
   }
 }
 
@@ -535,4 +569,54 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
       deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
     }
   }
+}
+
+/**
+ * The activation marker is a trust file, not inert metadata: `auth: "keyed"`
+ * is what makes every resolver refuse keyless writes, so a PR flipping it to
+ * "keyless" silently downgrades authentication for every reader. Once the
+ * marker exists at base it is frozen byte-identical; a NEW marker (the
+ * enable/migration PR) must carry exactly the §4.7 shape.
+ */
+export function validateReservedFiles({ baseMarker, headMarker }) {
+  if (baseMarker !== null && baseMarker !== undefined) {
+    if (headMarker === null || headMarker === undefined) {
+      deny('.adlc/manifest.d/.store.json exists at base and cannot be removed in a PR');
+    }
+    if (!headMarker.equals(baseMarker)) {
+      deny('.adlc/manifest.d/.store.json is a trust file and must be byte-identical to base in PRs');
+    }
+    return;
+  }
+  if (headMarker === null || headMarker === undefined) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(headMarker.toString('utf8'));
+  } catch {
+    deny('.adlc/manifest.d/.store.json must be valid JSON');
+  }
+  if (parsed?.format !== 'adlc-manifest-segments' || parsed?.version !== 1) {
+    deny('.adlc/manifest.d/.store.json must carry format "adlc-manifest-segments" version 1 (spec §4.7)');
+  }
+  if (parsed.auth !== undefined && parsed.auth !== 'keyed' && parsed.auth !== 'keyless') {
+    deny('.adlc/manifest.d/.store.json auth must be "keyed" or "keyless" when present (spec §4.7)');
+  }
+}
+
+/**
+ * §3 standing approves of a root text: cross-model-review approve entries
+ * whose (provider, revision) tuple has no later needs-attention entry.
+ * Lenient parse — unparseable lines cannot carry approvals.
+ */
+function standingApproveTuples(text) {
+  const lastVerdict = new Map();
+  for (const line of manifestRawLines(text)) {
+    const entry = tryParse(line);
+    if (entry?.gate !== 'cross-model-review') continue;
+    const { provider, revision, verdict } = entry.data ?? {};
+    if (typeof provider !== 'string' || typeof revision !== 'string') continue;
+    if (verdict !== 'approve' && verdict !== 'needs-attention') continue;
+    lastVerdict.set(`${provider}\u0000${revision}`, verdict);
+  }
+  return new Set([...lastVerdict.entries()].filter(([, v]) => v === 'approve').map(([k]) => k));
 }
