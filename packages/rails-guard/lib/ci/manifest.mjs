@@ -318,6 +318,20 @@ function numberedLines(text) {
   return out;
 }
 
+/** Lenient parse for DETECTION only. The pre-forest gate never parsed the
+ *  root — it byte-compared — so lines that are not JSON entries must keep
+ *  their old meaning (opaque appended bytes, allowed), not become a new
+ *  failure mode (AC19: a segment-free repo gets byte-identical verdicts).
+ *  Only once a cutover/seal entry IS detected does strict parsing apply. */
+function tryParse(line) {
+  try {
+    const entry = JSON.parse(line);
+    return entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
 const isCutoverEntry = (entry) => entry?.gate === 'manifest-cutover';
 const isSealEntry = (entry) => entry?.gate === 'cross-model-review' && entry?.data?.sealedByCutover === true;
 
@@ -406,7 +420,7 @@ export function assertRootTransition({ basePresent, baseBytes, headPresent, head
 
   const baseText = baseBytes.toString('utf8');
   const baseRaw = manifestRawLines(baseText);
-  const baseTail = baseRaw.length ? parseJson(baseRaw.at(-1), 'base manifest tail') : null;
+  const baseTail = baseRaw.length ? tryParse(baseRaw.at(-1)) : null;
 
   if (baseTail && isCutoverEntry(baseTail)) {
     if (headBytes.length !== baseBytes.length || !headBytes.equals(baseBytes)) {
@@ -417,8 +431,7 @@ export function assertRootTransition({ basePresent, baseBytes, headPresent, head
 
   assertAppendOnly(headBytes, baseBytes);
   const headText = headBytes.toString('utf8');
-  const appended = manifestRawLines(headText).slice(baseRaw.length)
-    .map((line, i) => parseJson(line, `appended root entry ${i + 1}`));
+  const appended = manifestRawLines(headText).slice(baseRaw.length).map(tryParse);
   if (appended.some((entry) => isCutoverEntry(entry) || isSealEntry(entry))) {
     validateSealCutoverAppend(baseText, headText);
   }

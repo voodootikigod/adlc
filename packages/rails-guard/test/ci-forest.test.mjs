@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   assertRootTransition,
+  baseForestBytes,
   validateSegmentAppendOnly,
   validateNewSegments,
   committedEvidenceAtHead,
@@ -478,4 +479,71 @@ test('reserved names (.store.json, .lineage) are not treated as segments, but mu
     [/^ls-tree [a-f0-9]+ \.adlc\/manifest\.d\/$/, ok(`120000 blob ${'d'.repeat(40)}\t.adlc/manifest.d/.store.json\n`)],
   ]);
   assert.throws(() => committedEvidenceAtHead(gitSym), (e) => e instanceof GateDeny, 'a symlinked marker is the same smuggling vector as a symlinked manifest');
+});
+
+// ---- kill-coverage for the seal+cutover field checks -----------------------
+// Each of these is a line a mutant could flip silently without a test that
+// reaches it: the binding fields individually, the seal verdict, the
+// operator reason floor, and the seal-without-cutover shape.
+
+test('AC18d: a wrong rootLines count DENIES', () => {
+  const bad = withSealCutover(BASE_ROOT, {
+    mutate: (e) => e.gate === 'manifest-cutover' ? { ...e, data: { ...e.data, rootLines: 99 } } : e,
+  });
+  assert.throws(() => assertRootTransition(rootArgs(BASE_ROOT, bad.text)), (e) => e instanceof GateDeny && /rootLines/.test(e.message));
+});
+
+test('AC18e: a cutover reason shorter than 8 characters DENIES', () => {
+  const bad = withSealCutover(BASE_ROOT, {
+    mutate: (e) => e.gate === 'manifest-cutover' ? { ...e, data: { ...e.data, reason: 'short' } } : e,
+  });
+  assert.throws(() => assertRootTransition(rootArgs(BASE_ROOT, bad.text)), (e) => e instanceof GateDeny && /reason/.test(e.message));
+});
+
+test('AC18f: a seal entry whose verdict is not needs-attention DENIES', () => {
+  const bad = withSealCutover(BASE_ROOT, {
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, data: { ...e.data, verdict: 'approve' } } : e,
+  });
+  assert.throws(() => assertRootTransition(rootArgs(BASE_ROOT, bad.text)), (e) => e instanceof GateDeny && /needs-attention/.test(e.message));
+});
+
+test('AC18g: seal entries with NO terminal cutover DENY — a seal marks a cutover that must exist', () => {
+  const lastLine = BASE_LINES.at(-1);
+  const sealOnly = BASE_ROOT + JSON.stringify({ seq: 3, ...seal(), prev: sha256(lastLine) }) + '\n';
+  assert.throws(() => assertRootTransition(rootArgs(BASE_ROOT, sealOnly)), (e) => e instanceof GateDeny);
+});
+
+test('baseForestBytes: reserved names and non-blob rows are excluded; blobs are read by hash', () => {
+  const segBytes = Buffer.from(segmentText({ anchor: rootAnchor(BASE_ROOT) }));
+  const BASE_REV = 'f'.repeat(40);
+  const git = stubGit([
+    [/^ls-tree f+ -- \.adlc\/manifest\.d$/, ok(`040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n`)],
+    [/^ls-tree f+ \.adlc\/manifest\.d\/$/, ok([
+      `100644 blob ${'a'.repeat(40)}\t.adlc/manifest.d/.store.json`,
+      `040000 tree ${'b'.repeat(40)}\t.adlc/manifest.d/nested`,
+      `100644 blob ${'d'.repeat(40)}\t.adlc/manifest.d/${SEG_A}`,
+    ].join('\n') + '\n')],
+    [/^cat-file blob d+$/, okRaw(segBytes)],
+  ]);
+  const base = baseForestBytes(git, BASE_REV);
+  assert.equal(base.size, 1, 'only the real segment');
+  assert.ok(base.get(SEG_A).equals(segBytes));
+});
+
+test('baseForestBytes: a git failure FAILS closed', () => {
+  const git = stubGit([
+    [/^ls-tree f+ -- \.adlc\/manifest\.d$/, { status: 128, stdout: '' }],
+  ]);
+  assert.throws(() => baseForestBytes(git, 'f'.repeat(40)), (e) => e instanceof GateFail);
+});
+
+test('AC19 pin: NON-JSON appended root bytes keep their pre-forest meaning — opaque appends are allowed', () => {
+  // The pre-forest gate byte-compared and never parsed; a >1 MiB opaque
+  // manifest with arbitrary appended bytes passed. Detection must therefore
+  // parse leniently — strict parsing applies only once a cutover/seal entry
+  // is actually detected. Caught by the rails-guard-ci entrypoint suite when
+  // an early version parsed every appended line fail-closed.
+  const opaqueBase = 'x'.repeat(2048) + '\n';
+  const opaqueHead = opaqueBase + 'appended-not-json\n';
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(opaqueBase, opaqueHead)));
 });
