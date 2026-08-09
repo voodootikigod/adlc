@@ -680,15 +680,18 @@ test('seal coverage is per FULL tuple — a ticket-scoped approve needs its own 
   // present. Matching on (provider, revision) alone lets a ticketless seal
   // "cover" a ticketed approve while the reader's per-tuple revocation
   // leaves that approval alive across the cutover.
+  // ticket is TOP-LEVEL on real entries — the recorder writes it there and
+  // the reader matches it there; an earlier version of this fixture put it
+  // in data and proved nothing about the real shape.
   const base = chainText([
     evidence(),
-    { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y', ticket: 'T-AAA' } },
-    { gate: 'cross-model-review', ts: '2026-01-01T01:01:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y', ticket: 'T-BBB' } },
+    { gate: 'cross-model-review', ticket: 'T-AAA', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' } },
+    { gate: 'cross-model-review', ticket: 'T-BBB', ts: '2026-01-01T01:01:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' } },
   ]);
   // one seal, carrying only T-AAA's tuple
   const sealed = withSealCutover(base, {
     sealCount: 1,
-    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, data: { ...e.data, ticket: 'T-AAA' } } : e,
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, ticket: 'T-AAA' } : e,
   });
   assert.throws(
     () => assertRootTransition(rootArgs(base, sealed.text)),
@@ -896,4 +899,44 @@ test('the cutover rootSha256 binding hashes RAW bytes — invalid utf8 in the le
   assert.doesNotThrow(() => assertRootTransition({
     basePresent: true, baseBytes, headPresent: true, headBytes, migration: NO_MIGRATION,
   }));
+});
+
+// ---- ticket shape fidelity and cutover-only auth inference -----------------
+
+test('a seal carrying ticket only in DATA does not cover a top-level-ticketed approve', () => {
+  // The reader matches entry.ticket (top-level) exclusively — a data-shaped
+  // ticket on a seal never revokes the per-ticket gate, so treating it as
+  // coverage leaves the approval alive across the cutover.
+  const approve = { gate: 'cross-model-review', ticket: 'T-AAA', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' } };
+  const base = chainText([evidence(), approve]);
+  const sealed = withSealCutover(base, {
+    sealCount: 1,
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, data: { ...e.data, ticket: 'T-AAA' } } : e, // data-shaped: wrong
+  });
+  assert.throws(
+    () => assertRootTransition(rootArgs(base, sealed.text)),
+    (e) => e instanceof GateDeny && /T-AAA/.test(e.message)
+  );
+  // top-level ticket on the seal: covers
+  const sealedRight = withSealCutover(base, {
+    sealCount: 1,
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, ticket: 'T-AAA' } : e,
+  });
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealedRight.text)));
+});
+
+test('a cutover-only forest (marker lost) still enforces keyed signature presence', () => {
+  // §8 refuses to run the ceremony without a key, so a cutover-tailed root
+  // implies a keyed forest even when the marker is gone — losing the marker
+  // must not silently drop the discipline.
+  const cutRoot = withSealCutover(BASE_ROOT).text;
+  const unsigned = segmentText({ anchor: rootAnchor(cutRoot) });
+  assert.throws(
+    () => validateNewSegments(newSegArgs({
+      headSegments: new Map([[SEG_A, Buffer.from(unsigned)]]),
+      headRootText: cutRoot,
+      forestAuth: 'keyed', // what rail-freeze must infer from the cutover tail
+    })),
+    (e) => e instanceof GateDeny && /sig/.test(e.message)
+  );
 });

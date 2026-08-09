@@ -336,6 +336,10 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   if (snapshot.marker !== null) {
     try { forestAuth = JSON.parse(snapshot.marker.toString('utf8'))?.auth ?? null; } catch { forestAuth = null; }
   }
+  // A cutover-tailed root implies a KEYED forest even with the marker lost:
+  // the ceremony refuses to run without a key (§8 step 1), so cutover-only
+  // repos must not silently drop signature discipline with the marker.
+  if (forestAuth === null && headRootCutover) forestAuth = 'keyed';
 
   // §9.2 — committed segments are append-only, per file; deletion/rename denies.
   validateSegmentAppendOnly(baseSegments.segments, snapshot.segments, { forestAuth });

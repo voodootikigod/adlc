@@ -488,7 +488,7 @@ export function validateSealCutoverAppend(baseText, headText, headBytes = Buffer
   // computed per §3 over the base text: (provider, revision) tuples whose
   // last cross-model verdict is approve.
   const standing = standingApproveTuples(baseText);
-  const sealed = new Set(seals.map((entry) => approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket)));
+  const sealed = new Set(seals.map((entry) => approveTupleKey(entry.data, entry.ticket)));
   for (const tuple of standing) {
     if (!sealed.has(tuple)) {
       const [provider, revision, ticket] = tuple.split('\u0000');
@@ -733,7 +733,10 @@ function standingApproveTuples(text) {
     if (entry?.gate !== 'cross-model-review') continue;
     const { provider, revision, verdict } = entry.data ?? {};
     if (typeof provider !== 'string' || typeof revision !== 'string') continue;
-    const key = approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket);
+    // entry.ticket, TOP-LEVEL only: the reader's per-ticket matching never
+    // consults data.ticket, so honoring a data-shaped ticket here would let
+    // a malformed seal "cover" an approve the reader keeps honoring.
+    const key = approveTupleKey(entry.data, entry.ticket);
     if (verdict === 'approve') approved.add(key);
     else if (verdict === 'needs-attention') revoked.add(key);
   }
