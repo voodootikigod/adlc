@@ -373,10 +373,38 @@ describe('write-path hardening', () => {
     // Pinned structurally: the implementation must not contain a whole-root
     // writeFileSync without the append flag.
     const src = readFileSync(new URL('../lib/migrate.mjs', import.meta.url), 'utf8');
-    const writes = [...src.matchAll(/writeFileSync\(rootPath[^)]*\)/g)].map((m) => m[0]);
-    assert.ok(writes.length > 0, 'the ceremony writes the root');
-    for (const call of writes) {
-      assert.match(call, /flag:\s*'a'/, `root write must be append-mode: ${call}`);
-    }
+    assert.ok(/openSync\(rootPath, 'a'\)/.test(src), 'the root is opened append-mode');
+    assert.ok(!/writeFileSync\(rootPath/.test(src), 'no whole-root writeFileSync may exist — a crash mid-rewrite truncates history');
+  });
+});
+
+describe('backup-path and durability hardening', () => {
+  it('a pre-planted symlink at the predictable backup path refuses — nothing is written through it', () => {
+    const { root, dir } = liveRepo({ entries: [evidence()] });
+    const external = realpathSync(mkdtempSync(join(tmpdir(), 'gm-migrate-bk-')));
+    try {
+      const victim = join(external, 'victim');
+      writeFileSync(victim, 'untouched');
+      const bytes = readFileSync(join(dir, 'manifest.jsonl'));
+      const predictable = `${join(dir, 'manifest.jsonl')}.pre-cutover-${sha256(bytes).slice(0, 16)}.bak`;
+      symlinkSync(victim, predictable);
+      assert.throws(
+        () => migrate(dir, { key: KEY, reason: REASON, write: true }),
+        /not a regular file/
+      );
+      assert.equal(readFileSync(victim, 'utf8'), 'untouched', 'the symlink target must never be written');
+    } finally { clean(root); clean(external); }
+  });
+
+  it('every durable write is fsynced and the root write is exclusive-or-append (structural pin)', () => {
+    const src = readFileSync(new URL('../lib/migrate.mjs', import.meta.url), 'utf8');
+    assert.ok((src.match(/fsyncSync\(/g) || []).length >= 3, 'backup, appendix, and marker writes must fsync');
+    assert.ok(/openSync\(backupPath, 'wx'\)/.test(src), 'the backup is created exclusively, never following anything pre-existing');
+  });
+
+  it('the rollback guidance never instructs deleting a manifest.d that may hold real segments', () => {
+    const src = readFileSync(new URL('../lib/migrate.mjs', import.meta.url), 'utf8');
+    assert.ok(!/delete \$\{segmentDirPath\(dir\)\} to roll back/.test(src), 'unconditional manifest.d deletion advice must not exist');
+    assert.match(src, /ONLY \.store\.json/, 'deletion advice must be conditional on the directory holding only the marker');
   });
 });

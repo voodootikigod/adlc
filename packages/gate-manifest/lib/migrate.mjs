@@ -14,14 +14,14 @@
 // to parity by validating the ceremony's output with rails-guard's own
 // validators — a census divergence fails there, not on migration day.
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { ADLC_DIR, ledgerPath, withLedgerLock } from '@adlc/core';
 import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 import { isSegmentedRepo, markerPath } from './lineage.mjs';
 import { segmentDirPath } from './forest.mjs';
-import { verify } from './verify.mjs';
+import { verify, verifyChain } from './verify.mjs';
 import { signEntry } from './sign.mjs';
 import { gitignoreContractViolation } from './enable.mjs';
 
@@ -246,13 +246,27 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     if (unsigned.length > 0 && !attestUnsigned) {
       throw new Error('unsigned entries appeared between planning and locking — re-run');
     }
+    // The backup path is PREDICTABLE (sha16 of the visible manifest bytes),
+    // so a hostile checkout can pre-plant a symlink exactly there and turn
+    // the backup write into an arbitrary-path write. lstat first, and create
+    // exclusively ('wx') so nothing pre-existing is ever followed or
+    // silently reused except a byte-identical prior backup (crash re-run).
     const backupPath = `${rootPath}.pre-cutover-${sha256(originalBytes).slice(0, 16)}.bak`;
-    if (existsSync(backupPath)) {
+    let backupStat = null;
+    try { backupStat = lstatSync(backupPath); } catch { backupStat = null; }
+    if (backupStat !== null) {
+      if (!backupStat.isFile()) {
+        throw new Error(`backup path ${backupPath} exists and is not a regular file — refusing to write through it`);
+      }
       if (!readFileSync(backupPath).equals(originalBytes)) {
         throw new Error(`backup path ${backupPath} exists with different content — refusing to overwrite; resolve it before re-running`);
       }
     } else {
-      writeFileSync(backupPath, originalBytes);
+      const fd = openSync(backupPath, 'wx');
+      try {
+        writeSync(fd, originalBytes);
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
     }
 
     const lines = rawLines(originalText);
@@ -311,7 +325,18 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     // whatever byte the crash hit). A root whose final line lacks its
     // trailing newline gets one first, or the first seal would concatenate
     // onto the old tail line and corrupt both.
-    writeFileSync(rootPath, newlineRepair + appendix, { flag: 'a' });
+    {
+      // Durable, append-mode: the backup was fsynced above, and the appendix
+      // must reach disk before the marker publishes — otherwise a power loss
+      // could surface a marker (or a later write) with the cutover entries
+      // still in the page cache, assembling states no crash-recovery path
+      // expects.
+      const fd = openSync(rootPath, 'a');
+      try {
+        writeSync(fd, newlineRepair + appendix);
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
+    }
 
     // Marker (§4.7) inside the SAME lock — the unit is not done until the
     // repo carries both signals. Temp file cleanup on EVERY failure path:
@@ -320,8 +345,17 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     mkdirSync(segDir, { recursive: true });
     const tempPath = join(segDir, `.store.json.tmp-${randomBytes(6).toString('hex')}`);
     try {
-      writeFileSync(tempPath, JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+      const fd = openSync(tempPath, 'wx');
+      try {
+        writeSync(fd, JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
       renameSync(tempPath, markerPath(dir));
+      // fsync the DIRECTORY so the rename itself is durable, not just the
+      // file contents (a crash could otherwise resurrect the pre-rename
+      // state with the temp name).
+      const dirFd = openSync(segDir, 'r');
+      try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
     } catch (err) {
       rmSync(tempPath, { force: true });
       throw err;
@@ -329,6 +363,21 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     if (!isSegmentedRepo(dir)) {
       rmSync(markerPath(dir), { force: true });
       throw new Error('the resolver does not recognize the marker that was just written (format/version skew) — rolled back');
+    }
+
+    // Verify the ROOT chain here, INSIDE the lock, where nothing else can
+    // write: this is authoritative for everything the ceremony changed. The
+    // whole-forest verify() below is advisory — the instant the marker
+    // published, a concurrent writer may legitimately mint a segment, and a
+    // forest-wide failure must never be answered by deleting manifest.d/
+    // (that could destroy the concurrent writer's real evidence).
+    const finalText = readFileSync(rootPath, 'utf8');
+    const finalCheck = verifyChain(
+      rawLines(finalText),
+      { key: signingKey, requireSignatures: unsigned.length === 0, anchorOnFirst: false }
+    );
+    if (!finalCheck.valid) {
+      throw new Error(`the migrated root does not chain-verify (${finalCheck.message}) — restore ${backupPath} over manifest.jsonl; if .adlc/manifest.d contains ONLY .store.json, delete the directory too, otherwise investigate its segments before touching them`);
     }
     return { seals, unsignedEntries: unsigned, backupPath };
   }, dir);
@@ -338,7 +387,11 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
   // legacy prefix.
   const post = verify(dir, { key: signingKey, requireSignatures: applied.unsignedEntries.length === 0 });
   if (!post.valid) {
-    throw new Error(`post-ceremony verification failed (${post.message}) — restore ${applied.backupPath} and delete ${segmentDirPath(dir)} to roll back`);
+    // Advisory, not destructive: the root was verified authoritatively
+    // inside the lock; a forest-level failure here can be a concurrent
+    // writer's half-minted segment, whose evidence must not be deleted on
+    // this path's say-so.
+    throw new Error(`post-ceremony forest verification reported: ${post.message}. The migrated ROOT verified inside the lock; investigate ${segmentDirPath(dir)} before altering anything — a concurrent writer may have minted a segment mid-verification. Backup: ${applied.backupPath}`);
   }
 
   return { ...plan, seals: applied.seals, unsignedEntries: applied.unsignedEntries, backupPath: applied.backupPath, decision: 'applied', written: true };
