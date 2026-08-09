@@ -204,6 +204,49 @@ rule targeting a specific branch-derived slug (e.g. `release-*.jsonl`) can
 still evade it — enforcing committability of each real segment at the moment
 it is minted belongs to the segment writer, deliberately outside `enable`.
 
+### migrate
+
+The history-preserving cutover ceremony (spec §8): switch a repository with a
+**live root** into segmented (forest) mode without rewriting a byte of its
+history. `enable` refuses live roots and names this command.
+
+```sh
+gate-manifest migrate --reason "cutover to forest mode"            # dry-run
+gate-manifest migrate --reason "cutover to forest mode" --write    # apply
+```
+
+Requires `ADLC_MANIFEST_KEY` — the ceremony verifies every existing signature
+and signs what it appends; no keyless form exists. Dry-run prints the full
+plan: every standing approve that will be sealed, the cutover entry's fields,
+the backup path, and the marker path.
+
+The write, in order: a hash-named backup
+(`manifest.jsonl.pre-cutover-<sha16>.bak`), one signed `needs-attention` seal
+per standing approve (§4.6 — a deliberate reset forcing fresh re-approval
+under forest trust semantics, never a grandfathering), the signed
+`manifest-cutover` entry binding `rootSha256` over all prior raw bytes, and
+the `.adlc/manifest.d/.store.json` marker with `auth: "keyed"`. Every append
+extends the existing chain normally.
+
+Refusals (exit 2, nothing written): missing key; invalid chain (run
+`repair-chain` first); unsigned entries without `--attest-unsigned` (with it,
+their count and line numbers are disclosed in the plan and in the cutover
+record); already segmented — by marker **or** cutover tail, so a lost marker
+cannot cause duplicate seals; a `--reason` under 8 characters; a gitignore
+contract that would strand the marker uncommittable.
+
+Crash safety: a partial run is recoverable at every step. Seals appended
+before a crash already revoke their tuples, so a re-run seals only the
+remainder — no duplicates. A cutover appended before the marker keeps the
+repo segmented via the root tail, and a re-run refuses rather than
+double-appending.
+
+Follow-ups the operator owns (printed on apply): commit in a dedicated PR;
+pin the minimum toolkit version in CI; in-flight PRs rebase and re-record
+revision-bound attestations (`migrate-branch` salvages a branch's root-tail
+evidence). **Rollback:** restore the backup over `manifest.jsonl` and delete
+`.adlc/manifest.d/`.
+
 ### adopt
 
 Choose which lineage this checkout continues, when more than one committed

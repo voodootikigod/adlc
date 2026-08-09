@@ -477,8 +477,14 @@ export function validateSealCutoverAppend(baseText, headText, headBytes = Buffer
   // legacy region may not decode losslessly; appended lines are strict JSON
   // and decode round-trip clean, so their utf8 re-encoding is byte-exact.
   const baseTailEntry = baseRaw.length ? tryParse(baseRaw.at(-1)) : null;
-  const baseTailBytes = baseBytes === null ? Buffer.alloc(0) : rawLastLine(baseBytes);
-  let previousLineBytes = baseTailBytes.length > 0 ? baseTailBytes : null;
+  // The prev hash matches the WRITER, which chains over the DECODED tail
+  // line (record.mjs hashes state.lastRawLine as a string; verify.mjs
+  // agrees). Hashing raw bytes here diverged on an invalid-utf8 tail and
+  // false-denied ceremony output that verify() itself accepts — caught by
+  // the migrate suite's cross-implementation test. rootSha256 below stays
+  // raw-byte: that binding is defined over file bytes and both its producer
+  // and this checker hash buffers.
+  let previousLineBytes = baseRaw.length > 0 ? Buffer.from(baseRaw.at(-1), 'utf8') : null;
   let previousSeq = Number.isInteger(baseTailEntry?.seq) ? baseTailEntry.seq : baseRaw.length;
   for (const [i, entry] of appended.entries()) {
     const expectedPrev = previousLineBytes ? createHash('sha256').update(previousLineBytes).digest('hex') : null;

@@ -10,6 +10,7 @@ import { buildAttest } from '../lib/attest.mjs';
 import { repairChain } from '../lib/repair.mjs';
 import { enable, boundedSegmentationState, CI_COVERAGE_WARNING, SEGMENTATION_UNDETERMINED_WARNING } from '../lib/enable.mjs';
 import { adopt } from '../lib/adopt.mjs';
+import { migrate } from '../lib/migrate.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
 import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
@@ -23,6 +24,7 @@ const USAGE =
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
   '       enable [--write] [--json] [--allow-keyless]\n' +
+  '       migrate --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       adopt  [segment-name] [--write] [--json]';
 
 const { values: flags, positionals } = parseArgs({
@@ -279,6 +281,41 @@ if (verb === 'enable') {
   if (out.decision === 'already-enabled') pass(out.reason);
   if (out.written) pass(`forest mode enabled — wrote ${out.markerPath}`);
   pass(`dry-run: would write ${out.markerPath} to enable forest mode — re-run with --write to apply`);
+}
+
+// ── migrate ─────────────────────────────────────────────────────────────────
+// The history-preserving cutover ceremony (spec §8). Dry-run by default;
+// --write applies. Key resolution is a bin concern; the library refuses
+// keyless itself, so no precheck is duplicated here.
+if (verb === 'migrate') {
+  let out;
+  try {
+    out = migrate(flags.dir, {
+      key: getKey(process.env),
+      reason: flags.reason ?? '',
+      attestUnsigned: flags['attest-unsigned'],
+      write: flags.write,
+    });
+  } catch (err) {
+    opError(err.message);
+  }
+  const refused = out.decision.startsWith('refuse-');
+  if (flags.json) {
+    printJson(out); // exactly ONE JSON document on stdout, in every mode
+    process.exit(refused ? 2 : 0);
+  }
+  if (refused) gateFail(`migrate refused: ${out.reason}`);
+  const sealsLine = `${out.seals.length} standing approve${out.seals.length === 1 ? '' : 's'} sealed`;
+  if (out.written) {
+    console.log(`cutover applied: ${sealsLine}; backup at ${out.backupPath}; marker at ${out.markerPath}`);
+    for (const step of out.followUps) console.log(`  next: ${step}`);
+    pass();
+  }
+  console.log(`dry-run plan: ${sealsLine}; cutover reason "${out.cutover.reason}"; backup would be ${out.backupPath}`);
+  for (const seal of out.seals) {
+    console.log(`  seal: provider ${seal.provider}, revision ${seal.revision}${seal.ticket ? `, ticket ${seal.ticket}` : ''}`);
+  }
+  pass('re-run with --write to apply');
 }
 
 // ── adopt ───────────────────────────────────────────────────────────────────

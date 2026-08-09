@@ -104,7 +104,7 @@ function gitProbeEnv() {
  * rather than guessing — only an exit meaning "no pattern matches" counts
  * as committable.
  */
-function gitignoreContractViolation(dir) {
+export function gitignoreContractViolation(dir) {
   const probeCwd = dirname(dir);
   const env = gitProbeEnv();
   const run = (args) => {

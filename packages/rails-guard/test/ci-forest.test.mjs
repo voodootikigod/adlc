@@ -897,7 +897,10 @@ test('the cutover rootSha256 binding hashes RAW bytes — invalid utf8 in the le
     ts: '2026-01-02T00:00:01.000Z',
     data: { reason: 'operator-migration', rootLines: 1, rootSha256: sha256Buf(baseBytes), sealedApprovals: 0 },
     files: {}, sigVersion: 2, sig: 'e'.repeat(64),
-    prev: sha256Buf(lastLineOf(baseBytes)),
+    // prev as the WRITER computes it: over the DECODED tail line (an earlier
+    // fixture hashed raw bytes here, encoding the gate's own divergence from
+    // record.mjs — the rootSha256 binding above is what stays raw-byte).
+    prev: sha256(baseBytes.toString('utf8').trim().split('\n').at(-1)),
   };
   void sealLine;
   const headBytes = Buffer.concat([baseBytes, Buffer.from(JSON.stringify(cutEntry) + '\n')]);
