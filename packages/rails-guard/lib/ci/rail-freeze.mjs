@@ -50,6 +50,13 @@ const MIGRATION_ALLOWED_EXACT = new Set([
 // held to the full §9.2/§9.3 and segmented-evidence validation.
 const MIGRATION_ALLOWED_PREFIXES = ['.adlc/ticket-archive/', '.adlc/tickets/', '.adlc/manifest.d/'];
 
+/** Whether a migration-only diff may touch `path` — exported so the allowlist
+ *  itself is directly testable (its wiring is otherwise reachable only via
+ *  the railed entrypoint suite). */
+export function migrationDiffAllowsPath(path) {
+  return MIGRATION_ALLOWED_EXACT.has(path) || MIGRATION_ALLOWED_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 /**
  * Run the rail-freeze gate.
  *
@@ -266,7 +273,7 @@ function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets })
   const diff = git(['diff', '--name-only', `${trustedBase}...HEAD`], 'git diff migration shape');
   if (diff.status !== 0) fail('cannot verify migration diff shape');
   const allowed = diff.stdout.trim().split('\n').filter(Boolean).every((path) =>
-    MIGRATION_ALLOWED_EXACT.has(path) || MIGRATION_ALLOWED_PREFIXES.some((prefix) => path.startsWith(prefix)));
+    migrationDiffAllowsPath(path));
   if (!allowed) deny('legacy-to-directory transition must be a dedicated migration-only diff');
 
   return { verified: true, storeHash: headSnapshot.hash, archiveHash: headArchive.hash };
@@ -310,7 +317,7 @@ function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel
  * under `.adlc/manifest.d/`. Root and forest are read from ONE pinned rev:
  * separate pins would be the #314 round-7 TOCTOU spread across files.
  */
-function verifyManifest({ git, trustedBase, base, migration }) {
+export function verifyManifest({ git, trustedBase, base, migration }) {
   const baseHasManifest = trackedAt(git, trustedBase, '.adlc/manifest.jsonl', `git ls-tree '${base}' manifest`);
   const snapshot = committedEvidenceAtHead(git);
   const baseSegments = baseForestBytes(git, trustedBase);

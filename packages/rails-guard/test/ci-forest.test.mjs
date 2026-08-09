@@ -14,6 +14,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assertRootTransition,
   baseForestBytes,
@@ -1184,4 +1188,102 @@ test('a keyless marker arriving WITH a cutover DENIES — the ceremony always wr
     }),
     (e) => e instanceof GateDeny && /keyless|keyed/.test(e.message)
   );
+});
+
+// ---- mutation kill coverage: wiring reachable only through verifyManifest --
+
+import { migrationDiffAllowsPath, verifyManifest, runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
+
+test('the migration allowlist reaches manifest.d/ and each legacy path', () => {
+  for (const path of ['.adlc/manifest.d/x.jsonl', '.adlc/tickets/t1.json', '.adlc/ticket-archive/a.json', '.adlc/tickets.json', '.adlc/manifest.jsonl', '.gitignore']) {
+    assert.ok(migrationDiffAllowsPath(path), `${path} must be migration-allowed`);
+  }
+  assert.ok(!migrationDiffAllowsPath('src/anything.mjs'), 'unrelated paths stay payload');
+});
+
+test('a grammar-valid slug may contain every digit', () => {
+  const seg = segmentText({ anchor: rootAnchor(BASE_ROOT) });
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[`feat-2345678-9-${ULID_A}.jsonl`, Buffer.from(seg)]]),
+  })));
+});
+
+test('baseForestBytes never reads .lineage as a segment — no blob fetch, no entry', () => {
+  // The stub throws on any un-stubbed invocation, so a mutant that stops
+  // reserving .lineage would die trying to cat-file it.
+  const git = stubGit([
+    [/^ls-tree f+ -- \.adlc\/manifest\.d$/, ok(`040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n`)],
+    [/^ls-tree f+ \.adlc\/manifest\.d\/$/, ok(`100644 blob ${'e'.repeat(40)}\t.adlc/manifest.d/.lineage\n`)],
+  ]);
+  const base = baseForestBytes(git, 'f'.repeat(40));
+  assert.equal(base.segments.size, 0);
+});
+
+function bootstrapGit({ rootText = '', segRows = '', markerJson = null } = {}) {
+  const rows = [];
+  if (rootText !== null) rows.push(`100644 blob ${'e'.repeat(40)}\t.adlc/manifest.jsonl`);
+  const responses = [
+    [/^rev-parse HEAD$/, ok(`${REV}\n`)],
+    [/^ls-tree [a-f0-9]+ -- \.adlc$/, ok(`040000 tree ${'b'.repeat(40)}\t.adlc\n`)],
+    [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.jsonl$/, ok(rootText === null ? '' : rows[0] + '\n')],
+    [/^cat-file blob e+$/, okRaw(Buffer.from(rootText ?? ''))],
+    [/^ls-tree [a-f0-9]+ -- \.adlc\/manifest\.d$/, ok(segRows || markerJson ? `040000 tree ${'c'.repeat(40)}\t.adlc/manifest.d\n` : '')],
+    [/^ls-tree [a-f0-9]+ \.adlc\/manifest\.d\/$/, ok(segRows + (markerJson ? `100644 blob ${'a'.repeat(40)}\t.adlc/manifest.d/.store.json\n` : ''))],
+    [/^cat-file blob a+$/, okRaw(Buffer.from(markerJson ?? ''))],
+    [/^cat-file blob d+$/, okRaw(Buffer.from(segmentText({ anchor: null })))],
+  ];
+  return stubGit(responses);
+}
+
+test('verifyManifest: a NEW marker on a LIVE base root denies through the real wiring', () => {
+  // Kills the base-read ternary mutants: with baseRootBytes nulled, the
+  // marker-on-live-root deny cannot fire and this composition passes.
+  const git = bootstrapGit({ rootText: BASE_ROOT, markerJson: JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }) });
+  const baseGit = (args, label) => {
+    const joined = args.join(' ');
+    // base root EXISTS (live, with entries); base forest is empty
+    if (/^ls-tree --name-only f+ -- \.adlc\/manifest\.jsonl$/.test(joined)) return ok('.adlc/manifest.jsonl\n');
+    if (/^ls-tree f+ -- \.adlc\/manifest\.jsonl$/.test(joined)) return ok(`100644 blob ${'9'.repeat(40)}\t.adlc/manifest.jsonl\n`);
+    if (/^ls-tree f+ -- \.adlc\/manifest\.d$/.test(joined)) return ok('');
+    if (args[0] === 'show') return okRaw(Buffer.from(BASE_ROOT));
+    return git(args, label);
+  };
+  assert.throws(
+    () => verifyManifest({ git: baseGit, trustedBase: 'f'.repeat(40), base: 'main', migration: { verified: false } }),
+    // The SPECIFIC live-root refusal — a looser match let a different deny
+    // (gained-entries) satisfy this test while the base read was nulled out.
+    (e) => e instanceof GateDeny && /holds evidence and no cutover/.test(e.message)
+  );
+});
+
+test('the REAL bootstrap gate fails a PR seeding segment evidence (no base ticket store)', () => {
+  // Drives runRailFreezeGate end to end on a throwaway repo: base has no
+  // ticket store and no config, HEAD commits a populated segment. The
+  // snapshot-only version of this test never executed the bootstrap branch
+  // and its comparison mutants survived.
+  const root = mkdtempSync(join(tmpdir(), 'forest-bootstrap-'));
+  try {
+    const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@t.co'); g('config', 'user.name', 't'); g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(root, 'README.md'), 'x\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    g('checkout', '-qb', 'feat');
+    mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'manifest.d', SEG_A), segmentText({ anchor: null }));
+    g('add', '-A'); g('commit', '-qm', 'seed a segment');
+    assert.throws(
+      () => runRailFreezeGate({ cwd: root, base: 'main', env: {}, stdio: 'pipe' }),
+      (e) => e instanceof GateFail && /segment evidence/.test(e.message),
+      'seeding segment evidence in a bootstrap PR must FAIL closed'
+    );
+    // and the clean bootstrap (no segments) passes — pinning the comparison
+    g('checkout', '-q', 'main');
+    g('checkout', '-qb', 'feat2');
+    writeFileSync(join(root, 'src.mjs'), 'y\n');
+    g('add', '-A'); g('commit', '-qm', 'ordinary change');
+    const clean = runRailFreezeGate({ cwd: root, base: 'main', env: {}, stdio: 'pipe' });
+    assert.equal(clean.status, 0, 'an ordinary bootstrap PR still passes');
+    void clean;
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
