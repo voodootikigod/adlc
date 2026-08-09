@@ -45,7 +45,10 @@ const MIGRATION_ALLOWED_EXACT = new Set([
   '.adlc/manifest.jsonl',
   '.gitignore',
 ]);
-const MIGRATION_ALLOWED_PREFIXES = ['.adlc/ticket-archive/', '.adlc/tickets/'];
+// manifest.d/ is allowed because a SEGMENTED repo's migration records its
+// evidence there (the frozen root cannot carry it); those files are still
+// held to the full §9.2/§9.3 and segmented-evidence validation.
+const MIGRATION_ALLOWED_PREFIXES = ['.adlc/ticket-archive/', '.adlc/tickets/', '.adlc/manifest.d/'];
 
 /**
  * Run the rail-freeze gate.

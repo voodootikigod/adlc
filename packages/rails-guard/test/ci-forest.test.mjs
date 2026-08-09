@@ -1091,3 +1091,32 @@ test('a segmented repo validates ticket-migration evidence in its SEGMENTS — t
     (e) => e instanceof GateDeny && /exactly one/.test(e.message)
   );
 });
+
+// ---- round-10: allowlist reach and whole-forest anchor re-resolution -------
+
+test('an append that ALTERS an existing segment terminal raw line breaks child anchors — and DENIES', () => {
+  // Byte-prefix append-only holds while the terminal RAW LINE changes: a
+  // parent whose last line lacks a trailing newline gains "\r\n..." — the
+  // old last line now ends in \r, its hash changes, and every child anchor
+  // pointing at it fails at read time. Neither segment is new, so per-name
+  // §9.3 never looks; the whole head forest must re-resolve, as the reader
+  // will.
+  const parentFirst = JSON.stringify({ seq: 1, ...evidence({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-a' }), prev: null });
+  const parentNoLf = parentFirst; // no trailing newline
+  const child = segmentText({ anchor: { segment: SEG_A, seq: 1, lineHash: sha256(parentFirst) }, branch: 'feat-b' });
+  // head: parent gains a CRLF-prefixed append; child untouched
+  const crlfAppend = parentNoLf + '\r\n' + JSON.stringify({ seq: 2, ...evidence(), prev: sha256(parentFirst + '\r') }) + '\n';
+  assert.throws(
+    () => validateNewSegments(newSegArgs({
+      headSegments: new Map([[SEG_A, Buffer.from(crlfAppend)], [SEG_B, Buffer.from(child)]]),
+      baseSegmentNames: new Set([SEG_A, SEG_B]),
+    })),
+    (e) => e instanceof GateDeny && /lineHash/.test(e.message)
+  );
+  // untouched healthy forest still passes whole-forest re-resolution
+  const parent = parentFirst + '\n';
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(parent)], [SEG_B, Buffer.from(child)]]),
+    baseSegmentNames: new Set([SEG_A, SEG_B]),
+  })));
+});

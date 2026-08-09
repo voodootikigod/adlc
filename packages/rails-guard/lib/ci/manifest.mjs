@@ -652,6 +652,22 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
     }
   }
 
+  // Whole-forest anchor re-resolution, not just new segments: append-only
+  // admits changes that alter an existing segment's terminal RAW LINE (a
+  // base file lacking its trailing newline gains a CRLF-prefixed append),
+  // silently breaking every child anchor at read time. The reader resolves
+  // every anchor on every read; the gate must resolve exactly what the
+  // reader will. Null anchors are excluded here — their legality is the
+  // base-state §9.3 rule (new segments) and the root-first-entries
+  // composition check above (existing ones).
+  for (const [name, anchor] of anchorBySegment) {
+    if (anchor === null || anchor === undefined) continue;
+    const resolution = resolveAnchor(anchor, chainsBySeq, true);
+    if (!resolution.ok) {
+      deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
+    }
+  }
+
   for (const name of newNames) {
     if (!CI_SEGMENT_NAME_RE.test(name)) {
       deny(`.adlc/manifest.d/${name} violates the segment filename grammar (spec §4.2)`);
@@ -675,11 +691,10 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
       }
       expectedSeq += 1;
     }
-    // `firstAnchor` is the anchor verifyChain saw on the entry it validated —
-    // the same bytes, no second read.
-    const resolution = resolveAnchor(chain.firstAnchor, chainsBySeq, baseRootPresent);
-    if (!resolution.ok) {
-      deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
+    // Non-null anchors were re-resolved forest-wide above; what remains per
+    // NEW segment is §9.3's null rule, judged against the BASE tree.
+    if (chain.firstAnchor === null && baseRootPresent) {
+      deny(`.adlc/manifest.d/${name} anchor rejected: anchor: null is not permitted once a root exists`);
     }
     if (forestAuth === 'keyed') {
       assertEntriesCarrySigs(manifestRawLines(text), `.adlc/manifest.d/${name}`, { firstMustBeV2: true });
