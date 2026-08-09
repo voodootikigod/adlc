@@ -395,7 +395,17 @@ function verifyManifest({ git, trustedBase, base, migration }) {
     return;
   }
 
-  if (migration.verified && baseSegmented) return; // validated against segments above
+  if (migration.verified && baseSegmented) {
+    // The evidence was validated against segments above — but this branch is
+    // only reached when the BASE HAS NO ROOT, and returning here skipped the
+    // un-seeded rule entirely: a segmented 'migration' PR could create a
+    // root pre-loaded with arbitrary evidence. A segmented repo's migration
+    // writes nothing to the root; at most an EMPTY root may appear.
+    if (snapshot.root.text.trim()) {
+      fail('a segmented ticket-store migration cannot introduce a populated .adlc/manifest.jsonl — its evidence lives in segments');
+    }
+    return;
+  }
 
   if (migration.verified) {
     // One snapshot for presence AND validation (#314 round 4) — and the SAME

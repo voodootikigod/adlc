@@ -1172,3 +1172,16 @@ test('a NEW cutover landing without the activation marker DENIES — the ceremon
     baseRootHasEntries: true, headRootCutover: true, newlyCutover: false,
   }));
 });
+
+// ---- round-12: migration root-seeding, keyless-cutover markers -------------
+
+test('a keyless marker arriving WITH a cutover DENIES — the ceremony always writes keyed', () => {
+  const keyless = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyless' }));
+  assert.throws(
+    () => validateReservedFiles({
+      baseMarker: null, headMarker: keyless,
+      baseRootHasEntries: true, headRootCutover: true, newlyCutover: true,
+    }),
+    (e) => e instanceof GateDeny && /keyless|keyed/.test(e.message)
+  );
+});

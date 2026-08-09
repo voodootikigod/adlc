@@ -765,6 +765,13 @@ export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntri
   if (parsed.auth !== 'keyed' && parsed.auth !== 'keyless') {
     deny('.adlc/manifest.d/.store.json auth must be "keyed" or "keyless" on a newly introduced marker (spec §4.7)');
   }
+  // The ceremony cannot run keyless and always writes auth "keyed" — a
+  // keyless marker arriving WITH the cutover is producer-impossible, and CI
+  // would enforce keyed for this forest while the marker tells writers the
+  // opposite: a standing contradiction planted in one merge.
+  if (newlyCutover && parsed.auth === 'keyless') {
+    deny('.adlc/manifest.d/.store.json cannot declare auth "keyless" alongside a cutover — the migration ceremony is always keyed');
+  }
 }
 
 /**
