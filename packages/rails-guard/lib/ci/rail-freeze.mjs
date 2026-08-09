@@ -310,18 +310,16 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   const baseHasManifest = trackedAt(git, trustedBase, '.adlc/manifest.jsonl', `git ls-tree '${base}' manifest`);
   const snapshot = committedEvidenceAtHead(git);
   const baseSegments = baseForestBytes(git, trustedBase);
+  // ONE base-root read, kept as the RAW buffer (utf8 is non-injective; the
+  // append-only compare must see the real bytes). Read before any validator
+  // so every consumer shares the same snapshot.
+  const baseRootBytes = baseHasManifest ? baseManifestBytes(git, trustedBase) : null;
+  const baseRootText = baseRootBytes === null ? '' : baseRootBytes.toString('utf8');
 
   // The marker is a trust file: frozen byte-identical once it exists at base;
   // a NEW one may only arrive greenfield (no base evidence) or alongside a
   // cutover in this same PR (a committed .lineage was already denied inside
   // the snapshot read).
-  // ONE base read, kept as the RAW buffer: utf8 decoding is non-injective
-  // (distinct invalid byte sequences collapse to U+FFFD), so a
-  // buffer→string→buffer round-trip would launder exactly the byte-level
-  // rewrites the append-only compare exists to catch. Text is derived FROM
-  // the buffer for the lenient detection checks only.
-  const baseRootBytes = baseHasManifest ? baseManifestBytes(git, trustedBase) : null;
-  const baseRootText = baseRootBytes === null ? '' : baseRootBytes.toString('utf8');
   validateReservedFiles({
     baseMarker: baseSegments.marker,
     headMarker: snapshot.marker,
@@ -338,7 +336,10 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   validateNewSegments({
     headSegments: snapshot.segments,
     baseSegmentNames: new Set(baseSegments.segments.keys()),
-    baseRootPresent: baseHasManifest,
+    // Entry presence, not file existence: bootstrap creates the root EMPTY
+    // by design, and the writer mints anchor:null when there is no head
+    // line to anchor to — an empty tracked root must not deny it.
+    baseRootPresent: baseRootText.trim().length > 0,
     headRootText: snapshot.root.present ? snapshot.root.text : null,
   });
 

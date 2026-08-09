@@ -748,3 +748,53 @@ test('seal matching is keyed as the reader matches — authorProvider is not par
   });
   assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
 });
+
+// ---- round-4 findings ------------------------------------------------------
+
+test('an append to an EXISTING segment must chain-verify — a corrupt continuation DENIES', () => {
+  // §9.2's letter is byte-prefix only, but a corrupt tail landing at merge
+  // means every keyed reader thereafter fails the whole forest closed — the
+  // gate exists to catch that before it lands. Only CHANGED segments are
+  // re-verified; untouched base segments were validated when they landed.
+  const base = segmentText({ anchor: rootAnchor(BASE_ROOT), entries: 2 });
+  const corrupt = base + JSON.stringify({ seq: 3, ...evidence(), prev: 'not-the-tail-hash' }) + '\n';
+  assert.throws(
+    () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(corrupt)]])),
+    (e) => e instanceof GateDeny && /chain/.test(e.message) && e.message.includes(SEG_A)
+  );
+  // a gapped seq in the continuation also denies
+  const lastLine = base.trim().split('\n').at(-1);
+  const gapped = base + JSON.stringify({ seq: 9, ...evidence(), prev: sha256(lastLine) }) + '\n';
+  assert.throws(
+    () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(gapped)]])),
+    (e) => e instanceof GateDeny && e.message.includes(SEG_A)
+  );
+  // and the honest continuation still passes (pinned above as AC5, re-pinned
+  // here against the chain re-verify specifically)
+  const appended = base + JSON.stringify({ seq: 3, ...evidence(), prev: sha256(lastLine) }) + '\n';
+  assert.doesNotThrow(() =>
+    validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(appended)]]))
+  );
+});
+
+test('an EMPTY tracked base root permits anchor:null — bootstrap creates the root empty by design', () => {
+  // "create it empty during bootstrap" is the sanctioned shape, and the
+  // writer mints anchor:null when there is no head LINE to anchor to. File
+  // existence is the wrong predicate; entry presence is the right one.
+  const nullSeg = segmentText({ anchor: null });
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(nullSeg)]]),
+    baseRootPresent: false, // what rail-freeze must pass for an EMPTY tracked root
+    headRootText: '',
+  })));
+});
+
+test('cutover seal matching normalizes providers as the reader does', () => {
+  // §6: "providers normalized on both sides as today" — NFKC, whitespace
+  // stripped, lowercased. An approve by "Codex" sealed by "codex" matches;
+  // treating them as distinct tuples would demand a phantom second seal.
+  const approve = { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'Codex ', authorProvider: 'anthropic', revision: 'git-change:x:y' } };
+  const base = chainText([evidence(), approve]);
+  const sealed = withSealCutover(base, { sealCount: 1 }); // seal() uses lowercase 'codex'
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
+});

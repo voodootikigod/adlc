@@ -326,6 +326,25 @@ export function validateSegmentAppendOnly(baseSegments, headSegments) {
     if (headBytes.length < baseBytes.length || !headBytes.subarray(0, baseBytes.length).equals(baseBytes)) {
       deny(`.adlc/manifest.d/${name} must be append-only in PRs`);
     }
+    if (headBytes.length === baseBytes.length) continue; // untouched: validated when it landed
+    // §9.2's letter is byte-prefix only, but a corrupt continuation landing
+    // at merge makes every keyed reader fail the whole forest closed — the
+    // early catch is the gate's job. Full-chain keyless verify plus §4.3
+    // contiguity, only for segments this PR actually extended.
+    const text = headBytes.toString('utf8');
+    const chain = verifyChain(numberedLines(text), { key: null, requireSignatures: false, anchorOnFirst: true });
+    if (!chain.valid) {
+      deny(`.adlc/manifest.d/${name} appended entries do not chain-verify: ${chain.message}`);
+    }
+    let expectedSeq = 1;
+    for (const raw of manifestRawLines(text)) {
+      const entry = tryParse(raw);
+      if (entry === null) continue;
+      if (entry.seq !== expectedSeq) {
+        deny(`.adlc/manifest.d/${name} seq must be contiguous from 1 (spec §4.3): expected ${expectedSeq}, found ${entry.seq}`);
+      }
+      expectedSeq += 1;
+    }
   }
 }
 
@@ -640,8 +659,16 @@ export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntri
  * whose (provider, revision) tuple has no later needs-attention entry.
  * Lenient parse — unparseable lines cannot carry approvals.
  */
+// Transcribed from packages/prosecute/lib/cross-model.mjs's module-local
+// normalizeProvider (not exported; a package dependency for three lines is
+// worse than the transcription pattern this file already documents). §6:
+// "providers normalized on both sides as today" — defeats accidental
+// variants, not determined forgers, same as the reader.
+const normalizeProvider = (value) =>
+  typeof value === 'string' ? value.normalize('NFKC').replace(/\s+/g, '').toLowerCase() : '';
+
 const approveTupleKey = (data, ticket) =>
-  [data?.provider, data?.revision, ticket ?? ''].join('\u0000');
+  [normalizeProvider(data?.provider), data?.revision, ticket ?? ''].join('\u0000');
 
 function standingApproveTuples(text) {
   // Keyed exactly as the reader matches (§6): (provider, revision), plus
