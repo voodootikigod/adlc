@@ -639,3 +639,69 @@ test('baseForestBytes: a base with NO manifest.d returns the same shape as one w
   assert.equal(base.segments.size, 0);
   assert.equal(base.marker, null);
 });
+
+// ---- round-2 findings ------------------------------------------------------
+
+test('a NEW marker on a LIVE (non-cutover) root DENIES — forest activation cannot bypass the cutover', () => {
+  // A marker landed by PR flips isSegmentedRepo for every clone: writers
+  // route to segments while the root never froze — the half-migrated state
+  // enable itself refuses, delivered via merge instead.
+  const marker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+  assert.throws(
+    () => validateReservedFiles({ baseMarker: null, headMarker: marker, baseRootHasEntries: true, headRootCutover: false }),
+    (e) => e instanceof GateDeny && /cutover/.test(e.message)
+  );
+  // legitimate arrival 1: greenfield enable (base root absent/empty)
+  assert.doesNotThrow(() => validateReservedFiles({ baseMarker: null, headMarker: marker, baseRootHasEntries: false, headRootCutover: false }));
+  // legitimate arrival 2: the migration ceremony (same PR cuts the root over)
+  assert.doesNotThrow(() => validateReservedFiles({ baseMarker: null, headMarker: marker, baseRootHasEntries: true, headRootCutover: true }));
+});
+
+test('a NEW marker without an auth mode DENIES — new markers are post-policy by definition', () => {
+  const marker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+  assert.throws(
+    () => validateReservedFiles({ baseMarker: null, headMarker: marker, baseRootHasEntries: false, headRootCutover: false }),
+    (e) => e instanceof GateDeny && /auth/.test(e.message)
+  );
+});
+
+test('seal coverage is per FULL tuple — a ticket-scoped approve needs its own seal', () => {
+  // §4.6 seals carry provider, authorProvider, revision AND ticket when
+  // present. Matching on (provider, revision) alone lets a ticketless seal
+  // "cover" a ticketed approve while the reader's per-tuple revocation
+  // leaves that approval alive across the cutover.
+  const base = chainText([
+    evidence(),
+    { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y', ticket: 'T-AAA' } },
+    { gate: 'cross-model-review', ts: '2026-01-01T01:01:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y', ticket: 'T-BBB' } },
+  ]);
+  // one seal, carrying only T-AAA's tuple
+  const sealed = withSealCutover(base, {
+    sealCount: 1,
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, data: { ...e.data, ticket: 'T-AAA' } } : e,
+  });
+  assert.throws(
+    () => assertRootTransition(rootArgs(base, sealed.text)),
+    (e) => e instanceof GateDeny && /standing approve/.test(e.message) && /T-BBB/.test(e.message)
+  );
+});
+
+test('a new segment with NONCONTIGUOUS seq DENIES — §4.3 requires +1 steps from 1', () => {
+  // The shared verifyChain checks monotonicity, not contiguity (a gap like
+  // 1,5 passes it) — tightening it is out of this ticket's scope, so the CI
+  // gate enforces contiguity for NEW segments itself.
+  const first = JSON.stringify({ seq: 1, ...evidence({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-x' }), prev: null });
+  const gapped = first + '\n' + JSON.stringify({ seq: 5, ...evidence(), prev: sha256(first) }) + '\n';
+  assert.throws(
+    () => validateNewSegments(newSegArgs({ headSegments: new Map([[SEG_A, Buffer.from(gapped)]]) })),
+    (e) => e instanceof GateDeny && /contiguous|strictly by 1|seq/.test(e.message)
+  );
+});
+
+test('a new segment whose FIRST seq is not 1 DENIES', () => {
+  const first = JSON.stringify({ seq: 3, ...evidence({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-x' }), prev: null });
+  assert.throws(
+    () => validateNewSegments(newSegArgs({ headSegments: new Map([[SEG_A, Buffer.from(first + '\n')]]) })),
+    (e) => e instanceof GateDeny && /seq/.test(e.message)
+  );
+});

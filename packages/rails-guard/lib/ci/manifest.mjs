@@ -427,11 +427,11 @@ export function validateSealCutoverAppend(baseText, headText) {
   // computed per §3 over the base text: (provider, revision) tuples whose
   // last cross-model verdict is approve.
   const standing = standingApproveTuples(baseText);
-  const sealed = new Set(seals.map((entry) => `${entry.data?.provider}\u0000${entry.data?.revision}`));
+  const sealed = new Set(seals.map((entry) => approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket)));
   for (const tuple of standing) {
     if (!sealed.has(tuple)) {
-      const [provider, revision] = tuple.split('\u0000');
-      deny(`the cutover leaves a standing approve unsealed (provider ${provider}, revision ${revision}) — §4.6 requires one seal per standing approve`);
+      const [provider, , revision, ticket] = tuple.split('\u0000');
+      deny(`the cutover leaves a standing approve unsealed (provider ${provider}, revision ${revision}${ticket ? `, ticket ${ticket}` : ''}) — §4.6 requires one seal per standing approve`);
     }
   }
 }
@@ -562,6 +562,20 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
     if (!chain.valid) {
       deny(`.adlc/manifest.d/${name} does not chain-verify: ${chain.message}`);
     }
+    // §4.3: seq starts at 1 and increases strictly BY 1. The shared
+    // verifyChain enforces monotonicity, not contiguity (a 1,5 gap passes
+    // it); tightening that helper is outside this ticket's scope, so the
+    // gate holds new segments to the spec here. (The shared looseness is a
+    // gate-manifest follow-up, recorded in the PR.)
+    let expectedSeq = 1;
+    for (const raw of manifestRawLines(text)) {
+      const entry = tryParse(raw);
+      if (entry === null) continue; // verifyChain already accepted the chain; unparseable lines cannot occur past it
+      if (entry.seq !== expectedSeq) {
+        deny(`.adlc/manifest.d/${name} seq must be contiguous from 1 (spec §4.3): expected ${expectedSeq}, found ${entry.seq}`);
+      }
+      expectedSeq += 1;
+    }
     // `firstAnchor` is the anchor verifyChain saw on the entry it validated —
     // the same bytes, no second read.
     const resolution = resolveAnchor(chain.firstAnchor, chainsBySeq, baseRootPresent);
@@ -578,7 +592,7 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
  * marker exists at base it is frozen byte-identical; a NEW marker (the
  * enable/migration PR) must carry exactly the §4.7 shape.
  */
-export function validateReservedFiles({ baseMarker, headMarker }) {
+export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntries = false, headRootCutover = false }) {
   if (baseMarker !== null && baseMarker !== undefined) {
     if (headMarker === null || headMarker === undefined) {
       deny('.adlc/manifest.d/.store.json exists at base and cannot be removed in a PR');
@@ -589,6 +603,16 @@ export function validateReservedFiles({ baseMarker, headMarker }) {
     return;
   }
   if (headMarker === null || headMarker === undefined) return;
+
+  // A NEW marker flips isSegmentedRepo for every clone the moment it merges.
+  // It has exactly two legitimate arrivals: greenfield enable (the base root
+  // has no evidence to freeze) and the migration ceremony (the same PR ends
+  // the root in a cutover entry). A marker landing on a LIVE root without a
+  // cutover manufactures the half-migrated state enable itself refuses —
+  // writers route to segments while the root never froze.
+  if (baseRootHasEntries && !headRootCutover) {
+    deny('.adlc/manifest.d/.store.json cannot be introduced while the root manifest holds evidence and no cutover entry — forest activation on a live root is the migration ceremony, not a marker add');
+  }
   let parsed;
   try {
     parsed = JSON.parse(headMarker.toString('utf8'));
@@ -598,8 +622,12 @@ export function validateReservedFiles({ baseMarker, headMarker }) {
   if (parsed?.format !== 'adlc-manifest-segments' || parsed?.version !== 1) {
     deny('.adlc/manifest.d/.store.json must carry format "adlc-manifest-segments" version 1 (spec §4.7)');
   }
-  if (parsed.auth !== undefined && parsed.auth !== 'keyed' && parsed.auth !== 'keyless') {
-    deny('.adlc/manifest.d/.store.json auth must be "keyed" or "keyless" when present (spec §4.7)');
+  // Markers WITHOUT the field exist (§4.7 pre-policy activations) — but a
+  // marker being ADDED now is post-policy by definition, and both producers
+  // (enable, the ceremony) always write the mode. Absent auth on a new
+  // marker is a hand-rolled activation dodging the authentication decision.
+  if (parsed.auth !== 'keyed' && parsed.auth !== 'keyless') {
+    deny('.adlc/manifest.d/.store.json auth must be "keyed" or "keyless" on a newly introduced marker (spec §4.7)');
   }
 }
 
@@ -608,7 +636,15 @@ export function validateReservedFiles({ baseMarker, headMarker }) {
  * whose (provider, revision) tuple has no later needs-attention entry.
  * Lenient parse — unparseable lines cannot carry approvals.
  */
+const approveTupleKey = (data, ticket) =>
+  [data?.provider, data?.authorProvider ?? '', data?.revision, ticket ?? ''].join('\u0000');
+
 function standingApproveTuples(text) {
+  // Keyed by the FULL identity §4.6 seals carry — provider, authorProvider,
+  // revision, and ticket when present. §3's (provider, revision) shorthand
+  // under-keys it: the reader revokes per tuple, so a ticketless seal
+  // "covering" a ticketed approve would leave that approval alive across
+  // the cutover.
   const lastVerdict = new Map();
   for (const line of manifestRawLines(text)) {
     const entry = tryParse(line);
@@ -616,7 +652,16 @@ function standingApproveTuples(text) {
     const { provider, revision, verdict } = entry.data ?? {};
     if (typeof provider !== 'string' || typeof revision !== 'string') continue;
     if (verdict !== 'approve' && verdict !== 'needs-attention') continue;
-    lastVerdict.set(`${provider}\u0000${revision}`, verdict);
+    lastVerdict.set(approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket), verdict);
   }
   return new Set([...lastVerdict.entries()].filter(([, v]) => v === 'approve').map(([k]) => k));
+}
+
+/** Whether a root text's last parseable line is the cutover entry — the
+ *  lenient-detection twin of assertRootTransition's dispatch, exported so the
+ *  caller can hand validateReservedFiles its context without re-parsing. */
+export function rootTextEndsInCutover(text) {
+  const lines = manifestRawLines(text ?? '');
+  if (lines.length === 0) return false;
+  return isCutoverEntry(tryParse(lines.at(-1)));
 }

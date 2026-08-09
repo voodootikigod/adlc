@@ -29,6 +29,7 @@ import {
   validateNewSegments,
   validateReservedFiles,
   validateSegmentAppendOnly,
+  rootTextEndsInCutover,
 } from './manifest.mjs';
 import { assertArraySuperset, assertExistingSignersUnchanged, rejectNewSigners, stable } from './json-contract.mjs';
 import { resolveImmutableTrustRoots } from './trust-roots.mjs';
@@ -311,9 +312,16 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   const baseSegments = baseForestBytes(git, trustedBase);
 
   // The marker is a trust file: frozen byte-identical once it exists at base;
-  // a new one must carry exactly the §4.7 shape (a committed .lineage was
-  // already denied inside the snapshot read).
-  validateReservedFiles({ baseMarker: baseSegments.marker, headMarker: snapshot.marker });
+  // a NEW one may only arrive greenfield (no base evidence) or alongside a
+  // cutover in this same PR (a committed .lineage was already denied inside
+  // the snapshot read).
+  const baseRootText = baseHasManifest ? baseManifestBytes(git, trustedBase).toString('utf8') : '';
+  validateReservedFiles({
+    baseMarker: baseSegments.marker,
+    headMarker: snapshot.marker,
+    baseRootHasEntries: baseRootText.trim().length > 0,
+    headRootCutover: snapshot.root.present && rootTextEndsInCutover(snapshot.root.text),
+  });
 
   // §9.2 — committed segments are append-only, per file; deletion/rename denies.
   validateSegmentAppendOnly(baseSegments.segments, snapshot.segments);
@@ -334,7 +342,7 @@ function verifyManifest({ git, trustedBase, base, migration }) {
     // after. Migration evidence keeps its existing conditional validation.
     assertRootTransition({
       basePresent: true,
-      baseBytes: baseManifestBytes(git, trustedBase),
+      baseBytes: Buffer.from(baseRootText),
       headPresent: snapshot.root.present,
       headBytes: snapshot.root.bytes ?? null,
       migration,
