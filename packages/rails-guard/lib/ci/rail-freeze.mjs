@@ -325,12 +325,14 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   // cutover in this same PR (a committed .lineage was already denied inside
   // the snapshot read).
   const headRootCutover = snapshot.root.present && rootTextEndsInCutover(snapshot.root.text);
+  const baseRootCutover = rootTextEndsInCutover(baseRootText);
   validateReservedFiles({
     baseMarker: baseSegments.marker,
     headMarker: snapshot.marker,
     baseRootHasEntries: baseRootText.trim().length > 0,
     headRootCutover,
     headRootGainedEntries: (snapshot.root.bytes?.length ?? 0) > (baseRootBytes?.length ?? 0),
+    newlyCutover: headRootCutover && !baseRootCutover,
   });
 
   // The forest's declared authentication mode, read leniently from the HEAD

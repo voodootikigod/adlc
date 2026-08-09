@@ -1120,3 +1120,55 @@ test('an append that ALTERS an existing segment terminal raw line breaks child a
     baseSegmentNames: new Set([SEG_A, SEG_B]),
   })));
 });
+
+// ---- round-11: root anchors, migration payload bounds, marker-less cutovers --
+
+test('a seal or cutover entry carrying an anchor field DENIES — root entries never carry anchors', () => {
+  // The reader rejects any root entry with an anchor (§4.4); a seal entry
+  // smuggling one would brick every reader while passing shape checks.
+  const withAnchor = withSealCutover(BASE_ROOT, {
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, anchor: null } : e,
+  });
+  assert.throws(
+    () => assertRootTransition(rootArgs(BASE_ROOT, withAnchor.text)),
+    (e) => e instanceof GateDeny && /anchor/.test(e.message)
+  );
+});
+
+test('a migration diff touching segments beyond the evidence carrier DENIES — the ceremony carries no payload', () => {
+  const mkEntry = (over) => JSON.stringify(over);
+  const apply = { seq: 1, gate: 'ticket-migrate', anchor: null, branch: 'feat-x', ts: '2026-01-01T00:00:00.000Z', files: {}, data: { operation: 'migrate', action: 'apply', bindingScope: 'store', storeHash: 'SH', archiveHash: 'AH', transactionId: 'tx1' }, prev: null };
+  const migSeg = mkEntry(apply) + '\n';
+  const unrelated = segmentText({ anchor: null, branch: 'feat-b' });
+  assert.throws(
+    () => validateSegmentedMigrationEvidence({
+      baseSegments: new Map(),
+      headSegments: new Map([[SEG_A, Buffer.from(migSeg)], [SEG_B, Buffer.from(unrelated)]]),
+      storeHash: 'SH', archiveHash: 'AH',
+    }),
+    (e) => e instanceof GateDeny && /payload|beyond|unrelated/.test(e.message)
+  );
+});
+
+test('a NEW cutover landing without the activation marker DENIES — the ceremony always writes both', () => {
+  const marker = Buffer.from(JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+  // ceremony shape: cutover + marker together → fine
+  assert.doesNotThrow(() => validateReservedFiles({
+    baseMarker: null, headMarker: marker,
+    baseRootHasEntries: true, headRootCutover: true, newlyCutover: true,
+  }));
+  // cutover without any marker → the state no producer creates
+  assert.throws(
+    () => validateReservedFiles({
+      baseMarker: null, headMarker: null,
+      baseRootHasEntries: true, headRootCutover: true, newlyCutover: true,
+    }),
+    (e) => e instanceof GateDeny && /marker/.test(e.message)
+  );
+  // an ALREADY-cutover base whose marker was lost long ago: PRs must not be
+  // bricked retroactively — only the transition is gated
+  assert.doesNotThrow(() => validateReservedFiles({
+    baseMarker: null, headMarker: null,
+    baseRootHasEntries: true, headRootCutover: true, newlyCutover: false,
+  }));
+});

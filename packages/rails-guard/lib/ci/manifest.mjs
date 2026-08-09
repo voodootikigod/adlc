@@ -453,6 +453,14 @@ export function validateSealCutoverAppend(baseText, headText, headBytes = Buffer
   }
   const cut = appended.at(-1);
   const seals = appended.slice(0, -1);
+  for (const [i, entry] of appended.entries()) {
+    // Root entries never carry anchors (§4.4) — the reader rejects the whole
+    // root on one, so a seal smuggling an anchor field would brick every
+    // clone while passing the shape checks below.
+    if (Object.hasOwn(entry, 'anchor')) {
+      deny(`root append entry ${i + 1} carries an anchor field — root entries never do, and every reader would reject the root`);
+    }
+  }
   for (const [i, entry] of seals.entries()) {
     if (!isSealEntry(entry)) {
       deny(`root append entry ${i + 1} precedes a cutover entry but is not a §4.6 seal (cross-model-review with data.sealedByCutover) — only a valid seal+cutover set may accompany a cutover`);
@@ -709,7 +717,15 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
  * marker exists at base it is frozen byte-identical; a NEW marker (the
  * enable/migration PR) must carry exactly the §4.7 shape.
  */
-export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntries = false, headRootCutover = false, headRootGainedEntries = false }) {
+export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntries = false, headRootCutover = false, headRootGainedEntries = false, newlyCutover = false }) {
+  // The ceremony writes the marker and the cutover entry together (§8 step
+  // 6); a cutover arriving WITHOUT the marker is a state no producer
+  // creates, and it lands the repo in the degraded marker-lost shape on day
+  // one. Only the TRANSITION is gated — an already-cutover base with a
+  // long-lost marker must not brick every later PR retroactively.
+  if (newlyCutover && (headMarker === null || headMarker === undefined)) {
+    deny('a cutover entry cannot land without the .adlc/manifest.d/.store.json activation marker — the ceremony writes both together');
+  }
   if (baseMarker !== null && baseMarker !== undefined) {
     if (headMarker === null || headMarker === undefined) {
       deny('.adlc/manifest.d/.store.json exists at base and cannot be removed in a PR');
@@ -830,6 +846,16 @@ export function validateSegmentedMigrationEvidence({ baseSegments, headSegments,
   }
   if (carriers.length > 1) {
     deny(`ticket-store migration evidence must live in exactly one segment, found it in: ${carriers.map((c) => c.name).join(', ')}`);
+  }
+  // The ceremony carries no payload: beyond the one evidence carrier, no
+  // segment may be added or changed in a migration diff — the same rule the
+  // path allowlist enforces for everything else.
+  for (const [name, headBytes] of headSegments) {
+    if (name === carriers[0].name) continue;
+    const baseBytes = baseSegments.get(name);
+    if (baseBytes === undefined || !headBytes.equals(baseBytes)) {
+      deny(`migration diffs must not touch segments beyond the evidence carrier — ${name} is an unrelated payload`);
+    }
   }
   validateMigrationEvidence(carriers[0].baseText, carriers[0].headText, storeHash, archiveHash);
 }
