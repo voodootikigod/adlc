@@ -367,13 +367,23 @@ function rawLastLine(buf) {
  *  keyless write or a forgery — catching it before merge beats every clone
  *  failing the forest closed after. Keyless and pre-policy forests have no
  *  mode to enforce. */
-function assertEntriesCarrySigs(rawLines, label) {
+function assertEntriesCarrySigs(rawLines, label, { firstMustBeV2 = false } = {}) {
+  // Matched to the real writer, not an idealized one: the segment writer
+  // forces v2 on the MINT (a v1-signed first entry could never be
+  // recovery-authenticated — v1 does not sign branch/anchor) and follows
+  // the configured version afterwards, which is v1 in repos that have not
+  // adopted v2. So: first entry v2 when required, every entry sig-presence.
+  let first = true;
   for (const raw of rawLines) {
     const entry = tryParse(raw);
     if (entry === null) continue;
-    if (entry.sigVersion !== 2 || typeof entry.sig !== 'string' || entry.sig === '') {
-      deny(`${label} carries an entry without a v2 signature — this forest declares auth "keyed", and an unsigned entry strands every keyed reader`);
+    if (typeof entry.sig !== 'string' || entry.sig === '') {
+      deny(`${label} carries an unsigned entry — this forest declares auth "keyed", and an unsigned entry strands every keyed reader`);
     }
+    if (first && firstMustBeV2 && entry.sigVersion !== 2) {
+      deny(`${label} first entry must carry sigVersion 2 — the keyed writer always mints v2, and a v1 first entry can never be recovery-authenticated (v1 does not sign branch/anchor)`);
+    }
+    first = false;
   }
 }
 
@@ -648,7 +658,7 @@ export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPr
       deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
     }
     if (forestAuth === 'keyed') {
-      assertEntriesCarrySigs(manifestRawLines(text), `.adlc/manifest.d/${name}`);
+      assertEntriesCarrySigs(manifestRawLines(text), `.adlc/manifest.d/${name}`, { firstMustBeV2: true });
     }
   }
 }

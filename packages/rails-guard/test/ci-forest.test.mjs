@@ -940,3 +940,35 @@ test('a cutover-only forest (marker lost) still enforces keyed signature presenc
     (e) => e instanceof GateDeny && /sig/.test(e.message)
   );
 });
+
+test('keyed discipline matches the real writer: v1 continuations pass, v1 FIRST entries of new segments deny', () => {
+  // The segment writer forces v2 on the mint (resolved.isNew ? 2 : version)
+  // and follows the configured version after — this repo records v1 today.
+  // Requiring v2 everywhere rejects the public recorder's real output;
+  // requiring nothing on the first entry breaks §4.4a recovery (v1 does not
+  // sign branch/anchor). First entry v2, everything else sig-presence.
+  const v2 = (extra = {}) => ({ ...evidence(extra), sigVersion: 2, sig: 'a'.repeat(64) });
+  const v1 = (extra = {}) => ({ ...evidence(extra), sig: 'b'.repeat(64) }); // v1: sig, no sigVersion
+
+  // v2 first + v1 second: the writer's real shape → passes
+  const first = JSON.stringify({ seq: 1, ...v2({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-x' }), prev: null });
+  const mixed = first + '\n' + JSON.stringify({ seq: 2, ...v1(), prev: sha256(first) }) + '\n';
+  assert.doesNotThrow(() => validateNewSegments(newSegArgs({
+    headSegments: new Map([[SEG_A, Buffer.from(mixed)]]), forestAuth: 'keyed',
+  })));
+
+  // v1 FIRST entry: the writer never produces this; recovery could never
+  // authenticate it → deny
+  const v1First = JSON.stringify({ seq: 1, ...v1({ anchor: rootAnchor(BASE_ROOT), branch: 'feat-x' }), prev: null }) + '\n';
+  assert.throws(
+    () => validateNewSegments(newSegArgs({ headSegments: new Map([[SEG_A, Buffer.from(v1First)]]), forestAuth: 'keyed' })),
+    (e) => e instanceof GateDeny && /sigVersion 2|v2/.test(e.message)
+  );
+
+  // v1 continuation of an existing segment → passes keyed
+  const base = first + '\n';
+  const v1Append = base + JSON.stringify({ seq: 2, ...v1(), prev: sha256(first) }) + '\n';
+  assert.doesNotThrow(
+    () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(v1Append)]]), { forestAuth: 'keyed' })
+  );
+});
