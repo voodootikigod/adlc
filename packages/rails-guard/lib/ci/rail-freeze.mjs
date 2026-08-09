@@ -315,7 +315,13 @@ function verifyManifest({ git, trustedBase, base, migration }) {
   // a NEW one may only arrive greenfield (no base evidence) or alongside a
   // cutover in this same PR (a committed .lineage was already denied inside
   // the snapshot read).
-  const baseRootText = baseHasManifest ? baseManifestBytes(git, trustedBase).toString('utf8') : '';
+  // ONE base read, kept as the RAW buffer: utf8 decoding is non-injective
+  // (distinct invalid byte sequences collapse to U+FFFD), so a
+  // buffer→string→buffer round-trip would launder exactly the byte-level
+  // rewrites the append-only compare exists to catch. Text is derived FROM
+  // the buffer for the lenient detection checks only.
+  const baseRootBytes = baseHasManifest ? baseManifestBytes(git, trustedBase) : null;
+  const baseRootText = baseRootBytes === null ? '' : baseRootBytes.toString('utf8');
   validateReservedFiles({
     baseMarker: baseSegments.marker,
     headMarker: snapshot.marker,
@@ -342,10 +348,11 @@ function verifyManifest({ git, trustedBase, base, migration }) {
     // after. Migration evidence keeps its existing conditional validation.
     assertRootTransition({
       basePresent: true,
-      baseBytes: Buffer.from(baseRootText),
+      baseBytes: baseRootBytes,
       headPresent: snapshot.root.present,
       headBytes: snapshot.root.bytes ?? null,
       migration,
+      baseMarkerPresent: baseSegments.marker !== null,
     });
     return;
   }

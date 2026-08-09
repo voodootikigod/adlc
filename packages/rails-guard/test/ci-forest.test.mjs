@@ -705,3 +705,46 @@ test('a new segment whose FIRST seq is not 1 DENIES', () => {
     (e) => e instanceof GateDeny && /seq/.test(e.message)
   );
 });
+
+// ---- round-3 findings ------------------------------------------------------
+
+test('a base with the marker FREEZES the root even without a cutover tail — empty-root forests included', () => {
+  // Greenfield enable leaves the root absent or empty and writes the marker.
+  // A later PR hand-appending root evidence is the stale-writer shape §11
+  // says merge must deny — the cutover tail is not the only freeze signal.
+  const head = BASE_ROOT + JSON.stringify({ seq: 3, ...evidence(), prev: sha256(BASE_LINES.at(-1)) }) + '\n';
+  assert.throws(
+    () => assertRootTransition(rootArgs(BASE_ROOT, head, { baseMarkerPresent: true })),
+    (e) => e instanceof GateDeny && /frozen|byte-identical/.test(e.message)
+  );
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(BASE_ROOT, BASE_ROOT, { baseMarkerPresent: true })));
+  // an EMPTY frozen root must stay empty
+  assert.throws(
+    () => assertRootTransition(rootArgs('', 'seeded\n', { baseMarkerPresent: true })),
+    (e) => e instanceof GateDeny
+  );
+});
+
+test('an approve ANYWHERE-revoked is not standing — revocation is terminal, not last-wins (§6)', () => {
+  // approve AFTER needs-attention: the reader still treats the tuple as
+  // revoked ("no needs-attention anywhere"), so the ceremony seals nothing
+  // — last-verdict accounting would demand a seal and reject a valid cutover.
+  const tuple = { provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' };
+  const revoke = { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'needs-attention', ...tuple } };
+  const approve = { gate: 'cross-model-review', ts: '2026-01-01T02:00:00.000Z', files: {}, data: { verdict: 'approve', ...tuple } };
+  const base = chainText([evidence(), revoke, approve]);
+  const zeroSeals = withSealCutover(base, { sealCount: 0 });
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, zeroSeals.text)));
+});
+
+test('seal matching is keyed as the reader matches — authorProvider is not part of the key (§6)', () => {
+  // The approve carries authorProvider anthropic; the seal names a different
+  // one. §6 matches (provider, revision[, ticket]) — the seal still covers.
+  const approve = { gate: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' } };
+  const base = chainText([evidence(), approve]);
+  const sealed = withSealCutover(base, {
+    sealCount: 1,
+    mutate: (e) => e.gate === 'cross-model-review' ? { ...e, data: { ...e.data, authorProvider: 'someone-else' } } : e,
+  });
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(base, sealed.text)));
+});

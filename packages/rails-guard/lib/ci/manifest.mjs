@@ -430,7 +430,7 @@ export function validateSealCutoverAppend(baseText, headText) {
   const sealed = new Set(seals.map((entry) => approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket)));
   for (const tuple of standing) {
     if (!sealed.has(tuple)) {
-      const [provider, , revision, ticket] = tuple.split('\u0000');
+      const [provider, revision, ticket] = tuple.split('\u0000');
       deny(`the cutover leaves a standing approve unsealed (provider ${provider}, revision ${revision}${ticket ? `, ticket ${ticket}` : ''}) — §4.6 requires one seal per standing approve`);
     }
   }
@@ -448,7 +448,7 @@ export function validateSealCutoverAppend(baseText, headText) {
  * WHOLE region must be a valid seal+cutover set. Migration evidence keeps
  * its existing, separately-validated path.
  */
-export function assertRootTransition({ basePresent, baseBytes, headPresent, headBytes, migration }) {
+export function assertRootTransition({ basePresent, baseBytes, headPresent, headBytes, migration, baseMarkerPresent = false }) {
   if (!basePresent) return; // creation rules live in verifyManifest's un-seeded branch, unchanged
   if (!headPresent) deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
 
@@ -456,9 +456,13 @@ export function assertRootTransition({ basePresent, baseBytes, headPresent, head
   const baseRaw = manifestRawLines(baseText);
   const baseTail = baseRaw.length ? tryParse(baseRaw.at(-1)) : null;
 
-  if (baseTail && isCutoverEntry(baseTail)) {
+  // The cutover tail is not the only freeze signal: a base carrying the
+  // activation marker is segmented even when its root is EMPTY (greenfield
+  // enable), and a root append there is §11's stale-writer shape — deny at
+  // merge with nothing grandfathered.
+  if (baseMarkerPresent || (baseTail && isCutoverEntry(baseTail))) {
     if (headBytes.length !== baseBytes.length || !headBytes.equals(baseBytes)) {
-      deny('.adlc/manifest.jsonl is frozen after cutover and must be byte-identical to base in PRs');
+      deny('.adlc/manifest.jsonl is frozen once the repository is segmented (cutover tail or activation marker at base) and must be byte-identical in PRs');
     }
     return;
   }
@@ -637,24 +641,28 @@ export function validateReservedFiles({ baseMarker, headMarker, baseRootHasEntri
  * Lenient parse — unparseable lines cannot carry approvals.
  */
 const approveTupleKey = (data, ticket) =>
-  [data?.provider, data?.authorProvider ?? '', data?.revision, ticket ?? ''].join('\u0000');
+  [data?.provider, data?.revision, ticket ?? ''].join('\u0000');
 
 function standingApproveTuples(text) {
-  // Keyed by the FULL identity §4.6 seals carry — provider, authorProvider,
-  // revision, and ticket when present. §3's (provider, revision) shorthand
-  // under-keys it: the reader revokes per tuple, so a ticketless seal
-  // "covering" a ticketed approve would leave that approval alive across
-  // the cutover.
-  const lastVerdict = new Map();
+  // Keyed exactly as the reader matches (§6): (provider, revision), plus
+  // ticket when present — authorProvider is NOT part of the match key, and
+  // ticket must be, or a ticketless seal would "cover" a ticketed approve
+  // the per-ticket gate still honors. Revocation is TERMINAL and
+  // position-independent ("no needs-attention anywhere in the forest"): an
+  // approve recorded after a revocation is still revoked, so last-verdict
+  // accounting would over-count standing approves and reject valid cutovers.
+  const approved = new Set();
+  const revoked = new Set();
   for (const line of manifestRawLines(text)) {
     const entry = tryParse(line);
     if (entry?.gate !== 'cross-model-review') continue;
     const { provider, revision, verdict } = entry.data ?? {};
     if (typeof provider !== 'string' || typeof revision !== 'string') continue;
-    if (verdict !== 'approve' && verdict !== 'needs-attention') continue;
-    lastVerdict.set(approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket), verdict);
+    const key = approveTupleKey(entry.data, entry.ticket ?? entry.data?.ticket);
+    if (verdict === 'approve') approved.add(key);
+    else if (verdict === 'needs-attention') revoked.add(key);
   }
-  return new Set([...lastVerdict.entries()].filter(([, v]) => v === 'approve').map(([k]) => k));
+  return new Set([...approved].filter((key) => !revoked.has(key)));
 }
 
 /** Whether a root text's last parseable line is the cutover entry — the
