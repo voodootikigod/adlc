@@ -354,11 +354,20 @@ export function validateSegmentAppendOnly(baseSegments, headSegments, { forestAu
 
 /** Raw bytes of the last non-empty line of a buffer, no trailing newline. */
 function rawLastLine(buf) {
+  // Mirrors manifestRawLines' blank-line filter at the byte level: the
+  // writer chains prev over the last NON-BLANK raw line, so a trailing
+  // whitespace-only line must be skipped here too or a valid chain fails.
+  const isBlank = (bytes) => bytes.every((b) => b === 0x20 || b === 0x09 || b === 0x0d);
   let end = buf.length;
-  while (end > 0 && buf[end - 1] === 0x0a) end -= 1;
-  let start = end;
-  while (start > 0 && buf[start - 1] !== 0x0a) start -= 1;
-  return buf.subarray(start, end);
+  while (end > 0) {
+    while (end > 0 && buf[end - 1] === 0x0a) end -= 1;
+    let start = end;
+    while (start > 0 && buf[start - 1] !== 0x0a) start -= 1;
+    const line = buf.subarray(start, end);
+    if (line.length > 0 && !isBlank(line)) return line;
+    end = start;
+  }
+  return buf.subarray(0, 0);
 }
 
 /** Presence-only signature discipline for a keyed forest. The gate holds no
@@ -460,9 +469,8 @@ export function validateSealCutoverAppend(baseText, headText, headBytes = Buffer
   // legacy region may not decode losslessly; appended lines are strict JSON
   // and decode round-trip clean, so their utf8 re-encoding is byte-exact.
   const baseTailEntry = baseRaw.length ? tryParse(baseRaw.at(-1)) : null;
-  let previousLineBytes = baseBytes !== null && manifestRawLines(baseBytes.toString('utf8')).length > 0
-    ? rawLastLine(baseBytes)
-    : null;
+  const baseTailBytes = baseBytes === null ? Buffer.alloc(0) : rawLastLine(baseBytes);
+  let previousLineBytes = baseTailBytes.length > 0 ? baseTailBytes : null;
   let previousSeq = Number.isInteger(baseTailEntry?.seq) ? baseTailEntry.seq : baseRaw.length;
   for (const [i, entry] of appended.entries()) {
     const expectedPrev = previousLineBytes ? createHash('sha256').update(previousLineBytes).digest('hex') : null;
@@ -740,7 +748,10 @@ function standingApproveTuples(text) {
   const revoked = new Set();
   for (const line of manifestRawLines(text)) {
     const entry = tryParse(line);
-    if (entry?.gate !== 'cross-model-review') continue;
+    // gate ?? type: prosecute's own evidence writer historically used
+    // `type`, and the reader honors either — an approve in the legacy shape
+    // escaping this census would survive cutover unsealed.
+    if (entry === null || (entry.gate ?? entry.type) !== 'cross-model-review') continue;
     const { provider, revision, verdict } = entry.data ?? {};
     if (typeof provider !== 'string' || typeof revision !== 'string') continue;
     // entry.ticket, TOP-LEVEL only: the reader's per-ticket matching never

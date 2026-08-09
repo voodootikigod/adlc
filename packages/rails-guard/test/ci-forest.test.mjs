@@ -972,3 +972,48 @@ test('keyed discipline matches the real writer: v1 continuations pass, v1 FIRST 
     () => validateSegmentAppendOnly(new Map([[SEG_A, Buffer.from(base)]]), new Map([[SEG_A, Buffer.from(v1Append)]]), { forestAuth: 'keyed' })
   );
 });
+
+// ---- auth precedence, legacy shapes, whitespace tolerance ------------------
+
+test('a legacy type-shaped approve is counted in the seal census — the reader honors it, so the census must', () => {
+  // prosecute's own evidence writer historically used `type` instead of
+  // `gate`; the reader accepts either (entry.gate ?? entry.type). An approve
+  // in that shape escaping the census would survive cutover unsealed.
+  const legacyApprove = { type: 'cross-model-review', ts: '2026-01-01T01:00:00.000Z', files: {}, data: { verdict: 'approve', provider: 'codex', authorProvider: 'anthropic', revision: 'git-change:x:y' } };
+  const base = chainText([evidence(), legacyApprove]);
+  const zeroSeals = withSealCutover(base, { sealCount: 0 });
+  assert.throws(
+    () => assertRootTransition(rootArgs(base, zeroSeals.text)),
+    (e) => e instanceof GateDeny && /standing approve/.test(e.message)
+  );
+});
+
+test('a whitespace-only trailing line in the legacy region does not break the cutover chain', () => {
+  // manifestRawLines filters blank lines, and the writer chains prev over
+  // the last NON-BLANK raw line — the byte-level tail helper must skip
+  // whitespace-only lines the same way or a valid cutover fails.
+  const baseWithBlank = BASE_ROOT + '   \n';
+  // Built ON the blank-tailed base: the ceremony's rootSha256 hashes ALL
+  // prior bytes (blank line included) while its prev chains over the last
+  // NON-blank line — the two must not be conflated.
+  const { text } = withSealCutover(baseWithBlank);
+  assert.doesNotThrow(() => assertRootTransition(rootArgs(baseWithBlank, text)));
+});
+
+test('an explicit keyless marker does not downgrade a cutover forest — cutover implies keyed, and the pair is inconsistent', () => {
+  // The ceremony cannot run keyless and always writes auth "keyed"; a
+  // keyless marker beside a cutover-tailed root is a state no producer
+  // creates. The stronger signal wins for enforcement.
+  const cutRoot = withSealCutover(BASE_ROOT).text;
+  const unsigned = segmentText({ anchor: rootAnchor(cutRoot) });
+  // rail-freeze must pass forestAuth 'keyed' here regardless of the marker;
+  // pinned at the validator level: keyed discipline applies.
+  assert.throws(
+    () => validateNewSegments(newSegArgs({
+      headSegments: new Map([[SEG_A, Buffer.from(unsigned)]]),
+      headRootText: cutRoot,
+      forestAuth: 'keyed',
+    })),
+    (e) => e instanceof GateDeny && /sig/.test(e.message)
+  );
+});
