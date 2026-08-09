@@ -343,6 +343,13 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     // a stranded .store.json.tmp-* would trip forest validation later.
     const segDir = segmentDirPath(dir);
     mkdirSync(segDir, { recursive: true });
+    // A marker file already present here was NOT recognized by
+    // isSegmentedRepo (or the plan would have refused) — an unrecognized or
+    // foreign trust marker is a broken state to surface, never something to
+    // silently overwrite.
+    if (lstatSync(markerPath(dir), { throwIfNoEntry: false }) !== undefined) {
+      throw new Error(`${markerPath(dir)} already exists but was not recognized as a valid activation marker — refusing to overwrite a trust file; inspect and remove it deliberately before re-running`);
+    }
     const tempPath = join(segDir, `.store.json.tmp-${randomBytes(6).toString('hex')}`);
     try {
       const fd = openSync(tempPath, 'wx');
@@ -351,11 +358,17 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
         fsyncSync(fd);
       } finally { closeSync(fd); }
       renameSync(tempPath, markerPath(dir));
-      // fsync the DIRECTORY so the rename itself is durable, not just the
-      // file contents (a crash could otherwise resurrect the pre-rename
-      // state with the temp name).
-      const dirFd = openSync(segDir, 'r');
-      try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+      // fsync the directories so the rename and the new dirents (backup,
+      // manifest.d) are durable, not just file contents. BEST-EFFORT: Windows
+      // cannot open directories for fsync (EPERM/EISDIR) — the rename is
+      // still atomic there, and reporting failure AFTER committing the
+      // cutover would be strictly worse than reduced metadata durability.
+      for (const d of [segDir, dir]) {
+        try {
+          const dirFd = openSync(d, 'r');
+          try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+        } catch { /* platform without directory fsync */ }
+      }
     } catch (err) {
       rmSync(tempPath, { force: true });
       throw err;
@@ -379,7 +392,16 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     if (!finalCheck.valid) {
       throw new Error(`the migrated root does not chain-verify (${finalCheck.message}) — restore ${backupPath} over manifest.jsonl; if .adlc/manifest.d contains ONLY .store.json, delete the directory too, otherwise investigate its segments before touching them`);
     }
-    return { seals, unsignedEntries: unsigned, backupPath };
+    return {
+      seals,
+      unsignedEntries: unsigned,
+      backupPath,
+      cutover: {
+        reason,
+        sealedApprovals: seals.length,
+        rootLines: rawLines(preCutoverBytes.toString('utf8')).length,
+      },
+    };
   }, dir);
 
   // Post-ceremony verification: the migrated ledger must verify strictly
@@ -394,5 +416,7 @@ export function migrate(dir = ADLC_DIR, { key = null, reason = '', attestUnsigne
     throw new Error(`post-ceremony forest verification reported: ${post.message}. The migrated ROOT verified inside the lock; investigate ${segmentDirPath(dir)} before altering anything — a concurrent writer may have minted a segment mid-verification. Backup: ${applied.backupPath}`);
   }
 
-  return { ...plan, seals: applied.seals, unsignedEntries: applied.unsignedEntries, backupPath: applied.backupPath, decision: 'applied', written: true };
+  // Applied metadata comes from INSIDE the lock — the plan's numbers can be
+  // stale the moment a writer appended between planning and locking.
+  return { ...plan, ...applied, decision: 'applied', written: true };
 }

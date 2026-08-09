@@ -244,8 +244,11 @@ double-appending.
 Follow-ups the operator owns (printed on apply): commit in a dedicated PR;
 pin the minimum toolkit version in CI; in-flight PRs rebase and re-record
 revision-bound attestations (`migrate-branch` salvages a branch's root-tail
-evidence). **Rollback:** restore the backup over `manifest.jsonl` and delete
-`.adlc/manifest.d/`.
+evidence). **Rollback:** restore the backup over `manifest.jsonl`; then, ONLY
+if `.adlc/manifest.d/` contains nothing but `.store.json`, delete the
+directory — if it holds segment files, a writer already recorded real
+evidence there, and deleting it destroys that evidence. Salvage segments
+first (`migrate-branch` or manual review) before any removal.
 
 ### adopt
 
