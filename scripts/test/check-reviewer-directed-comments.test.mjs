@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -874,8 +874,34 @@ test('REAL CLI: the direct-execution guard runs the gate when invoked from a pat
   // unrelated temp dir) so its own `@adlc/core` import still resolves via the
   // real node_modules — only its own path needs the space, not the git repo it
   // scans, so a separate temp git repo (via --cwd) supplies that.
+  // The spaced dir lives in a PRIVATE temp root, not inside scripts/test/:
+  // an in-tree fixture races every test that copies the repo (the plugin
+  // smoke suite walked into this directory mid-delete and failed whole CI
+  // runs with ENOENT). @adlc/core still resolves because the temp root gets
+  // a node_modules symlink into the real repo — Node's resolution walks up
+  // from the script copy and finds it one level above.
   const testDir = dirname(fileURLToPath(import.meta.url));
-  const spacedDir = join(testDir, 'adlc cli space test dir');
+  // Resolve node_modules the way Node itself would from this test: walking
+  // up. A worktree checkout has none of its own — resolution continues past
+  // the worktree root into the primary checkout — so a fixed repo-relative
+  // path would symlink to nowhere exactly there.
+  const findNodeModules = (from) => {
+    let dir = from;
+    for (;;) {
+      const candidate = join(dir, 'node_modules');
+      if (existsSync(candidate)) return candidate;
+      const parent = dirname(dir);
+      if (parent === dir) throw new Error('no node_modules found walking up from ' + from);
+      dir = parent;
+    }
+  };
+  // realpath immediately: macOS tmpdir() is a symlink (/var -> /private/var),
+  // and the CLI's direct-execution guard compares import.meta.url (real path)
+  // against argv (as invoked) — a symlinked invocation path makes the guard
+  // silently not fire, which this very test exists to catch.
+  const spacedRoot = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-cli-space-root-')));
+  symlinkSync(findNodeModules(testDir), join(spacedRoot, 'node_modules'), 'junction');
+  const spacedDir = join(spacedRoot, 'adlc cli space test dir');
   const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-cli-space-'));
   const originalCwd = process.cwd();
   try {
@@ -901,7 +927,7 @@ test('REAL CLI: the direct-execution guard runs the gate when invoked from a pat
   } finally {
     process.chdir(originalCwd);
     rmSync(repo, { recursive: true, force: true });
-    rmSync(spacedDir, { recursive: true, force: true });
+    rmSync(spacedRoot, { recursive: true, force: true });
   }
 });
 
