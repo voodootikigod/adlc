@@ -21,10 +21,14 @@ import { deny, fail } from './errors.mjs';
 import { createGit, parseJson, resolveTrustedBase, trackedAt } from './git.mjs';
 import { ownersForPaths } from './codeowners.mjs';
 import {
-  assertAppendOnly,
+  assertRootTransition,
+  baseForestBytes,
   baseManifestBytes,
+  committedEvidenceAtHead,
   committedManifestAtHead,
   validateMigrationEvidence,
+  validateNewSegments,
+  validateSegmentAppendOnly,
 } from './manifest.mjs';
 import { assertArraySuperset, assertExistingSignersUnchanged, rejectNewSigners, stable } from './json-contract.mjs';
 import { resolveImmutableTrustRoots } from './trust-roots.mjs';
@@ -287,34 +291,54 @@ function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel
   }
 }
 
-/** Manifest evidence must be append-only once it exists, and un-seeded before it does. */
+/**
+ * Manifest evidence must be append-only once it exists, and un-seeded before
+ * it does — for the root AND (spec §9.1–9.3) every committed segment file
+ * under `.adlc/manifest.d/`. Root and forest are read from ONE pinned rev:
+ * separate pins would be the #314 round-7 TOCTOU spread across files.
+ */
 function verifyManifest({ git, trustedBase, base, migration }) {
   const baseHasManifest = trackedAt(git, trustedBase, '.adlc/manifest.jsonl', `git ls-tree '${base}' manifest`);
+  const snapshot = committedEvidenceAtHead(git);
+  const baseSegments = baseForestBytes(git, trustedBase);
+
+  // §9.2 — committed segments are append-only, per file; deletion/rename denies.
+  validateSegmentAppendOnly(baseSegments, snapshot.segments);
+
+  // §9.3 — segments new in this PR: grammar, internal chain, anchor
+  // resolution within the HEAD forest, cycle check. anchor:null is judged
+  // against the BASE tree's root (§7.1's two-branch fork rule).
+  validateNewSegments({
+    headSegments: snapshot.segments,
+    baseSegmentNames: new Set(baseSegments.keys()),
+    baseRootPresent: baseHasManifest,
+    headRootText: snapshot.root.present ? snapshot.root.text : null,
+  });
 
   if (baseHasManifest) {
-    const head = committedManifestAtHead(git);
-    if (!head.present) deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
-    const baseBytes = baseManifestBytes(git, trustedBase);
-    assertAppendOnly(head.bytes, baseBytes);
-    if (migration.verified) {
-      validateMigrationEvidence(baseBytes.toString('utf8'), head.text, migration.storeHash, migration.archiveHash);
-    }
+    // §9.1 — byte-prefix pre-cutover (ordinary appends stay legal; a region
+    // containing cutover/seal entries must be a valid set), byte-identical
+    // after. Migration evidence keeps its existing conditional validation.
+    assertRootTransition({
+      basePresent: true,
+      baseBytes: baseManifestBytes(git, trustedBase),
+      headPresent: snapshot.root.present,
+      headBytes: snapshot.root.bytes ?? null,
+      migration,
+    });
     return;
   }
 
   if (migration.verified) {
-    // Read the evidence EXACTLY ONCE and make both the presence and the validation
-    // decision on that single snapshot. A two-read pattern (validate one snapshot,
-    // presence-check a second) is a TOCTOU fail-open: an empty file skips validation,
-    // then a swapped non-empty file satisfies presence with the evidence never checked
-    // (#314 round 4). validateMigrationEvidence denies empty evidence, so one read plus
-    // one unconditional validation covers both.
-    validateMigrationEvidence('', committedManifestAtHead(git).text, migration.storeHash, migration.archiveHash);
+    // One snapshot for presence AND validation (#314 round 4) — and the SAME
+    // snapshot the forest checks above used, keeping the whole verdict pinned
+    // to one rev.
+    validateMigrationEvidence('', snapshot.root.text, migration.storeHash, migration.archiveHash);
     return;
   }
 
   // Ordinary PR: only a TRACKED manifest ADDED by this diff, carrying evidence, denies.
-  if (committedManifestAtHead(git).text.trim()) {
+  if (snapshot.root.text.trim()) {
     deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
   }
 }

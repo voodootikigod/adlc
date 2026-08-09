@@ -9,6 +9,12 @@
 import { createHash } from 'node:crypto';
 import { deny, fail } from './errors.mjs';
 import { parseJson } from './git.mjs';
+// Hardened forest primitives, reused rather than reimplemented (see the
+// forest-validation header below): verifyChain walks one chain's raw lines
+// with the anchor-position rules; resolveAnchor and detectAnchorCycle are
+// pure over Maps of data. rails-guard already depends on @adlc/gate-manifest.
+import { verifyChain } from '@adlc/gate-manifest/lib/verify.mjs';
+import { resolveAnchor, detectAnchorCycle } from '@adlc/gate-manifest/lib/forest.mjs';
 
 /**
  * The COMMITTED content of `.adlc/manifest.jsonl` at HEAD.
@@ -158,4 +164,362 @@ export function validateMigrationEvidence(baseText, headText, expectedStoreHash,
     previousLine = appendedRawLines[index];
     previousSeq = appendedEntry.seq;
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Forest validation (spec §9.1–9.3, T-MANIFEST-FOREST slice 6).
+//
+// Everything below extends this single reader to `.adlc/manifest.d/`. The
+// anchor-resolution and cycle-detection logic is imported from
+// @adlc/gate-manifest (already a dependency) rather than reimplemented — the
+// enable-disclosure work demonstrated exactly how a hand-rolled duplicate of
+// a hardened helper reintroduces the vulnerability the original closed.
+// SEGMENT_NAME_RE and the reserved-name set are module-local in forest.mjs
+// (out of this ticket's scope to export), so they are duplicated here with
+// the same rationale enable.mjs recorded for MARKER: both transcribe the
+// railed spec (§4.2, §4.7), so drift means one of us diverged from the spec
+// and the cross-implementation test will catch it.
+
+/** spec §4.2 — `<slug>-<ulid>.jsonl`, lowercase slug, UPPERCASE Crockford ULID. */
+const CI_SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
+/** spec §4.7 — the marker and the (never-committed, but grammar-exempt) token. */
+const CI_RESERVED_NAMES = new Set(['.store.json', '.lineage']);
+
+/**
+ * The committed root AND forest at HEAD, from ONE pinned rev.
+ *
+ * A separate pin per file would be the #314 round-7 TOCTOU spread across
+ * files: the root read from tree A and the segments from tree B, with a
+ * concurrent ref move between them making the combined snapshot describe a
+ * tree that never existed. One `rev-parse`, every lookup against that sha,
+ * every blob read by the hash from its own ls-tree row.
+ *
+ * Mode/type discipline matches the root's exactly, for the same smuggling
+ * reasons: `.adlc` and `.adlc/manifest.d` must be real trees; every entry
+ * under `manifest.d/` must be a regular 100644 blob — a symlinked segment
+ * (or marker) is the same forged-evidence vector as a symlinked manifest.
+ * Nested directories are denied outright (§4.2).
+ *
+ * @returns {{ rev: string,
+ *             root: {present: boolean, text: string, bytes?: Buffer},
+ *             manifestDPresent: boolean,
+ *             segments: Map<string, Buffer> }}  reserved names are mode-checked
+ *   but never included in `segments`.
+ */
+export function committedEvidenceAtHead(git) {
+  const revResult = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
+  if (revResult.status !== 0) fail('git rev-parse HEAD failed (operational error) — failing closed.');
+  const rev = revResult.stdout.toString().trim();
+
+  const adlcDir = git(['ls-tree', rev, '--', '.adlc'], 'git ls-tree .adlc');
+  if (adlcDir.status !== 0) fail('git ls-tree failed for the HEAD .adlc directory (operational error) — failing closed.');
+  const adlcRow = adlcDir.stdout.toString().trim();
+  if (adlcRow && adlcRow.split(/\s+/)[0] !== '040000') {
+    deny('.adlc must be a directory, not a symlink or submodule');
+  }
+
+  const readBlob = (hash, label) => {
+    const blob = git(['cat-file', 'blob', hash], label, { raw: true });
+    if (blob.status !== 0) fail(`git cat-file failed for ${label} (operational error) — failing closed.`);
+    return Buffer.from(blob.stdout);
+  };
+
+  // Root — same rules committedManifestAtHead applies, against THIS pin.
+  const rootRow = git(['ls-tree', rev, '--', '.adlc/manifest.jsonl'], 'git ls-tree manifest');
+  if (rootRow.status !== 0) fail('git ls-tree failed for the HEAD manifest (operational error) — failing closed.');
+  let root = { present: false, text: '' };
+  const rootLine = rootRow.stdout.toString().trim();
+  if (rootLine) {
+    const [mode, type, hash] = rootLine.split(/\s+/);
+    if (type !== 'blob' || mode !== '100644') {
+      deny('.adlc/manifest.jsonl must be a regular tracked file, not a symlink or submodule');
+    }
+    const bytes = readBlob(hash, 'HEAD manifest blob');
+    root = { present: true, text: bytes.toString('utf8'), bytes };
+  }
+
+  // Forest
+  const dirRow = git(['ls-tree', rev, '--', '.adlc/manifest.d'], 'git ls-tree manifest.d');
+  if (dirRow.status !== 0) fail('git ls-tree failed for the HEAD manifest.d (operational error) — failing closed.');
+  const dirLine = dirRow.stdout.toString().trim();
+  if (!dirLine) return { rev, root, manifestDPresent: false, segments: new Map() };
+  if (dirLine.split(/\s+/)[0] !== '040000') {
+    deny('.adlc/manifest.d must be a directory, not a symlink or submodule');
+  }
+
+  const listing = git(['ls-tree', rev, '.adlc/manifest.d/'], 'git ls-tree manifest.d contents');
+  if (listing.status !== 0) fail('git ls-tree failed for the HEAD manifest.d contents (operational error) — failing closed.');
+  const segments = new Map();
+  for (const row of listing.stdout.toString().split('\n')) {
+    if (!row.trim()) continue;
+    const tab = row.indexOf('\t');
+    const [mode, type, hash] = row.slice(0, tab).split(/\s+/);
+    const name = row.slice(tab + 1).replace(/^\.adlc\/manifest\.d\//, '');
+    if (type === 'tree') deny(`.adlc/manifest.d must not contain nested directories (${name})`);
+    if (type !== 'blob' || mode !== '100644') {
+      deny(`.adlc/manifest.d/${name} must be a regular tracked file, not a symlink or submodule`);
+    }
+    if (CI_RESERVED_NAMES.has(name)) continue; // marker/token: mode-checked above, never a segment
+    segments.set(name, readBlob(hash, `HEAD segment blob ${name}`));
+  }
+  return { rev, root, manifestDPresent: true, segments };
+}
+
+/**
+ * The committed forest at the trusted base. Base is the merged main this PR
+ * targets — its shape was validated when its own PRs merged, so this collects
+ * names and bytes without re-litigating modes (mirroring baseManifestBytes).
+ *
+ * @returns {Map<string, Buffer>}
+ */
+export function baseForestBytes(git, trustedBase) {
+  const dirRow = git(['ls-tree', trustedBase, '--', '.adlc/manifest.d'], 'git ls-tree base manifest.d');
+  if (dirRow.status !== 0) fail('git ls-tree failed for the base manifest.d (operational error) — failing closed.');
+  if (!dirRow.stdout.toString().trim()) return new Map();
+  const listing = git(['ls-tree', trustedBase, '.adlc/manifest.d/'], 'git ls-tree base manifest.d contents');
+  if (listing.status !== 0) fail('git ls-tree failed for the base manifest.d contents (operational error) — failing closed.');
+  const segments = new Map();
+  for (const row of listing.stdout.toString().split('\n')) {
+    if (!row.trim()) continue;
+    const tab = row.indexOf('\t');
+    const [, type, hash] = row.slice(0, tab).split(/\s+/);
+    const name = row.slice(tab + 1).replace(/^\.adlc\/manifest\.d\//, '');
+    if (type !== 'blob' || CI_RESERVED_NAMES.has(name)) continue;
+    const blob = git(['cat-file', 'blob', hash], `base segment blob ${name}`, { raw: true });
+    if (blob.status !== 0) fail(`git cat-file failed for base segment ${name} (operational error) — failing closed.`);
+    segments.set(name, Buffer.from(blob.stdout));
+  }
+  return segments;
+}
+
+/**
+ * §9.2 — every segment committed at base must survive to HEAD with its base
+ * bytes as a byte prefix. Byte-level for the same non-injective-utf8 reason
+ * as assertAppendOnly; per-file because each segment is its own chain.
+ */
+export function validateSegmentAppendOnly(baseSegments, headSegments) {
+  for (const [name, baseBytes] of baseSegments) {
+    const headBytes = headSegments.get(name);
+    if (headBytes === undefined) {
+      deny(`.adlc/manifest.d/${name} exists at base but is absent at HEAD — committed segments cannot be removed or renamed in a PR`);
+    }
+    if (headBytes.length < baseBytes.length || !headBytes.subarray(0, baseBytes.length).equals(baseBytes)) {
+      deny(`.adlc/manifest.d/${name} must be append-only in PRs`);
+    }
+  }
+}
+
+/** Raw non-blank lines with 1-based numbers, in verifyChain's input shape. */
+function numberedLines(text) {
+  const out = [];
+  String(text).split('\n').forEach((line, i) => {
+    if (line.trim()) out.push({ line, lineNo: i + 1 });
+  });
+  return out;
+}
+
+const isCutoverEntry = (entry) => entry?.gate === 'manifest-cutover';
+const isSealEntry = (entry) => entry?.gate === 'cross-model-review' && entry?.data?.sealedByCutover === true;
+
+/** §9.1 structural presence rule: rails-guard holds no key, so it checks that
+ *  the fields EXIST — spoofing is contained (not prevented) because the
+ *  absent-or-invalid signature makes every keyed reader fail the forest
+ *  closed, denying the spoofer rather than widening trust. */
+function assertSealCutoverSignatureShape(entry, label) {
+  if (entry.sigVersion !== 2) deny(`${label} must carry sigVersion 2`);
+  if (typeof entry.sig !== 'string' || entry.sig === '') deny(`${label} must carry a sig field`);
+}
+
+/**
+ * §9.1 seal+cutover set: zero or more §4.6 seal entries followed by EXACTLY
+ * one terminal §4.5 cutover entry, chain-verified over the actual raw lines
+ * exactly as migration evidence is, with the cutover's own bindings checked:
+ * `rootSha256` must hash every byte before the cutover line, `rootLines`
+ * must count every entry before it, and `sealedApprovals` must equal the
+ * seal entries appended. All of that is computable from public bytes — a
+ * keyless author can fake it wholesale, which is §9.1's stated containment
+ * tradeoff, not a gap in this check.
+ */
+export function validateSealCutoverAppend(baseText, headText) {
+  const baseRaw = manifestRawLines(baseText);
+  const headRaw = manifestRawLines(headText);
+  const appendedRaw = headRaw.slice(baseRaw.length);
+  const appended = appendedRaw.map((line, i) => parseJson(line, `appended root entry ${i + 1}`));
+
+  const cutoverIndex = appended.findIndex(isCutoverEntry);
+  if (cutoverIndex !== appended.length - 1) {
+    deny('a root append containing a manifest-cutover entry must end with it — the cutover entry is terminal');
+  }
+  const cut = appended.at(-1);
+  const seals = appended.slice(0, -1);
+  for (const [i, entry] of seals.entries()) {
+    if (!isSealEntry(entry)) {
+      deny(`root append entry ${i + 1} precedes a cutover entry but is not a §4.6 seal (cross-model-review with data.sealedByCutover) — only a valid seal+cutover set may accompany a cutover`);
+    }
+    if (entry.data?.verdict !== 'needs-attention') deny(`seal entry ${i + 1} must carry data.verdict "needs-attention"`);
+    assertSealCutoverSignatureShape(entry, `seal entry ${i + 1}`);
+  }
+  assertSealCutoverSignatureShape(cut, 'the cutover entry');
+  if (typeof cut.data?.reason !== 'string' || cut.data.reason.length < 8) {
+    deny('the cutover entry must carry an operator reason of at least 8 characters');
+  }
+
+  // Chain over the ACTUAL raw lines (the #363 round-4 rule).
+  let previousLine = baseRaw.at(-1) ?? null;
+  let previousSeq = baseRaw.length ? parseJson(baseRaw.at(-1), 'base manifest tail').seq : 0;
+  for (const [i, entry] of appended.entries()) {
+    const expectedPrev = previousLine ? createHash('sha256').update(previousLine).digest('hex') : null;
+    if (entry.prev !== expectedPrev) deny('the seal+cutover append does not extend the manifest hash chain');
+    if (entry.seq !== previousSeq + 1) deny('the seal+cutover append sequence does not extend the manifest');
+    previousLine = appendedRaw[i];
+    previousSeq = entry.seq;
+  }
+
+  // Cutover bindings: everything before the cutover LINE, as exact bytes.
+  const priorBytes = headText.slice(0, headText.lastIndexOf(appendedRaw.at(-1)));
+  if (cut.data.rootSha256 !== createHash('sha256').update(priorBytes).digest('hex')) {
+    deny('the cutover entry rootSha256 does not hash the prior root bytes');
+  }
+  if (cut.data.rootLines !== headRaw.length - 1) {
+    deny('the cutover entry rootLines does not count the prior root entries');
+  }
+  if (cut.data.sealedApprovals !== seals.length) {
+    deny('the cutover entry sealedApprovals does not match the seal entries appended');
+  }
+}
+
+/**
+ * §9.1 — the root's transition rules, dispatching on the base's last entry.
+ *
+ * Base root cutover → HEAD root byte-identical: that is the freeze.
+ * Base root not cutover → byte-prefix (today's rule); ordinary evidence
+ * appends stay legal (§11: a single-file repo keeps exact current behavior
+ * indefinitely — §9.1's "only permitted appends" is read against that
+ * guarantee, which the maintainer should adjudicate if the tension is real);
+ * but the moment the appended region contains a cutover or seal entry, the
+ * WHOLE region must be a valid seal+cutover set. Migration evidence keeps
+ * its existing, separately-validated path.
+ */
+export function assertRootTransition({ basePresent, baseBytes, headPresent, headBytes, migration }) {
+  if (!basePresent) return; // creation rules live in verifyManifest's un-seeded branch, unchanged
+  if (!headPresent) deny('.adlc/manifest.jsonl exists at base but is absent at HEAD');
+
+  const baseText = baseBytes.toString('utf8');
+  const baseRaw = manifestRawLines(baseText);
+  const baseTail = baseRaw.length ? parseJson(baseRaw.at(-1), 'base manifest tail') : null;
+
+  if (baseTail && isCutoverEntry(baseTail)) {
+    if (headBytes.length !== baseBytes.length || !headBytes.equals(baseBytes)) {
+      deny('.adlc/manifest.jsonl is frozen after cutover and must be byte-identical to base in PRs');
+    }
+    return;
+  }
+
+  assertAppendOnly(headBytes, baseBytes);
+  const headText = headBytes.toString('utf8');
+  const appended = manifestRawLines(headText).slice(baseRaw.length)
+    .map((line, i) => parseJson(line, `appended root entry ${i + 1}`));
+  if (appended.some((entry) => isCutoverEntry(entry) || isSealEntry(entry))) {
+    validateSealCutoverAppend(baseText, headText);
+  }
+  if (migration?.verified) {
+    validateMigrationEvidence(baseText, headText, migration.storeHash, migration.archiveHash);
+  }
+}
+
+/** Map seq -> raw line for one chain's text; unparseable lines are skipped
+ *  (they can never satisfy an anchor lookup, which indexes by seq). */
+function seqIndex(text) {
+  const bySeq = new Map();
+  for (const line of manifestRawLines(text)) {
+    try {
+      const entry = JSON.parse(line);
+      if (Number.isInteger(entry?.seq)) bySeq.set(entry.seq, line);
+    } catch { /* not indexable */ }
+  }
+  return bySeq;
+}
+
+/** First entry's anchor of a segment's text, or undefined when unreadable. */
+function firstAnchorOf(text) {
+  const first = manifestRawLines(text)[0];
+  if (first === undefined) return undefined;
+  try {
+    const entry = JSON.parse(first);
+    return Object.hasOwn(entry, 'anchor') ? entry.anchor : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * §9.3 — every segment present at HEAD but not at base must: match the §4.2
+ * filename grammar (with case-collision safety across the whole head set),
+ * parse and chain-verify internally over raw lines, and carry an anchor that
+ * resolves — matching lineHash, cycle-checked — within the HEAD forest.
+ *
+ * Resolving at HEAD rather than base is deliberate: a PR may legitimately
+ * mint a second segment anchored to one it added itself; history pinning
+ * comes from §9.1/§9.2's committed-byte append-only, not from anchor targets.
+ * `anchor: null` is permitted whenever the BASE tree has no root — regardless
+ * of how many other segments base already has (§7.1's two-branch fork:
+ * whichever merges second must not be denied because the first is now base).
+ *
+ * Chain verification runs keyless (rails-guard holds no key): structure and
+ * anchor-position rules, signature checks left to keyed readers — §9.1's
+ * containment note, applied to segments.
+ */
+export function validateNewSegments({ headSegments, baseSegmentNames, baseRootPresent, headRootText }) {
+  // Case-collision guard spans the ENTIRE head set (base names included):
+  // grammar forbids uppercase slugs, so a collision implies a grammar break
+  // somewhere, but the check must not depend on that coupling surviving.
+  const seenLower = new Map();
+  for (const name of [...baseSegmentNames, ...headSegments.keys()]) {
+    const lower = name.toLowerCase();
+    if (seenLower.has(lower) && seenLower.get(lower) !== name) {
+      deny(`.adlc/manifest.d/${name} case-collides with ${seenLower.get(lower)} (case-insensitive filesystem safety)`);
+    }
+    seenLower.set(lower, name);
+  }
+
+  const newNames = [...headSegments.keys()].filter((name) => !baseSegmentNames.has(name)).sort();
+
+  // Anchor resolution context: the WHOLE head forest, root included.
+  const chainsBySeq = new Map();
+  if (headRootText !== null && headRootText !== undefined) chainsBySeq.set('root', seqIndex(headRootText));
+  for (const [name, bytes] of headSegments) chainsBySeq.set(name, seqIndex(bytes.toString('utf8')));
+
+  const anchorBySegment = new Map();
+  for (const [name, bytes] of headSegments) {
+    const anchor = firstAnchorOf(bytes.toString('utf8'));
+    if (anchor !== undefined) anchorBySegment.set(name, anchor);
+  }
+
+  // Cycle detection FIRST: a byte-consistent cycle cannot exist (each
+  // lineHash would have to hash a line that contains the hash of itself), so
+  // any cycle necessarily carries at least one lying lineHash — and denying
+  // it as a lineHash mismatch would bury the structural finding. Checking
+  // the graph before the hashes names the real problem and guarantees the
+  // walk terminates before any per-anchor work.
+  const cycle = detectAnchorCycle(anchorBySegment);
+  if (!cycle.ok) {
+    deny(`.adlc/manifest.d anchor cycle detected at ${cycle.segment} — the forest must be a forest`);
+  }
+
+  for (const name of newNames) {
+    if (!CI_SEGMENT_NAME_RE.test(name)) {
+      deny(`.adlc/manifest.d/${name} violates the segment filename grammar (spec §4.2)`);
+    }
+    const text = headSegments.get(name).toString('utf8');
+    const chain = verifyChain(numberedLines(text), { key: null, requireSignatures: false, anchorOnFirst: true });
+    if (!chain.valid) {
+      deny(`.adlc/manifest.d/${name} does not chain-verify: ${chain.message}`);
+    }
+    // `firstAnchor` is the anchor verifyChain saw on the entry it validated —
+    // the same bytes, no second read.
+    const resolution = resolveAnchor(chain.firstAnchor, chainsBySeq, baseRootPresent);
+    if (!resolution.ok) {
+      deny(`.adlc/manifest.d/${name} anchor rejected: ${resolution.reason}`);
+    }
+  }
 }
