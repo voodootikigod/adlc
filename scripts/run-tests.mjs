@@ -98,15 +98,18 @@ export function buildSegmentEnv(baseEnv = process.env, { platform = process.plat
 const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck true';
 
 /**
+ * Suite directories a package may carry, in the order their globs are run.
+ * `cli-test` and `adapter-test` live outside `test/` so they do not match the
+ * frozen `packages/context-handoff/test/**` rail glob (T154 / slice 5).
+ */
+export const PACKAGE_TEST_DIRS = ['test', 'cli-test', 'adapter-test'];
+
+/**
  * True when a workspace package has a runnable test suite directory.
  * Inject `existsSync` in tests so the directory/file filter polarity is observable.
  */
 export function packageHasTests(name, { existsSync: exists = existsSync, packagesDir = 'packages' } = {}) {
-  return (
-    exists(join(packagesDir, name, 'test')) ||
-    exists(join(packagesDir, name, 'cli-test')) ||
-    exists(join(packagesDir, name, 'adapter-test'))
-  );
+  return PACKAGE_TEST_DIRS.some((dir) => exists(join(packagesDir, name, dir)));
 }
 
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
@@ -115,19 +118,9 @@ export function packageSegments({ existsSync: exists = existsSync, readdirSync: 
     .filter((entry) => entry.isDirectory())
     .filter((entry) => packageHasTests(entry.name, { existsSync: exists }))
     .map((entry) => {
-      const globs = [];
-      if (exists(join('packages', entry.name, 'test'))) {
-        globs.push(`packages/${entry.name}/test/*.test.mjs`);
-      }
-      // Slice-2+ CLI contract tests live outside test/ so they do not match
-      // T154's frozen `packages/context-handoff/test/**/*.test.mjs` rail glob.
-      if (exists(join('packages', entry.name, 'cli-test'))) {
-        globs.push(`packages/${entry.name}/cli-test/*.test.mjs`);
-      }
-      // Slice-5 adapter-core tests, outside test/ for the same rail reason.
-      if (exists(join('packages', entry.name, 'adapter-test'))) {
-        globs.push(`packages/${entry.name}/adapter-test/*.test.mjs`);
-      }
+      const globs = PACKAGE_TEST_DIRS.filter((dir) => exists(join('packages', entry.name, dir))).map(
+        (dir) => `packages/${entry.name}/${dir}/*.test.mjs`,
+      );
       return [`packages/${entry.name}`, `node --test ${globs.join(' ')}`];
     });
 }

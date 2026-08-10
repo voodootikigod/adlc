@@ -25,8 +25,6 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { loadContextHandoff } from './handoff-resolve.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
-const MAX_SCAN_BYTES = 256 * 1024;
-
 function fail(message) {
   console.error(`adlc-handoff-gate: ${message}`);
   process.exit(2);
@@ -164,11 +162,26 @@ function countToolCalls(text) {
  * `@adlc/context-handoff`; nothing here compares against one.
  * An unreadable-but-present transcript yields NaN so the band classifier
  * treats it as invalid rather than as a healthy zero.
+ *
+ * `maxScanBytes` is the read window and is REQUIRED — the caller passes the
+ * package's HARD_BYTES rather than a local copy. Scanning past the hard band
+ * buys nothing (a transcript that large already denies on the bytes signal),
+ * so the window and the band are the same number by construction; keeping a
+ * second literal here would just be a threshold copy waiting to drift.
+ *
+ * @param {object} payload hook payload
+ * @param {{ maxScanBytes: number, size?: Function, tail?: Function }} opts
  */
-export function observeHandoffSignals(payload, { size = fileSize, tail = tailBytes } = {}) {
+export function observeHandoffSignals(payload, { maxScanBytes, size = fileSize, tail = tailBytes }) {
   const observed = {};
   const tp = payload?.transcript_path;
   if (typeof tp !== 'string' || tp === '' || !existsSync(tp)) return observed;
+  if (!Number.isFinite(maxScanBytes) || maxScanBytes <= 0) {
+    // No usable window means the signal cannot be bounded — do not guess.
+    observed.bytes = Number.NaN;
+    observed.depth = Number.NaN;
+    return observed;
+  }
 
   const sessionBytes = size(tp);
   if (sessionBytes < 0) {
@@ -180,8 +193,8 @@ export function observeHandoffSignals(payload, { size = fileSize, tail = tailByt
 
   let windowText;
   let truncated = false;
-  if (sessionBytes > MAX_SCAN_BYTES) {
-    windowText = tail(tp, MAX_SCAN_BYTES);
+  if (sessionBytes > maxScanBytes) {
+    windowText = tail(tp, maxScanBytes);
     truncated = true;
   } else {
     try {
@@ -244,6 +257,9 @@ async function main() {
       fail(`@adlc/context-handoff missing export: ${method} — failing closed`);
     }
   }
+  if (!Number.isFinite(api.HARD_BYTES) || api.HARD_BYTES <= 0) {
+    fail('@adlc/context-handoff missing export: HARD_BYTES — failing closed');
+  }
 
   const sessionId = api.resolveHandoffSessionId({
     candidates: [payload.session_id, payload.sessionId],
@@ -260,7 +276,7 @@ async function main() {
   const result = api.evaluateHandoffPreToolUse({
     root: process.cwd(),
     sessionId,
-    observed: observeHandoffSignals(payload),
+    observed: observeHandoffSignals(payload, { maxScanBytes: api.HARD_BYTES }),
     ticketId: activeTicketIdOrNull(),
     editRelPaths,
     isBash,

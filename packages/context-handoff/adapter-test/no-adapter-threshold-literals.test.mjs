@@ -42,18 +42,13 @@ const ADAPTER_SOURCES = [
 /**
  * Declarations that hold a band value for a reason that is NOT a threshold
  * comparison. Each entry is a deliberate, reviewed exception — keep it short.
+ *
+ * Empty on purpose. The one candidate was the Codex hook's transcript read
+ * window, which equals HARD_BYTES by construction (scanning past the hard band
+ * buys nothing, since a transcript that large already denies on bytes). Rather
+ * than exempt the copy, the hook now takes the window from the loaded package.
  */
-const ALLOWLIST = [
-  {
-    file: 'plugins/adlc-codex/hooks/adlc-handoff-gate.mjs',
-    identifier: 'MAX_SCAN_BYTES',
-    why:
-      'transcript read-window size, not a band edge. It equals HARD_BYTES today ' +
-      'only because scanning more than the hard band buys nothing; the hook ' +
-      'compares against the identifier, never against the literal, and treats a ' +
-      'truncated read as fail-closed depth rather than inferring a band from it.',
-  },
-];
+const ALLOWLIST = [];
 
 const BAND_VALUES = [
   WARN_PCT,
@@ -177,6 +172,18 @@ test('the allowlist is documented and stays small', () => {
     assert.ok(entry.why.length > 40, `${entry.identifier} needs a real justification`);
     assert.ok(ADAPTER_SOURCES.includes(entry.file), `${entry.file} is not scanned`);
   }
+});
+
+test('the read window is taken from the package, not re-declared', () => {
+  // A local window constant equal to HARD_BYTES cannot be killed by any
+  // behavioural test — a transcript large enough to trigger windowing already
+  // denies on the bytes signal — so it must not exist in the first place.
+  const source = readFileSync(
+    join(REPO_ROOT, 'plugins/adlc-codex/hooks/adlc-handoff-gate.mjs'),
+    'utf8',
+  );
+  assert.match(source, /maxScanBytes:\s*api\.HARD_BYTES/);
+  assert.doesNotMatch(stripComments(source), /MAX_SCAN_BYTES\s*=/);
 });
 
 test('the scan bites', () => {
