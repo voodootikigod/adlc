@@ -28,6 +28,12 @@
             "command": "node \"${PLUGIN_ROOT}/hooks/adlc-build-gate.mjs\"",
             "timeout": 10,
             "statusMessage": "ADLC: Checking build-gate context fitness"
+          },
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/adlc-handoff-gate.mjs\"",
+            "timeout": 10,
+            "statusMessage": "ADLC: Checking context-rot handoff deny"
           }
         ]
       }
