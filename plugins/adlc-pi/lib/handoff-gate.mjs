@@ -12,12 +12,11 @@
 // absent, and the OR-join ignores missing signal kinds rather than reading them
 // as zero.
 //
-// Session identity: pi runs the extension in-process and does not hand out a
-// session id, so one is taken from the session_start event when the host
-// supplies it and otherwise minted per extension instance. A minted id is
-// stable for the process — which is exactly the lifetime D2 (denier sticky)
-// needs — while a NEW process gets a new id and is held by D3 against the
-// previous session's still-open record.
+// Session identity: pi's own `ctx.sessionManager.getSessionId()`, which every
+// ExtensionContext carries on its read-only session manager. The mint below is
+// a last resort for contexts that expose no session manager at all (older
+// hosts, harness fakes); it names the extension instance rather than the
+// session, so it survives only as a fallback that still fails closed.
 
 import { randomUUID } from 'node:crypto';
 import { relative, isAbsolute, resolve } from 'node:path';
@@ -46,8 +45,23 @@ const SHELL_TOOLS = new Set(['bash']);
  * @returns {string|null}
  */
 export function resolvePiSessionId(event, ctx, { mint = defaultMint } = {}) {
+  // ctx.sessionManager.getSessionId() is pi's REAL session identity, exposed on
+  // the read-only session manager every ExtensionContext carries. It must come
+  // first: a minted id names the extension instance, not the session, so a
+  // reload would hand the same rotten session a fresh identity and drop D2.
+  let managed;
+  try {
+    managed =
+      typeof ctx?.sessionManager?.getSessionId === 'function'
+        ? ctx.sessionManager.getSessionId()
+        : undefined;
+  } catch {
+    managed = undefined;
+  }
+
   const hosted = resolveHandoffSessionId({
     candidates: [
+      managed,
       event?.sessionId,
       event?.session_id,
       event?.session?.id,

@@ -82,10 +82,11 @@ function fakeCtx(cwd, { percent } = {}) {
   };
 }
 
-async function boot(root, { percent, sessionEvent } = {}) {
+async function boot(root, { percent, sessionEvent, sessionId } = {}) {
   const pi = fakePi();
   createExtension({ env: {} })(pi);
   const ctx = fakeCtx(root, { percent });
+  if (sessionId) ctx.sessionManager = { getSessionId: () => sessionId };
   await pi.handlers.session_start(
     sessionEvent ?? { type: 'session_start', reason: 'startup' },
     ctx,
@@ -176,6 +177,32 @@ test('an unsafe session id reaches the gate as null, not as a filename', () => {
     checkHandoff({ toolName: 'edit', sessionId, root: '/tmp', evaluate });
   }
   assert.deepEqual(seen, [null, null, null, null]);
+});
+
+test('pi\'s own session manager is the primary identity', () => {
+  // ExtensionContext.sessionManager is a ReadonlySessionManager exposing
+  // getSessionId(). Preferring anything else would bind D2 to the extension
+  // instance instead of the session, so a reload would drop the deny.
+  const ctx = { sessionManager: { getSessionId: () => 'pi-real-session' } };
+  assert.equal(resolvePiSessionId(null, ctx), 'pi-real-session');
+  assert.equal(
+    resolvePiSessionId({ sessionId: 'event-sess' }, ctx),
+    'pi-real-session',
+    'the session manager outranks the event payload',
+  );
+});
+
+test('a throwing or absent session manager falls through, never crashes', () => {
+  const throwing = {
+    sessionManager: {
+      getSessionId() {
+        throw new Error('no session yet');
+      },
+    },
+  };
+  assert.equal(resolvePiSessionId({ sessionId: 'event-sess' }, throwing), 'event-sess');
+  const unsafe = { sessionManager: { getSessionId: () => '../escape' } };
+  assert.equal(resolvePiSessionId({ sessionId: 'event-sess' }, unsafe), 'event-sess');
 });
 
 test('a host-supplied session id wins over the mint', () => {
