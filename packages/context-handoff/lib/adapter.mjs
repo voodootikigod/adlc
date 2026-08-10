@@ -17,6 +17,7 @@ import {
   ensureDenyMarker,
   loadDenyRecords,
   mutationGateInputFromLoad,
+  evaluateMarkerOnReentry,
 } from './deny-marker.mjs';
 import { evaluateBands, nagSuppression, handoffDenyActive } from './bands.mjs';
 import { evaluateMutationGate } from './mutation-gate.mjs';
@@ -138,7 +139,19 @@ export function denyStoreHot(loaded) {
  * @param {boolean} [opts.isBash]
  * @param {string} [opts.bashCommand]
  * @param {string} [opts.host] recorded on the deny marker
- * @returns {{ deny: boolean, reasons: string[], ensuredMarker: boolean }}
+ * @param {string|null} [opts.manifestKey] signing key used to VERIFY a
+ *        resume-auth cache. Without it `readResumeAuth` can only ever report
+ *        `verified:false`, and `authorized()` requires `verified === true` — so
+ *        a correctly signed resume could never clear a deny through an adapter.
+ *        Adapters pass their own `ADLC_MANIFEST_KEY`; absent, the gate still
+ *        fails closed, it just cannot be re-opened in-session.
+ * @param {boolean} [opts.denyEverWritten] caller-threaded D1 fact: this session
+ *        has already had a deny marker written OR attempted. `processStickyDeny`
+ *        is a per-call local, so without this a marker write that FAILED denies
+ *        one call and then fails open once the band cools. Only a caller with
+ *        memory across calls can carry it; the spec makes it caller-threaded for
+ *        exactly that reason.
+ * @returns {{ deny: boolean, reasons: string[], ensuredMarker: boolean, denyEverWritten: boolean }}
  */
 export function evaluateHandoffPreToolUse({
   root,
@@ -149,10 +162,13 @@ export function evaluateHandoffPreToolUse({
   isBash = false,
   bashCommand = '',
   host = 'unknown',
+  manifestKey = null,
+  denyEverWritten = false,
 }) {
   const reasons = [];
   let ensuredMarker = false;
   let mutationDenied = false;
+  let sawDeny = denyEverWritten === true;
 
   for (const rel of editRelPaths) {
     if (isProtectedHandoffPath(rel)) {
@@ -177,6 +193,7 @@ export function evaluateHandoffPreToolUse({
   } else {
     let processStickyDeny = false;
     if (handoffActive) {
+      sawDeny = true;
       const ensured = ensureDenyMarker(root, {
         sessionId,
         ticketId,
@@ -189,11 +206,31 @@ export function evaluateHandoffPreToolUse({
         processStickyDeny = true;
         reasons.push(`ensure_deny_marker:${ensured.reason ?? 'failed'}`);
       }
+    } else if (sawDeny) {
+      // D1 re-entry: this session already had a marker written or attempted, so
+      // a cooling signal must not clear it. A failed write leaves nothing on
+      // disk, which is exactly the case a cold store would otherwise allow.
+      const reentry = evaluateMarkerOnReentry(root, sessionId, {
+        absoluteHandoff: false,
+        denyEverWritten: true,
+      });
+      if (reentry.deny) {
+        processStickyDeny = processStickyDeny || reentry.processSticky === true;
+        reasons.push(`D1:${reentry.reason}`);
+        mutationDenied = true;
+      }
     }
 
     // Re-load after ensure so the new marker participates in D2/D3.
     const loadedAfter = handoffActive ? loadDenyRecords(root) : loaded;
-    const resumeAuth = readResumeAuth(root, sessionId);
+    // Without a key `readResumeAuth` reports verified:false for every document,
+    // and `authorized()` demands verified === true — so a signed resume can only
+    // ever clear a deny when the adapter supplies the key it was signed with.
+    const resumeAuth = readResumeAuth(
+      root,
+      sessionId,
+      typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
+    );
     const gateInput = mutationGateInputFromLoad(loadedAfter, {
       currentSessionId: sessionId,
       processStickyDeny,
@@ -205,6 +242,17 @@ export function evaluateHandoffPreToolUse({
     if (gate.deny) {
       mutationDenied = true;
       for (const r of gate.reasons) reasons.push(r);
+    }
+
+    // Diagnostic only, and only once the call is already denied: an operator who
+    // ran `adlc handoff resume` and is still blocked needs to know the adapter
+    // could not verify the cache, rather than assuming the resume failed.
+    if (mutationDenied && resumeAuth && resumeAuth.verified !== true) {
+      reasons.push(
+        typeof manifestKey === 'string' && manifestKey.length > 0
+          ? 'resume_auth_unverified'
+          : 'resume_auth_unverifiable:no_manifest_key',
+      );
     }
   }
 
@@ -223,5 +271,5 @@ export function evaluateHandoffPreToolUse({
     seen.add(r);
     uniq.push(r);
   }
-  return { deny: uniq.length > 0, reasons: uniq, ensuredMarker };
+  return { deny: uniq.length > 0, reasons: uniq, ensuredMarker, denyEverWritten: sawDeny };
 }

@@ -32,7 +32,7 @@ import { recordGateEvent } from './evidence.mjs';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from './doctrine.mjs';
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
-import { checkHandoff, resolvePiSessionId } from './handoff-gate.mjs';
+import { checkHandoff, resolvePiSessionId, createStickyDenyState } from './handoff-gate.mjs';
 import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
@@ -63,6 +63,9 @@ export function createExtension({ env = process.env } = {}) {
     // instance and re-derived at session_start if the host offers a real id;
     // null means the deny-set fails closed under pressure rather than skipping.
     let handoffSessionId = resolvePiSessionId(null, null);
+    // Per-session D1 memory: a FAILED deny-marker write must stay sticky after
+    // the band cools, and only an in-process caller can carry that fact.
+    const handoffSticky = createStickyDenyState();
     // Most recent gate event, summarized for the live widget (line 3).
     let lastGateEvent = null;
     // TUI-only message renderers, isolated so this module stays loadable under
@@ -327,6 +330,8 @@ export function createExtension({ env = process.env } = {}) {
         usage: safeUsage(ctx),
         ticketId: active.ticketId ?? null,
         root: activeCwd,
+        manifestKey,
+        sticky: handoffSticky,
       });
       if (handoff.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');

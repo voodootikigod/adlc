@@ -1697,6 +1697,13 @@ async function handoff(input) {
     isBash,
     bashCommand,
     host: 'claude-code',
+    // Without the key a signed resume-auth reads as unverified and can never
+    // clear the deny it was minted to clear.
+    manifestKey: process.env.ADLC_MANIFEST_KEY ?? null,
+    // A hook is a fresh process per call, so there is no in-memory D1 fact to
+    // carry. The durable half is the deny-store sentinel, which
+    // mutationGateInputFromLoad already consults via registeredSessions.
+    denyEverWritten: false,
   });
 
   if (!result.deny) return;

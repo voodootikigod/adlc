@@ -13,6 +13,7 @@ import { ensureDenyMarker, writeDenyRecord, HANDOFF_DEPTH } from '@adlc/context-
 import { adlcRailsGuard } from '../index.mjs';
 import {
   checkHandoff,
+  createStickyDenyState,
   handoffAppliesTo,
   isShellTool,
   shellCommandOf,
@@ -342,6 +343,38 @@ test('permission.ask leaves read-only kinds alone', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the manifest key is threaded so a signed resume-auth can be verified', () => {
+  const seen = [];
+  const evaluate = (o) => {
+    seen.push(o.manifestKey);
+    return { deny: false, reasons: [], denyEverWritten: false };
+  };
+  checkHandoff({
+    tool: 'edit',
+    sessionID: 's1',
+    root: '/tmp',
+    env: { ADLC_MANIFEST_KEY: 'k'.repeat(64) },
+    evaluate,
+  });
+  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', env: {}, evaluate });
+  assert.deepEqual(seen, ['k'.repeat(64), null]);
+});
+
+test('a failed marker write stays sticky for the session across calls', () => {
+  const sticky = createStickyDenyState();
+  const calls = [];
+  // First call reports the D1 fact; the second must receive it back.
+  const evaluate = (o) => {
+    calls.push(o.denyEverWritten);
+    return { deny: false, reasons: [], denyEverWritten: true };
+  };
+  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', sticky, evaluate });
+  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', sticky, evaluate });
+  // …and must not leak to a different session.
+  checkHandoff({ tool: 'edit', sessionID: 's2', root: '/tmp', sticky, evaluate });
+  assert.deepEqual(calls, [false, true, false]);
 });
 
 test('the plugin declares the package it enforces with', () => {

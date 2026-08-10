@@ -27,6 +27,7 @@ import {
 import { createExtension } from '../lib/extension.mjs';
 import {
   checkHandoff,
+  createStickyDenyState,
   handoffAppliesTo,
   isShellTool,
   isStructuredMutator,
@@ -420,6 +421,31 @@ test('the deny is surfaced to the operator and recorded as evidence', async () =
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the manifest key is threaded so a signed resume-auth can be verified', () => {
+  const seen = [];
+  const evaluate = (o) => {
+    seen.push(o.manifestKey);
+    return { deny: false, reasons: [], denyEverWritten: false };
+  };
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', manifestKey: 'k'.repeat(64), evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', manifestKey: '', evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', evaluate });
+  assert.deepEqual(seen, ['k'.repeat(64), null, null]);
+});
+
+test('a failed marker write stays sticky for the session across calls', () => {
+  const sticky = createStickyDenyState();
+  const calls = [];
+  const evaluate = (o) => {
+    calls.push(o.denyEverWritten);
+    return { deny: false, reasons: [], denyEverWritten: true };
+  };
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', sticky, evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', sticky, evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-b', root: '/tmp', sticky, evaluate });
+  assert.deepEqual(calls, [false, true, false]);
 });
 
 test('the plugin declares the package it enforces with', () => {

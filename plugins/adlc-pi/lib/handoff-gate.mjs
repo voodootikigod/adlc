@@ -79,6 +79,28 @@ function defaultMint() {
   return `pi-${process.pid}-${randomUUID()}`;
 }
 
+/**
+ * Per-session D1 memory. `processStickyDeny` is a per-call local inside the
+ * gate, so a marker write that FAILED would deny one call and then fail open
+ * once the band cooled. pi runs in-process, so it can hold the fact the spec
+ * asks callers to thread.
+ */
+export function createStickyDenyState() {
+  const seen = new Set();
+  return {
+    /** @param {string|null} sessionId */
+    has(sessionId) {
+      return typeof sessionId === 'string' && seen.has(sessionId);
+    },
+    /** @param {string|null} sessionId @param {boolean} value */
+    record(sessionId, value) {
+      if (value === true && typeof sessionId === 'string' && sessionId !== '') {
+        seen.add(sessionId);
+      }
+    },
+  };
+}
+
 /** @param {unknown} toolName */
 export function isStructuredMutator(toolName) {
   return STRUCTURED_MUTATORS.has(String(toolName ?? '').toLowerCase());
@@ -150,6 +172,12 @@ export function observeHandoffSignals(usage) {
  * @param {object|null} [opts.usage] ctx.getContextUsage() reading
  * @param {string|null} [opts.ticketId]
  * @param {string} opts.root
+ * @param {string|null} [opts.manifestKey] lets a signed resume-auth be VERIFIED;
+ *        without it `authorized()` can never accept one, so a completed
+ *        `adlc handoff resume` could not clear the deny it was minted to clear
+ * @param {{ has: Function, record: Function }} [opts.sticky] per-session D1
+ *        memory: a marker write that FAILED must stay sticky after the band
+ *        cools, and only a caller with memory across calls can carry that
  * @param {Function} [opts.evaluate] injection seam for tests
  * @returns {{ decision: 'allow'|'deny', reason?: string, reasons?: string[] }}
  */
@@ -160,23 +188,29 @@ export function checkHandoff({
   usage = null,
   ticketId = null,
   root,
+  manifestKey = null,
+  sticky,
   evaluate = evaluateHandoffPreToolUse,
 }) {
   if (!handoffAppliesTo(toolName)) return { decision: 'allow' };
 
   const shell = isShellTool(toolName);
   const target = shell ? null : editTargetOf(input);
+  const safeSessionId = isSafeSessionId(sessionId) ? sessionId : null;
 
   const result = evaluate({
     root,
-    sessionId: isSafeSessionId(sessionId) ? sessionId : null,
+    sessionId: safeSessionId,
     observed: observeHandoffSignals(usage),
     ticketId,
     editRelPaths: target ? [toRepoRelative(target, root)] : [],
     isBash: shell,
     bashCommand: shell && typeof input?.command === 'string' ? input.command : '',
     host: 'pi',
+    manifestKey: typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null,
+    denyEverWritten: sticky ? sticky.has(safeSessionId) : false,
   });
+  if (sticky) sticky.record(safeSessionId, result.denyEverWritten);
 
   if (!result.deny) return { decision: 'allow' };
   return {

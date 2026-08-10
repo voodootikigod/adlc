@@ -18,6 +18,7 @@ import {
   evaluateHandoffPreToolUse,
   ensureDenyMarker,
   writeDenyRecord,
+  writeResumeAuth,
   HANDOFF_DEPTH,
 } from '@adlc/context-handoff';
 
@@ -346,6 +347,166 @@ test('reasons are de-duplicated', () => {
       host: 'test',
     });
     assert.equal(r.reasons.length, 1);
+  });
+});
+
+// --- signed resume-auth (cross-model review, HIGH/auth) ---------------------
+
+test('a signed resume-auth clears D3 only when the adapter supplies the key', () => {
+  withRepo((root) => {
+    const key = 'a'.repeat(64);
+    assert.equal(
+      ensureDenyMarker(root, {
+        sessionId: 'denier-auth',
+        ticketId: 'T1',
+        contentHash: 'hash-1',
+        host: 'test',
+      }).ok,
+      true,
+    );
+    const written = writeResumeAuth(
+      root,
+      'consumer-auth',
+      { ticketId: 'T1', contentHash: 'hash-1', denySessionId: 'denier-auth' },
+      { key },
+    );
+    assert.equal(written.ok, true, `resume-auth must be writable: ${written.error ?? ''}`);
+
+    // No key: readResumeAuth can only report verified:false, and authorized()
+    // demands verified === true — the operator's completed resume is inert.
+    const withoutKey = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'consumer-auth',
+      observed: { depth: 1 },
+      host: 'test',
+    });
+    assert.equal(withoutKey.deny, true);
+    assert.ok(
+      withoutKey.reasons.includes('resume_auth_unverifiable:no_manifest_key'),
+      `the operator must learn why the resume did not help: ${withoutKey.reasons.join()}`,
+    );
+
+    // Same tree, same document, key supplied → the resume actually resumes.
+    const withKey = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'consumer-auth',
+      observed: { depth: 1 },
+      host: 'test',
+      manifestKey: key,
+    });
+    assert.equal(withKey.deny, false, `signed resume must clear D3: ${withKey.reasons.join()}`);
+  });
+});
+
+test('a forged resume-auth stays denied even with the key', () => {
+  withRepo((root) => {
+    const key = 'a'.repeat(64);
+    assert.equal(
+      ensureDenyMarker(root, {
+        sessionId: 'denier-forge',
+        ticketId: 'T1',
+        contentHash: 'hash-1',
+        host: 'test',
+      }).ok,
+      true,
+    );
+    // Signed with a DIFFERENT key: the signature is well-formed but wrong.
+    writeResumeAuth(
+      root,
+      'consumer-forge',
+      { ticketId: 'T1', contentHash: 'hash-1', denySessionId: 'denier-forge' },
+      { key: 'b'.repeat(64) },
+    );
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'consumer-forge',
+      observed: { depth: 1 },
+      host: 'test',
+      manifestKey: key,
+    });
+    assert.equal(r.deny, true);
+    assert.ok(r.reasons.includes('resume_auth_unverified'), r.reasons.join());
+  });
+});
+
+test('a resume-auth for the wrong content hash stays denied', () => {
+  withRepo((root) => {
+    const key = 'a'.repeat(64);
+    assert.equal(
+      ensureDenyMarker(root, {
+        sessionId: 'denier-hash',
+        ticketId: 'T1',
+        contentHash: 'hash-1',
+        host: 'test',
+      }).ok,
+      true,
+    );
+    writeResumeAuth(
+      root,
+      'consumer-hash',
+      { ticketId: 'T1', contentHash: 'hash-STALE', denySessionId: 'denier-hash' },
+      { key },
+    );
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'consumer-hash',
+      observed: { depth: 1 },
+      host: 'test',
+      manifestKey: key,
+    });
+    assert.equal(r.deny, true, 'a correctly signed resume for another hash must not authorize');
+  });
+});
+
+// --- D1 stickiness across calls (cross-model review, MEDIUM/error-handling) --
+
+test('denyEverWritten keeps a failed marker write sticky after the band cools', () => {
+  withRepo((root) => {
+    // First call at band pressure reports the D1 fact back to the caller.
+    const atBand = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sticky-sess',
+      observed: { depth: HANDOFF_DEPTH },
+      host: 'test',
+    });
+    assert.equal(atBand.deny, true);
+    assert.equal(atBand.denyEverWritten, true, 'the caller must be told to remember this');
+
+    // Now simulate the write having failed: no marker, no sentinel, cold store.
+    rmSync(join(root, '.adlc', 'handoffs'), { recursive: true, force: true });
+    rmSync(join(root, '.adlc', '.deny-store'), { force: true });
+
+    const unthreaded = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sticky-sess',
+      observed: { depth: 1 },
+      host: 'test',
+    });
+    assert.equal(unthreaded.deny, false, 'without the threaded fact the gate has nothing to go on');
+
+    const threaded = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sticky-sess',
+      observed: { depth: 1 },
+      host: 'test',
+      denyEverWritten: true,
+    });
+    assert.equal(threaded.deny, true, 'a cooling signal must not clear a deny that was attempted');
+    assert.ok(threaded.reasons.some((r) => r.startsWith('D1:')), threaded.reasons.join());
+    assert.equal(threaded.denyEverWritten, true, 'and the fact stays set');
+  });
+});
+
+test('denyEverWritten does not deny a session that never hit the band', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'clean-sess',
+      observed: { depth: 1 },
+      host: 'test',
+    });
+    assert.equal(r.deny, false);
+    assert.equal(r.denyEverWritten, false);
   });
 });
 

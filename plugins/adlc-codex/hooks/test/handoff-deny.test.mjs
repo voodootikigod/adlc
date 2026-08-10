@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import {
   ensureDenyMarker,
   writeDenyRecord,
+  writeResumeAuth,
   HANDOFF_DEPTH,
 } from '@adlc/context-handoff';
 
@@ -47,6 +48,7 @@ function runHandoff({
   seedDeny,
   rawInput,
   makeAdlcDir = true,
+  env: extraEnv = {},
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-'));
   try {
@@ -86,6 +88,7 @@ function runHandoff({
           NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
             .filter(Boolean)
             .join(':'),
+          ...extraEnv,
         },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -286,6 +289,40 @@ test('resume-auth / model-ok / lock artifacts are protected too', () => {
     assert.equal(r.verdict, 'deny', `${rel} must be protected`);
     assert.match(r.out, /path_protected/);
   }
+});
+
+test('a signed resume-auth clears the deny only when the hook has the key', () => {
+  const key = 'a'.repeat(64);
+  const seed = (root) => {
+    seedForeignDeny('denier-resume')(root);
+    // The marker's contentHash is what the resume-auth must attest to.
+    assert.equal(
+      writeResumeAuth(
+        root,
+        'consumer-resume',
+        { ticketId: 'T1', contentHash: 'abc', denySessionId: 'denier-resume' },
+        { key },
+      ).ok,
+      true,
+    );
+  };
+
+  // The hook inherits the ambient environment, so the no-key case must clear
+  // any real ADLC_MANIFEST_KEY rather than assume the shell has none.
+  const without = runHandoff({
+    sessionId: 'consumer-resume',
+    seedDeny: seed,
+    env: { ADLC_MANIFEST_KEY: '' },
+  });
+  assert.equal(without.verdict, 'deny');
+  assert.match(without.out, /resume_auth_unverifiable:no_manifest_key/);
+
+  const with_ = runHandoff({
+    sessionId: 'consumer-resume',
+    seedDeny: seed,
+    env: { ADLC_MANIFEST_KEY: key },
+  });
+  assert.equal(with_.verdict, 'allow', with_.out);
 });
 
 test('malformed stdin fails closed', () => {

@@ -18,7 +18,7 @@
 import { checkToolCall, resolveRailsInForce, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
-import { checkHandoff } from './lib/handoff-gate.mjs';
+import { checkHandoff, createStickyDenyState } from './lib/handoff-gate.mjs';
 import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
@@ -111,6 +111,9 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   const watcherState = createWatcherState();
   // Phase 3.3: per-session churn tracker for the flail advisory.
   const flail = createFlailTracker();
+  // Slice 5: per-session D1 memory so a FAILED deny-marker write stays sticky
+  // after the band cools, instead of denying exactly one tool call.
+  const handoffSticky = createStickyDenyState();
 
   const deny = async (message) => {
     if (advisoryOnly) {
@@ -186,6 +189,8 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
         sessionID: input?.sessionID,
         tracker,
         root,
+        env,
+        sticky: handoffSticky,
       });
       if (handoff.decision === 'deny') {
         return denyHandoff(`ADLC context-handoff: blocked ${tool} — ${handoff.reason}`);
@@ -257,6 +262,8 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
           sessionID: input?.sessionID,
           tracker,
           root,
+          env,
+          sticky: handoffSticky,
         });
         if (handoff.decision === 'deny') {
           output.status = 'deny';

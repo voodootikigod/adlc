@@ -62,6 +62,28 @@ export function toRepoRelative(path, root) {
 }
 
 /**
+ * Per-session D1 memory. `processStickyDeny` is a per-call local inside the
+ * gate, so a marker write that FAILED would deny one call and then fail open
+ * once the band cooled. OpenCode runs in-process, so it can actually hold the
+ * fact the spec asks callers to thread.
+ */
+export function createStickyDenyState() {
+  const seen = new Set();
+  return {
+    /** @param {string|null} sessionId */
+    has(sessionId) {
+      return typeof sessionId === 'string' && seen.has(sessionId);
+    },
+    /** @param {string|null} sessionId @param {boolean} value */
+    record(sessionId, value) {
+      if (value === true && typeof sessionId === 'string' && sessionId !== '') {
+        seen.add(sessionId);
+      }
+    },
+  };
+}
+
+/**
  * Evaluate the handoff deny-set for one tool call.
  *
  * @param {object} opts
@@ -70,6 +92,9 @@ export function toRepoRelative(path, root) {
  * @param {string|undefined} opts.sessionID
  * @param {{ depth: (id: string) => number }} [opts.tracker]
  * @param {string} opts.root
+ * @param {object} [opts.env] supplies ADLC_MANIFEST_KEY so a signed resume-auth
+ *        can be VERIFIED — without it `authorized()` can never accept one
+ * @param {ReturnType<typeof createStickyDenyState>} [opts.sticky]
  * @param {(o: object) => { deny: boolean, reasons: string[] }} [opts.evaluate]
  *        injection seam for tests; defaults to the package implementation
  * @returns {{ decision: 'allow'|'deny', reason?: string, reasons?: string[] }}
@@ -80,6 +105,8 @@ export function checkHandoff({
   sessionID,
   tracker,
   root,
+  env = process.env,
+  sticky,
   evaluate = evaluateHandoffPreToolUse,
 }) {
   if (!handoffAppliesTo(tool)) return { decision: 'allow' };
@@ -91,17 +118,23 @@ export function checkHandoff({
     if (Number.isFinite(depth)) observed.depth = depth;
   }
 
+  // An absent/blank sessionID is NOT an id: it must reach the gate as null so
+  // the fail-closed-under-pressure path fires instead of silently passing.
+  const sessionId = typeof sessionID === 'string' && sessionID !== '' ? sessionID : null;
+  const manifestKey = env?.ADLC_MANIFEST_KEY;
+
   const result = evaluate({
     root,
-    // An absent/blank sessionID is NOT an id: it must reach the gate as null so
-    // the fail-closed-under-pressure path fires instead of silently passing.
-    sessionId: typeof sessionID === 'string' && sessionID !== '' ? sessionID : null,
+    sessionId,
     observed,
     editRelPaths: shell ? [] : extractTargets(args).map((p) => toRepoRelative(p, root)),
     isBash: shell,
     bashCommand: shell ? shellCommandOf(args) : '',
     host: 'opencode',
+    manifestKey: typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null,
+    denyEverWritten: sticky ? sticky.has(sessionId) : false,
   });
+  if (sticky) sticky.record(sessionId, result.denyEverWritten);
 
   if (!result.deny) return { decision: 'allow' };
   return {
