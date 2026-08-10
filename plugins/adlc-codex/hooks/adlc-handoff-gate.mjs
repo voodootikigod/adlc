@@ -24,6 +24,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { loadContextHandoff } from './handoff-resolve.mjs';
+import { countToolCalls } from './adlc-build-gate.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 function fail(message) {
@@ -153,10 +154,12 @@ function tailBytes(path, maxBytes) {
   }
 }
 
-function countToolCalls(text) {
-  const matches = String(text ?? '').match(/"type"\s*:\s*"tool_use"|"type"\s*:\s*"function_call"/g);
-  return matches ? matches.length : 0;
-}
+// countToolCalls comes from adlc-build-gate.mjs — the canonical Codex
+// transcript counter, itself pinned to packages/build-gate by a drift test. A
+// second hand-written regex here silently disagreed with it: it missed the
+// `Writing|Editing|Created` prose tool-log form the real counter recognizes, so
+// a deep session in that transcript shape reported depth 0 and never reached
+// the band. Two counters over one transcript is one counter too many.
 
 /**
  * Observe depth/bytes for evaluateBands. Thresholds live in
@@ -298,8 +301,11 @@ async function main() {
     // their OWN declared dependency and do pass the key.
     manifestKey: null,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
-    // carry. The durable half is the deny-store sentinel, which
-    // mutationGateInputFromLoad already consults via registeredSessions.
+    // carry. When a marker write SUCCEEDS the sentinel records the session and
+    // mutationGateInputFromLoad reconstructs stickiness from registeredSessions.
+    // When the write FAILS there is nothing durable to reconstruct from, so a
+    // later call whose band has cooled will not know — a residual gap that needs
+    // host-owned storage surviving the subprocess, not a flag here.
     denyEverWritten: false,
   });
 

@@ -346,6 +346,7 @@ test('the direct-execution guard survives a path containing a space', () => {
     for (const f of [
       'adlc-handoff-gate.mjs',
       'handoff-resolve.mjs',
+      'adlc-build-gate.mjs',
       'generated-active-ticket.mjs',
       'generated-ticket-reader.mjs',
     ]) {

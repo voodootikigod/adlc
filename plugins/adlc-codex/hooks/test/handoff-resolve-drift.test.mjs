@@ -45,6 +45,30 @@ test('the copy still exports the resolver contract the hook depends on', () => {
   }
 });
 
+test('the handoff hook counts tool calls with the canonical counter', async () => {
+  // Two regexes over one transcript is one too many: the handoff hook shipped
+  // its own, which missed the `Writing|Editing|Created` prose tool-log form the
+  // build gate recognizes — so the same session read as deep to one gate and
+  // empty to the other. The hook must import, not re-derive.
+  const source = readFileSync(join(HOOKS_DIR, 'adlc-handoff-gate.mjs'), 'utf8');
+  assert.match(
+    source,
+    /import \{ countToolCalls \} from '\.\/adlc-build-gate\.mjs'/,
+    'the handoff hook must import the canonical counter',
+  );
+  assert.doesNotMatch(
+    source,
+    /function countToolCalls\b/,
+    'and must not declare a second one',
+  );
+
+  const { countToolCalls } = await import(join(HOOKS_DIR, 'adlc-build-gate.mjs'));
+  const prose = 'Writing src/a.mjs\nEditing src/b.mjs\nCreated src/c.mjs\n';
+  assert.equal(countToolCalls(prose), 3, 'the prose tool-log form must count');
+  const blocks = JSON.stringify({ content: [{ type: 'tool_use' }] });
+  assert.equal(countToolCalls(`${blocks}\n${prose}`), 4);
+});
+
 test('the resolver loads the package from a project root', async () => {
   const { loadContextHandoff } = await import(CODEX_COPY);
   const api = await loadContextHandoff({ projectRoot: REPO_ROOT });

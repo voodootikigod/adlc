@@ -1704,8 +1704,11 @@ async function handoff(input) {
     // key. The cost is that a signed resume-auth cannot be verified in-session.
     manifestKey: null,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
-    // carry. The durable half is the deny-store sentinel, which
-    // mutationGateInputFromLoad already consults via registeredSessions.
+    // carry. When a marker write SUCCEEDS the sentinel records the session and
+    // mutationGateInputFromLoad reconstructs stickiness from registeredSessions.
+    // When the write FAILS there is nothing durable to reconstruct from, so a
+    // later call whose band has cooled will not know — a residual gap that needs
+    // host-owned storage surviving the subprocess, not a flag here.
     denyEverWritten: false,
   });
 
