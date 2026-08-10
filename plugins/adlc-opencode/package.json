@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@adlc/build-gate": "^1.10.0",
+    "@adlc/context-handoff": "^1.10.0",
     "@adlc/core": "^1.10.0",
     "@adlc/flail-detector": "^1.10.0",
     "@adlc/gate-manifest": "^1.10.0"
