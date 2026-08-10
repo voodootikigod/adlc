@@ -40,7 +40,8 @@
     "./lib/lock.mjs": "./lib/lock.mjs",
     "./lib/resume-auth.mjs": "./lib/resume-auth.mjs",
     "./lib/deny-persist.mjs": "./lib/deny-persist.mjs",
-    "./lib/adapter.mjs": "./lib/adapter.mjs"
+    "./lib/adapter.mjs": "./lib/adapter.mjs",
+    "./lib/secret-scrub.mjs": "./lib/secret-scrub.mjs"
   },
   "dependencies": {
     "@adlc/core": "1.10.0",

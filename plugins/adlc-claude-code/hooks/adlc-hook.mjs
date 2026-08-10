@@ -1637,8 +1637,42 @@ function observeHandoffSignals(input) {
  * loadDenyRecords. Also protects deny-store paths and fail-closes Bash under
  * an active deny-set.
  */
+/**
+ * Credentials this hook must not expose to imported code.
+ *
+ * KEEP IN SYNC with `HOOK_SECRET_ENV_VARS` in
+ * packages/context-handoff/lib/secret-scrub.mjs, pinned by
+ * hooks/test/handoff-secret-scrub.test.mjs. Inlined rather than imported
+ * because it must run BEFORE the package is loaded — loading the package is
+ * precisely the step it protects.
+ */
+const HOOK_SECRET_ENV_VARS = ['ADLC_MANIFEST_KEY', 'ADLC_ADMIN_KEY'];
+
+/**
+ * Delete credentials from this process's environment.
+ *
+ * handoff-resolve.mjs resolves the gate implementation from the PROJECT's
+ * node_modules, so the module imported below is project-controlled code running
+ * in this process and can read `process.env` directly. Scrubbing is scoped to
+ * the `handoff` mode: the buildgate mode spawns `adlc gate-manifest record` as a
+ * CHILD process that legitimately needs the key, and those modes never import
+ * project-resolved code.
+ */
+function scrubHandoffSecrets(env = process.env) {
+  const removed = [];
+  for (const name of HOOK_SECRET_ENV_VARS) {
+    if (env[name] === undefined) continue;
+    delete env[name];
+    removed.push(name);
+  }
+  return removed;
+}
+
 async function handoff(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo → allow
+
+  // Before anything project-controlled can be imported.
+  scrubHandoffSecrets();
 
   const api = await loadContextHandoff({ projectRoot: process.cwd() });
   if (!api) {

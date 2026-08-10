@@ -9,3 +9,4 @@ export * from './lock.mjs';
 export * from './resume-auth.mjs';
 export * from './deny-persist.mjs';
 export * from './adapter.mjs';
+export * from './secret-scrub.mjs';

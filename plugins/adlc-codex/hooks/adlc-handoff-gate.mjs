@@ -237,8 +237,43 @@ const REQUIRED_API = [
   'isHandoffMutatingShell',
 ];
 
+/**
+ * Credentials this hook must not expose to imported code.
+ *
+ * KEEP IN SYNC with `HOOK_SECRET_ENV_VARS` in
+ * packages/context-handoff/lib/secret-scrub.mjs, pinned by
+ * hooks/test/handoff-secret-scrub.test.mjs. Inlined rather than imported
+ * because it must run BEFORE the package is loaded — loading the package is
+ * precisely the step it protects.
+ */
+const HOOK_SECRET_ENV_VARS = ['ADLC_MANIFEST_KEY', 'ADLC_ADMIN_KEY'];
+
+/**
+ * Delete credentials from this process's environment.
+ *
+ * handoff-resolve.mjs resolves the gate implementation from the PROJECT's
+ * node_modules, so the module imported below is project-controlled code running
+ * in this process — it can read `process.env` directly. Passing
+ * `manifestKey: null` into the gate does not help while the value is still in
+ * the environment that module inherits.
+ *
+ * @returns {string[]} names actually removed
+ */
+export function scrubSecrets(env = process.env) {
+  const removed = [];
+  for (const name of HOOK_SECRET_ENV_VARS) {
+    if (env[name] === undefined) continue;
+    delete env[name];
+    removed.push(name);
+  }
+  return removed;
+}
+
 async function main() {
   if (!existsSync('.adlc')) process.exit(0); // not an ADLC repo → allow
+
+  // Before anything project-controlled can be imported.
+  scrubSecrets();
 
   let payload = {};
   const raw = await stdinText();
