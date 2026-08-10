@@ -30,7 +30,7 @@ export function resolveSessionId(input, { isSafeSessionId }) {
   if (input && typeof input === 'object') {
     candidates.push(input.session_id, input.sessionId);
     const tp = input.transcript_path;
-    if (typeof tp === 'string' && tp.length > 0) {
+    if (typeof tp === 'string' && tp) {
       const base = basename(tp);
       const stem = base.slice(0, base.length - extname(base).length);
       candidates.push(stem);

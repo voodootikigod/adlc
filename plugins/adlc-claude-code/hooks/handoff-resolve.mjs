@@ -12,13 +12,20 @@ import { fileURLToPath } from 'node:url';
 
 const SPEC = '@adlc/context-handoff';
 
+/** @param {unknown} v */
+function nonEmptyString(v) {
+  return typeof v === 'string' && Boolean(v);
+}
+
 /**
  * @param {string} start
  * @yields {string} ancestor directories including start
  */
 function* walkUp(start) {
   let cur = start;
-  for (let i = 0; i < 64; i++) {
+  const seen = new Set();
+  while (!seen.has(cur)) {
+    seen.add(cur);
     yield cur;
     const parent = dirname(cur);
     if (parent === cur) return;
@@ -36,7 +43,7 @@ export function loadContextHandoff({
   pluginHooksDir = dirname(fileURLToPath(import.meta.url)),
 } = {}) {
   const anchors = [];
-  if (typeof projectRoot === 'string' && projectRoot.length > 0) {
+  if (nonEmptyString(projectRoot)) {
     anchors.push(join(projectRoot, 'package.json'));
   }
   for (const dir of walkUp(pluginHooksDir)) {
@@ -59,7 +66,7 @@ export function loadContextHandoff({
   // Last resort: filesystem walk for node_modules/@adlc/context-handoff and
   // require its lib entry by absolute path (covers odd layouts / NODE_PATH).
   const starts = [];
-  if (typeof projectRoot === 'string' && projectRoot.length > 0) starts.push(projectRoot);
+  if (nonEmptyString(projectRoot)) starts.push(projectRoot);
   starts.push(pluginHooksDir);
   for (const start of starts) {
     for (const dir of walkUp(start)) {

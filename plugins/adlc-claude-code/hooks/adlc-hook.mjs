@@ -197,12 +197,7 @@ function main() {
       process.exit(2);
     }
     if (MODE === 'handoff') {
-      try {
-        denyHandoff('handoff hook could not enter the project directory — failing closed');
-      } catch {
-        /* deny emit failed; the exit 2 below still blocks */
-      }
-      process.exit(2);
+      denyHandoff('handoff hook could not enter the project directory — failing closed');
     }
     return;
   }
@@ -279,12 +274,7 @@ function main() {
         process.exit(2);
       }
       if (MODE === 'handoff') {
-        try {
-          denyHandoff('handoff hook found the ADLC root but could not enter it — failing closed');
-        } catch {
-          /* exit 2 below still blocks */
-        }
-        process.exit(2);
+        denyHandoff('handoff hook found the ADLC root but could not enter it — failing closed');
       }
       return;
     }
