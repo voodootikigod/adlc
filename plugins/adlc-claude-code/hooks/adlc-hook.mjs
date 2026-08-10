@@ -8,19 +8,21 @@
 //                                  ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 — see review()]
 //   rails      (PreToolUse)     → block edits to frozen rail paths        [ENFORCING]
 //   buildgate  (PreToolUse)     → fitness-to-build gate (issue #48)        [ENFORCING]
+//   handoff    (PreToolUse)     → context-rot deny/handoff (D1–D3)         [ENFORCING]
 //
 // CONTRACT: preflight/flail/manifest must NEVER block and stay SILENT unless
-// there is something to flag. `rails` and `buildgate` are the two unconditional
-// enforcement hooks — either can DENY an Edit/Write (via a permissionDecision in
-// its JSON output, not via exit code, though exit 2 is also set as a fail-closed
-// belt-and-suspenders). `review` is advisory by default (systemMessage only) and
-// only blocks (Stop `decision: "block"`, forcing the session to continue rather
-// than end) when the operator has explicitly opted in — see review()'s own
-// comment for the rationale. All five modes still ALWAYS exit 0 on the allow
-// path and never surface their own errors; if the toolkit isn't installed or the
-// repo isn't ADLC-initialized, every mode no-ops. Both enforcing gates are
-// themselves a no-op until a ticket declares `rails` paths / an active ticket is
-// resolved, so installing the plugin can't brick a clean repo.
+// there is something to flag. `rails`, `buildgate`, and `handoff` are the
+// unconditional enforcement hooks — each can DENY an Edit/Write/Bash (via a
+// permissionDecision in its JSON output, not via exit code, though exit 2 is
+// also set as a fail-closed belt-and-suspenders). `review` is advisory by
+// default (systemMessage only) and only blocks (Stop `decision: "block"`,
+// forcing the session to continue rather than end) when the operator has
+// explicitly opted in — see review()'s own comment for the rationale. Advisory
+// modes still ALWAYS exit 0 on the allow path and never surface their own
+// errors; if the toolkit isn't installed or the repo isn't ADLC-initialized,
+// every mode no-ops. Enforcing gates are themselves a no-op until a ticket
+// declares `rails` paths / an active high-risk ticket / a handoff deny-store
+// (or handoff band) applies — so installing the plugin can't brick a clean repo.
 //
 // `buildgate`'s core decision (risk-tier derivation, the depth/session-bytes
 // context-fitness signal, and the allow/deny decision) is computed ENTIRELY
@@ -59,6 +61,12 @@ import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { loadContextHandoff } from './handoff-resolve.mjs';
+import {
+  resolveSessionId,
+  bashCommandFromInput,
+  evaluateHandoffPreToolUse,
+} from './handoff-gate.mjs';
 
 const MODE = process.argv[2];
 
@@ -152,6 +160,10 @@ function main() {
     denyBuildGate('build-gate hook received unreadable/malformed input — failing closed');
     return; // unreachable: denyBuildGate exits 2
   }
+  if (MODE === 'handoff' && parsed === null) {
+    denyHandoff('handoff hook received unreadable/malformed input — failing closed');
+    return; // unreachable: denyHandoff exits 2
+  }
   const input = parsed ?? {};
 
   // The base for resolving RELATIVE edit targets is the TOOL's working directory
@@ -179,6 +191,14 @@ function main() {
     if (MODE === 'buildgate') {
       try {
         denyBuildGate('build-gate hook could not enter the project directory — failing closed');
+      } catch {
+        /* deny emit failed; the exit 2 below still blocks */
+      }
+      process.exit(2);
+    }
+    if (MODE === 'handoff') {
+      try {
+        denyHandoff('handoff hook could not enter the project directory — failing closed');
       } catch {
         /* deny emit failed; the exit 2 below still blocks */
       }
@@ -258,6 +278,14 @@ function main() {
         }
         process.exit(2);
       }
+      if (MODE === 'handoff') {
+        try {
+          denyHandoff('handoff hook found the ADLC root but could not enter it — failing closed');
+        } catch {
+          /* exit 2 below still blocks */
+        }
+        process.exit(2);
+      }
       return;
     }
   }
@@ -269,6 +297,7 @@ function main() {
   if (MODE === 'review') return review(input);
   if (MODE === 'rails') return rails(input);
   if (MODE === 'buildgate') return buildgate(input);
+  if (MODE === 'handoff') return handoff(input);
   // unknown mode → no-op
 }
 
@@ -1548,10 +1577,142 @@ function buildgate(input) {
   );
 }
 
+
+/**
+ * Emit a PreToolUse DENY and exit 2 for context-handoff. Fails closed two ways,
+ * exactly like denyRail / denyBuildGate.
+ */
+function denyHandoff(reason) {
+  emit({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+    systemMessage: `ADLC context-handoff: ${reason}`,
+  });
+  process.exit(2);
+}
+
+/**
+ * Observe depth/bytes for evaluateBands — thresholds come from @adlc/context-handoff
+ * via evaluateBands / handoffDenyActive (no local HANDOFF_/HARD_ threshold copies).
+ */
+function observeHandoffSignals(input) {
+  const observed = {};
+  const tp = input.transcript_path;
+  if (!tp || !existsSync(tp)) return observed;
+  const sessionBytes = fileSize(tp);
+  if (sessionBytes < 0) {
+    // Present-but-unreadable → fail closed as hard via evaluateBands invalid path
+    // by supplying a non-finite sentinel the classifier treats as invalid.
+    observed.bytes = Number.NaN;
+    observed.depth = Number.NaN;
+    return observed;
+  }
+  observed.bytes = sessionBytes;
+  let windowText;
+  if (sessionBytes > MAX_SCAN_BYTES) {
+    windowText = tailBytes(tp, MAX_SCAN_BYTES);
+  } else {
+    try {
+      windowText = readFileSync(tp, 'utf8');
+    } catch {
+      windowText = null;
+    }
+  }
+  if (windowText == null) {
+    observed.depth = Number.NaN;
+    return observed;
+  }
+  observed.depth = countToolCallsForBuildGate(windowText);
+  return observed;
+}
+
+/**
+ * PreToolUse context-rot handoff gate (slice 4). Loads `@adlc/context-handoff`
+ * and evaluates D1–D3 via evaluateMutationGate / mutationGateInputFromLoad /
+ * loadDenyRecords. Also protects deny-store paths and fail-closes Bash under
+ * an active deny-set.
+ */
+function handoff(input) {
+  if (!existsSync('.adlc')) return; // not an ADLC repo → allow
+
+  const api = loadContextHandoff({ projectRoot: process.cwd() });
+  if (!api) {
+    return denyHandoff(
+      'cannot load @adlc/context-handoff — install @adlc/cli (or the workspace package) so D1–D3 can be evaluated; failing closed'
+    );
+  }
+
+  const required = [
+    'evaluateBands',
+    'handoffDenyActive',
+    'ensureDenyMarker',
+    'loadDenyRecords',
+    'mutationGateInputFromLoad',
+    'evaluateMutationGate',
+    'readResumeAuth',
+    'nagSuppression',
+    'isSafeSessionId',
+  ];
+  for (const method of required) {
+    if (typeof api[method] !== 'function') {
+      return denyHandoff(
+        `@adlc/context-handoff missing export: ${method} — failing closed`
+      );
+    }
+  }
+
+  const sessionId = resolveSessionId(input, { isSafeSessionId: api.isSafeSessionId });
+  const observed = observeHandoffSignals(input);
+
+  let ticketId = null;
+  try {
+    const active = resolveActiveTicketIdForBuildGate();
+    if (!active.conflict && active.id) ticketId = active.id;
+  } catch {
+    /* unbound marker is fine */
+  }
+
+  const toolName = typeof input.tool_name === 'string' ? input.tool_name : '';
+  const isBash = toolName === 'Bash' || toolName === 'Shell';
+  const bashCommand = isBash ? bashCommandFromInput(input) : '';
+
+  let editRelPaths = [];
+  if (!isBash) {
+    try {
+      editRelPaths = targetFilePaths(input).map((fp) => toRepoRelative(fp));
+    } catch (err) {
+      return denyHandoff(
+        `could not resolve edit target for handoff path protection (${err?.message ?? 'unknown'}) — failing closed`
+      );
+    }
+  }
+
+  const result = evaluateHandoffPreToolUse({
+    api,
+    root: process.cwd(),
+    sessionId,
+    observed,
+    ticketId,
+    editRelPaths,
+    isBash,
+    bashCommand,
+  });
+
+  if (!result.deny) return;
+
+  return denyHandoff(
+    `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
+      `or continue in a fresh session. Agent Shell cannot clear deny-set.`
+  );
+}
+
 try {
   main();
 } catch (err) {
-  // The `rails`/`buildgate` modes are ENFORCING — a crash must FAIL CLOSED,
+  // The `rails`/`buildgate`/`handoff` modes are ENFORCING — a crash must FAIL CLOSED,
   // never fall through to exit 0 (which the harness reads as "allow"). Emit a
   // deny and exit 2 so the PreToolUse call is blocked even if the deny
   // payload is missed. The advisory modes (preflight/flail/manifest/review)
@@ -1567,6 +1728,14 @@ try {
   if (MODE === 'buildgate') {
     try {
       denyBuildGate(`build-gate hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+    } catch {
+      /* even emit failed — the non-zero exit below still blocks */
+    }
+    process.exit(2);
+  }
+  if (MODE === 'handoff') {
+    try {
+      denyHandoff(`handoff hook errored (${err?.message ?? 'unknown'}) — failing closed`);
     } catch {
       /* even emit failed — the non-zero exit below still blocks */
     }

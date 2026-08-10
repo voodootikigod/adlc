@@ -13,6 +13,21 @@
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs buildgate",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs handoff",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs handoff",
+            "timeout": 15
           }
         ]
       }

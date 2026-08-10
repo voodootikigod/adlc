@@ -138,6 +138,7 @@ merge") keeps its full descriptive text.
 | **adversarial-review trigger** | Stop | Advisory by default: diffs the working tree/branch against the [ADR-0007](../adr/0007-multimodel-adversarial-review.md) §1 risk-tier path patterns (auth/trust boundary, security controls/deny paths, secrets, data-loss ops, schema/migration, CI/CD/supply-chain) and warns if a risk-gated change has no `adversarial-review` gate-manifest record. This is the mechanical trigger [ADR-0005](../adr/0005-adversarial-design-review-gate.md)/[ADR-0007](../adr/0007-multimodel-adversarial-review.md) deferred pending operator-reliance proving insufficient — set `ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1` to make it block (Stop `decision: "block"`) instead of just warn. |
 | **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
 | **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. Bash is not gated in-session (same reason as rails-guard) and, unlike rails, there is no CI backstop for it — see Gaps below. |
+| **context-handoff** | PreToolUse | **Enforcing** (T157 / context-rot handoff slice 4): evaluates D1–D3 via `@adlc/context-handoff` (`loadDenyRecords` / `mutationGateInputFromLoad` / `evaluateMutationGate`). Denies Edit/Write/MultiEdit/NotebookEdit **and Bash|Shell** under an active deny-set (fail-closed-all); ensures a deny marker when the absolute handoff/hard band fires; protects `.adlc/handoffs/denies/**`, `.adlc/.deny-store`, and `*.resume-auth.json` / `*.model-ok` / `*.lock`. Session id from `session_id` / `sessionId` / transcript basename. |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
@@ -147,7 +148,10 @@ no-ops until an active ticket is resolved via `ADLC_TICKET`/
 for that file's schema and read semantics (an unparseable pointer, an object with
 no recognized id key, or a pointer conflicting with `ADLC_TICKET` all fail closed),
 plus [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
-and [`@adlc/build-gate`](../../packages/build-gate/README.md).
+and [`@adlc/build-gate`](../../packages/build-gate/README.md). Context-handoff
+no-ops until `.adlc/` exists and a deny store / handoff band applies — see
+[`docs/specs/context-rot-handoff.md`](../specs/context-rot-handoff.md) and
+[`@adlc/context-handoff`](../../packages/context-handoff/README.md).
 
 **Build-gate bypass.** `ADLC_BUILD_GATE_BYPASS=1` overrides a build-gate deny
 only if the override is durably recorded to the gate-manifest (an un-auditable

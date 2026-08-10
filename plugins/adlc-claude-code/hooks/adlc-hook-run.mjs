@@ -40,12 +40,13 @@ const TIMEOUTS_MS = {
   review: 25_000,     // hooks.json: 30 s
   rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
   buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
+  handoff: 10_000,    // hooks.json: 15 s — enforcing hook: deny on timeout
 };
 const timeoutMs = TIMEOUTS_MS[mode] ?? 25_000;
 
 // The enforcing modes (rails, buildgate) must deny — not silently allow — on a
 // timeout or a kill signal. Advisory modes exit 0 so they never block the user.
-const ENFORCING_MODES = new Set(['rails', 'buildgate']);
+const ENFORCING_MODES = new Set(['rails', 'buildgate', 'handoff']);
 
 const result = spawnSync(
   process.execPath,
