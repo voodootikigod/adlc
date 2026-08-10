@@ -534,3 +534,64 @@ test('loadContextHandoff prefers projectRoot package when plugin walk is blind',
     rmSync(blind, { recursive: true, force: true });
   }
 });
+
+test('missing transcript_path file does not invent hard-band deny', () => {
+  const r = runHandoff({
+    sessionId: 'missing-tp',
+    // Force observeHandoffSignals to see a path that does not exist.
+    // runHandoff only sets transcript_path when transcriptToolCalls is set, so
+    // drive the hook manually.
+  });
+  // Baseline allow without signals — control.
+  assert.equal(r.verdict, 'allow');
+
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-handoff-miss-tp-'));
+  try {
+    mkdirSync(join(dir, '.adlc'));
+    writeFileSync(
+      join(dir, '.adlc', 'tickets.json'),
+      JSON.stringify({ tickets: [{ id: 'T1', title: 'x', body: 'y', rails: [], scope: ['src/**'] }] }),
+    );
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+    const input = JSON.stringify({
+      cwd: dir,
+      session_id: 'missing-tp2',
+      tool_name: 'Edit',
+      tool_input: { file_path: join(dir, 'src', 'app.mjs') },
+      transcript_path: join(dir, 'no-such-transcript.jsonl'),
+    });
+    let out = '';
+    let status = 0;
+    try {
+      out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+        input,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: '',
+          NODE_PATH: join(REPO_ROOT, 'node_modules'),
+        },
+      });
+    } catch (e) {
+      out = e.stdout ?? '';
+      status = e.status ?? 1;
+    }
+    const verdict =
+      out.includes('"permissionDecision":"deny"') || status === 2 ? 'deny' : 'allow';
+    assert.equal(verdict, 'allow');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadContextHandoff rejects non-string projectRoot without throwing', async () => {
+  const { loadContextHandoff } = await import('../handoff-resolve.mjs');
+  const blind = mkdtempSync(join(tmpdir(), 'adlc-handoff-blind2-'));
+  try {
+    assert.equal(loadContextHandoff({ projectRoot: null, pluginHooksDir: blind }), null);
+    assert.equal(loadContextHandoff({ projectRoot: 1, pluginHooksDir: blind }), null);
+  } finally {
+    rmSync(blind, { recursive: true, force: true });
+  }
+});
