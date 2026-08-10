@@ -288,6 +288,8 @@ describe('signature-coverage, race detection, and resumability', () => {
       const segLines = readFileSync(join(dir, 'manifest.d', resume.segment), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
       assert.equal(segLines.length, 3, 'first (pre-crash) + second (resumed) + salvage record');
       assert.equal(segLines.at(-1).gate, 'manifest-salvage');
+      assert.equal(segLines.at(-1).data.salvagedEntries, 2, 'the record discloses the FULL salvage, not the resumed remainder');
+      assert.equal(segLines.at(-1).data.salvagedLineHashes.length, 2);
       const verified = verify(dir, { key: KEY, requireSignatures: true });
       assert.equal(verified.valid, true, verified.message);
     } finally { clean(root); }

@@ -277,8 +277,11 @@ export function migrateBranch(dir = ADLC_DIR, { key = null, sourceRef = 'ORIG_HE
     data: {
       sourceRef: plan.sourceRef,
       sourceSha: plan.sourceSha,
-      salvagedEntries: plan.entries.length,
-      salvagedLineHashes: plan.entries.map((e) => e.lineHash),
+      // The FULL salvage, not this run's remainder: a resumed run must
+      // disclose everything the segment carries from the source, or the
+      // record understates what was re-signed.
+      salvagedEntries: plan.allEntries.length,
+      salvagedLineHashes: plan.allEntries.map((e) => e.lineHash),
       ...(plan.unsignedEntries.length > 0
         ? { attestedUnsignedEntries: plan.unsignedEntries.length }
         : {}),
