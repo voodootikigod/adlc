@@ -82,6 +82,30 @@ Mirrors the sibling integrations; all glob/ticket logic delegates to `@adlc/core
   rails `.adlc/tickets.json` and `.adlc/current-ticket.json`.
 - Symlink-aware: both the lexical path and the resolved real path are matched.
 
+## Context-rot handoff
+
+OpenCode is an **enforcing** tier for the context-rot handoff. The deny-set from
+`@adlc/context-handoff` is evaluated in `tool.execute.before` **ahead of** the
+rail check: a session that must hand off should be told to stop, not told which
+rail it happened to hit.
+
+Once a session passes the handoff band a deny record is written for it under
+`.adlc/handoffs/denies/`. While any such record is open and unauthorized, the
+session loses structured edits **and bash wholesale** — including attempts to
+run `adlc handoff write|resume|bypass|repair|unlock` from the agent's own shell.
+Writes to the deny store, resume-auth caches, model-ok stamps, and lock files
+are refused whether or not a deny is active. Read-only tools keep working.
+
+The band signal is the in-process depth tracker the build-gate backstop already
+maintains, keyed on the host's `sessionID`. A tool call arriving with no usable
+session id fails closed once the band fires or a deny store already exists; a
+clean repository is never affected.
+
+`ADLC_ALLOW_ADVISORY_HOOKS=1` (and `advisoryHooks: true`) downgrade the **rail**
+guard only. They do not clear the deny-set: rails have an authoritative CI
+backstop, and the deny-set has none — its only exits are a signed
+`adlc handoff resume`, a signed bypass, or a privileged host repair.
+
 ## Formal ADLC coverage
 
 | Phase | Status | Wired via |

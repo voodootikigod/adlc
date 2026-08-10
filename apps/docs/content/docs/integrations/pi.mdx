@@ -91,6 +91,39 @@ integration: `scripts/rails-guard-ci.mjs` reads the frozen rail set **from the
 trusted base ref** and rejects any PR that edits a rail, however the edit was
 made. **Make it a required check.**
 
+## Context-rot handoff
+
+pi is an **enforcing** tier for the context-rot handoff, and the only harness
+with a *real* context-fill signal: `ctx.getContextUsage().percent` is a live
+reading of the window, not a transcript-size proxy. It feeds the band join
+directly as `pct`.
+
+The deny-set from `@adlc/context-handoff` is evaluated on every `tool_call`,
+before every other gate, and — unlike everything else in this extension — it is
+**not** scoped to an active ticket. An open deny record is a fact about the
+session, so it holds whether or not a ticket is selected.
+
+Once a session passes the handoff band a deny record is written for it under
+`.adlc/handoffs/denies/`. While any such record is open and unauthorized, the
+session loses structured edits, bash **wholesale**, and third-party tools —
+including attempts to run `adlc handoff write|resume|bypass|repair|unlock` from
+the agent's own shell. Writes to the deny store, resume-auth caches, model-ok
+stamps, and lock files are refused whether or not a deny is active. Read-only
+tools keep working.
+
+Because the handoff band (60%) sits below the build gate's own context
+threshold (80%), a percent high enough to trip the build gate now trips the
+handoff deny first. The build gate still fires on the compaction signal, which
+degrades a session without moving the percent — but note that its
+`ADLC_BUILD_GATE_BYPASS` override does not clear a deny-set: resume in a fresh
+session, or repair the record from a terminal.
+
+pi runs the extension in-process and hands out no session id, so one is taken
+from the `session_start` event when the host supplies it and otherwise minted
+per extension instance. That is exactly the lifetime the denier-sticky rule
+needs; a new process gets a new id and is held by the previous session's still
+open record.
+
 ## Formal ADLC coverage
 
 | Phase | pi surface |

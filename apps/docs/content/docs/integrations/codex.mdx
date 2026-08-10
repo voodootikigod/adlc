@@ -70,6 +70,28 @@ it is the authoritative proof over the committed diff.
 `PostToolUse` only tracks repeated failures. Its implementation catches internal
 errors and exits successfully, so telemetry cannot break a Codex tool call.
 
+## Context-rot handoff
+
+Codex is an **enforcing** tier for the context-rot handoff. A third `PreToolUse`
+hook evaluates the deny-set from `@adlc/context-handoff` on the same matcher as
+the rail and build gates.
+
+Once a session passes the handoff band, a deny record is written for it under
+`.adlc/handoffs/denies/`. While any such record is open and unauthorized, the
+session loses structured edits **and the shell wholesale** — including attempts
+to run `adlc handoff write|resume|bypass|repair|unlock` from the agent's own
+shell. Writes to the deny store, resume-auth caches, model-ok stamps, and lock
+files are refused whether or not a deny is active.
+
+The session that wrote the record stays denied even after another session
+consumes it. Clearing the deny is a host action, not an agent one: resume in a
+fresh session with `adlc handoff resume`, or repair the record from a terminal.
+
+Session identity comes from the hook payload's `session_id` and falls back to
+the `transcript_path` stem. With neither available, mutations fail closed once
+the band fires or a deny store already exists — a clean repository is never
+affected.
+
 ## Update, inspect, and remove
 
 ```sh
