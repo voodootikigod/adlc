@@ -313,3 +313,32 @@ describe('signature-coverage, race detection, and resumability', () => {
     assert.match(src, /post-write verification|raced|does not match the salvage plan/i);
   });
 });
+
+describe('round-2 hardening', () => {
+  it('a flag-shaped source ref refuses before reaching git', () => {
+    const { root, dir } = scenario();
+    try {
+      for (const bad of ['--upload-pack=/tmp/evil', '-x']) {
+        const plan = planMigrateBranch(dir, { key: KEY, sourceRef: bad, cwd: root });
+        assert.equal(plan.decision, 'refuse-source', `expected refusal for ${bad}`);
+      }
+    } finally { clean(root); }
+  });
+
+  it('a completed IDENTICAL salvage refuses as done; a MISMATCHED record refuses as inspect-first', () => {
+    const { root, dir, sourceSha } = scenario();
+    try {
+      migrateBranch(dir, { key: KEY, sourceRef: sourceSha, cwd: root, write: true });
+      const done = planMigrateBranch(dir, { key: KEY, sourceRef: sourceSha, cwd: root });
+      assert.equal(done.decision, 'refuse-existing-segment');
+      assert.match(done.reason, /THIS salvage|nothing left/);
+    } finally { clean(root); }
+  });
+
+  it('the pre-record verification precedes the record append (structural pin)', () => {
+    const src = readFileSync(new URL('../lib/migrate-branch.mjs', import.meta.url), 'utf8');
+    const precheck = src.indexOf('no salvage record was written');
+    const recordAppend = src.indexOf("gate: 'manifest-salvage'", precheck);
+    assert.ok(precheck > 0 && recordAppend > precheck, 'verification must run before the record lands — the old order left a retry-blocking record behind');
+  });
+});

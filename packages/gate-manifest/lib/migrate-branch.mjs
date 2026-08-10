@@ -130,6 +130,14 @@ export function planMigrateBranch(dir = ADLC_DIR, {
     return { decision: 'refuse-branch', reason: 'no current git branch (detached HEAD?) — the salvaged segment carries the branch identity, which must exist' };
   }
 
+  // A ref beginning with '-' would be parsed by git as a FLAG, not a ref —
+  // execFileSync avoids the shell but not git's own option parsing.
+  if (typeof sourceRef !== 'string' || sourceRef === '' || sourceRef.startsWith('-')) {
+    return { decision: 'refuse-source', reason: `invalid source ref ${JSON.stringify(sourceRef)} — refs must not begin with '-'` };
+  }
+  if (typeof sourcePath !== 'string' || sourcePath === '' || sourcePath.startsWith('-')) {
+    return { decision: 'refuse-source', reason: `invalid source path ${JSON.stringify(sourcePath)} — paths must not begin with '-'` };
+  }
   const sourceBytes = gitShow(repoCwd, sourceRef, sourcePath);
   if (sourceBytes === null) {
     return { decision: 'refuse-source', reason: `cannot read ${sourcePath} at ${sourceRef} — pass --from <ref> naming the pre-rebase state (ORIG_HEAD is the default and survives one rebase; the reflog holds older states)` };
@@ -226,8 +234,14 @@ export function planMigrateBranch(dir = ADLC_DIR, {
     const segEntries = readRawLines(`${segmentDirPath(dir)}/${owned}`)
       .map(({ line }) => parse(line))
       .filter((e) => e !== null);
-    if (segEntries.some((e) => e.gate === 'manifest-salvage')) {
-      return { decision: 'refuse-existing-segment', reason: `branch ${branch} already owns segment ${owned} carrying a completed salvage record — salvage runs once` };
+    const record = segEntries.find((e) => e.gate === 'manifest-salvage');
+    if (record !== undefined) {
+      const recordedHashes = JSON.stringify(record.data?.salvagedLineHashes ?? []);
+      const plannedHashes = JSON.stringify(planned.map((e) => e.lineHash));
+      if (recordedHashes === plannedHashes) {
+        return { decision: 'refuse-existing-segment', reason: `branch ${branch} already owns segment ${owned} carrying the completed record of THIS salvage — nothing left to do` };
+      }
+      return { decision: 'refuse-existing-segment', reason: `branch ${branch} owns segment ${owned} whose salvage record does not match this source — a different or corrupted salvage landed there; inspect the segment and its manifest-salvage entry before anything else` };
     }
     const isPrefix = segEntries.length <= planned.length
       && segEntries.every((e, i) => stable(contentOf(e)) === stable(planned[i].content));
@@ -270,6 +284,23 @@ export function migrateBranch(dir = ADLC_DIR, { key = null, sourceRef = 'ORIG_HE
       if (!RESERVED.has(field)) payload[field] = value;
     }
     appendManifestEntry(payload, dir, { signatureVersion: 2, cwd: repoCwd, key: signingKey });
+  }
+
+  // Verify BEFORE the salvage record lands: if a concurrent writer's mint
+  // absorbed these appends, failing here leaves NO completed-salvage record
+  // on disk — the segment is inspectable and, once resolved, retryable. The
+  // old ordering stamped the record first and then threw, leaving a state
+  // whose record blocked every retry forever.
+  {
+    const segName = branchOwnsSegment(dir, plan.branch);
+    const soFar = readRawLines(`${segmentDirPath(dir)}/${segName}`)
+      .map(({ line }) => parse(line))
+      .filter((e) => e !== null);
+    const expected = plan.allEntries.map((e) => stable(contentOf(e.entry)));
+    const actual = soFar.map((e) => stable(contentOf(e)));
+    if (actual.length !== expected.length || !expected.every((c, i) => c === actual[i])) {
+      throw new Error(`segment ${segName} does not match the salvage plan — a concurrent writer raced this salvage; no salvage record was written, nothing was deleted; inspect the segment, then re-run (the salvage resumes past a clean prefix)`);
+    }
   }
 
   appendManifestEntry({
