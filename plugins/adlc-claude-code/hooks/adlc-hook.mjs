@@ -162,7 +162,7 @@ function main() {
   }
   if (MODE === 'handoff' && parsed === null) {
     denyHandoff('handoff hook received unreadable/malformed input — failing closed');
-    return; // unreachable: denyHandoff exits 2
+    return; // unreachable: denyHandoff exits non-zero
   }
   const input = parsed ?? {};
 

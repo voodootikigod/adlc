@@ -450,3 +450,85 @@ test('hooks.json wires handoff for Edit matcher and Bash|Shell', () => {
   assert.match(String(bash.matcher), /Bash\|Shell|Shell\|Bash/);
   assert.ok(bash.hooks.some((h) => String(h.command).includes('handoff')));
 });
+
+test('malformed stdin → deny (fail closed)', () => {
+  let out = '';
+  let status = 0;
+  try {
+    out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+      input: '{not-json',
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: '',
+        NODE_PATH: join(REPO_ROOT, 'node_modules'),
+      },
+    });
+  } catch (e) {
+    out = e.stdout ?? '';
+    status = e.status ?? 1;
+  }
+  assert.equal(status, 2);
+  assert.match(out, /permissionDecision":"deny"/);
+  assert.match(out, /unreadable\/malformed input/);
+});
+
+test('unenterable project cwd → deny (fail closed)', () => {
+  const missing = join(tmpdir(), `adlc-handoff-missing-${Date.now()}`, 'nope');
+  let out = '';
+  let status = 0;
+  try {
+    out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+      input: JSON.stringify({
+        cwd: missing,
+        session_id: 'sess-missing',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/app.mjs' },
+      }),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: '',
+        NODE_PATH: join(REPO_ROOT, 'node_modules'),
+      },
+    });
+  } catch (e) {
+    out = e.stdout ?? '';
+    status = e.status ?? 1;
+  }
+  assert.equal(status, 2);
+  assert.match(out, /permissionDecision":"deny"/);
+  assert.match(out, /could not enter the project directory/);
+});
+
+test('empty transcript_path string does not become a session id', async () => {
+  const { resolveSessionId } = await import('../handoff-gate.mjs');
+  const { isSafeSessionId } = await import('@adlc/context-handoff');
+  assert.equal(resolveSessionId(null, { isSafeSessionId }), null);
+  assert.equal(resolveSessionId(undefined, { isSafeSessionId }), null);
+  assert.equal(
+    resolveSessionId({ session_id: '', transcript_path: '' }, { isSafeSessionId }),
+    null,
+  );
+  // Stem containing `..` is rejected by isSafeSessionId.
+  assert.equal(
+    resolveSessionId({ transcript_path: '....jsonl' }, { isSafeSessionId }),
+    null,
+  );
+});
+
+test('loadContextHandoff prefers projectRoot package when plugin walk is blind', async () => {
+  const { loadContextHandoff } = await import('../handoff-resolve.mjs');
+  const blind = mkdtempSync(join(tmpdir(), 'adlc-handoff-blind-'));
+  try {
+    // pluginHooksDir outside the monorepo: walk cannot find @adlc/*.
+    // projectRoot still resolves via the real repo package.json.
+    const api = loadContextHandoff({
+      projectRoot: REPO_ROOT,
+      pluginHooksDir: blind,
+    });
+    assert.equal(typeof api?.evaluateMutationGate, 'function');
+  } finally {
+    rmSync(blind, { recursive: true, force: true });
+  }
+});

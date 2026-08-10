@@ -40,7 +40,7 @@ const TIMEOUTS_MS = {
   review: 25_000,     // hooks.json: 30 s
   rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
   buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
-  handoff: 10_000,    // hooks.json: 15 s — enforcing hook: deny on timeout
+  handoff: 10_000,    // hooks.json timeout minus buffer — enforcing: deny on timeout
 };
 const timeoutMs = TIMEOUTS_MS[mode] ?? 25_000;
 
