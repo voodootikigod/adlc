@@ -52,6 +52,18 @@ export function resolveContextHandoffEntry({
     anchors.push(join(dir, 'package.json'));
   }
 
+  // Prefer ESM resolve when available (avoids CJS export-condition gaps).
+  if (nonEmptyString(projectRoot) && typeof import.meta.resolve === 'function') {
+    try {
+      const url = import.meta.resolve(SPEC, pathToFileURL(join(projectRoot, 'package.json')).href);
+      if (typeof url === 'string' && url.startsWith('file:')) {
+        return fileURLToPath(url);
+      }
+    } catch {
+      /* fall through to createRequire.resolve */
+    }
+  }
+
   const seen = new Set();
   for (const anchor of anchors) {
     if (seen.has(anchor)) continue;

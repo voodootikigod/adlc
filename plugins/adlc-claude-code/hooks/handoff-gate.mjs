@@ -51,9 +51,22 @@ export function resolveSessionId(input, { isSafeSessionId }) {
  */
 export function isProtectedHandoffPath(rel) {
   if (typeof rel !== 'string' || rel.length === 0) return false;
-  const norm = rel.replace(/\\/g, '/').replace(/^\.\//, '');
+  // Collapse . / .. and separators; keep as repo-relative (no leading /).
+  const norm = rel
+    .replace(/\\/g, '/')
+    .split('/')
+    .reduce((acc, part) => {
+      if (part === '' || part === '.') return acc;
+      if (part === '..') {
+        acc.pop();
+        return acc;
+      }
+      acc.push(part);
+      return acc;
+    }, [])
+    .join('/');
   if (norm === '.adlc/.deny-store' || norm === '.adlc/handoffs/.deny-store') return true;
-  if (norm.startsWith('.adlc/handoffs/denies/')) return true;
+  if (norm === '.adlc/handoffs/denies' || norm.startsWith('.adlc/handoffs/denies/')) return true;
   if (!norm.startsWith('.adlc/handoffs/')) return false;
   const leaf = basename(norm);
   return (

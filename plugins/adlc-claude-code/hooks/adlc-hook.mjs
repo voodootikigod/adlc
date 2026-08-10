@@ -1606,9 +1606,15 @@ function observeHandoffSignals(input) {
     return observed;
   }
   observed.bytes = sessionBytes;
+  // MAX_SCAN_BYTES equals HARD_BYTES (256 KiB) today, so a truncated read means
+  // bytes already satisfy the hard band. Still fail-closed on depth when we only
+  // saw a window: set depth to +Infinity so evaluateBands stays hard if the two
+  // constants ever diverge.
   let windowText;
+  let truncated = false;
   if (sessionBytes > MAX_SCAN_BYTES) {
     windowText = tailBytes(tp, MAX_SCAN_BYTES);
+    truncated = true;
   } else {
     try {
       windowText = readFileSync(tp, 'utf8');
@@ -1620,7 +1626,9 @@ function observeHandoffSignals(input) {
     observed.depth = Number.NaN;
     return observed;
   }
-  observed.depth = countToolCallsForBuildGate(windowText);
+  observed.depth = truncated
+    ? Number.POSITIVE_INFINITY
+    : countToolCallsForBuildGate(windowText);
   return observed;
 }
 

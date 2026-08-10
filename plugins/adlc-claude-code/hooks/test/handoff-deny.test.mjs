@@ -595,3 +595,25 @@ test('loadContextHandoff rejects non-string projectRoot without throwing', async
     rmSync(blind, { recursive: true, force: true });
   }
 });
+
+test('Write to denies directory (no trailing slash) is denied', () => {
+  const r = runHandoff({
+    sessionId: 'path-dir',
+    toolName: 'Write',
+    toolInput: {
+      file_path: '.adlc/handoffs/denies',
+      content: '{}',
+    },
+    seedDeny: (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    },
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, /path_protected:/);
+});
+
+test('Write via dotted handoffs path is still protected', async () => {
+  const { isProtectedHandoffPath } = await import('../handoff-gate.mjs');
+  assert.equal(isProtectedHandoffPath('.adlc/./handoffs/denies/x.json'), true);
+  assert.equal(isProtectedHandoffPath('.adlc/handoffs/denies'), true);
+});
