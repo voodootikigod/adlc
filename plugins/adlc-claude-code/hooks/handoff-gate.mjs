@@ -30,10 +30,12 @@ export function resolveSessionId(input, { isSafeSessionId }) {
   if (input && typeof input === 'object') {
     candidates.push(input.session_id, input.sessionId);
     const tp = input.transcript_path;
-    if (typeof tp === 'string' && tp) {
-      const base = basename(tp);
-      const stem = base.slice(0, base.length - extname(base).length);
-      candidates.push(stem);
+    if (typeof tp === 'string') {
+      if (tp !== '') {
+        const base = basename(tp);
+        const stem = base.slice(0, base.length - extname(base).length);
+        candidates.push(stem);
+      }
     }
   }
   for (const c of candidates) {

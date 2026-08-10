@@ -505,6 +505,8 @@ test('empty transcript_path string does not become a session id', async () => {
   const { resolveSessionId } = await import('../handoff-gate.mjs');
   const { isSafeSessionId } = await import('@adlc/context-handoff');
   assert.equal(resolveSessionId(null, { isSafeSessionId }), null);
+  assert.equal(resolveSessionId({ transcript_path: 12 }, { isSafeSessionId }), null);
+
   assert.equal(resolveSessionId(undefined, { isSafeSessionId }), null);
   assert.equal(
     resolveSessionId({ session_id: '', transcript_path: '' }, { isSafeSessionId }),

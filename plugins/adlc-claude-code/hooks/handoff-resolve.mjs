@@ -14,7 +14,8 @@ const SPEC = '@adlc/context-handoff';
 
 /** @param {unknown} v */
 function nonEmptyString(v) {
-  return typeof v === 'string' && Boolean(v);
+  if (typeof v !== 'string') return false;
+  return v !== '';
 }
 
 /**

@@ -196,8 +196,8 @@ function main() {
       }
       process.exit(2);
     }
-    if (MODE === 'handoff') {
-      denyHandoff('handoff hook could not enter the project directory — failing closed');
+    if (['handoff'].includes(MODE)) {
+      failClosedHandoffEnter('could not enter the project directory');
     }
     return;
   }
@@ -273,8 +273,8 @@ function main() {
         }
         process.exit(2);
       }
-      if (MODE === 'handoff') {
-        denyHandoff('handoff hook found the ADLC root but could not enter it — failing closed');
+      if (['handoff'].includes(MODE)) {
+        failClosedHandoffEnter('found the ADLC root but could not enter it');
       }
       return;
     }
@@ -1582,6 +1582,11 @@ function denyHandoff(reason) {
     systemMessage: `ADLC context-handoff: ${reason}`,
   });
   process.exit(2);
+}
+
+/** Fail closed when handoff cannot operate in the project / ADLC root. */
+function failClosedHandoffEnter(why) {
+  denyHandoff(`handoff hook ${why} — failing closed`);
 }
 
 /**
