@@ -10,7 +10,10 @@ import {
   rmSync,
   writeFileSync,
   readFileSync,
+  copyFileSync,
   existsSync,
+  realpathSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -291,11 +294,16 @@ test('resume-auth / model-ok / lock artifacts are protected too', () => {
   }
 });
 
-test('a signed resume-auth clears the deny only when the hook has the key', () => {
+test('the hook never hands the manifest key to project-resolved code', () => {
+  // handoff-resolve.mjs deliberately resolves @adlc/context-handoff from the
+  // PROJECT's node_modules, so the imported module is project-controlled. If
+  // the hook passed ADLC_MANIFEST_KEY into it, any repository shipping a
+  // package by that name could exfiltrate the manifest trust anchor. The
+  // observable contract: even WITH a key in the environment and a validly
+  // signed resume-auth on disk, this hook cannot verify it — and says so.
   const key = 'a'.repeat(64);
   const seed = (root) => {
     seedForeignDeny('denier-resume')(root);
-    // The marker's contentHash is what the resume-auth must attest to.
     assert.equal(
       writeResumeAuth(
         root,
@@ -307,22 +315,80 @@ test('a signed resume-auth clears the deny only when the hook has the key', () =
     );
   };
 
-  // The hook inherits the ambient environment, so the no-key case must clear
-  // any real ADLC_MANIFEST_KEY rather than assume the shell has none.
-  const without = runHandoff({
-    sessionId: 'consumer-resume',
-    seedDeny: seed,
-    env: { ADLC_MANIFEST_KEY: '' },
-  });
-  assert.equal(without.verdict, 'deny');
-  assert.match(without.out, /resume_auth_unverifiable:no_manifest_key/);
+  for (const envKey of ['', key]) {
+    const r = runHandoff({
+      sessionId: 'consumer-resume',
+      seedDeny: seed,
+      env: { ADLC_MANIFEST_KEY: envKey },
+    });
+    assert.equal(r.verdict, 'deny', `key=${envKey ? 'set' : 'unset'} must still deny`);
+    assert.match(r.out, /resume_auth_unverifiable:no_manifest_key/);
+  }
 
-  const with_ = runHandoff({
-    sessionId: 'consumer-resume',
-    seedDeny: seed,
-    env: { ADLC_MANIFEST_KEY: key },
-  });
-  assert.equal(with_.verdict, 'allow', with_.out);
+  const source = readFileSync(HOOK, 'utf8');
+  assert.doesNotMatch(
+    source,
+    /manifestKey:\s*process\.env/,
+    'the key must not be threaded into the dynamically resolved module',
+  );
+});
+
+test('the direct-execution guard survives a path containing a space', () => {
+  // `file://${argv[1]}` does not match import.meta.url for a percent-encoded
+  // path, so main() would never run and the hook would exit 0 — read as ALLOW.
+  // realpathSync: macOS tmpdir() is itself a symlink, and import.meta.url is
+  // always the RESOLVED path — without this the two would differ for a reason
+  // that has nothing to do with the space this test is about.
+  const spaced = realpathSync(mkdtempSync(join(tmpdir(), 'adlc codex hook ')));
+  try {
+    const copyDir = join(spaced, 'hooks');
+    mkdirSync(copyDir, { recursive: true });
+    for (const f of [
+      'adlc-handoff-gate.mjs',
+      'handoff-resolve.mjs',
+      'generated-active-ticket.mjs',
+      'generated-ticket-reader.mjs',
+    ]) {
+      copyFileSync(join(HOOKS_DIR, f), join(copyDir, f));
+    }
+    // Let the resolver find the package by walking up from the spaced hooks
+    // dir, so this asserts the real deny rather than the fail-closed path.
+    symlinkSync(join(REPO_ROOT, 'node_modules'), join(spaced, 'node_modules'), 'dir');
+    const repo = mkdtempSync(join(tmpdir(), 'adlc-codex-spaced-'));
+    try {
+      mkdirSync(join(repo, '.adlc'), { recursive: true });
+      seedForeignDeny('denier-spaced')(repo);
+      let status = 0;
+      let out = '';
+      try {
+        execFileSync(process.execPath, [join(copyDir, 'adlc-handoff-gate.mjs')], {
+          input: JSON.stringify({
+            session_id: 'consumer-spaced',
+            tool_name: 'apply_patch',
+            file_path: 'src/app.mjs',
+          }),
+          encoding: 'utf8',
+          cwd: repo,
+          env: {
+            ...process.env,
+            NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
+              .filter(Boolean)
+              .join(':'),
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (e) {
+        out = e.stderr ?? '';
+        status = e.status ?? 1;
+      }
+      assert.equal(status, 2, `the hook must still enforce from a spaced path: ${out}`);
+      assert.match(out, /D3:unauthorized_open:denier-spaced/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(spaced, { recursive: true, force: true });
+  }
 });
 
 test('malformed stdin fails closed', () => {

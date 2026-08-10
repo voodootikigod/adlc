@@ -1697,9 +1697,12 @@ async function handoff(input) {
     isBash,
     bashCommand,
     host: 'claude-code',
-    // Without the key a signed resume-auth reads as unverified and can never
-    // clear the deny it was minted to clear.
-    manifestKey: process.env.ADLC_MANIFEST_KEY ?? null,
+    // NO manifest key here, deliberately — see the same note in
+    // plugins/adlc-codex/hooks/adlc-handoff-gate.mjs. handoff-resolve.mjs
+    // resolves the package from the PROJECT's node_modules, so that module is
+    // project-controlled code and must never be handed the manifest signing
+    // key. The cost is that a signed resume-auth cannot be verified in-session.
+    manifestKey: null,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
     // carry. The durable half is the deny-store sentinel, which
     // mutationGateInputFromLoad already consults via registeredSessions.

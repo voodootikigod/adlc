@@ -21,6 +21,7 @@
 
 import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { loadContextHandoff } from './handoff-resolve.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
@@ -282,9 +283,20 @@ async function main() {
     isBash,
     bashCommand,
     host: 'codex',
-    // Without the key a signed resume-auth reads as unverified and can never
-    // clear the deny it was minted to clear.
-    manifestKey: process.env.ADLC_MANIFEST_KEY ?? null,
+    // NO manifest key here, deliberately. handoff-resolve.mjs resolves the
+    // package from the PROJECT's node_modules by design (a hook cannot bare-
+    // import from its install dir), so the module imported below is
+    // project-controlled code. Handing it the signing key would let any
+    // repository shipping a package named @adlc/context-handoff exfiltrate the
+    // trust anchor for the whole manifest — a permanently forgeable one.
+    //
+    // The cost is that this hook cannot VERIFY a resume-auth cache, so a signed
+    // resume cannot re-open a deny in-session; the gate says so by name
+    // (`resume_auth_unverifiable:no_manifest_key`) and the documented path
+    // stays what it already was — continue in a fresh session, or repair from a
+    // terminal. In-process adapters (OpenCode, Pi) resolve the package through
+    // their OWN declared dependency and do pass the key.
+    manifestKey: null,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
     // carry. The durable half is the deny-store sentinel, which
     // mutationGateInputFromLoad already consults via registeredSessions.
@@ -301,7 +313,14 @@ async function main() {
 
 // Only run as a hook when executed directly — the contract test imports this
 // module for its pure exports and must not trigger a live stdin read.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+//
+// pathToFileURL, never `file://${argv[1]}`: a path containing a space (or any
+// character a file URL percent-encodes, and every Windows path) would not match
+// import.meta.url, so main() would silently never run and the hook would exit 0
+// — reading as ALLOW. An enforcing gate that no-ops on an install path is worse
+// than one that errors.
+const isMain =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   main().catch((err) => {
     // Enforcing hook — a crash must fail closed, never fall through to allow.

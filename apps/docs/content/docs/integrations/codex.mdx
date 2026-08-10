@@ -95,11 +95,16 @@ the `transcript_path` stem. With neither available, mutations fail closed once
 the band fires or a deny store already exists — a clean repository is never
 affected.
 
-Clearing a deny needs `ADLC_MANIFEST_KEY` in the harness's environment:
-`adlc handoff resume` signs a resume-auth cache, and the adapter can only honour
-it by verifying that signature. Without the key the gate still fails closed — it
-just cannot be re-opened in-session, and says so
-(`resume_auth_unverifiable:no_manifest_key`).
+A signed resume-auth cache cannot be verified by this hook, and that is
+deliberate. Codex hooks run from the plugin's installed location and resolve
+`@adlc/context-handoff` by walking up into the **project's** `node_modules`, so
+the module they import is project-controlled code. Handing it `ADLC_MANIFEST_KEY`
+would let any repository shipping a package under that name exfiltrate the
+manifest trust anchor. The hook therefore reports
+`resume_auth_unverifiable:no_manifest_key` and keeps denying; the way out stays
+what it already was — continue in a fresh session, or repair from a terminal.
+(The in-process integrations, opencode and pi, resolve the package through their
+own declared dependency and do verify.)
 
 ## Update, inspect, and remove
 
