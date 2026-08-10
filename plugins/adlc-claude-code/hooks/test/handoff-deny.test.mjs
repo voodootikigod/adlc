@@ -525,7 +525,7 @@ test('loadContextHandoff prefers projectRoot package when plugin walk is blind',
   try {
     // pluginHooksDir outside the monorepo: walk cannot find @adlc/*.
     // projectRoot still resolves via the real repo package.json.
-    const api = loadContextHandoff({
+    const api = await loadContextHandoff({
       projectRoot: REPO_ROOT,
       pluginHooksDir: blind,
     });
@@ -589,8 +589,8 @@ test('loadContextHandoff rejects non-string projectRoot without throwing', async
   const { loadContextHandoff } = await import('../handoff-resolve.mjs');
   const blind = mkdtempSync(join(tmpdir(), 'adlc-handoff-blind2-'));
   try {
-    assert.equal(loadContextHandoff({ projectRoot: null, pluginHooksDir: blind }), null);
-    assert.equal(loadContextHandoff({ projectRoot: 1, pluginHooksDir: blind }), null);
+    assert.equal(await loadContextHandoff({ projectRoot: null, pluginHooksDir: blind }), null);
+    assert.equal(await loadContextHandoff({ projectRoot: 1, pluginHooksDir: blind }), null);
   } finally {
     rmSync(blind, { recursive: true, force: true });
   }

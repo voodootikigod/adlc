@@ -2,13 +2,14 @@
 //
 // The plugin install dir (~/.claude/plugins/cache/…) does not ship workspace
 // packages, so a bare static import from this file would miss the project's
-// (or monorepo's) node_modules. Walk createRequire anchors instead — sync
-// require() of the ESM package works on Node ≥20.19 / 22+ (this repo's floor).
+// (or monorepo's) node_modules. Resolve via createRequire, then dynamic-import
+// the ESM entry — sync require() of pure-ESM packages fails on Node 18
+// (ERR_REQUIRE_ESM); CI still matrices node 18.
 
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SPEC = '@adlc/context-handoff';
 
@@ -35,11 +36,11 @@ function* walkUp(start) {
 }
 
 /**
- * Load `@adlc/context-handoff` from the project tree and/or plugin ancestry.
+ * Resolve the absolute filesystem path of `@adlc/context-handoff`'s ESM entry.
  * @param {{ projectRoot?: string|null, pluginHooksDir?: string }} [opts]
- * @returns {typeof import('@adlc/context-handoff') | null}
+ * @returns {string|null}
  */
-export function loadContextHandoff({
+export function resolveContextHandoffEntry({
   projectRoot = null,
   pluginHooksDir = dirname(fileURLToPath(import.meta.url)),
 } = {}) {
@@ -58,28 +59,36 @@ export function loadContextHandoff({
     if (!existsSync(anchor)) continue;
     try {
       const req = createRequire(anchor);
-      return req(SPEC);
+      return req.resolve(SPEC);
     } catch {
       /* try next */
     }
   }
 
-  // Last resort: filesystem walk for node_modules/@adlc/context-handoff and
-  // require its lib entry by absolute path (covers odd layouts / NODE_PATH).
   const starts = [];
   if (nonEmptyString(projectRoot)) starts.push(projectRoot);
   starts.push(pluginHooksDir);
   for (const start of starts) {
     for (const dir of walkUp(start)) {
       const entry = join(dir, 'node_modules', '@adlc', 'context-handoff', 'lib', 'index.mjs');
-      if (!existsSync(entry)) continue;
-      try {
-        const req = createRequire(entry);
-        return req(entry);
-      } catch {
-        /* keep walking */
-      }
+      if (existsSync(entry)) return entry;
     }
   }
   return null;
+}
+
+/**
+ * Load `@adlc/context-handoff` from the project tree and/or plugin ancestry.
+ * Async because the package is ESM-only (Node 18 cannot sync-require it).
+ * @param {{ projectRoot?: string|null, pluginHooksDir?: string }} [opts]
+ * @returns {Promise<typeof import('@adlc/context-handoff') | null>}
+ */
+export async function loadContextHandoff(opts = {}) {
+  const entry = resolveContextHandoffEntry(opts);
+  if (!entry) return null;
+  try {
+    return await import(pathToFileURL(entry).href);
+  } catch {
+    return null;
+  }
 }

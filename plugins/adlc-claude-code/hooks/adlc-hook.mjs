@@ -146,7 +146,7 @@ function parseJson(text) {
   }
 }
 
-function main() {
+async function main() {
   const parsed = parseJson(readStdin());
   // The enforcing rails/buildgate hooks must FAIL CLOSED if they cannot even
   // read/parse their own input (empty stdin, malformed JSON) — they cannot
@@ -287,7 +287,7 @@ function main() {
   if (MODE === 'review') return review(input);
   if (MODE === 'rails') return rails(input);
   if (MODE === 'buildgate') return buildgate(input);
-  if (MODE === 'handoff') return handoff(input);
+  if (MODE === 'handoff') return await handoff(input);
   // unknown mode → no-op
 }
 
@@ -1630,10 +1630,10 @@ function observeHandoffSignals(input) {
  * loadDenyRecords. Also protects deny-store paths and fail-closes Bash under
  * an active deny-set.
  */
-function handoff(input) {
+async function handoff(input) {
   if (!existsSync('.adlc')) return; // not an ADLC repo → allow
 
-  const api = loadContextHandoff({ projectRoot: process.cwd() });
+  const api = await loadContextHandoff({ projectRoot: process.cwd() });
   if (!api) {
     return denyHandoff(
       'cannot load @adlc/context-handoff — install @adlc/cli (or the workspace package) so D1–D3 can be evaluated; failing closed'
@@ -1705,7 +1705,7 @@ function handoff(input) {
 }
 
 try {
-  main();
+  await main();
 } catch (err) {
   // The `rails`/`buildgate`/`handoff` modes are ENFORCING — a crash must FAIL CLOSED,
   // never fall through to exit 0 (which the harness reads as "allow"). Emit a
