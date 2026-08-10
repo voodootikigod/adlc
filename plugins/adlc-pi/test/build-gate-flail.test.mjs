@@ -67,28 +67,64 @@ const writeCall = (path, id = 'w1') => ({ type: 'tool_call', toolName: 'write', 
 // AC1 — percent-threshold gating, risk-tier scoping
 // =========================================================================
 
+// Slice 5 moved the context-rot handoff deny in FRONT of the build gate, and
+// its handoff band (60%) sits below this gate's own threshold (80%). Every
+// percent that would trip the build gate therefore trips the handoff deny
+// first, so the extension-level percent cases below assert that precedence,
+// and the build gate's own percent decision is asserted where it is still
+// reachable: on checkBuildGate directly, and through the compaction signal
+// (AC2), which degrades a session without moving the percent.
 test('AC1: high-risk ticket + degraded context denies a structured write', async () => {
+  const root = makeRepo();
+  try {
+    const verdict = checkBuildGate({
+      ticket: HIGH_RISK_TICKET,
+      usage: { percent: DEFAULT_CONTEXT_PERCENT_THRESHOLD + 5 },
+      compacted: false,
+      env: {},
+      root,
+    });
+    assert.equal(verdict.decision, 'deny');
+    assert.match(verdict.reason, /high/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('AC1: the context-handoff deny outranks the build gate above the handoff band', async () => {
   const root = makeRepo();
   try {
     const { pi, ctx } = await boot(root, DEFAULT_CONTEXT_PERCENT_THRESHOLD + 5);
     const denied = await pi.handlers.tool_call(writeCall('src/a.ts'), ctx);
     assert.equal(denied.block, true);
-    assert.match(denied.reason, /build gate/i);
+    // The stronger deny wins: the build gate's bypass is an operator override,
+    // the deny-set's exits are signed. Reporting the weaker one would tell the
+    // agent to reach for an escape hatch that no longer applies.
+    assert.match(denied.reason, /context-rot handoff deny/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('AC1: below threshold allows; normal-risk ticket allows at any percent', async () => {
+test('AC1: below both bands allows; normal-risk ticket is not build-gated', async () => {
   const root = makeRepo();
   try {
-    const low = await boot(root, DEFAULT_CONTEXT_PERCENT_THRESHOLD - 20);
+    const low = await boot(root, 30);
     assert.equal(await low.pi.handlers.tool_call(writeCall('src/a.ts'), low.ctx), undefined);
   } finally { rmSync(root, { recursive: true, force: true }); }
 
   const root2 = makeRepo({ current: 'T2' });
   try {
-    const { pi, ctx } = await boot(root2, 99);
-    assert.equal(await pi.handlers.tool_call(writeCall('src/a.ts'), ctx), undefined, 'normal risk never gated');
+    const { pi, ctx } = await boot(root2, 30);
+    assert.equal(await pi.handlers.tool_call(writeCall('src/a.ts'), ctx), undefined, 'normal risk never build-gated');
   } finally { rmSync(root2, { recursive: true, force: true }); }
+
+  // …but the deny-set is NOT risk-scoped: a normal-risk ticket past the
+  // handoff band is still stopped. That is the deliberate difference between
+  // a per-ticket blast-radius gate and a per-session trust decision.
+  const root3 = makeRepo({ current: 'T2' });
+  try {
+    const { pi, ctx } = await boot(root3, 99);
+    const denied = await pi.handlers.tool_call(writeCall('src/a.ts'), ctx);
+    assert.equal(denied.block, true);
+    assert.match(denied.reason, /context-rot handoff deny/);
+  } finally { rmSync(root3, { recursive: true, force: true }); }
 });
 
 test('AC1: custom threshold via ADLC_BUILD_GATE_CONTEXT_PCT', () => {
@@ -126,10 +162,20 @@ test('AC2: threshold/overflow compaction degrades even at low percent; manual do
 // AC3 — audited override
 // =========================================================================
 
+// The override is exercised through the compaction signal rather than a high
+// percent: past the handoff band the deny-set fires first, and no build-gate
+// bypass clears it (see the AC1 precedence test). Compaction degrades the
+// session at a low percent, which is exactly where the override still applies.
+async function bootCompactedHighRisk(root, env) {
+  const { pi, ctx } = await boot(root, 10, env);
+  await pi.handlers.session_compact({ type: 'session_compact', reason: 'overflow', willRetry: true }, ctx);
+  return { pi, ctx };
+}
+
 test('AC3: bypass allows only when the override is durably recorded', async () => {
   const root = makeRepo();
   try {
-    const { pi, ctx } = await boot(root, 95, { ADLC_BUILD_GATE_BYPASS: '1' });
+    const { pi, ctx } = await bootCompactedHighRisk(root, { ADLC_BUILD_GATE_BYPASS: '1' });
     assert.equal(await pi.handlers.tool_call(writeCall('src/a.ts'), ctx), undefined, 'audited bypass allows');
     const ledger = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
     assert.match(ledger, /build-gate-bypass/);
@@ -139,8 +185,9 @@ test('AC3: bypass allows only when the override is durably recorded', async () =
 test('AC3: bypass with an unwritable ledger stays denied', async () => {
   const root = makeRepo();
   try {
+    const { pi, ctx } = await boot(root, 10, { ADLC_BUILD_GATE_BYPASS: '1' });
+    await pi.handlers.session_compact({ type: 'session_compact', reason: 'overflow', willRetry: true }, ctx);
     chmodSync(join(root, '.adlc'), 0o555);
-    const { pi, ctx } = await boot(root, 95, { ADLC_BUILD_GATE_BYPASS: '1' });
     const denied = await pi.handlers.tool_call(writeCall('src/a.ts'), ctx);
     assert.equal(denied?.block, true, 'an unrecordable override must be refused');
     assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false);

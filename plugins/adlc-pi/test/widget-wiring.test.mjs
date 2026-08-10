@@ -205,7 +205,11 @@ test('AC5: a rail deny emits an adlc-gate-notice message in addition to notify',
 test('AC5: the build-gate deny path emits an adlc-gate-notice', async () => {
   const root = makeRepo({ tickets: [HIGH_RISK], current: 'T7' });
   try {
-    const { pi, ctx } = await boot(root, { ctx: fakeCtx(realpathSync(join(root)), { percent: 95 }) });
+    // Degrade via compaction at a low percent: past the handoff band (60%) the
+    // slice-5 deny-set fires first, so a high percent would exercise the
+    // handoff notice rather than this one.
+    const { pi, ctx } = await boot(root, { ctx: fakeCtx(realpathSync(join(root)), { percent: 10 }) });
+    await pi.handlers.session_compact({ type: 'session_compact', reason: 'overflow', willRetry: true }, ctx);
     const denied = await pi.handlers.tool_call(
       { type: 'tool_call', toolName: 'write', toolCallId: 'c1', input: { path: 'src/a.ts', content: 'x' } },
       ctx

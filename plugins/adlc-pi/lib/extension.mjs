@@ -32,6 +32,7 @@ import { recordGateEvent } from './evidence.mjs';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from './doctrine.mjs';
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
+import { checkHandoff, resolvePiSessionId } from './handoff-gate.mjs';
 import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
@@ -58,6 +59,10 @@ export function createExtension({ env = process.env } = {}) {
     const fitness = createFitnessTracker();
     const flail = createFlailTracker();
     const unvettedSeen = new Set();
+    // Context-handoff session identity (slice 5). Minted once per extension
+    // instance and re-derived at session_start if the host offers a real id;
+    // null means the deny-set fails closed under pressure rather than skipping.
+    let handoffSessionId = resolvePiSessionId(null, null);
     // Most recent gate event, summarized for the live widget (line 3).
     let lastGateEvent = null;
     // TUI-only message renderers, isolated so this module stays loadable under
@@ -244,6 +249,9 @@ export function createExtension({ env = process.env } = {}) {
     // =====================================================================
 
     pi.on('session_start', async (_event, ctx) => {
+      // Prefer a host-supplied session id over the minted one; keep the mint
+      // when the host offers none, so D2 still has a stable process identity.
+      handoffSessionId = resolvePiSessionId(_event, ctx, { mint: () => handoffSessionId ?? '' });
       reload(ctx.cwd);
       fitness.reset();
       flail.reset();
@@ -308,6 +316,28 @@ export function createExtension({ env = process.env } = {}) {
     // =====================================================================
 
     pi.on('tool_call', async (event, ctx) => {
+      // Context-rot handoff (slice 5) is evaluated FIRST and is deliberately
+      // NOT ticket-scoped: an open deny record is a session-trust fact, so it
+      // must hold even when no ticket is active — every gate below this line
+      // returns early without a ticket.
+      const handoff = checkHandoff({
+        toolName: event.toolName,
+        input: event.input,
+        sessionId: handoffSessionId,
+        usage: safeUsage(ctx),
+        ticketId: active.ticketId ?? null,
+        root: activeCwd,
+      });
+      if (handoff.decision === 'deny') {
+        ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
+        noteGate({
+          ctx,
+          type: 'handoff-deny',
+          detail: { tool: event.toolName, reasons: handoff.reasons },
+        });
+        return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+      }
+
       if (active.ticketId && (active.error || !active.ticket)) {
         return {
           block: true,
