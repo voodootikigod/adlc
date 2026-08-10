@@ -8,3 +8,4 @@ export * from './final.mjs';
 export * from './lock.mjs';
 export * from './resume-auth.mjs';
 export * from './deny-persist.mjs';
+export * from './adapter.mjs';

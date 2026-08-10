@@ -161,13 +161,17 @@ test('gate-bypass and mock-seam variables are scrubbed like the key', () => {
   assert.equal(scrubbed.length, 3);
 });
 
-test('packageHasTests is true for test/ or cli-test, false otherwise', () => {
+test('packageHasTests is true for test/, cli-test or adapter-test, false otherwise', () => {
   assert.equal(packageHasTests('with-test', { existsSync: (p) => p.endsWith('/with-test/test') }), true);
   assert.equal(packageHasTests('with-cli', { existsSync: (p) => p.endsWith('/with-cli/cli-test') }), true);
+  assert.equal(
+    packageHasTests('with-adapter', { existsSync: (p) => p.endsWith('/with-adapter/adapter-test') }),
+    true,
+  );
   assert.equal(packageHasTests('empty', { existsSync: () => false }), false);
 });
 
-test('packageSegments includes cli-test globs and skips packages with neither suite', () => {
+test('packageSegments includes cli-test and adapter-test globs and skips packages with neither suite', () => {
   const entries = [
     { name: 'context-handoff', isDirectory: () => true },
     { name: 'core', isDirectory: () => true },
@@ -177,11 +181,14 @@ test('packageSegments includes cli-test globs and skips packages with neither su
   const exists = (path) => {
     if (path === 'packages/context-handoff/test') return true;
     if (path === 'packages/context-handoff/cli-test') return true;
+    if (path === 'packages/context-handoff/adapter-test') return true;
     if (path === 'packages/core/test') return true;
     return false;
   };
   const segs = packageSegments({ existsSync: exists, readdirSync: () => entries });
   assert.deepEqual(segs.map(([name]) => name), ['packages/context-handoff', 'packages/core']);
   assert.match(segs[0][1], /cli-test\/\*\.test\.mjs/);
+  assert.match(segs[0][1], /adapter-test\/\*\.test\.mjs/);
   assert.doesNotMatch(segs[1][1], /cli-test/);
+  assert.doesNotMatch(segs[1][1], /adapter-test/);
 });

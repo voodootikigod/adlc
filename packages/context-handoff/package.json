@@ -39,14 +39,15 @@
     "./lib/final.mjs": "./lib/final.mjs",
     "./lib/lock.mjs": "./lib/lock.mjs",
     "./lib/resume-auth.mjs": "./lib/resume-auth.mjs",
-    "./lib/deny-persist.mjs": "./lib/deny-persist.mjs"
+    "./lib/deny-persist.mjs": "./lib/deny-persist.mjs",
+    "./lib/adapter.mjs": "./lib/adapter.mjs"
   },
   "dependencies": {
     "@adlc/core": "1.10.0",
     "@adlc/gate-manifest": "1.10.0"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs cli-test/*.test.mjs"
+    "test": "node --test test/*.test.mjs cli-test/*.test.mjs adapter-test/*.test.mjs"
   },
   "engines": {
     "node": ">=18"

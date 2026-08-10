@@ -102,7 +102,11 @@ const TSC_FLAGS = '--noEmit --allowJs --target es2022 --module nodenext --module
  * Inject `existsSync` in tests so the directory/file filter polarity is observable.
  */
 export function packageHasTests(name, { existsSync: exists = existsSync, packagesDir = 'packages' } = {}) {
-  return exists(join(packagesDir, name, 'test')) || exists(join(packagesDir, name, 'cli-test'));
+  return (
+    exists(join(packagesDir, name, 'test')) ||
+    exists(join(packagesDir, name, 'cli-test')) ||
+    exists(join(packagesDir, name, 'adapter-test'))
+  );
 }
 
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
@@ -119,6 +123,10 @@ export function packageSegments({ existsSync: exists = existsSync, readdirSync: 
       // T154's frozen `packages/context-handoff/test/**/*.test.mjs` rail glob.
       if (exists(join('packages', entry.name, 'cli-test'))) {
         globs.push(`packages/${entry.name}/cli-test/*.test.mjs`);
+      }
+      // Slice-5 adapter-core tests, outside test/ for the same rail reason.
+      if (exists(join('packages', entry.name, 'adapter-test'))) {
+        globs.push(`packages/${entry.name}/adapter-test/*.test.mjs`);
       }
       return [`packages/${entry.name}`, `node --test ${globs.join(' ')}`];
     });

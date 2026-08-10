@@ -65,7 +65,6 @@ import { loadContextHandoff } from './handoff-resolve.mjs';
 import {
   resolveSessionId,
   bashCommandFromInput,
-  evaluateHandoffPreToolUse,
 } from './handoff-gate.mjs';
 
 const MODE = process.argv[2];
@@ -1649,14 +1648,10 @@ async function handoff(input) {
   }
 
   const required = [
-    'evaluateBands',
-    'handoffDenyActive',
-    'ensureDenyMarker',
-    'loadDenyRecords',
-    'mutationGateInputFromLoad',
-    'evaluateMutationGate',
-    'readResumeAuth',
-    'nagSuppression',
+    'evaluateHandoffPreToolUse',
+    'resolveHandoffSessionId',
+    'isProtectedHandoffPath',
+    'isHandoffMutatingShell',
     'isSafeSessionId',
   ];
   for (const method of required) {
@@ -1693,8 +1688,7 @@ async function handoff(input) {
     }
   }
 
-  const result = evaluateHandoffPreToolUse({
-    api,
+  const result = api.evaluateHandoffPreToolUse({
     root: process.cwd(),
     sessionId,
     observed,
@@ -1702,6 +1696,7 @@ async function handoff(input) {
     editRelPaths,
     isBash,
     bashCommand,
+    host: 'claude-code',
   });
 
   if (!result.deny) return;
