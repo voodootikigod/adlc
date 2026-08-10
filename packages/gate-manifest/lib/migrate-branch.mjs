@@ -43,6 +43,12 @@ function stable(value) {
   return JSON.stringify(value);
 }
 
+/** Order-insensitive identity of an entry's replayable content. Exported for
+ *  the property test: two entries with the same fields in different key
+ *  orders MUST compare equal, or resume/race comparisons would break the
+ *  moment a legacy source stores keys in a nonstandard order. */
+export const contentKey = (entry) => stable(contentOf(entry));
+
 /** An entry reduced to its replayable content fields. */
 function contentOf(entry) {
   const out = {};

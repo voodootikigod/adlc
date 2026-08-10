@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -340,5 +340,47 @@ describe('round-2 hardening', () => {
     const precheck = src.indexOf('no salvage record was written');
     const recordAppend = src.indexOf("gate: 'manifest-salvage'", precheck);
     assert.ok(precheck > 0 && recordAppend > precheck, 'verification must run before the record lands — the old order left a retry-blocking record behind');
+  });
+});
+
+describe('mutation kill coverage', () => {
+  const BIN = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+
+  it('the migrate-branch verb: refusal exits 2 (json), human dry-run exits 0 with correct pluralization', () => {
+    const { root, sourceSha } = scenario();
+    try {
+      const env = { ...process.env, ADLC_MANIFEST_KEY: KEY };
+      const refused = spawnSync(process.execPath, [BIN, 'migrate-branch', '--from', 'no-such-ref', '--json'], { cwd: root, encoding: 'utf8', env });
+      assert.equal(refused.status, 2, refused.stderr);
+      assert.match(JSON.parse(refused.stdout).decision, /^refuse-/);
+      const dry = spawnSync(process.execPath, [BIN, 'migrate-branch', '--from', sourceSha], { cwd: root, encoding: 'utf8', env });
+      assert.equal(dry.status, 0, dry.stderr);
+      assert.match(dry.stdout, /2 entries from/, 'two salvaged entries pluralize as entries');
+      const usage = spawnSync(process.execPath, [BIN], { cwd: root, encoding: 'utf8', env });
+      assert.match(usage.stderr + usage.stdout, /migrate-branch \[--from <ref>\]/, 'the usage line advertises the verb correctly');
+    } finally { clean(root); }
+  });
+
+  it('a clean v1-signed source entry salvages — its own sig field is a covered field, not contraband', async () => {
+    const { root, dir, g } = scenario();
+    try {
+      const { signEntry } = await import('../lib/sign.mjs');
+      const working = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
+      const sharedLines = working.trim().split('\n').slice(0, 2);
+      const v1 = { seq: 3, gate: 'evidence', ts: '2026-01-01T09:00:00.000Z', data: { legacy: 'v1' }, files: {}, prev: sha256(sharedLines.at(-1)) };
+      v1.sig = signEntry(KEY, v1);
+      writeFileSync(join(root, 'v1clean.jsonl'), sharedLines.join('\n') + '\n' + JSON.stringify(v1) + '\n');
+      g('add', 'v1clean.jsonl'); g('commit', '-qm', 'v1 clean');
+      const plan = planMigrateBranch(dir, { key: KEY, sourceRef: g('rev-parse', 'HEAD'), sourcePath: 'v1clean.jsonl', cwd: root });
+      assert.equal(plan.decision, 'plan', plan.reason);
+    } finally { clean(root); }
+  });
+
+  it('contentKey is key-order insensitive — the property resume and race comparisons stand on', async () => {
+    const { contentKey } = await import('../lib/migrate-branch.mjs');
+    const a = { gate: 'evidence', ts: 't', data: { x: 1, y: [1, { b: 2, a: 1 }] }, files: {} };
+    const b = { files: {}, data: { y: [1, { a: 1, b: 2 }], x: 1 }, ts: 't', gate: 'evidence' };
+    assert.equal(contentKey(a), contentKey(b), 'same content, different key order, must compare equal');
+    assert.notEqual(contentKey(a), contentKey({ ...a, data: { x: 2 } }));
   });
 });
