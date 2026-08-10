@@ -11,6 +11,7 @@ import { repairChain } from '../lib/repair.mjs';
 import { enable, boundedSegmentationState, CI_COVERAGE_WARNING, SEGMENTATION_UNDETERMINED_WARNING } from '../lib/enable.mjs';
 import { adopt } from '../lib/adopt.mjs';
 import { migrate } from '../lib/migrate.mjs';
+import { migrateBranch } from '../lib/migrate-branch.mjs';
 import { ADLC_DIR } from '@adlc/core';
 import { getKey } from '../lib/sign.mjs';
 import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
@@ -25,6 +26,7 @@ const USAGE =
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
   '       enable [--write] [--json] [--allow-keyless]\n' +
   '       migrate --reason "..." [--write] [--attest-unsigned] [--json]\n' +
+  '       migrate-branch [--from <ref>] [--write] [--attest-unsigned] [--json]\n' +
   '       adopt  [segment-name] [--write] [--json]';
 
 const { values: flags, positionals } = parseArgs({
@@ -42,6 +44,7 @@ const { values: flags, positionals } = parseArgs({
     output: { type: 'string' },
     'allow-key-import': { type: 'boolean', default: false },
     'allow-keyless': { type: 'boolean', default: false },
+    from: { type: 'string' },
   },
 });
 
@@ -315,6 +318,38 @@ if (verb === 'migrate') {
   for (const seal of out.seals) {
     console.log(`  seal: provider ${seal.provider}, revision ${seal.revision}${seal.ticket ? `, ticket ${seal.ticket}` : ''}`);
   }
+  pass('re-run with --write to apply');
+}
+
+// ── migrate-branch ──────────────────────────────────────────────────────────
+// In-flight branch salvage after a cutover: re-chains the branch's
+// signature-verified pre-rebase root-tail entries into a fresh segment via
+// the production writer. Dry-run by default.
+if (verb === 'migrate-branch') {
+  let out;
+  try {
+    out = migrateBranch(flags.dir, {
+      key: getKey(process.env),
+      sourceRef: flags.from ?? 'ORIG_HEAD',
+      cwd: process.cwd(),
+      attestUnsigned: flags['attest-unsigned'],
+      write: flags.write,
+    });
+  } catch (err) {
+    opError(err.message);
+  }
+  const refused = out.decision.startsWith('refuse-');
+  if (flags.json) {
+    printJson(out); // exactly ONE JSON document on stdout, in every mode
+    process.exit(refused ? 2 : 0);
+  }
+  if (refused) gateFail(`migrate-branch refused: ${out.reason}`);
+  const line = `${out.entries.length} entr${out.entries.length === 1 ? 'y' : 'ies'} from ${out.sourceRef} (${out.sourceSha.slice(0, 12)}) for branch ${out.branch}`;
+  if (out.written) {
+    console.log(`salvaged ${line} into ${out.segment}`);
+    pass('re-record or carry-forward revision-bound attestations next — the salvaged approves are findable again');
+  }
+  console.log(`dry-run plan: would salvage ${line}`);
   pass('re-run with --write to apply');
 }
 
