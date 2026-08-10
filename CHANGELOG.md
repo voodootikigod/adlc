@@ -9,6 +9,30 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-08-10
+
+### Added
+- **gate-manifest / rails-guard:** the manifest forest is now fully
+  operational end to end — the CI gate validates segments, cutovers, and
+  anchors (spec §9.1–9.3); `adlc gate-manifest migrate` performs the
+  history-preserving cutover for repositories with a live root, sealing
+  every standing approve; and `migrate-branch` salvages an in-flight
+  branch's root-tail evidence after a cutover, preserving the
+  carry-forward path. A repository can now enter forest mode from any
+  starting state, with CI guarding every byte (#470, #472, #475)
+- **build-gate:** the hard band migrates to `isHardDegraded` (T156) (#469)
+- **claude-code:** context-handoff denies are enforced on PreToolUse (T157)
+  (#476)
+
+### Fixed
+- **tests:** the spaced-path CLI fixture lives in a private temp root — an
+  in-tree fixture raced every repo-copying test and failed unrelated CI
+  runs with ENOENT (#471)
+
+This is the recommended minimum toolkit version for repositories cutting
+over to the segmented manifest: earlier releases lack the `migrate`
+ceremony and the `migrate-branch` salvage that in-flight branches need.
+
 ## [1.9.0] - 2026-08-08
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@adlc/ticket-prune",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Reports and archives stale/shipped tickets out of .adlc/tickets.json (dry-run by default).",
   "type": "module",
   "license": "MIT",
@@ -31,8 +31,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.9.0",
-    "@adlc/tickets": "1.9.0"
+    "@adlc/core": "1.10.0",
+    "@adlc/tickets": "1.10.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

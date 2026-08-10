@@ -1,6 +1,6 @@
 {
   "name": "@adlc/rails-guard",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Rail-freeze enforcement and suppression-marker gate — blocks builder edits to frozen paths (C5).",
   "type": "module",
   "license": "MIT",
@@ -32,9 +32,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.9.0",
-    "@adlc/gate-manifest": "1.9.0",
-    "@adlc/tickets": "1.9.0"
+    "@adlc/core": "1.10.0",
+    "@adlc/gate-manifest": "1.10.0",
+    "@adlc/tickets": "1.10.0"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"
