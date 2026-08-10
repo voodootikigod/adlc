@@ -28,6 +28,30 @@ const sha256 = (input) => createHash('sha256').update(input).digest('hex');
 
 const RESERVED = new Set(['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor', 'branch']);
 
+/** The complete field set a V1 signature covers (sign.mjs canonicalEntryBytes'
+ *  v1 branch): anything else on a v1-signed entry is UNAUTHENTICATED, and
+ *  replaying it through the v2-signing writer would launder it into evidence
+ *  that verifies as if it had always been signed. */
+const V1_COVERED = new Set(['seq', 'gate', 'ts', 'ticket', 'data', 'files', 'prev', 'sig']);
+
+/** Stable stringify for content comparison: key-order independent. */
+function stable(value) {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** An entry reduced to its replayable content fields. */
+function contentOf(entry) {
+  const out = {};
+  for (const [field, value] of Object.entries(entry)) {
+    if (!RESERVED.has(field)) out[field] = value;
+  }
+  return out;
+}
+
 const parse = (line) => {
   try {
     const entry = JSON.parse(line);
@@ -176,22 +200,48 @@ export function planMigrateBranch(dir = ADLC_DIR, {
     if (!verifyEntrySig(signingKey, entry)) {
       return { decision: 'refuse-tampered', reason: `source entry seq ${entry.seq ?? '?'} carries a signature that does not verify under the key — tampered evidence is never salvaged` };
     }
+    if (entry.sigVersion !== 2) {
+      // v1 signs a FIXED subset; any other field on the entry was never
+      // authenticated, and replaying it would launder it into v2-signed
+      // evidence that verifies as if it had always been covered.
+      const uncovered = Object.keys(entry).filter((field) => !V1_COVERED.has(field));
+      if (uncovered.length > 0) {
+        return { decision: 'refuse-uncovered', reason: `source entry seq ${entry.seq ?? '?'} is v1-signed but carries field(s) its signature never covered: ${uncovered.join(', ')} — salvaging them would launder unauthenticated data into v2-signed evidence` };
+      }
+    }
   }
   if (unsigned.length > 0 && !attestUnsigned) {
     return { decision: 'refuse-unsigned', reason: `${unsigned.length} source entr${unsigned.length === 1 ? 'y is' : 'ies are'} unsigned — re-run with --attest-unsigned to salvage them under the ceremony key deliberately, with the count disclosed in the salvage record` };
   }
 
-  // Once-only: a branch that already owns a segment (or a lineage token) has
-  // written post-rebase evidence; interleaving older salvaged entries after
-  // it would scramble the record. Refuse and leave sequencing to the operator.
+  // Once-only, with crash RESUMABILITY: a branch segment whose entries are
+  // exactly a content-prefix of this salvage (and no salvage record yet) is
+  // an interrupted run — resume by appending the remainder. Any other
+  // existing segment means post-rebase evidence already landed; interleaving
+  // older salvaged entries after it would scramble the record, so refuse.
+  const planned = entries.map(({ entry, line }) => ({ entry, lineHash: sha256(line), content: contentOf(entry) }));
   const owned = branchOwnsSegment(dir, branch);
+  let alreadyAppended = 0;
   if (owned !== null) {
-    return { decision: 'refuse-existing-segment', reason: `branch ${branch} already owns segment ${owned} — salvage runs once, immediately after the rebase, before any new writes` };
+    const segEntries = readRawLines(`${segmentDirPath(dir)}/${owned}`)
+      .map(({ line }) => parse(line))
+      .filter((e) => e !== null);
+    if (segEntries.some((e) => e.gate === 'manifest-salvage')) {
+      return { decision: 'refuse-existing-segment', reason: `branch ${branch} already owns segment ${owned} carrying a completed salvage record — salvage runs once` };
+    }
+    const isPrefix = segEntries.length <= planned.length
+      && segEntries.every((e, i) => stable(contentOf(e)) === stable(planned[i].content));
+    if (!isPrefix) {
+      return { decision: 'refuse-existing-segment', reason: `branch ${branch} already owns segment ${owned} with entries unrelated to this salvage — salvage runs once, immediately after the rebase, before any new writes` };
+    }
+    alreadyAppended = segEntries.length;
   }
 
   return {
     decision: 'plan',
-    entries: entries.map(({ entry, line }) => ({ entry, lineHash: sha256(line) })),
+    entries: planned.slice(alreadyAppended).map(({ entry, lineHash }) => ({ entry, lineHash })),
+    allEntries: planned.map(({ entry, lineHash }) => ({ entry, lineHash })),
+    alreadyAppended,
     unsignedEntries: unsigned,
     branch,
     sourceRef,
@@ -236,6 +286,22 @@ export function migrateBranch(dir = ADLC_DIR, { key = null, sourceRef = 'ORIG_HE
     files: {},
   }, dir, { signatureVersion: 2, cwd: repoCwd, key: signingKey });
 
+  // Post-write verification: the segment's content sequence must be exactly
+  // the planned salvage followed by the salvage record. A concurrent writer
+  // minting this branch's segment between plan and write would have made the
+  // first append EXTEND a foreign segment — detected here, loudly, because
+  // the resulting sequence does not match the salvage plan.
   const segment = branchOwnsSegment(dir, plan.branch);
+  const written = readRawLines(`${segmentDirPath(dir)}/${segment}`)
+    .map(({ line }) => parse(line))
+    .filter((e) => e !== null);
+  const expected = plan.allEntries.map((e) => stable(contentOf(e.entry)));
+  const actualContent = written.slice(0, -1).map((e) => stable(contentOf(e)));
+  const last = written.at(-1);
+  if (actualContent.length !== expected.length
+    || !expected.every((c, i) => c === actualContent[i])
+    || last?.gate !== 'manifest-salvage') {
+    throw new Error(`segment ${segment} does not match the salvage plan — a concurrent writer raced this salvage; inspect the segment before retrying, nothing has been deleted`);
+  }
   return { ...plan, segment, decision: 'applied', written: true };
 }

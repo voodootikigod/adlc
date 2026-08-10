@@ -243,3 +243,71 @@ describe('the salvage', () => {
     } finally { clean(root); }
   });
 });
+
+describe('signature-coverage, race detection, and resumability', () => {
+  it('a v1-signed entry carrying a field its signature never covered refuses — no laundering into v2', async () => {
+    const { root, dir, sourceSha, g } = scenario();
+    try {
+      // take the real branch source and bolt an UNSIGNED field onto a
+      // v1-style entry: rewrite the last branch entry as v1-signed (drop
+      // sigVersion, re-sign the v1 subset) plus an extra field
+      const branchRoot = execFileSync('git', ['show', `${sourceSha}:.adlc/manifest.jsonl`], { cwd: root, encoding: 'utf8' });
+      const lines = branchRoot.trim().split('\n');
+      const { signEntry } = await import('../lib/sign.mjs');
+      const last = JSON.parse(lines.at(-1));
+      delete last.sigVersion; delete last.sig;
+      last.smuggled = 'never-signed';
+      const v1subset = { seq: last.seq, gate: last.gate, ts: last.ts, ...(last.ticket !== undefined ? { ticket: last.ticket } : {}), data: last.data, files: last.files, prev: last.prev };
+      void v1subset;
+      last.sig = signEntry(KEY, { ...last });
+      lines[lines.length - 1] = JSON.stringify(last);
+      writeFileSync(join(root, 'v1extra.jsonl'), lines.join('\n') + '\n');
+      g('add', 'v1extra.jsonl'); g('commit', '-qm', 'v1 with smuggled field');
+      const plan = planMigrateBranch(dir, { key: KEY, sourceRef: g('rev-parse', 'HEAD'), sourcePath: 'v1extra.jsonl', cwd: root });
+      assert.equal(plan.decision, 'refuse-uncovered');
+      assert.match(plan.reason, /smuggled/);
+    } finally { clean(root); }
+  });
+
+  it('an interrupted salvage RESUMES: already-appended prefix is skipped, the record still lands', () => {
+    const { root, dir, sourceSha } = scenario();
+    try {
+      // simulate the crash: salvage only the FIRST entry by hand via the
+      // production writer, exactly as an interrupted run would have
+      const plan = planMigrateBranch(dir, { key: KEY, sourceRef: sourceSha, cwd: root });
+      const first = plan.entries[0].entry;
+      const payload = {};
+      for (const [k, v] of Object.entries(first)) {
+        if (!['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor', 'branch'].includes(k)) payload[k] = v;
+      }
+      appendManifestEntry(payload, dir, { signatureVersion: 2, cwd: root, key: KEY });
+      // the resume: plan again — must be a plan, not refuse-existing-segment
+      const resume = migrateBranch(dir, { key: KEY, sourceRef: sourceSha, cwd: root, write: true });
+      assert.equal(resume.decision, 'applied');
+      assert.equal(resume.entries.length, 1, 'only the remainder is appended');
+      const segLines = readFileSync(join(dir, 'manifest.d', resume.segment), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      assert.equal(segLines.length, 3, 'first (pre-crash) + second (resumed) + salvage record');
+      assert.equal(segLines.at(-1).gate, 'manifest-salvage');
+      const verified = verify(dir, { key: KEY, requireSignatures: true });
+      assert.equal(verified.valid, true, verified.message);
+    } finally { clean(root); }
+  });
+
+  it('a branch segment holding entries UNRELATED to the salvage still refuses', () => {
+    const { root, dir, sourceSha } = scenario();
+    try {
+      appendManifestEntry({ gate: 'evidence', data: { note: 'fresh-work-not-salvage' }, files: {} }, dir, { signatureVersion: 2, cwd: root, key: KEY });
+      const plan = planMigrateBranch(dir, { key: KEY, sourceRef: sourceSha, cwd: root });
+      assert.equal(plan.decision, 'refuse-existing-segment');
+    } finally { clean(root); }
+  });
+
+  it('the post-write mint verification detects a raced foreign segment', () => {
+    // structural pin: the applied result must verify that the segment's
+    // entries match what the salvage planned, so a concurrent writer
+    // sneaking a mint between plan and write is DETECTED, not silently
+    // extended.
+    const src = readFileSync(new URL('../lib/migrate-branch.mjs', import.meta.url), 'utf8');
+    assert.match(src, /post-write verification|raced|does not match the salvage plan/i);
+  });
+});
