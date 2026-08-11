@@ -10,7 +10,8 @@
 // What stays in each adapter is only the harness-specific I/O: reading its
 // payload shape, observing its context signals, and emitting its deny.
 
-import { basename, extname } from 'node:path';
+import { basename, extname, dirname, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 
 import {
   isSafeSessionId,
@@ -102,6 +103,66 @@ export function isHandoffMutatingShell(command) {
     if (HANDOFF_MUTATING_SUBCOMMANDS.has(m[1].toLowerCase())) return true;
   }
   return false;
+}
+
+/**
+ * Repo-relative form of `rel` with filesystem aliases resolved.
+ *
+ * `isProtectedHandoffPath` is lexical — it answers about the string it is
+ * given. A repository can therefore point `alias.json` at
+ * `.adlc/handoffs/denies/x.json`, hand the gate the innocuous name, and have
+ * the filesystem follow the link. Rails-guard resolves both forms for exactly
+ * this reason; the handoff store deserves the same treatment.
+ *
+ * Resolves the nearest EXISTING ancestor so a not-yet-created file inside a
+ * symlinked directory is still caught, and returns null when nothing can be
+ * resolved (the caller then relies on the lexical check alone).
+ *
+ * @param {string} root repo root
+ * @param {string} rel repo-relative path
+ * @returns {string|null}
+ */
+export function resolvedRepoRelative(root, rel) {
+  if (typeof root !== 'string' || root === '' || typeof rel !== 'string' || rel === '') {
+    return null;
+  }
+  try {
+    const absolute = resolve(root, rel);
+    let probe = absolute;
+    const trailing = [];
+    // Walk up to the nearest path that exists, remembering what we skipped.
+    for (let i = 0; i < 64; i += 1) {
+      if (existsSync(probe)) break;
+      const parent = dirname(probe);
+      if (parent === probe) return null;
+      trailing.unshift(basename(probe));
+      probe = parent;
+    }
+    if (!existsSync(probe)) return null;
+    const realRoot = realpathSync(root);
+    const realTarget = join(realpathSync(probe), ...trailing);
+    const back = relative(realRoot, realTarget).replace(/\\/g, '/');
+    return back === '' || back.startsWith('..') ? null : back;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a path is a protected handoff artifact by its own name OR by what
+ * it resolves to on disk.
+ *
+ * @param {string} root repo root
+ * @param {string} rel repo-relative path
+ * @returns {{ protected: boolean, via: 'lexical'|'symlink'|null }}
+ */
+export function classifyHandoffPath(root, rel) {
+  if (isProtectedHandoffPath(rel)) return { protected: true, via: 'lexical' };
+  const resolved = resolvedRepoRelative(root, rel);
+  if (resolved !== null && resolved !== rel && isProtectedHandoffPath(resolved)) {
+    return { protected: true, via: 'symlink' };
+  }
+  return { protected: false, via: null };
 }
 
 /**
@@ -210,8 +271,9 @@ export function evaluateHandoffPreToolUse({
   let sawDeny = denyEverWritten === true;
 
   for (const rel of editRelPaths) {
-    if (isProtectedHandoffPath(rel)) {
-      reasons.push(`path_protected:${rel}`);
+    const verdict = classifyHandoffPath(root, rel);
+    if (verdict.protected) {
+      reasons.push(verdict.via === 'symlink' ? `path_protected_symlink:${rel}` : `path_protected:${rel}`);
     }
   }
 
@@ -317,7 +379,8 @@ export function evaluateHandoffPreToolUse({
   // cannot reach at all.
   if (isBash) {
     for (const token of shellPathCandidates(bashCommand)) {
-      if (isProtectedHandoffPath(token)) {
+      const verdict = classifyHandoffPath(root, token);
+      if (verdict.protected) {
         reasons.push(`path_protected_shell:${token}`);
       }
     }

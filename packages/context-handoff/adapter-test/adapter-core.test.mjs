@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -566,6 +566,52 @@ test('shell path extraction sees directories and their protected children', () =
   assert.deepEqual(shellPathCandidates(''), []);
   assert.deepEqual(shellPathCandidates(null), []);
   assert.equal(shellPathCandidates('ls -la').length, 0, 'no path-like token, no candidates');
+});
+
+test('a symlink alias to the deny store is protected', () => {
+  withRepo((root) => {
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(join(root, '.adlc', '.deny-store'), '{}');
+    // An innocuous-looking name pointing at trust-root state.
+    symlinkSync(join(root, '.adlc', '.deny-store'), join(root, 'notes.json'));
+    symlinkSync(join(root, '.adlc', 'handoffs', 'denies'), join(root, 'aliasdir'), 'dir');
+
+    const viaFile = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: 1 },
+      editRelPaths: ['notes.json'],
+      host: 'test',
+    });
+    assert.equal(viaFile.deny, true, 'a symlinked file alias must not slip through');
+    assert.ok(viaFile.reasons.some((r) => r.startsWith('path_protected_symlink:')), viaFile.reasons.join());
+
+    // A file that does not exist yet, inside a symlinked DIRECTORY.
+    const viaDir = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: 1 },
+      editRelPaths: ['aliasdir/forged.json'],
+      host: 'test',
+    });
+    assert.equal(viaDir.deny, true, 'the nearest existing ancestor must be resolved');
+  });
+});
+
+test('symlink resolution does not flag ordinary aliases', () => {
+  withRepo((root) => {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'app.mjs'), 'export {}\n');
+    symlinkSync(join(root, 'src', 'app.mjs'), join(root, 'link.mjs'));
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: 1 },
+      editRelPaths: ['link.mjs', 'src/app.mjs'],
+      host: 'test',
+    });
+    assert.equal(r.deny, false, r.reasons.join());
+  });
 });
 
 test('the marker records the host the adapter reports', () => {
