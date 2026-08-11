@@ -179,7 +179,18 @@ function tailBytes(path, maxBytes) {
 export function observeHandoffSignals(payload, { maxScanBytes, size = fileSize, tail = tailBytes }) {
   const observed = {};
   const tp = payload?.transcript_path;
-  if (typeof tp !== 'string' || tp === '' || !existsSync(tp)) return observed;
+  // No transcript field at all is an ABSENT signal: the band join ignores it, so
+  // a harness that supplies no telemetry cannot hard-lock the repo.
+  if (typeof tp !== 'string' || tp === '') return observed;
+  // A path that WAS supplied but cannot be reached is a different thing — a
+  // failed read of a signal that exists. Rotation, deletion, or a permission
+  // error must not read as "no pressure" for a session that may be well past
+  // the band. NaN is what the classifier treats as invalid, i.e. fail closed.
+  if (!existsSync(tp)) {
+    observed.bytes = Number.NaN;
+    observed.depth = Number.NaN;
+    return observed;
+  }
   if (!Number.isFinite(maxScanBytes) || maxScanBytes <= 0) {
     // No usable window means the signal cannot be bounded — do not guess.
     observed.bytes = Number.NaN;

@@ -392,6 +392,20 @@ test('the direct-execution guard survives a path containing a space', () => {
   }
 });
 
+test('a supplied but missing transcript fails closed; an absent one does not', () => {
+  // Absent field → no signal → a harness without telemetry stays usable.
+  const absent = runHandoff({ sessionId: 'sess-absent' });
+  assert.equal(absent.verdict, 'allow', absent.out);
+
+  // Supplied but unreachable → a FAILED read of a real signal, not the absence
+  // of one. A rotated or deleted transcript must not read as "no pressure".
+  const missing = runHandoff({
+    sessionId: 'sess-missing',
+    payloadExtra: { file_path: 'src/app.mjs', transcript_path: '/nonexistent/rotated.jsonl' },
+  });
+  assert.equal(missing.verdict, 'deny', missing.out);
+});
+
 test('malformed stdin fails closed', () => {
   const r = runHandoff({ rawInput: '{not json' });
   assert.equal(r.verdict, 'deny');
