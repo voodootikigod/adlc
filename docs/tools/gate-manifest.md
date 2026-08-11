@@ -250,6 +250,19 @@ directory — if it holds segment files, a writer already recorded real
 evidence there, and deleting it destroys that evidence. Salvage segments
 first (`migrate-branch` or manual review) before any removal.
 
+After a cutover, set (or verify) the repository's toolkit floor: a toolkit
+that predates the marker contract appends evidence directly to the
+now-frozen root (failing only later at the CI forest gate), and even
+marker-aware releases older than the cutover verbs cannot run `migrate` /
+`migrate-branch` when a branch needs salvage. Pin the minimum version where
+your preflight and CI can read it (in this repository:
+`scripts/toolkit-floor.json`, enforced by `scripts/toolkit-floor-check.mjs`
+in preflight and the rails-guard CI job) so a stale CLI is caught at the
+earliest local gate, with an explicit upgrade instruction, before any bad
+evidence reaches a PR. The floor cannot make an already-installed
+pre-cutover binary refuse to write — that is unfixable retroactively; it
+bounds how far such a write travels.
+
 ### migrate-branch
 
 In-flight branch salvage after a cutover. When main migrates while a branch

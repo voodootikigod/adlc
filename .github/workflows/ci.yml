@@ -296,6 +296,22 @@ jobs:
         with:
           node-version: 20
 
+      # Forest cutover follow-up (T-01KZPYF2ERZ9XSGB313NHTRRAX): when the
+      # segmented-manifest marker exists in the checked-out tree, the IN-TREE
+      # toolkit must meet the floor pinned in scripts/toolkit-floor.json.
+      # Belt-and-suspenders against an in-tree downgrade of the gate packages
+      # (a pre-forest toolkit appends evidence to the frozen manifest root):
+      # a pull_request run judges the MERGE-ref tree, so a branch carrying a
+      # downgrade fails here; a push-to-main run re-asserts the floor on what
+      # actually landed. This workflow has no branch-push or dispatch
+      # triggers — a workflow that gains one must run this step too. MUST run
+      # BEFORE Install: the checker is dependency-free, and running it first
+      # keeps candidate lifecycle scripts (npm install) from mutating the
+      # checker, the floor file, or the judged package manifest in the
+      # working tree before the verdict.
+      - name: Toolkit floor gate
+        run: node scripts/toolkit-floor-check.mjs in-tree
+
       - name: Install
         run: npm install
 

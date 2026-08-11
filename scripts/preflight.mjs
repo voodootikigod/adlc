@@ -26,6 +26,7 @@
 
 import { spawnSync, execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { checkGlobal as checkToolkitFloor } from './toolkit-floor-check.mjs';
 
 /** Base branch name (not a ref) — `--base <name>`, default `main`. */
 export function parseBase(argv) {
@@ -108,6 +109,17 @@ else main();
 
 function main() {
 console.log(`preflight: running the ${GATES.length} gates that block a PR (base: origin/${BASE})\n`);
+
+// Precondition, not a gate: with the repo in segmented-manifest (forest) mode,
+// a stale GLOBAL adlc CLI predates the forest contract — the oldest write
+// evidence to the frozen manifest root and only discover it at PR time. Fail
+// here, before any gate runs, with the floor from scripts/toolkit-floor.json.
+// A missing global adlc passes — in-tree code is what the gates below run.
+const floor = checkToolkitFloor(process.cwd());
+if (!floor.ok) {
+  console.error(floor.message);
+  process.exit(1);
+}
 
 if (!refreshBase()) process.exit(1);
 

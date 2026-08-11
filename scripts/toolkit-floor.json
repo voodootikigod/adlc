@@ -1,0 +1,4 @@
+{
+  "minToolkit": "1.10.0",
+  "reason": "forest cutover PR #482 — 1.10.0 is the first release with the full forest contract (the migrate/migrate-branch cutover and salvage verbs); pre-1.8 toolkits never read the marker and append evidence to the frozen manifest root"
+}
