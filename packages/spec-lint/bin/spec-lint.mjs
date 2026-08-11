@@ -81,11 +81,15 @@ const noCriteria = classified.length === 0;
 const wishes = classified.filter(c => c.status === 'WISH');
 
 if (noCriteria) {
-  // Warn loudly, but exit 0 (no criteria = nothing to gate on).
-  if (!flags.json) {
-    console.warn('WARNING: no criteria found — add acceptance criteria to gate on.');
-  }
-  pass();
+  // Fail closed: a spec with zero recognized acceptance criteria is the strongest
+  // under-specification signal, not the absence of one. Criteria placed under an
+  // unrecognized heading never parse and land here too — also a gate failure, not
+  // a pass. (In --json mode the result body was already printed above.)
+  gateFail(
+    'spec-lint: no acceptance criteria found. State at least one criterion under a ' +
+      'recognized heading (Acceptance Criteria / Requirements), each with a ' +
+      'verification method. Zero criteria fails the gate.',
+  );
 }
 
 if (wishes.length > 0) {

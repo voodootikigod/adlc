@@ -834,10 +834,13 @@ describe('CLI: exit codes', () => {
     assert.equal(code, 2);
   });
 
-  it('exits 0 for no-criteria spec (warn but pass)', () => {
-    const { code, stdout } = runCli([fixture('no-criteria.md')]);
-    assert.equal(code, 0);
-    assert.ok(stdout.includes('WARNING') || stdout.includes('no criteria'));
+  it('exits 2 for no-criteria spec (fail closed)', () => {
+    // Seam 7 (delta.md / PR #486): zero recognized criteria is the strongest
+    // under-specification signal, not a pass. This test previously asserted the
+    // vacuous exit-0; it now asserts the fail-closed exit-2 the gate was fixed to.
+    const { code, stderr } = runCli([fixture('no-criteria.md')]);
+    assert.equal(code, 2);
+    assert.ok(stderr.includes('no acceptance criteria'));
   });
 });
 
