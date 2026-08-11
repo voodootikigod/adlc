@@ -95,9 +95,12 @@ session loses structured edits **and bash wholesale** — including attempts to
 run `adlc handoff write|resume|bypass|repair|unlock` from the agent's own shell.
 **Structured** writes to the deny store, resume-auth caches, model-ok stamps,
 and lock files are refused whether or not a deny is active. The shell is gated
-wholesale under an active deny-set, but shell targets are not path-inspected —
-with a cold deny-set, a shell command reaching those artifacts is caught by the
-CI diff gate, not in-session. Read-only tools keep working.
+A shell command naming one of those paths is refused too, deny-set or not —
+there is **no** CI backstop for them, because `.adlc/*` is gitignored and a
+deletion never reaches a diff. That check reads literal paths only: it cannot
+see through a variable, an expansion, or an interpreter one-liner, so it raises
+the cost of the obvious attempt rather than closing the class. Read-only tools
+keep working.
 
 The band signal is the in-process depth tracker the build-gate backstop already
 maintains, keyed on the host's `sessionID`. A tool call arriving with no usable

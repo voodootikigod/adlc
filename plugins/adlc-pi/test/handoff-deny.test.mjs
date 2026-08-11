@@ -448,6 +448,33 @@ test('a failed marker write stays sticky for the session across calls', () => {
   assert.deepEqual(calls, [false, true, false]);
 });
 
+test('a THROWING getContextUsage fails closed, an absent one does not', async () => {
+  const root = makeRepo();
+  try {
+    // Absent API: a host that does not provide it must not hard-lock the repo.
+    const absent = await boot(root);
+    assert.equal(
+      (await call(absent.pi, absent.ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
+      undefined,
+    );
+
+    // Present but throwing: that is a FAILED read of a real signal, not the
+    // absence of one. Collapsing the two would let a 95%-full session through
+    // on a transient error.
+    const pi = fakePi();
+    createExtension({ env: {} })(pi);
+    const ctx = fakeCtx(root);
+    ctx.getContextUsage = () => {
+      throw new Error('transient');
+    };
+    await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, ctx);
+    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict?.block, true, 'an unreadable context signal must fail closed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('the plugin declares the package it enforces with', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.ok(pkg.dependencies['@adlc/context-handoff'], 'must depend on @adlc/context-handoff');

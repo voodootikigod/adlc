@@ -79,6 +79,21 @@ export function createExtension({ env = process.env } = {}) {
       catch { return null; }
     }
 
+    // Same reading, but an API that THREW is not the same as an API that is
+    // absent. `safeUsage` collapses both to null, which the band join reads as
+    // "no signal" and lets through — so a transient failure at 95% context
+    // would fail OPEN. The handoff gate needs the two distinguished: absent
+    // stays absent (a host without the API must not hard-lock the repo), while
+    // a failed read becomes an explicitly invalid signal that fails closed.
+    function handoffUsage(ctx) {
+      if (typeof ctx?.getContextUsage !== 'function') return null;
+      try {
+        return ctx.getContextUsage();
+      } catch {
+        return { percent: Number.NaN };
+      }
+    }
+
     // =====================================================================
     // Live widget + gate-notice choke point (spec 3.2 / 3.3)
     // =====================================================================
@@ -327,7 +342,7 @@ export function createExtension({ env = process.env } = {}) {
         toolName: event.toolName,
         input: event.input,
         sessionId: handoffSessionId,
-        usage: safeUsage(ctx),
+        usage: handoffUsage(ctx),
         ticketId: active.ticketId ?? null,
         root: activeCwd,
         manifestKey,

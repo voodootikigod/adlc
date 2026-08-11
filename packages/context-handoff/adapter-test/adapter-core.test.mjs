@@ -15,6 +15,7 @@ import {
   isProtectedHandoffPath,
   isHandoffMutatingShell,
   denyStoreHot,
+  shellPathCandidates,
   evaluateHandoffPreToolUse,
   ensureDenyMarker,
   writeDenyRecord,
@@ -508,6 +509,63 @@ test('denyEverWritten does not deny a session that never hit the band', () => {
     assert.equal(r.deny, false);
     assert.equal(r.denyEverWritten, false);
   });
+});
+
+test('a shell erasing the deny store is denied even with a cold deny-set', () => {
+  withRepo((root) => {
+    // The gap this closes: after another session consumes the record, the fresh
+    // session has no D1-D3 and could `rm -rf .adlc/handoffs`. Those paths are
+    // gitignored, so no CI diff would ever show it.
+    for (const command of [
+      'rm -rf .adlc/handoffs',
+      'rm -rf .adlc/handoffs/denies',
+      'rm -f .adlc/.deny-store',
+      'rm .adlc/handoffs/denies/other.json',
+      'mv .adlc/handoffs/denies /tmp/stash',
+    ]) {
+      const r = evaluateHandoffPreToolUse({
+        root,
+        sessionId: 'sess-clean',
+        observed: { depth: 1 },
+        isBash: true,
+        bashCommand: command,
+        host: 'test',
+      });
+      assert.equal(r.deny, true, `must deny: ${command}`);
+      assert.ok(
+        r.reasons.some((x) => x.startsWith('path_protected_shell:')),
+        `${command} → ${r.reasons.join()}`,
+      );
+    }
+  });
+});
+
+test('ordinary shell commands are still allowed with a cold deny-set', () => {
+  withRepo((root) => {
+    for (const command of ['ls -la', 'rm -rf build/out', 'cat src/app.mjs', 'git status']) {
+      const r = evaluateHandoffPreToolUse({
+        root,
+        sessionId: 'sess-clean',
+        observed: { depth: 1 },
+        isBash: true,
+        bashCommand: command,
+        host: 'test',
+      });
+      assert.equal(r.deny, false, `must allow: ${command} → ${r.reasons.join()}`);
+    }
+  });
+});
+
+test('shell path extraction sees directories and their protected children', () => {
+  const found = shellPathCandidates('rm -rf .adlc/handoffs');
+  assert.ok(found.includes('.adlc/handoffs'));
+  assert.ok(
+    found.includes('.adlc/handoffs/denies'),
+    'a directory-level delete must be recognized as covering its contents',
+  );
+  assert.deepEqual(shellPathCandidates(''), []);
+  assert.deepEqual(shellPathCandidates(null), []);
+  assert.equal(shellPathCandidates('ls -la').length, 0, 'no path-like token, no candidates');
 });
 
 test('the marker records the host the adapter reports', () => {

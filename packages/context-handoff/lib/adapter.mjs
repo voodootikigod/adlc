@@ -105,6 +105,45 @@ export function isHandoffMutatingShell(command) {
 }
 
 /**
+ * Literal path-like tokens in a shell command, plus every directory prefix of
+ * each one.
+ *
+ * The prefixes matter: `rm -rf .adlc/handoffs` names a DIRECTORY, and the
+ * protected-path predicate answers about the artifacts inside it. Without
+ * expanding prefixes, deleting the whole tree would read as untouched while
+ * deleting one marker inside it would be caught — exactly backwards.
+ *
+ * @param {unknown} command
+ * @returns {string[]}
+ */
+export function shellPathCandidates(command) {
+  if (typeof command !== 'string' || command === '') return [];
+  const out = new Set();
+  // Strip quotes, then take whitespace/;|&-separated tokens that look like paths.
+  for (const raw of command.replace(/['"]/g, ' ').split(/[\s;|&()<>]+/)) {
+    const token = raw.replace(/^-+/, '');
+    if (token === '' || !token.includes('/')) continue;
+    const norm = token.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (norm === '') continue;
+    out.add(norm);
+    // Every ancestor, so a directory-level target is seen as covering its
+    // contents: `.adlc/handoffs` → also `.adlc/handoffs/denies`.
+    const parts = norm.split('/');
+    for (let i = 1; i < parts.length; i += 1) out.add(parts.slice(0, i).join('/'));
+  }
+  // `.adlc/handoffs` is protected via its `denies` child; name it explicitly so a
+  // directory-level delete is recognized.
+  const expanded = new Set(out);
+  for (const p of out) {
+    if (p === '.adlc/handoffs' || p === '.adlc') {
+      expanded.add('.adlc/handoffs/denies');
+      expanded.add('.adlc/.deny-store');
+    }
+  }
+  return [...expanded];
+}
+
+/**
  * True when the deny store is in play at all: any record, any invalid record,
  * any registered session, or a store that could not be read. A cold store on a
  * repo that never hit the handoff band is the fail-OPEN case — an adapter
@@ -261,6 +300,26 @@ export function evaluateHandoffPreToolUse({
     reasons.push('bash_fail_closed_under_deny');
     if (isHandoffMutatingShell(bashCommand)) {
       reasons.push('bash_handoff_mutating_cli');
+    }
+  }
+
+  // A shell touching the deny store is denied whether or not a deny is active.
+  //
+  // Without this, a session whose record was just consumed has no D1-D3 and can
+  // `rm -rf .adlc/handoffs .adlc/.deny-store` — erasing the durable identity that
+  // keeps the ORIGINAL denier sticky. There is no CI backstop for that: those
+  // paths are gitignored (`.adlc/*`), so the deletion never appears in a diff.
+  //
+  // Best-effort by construction: this reads literal paths out of the command and
+  // cannot see through variables, expansion, or an interpreter one-liner — the
+  // same limitation the rail shell classifier documents. It raises the cost of
+  // the obvious attempt; the durable fix is host-owned storage the agent's shell
+  // cannot reach at all.
+  if (isBash) {
+    for (const token of shellPathCandidates(bashCommand)) {
+      if (isProtectedHandoffPath(token)) {
+        reasons.push(`path_protected_shell:${token}`);
+      }
     }
   }
 
