@@ -26,6 +26,7 @@ import {
   isSafeSessionId,
   resolveHandoffSessionId,
 } from '@adlc/context-handoff';
+import { extractToolPaths } from './rails-checker.mjs';
 
 /** pi tool names that mutate through a structured target. */
 const STRUCTURED_MUTATORS = new Set(['write', 'edit']);
@@ -133,6 +134,30 @@ export function editTargetOf(input) {
   return typeof path === 'string' && path.trim() !== '' ? path : null;
 }
 
+/**
+ * Every extractable target from a tool_call input.
+ *
+ * The rail gate vets custom tools through `extractToolPaths`, which recognizes
+ * `target` and `file` as well as `path`, plus one level of nesting. The handoff
+ * gate read only the three `path` spellings, so a third-party tool calling
+ * `{target: '.adlc/.deny-store'}` reached the deny store with an empty
+ * editRelPaths while the rail checker saw the path perfectly well. One
+ * extractor per plugin, not two.
+ *
+ * editTargetOf stays the narrow reader for pi's OWN structured mutators, whose
+ * shape is known; this is the union so nothing extractable is dropped.
+ *
+ * @param {object} input pi tool_call input
+ * @param {string} root repo root
+ * @returns {string[]}
+ */
+export function editTargetsOf(input, root) {
+  const out = new Set(extractToolPaths(input, root));
+  const narrow = editTargetOf(input);
+  if (narrow) out.add(narrow);
+  return [...out];
+}
+
 /** Repo-relative, forward-slashed. Paths outside the repo keep their own form. */
 export function toRepoRelative(path, root) {
   const normalized = String(path).replaceAll('\\', '/');
@@ -195,7 +220,7 @@ export function checkHandoff({
   if (!handoffAppliesTo(toolName)) return { decision: 'allow' };
 
   const shell = isShellTool(toolName);
-  const target = shell ? null : editTargetOf(input);
+  const targets = shell ? [] : editTargetsOf(input, root);
   const safeSessionId = isSafeSessionId(sessionId) ? sessionId : null;
 
   const result = evaluate({
@@ -203,7 +228,7 @@ export function checkHandoff({
     sessionId: safeSessionId,
     observed: observeHandoffSignals(usage),
     ticketId,
-    editRelPaths: target ? [toRepoRelative(target, root)] : [],
+    editRelPaths: targets.map((p) => toRepoRelative(p, root)),
     isBash: shell,
     bashCommand: shell && typeof input?.command === 'string' ? input.command : '',
     host: 'pi',

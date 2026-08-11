@@ -480,3 +480,36 @@ test('the plugin declares the package it enforces with', () => {
   assert.ok(pkg.dependencies['@adlc/context-handoff'], 'must depend on @adlc/context-handoff');
   assert.ok(pkg.files.includes('lib/'), 'files must ship lib/');
 });
+
+test('a custom tool reaching the deny store by any extractable key is denied', async () => {
+  // The rail gate vets custom tools with extractToolPaths, which reads `target`
+  // and `file` as well as `path`. The handoff gate read only the three `path`
+  // spellings, so these reached the store while the rail checker saw them.
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root, { percent: 5 });
+    for (const input of [
+      { target: join(root, '.adlc', '.deny-store') },
+      { file: join(root, '.adlc', 'handoffs', 'denies', 'x.json') },
+    ]) {
+      const verdict = await call(pi, ctx, 'custom_writer', input);
+      assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
+      assert.match(verdict.reason, /path_protected/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a custom tool targeting ordinary files is still allowed with a cold store', async () => {
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root, { percent: 5 });
+    for (const input of [{ target: 'src/app.mjs' }, { path: 'src/app.mjs' }, {}]) {
+      const verdict = await call(pi, ctx, 'custom_writer', input);
+      assert.notEqual(verdict?.block, true, `must allow: ${JSON.stringify(input)}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
