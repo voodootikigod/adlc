@@ -1,0 +1,17 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 8 (medium). Post 6's thesis is \"run N+1 cheaper than run N\", but it is unmeasured: the findings ledger records ZERO spend, the calibration recall number never reaches the manifest or the prosecution verdicts, and there is no scheduled skill-rot/model-ratchet cron (only copilot-live-canary, ceremony-drift, pi-version-matrix run on a schedule). The ratchet is designed but not turning; the central economic claim is not observable.\n\nNORMATIVE BEHAVIOR\n1. Wire real spend capture into the findings ledger / manifest so cost-per-merged-verified-change is computable run-over-run (respect the existing no-fabrication rule: unmeasured is \"unreported\", never zero).\n2. Carry the review-calibration recall number into the gate-manifest so prosecution verdicts are self-describing (recall alongside test hashes and rails proofs).\n3. Add scheduled workflows for skill-rot and model-ratchet (docs/ci/adlc-maintenance.yml pattern) so cache-invalidation and frontier re-prosecution actually fire.\n\n## Acceptance Criteria\n\n- Spend is captured into the manifest/ledger and is non-zero for a run that reports usage (still \"unreported\" when absent, never fabricated zero). verify: `node --test packages/prosecute/test/spend-capture.test.mjs`\n- The calibration recall number is recorded into the gate-manifest. verify: `node --test packages/gate-manifest/test/recall-record.test.mjs`\n- Scheduled skill-rot and model-ratchet workflows exist. verify: `node -e \"const fs=require('fs');const y=fs.readFileSync('.github/workflows/adlc-maintenance.yml','utf8');process.exit(/skill-rot/.test(y)&&/model-ratchet/.test(y)?0:1)\"`\n\nallow-suppression: none",
+  "category": "feature",
+  "duration": 3,
+  "id": "T-01KZRQF4A21KVA65QTDV7YSN8A",
+  "rails": [
+    "packages/prosecute/test/**/*.test.mjs",
+    ".github/workflows/**"
+  ],
+  "scope": [
+    "packages/prosecute/**",
+    "packages/gate-manifest/**",
+    "packages/review-calibration/**",
+    ".github/workflows/**"
+  ],
+  "title": "Make the cost ratchet observable: real spend capture, recall into manifest, skill-rot/model-ratchet cron"
+}

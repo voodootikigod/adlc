@@ -1,0 +1,14 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 5 (high). Out of the box the in-session path is advisory: --prompt-only LLM-backed gates always exit 0; rail/build-gate enforcement hides behind ADLC_*_ENFORCEMENT=1; the adversarial-review Stop hook only blocks under ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1. The shipped default posture is \"trust the model unless the operator opts into distrust\" — the inverse of the founding stance (\"tool layer, not prompt layer\").\n\nNORMATIVE BEHAVIOR\n1. Where the host can fail closed, make enforcing the DEFAULT. Advisory mode becomes an explicit opt-DOWN (e.g. ADLC_*_ADVISORY=1) that emits a loud, one-time notice naming exactly which enforcement was downgraded and by which flag.\n2. Do not change behavior on hosts that cannot fail closed (documented per Seam 6); those remain advisory but must announce it.\n3. Preserve every existing fail-closed path; this ticket only flips defaults and inverts the flag polarity, with migration notes.\n\n## Acceptance Criteria\n\n- With no env flags set, a rail-protected edit in an enforcing-capable host is DENIED by default. verify: `node --test plugins/adlc-claude-code/hooks/test/default-enforcing.test.mjs`\n- Advisory mode requires an explicit opt-down flag and emits a visible downgrade notice. verify: `node --test plugins/adlc-claude-code/hooks/test/advisory-optdown.test.mjs`\n- Existing enforcing-mode tests still pass unchanged. verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`\n\nallow-suppression: none",
+  "category": "refactor",
+  "duration": 3,
+  "id": "T-01KZRQF3GKRX0V9HTQ70QKDFNE",
+  "rails": [
+    "plugins/adlc-claude-code/hooks/test/**/*.test.mjs"
+  ],
+  "scope": [
+    "plugins/**/hooks/**",
+    "packages/coldstart/**"
+  ],
+  "title": "Flip in-session enforcement defaults to fail-closed; make advisory an explicit, logged opt-down"
+}

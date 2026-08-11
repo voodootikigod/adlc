@@ -1,0 +1,14 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 3 (high). P1 spec-approval and P6 behavioral-acceptance are agent-runnable self-declarations. Nothing binds them to a human identity an agent cannot mint. The series' headline promise (\"two human gates, everything between machine-checked\") reduces to a naming convention.\n\nNORMATIVE BEHAVIOR\n1. P1 and P6 acceptance evidence must carry a human-identity binding the runner verifies and an agent cannot forge: a signed human approval token held outside the repo, or a required human GitHub review identity (ties into Seam 1's ruleset), verified at assert time.\n2. An acceptance record without a valid human binding must FAIL the gate (exit 2), not pass. The runner must distinguish agent-authored from human-authored acceptance and reject the former for these two gates.\n3. Until a binding mechanism ships, the runner must not report P1/P6 as satisfied on agent-minted evidence; document the interim posture explicitly.\n\nTouches gate-manifest (enforcement package) — CROSS-MODEL GATED at P5.\n\n## Acceptance Criteria\n\n- An agent-minted P6 acceptance record without a human binding fails the gate. verify: `node --test packages/runner/test/acceptance-human-binding.test.mjs`\n- A record with a valid human binding passes; a forged/absent binding is rejected. verify: `node --test packages/runner/test/acceptance-human-binding.test.mjs`\n- Existing acceptance revision-binding tests still pass. verify: `node --test packages/runner/test/*.test.mjs`\n\nallow-suppression: none",
+  "category": "architecture",
+  "duration": 4,
+  "id": "T-01KZRQF304WB9B24HEKQEHQS1D",
+  "rails": [
+    "packages/runner/test/**/*.test.mjs"
+  ],
+  "scope": [
+    "packages/runner/**",
+    "packages/gate-manifest/**"
+  ],
+  "title": "Bind the two human gates (P1/P6) to a non-agent human identity"
+}

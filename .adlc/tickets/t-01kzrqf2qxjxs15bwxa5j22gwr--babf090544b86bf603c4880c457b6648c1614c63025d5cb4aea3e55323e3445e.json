@@ -1,0 +1,15 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 2 (high). P5 \"verified\"/\"killed\" verdicts and the loop-until-dry exit are model self-report: the verifier cannot execute anything, and a \"dry pass\" is satisfied by any non-empty string. The evidence PACKAGING is rigorous (revision-bound, content-hashed, re-hashed at assert) but the CONTENT is not reproduced. This contradicts F4/Principle 2 (\"evidence or it didn't happen\", symmetric for critics). Note: review-calibration already does this right (plants witness-verified by pass-on-original/fail-on-mutant) — port that discipline into the live loop.\n\nNORMATIVE BEHAVIOR\n1. For every finding verdict that admits mechanical reproduction, the prosecute schema must require an executed-artifact reference: a \"killed\" finding requires a repro that exits non-zero on the pre-fix revision, a \"fixed\"/\"verified\" finding requires a test that fails on base and passes on head. Text-only proof is rejected for these classes.\n2. The dry-pass / loop-until-dry exit condition must be computed from executed results (e.g. a recorded command + exit code the runner can re-run), not from the presence of prose. Keep model judgment ONLY where execution is structurally impossible, and label those verdicts distinctly as non-reproduced.\n3. Preserve existing revision-binding and no-fabrication guarantees; do not weaken schema.mjs's anti-vacuous checks.\n\nThis ticket touches an enforcement package (packages/prosecute) — P5 is CROSS-MODEL GATED per the ADLC router: a same-model clean prosecute is not enough to merge.\n\n## Acceptance Criteria\n\n- The schema rejects a \"killed\" finding lacking an executed repro reference. verify: `node --test packages/prosecute/test/schema.test.mjs`\n- The dry-pass exit is computed from a re-runnable command+exit-code, not a non-empty string. verify: `node --test packages/prosecute/test/run.test.mjs`\n- A verified/fixed finding requires a fail-on-base/pass-on-head witness. verify: `node --test packages/prosecute/test/witness.test.mjs`\n- Existing revision-binding and no-fabrication tests still pass. verify: `node --test packages/prosecute/test/*.test.mjs`\n\nallow-suppression: none",
+  "category": "architecture",
+  "duration": 5,
+  "id": "T-01KZRQF2QXJXS15BWXA5J22GWR",
+  "rails": [
+    "packages/prosecute/test/**/*.test.mjs",
+    "packages/core/test/**/*.test.mjs"
+  ],
+  "scope": [
+    "packages/prosecute/**",
+    "packages/core/**"
+  ],
+  "title": "P5 prosecution: require executed proof for verified/killed findings, not model text"
+}

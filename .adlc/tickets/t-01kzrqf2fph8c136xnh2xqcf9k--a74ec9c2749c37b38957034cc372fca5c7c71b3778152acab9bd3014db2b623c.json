@@ -1,0 +1,16 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 1 (critical). Every ADLC gate (rails-guard, mutation-gate, cross-model-gate, findings-ledger-append-only, reviewer-directed-comment) is correctly fail-closed in code, but the main branch ruleset requires only the unit-test legs (\"test (18/20/22)\") and 0 reviews. A gate that exits 2 (DENY) still merges. ci.yml itself calls a failing-but-not-required gate \"theatre\".\n\nNORMATIVE BEHAVIOR\n1. Add a deterministic \"gate-liveness\" check (scripts/gate-liveness.mjs) that, given the repo's declared gate set, asserts via 'gh api repos/<owner>/<repo>/rules/branches/main' that every declared blocking gate context is present in required_status_checks.contexts, and that pull-request review is required (require_code_owner_review true OR required_approving_review_count >= 1). Exit 2 if any declared gate is not a required check; exit 1 on API/network error (fail closed — never 0 on an unverifiable ruleset). This is the meta-gate that would have caught this seam automatically; it is the custody sibling of gate-fuzzing (which red-teams gate LOGIC — this red-teams gate WIRING).\n2. The list of \"declared blocking gates\" must be read from a single committed source (e.g. docs/ci/required-gates.json), not hard-coded in two places; add a bijectivity test that this source equals the set of gate jobs in ci.yml + cross-model-gate.yml.\n3. Do NOT modify the live GitHub ruleset from code. Document the exact contexts to add in docs/ci/required-gates.json and the PR description; the ruleset change is a human/infra action performed via gh or the GitHub UI and recorded as such.\n\nOut of scope: changing any gate's internal logic; the human-gate binding (separate ticket); the ruleset edit itself (human action).\n\n## Acceptance Criteria\n\n- gate-liveness check exists and exits 2 when a declared gate is absent from required_status_checks. verify: `node --test scripts/test/gate-liveness.test.mjs`\n- gate-liveness fails closed (exit 1, never 0) on an unreadable/absent ruleset response. verify: `node --test scripts/test/gate-liveness.test.mjs` (asserts the error path)\n- The declared-gate source is single-sourced with a bijectivity test against the CI workflow job set. verify: `node --test scripts/test/gate-liveness.test.mjs` (bijectivity case)\n- docs/ci/required-gates.json enumerates rails-guard, mutation-gate, cross-model-gate, and the pre-ga gate as required contexts. verify: `node -e \"const g=require('./docs/ci/required-gates.json'); process.exit(['rails-guard','mutation-gate','cross-model-gate'].every(x=>JSON.stringify(g).includes(x))?0:1)\"`\n\nallow-suppression: none",
+  "category": "chore",
+  "duration": 2,
+  "id": "T-01KZRQF2FPH8C136XNH2XQCF9K",
+  "rails": [
+    "scripts/test/gate-liveness*.test.mjs"
+  ],
+  "scope": [
+    "scripts/**",
+    ".github/workflows/**",
+    "docs/ci/**",
+    "packages/gate-manifest/**"
+  ],
+  "title": "Make ADLC gates merge-blocking: wire required checks + a gate-liveness meta-gate"
+}

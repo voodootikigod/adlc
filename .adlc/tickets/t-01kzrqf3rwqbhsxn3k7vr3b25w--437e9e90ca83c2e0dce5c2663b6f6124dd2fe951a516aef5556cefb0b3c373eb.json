@@ -1,0 +1,15 @@
+{
+  "body": "Source: the ADLC principle-fidelity audit (delta.md, PR #486). This ticket remediates one of the eight root-cause \"seams\" that audit found — cases where the toolkit trusts the model at the boundary between a built gate and the deployed system.\n\nSEAM 6 (medium). Enforcement is uneven across the 8 integrations: adlc-cursor and adlc-gemini are opt-in with failClosed:false on fail-open hosts; the context-handoff (F3) deny exists only in the Claude Code plugin (7 of 8 lack it); the flagship Claude Code wrapper itself FAILS OPEN on hook timeout/kill — it exits 1 where only exit 2 blocks. The weakest live integration defines the real guarantee.\n\nNORMATIVE BEHAVIOR\n1. Close the Claude Code wrapper timeout hole: in ENFORCING modes, map a hook timeout/kill to exit 2 (deny), matching what the CI wrapper (adlc-hook-run.mjs) already does. This is the concrete, highest-value first step.\n2. Publish a minimum enforcement FLOOR every integration must meet (rails deny on protected paths + fail-closed-on-error where the host allows), and turn the live-deny proofs into a conformance suite runnable per integration.\n3. Make the harness-capability-matrix a GATE (a test that asserts each integration meets the floor or is explicitly, loudly documented as below it), not just prose.\n\n## Acceptance Criteria\n\n- The Claude Code wrapper maps an enforcing-mode hook timeout to exit 2 (deny). verify: `node --test plugins/adlc-claude-code/hooks/test/wrapper-timeout-deny.test.mjs`\n- A conformance test asserts each integration meets the enforcement floor or is flagged below it. verify: `node --test scripts/test/integration-parity-floor.test.mjs`\n- Existing wrapper and live-deny tests still pass. verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`\n\nallow-suppression: none",
+  "category": "architecture",
+  "duration": 4,
+  "id": "T-01KZRQF3RWQBHSXN3K7VR3B25W",
+  "rails": [
+    "scripts/test/**/*.test.mjs"
+  ],
+  "scope": [
+    "plugins/**",
+    "scripts/**",
+    "docs/integrations/**"
+  ],
+  "title": "Define a cross-harness enforcement floor and close the Claude Code wrapper timeout fail-open (exit 1 to 2)"
+}
