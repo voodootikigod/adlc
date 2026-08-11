@@ -384,3 +384,45 @@ test('the plugin declares the package it enforces with', () => {
   assert.ok(pkg.dependencies['@adlc/context-handoff'], 'must depend on @adlc/context-handoff');
   assert.ok(pkg.files.includes('lib/'), 'files must ship lib/');
 });
+
+test('a custom tool naming a trust-root artifact via target is denied', async () => {
+  // extractTargets is the rail checker's extractor and covers the shapes
+  // OpenCode's own mutators use; third-party writers commonly pass `target`,
+  // which it does not read. Those reached the handoff core with an empty path
+  // list and were allowed on a cold store.
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    for (const args of [
+      { target: '.adlc/.deny-store' },
+      { targetPath: '.adlc/handoffs/denies/s1.json' },
+    ]) {
+      await assert.rejects(
+        () =>
+          hooks['tool.execute.before'](
+            { tool: 'custom_writer', sessionID: 's1', callID: 'c' },
+            { args },
+          ),
+        /path_protected/,
+        `must deny: ${JSON.stringify(args)}`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a custom tool naming an ordinary target is still allowed', async () => {
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    for (const args of [{ target: 'src/app.mjs' }, {}]) {
+      await hooks['tool.execute.before'](
+        { tool: 'custom_writer', sessionID: 's1', callID: 'c' },
+        { args },
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

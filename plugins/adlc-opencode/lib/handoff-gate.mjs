@@ -45,6 +45,33 @@ export function isShellTool(tool) {
   return SHELL_TOOLS.includes(String(tool ?? '').toLowerCase());
 }
 
+/**
+ * Every candidate target the deny-set should vet on a tool call.
+ *
+ * `extractTargets` is the rail checker's extractor and covers the shapes
+ * OpenCode's OWN mutators use — `path`, `file`, `filePath`, `files[]`,
+ * `edits[]`, apply_patch bodies. It does not read `target`/`targetPath`, which
+ * third-party writers commonly use and which pi's equivalent extractor does
+ * recognize, so a custom tool could name a protected artifact and reach the
+ * handoff core with an empty path list.
+ *
+ * Widened here rather than in the rail checker: this is the deny-set's
+ * always-on artifact protection, whereas extractTargets also drives per-ticket
+ * rail policy whose behaviour is frozen. The rails-side gap is real but
+ * separate.
+ *
+ * @param {object} args OpenCode tool args
+ * @returns {string[]}
+ */
+export function handoffTargetsOf(args) {
+  const out = new Set(extractTargets(args));
+  for (const key of ['target', 'targetPath', 'target_path']) {
+    const value = args?.[key];
+    if (typeof value === 'string' && value.trim() !== '') out.add(value);
+  }
+  return [...out];
+}
+
 /** Shell command text from OpenCode tool args. */
 export function shellCommandOf(args) {
   if (!args || typeof args !== 'object') return '';
@@ -127,7 +154,7 @@ export function checkHandoff({
     root,
     sessionId,
     observed,
-    editRelPaths: shell ? [] : extractTargets(args).map((p) => toRepoRelative(p, root)),
+    editRelPaths: shell ? [] : handoffTargetsOf(args).map((p) => toRepoRelative(p, root)),
     isBash: shell,
     bashCommand: shell ? shellCommandOf(args) : '',
     host: 'opencode',
