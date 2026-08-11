@@ -207,11 +207,18 @@ const PROTECTED_SHELL_ROOTS = ['.adlc/handoffs/denies', '.adlc/.deny-store'];
 /**
  * True when deleting `rel` would take a protected artifact with it — `rel` is
  * an ancestor DIRECTORY of one, rather than the artifact itself.
- * @param {string} rel repo-relative, already normalized
+ *
+ * The repo root is deliberately NOT covered. Candidates include every ancestor
+ * of every token, so `.` is synthesized by any dot-relative path and the root
+ * by any absolute in-repo path: treating the root as protected denied ordinary
+ * commands like `cat ./src/app.mjs`. A target that erases the whole checkout is
+ * outside what this guard can distinguish.
+ *
+ * @param {string} rel repo-relative, already normalized, never ''
  * @returns {boolean}
  */
 function coversProtectedRoot(rel) {
-  if (rel === '') return true; // the repo root contains all of them
+  if (rel === '') return false;
   return PROTECTED_SHELL_ROOTS.some((p) => p === rel || p.startsWith(`${rel}/`));
 }
 
@@ -234,17 +241,8 @@ export function classifyShellTarget(root, rel) {
   const direct = classifyHandoffPath(root, rel);
   if (direct.protected) return direct;
   const resolved = resolvedRepoRelative(root, rel);
-  if (resolved !== null) {
-    return coversProtectedRoot(resolved) ? { protected: true, via: 'covers' } : { protected: false, via: null };
-  }
-  // resolvedRepoRelative yields null for the repo root itself and for anything
-  // it cannot place; only the first is a hit, so ask directly.
-  try {
-    if (realpathSync(resolve(root, rel)) === realpathSync(root)) {
-      return { protected: true, via: 'covers' };
-    }
-  } catch {
-    // Unresolvable — fall through to the lexical answer already computed.
+  if (resolved !== null && coversProtectedRoot(resolved)) {
+    return { protected: true, via: 'covers' };
   }
   return { protected: false, via: null };
 }

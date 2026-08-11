@@ -543,7 +543,21 @@ test('a shell erasing the deny store is denied even with a cold deny-set', () =>
 
 test('ordinary shell commands are still allowed with a cold deny-set', () => {
   withRepo((root) => {
-    for (const command of ['ls -la', 'rm -rf build/out', 'cat src/app.mjs', 'git status']) {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'app.mjs'), '');
+    for (const command of [
+      'ls -la',
+      'rm -rf build/out',
+      'cat src/app.mjs',
+      'git status',
+      // Dot-relative and absolute in-repo spellings synthesize `.` and the repo
+      // root as ancestors. Treating the root as protected denied all of these.
+      'cat ./src/app.mjs',
+      'node ./scripts/check.mjs',
+      'git -C . status',
+      `cat ${join(root, 'src', 'app.mjs')}`,
+      `rm -rf ${join(root, 'build', 'out')}`,
+    ]) {
       const r = evaluateHandoffPreToolUse({
         root,
         sessionId: 'sess-clean',
@@ -606,8 +620,6 @@ test('every literal spelling of erasing the deny store is denied', () => {
       `rm -rf ${join(root, '.adlc')}`,
       `rm -rf ${join(root, '.adlc', 'handoffs')}`,
       `rm -rf ${join(root, '.adlc', 'handoffs', 'denies')}`,
-      'rm -rf .',
-      `rm -rf ${root}`,
     ]) {
       const r = deny(command);
       assert.equal(r.deny, true, `must deny: ${command}`);
