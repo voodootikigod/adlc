@@ -438,3 +438,40 @@ test('the plugin ships the new hook and its resolver', () => {
   );
   assert.equal(pkg.dependencies['@adlc/context-handoff'], corePkg.version);
 });
+
+test('a nested shell call inside a parallel envelope is scanned for protected paths', () => {
+  // multi_tool_use.parallel is in this hook's PreToolUse matcher, but the outer
+  // envelope is not itself a shell tool. Reading only the outer name left the
+  // nested command unscanned, so this deletion was allowed on a cold deny-set
+  // while the same command sent directly was denied.
+  const r = runHandoff({
+    sessionId: 'parallel-1',
+    toolName: 'multi_tool_use.parallel',
+    transcriptToolCalls: 5,
+    payloadExtra: {
+      tool_uses: [
+        {
+          recipient_name: 'functions.exec_command',
+          parameters: { command: 'rm -rf .adlc/handoffs .adlc/.deny-store' },
+        },
+      ],
+    },
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+  assert.match(r.out, /path_protected_shell/);
+});
+
+test('a parallel envelope carrying only ordinary work is still allowed', () => {
+  const r = runHandoff({
+    sessionId: 'parallel-2',
+    toolName: 'multi_tool_use.parallel',
+    transcriptToolCalls: 5,
+    payloadExtra: {
+      tool_uses: [
+        { recipient_name: 'functions.exec_command', parameters: { command: 'cat ./src/app.mjs' } },
+        { recipient_name: 'functions.apply_patch', parameters: { path: 'src/app.mjs' } },
+      ],
+    },
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});

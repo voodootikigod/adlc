@@ -55,6 +55,34 @@ export function isShellToolName(name) {
   return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
 }
 
+/**
+ * True when any tool named ANYWHERE in the payload is a shell tool.
+ *
+ * `multi_tool_use.parallel` is in this hook's PreToolUse matcher, and its
+ * nested calls carry their own `recipient_name`. Reading only the outer name
+ * classified such an envelope as non-shell, so a nested `exec_command` reached
+ * the core with `isBash:false` — skipping both the protected-path scan and the
+ * wholesale shell block.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function hasShellToolAnywhere(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => hasShellToolAnywhere(item));
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      ['tool_name', 'toolName', 'tool', 'name', 'recipient_name'].includes(key) &&
+      typeof child === 'string' &&
+      isShellToolName(child)
+    ) {
+      return true;
+    }
+    if (hasShellToolAnywhere(child)) return true;
+  }
+  return false;
+}
+
 /** Every shell command string anywhere in the payload, joined for scanning. */
 export function collectCommandText(value, out = []) {
   if (!value || typeof value !== 'object') return out;
@@ -317,9 +345,13 @@ async function main() {
   });
 
   const name = toolNameOf(payload);
-  const isBash = isShellToolName(name);
+  const directShell = isShellToolName(name);
+  // A parallel envelope is not itself a shell tool but can carry one.
+  const isBash = directShell || hasShellToolAnywhere(payload);
   const bashCommand = isBash ? collectCommandText(payload).join('\n') : '';
-  const editRelPaths = isBash
+  // Only a DIRECT shell tool skips edit-path collection: an envelope can carry a
+  // nested apply_patch alongside a nested exec, and both need checking.
+  const editRelPaths = directShell
     ? []
     : Array.from(collectEditPaths(payload)).map((p) => toRepoRelative(p));
 
