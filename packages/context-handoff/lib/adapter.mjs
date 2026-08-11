@@ -169,10 +169,14 @@ export function classifyHandoffPath(root, rel) {
  * Literal path-like tokens in a shell command, plus every directory prefix of
  * each one.
  *
- * The prefixes matter: `rm -rf .adlc/handoffs` names a DIRECTORY, and the
- * protected-path predicate answers about the artifacts inside it. Without
- * expanding prefixes, deleting the whole tree would read as untouched while
- * deleting one marker inside it would be caught — exactly backwards.
+ * The prefixes matter: `rm -rf .adlc/handoffs/denies/..` names an ancestor, and
+ * the protected-path predicate answers about the artifacts under it.
+ *
+ * Slashless tokens are kept: `.adlc` names the directory holding every
+ * protected artifact, and dropping it let `rm -rf .adlc` through while
+ * `rm -rf .adlc/handoffs` was caught. Tokens that name nothing resolve to
+ * themselves and classify as unprotected, so the extra candidates cost a
+ * failed stat each.
  *
  * @param {unknown} command
  * @returns {string[]}
@@ -180,28 +184,69 @@ export function classifyHandoffPath(root, rel) {
 export function shellPathCandidates(command) {
   if (typeof command !== 'string' || command === '') return [];
   const out = new Set();
-  // Strip quotes, then take whitespace/;|&-separated tokens that look like paths.
+  // Strip quotes, then take whitespace/;|&-separated tokens.
   for (const raw of command.replace(/['"]/g, ' ').split(/[\s;|&()<>]+/)) {
     const token = raw.replace(/^-+/, '');
-    if (token === '' || !token.includes('/')) continue;
+    if (token === '') continue;
     const norm = token.replace(/\\/g, '/').replace(/\/+$/, '');
     if (norm === '') continue;
     out.add(norm);
-    // Every ancestor, so a directory-level target is seen as covering its
-    // contents: `.adlc/handoffs` → also `.adlc/handoffs/denies`.
+    // Every ancestor, so a deep target is seen as reaching through them.
     const parts = norm.split('/');
-    for (let i = 1; i < parts.length; i += 1) out.add(parts.slice(0, i).join('/'));
-  }
-  // `.adlc/handoffs` is protected via its `denies` child; name it explicitly so a
-  // directory-level delete is recognized.
-  const expanded = new Set(out);
-  for (const p of out) {
-    if (p === '.adlc/handoffs' || p === '.adlc') {
-      expanded.add('.adlc/handoffs/denies');
-      expanded.add('.adlc/.deny-store');
+    for (let i = 1; i < parts.length; i += 1) {
+      const prefix = parts.slice(0, i).join('/');
+      if (prefix !== '') out.add(prefix);
     }
   }
-  return [...expanded];
+  return [...out];
+}
+
+/** Repo-relative artifacts a shell target must not be able to reach. */
+const PROTECTED_SHELL_ROOTS = ['.adlc/handoffs/denies', '.adlc/.deny-store'];
+
+/**
+ * True when deleting `rel` would take a protected artifact with it — `rel` is
+ * an ancestor DIRECTORY of one, rather than the artifact itself.
+ * @param {string} rel repo-relative, already normalized
+ * @returns {boolean}
+ */
+function coversProtectedRoot(rel) {
+  if (rel === '') return true; // the repo root contains all of them
+  return PROTECTED_SHELL_ROOTS.some((p) => p === rel || p.startsWith(`${rel}/`));
+}
+
+/**
+ * Classify a shell command's path token.
+ *
+ * Distinct from `classifyHandoffPath` in one way that matters: a shell target
+ * is usually a DIRECTORY, and the question is what the command can reach, not
+ * whether the token is itself an artifact. It is therefore decided on the
+ * RESOLVED repo-relative form. Deciding directory coverage on the raw token —
+ * as this did — meant `.adlc/handoffs` was caught while `./.adlc`,
+ * `/abs/repo/.adlc`, and `/abs/repo/.adlc/handoffs` were not, because only the
+ * literal spellings were expanded.
+ *
+ * @param {string} root repo root
+ * @param {string} rel candidate token
+ * @returns {{ protected: boolean, via: 'lexical'|'symlink'|'covers'|null }}
+ */
+export function classifyShellTarget(root, rel) {
+  const direct = classifyHandoffPath(root, rel);
+  if (direct.protected) return direct;
+  const resolved = resolvedRepoRelative(root, rel);
+  if (resolved !== null) {
+    return coversProtectedRoot(resolved) ? { protected: true, via: 'covers' } : { protected: false, via: null };
+  }
+  // resolvedRepoRelative yields null for the repo root itself and for anything
+  // it cannot place; only the first is a hit, so ask directly.
+  try {
+    if (realpathSync(resolve(root, rel)) === realpathSync(root)) {
+      return { protected: true, via: 'covers' };
+    }
+  } catch {
+    // Unresolvable — fall through to the lexical answer already computed.
+  }
+  return { protected: false, via: null };
 }
 
 /**
@@ -372,14 +417,18 @@ export function evaluateHandoffPreToolUse({
   // keeps the ORIGINAL denier sticky. There is no CI backstop for that: those
   // paths are gitignored (`.adlc/*`), so the deletion never appears in a diff.
   //
+  // Every literal spelling of the same target is caught — relative, dot-relative,
+  // absolute, symlinked, and the parent directories each reaches through —
+  // because the decision is made on the RESOLVED repo-relative path.
+  //
   // Best-effort by construction: this reads literal paths out of the command and
   // cannot see through variables, expansion, or an interpreter one-liner — the
   // same limitation the rail shell classifier documents. It raises the cost of
   // the obvious attempt; the durable fix is host-owned storage the agent's shell
-  // cannot reach at all.
+  // cannot reach at all (T-01KZRCNX3TSJ4C0PXZ28C9CB5N).
   if (isBash) {
     for (const token of shellPathCandidates(bashCommand)) {
-      const verdict = classifyHandoffPath(root, token);
+      const verdict = classifyShellTarget(root, token);
       if (verdict.protected) {
         reasons.push(`path_protected_shell:${token}`);
       }

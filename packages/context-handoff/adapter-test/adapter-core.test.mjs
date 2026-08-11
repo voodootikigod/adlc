@@ -16,6 +16,7 @@ import {
   isHandoffMutatingShell,
   denyStoreHot,
   shellPathCandidates,
+  classifyShellTarget,
   evaluateHandoffPreToolUse,
   ensureDenyMarker,
   writeDenyRecord,
@@ -556,16 +557,76 @@ test('ordinary shell commands are still allowed with a cold deny-set', () => {
   });
 });
 
-test('shell path extraction sees directories and their protected children', () => {
-  const found = shellPathCandidates('rm -rf .adlc/handoffs');
+test('shell path extraction sees a target and every ancestor it reaches through', () => {
+  const found = shellPathCandidates('rm -rf .adlc/handoffs/denies');
+  assert.ok(found.includes('.adlc/handoffs/denies'));
   assert.ok(found.includes('.adlc/handoffs'));
-  assert.ok(
-    found.includes('.adlc/handoffs/denies'),
-    'a directory-level delete must be recognized as covering its contents',
-  );
+  assert.ok(found.includes('.adlc'), 'the slashless root must survive extraction');
   assert.deepEqual(shellPathCandidates(''), []);
   assert.deepEqual(shellPathCandidates(null), []);
-  assert.equal(shellPathCandidates('ls -la').length, 0, 'no path-like token, no candidates');
+});
+
+test('classifyShellTarget answers on the resolved path, not the spelling', () => {
+  withRepo((root) => {
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(join(root, '.adlc', '.deny-store'), '{}');
+    // Directory coverage used to be expanded from the literal token, so only the
+    // exact strings `.adlc` and `.adlc/handoffs` were recognized. Every other
+    // spelling of the same directory reached the store untouched.
+    for (const spelling of ['.adlc', './.adlc', '.adlc/handoffs', join(root, '.adlc'), join(root, '.adlc', 'handoffs')]) {
+      assert.equal(
+        classifyShellTarget(root, spelling).protected,
+        true,
+        `must be protected: ${spelling}`,
+      );
+    }
+    assert.equal(classifyShellTarget(root, '.adlc/tickets').protected, false);
+    assert.equal(classifyShellTarget(root, 'build/out').protected, false);
+  });
+});
+
+test('every literal spelling of erasing the deny store is denied', () => {
+  withRepo((root) => {
+    // No .deny-store here on purpose: a sentinel makes the store hot, and every
+    // command would then deny for that reason instead of the path scan under test.
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    const deny = (command) =>
+      evaluateHandoffPreToolUse({
+        root,
+        sessionId: 'sess-clean',
+        observed: { depth: 1 },
+        isBash: true,
+        bashCommand: command,
+        host: 'test',
+      });
+
+    for (const command of [
+      'rm -rf .adlc',
+      'rm -rf ./.adlc',
+      `rm -rf ${join(root, '.adlc')}`,
+      `rm -rf ${join(root, '.adlc', 'handoffs')}`,
+      `rm -rf ${join(root, '.adlc', 'handoffs', 'denies')}`,
+      'rm -rf .',
+      `rm -rf ${root}`,
+    ]) {
+      const r = deny(command);
+      assert.equal(r.deny, true, `must deny: ${command}`);
+      assert.ok(
+        r.reasons.some((x) => x.startsWith('path_protected_shell:')),
+        `${command} → ${r.reasons.join()}`,
+      );
+    }
+
+    // The documented limitation, stated so a regression here is visible: a
+    // literal scanner cannot follow a variable. Host-owned storage is the fix
+    // (T-01KZRCNX3TSJ4C0PXZ28C9CB5N), not a longer regex.
+    const viaVariable = deny('d=.adlc; rm -rf "$d/handoffs"');
+    assert.equal(
+      viaVariable.reasons.some((x) => x.startsWith('path_protected_shell:')),
+      false,
+      'variable indirection is out of reach of a literal scan',
+    );
+  });
 });
 
 test('a symlink alias to the deny store is protected', () => {

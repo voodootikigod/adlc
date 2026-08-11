@@ -95,7 +95,9 @@ session loses structured edits **and bash wholesale** — including attempts to
 run `adlc handoff write|resume|bypass|repair|unlock` from the agent's own shell.
 **Structured** writes to the deny store, resume-auth caches, model-ok stamps,
 and lock files are refused whether or not a deny is active. The shell is gated
-A shell command naming one of those paths is refused too, deny-set or not —
+A shell command naming one of those paths — in any literal spelling: relative,
+dot-relative, absolute, symlinked, or a parent directory that holds them — is
+refused too, deny-set or not —
 there is **no** CI backstop for them, because `.adlc/*` is gitignored and a
 deletion never reaches a diff. That check reads literal paths only: it cannot
 see through a variable, an expansion, or an interpreter one-liner, so it raises
