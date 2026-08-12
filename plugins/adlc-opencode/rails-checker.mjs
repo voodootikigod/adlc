@@ -180,6 +180,36 @@ export function extractTargets(args) {
   return targets;
 }
 
+/**
+ * Targets to test when deciding whether an UNGATED tool name is being spoofed.
+ *
+ * Deliberately broader than `extractTargets`, and deliberately used only by the
+ * ungated branch. The two branches allow on zero targets in opposite ways:
+ *
+ * - The mutating/unknown branch DENIES when nothing is extractable, so breadth
+ *   there buys no safety — and would cost it. Teaching `extractTargets` to read
+ *   `target` would turn `{target: 'src/in-scope.mjs'}` from a fail-closed deny
+ *   into an extractable non-rail ALLOW, loosening the gate for exactly the tool
+ *   class it can vouch for least.
+ * - The ungated branch ALLOWS when nothing is extractable, because `task`,
+ *   `skill`, and `todowrite` legitimately carry no path on nearly every call.
+ *   A spelling it cannot see is therefore a hole, not a fail-closed default —
+ *   `{target: <frozen rail>}` walked straight through it.
+ *
+ * So breadth belongs here and narrowness belongs in `extractTargets`.
+ *
+ * @param {object} args tool args
+ * @returns {string[]}
+ */
+export function spoofCandidateTargets(args) {
+  const out = new Set(extractTargets(args));
+  for (const key of ['target', 'targetPath', 'target_path']) {
+    const value = args?.[key];
+    if (typeof value === 'string' && value.trim() !== '') out.add(value);
+  }
+  return [...out];
+}
+
 const railSegments = (s) => s.split('/').filter((x) => x !== '');
 
 // True if directory `target` is a proper ANCESTOR of the concrete paths a rail
@@ -285,7 +315,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     // spoofed/abused and deny rather than allow purely by name.
     const force = resolveRailsInForce(root, env);
     if (force.active && !force.conflict) {
-      for (const target of extractTargets(args)) {
+      for (const target of spoofCandidateTargets(args)) {
         const hit = railHit(target, force.rails, root);
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };

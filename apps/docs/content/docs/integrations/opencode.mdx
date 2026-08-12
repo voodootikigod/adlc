@@ -65,6 +65,17 @@ tuple (env vars override); see the integration guide for the option table.
    classifier; unrecognized structured tools carrying a path fail closed. The
    only downgrade is the explicit `ADLC_ALLOW_ADVISORY_HOOKS=1` escape hatch
    (surface loudly, don't block).
+
+   Which argument shapes the check can see differs by tool class, because the
+   two classes treat "no path found" oppositely. An **unrecognized or mutating**
+   tool is denied when no target can be extracted, so breadth costs it nothing:
+   it reads `filePath`, `path`, `file`, `files[]`, `edits[]`, and apply_patch
+   envelope bodies. An **ungated** tool (`task`, `skill`, `todowrite`,
+   `question`, plus anything in `ADLC_UNGATED_TOOLS`) is allowed when no target
+   is found — those tools carry no path on nearly every call — so its spoof
+   check additionally reads `target`, `targetPath`, and `target_path`. Anything
+   neither shape can see (a nested CLI argv, a derived or defaulted write path)
+   is covered by the commit-time gate below, not in-session.
 2. **Commit-time (unbypassable).** The real control is
    `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
    frozen rail set **from the trusted base ref** and rejects any PR that edits a

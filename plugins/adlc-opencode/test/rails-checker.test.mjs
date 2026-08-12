@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkRail, checkToolCall, extractTargets, resolveActiveTicketId } from '../rails-checker.mjs';
+import { checkRail, checkToolCall, extractTargets, spoofCandidateTargets, resolveActiveTicketId } from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
 function repo({ tickets, current } = {}) {
@@ -688,4 +688,58 @@ test('r: preflight scratch probes are vetted — denied only when a probe path i
     rmSync(railedGit, { recursive: true, force: true });
     rmSync(normalRails, { recursive: true, force: true });
   }
+});
+
+// ---- (r) ungated-tool spoof defense sees target-keyed arguments ----
+test('r: an ungated tool naming a frozen rail via target is denied', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    // The spoof branch allows on ZERO extractable targets (task/skill carry no
+    // path on nearly every call), so a spelling it cannot see is a hole rather
+    // than a fail-closed default. extractTargets misses these three.
+    for (const args of [
+      { target: 'test/frozen.test.mjs' },
+      { targetPath: 'test/frozen.test.mjs' },
+      { target_path: 'test/frozen.test.mjs' },
+    ]) {
+      for (const tool of ['task', 'skill', 'todowrite']) {
+        const r = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+        assert.equal(r.decision, 'deny', `${tool} ${JSON.stringify(args)} → ${r.reason}`);
+        assert.match(r.reason, /frozen rail "test\/\*\*"/);
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: an ungated tool naming a non-rail target still runs', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    for (const args of [{ target: 'src/ok.mjs' }, { targetPath: 'src/ok.mjs' }, {}]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: extractTargets still does not read target — the breadth is spoof-only', () => {
+  // Guards the trade-off this fix was scoped around: teaching extractTargets to
+  // read `target` would turn a fail-closed deny into an allow on the
+  // mutating/unknown branch, which denies when nothing is extractable.
+  assert.deepEqual(extractTargets({ target: 'a' }), []);
+  assert.deepEqual(extractTargets({ targetPath: 'a' }), []);
+  assert.deepEqual(extractTargets({ target_path: 'a' }), []);
+  assert.deepEqual(spoofCandidateTargets({ target: 'a' }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ path: 'b', target: 'a' }), ['b', 'a']);
+  assert.deepEqual(spoofCandidateTargets({}), []);
+});
+
+test('r: a mutating/unknown tool with only a target still fails closed', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    for (const args of [{ target: 'src/ok.mjs' }, { target: 'test/frozen.test.mjs' }]) {
+      const r = checkToolCall({ tool: 'custom_writer', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+      assert.match(r.reason, /no extractable target path/);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
