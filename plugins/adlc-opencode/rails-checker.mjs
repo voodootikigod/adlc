@@ -203,11 +203,46 @@ export function extractTargets(args) {
  */
 export function spoofCandidateTargets(args) {
   const out = new Set(extractTargets(args));
-  for (const key of ['target', 'targetPath', 'target_path']) {
-    const value = args?.[key];
-    if (typeof value === 'string' && value.trim() !== '') out.add(value);
-  }
+  collectTargetKeyed(args, out, 0);
   return [...out];
+}
+
+/** Target-ish argument names. Narrower than a path heuristic, broader than one spelling. */
+const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
+
+/**
+ * Collect strings under a target-ish key at any reachable depth.
+ *
+ * Depth matters: `extractTargets` walks `files[]`/`edits[]` but reads only
+ * `filePath`/`path`/`file` inside their entries, so a first pass that checked
+ * the new keys on the top level alone still let `{edits:[{target: <rail>}]}`,
+ * `{files:[{target: <rail>}]}`, and `{target: [<rail>]}` through. Enumerating
+ * spellings without covering the SHAPES they arrive in is the same defect one
+ * level down.
+ *
+ * @param {unknown} value
+ * @param {Set<string>} out
+ * @param {number} depth
+ */
+function collectTargetKeyed(value, out, depth) {
+  if (depth > 4 || !value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectTargetKeyed(item, out, depth + 1);
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const keyed = TARGET_KEY.test(key);
+    if (keyed && typeof child === 'string' && child.trim() !== '') {
+      out.add(child);
+    } else if (keyed && Array.isArray(child)) {
+      for (const item of child) {
+        if (typeof item === 'string' && item.trim() !== '') out.add(item);
+        else collectTargetKeyed(item, out, depth + 1);
+      }
+    } else {
+      collectTargetKeyed(child, out, depth + 1);
+    }
+  }
 }
 
 const railSegments = (s) => s.split('/').filter((x) => x !== '');

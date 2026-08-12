@@ -697,10 +697,20 @@ test('r: an ungated tool naming a frozen rail via target is denied', () => {
     // The spoof branch allows on ZERO extractable targets (task/skill carry no
     // path on nearly every call), so a spelling it cannot see is a hole rather
     // than a fail-closed default. extractTargets misses these three.
+    // Spellings AND the shapes they arrive in: extractTargets walks files[]/
+    // edits[] but reads only filePath/path/file inside their entries, so a
+    // top-level-only check still let the nested forms through.
     for (const args of [
       { target: 'test/frozen.test.mjs' },
       { targetPath: 'test/frozen.test.mjs' },
       { target_path: 'test/frozen.test.mjs' },
+      { targetFile: 'test/frozen.test.mjs' },
+      { target_file: 'test/frozen.test.mjs' },
+      { target: ['test/frozen.test.mjs'] },
+      { edits: [{ target: 'test/frozen.test.mjs' }] },
+      { edits: [{ targetPath: 'test/frozen.test.mjs' }] },
+      { files: [{ target: 'test/frozen.test.mjs' }] },
+      { batch: { nested: { target: 'test/frozen.test.mjs' } } },
     ]) {
       for (const tool of ['task', 'skill', 'todowrite']) {
         const r = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -714,7 +724,14 @@ test('r: an ungated tool naming a frozen rail via target is denied', () => {
 test('r: an ungated tool naming a non-rail target still runs', () => {
   const dir = repo({ tickets: T1_RAILED });
   try {
-    for (const args of [{ target: 'src/ok.mjs' }, { targetPath: 'src/ok.mjs' }, {}]) {
+    for (const args of [
+      { target: 'src/ok.mjs' },
+      { targetPath: 'src/ok.mjs' },
+      { target: ['src/ok.mjs'] },
+      { edits: [{ target: 'src/ok.mjs' }] },
+      { files: [{ target: 'src/ok.mjs' }] },
+      {},
+    ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
     }
@@ -728,7 +745,10 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(extractTargets({ target: 'a' }), []);
   assert.deepEqual(extractTargets({ targetPath: 'a' }), []);
   assert.deepEqual(extractTargets({ target_path: 'a' }), []);
+  assert.deepEqual(extractTargets({ edits: [{ target: 'a' }] }), []);
   assert.deepEqual(spoofCandidateTargets({ target: 'a' }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ edits: [{ target: 'a' }] }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ target: ['a'] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ path: 'b', target: 'a' }), ['b', 'a']);
   assert.deepEqual(spoofCandidateTargets({}), []);
 });
