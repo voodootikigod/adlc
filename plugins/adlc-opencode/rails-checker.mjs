@@ -203,7 +203,7 @@ export function extractTargets(args) {
  */
 export function spoofCandidateTargets(args) {
   const out = new Set(extractTargets(args));
-  collectTargetKeyed(args, out, 0);
+  collectTargetKeyed(args, out);
   return [...out];
 }
 
@@ -220,27 +220,41 @@ const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
  * spellings without covering the SHAPES they arrive in is the same defect one
  * level down.
  *
- * @param {unknown} value
+ * Walked iteratively with no depth ceiling. A numeric cap would BE a bypass of
+ * the same shape this helper exists to close — nest one level past it and the
+ * scan stops looking — and an explicit stack also removes the recursion depth
+ * a hostile payload could otherwise exhaust. `seen` keeps a self-referencing
+ * object from looping forever.
+ *
+ * @param {unknown} root
  * @param {Set<string>} out
- * @param {number} depth
  */
-function collectTargetKeyed(value, out, depth) {
-  if (depth > 4 || !value || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectTargetKeyed(item, out, depth + 1);
-    return;
-  }
-  for (const [key, child] of Object.entries(value)) {
-    const keyed = TARGET_KEY.test(key);
-    if (keyed && typeof child === 'string' && child.trim() !== '') {
-      out.add(child);
-    } else if (keyed && Array.isArray(child)) {
-      for (const item of child) {
-        if (typeof item === 'string' && item.trim() !== '') out.add(item);
-        else collectTargetKeyed(item, out, depth + 1);
+function collectTargetKeyed(root, out) {
+  const stack = [root];
+  const seen = new Set();
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) stack.push(item);
+      continue;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (TARGET_KEY.test(key)) {
+        if (typeof child === 'string' && child.trim() !== '') {
+          out.add(child);
+          continue;
+        }
+        if (Array.isArray(child)) {
+          for (const item of child) {
+            if (typeof item === 'string' && item.trim() !== '') out.add(item);
+            else stack.push(item);
+          }
+          continue;
+        }
       }
-    } else {
-      collectTargetKeyed(child, out, depth + 1);
+      stack.push(child);
     }
   }
 }

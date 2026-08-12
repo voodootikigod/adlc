@@ -711,6 +711,10 @@ test('r: an ungated tool naming a frozen rail via target is denied', () => {
       { edits: [{ targetPath: 'test/frozen.test.mjs' }] },
       { files: [{ target: 'test/frozen.test.mjs' }] },
       { batch: { nested: { target: 'test/frozen.test.mjs' } } },
+      // No depth ceiling: a cap would itself be a bypass — nest past it and the
+      // scan stops looking.
+      { a: { b: { c: { d: { e: { f: { target: 'test/frozen.test.mjs' } } } } } } },
+      { edits: [{ changes: [{ targetFile: 'test/frozen.test.mjs' }] }] },
     ]) {
       for (const tool of ['task', 'skill', 'todowrite']) {
         const r = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -730,6 +734,10 @@ test('r: an ungated tool naming a non-rail target still runs', () => {
       { target: ['src/ok.mjs'] },
       { edits: [{ target: 'src/ok.mjs' }] },
       { files: [{ target: 'src/ok.mjs' }] },
+      // A non-target key holding rail-looking strings must NOT become a target,
+      // or the spoof guard turns into an over-blocking string scanner.
+      { notes: ['test/frozen.test.mjs'] },
+      { description: 'edit test/frozen.test.mjs later' },
       {},
     ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -749,6 +757,11 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets({ target: 'a' }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ edits: [{ target: 'a' }] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ target: ['a'] }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ notes: ['a'] }), []);
+  // Self-referencing args terminate rather than hanging the gate.
+  const cyclic = { target: 'a' };
+  cyclic.self = cyclic;
+  assert.deepEqual(spoofCandidateTargets(cyclic), ['a']);
   assert.deepEqual(spoofCandidateTargets({ path: 'b', target: 'a' }), ['b', 'a']);
   assert.deepEqual(spoofCandidateTargets({}), []);
 });
