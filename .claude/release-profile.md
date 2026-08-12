@@ -25,23 +25,54 @@ verify:
     # it. Asserting dist-tags for only @adlc/core and @adlc/cli was not enough: a phase CLI
     # published under some other tag still satisfies an existence check while `npm install`
     # resolves the previous release for that package. Fail closed on both.
-    fail=0
+    #
+    # Bounded re-poll (v1.8.0): run immediately after publish, a single-shot check races npm
+    # propagation — brand-new package documents 404 for up to ~60s, indistinguishable from
+    # "never published". Each target that fails is re-polled for 180s from ITS OWN first
+    # failure (per-target budget, so a slow serialized round cannot shortchange a target
+    # first observed failing late) before being declared missing/stale; a target still
+    # failing after its budget still exits non-zero (the retry raises the evidence bar,
+    # it never lowers it). Serialized `npm view` only — 38 rapid raw-HTTP requests during
+    # v1.8.0 rate-limited into a response that read as "all 38 missing". No parallelism;
+    # no raw HTTP.
+    names=""
     for f in $(find packages plugins -maxdepth 2 -name package.json -not -path '*/node_modules/*'); do
       name=$(node -p "require('$PWD/$f').name || ''" 2>/dev/null)
       priv=$(node -p "require('$PWD/$f').private === true" 2>/dev/null)
       [ "$priv" = "true" ] && continue
       [ -z "$name" ] && continue
-      if ! npm view "$name@{{version}}" version >/dev/null 2>&1; then
-        echo "MISSING: $name@{{version}}"; fail=1; continue
-      fi
-      latest=$(npm view "$name" dist-tags.latest 2>/dev/null)
-      if [ "$latest" = "{{version}}" ]; then
-        echo "ok: $name@{{version}} (latest)"
-      else
-        echo "STALE TAG: $name latest=$latest expected {{version}}"; fail=1
-      fi
+      names="$names $name:"
     done
-    exit $fail
+    pending="$names"
+    fail=0
+    while :; do
+      next=""
+      for item in $pending; do
+        name=${item%%:*}
+        d=${item#*:}
+        if ! npm view "$name@{{version}}" version >/dev/null 2>&1; then
+          msg="MISSING: $name@{{version}}"
+        else
+          latest=$(npm view "$name" dist-tags.latest 2>/dev/null)
+          if [ "$latest" = "{{version}}" ]; then
+            echo "ok: $name@{{version}} (latest)"
+            continue
+          fi
+          msg="STALE TAG: $name latest=$latest expected {{version}}"
+        fi
+        now=$(date +%s)
+        [ -z "$d" ] && d=$(( now + 180 ))
+        if [ "$now" -ge "$d" ]; then
+          echo "$msg"; fail=1
+        else
+          echo "re-poll: $msg (propagation can lag ~60s for new package names)"
+          next="$next $name:$d"
+        fi
+      done
+      [ -z "$next" ] && exit $fail
+      pending="$next"
+      sleep 20
+    done
 ---
 
 **The bump lands via PR, never directly.** `main` carries an active ruleset requiring pull
@@ -99,6 +130,19 @@ the partial-publish failure mode did not recur. Checking only `@adlc/core` and `
 cannot detect a missing phase CLI: the umbrella resolving does not prove its dependencies were
 published at that version.
 
+**A `verify` miss immediately after publish is not yet a failure.** During v1.8.0, all 38
+targets published successfully — the publish log showed `+ <name>@1.8.0` for every one — yet
+the then-single-shot `verify` reported three MISSING: one existing package whose new version
+had not propagated, and two brand-new package names whose entire package documents returned
+`Not found` at t+20s and t+40s before appearing at t+60s. New package names are the worst
+case: the whole document 404s, indistinguishable from "never published." The publish log's
+`+ <name>@<version>` line is the authoritative signal that a publish succeeded; a `verify`
+miss right after publish must be re-polled before it is treated as a failure. The `verify`
+block now does this itself (bounded 180s re-poll, then fail closed) — do not "fix" it back
+to a single shot, and do not swap its serialized `npm view` calls for raw HTTP: 38 rapid
+`curl` requests during the same release self-inflicted rate limiting that parsed as "all 38
+missing," which looks exactly like a catastrophic release failure.
+
 Publish order is `@adlc/core` first, then the phase CLIs, then the `@adlc/cli` umbrella last
 (it depends on every other CLI), each with `--provenance --access public`.
 
@@ -126,6 +170,15 @@ gate downstream is untouched by it. R1 still forbids bypassing the *approval* ga
 
 **Conformant, with one declared exception.** `npm-publish` has a required reviewer, the publish
 job is bound to it, `id-token: write` is requested, and there is no repo- or org-scoped token.
+
+**Trusted publishing is configured — confirmed, not proven.** The conformance checker's caveat
+that it "cannot prove the npm trusted publisher is configured" stands as a statement about what
+an in-repo check can see. For the record: on 2026-08-08 (during the v1.8.0 release) the
+maintainer confirmed directly that trusted publishing IS configured on npmjs.com for the
+existing `@adlc/*` packages, and that the environment-scoped `NPM_TOKEN` remains solely to
+bootstrap first-time publishes of new package names. That is the maintainer's dated statement
+about npmjs.com settings, not something any in-repo check verified; npm-side settings are
+mutable, so it answers the question as of that date rather than settling it forever.
 
 **The `NPM_TOKEN` environment secret is deliberate and stays.** npm trusted publishing cannot
 create a package that does not exist yet — a brand-new package's *first* publish needs a token.
