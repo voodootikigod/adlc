@@ -426,3 +426,25 @@ test('a custom tool naming an ordinary target is still allowed', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a custom tool naming a protected directory is denied', async () => {
+  // The structured classifier had no ancestor coverage, so a delete/move tool
+  // handed the handoffs directory got through while `rm -rf` on it did not.
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    for (const args of [{ target: '.adlc/handoffs' }, { path: '.adlc' }]) {
+      await assert.rejects(
+        () =>
+          hooks['tool.execute.before'](
+            { tool: 'custom_deleter', sessionID: 's1', callID: 'c' },
+            { args },
+          ),
+        /path_protected/,
+        `must deny: ${JSON.stringify(args)}`,
+      );
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

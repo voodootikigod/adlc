@@ -513,3 +513,17 @@ test('a custom tool targeting ordinary files is still allowed with a cold store'
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a custom tool naming a protected directory is denied', async () => {
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root, { percent: 5 });
+    for (const input of [{ target: join(root, '.adlc', 'handoffs') }, { path: join(root, '.adlc') }]) {
+      const verdict = await call(pi, ctx, 'custom_deleter', input);
+      assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
+      assert.match(verdict.reason, /path_protected/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -16,7 +16,7 @@ import {
   isHandoffMutatingShell,
   denyStoreHot,
   shellPathCandidates,
-  classifyShellTarget,
+  classifyProtectedTarget,
   evaluateHandoffPreToolUse,
   ensureDenyMarker,
   writeDenyRecord,
@@ -580,7 +580,43 @@ test('shell path extraction sees a target and every ancestor it reaches through'
   assert.deepEqual(shellPathCandidates(null), []);
 });
 
-test('classifyShellTarget answers on the resolved path, not the spelling', () => {
+test('a structured target naming a protected DIRECTORY is denied', () => {
+  withRepo((root) => {
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    // Ancestor coverage was shell-only at first, on the reasoning that a
+    // structured target is a file. OpenCode and pi route third-party tool
+    // targets through this same path, and a delete/move tool can name a
+    // directory — so `{target: '.adlc/handoffs'}` was allowed while
+    // `rm -rf .adlc/handoffs` was denied.
+    for (const rel of ['.adlc', '.adlc/handoffs', '.adlc/handoffs/denies']) {
+      const r = evaluateHandoffPreToolUse({
+        root,
+        sessionId: 'sess-structured',
+        observed: { depth: 1 },
+        editRelPaths: [rel],
+        host: 'test',
+      });
+      assert.equal(r.deny, true, `must deny structured target: ${rel}`);
+      assert.ok(
+        r.reasons.some((x) => x.startsWith('path_protected')),
+        `${rel} → ${r.reasons.join()}`,
+      );
+    }
+    // Siblings under .adlc that hold no protected artifact stay editable.
+    for (const rel of ['.adlc/tickets', '.adlc/tickets/t1.json', 'src/app.mjs']) {
+      const r = evaluateHandoffPreToolUse({
+        root,
+        sessionId: 'sess-structured',
+        observed: { depth: 1 },
+        editRelPaths: [rel],
+        host: 'test',
+      });
+      assert.equal(r.deny, false, `must allow structured target: ${rel} → ${r.reasons.join()}`);
+    }
+  });
+});
+
+test('classifyProtectedTarget answers on the resolved path, not the spelling', () => {
   withRepo((root) => {
     mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
     writeFileSync(join(root, '.adlc', '.deny-store'), '{}');
@@ -589,13 +625,13 @@ test('classifyShellTarget answers on the resolved path, not the spelling', () =>
     // spelling of the same directory reached the store untouched.
     for (const spelling of ['.adlc', './.adlc', '.adlc/handoffs', join(root, '.adlc'), join(root, '.adlc', 'handoffs')]) {
       assert.equal(
-        classifyShellTarget(root, spelling).protected,
+        classifyProtectedTarget(root, spelling).protected,
         true,
         `must be protected: ${spelling}`,
       );
     }
-    assert.equal(classifyShellTarget(root, '.adlc/tickets').protected, false);
-    assert.equal(classifyShellTarget(root, 'build/out').protected, false);
+    assert.equal(classifyProtectedTarget(root, '.adlc/tickets').protected, false);
+    assert.equal(classifyProtectedTarget(root, 'build/out').protected, false);
   });
 });
 

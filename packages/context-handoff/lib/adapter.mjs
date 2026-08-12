@@ -223,21 +223,28 @@ function coversProtectedRoot(rel) {
 }
 
 /**
- * Classify a shell command's path token.
+ * Classify a mutation TARGET — a path some tool is about to act on.
  *
- * Distinct from `classifyHandoffPath` in one way that matters: a shell target
- * is usually a DIRECTORY, and the question is what the command can reach, not
- * whether the token is itself an artifact. It is therefore decided on the
- * RESOLVED repo-relative form. Deciding directory coverage on the raw token —
- * as this did — meant `.adlc/handoffs` was caught while `./.adlc`,
- * `/abs/repo/.adlc`, and `/abs/repo/.adlc/handoffs` were not, because only the
- * literal spellings were expanded.
+ * Distinct from `classifyHandoffPath` in one way that matters: a target may be
+ * a DIRECTORY, and the question is what acting on it can reach, not whether the
+ * token is itself an artifact. It is therefore decided on the RESOLVED
+ * repo-relative form. Deciding directory coverage on the raw token meant
+ * `.adlc/handoffs` was caught while `./.adlc`, `/abs/repo/.adlc`, and
+ * `/abs/repo/.adlc/handoffs` were not, because only the literal spellings were
+ * expanded.
+ *
+ * Used for structured targets as well as shell tokens. It was shell-only at
+ * first, on the reasoning that a structured target is a file rather than a
+ * directory — true of a harness's own write/edit tools, false of the
+ * third-party tools OpenCode and pi deliberately route through the same path.
+ * A delete/move tool handed `{target: '.adlc/handoffs'}` was unprotected while
+ * `rm -rf .adlc/handoffs` was denied.
  *
  * @param {string} root repo root
- * @param {string} rel candidate token
+ * @param {string} rel candidate path
  * @returns {{ protected: boolean, via: 'lexical'|'symlink'|'covers'|null }}
  */
-export function classifyShellTarget(root, rel) {
+export function classifyProtectedTarget(root, rel) {
   const direct = classifyHandoffPath(root, rel);
   if (direct.protected) return direct;
   const resolved = resolvedRepoRelative(root, rel);
@@ -314,7 +321,7 @@ export function evaluateHandoffPreToolUse({
   let sawDeny = denyEverWritten === true;
 
   for (const rel of editRelPaths) {
-    const verdict = classifyHandoffPath(root, rel);
+    const verdict = classifyProtectedTarget(root, rel);
     if (verdict.protected) {
       reasons.push(verdict.via === 'symlink' ? `path_protected_symlink:${rel}` : `path_protected:${rel}`);
     }
@@ -426,7 +433,7 @@ export function evaluateHandoffPreToolUse({
   // cannot reach at all (T-01KZRCNX3TSJ4C0PXZ28C9CB5N).
   if (isBash) {
     for (const token of shellPathCandidates(bashCommand)) {
-      const verdict = classifyShellTarget(root, token);
+      const verdict = classifyProtectedTarget(root, token);
       if (verdict.protected) {
         reasons.push(`path_protected_shell:${token}`);
       }
