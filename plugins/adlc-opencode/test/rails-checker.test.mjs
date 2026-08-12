@@ -758,6 +758,13 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets({ edits: [{ target: 'a' }] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ target: ['a'] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ notes: ['a'] }), []);
+  // Blank entries are not targets: railHit('') would be a silent no-op, so an
+  // empty string in the list looks like coverage without being any.
+  assert.deepEqual(spoofCandidateTargets({ target: ['', '   ', 'a'] }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ target: '   ' }), []);
+  // Non-object children must be skipped, not walked into.
+  assert.deepEqual(spoofCandidateTargets({ target: null }), []);
+  assert.deepEqual(spoofCandidateTargets({ a: null, b: 3, c: undefined, target: 'x' }), ['x']);
   // Self-referencing args terminate rather than hanging the gate.
   const cyclic = { target: 'a' };
   cyclic.self = cyclic;

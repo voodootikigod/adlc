@@ -234,7 +234,11 @@ function collectTargetKeyed(root, out) {
   const seen = new Set();
   while (stack.length > 0) {
     const value = stack.pop();
-    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    // Split from the cycle check on purpose: folded into one condition, a
+    // swapped operator turns the loop-termination guard into an infinite loop
+    // on self-referencing args, which a test can only hang on rather than fail.
+    if (!value || typeof value !== 'object') continue;
+    if (seen.has(value)) continue;
     seen.add(value);
     if (Array.isArray(value)) {
       for (const item of value) stack.push(item);
