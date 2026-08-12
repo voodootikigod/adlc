@@ -210,6 +210,9 @@ export function spoofCandidateTargets(args) {
 /** Target-ish argument names. Narrower than a path heuristic, broader than one spelling. */
 const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
 
+/** Path fields that name the file once we are already inside a target subtree. */
+const PATH_FIELD = /^(?:path|file|file_?path)$/i;
+
 /**
  * Collect strings under a target-ish key at any reachable depth.
  *
@@ -230,10 +233,10 @@ const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
  * @param {Set<string>} out
  */
 function collectTargetKeyed(root, out) {
-  const stack = [root];
+  const stack = [{ value: root, inTarget: false }];
   const seen = new Set();
   while (stack.length > 0) {
-    const value = stack.pop();
+    const { value, inTarget } = stack.pop();
     // Split from the cycle check on purpose: folded into one condition, a
     // swapped operator turns the loop-termination guard into an infinite loop
     // on self-referencing args, which a test can only hang on rather than fail.
@@ -241,24 +244,23 @@ function collectTargetKeyed(root, out) {
     if (seen.has(value)) continue;
     seen.add(value);
     if (Array.isArray(value)) {
-      for (const item of value) stack.push(item);
+      for (const item of value) {
+        if (inTarget && typeof item === 'string' && item.trim() !== '') out.add(item);
+        else stack.push({ value: item, inTarget });
+      }
       continue;
     }
     for (const [key, child] of Object.entries(value)) {
-      if (TARGET_KEY.test(key)) {
-        if (typeof child === 'string' && child.trim() !== '') {
-          out.add(child);
-          continue;
-        }
-        if (Array.isArray(child)) {
-          for (const item of child) {
-            if (typeof item === 'string' && item.trim() !== '') out.add(item);
-            else stack.push(item);
-          }
-          continue;
-        }
+      const targetKey = TARGET_KEY.test(key);
+      // Inside a target-valued subtree a conventional path field IS the target:
+      // `{target: {path: '…'}}` names a file just as plainly as `{target: '…'}`.
+      // Descending without carrying that context loses the whole shape.
+      const names = targetKey || (inTarget && PATH_FIELD.test(key));
+      if (names && typeof child === 'string' && child.trim() !== '') {
+        out.add(child);
+        continue;
       }
-      stack.push(child);
+      stack.push({ value: child, inTarget: inTarget || targetKey });
     }
   }
 }

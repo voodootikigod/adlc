@@ -715,6 +715,11 @@ test('r: an ungated tool naming a frozen rail via target is denied', () => {
       // scan stops looking.
       { a: { b: { c: { d: { e: { f: { target: 'test/frozen.test.mjs' } } } } } } },
       { edits: [{ changes: [{ targetFile: 'test/frozen.test.mjs' }] }] },
+      // A target may be an OBJECT: inside a target subtree a conventional path
+      // field names the file just as plainly as a bare string does.
+      { target: { path: 'test/frozen.test.mjs' } },
+      { target: { filePath: 'test/frozen.test.mjs' } },
+      { target: [{ path: 'test/frozen.test.mjs' }] },
     ]) {
       for (const tool of ['task', 'skill', 'todowrite']) {
         const r = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -737,6 +742,10 @@ test('r: an ungated tool naming a non-rail target still runs', () => {
       // A non-target key holding rail-looking strings must NOT become a target,
       // or the spoof guard turns into an over-blocking string scanner.
       { notes: ['test/frozen.test.mjs'] },
+      { target: { path: 'src/ok.mjs' } },
+      // Target context does not leak: a path-shaped key OUTSIDE a target
+      // subtree must not start collecting arbitrary nested strings.
+      { path: { deep: 'test/frozen.test.mjs' } },
       { description: 'edit test/frozen.test.mjs later' },
       {},
     ]) {
@@ -758,6 +767,9 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets({ edits: [{ target: 'a' }] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ target: ['a'] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ notes: ['a'] }), []);
+  assert.deepEqual(spoofCandidateTargets({ target: { path: 'a' } }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ target: [{ filePath: 'a' }] }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ path: { deep: 'a' } }), []);
   // Blank entries are not targets: railHit('') would be a silent no-op, so an
   // empty string in the list looks like coverage without being any.
   assert.deepEqual(spoofCandidateTargets({ target: ['', '   ', 'a'] }), ['a']);
