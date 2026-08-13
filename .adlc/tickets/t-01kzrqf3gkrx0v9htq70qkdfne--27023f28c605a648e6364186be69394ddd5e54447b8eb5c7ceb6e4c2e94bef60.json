@@ -4,7 +4,8 @@
   "duration": 3,
   "id": "T-01KZRQF3GKRX0V9HTQ70QKDFNE",
   "rails": [
-    "plugins/adlc-claude-code/hooks/test/**/*.test.mjs"
+    "plugins/adlc-claude-code/hooks/test/default-enforcing.test.mjs",
+    "plugins/adlc-claude-code/hooks/test/advisory-optdown.test.mjs"
   ],
   "scope": [
     "plugins/**/hooks/**",

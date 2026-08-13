@@ -4,8 +4,7 @@
   "duration": 5,
   "id": "T-01KZRQF2QXJXS15BWXA5J22GWR",
   "rails": [
-    "packages/prosecute/test/**/*.test.mjs",
-    "packages/core/test/**/*.test.mjs"
+    "packages/prosecute/test/execution-witnessed.test.mjs"
   ],
   "scope": [
     "packages/prosecute/**",

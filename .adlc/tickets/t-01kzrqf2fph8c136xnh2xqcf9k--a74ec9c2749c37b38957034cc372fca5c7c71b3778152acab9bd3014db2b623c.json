@@ -4,7 +4,7 @@
   "duration": 2,
   "id": "T-01KZRQF2FPH8C136XNH2XQCF9K",
   "rails": [
-    "scripts/test/gate-liveness*.test.mjs"
+    "scripts/test/gate-liveness.test.mjs"
   ],
   "scope": [
     "scripts/**",

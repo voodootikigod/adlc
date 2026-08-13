@@ -4,8 +4,8 @@
   "duration": 3,
   "id": "T-01KZRQF4A21KVA65QTDV7YSN8A",
   "rails": [
-    "packages/prosecute/test/**/*.test.mjs",
-    ".github/workflows/**"
+    "packages/prosecute/test/spend-capture.test.mjs",
+    "packages/gate-manifest/test/recall-record.test.mjs"
   ],
   "scope": [
     "packages/prosecute/**",

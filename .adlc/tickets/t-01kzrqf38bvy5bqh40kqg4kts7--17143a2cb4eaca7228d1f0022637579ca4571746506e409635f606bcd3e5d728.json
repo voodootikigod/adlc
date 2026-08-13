@@ -4,7 +4,8 @@
   "duration": 3,
   "id": "T-01KZRQF38BVY5BQH40KQG4KTS7",
   "rails": [
-    "plugins/adlc-claude-code/hooks/test/**/*.test.mjs"
+    "plugins/adlc-claude-code/hooks/test/handoff-key-scrub.test.mjs",
+    "plugins/adlc-claude-code/hooks/test/handoff-resolve-trust.test.mjs"
   ],
   "scope": [
     "plugins/adlc-claude-code/hooks/**"

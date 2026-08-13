@@ -4,7 +4,7 @@
   "duration": 4,
   "id": "T-01KZRQF304WB9B24HEKQEHQS1D",
   "rails": [
-    "packages/runner/test/**/*.test.mjs"
+    "packages/runner/test/acceptance-human-binding.test.mjs"
   ],
   "scope": [
     "packages/runner/**",

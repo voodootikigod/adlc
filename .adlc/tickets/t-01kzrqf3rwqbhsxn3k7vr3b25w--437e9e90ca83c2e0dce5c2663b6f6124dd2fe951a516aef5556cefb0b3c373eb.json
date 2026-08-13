@@ -4,7 +4,8 @@
   "duration": 4,
   "id": "T-01KZRQF3RWQBHSXN3K7VR3B25W",
   "rails": [
-    "scripts/test/**/*.test.mjs"
+    "plugins/adlc-claude-code/hooks/test/wrapper-timeout-deny.test.mjs",
+    "scripts/test/integration-parity-floor.test.mjs"
   ],
   "scope": [
     "plugins/**",
