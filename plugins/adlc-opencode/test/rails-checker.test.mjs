@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   checkRail, checkToolCall, extractTargets, spoofCandidateTargets, spoofCandidates, namesAFile, resolveActiveTicketId,
-  RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
+  targetIsRailAncestor, RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
 } from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
@@ -1158,6 +1158,24 @@ test('r: no conflict-safe gate package writes files or spawns processes', () => 
       assert.ok(!WRITES.test(src), `${gate}: ${file.pathname} writes or spawns — it cannot be conflict-safe`);
     }
   }
+});
+
+test('r: targetIsRailAncestor honors an anchored ** by default and can be narrowed', () => {
+  // The two-argument form is the exported contract a sibling adapter gets, and
+  // it is the FULL ancestor question; the narrowed form is opt-in. Pinned
+  // directly because railHit always passes the option, so nothing else would
+  // notice the default changing.
+  assert.equal(targetIsRailAncestor('src', 'src/**'), true);
+  assert.equal(targetIsRailAncestor('src/index.mjs', 'src/**/test/*.mjs'), true);
+  // Narrowed: only the form an anchored ** creates goes away.
+  assert.equal(targetIsRailAncestor('src/index.mjs', 'src/**/test/*.mjs', { throughDoubleStar: false }), false);
+  // …every other ancestor form survives it, including through an interior
+  // single-star segment, which is why this is not just "ancestors off".
+  assert.equal(targetIsRailAncestor('assets.bundle', 'assets.bundle/**', { throughDoubleStar: false }), true);
+  assert.equal(targetIsRailAncestor('packages/foo/test', 'packages/*/test/**', { throughDoubleStar: false }), true);
+  // A LEADING ** anchors nothing, in either mode.
+  assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs'), false);
+  assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs', { throughDoubleStar: false }), false);
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {
