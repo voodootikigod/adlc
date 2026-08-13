@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths } from '@adlc/core';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
@@ -65,6 +65,191 @@ function readCanonicalTickets(root) {
     if (err.code === 'STORE_NOT_FOUND') return [];
     throw new Error(`canonical ticket store under ${root} exists but cannot be read for tiering: ${err.message}`);
   }
+}
+
+// #485 — store ids for record-cross-model's unknown-ticket refusal. Distinct from
+// readCanonicalTickets: that helper collapses STORE_NOT_FOUND to an empty table
+// (right for rails, where absent contributes nothing to union), but HERE absent
+// and empty must stay distinguishable — an absent store means there is nothing
+// to validate --ticket against, while an EMPTY store makes every id unknown.
+// Same env:{} isolation and the same fail-closed posture on a store that exists
+// but cannot be resolved.
+//
+// `ledgerDir` is the --dir the attestation will be APPENDED to. Validation must
+// anchor there, not at process.cwd(): with --dir pointing into another
+// checkout, the id belongs to THAT workspace's store — validating the caller's
+// store would fail open when the caller has none and falsely refuse ids the
+// target knows. For the default `.adlc`, the anchor is the caller's cwd.
+function storeTicketIds(ledgerDir) {
+  // CANONICALIZE before anchoring: path.resolve is lexical, but the append
+  // follows filesystem links — a symlinked --dir would otherwise validate
+  // against the symlink's containing repository while the entry lands in the
+  // link TARGET's manifest. realpath both, so validation and the write agree
+  // on the workspace. A ledger dir that does not exist yet cannot be a
+  // symlink; canonicalize its parent chain instead. Any other failure
+  // propagates (the caller op-errors, fail closed).
+  const resolved = resolve(ledgerDir);
+  let canonical;
+  let existingAnchor; // nearest EXISTING directory on the canonical path
+  try {
+    canonical = realpathSync(resolved);
+    existingAnchor = canonical;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // The ledger path (possibly several components of it — the writers create
+    // directories recursively) does not exist yet, so no symlink can lurk in
+    // the absent suffix. Canonicalize the nearest EXISTING ancestor and
+    // re-append the absent components lexically.
+    let ancestor = dirname(resolved);
+    const suffix = [basename(resolved)];
+    while (!existsSync(ancestor) && dirname(ancestor) !== ancestor) {
+      suffix.unshift(basename(ancestor));
+      ancestor = dirname(ancestor);
+    }
+    existingAnchor = realpathSync(ancestor);
+    canonical = join(existingAnchor, ...suffix);
+  }
+  // Git discovery walks UP from its starting directory, so start at the
+  // canonical ledger dir ITSELF: `--dir .adlc` discovers the containing repo,
+  // and `--dir .` (a ledger at the repo root) discovers THAT repo rather than
+  // whatever contains it. A not-yet-created ledger starts from its nearest
+  // EXISTING ancestor — git (and spawn itself) needs a real cwd.
+  const discoveryStart = existingAnchor;
+  // `root: null` means CONFIRMED not-a-git-directory. An operational git
+  // failure (missing binary, permissions, invalid GIT_DIR) establishes
+  // nothing about store absence, so it fails closed instead of collapsing
+  // into "no store".
+  let root = null;
+  try {
+    root = repoRoot(discoveryStart);
+  } catch (err) {
+    const notARepo = err?.status === 128 && /not a git repository/i.test(String(err?.stderr ?? ''));
+    if (!notARepo) {
+      throw new Error(`could not establish whether a canonical ticket store exists (git discovery failed: ${err.message}); fix git, or record a store-external id deliberately with --allow-unknown-ticket`);
+    }
+  }
+  // A non-git directory can still hold a canonical store — detect relative to
+  // the ledger's parent AND the ledger dir itself (`--dir .` makes the ledger
+  // dir the workspace root) rather than assuming absence.
+  //
+  // The WORKTREE store is authoritative when it loads: an uncommitted archive
+  // or deletion of a shard makes that id unknown immediately (HEAD must not
+  // resurrect it). HEAD's tree contributes ids in exactly two shapes, both of
+  // which are the worktree-vs-tree gap readBaseTickets closes for tiering:
+  //   1. store paths carry git's skip-worktree bit (sparse checkout sets the
+  //      same bit) — tracked state DELIBERATELY unmaterialised, so the loaded
+  //      worktree view is incomplete and HEAD ids are unioned in;
+  //   2. the worktree store is wholly absent while HEAD tracks one — the ids
+  //      tracked at HEAD are the store (a typo exists in neither view).
+  // An unborn HEAD (no commits yet) genuinely tracks nothing.
+  const detectionRoots = root !== null ? [root] : [...new Set([dirname(canonical), canonical])];
+  let present = false;
+  const ids = new Set();
+  // Only a non-empty STRING id names a ticket. A malformed record (e.g. `{}`)
+  // must never coerce into a matchable ghost id like "undefined".
+  const addId = (id) => {
+    if (typeof id === 'string' && id.trim() !== '') ids.add(id);
+  };
+  for (const detectionRoot of detectionRoots) {
+    try {
+      for (const t of detectTicketStore({ root: detectionRoot, env: {} }).load().mutableTickets()) addId(t.id);
+      present = true;
+    } catch (err) {
+      if (err.code !== 'STORE_NOT_FOUND') {
+        throw new Error(`canonical ticket store under ${detectionRoot} exists but cannot be read to validate --ticket: ${err.message}`);
+      }
+    }
+  }
+  // The prosecution contract also accepts a CUSTOM in-repo workspace: tiering
+  // unions `<dir>/tickets.json` (loadTicketsForTier), so recording against such
+  // a workspace validates against its table too. A present-but-corrupt table
+  // fails closed via readTicketArray; absence of the file is simply "not that
+  // shape". For the default `.adlc`, this re-reads the legacy store — a
+  // harmless duplicate union.
+  const dirTablePath = join(canonical, 'tickets.json');
+  if (existsSync(dirTablePath)) {
+    for (const t of readTicketArray(dirTablePath)) addId(t.id);
+    present = true;
+  }
+  if (root !== null) {
+    let headResolves = true;
+    try {
+      git(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: root });
+    } catch (err) {
+      // `--verify --quiet` exits 1 for "no such ref" — the unborn-repository
+      // shape, which genuinely tracks nothing. Any OTHER failure (corrupt
+      // refs, I/O) proves nothing about tracked ticket state; fail closed.
+      if (err?.status !== 1) {
+        throw new Error(`could not resolve HEAD to validate --ticket against tracked ticket state: ${err.message}`);
+      }
+      headResolves = false;
+    }
+    if (headResolves) {
+      // Paths git marks skip-worktree (sparse checkout sets the same bit):
+      // tracked ticket state DELIBERATELY left unmaterialised.
+      const sFlagged = git(['ls-files', '-t', '--', '.adlc/tickets.json', '.adlc/tickets'], { cwd: root })
+        .split('\n')
+        .filter((line) => line.startsWith('S '))
+        .map((line) => line.slice(2));
+      const wholeStoreFromHead = !present ||
+        sFlagged.some((path) => path === '.adlc/tickets.json' || path.endsWith('/.store.json'));
+      if (wholeStoreFromHead) {
+        try {
+          for (const t of new GitTreeTicketStore({ cwd: root, revision: 'HEAD' }).load().mutableTickets()) addId(t.id);
+          present = true;
+        } catch (err) {
+          if (err.code !== 'STORE_NOT_FOUND') {
+            throw new Error(`ticket store tracked at HEAD cannot be read to validate --ticket: ${err.message}`);
+          }
+        }
+      } else {
+        // Per-shard overlay, never all-of-HEAD: only an id whose OWN shard is
+        // deliberately unmaterialised comes from HEAD. An ordinarily deleted
+        // shard (an uncommitted archive/prune) stays unknown — HEAD must not
+        // resurrect it just because some OTHER shard is sparse.
+        for (const path of sFlagged) {
+          let shard;
+          try {
+            shard = JSON.parse(git(['show', `HEAD:${path}`], { cwd: root }));
+          } catch (err) {
+            throw new Error(`skip-worktree shard ${path} cannot be read from HEAD to validate --ticket: ${err.message}`);
+          }
+          addId(shard?.id);
+        }
+      }
+    }
+  }
+  return { present, ids: [...ids] };
+}
+
+// Bounded Levenshtein distance: enough to surface a dropped, added, or swapped
+// character in a ULID-style id (the recorded incident pair differs by one
+// dropped character), cheap enough to run against every store id. Returns
+// cap + 1 as soon as the distance provably exceeds `cap`.
+function editDistance(a, b, cap) {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function nearMissIds(id, ids, { cap = 2, limit = 5 } = {}) {
+  const target = String(id).toUpperCase();
+  return ids
+    .map((candidate) => ({ candidate, distance: editDistance(target, String(candidate).toUpperCase(), cap) }))
+    .filter((entry) => entry.distance <= cap)
+    .sort((x, y) => x.distance - y.distance)
+    .slice(0, limit)
+    .map((entry) => entry.candidate);
 }
 
 // Load the ticket table(s) whose `rails` define trust-root DENY paths for
@@ -165,6 +350,11 @@ const { values, positionals } = parseArgs({
     // #370: recording with no signing key is refused by default (the entry would be
     // inert and permanent). This makes an unsigned write a deliberate, auditable act.
     'allow-unsigned': { type: 'boolean', default: false },
+    // #485: recording against a ticket id absent from the canonical store is refused
+    // by default (a typo'd id writes a permanent attestation the gate never matches).
+    // This flag is the deliberate path for store-external ids (issue-number-style
+    // references the historical seal census legitimately contains).
+    'allow-unknown-ticket': { type: 'boolean', default: false },
     // revision-binding carry-forward — carry an EXISTING approve forward onto a moved base without a fresh review,
     // when the reviewed change itself is unchanged (see carryForwardCrossModelReview).
     'carry-forward': { type: 'string' },
@@ -202,7 +392,7 @@ ADLC P5 review-evidence recorder.
 
   record-cross-model --ticket id --provider <p> --author-provider <a> --verdict approve
                      [--revision rev] [--input <passes.json>] [--base main] [--dir .adlc]
-                     [--allow-unsigned]
+                     [--allow-unsigned] [--allow-unknown-ticket]
       Register a cross-model attestation. Resolves the revision the SAME way the
       gate does (pass the same --input/--revision you use for the gate run) so the
       recorded revision matches. FAILS CLOSED if --provider === --author-provider.
@@ -210,6 +400,12 @@ ADLC P5 review-evidence recorder.
       would be unsigned, and the gate rejects unsigned attestations. Pass
       --allow-unsigned to write one deliberately anyway (forge-resistance tests);
       the success line is then replaced by a warning. --json reports "signed".
+      Also FAILS CLOSED (exit 2, near-miss ids listed) when --ticket does not
+      exist in the canonical ticket store — the manifest is append-only, so an
+      attestation bound to a mistyped id is permanent. A repo with no ticket
+      store records freely; --allow-unknown-ticket is the deliberate path for
+      store-external ids (e.g. issue-number references). Applies to the
+      carry-forward form below too.
 
   record-cross-model --ticket id --carry-forward FROM_REVISION [--base main] [--dir .adlc]
       Carry an EXISTING approve forward onto a moved base WITHOUT a fresh review, when
@@ -244,8 +440,9 @@ ADLC P5 review-evidence recorder.
 Exit codes:
   0  two consecutive dry passes recorded (or a finding/attestation recorded)
   1  operational error (e.g. a finding missing --file/--desc — fails closed)
-  2  verified findings remain, dry-pass convergence failed, or a trust-root-tier
-     change lacks a matching cross-model attestation
+  2  verified findings remain, dry-pass convergence failed, a trust-root-tier
+     change lacks a matching cross-model attestation, or record-cross-model
+     refused a --ticket id absent from the canonical ticket store
      (with --attestation-store: also a rollback/truncation being detected)
 `);
   process.exit(0);
@@ -261,6 +458,38 @@ if (positionals[0] === 'record-cross-model') {
   // in CI under the real secret — inert, not a bypass. No-op in CI / when the key is already set.
   loadManifestKeyFromEnvLocal();
   if (!values.ticket) opError('record-cross-model requires --ticket');
+  // #485 FAIL CLOSED — the manifest is append-only, so an attestation bound to a
+  // typo'd ticket id is permanent, and the gate (which matches attestations per
+  // ticket) never matches it to the intended ticket — the distinct-provider
+  // review that produced it is spent and must be repeated. The forest-cutover
+  // seal census carries exactly that shape: a recorded id one dropped character
+  // away from the real one. So before ANYTHING is appended, on BOTH write paths
+  // (fresh record and carry-forward), --ticket must exist in the canonical
+  // ticket store. An ABSENT store means there is nothing to validate against
+  // (downstream repos without adlc tickets record freely); a store that exists
+  // but cannot be resolved is an operational error, never treated as absent.
+  if (!values['allow-unknown-ticket']) {
+    let store;
+    try {
+      store = storeTicketIds(values.dir);
+    } catch (err) {
+      opError(`record-cross-model: ${err.message}`);
+    }
+    if (!store.present) {
+      // stderr, never stdout: with --json, stdout must stay a single parseable
+      // JSON document (the recorded entry).
+      console.error('record-cross-model: no canonical ticket store in this repository — --ticket accepted as given');
+    } else if (!store.ids.includes(values.ticket)) {
+      const near = nearMissIds(values.ticket, store.ids);
+      console.error(
+        `record-cross-model: ticket ${values.ticket} does not exist in the canonical ticket store (${store.ids.length} ticket(s)). ` +
+        'Nothing was written: the manifest is append-only, and an attestation bound to a mistyped id is permanent while satisfying the gate for no ticket.' +
+        (near.length > 0 ? `\n  Near-miss store id(s):\n${near.map((id) => `    ${id}`).join('\n')}` : '') +
+        '\n  For a deliberately store-external id (e.g. an issue-number reference), pass --allow-unknown-ticket.'
+      );
+      process.exit(2);
+    }
+  }
   // #370 FAIL CLOSED — recording is a SIGNING operation, so with no key it cannot do its
   // job. It used to write the unsigned entry anyway, exit 0 and print success; the gate
   // then rejected the inert entry in CI and pointed the operator back at the step they had
