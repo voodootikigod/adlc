@@ -501,7 +501,10 @@ const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[
 // segments × rail segments, so there is nothing left to cap.
 function ancestorWalk(T, R, ti, ri, throughDoubleStar, seen) {
   for (;;) {
-    const state = ti * (R.length + 1) + ri;
+    // Keyed as text rather than packed into one number: any multiplier larger
+    // than the rail length encodes the pair just as well, so the arithmetic
+    // form has a free constant in it that no behaviour depends on.
+    const state = `${ti}:${ri}`;
     if (seen.has(state)) return false;              // already explored; it did not pan out
     seen.add(state);
     if (ti === T.length) return ri < R.length;      // target is a proper prefix of the rail pattern
