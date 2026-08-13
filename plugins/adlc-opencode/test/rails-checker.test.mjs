@@ -746,6 +746,7 @@ test('r: an ungated tool naming a non-rail target still runs', () => {
       // Target context does not leak: a path-shaped key OUTSIDE a target
       // subtree must not start collecting arbitrary nested strings.
       { path: { deep: 'test/frozen.test.mjs' } },
+      { meta: { path: 'test/frozen.test.mjs' } },
       { description: 'edit test/frozen.test.mjs later' },
       {},
     ]) {
@@ -770,6 +771,12 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets({ target: { path: 'a' } }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ target: [{ filePath: 'a' }] }), ['a']);
   assert.deepEqual(spoofCandidateTargets({ path: { deep: 'a' } }), []);
+  // A path field OUTSIDE a target subtree, nested where extractTargets cannot
+  // see it either: this is the boundary between the spoof guard and a general
+  // string scanner, and it is deliberate rather than incidental.
+  assert.deepEqual(spoofCandidateTargets({ meta: { path: 'a' } }), []);
+  assert.deepEqual(spoofCandidateTargets({ meta: { filePath: 'a' } }), []);
+  assert.deepEqual(spoofCandidateTargets({ meta: { target: 'a' } }), ['a']);
   // Blank entries are not targets: railHit('') would be a silent no-op, so an
   // empty string in the list looks like coverage without being any.
   assert.deepEqual(spoofCandidateTargets({ target: ['', '   ', 'a'] }), ['a']);
