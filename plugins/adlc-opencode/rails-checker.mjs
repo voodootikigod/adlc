@@ -494,11 +494,17 @@ const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[
 
 // `seen` holds the (target index, rail index) pairs already explored. The
 // answer depends on nothing else, so a state reached twice cannot answer
-// differently — and without that memo two `**`s in one rail turn a long target
-// into seconds of work, three into minutes, inside a synchronous pre-execution
-// hook. Deliberately NOT solved with a segment-count cap: a numeric ceiling on
-// a path is itself a bypass, and memoizing makes the walk linear in
-// segments × rail segments, so there is nothing left to cap.
+// differently. With the constant-work `**` transitions below, that bounds the
+// whole walk at one visit per state — target segments × rail segments — for a
+// path length the CALLER chooses, in a synchronous pre-execution hook. Both
+// halves are needed: memo without constant-work transitions still scans the
+// remaining segments at every `**` state and stays quadratic in path length.
+// Deliberately NOT solved with a segment-count cap: a numeric ceiling on a path
+// is itself a bypass, and there is nothing left to cap once the bound holds.
+//
+// Recursion is bounded by the rail's segment count (only the skip branch
+// recurses, and it always advances `ri`); the target is walked iteratively, so
+// a long path cannot exhaust the stack either.
 function ancestorWalk(T, R, ti, ri, throughDoubleStar, seen) {
   for (;;) {
     // Keyed as text rather than packed into one number: any multiplier larger
@@ -520,13 +526,16 @@ function ancestorWalk(T, R, ti, ri, throughDoubleStar, seen) {
       // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
       if (ri === 0) return false;
       if (throughDoubleStar) return true;
-      // Narrowed: try every split, EXCEPT the one that lets the `**` swallow the
-      // target's last segment. That segment is the one whose directory-ness is
-      // in question, and a `**` matches any name at all — it is not evidence.
-      for (let k = ti; k < T.length; k++) {
-        if (ancestorWalk(T, R, k, ri + 1, throughDoubleStar, seen)) return true;
-      }
-      return false;
+      // Narrowed: two constant-work moves, never a scan of the remaining
+      // segments. Either the `**` takes nothing more and the rail advances, or
+      // it eats one segment and the rail stays put — repeated, that reaches
+      // every split. The one split it must not reach is the `**` swallowing the
+      // target's LAST segment: that segment is the one whose directory-ness is
+      // in question, and a `**` matches any name at all, so it is not evidence.
+      if (ancestorWalk(T, R, ti, ri + 1, throughDoubleStar, seen)) return true;
+      if (ti >= T.length - 1) return false;
+      ti += 1;                                      // eat one; iterate rather
+      continue;                                     // than recurse per segment
     }
     if (!segmentMatches(seg, T[ti])) return false;  // mismatch → not an ancestor
     ti += 1; ri += 1;

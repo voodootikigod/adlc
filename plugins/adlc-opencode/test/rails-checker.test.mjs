@@ -1093,15 +1093,28 @@ test('r: narrowed ancestor matching stays linear on a hostile target path', () =
   // (target, rail) state that is combinatorial in the number of globstars over
   // an ATTACKER-CONTROLLED path, inside a synchronous pre-execution hook: this
   // input took minutes before, and a caller only has to name a long path.
-  const target = `a/${Array.from({ length: 2000 }, (_, i) => `s${i}`).join('/')}`;
+  // Sized past where the quadratic form gave out: 16k segments took ~8s with a
+  // per-state suffix scan and minutes with none, against ~10ms once each state
+  // is visited once. The ceiling therefore has two orders of magnitude of
+  // headroom, so this fails on an asymptotic regression rather than on a slow
+  // machine.
+  const target = `a/${Array.from({ length: 16000 }, (_, i) => `s${i}`).join('/')}`;
   const started = process.hrtime.bigint();
   for (const rail of ['a/**/z/**', 'a/**/**/z/**', 'a/**/**/**/z/**']) {
     assert.equal(targetIsRailAncestor(target, rail, { throughDoubleStar: false }), false, rail);
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-  // Two orders of magnitude of headroom over the memoized cost, so this fails
-  // on the combinatorial blowup rather than on a slow machine.
-  assert.ok(elapsedMs < 5000, `narrowed ancestor walk took ${elapsedMs | 0}ms`);
+  assert.ok(elapsedMs < 2000, `narrowed ancestor walk took ${elapsedMs | 0}ms`);
+  // And the hook really does route a hostile path here: a dotted file-keyed
+  // target is what selects the narrowed mode. Asserted for its DECISION only —
+  // the rest of checkToolCall canonicalizes and symlink-resolves a 100KB path,
+  // which dominates the timing and would make a ceiling here a measurement of
+  // the filesystem rather than of this walk.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['a/**/**/z/**'] }] } });
+  try {
+    const r = checkToolCall({ tool: 'task', args: { filePath: `${target}/x.mjs` }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'allow', r.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('r: a file-specific key does not make an absent extensionless path a file', () => {
