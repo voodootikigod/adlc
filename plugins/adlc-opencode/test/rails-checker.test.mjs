@@ -836,6 +836,24 @@ test('r: namesAFile prefers the filesystem and falls back to the name', () => {
   }
   // Trailing bare dot is not an extension either.
   assert.equal(namesAFile('a.', absent), false);
+  // Digits past 1 are still extension characters — .mp3/.7z name files.
+  for (const f of ['song.mp3', 'a.7z', 'v.h264']) assert.equal(namesAFile(f, absent), true, f);
+});
+
+test('r: an existing dotted-name DIRECTORY is not a file, by either spelling', () => {
+  // The one case where the filesystem and the name heuristic disagree: a real
+  // directory whose leaf looks like it carries an extension. Pins that the stat
+  // wins, for a relative path AND for an absolute one resolved against a
+  // different root.
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    mkdirSync(join(dir, 'assets.bundle'), { recursive: true });
+    writeFileSync(join(dir, 'assets.bundle', 'x.mjs'), '');
+    assert.equal(namesAFile('assets.bundle', dir), false, 'relative');
+    assert.equal(namesAFile(join(dir, 'assets.bundle'), dir), false, 'absolute, same root');
+    assert.equal(namesAFile(join(dir, 'assets.bundle'), '/nonexistent-other-root'), false, 'absolute, other root');
+    assert.equal(namesAFile(join(dir, 'assets.bundle', 'x.mjs'), '/nonexistent-other-root'), true, 'absolute file');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('r: a dot-directory holding a rail keeps ancestor detection', () => {
