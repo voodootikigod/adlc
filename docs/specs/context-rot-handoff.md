@@ -112,7 +112,7 @@ only — never via agent Shell under deny):
 - Other sessions mutating: must satisfy `authorized` for **every open** deny.
   File cache ignored unless signature verifies; verify error ⇒ DENY.
 - Wrong-hash / stale resume-auth ⇒ DENY.
-- Hooks deny agent Write to denies/*, `.adlc/.deny-store`, *.resume-auth.json, *.model-ok, *.lock.
+- Hooks deny agent Write to denies/*, `.adlc/.deny-store`, *.resume-auth.json, *.model-ok, *.lock, content/**.
 
 ### Bypass / unlock / PreCompact / missing-final
 
@@ -132,6 +132,48 @@ else unlock command.
 
 Active ticket: CLI → pointer → env-if-equal. Model: signed model-attest only.
 Proven: harness-attested tool_calls; dead_end_influenced evidence-only.
+
+## Continuation (2026-08 amendment — host-orchestrated successor)
+
+The sanctioned recovery for a handoff deny is a **host-orchestrated successor
+spawn** (this supersedes the former successor-spawn non-goal). The denier is
+never un-denied (D2 sticky); continuation replaces the session, never revives
+it.
+
+### Capture
+
+Content artifact `.adlc/handoffs/content/<session_id>.md`, written ONLY by
+host-privileged code (CLI / supervisor / hook-host) — never agent tools. The
+protected-path set (package adapter + every harness copy) covers
+`.adlc/handoffs/content/**`. Content = deterministic brief (active ticket
+id+title, gate-manifest evidence tail, git branch + status summary, flail
+signals when present) + optional model narrative extracted host-side from the
+harness transcript (trailing assistant message). With a capture present, final
+`content_hash` = sha256 over the canonicalized capture body; absent a capture,
+the metadata hash (§final) stands. The 72h `written_at` staleness rule applies
+to model-narrative injection.
+
+### Continue
+
+`adlc handoff continue --deny-session <old> [--session <new>]
+[--capture-from <transcript>] [--write] [--json]` composes capture → `write`
+(final + bind; ticket: CLI → pointer → env-if-equal) → `resume` for the
+successor id → bootstrap payload on stdout:
+`{ successor_session_id, ticket_id, content_path, content_hash,
+bootstrap_prompt }`. Mutating posture identical to write/resume: `--write` +
+`ADLC_MANIFEST_KEY`, denier lock held, evidence gate
+`context-handoff-continue`, rollback of this run's file mutations when the
+evidence append fails. Degrade (exit 2, nothing consumed): unbound deny;
+missing/corrupt `--capture-from` source; consumed deny. The successor id comes
+from `--session` or is minted by the command — never derived from agent input.
+`continue` joins write|resume|bypass|repair|unlock in
+HANDOFF_MUTATING_SUBCOMMANDS (package adapter + every harness copy).
+
+### Supervised-only auto-consume
+
+Only the continuation machinery's own minted/known successor id is consumed
+for. Arbitrary fresh sessions never auto-consume. Hooks never consume
+(keyless). This is the v1 policy; no config relaxes it in this program.
 
 ## Slice-1 contract tests
 
@@ -155,6 +197,15 @@ Proven: harness-attested tool_calls; dead_end_influenced evidence-only.
 15. proven-check rejects cli-observed.
 16. Missing-final + host-repair fixtures.
 17. Multi-signal OR-join fixtures.
+18. continue happy path consumes exactly the minted successor and emits the payload.
+19. continue on unbound deny exits 2 and consumes nothing.
+20. continue rolls back on evidence-append failure: deny stays open, no resume-auth survives.
+21. Agent Write to `.adlc/handoffs/content/**` denied on enforcing tiers.
+22. Content-hash binding: tampered capture content fails resume verification.
+23. Agent Shell invoking `handoff continue` denied under deny-set.
+24. Supervisor env-scrub: spawned successor drops CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_ENTRYPOINT.
+
+> **Continuation coverage:** items 18–23 are package-level (`@adlc/context-handoff` helpers + CLI tests); item 24 is harness-adapter level (supervisor slice).
 
 ## Slices
 
@@ -175,6 +226,8 @@ Slice-1 freeze (this ticket's deliverable). Later slices are out of scope here.
 
 ## Non-goals
 
-Host compactors; fake chat spawn; replacing tickets; runtime-binding dead_ends;
+Host compactors; replacing tickets; runtime-binding dead_ends;
 committing handoffs; env/label controls; denier unlock via consume;
-harness adapter wiring (slices 4–6); build-gate migration (slice 3).
+harness adapter wiring (slices 4–6); build-gate migration (slice 3);
+unsupervised auto-consume (v1); warn-band model checkpoint (v1);
+in-place context wipe of a denied session (successor session only).
