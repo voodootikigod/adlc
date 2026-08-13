@@ -244,6 +244,13 @@ test('i: extractTargets covers the tolerated shapes', () => {
   assert.deepEqual(extractTargets({ path: 'b', files: ['c', { filePath: 'd' }], edits: [{ path: 'e' }] }), ['b', 'c', 'd', 'e']);
   assert.deepEqual(extractTargets({ patch: 'not a path field' }), []);
   assert.deepEqual(extractTargets(undefined), []);
+  // `typeof null === 'object'`, so the non-object guard needs both halves: a
+  // null args object must return empty, not throw inside the gate.
+  assert.deepEqual(extractTargets(null), []);
+  assert.deepEqual(spoofCandidateTargets(null), []);
+  // A host that hands the hook a non-object payload yields no targets rather
+  // than reading properties off it.
+  assert.deepEqual(extractTargets('test/frozen.test.mjs'), []);
 });
 
 // ---- (j) tool-name normalization + ungated first-party tools ----
