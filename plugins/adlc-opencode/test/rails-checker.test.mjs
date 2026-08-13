@@ -251,6 +251,11 @@ test('i: extractTargets covers the tolerated shapes', () => {
   // A host that hands the hook a non-object payload yields no targets rather
   // than reading properties off it.
   assert.deepEqual(extractTargets('test/frozen.test.mjs'), []);
+  // Same guard one level down: a null entry inside files[]/edits[] is skipped,
+  // not walked into. `typeof null === 'object'`, so the null half is the half a
+  // list can actually contain.
+  assert.deepEqual(extractTargets({ files: [null], edits: [null] }), []);
+  assert.deepEqual(extractTargets({ files: [null, { filePath: 'a' }] }), ['a']);
 });
 
 // ---- (j) tool-name normalization + ungated first-party tools ----
@@ -849,6 +854,9 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
       { file: 'src/index.mjs' },
       { files: ['src/index.mjs'] },
       { edits: [{ filePath: 'src/index.mjs' }] },
+      // A patch envelope names the FILES it updates — as file-specific a
+      // statement as any key, and the shape apply_patch arrives in.
+      { patch: '*** Begin Patch\n*** Update File: src/index.mjs\n*** End Patch\n' },
     ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
