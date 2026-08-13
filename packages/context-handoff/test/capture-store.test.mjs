@@ -56,6 +56,14 @@ test('hashCaptureBody is sha256 hex and stable across calls', () => {
   assert.equal(first, hashCaptureBody('body\n'));
 });
 
+test('the storage cap is 64 KiB and bites exactly there', () => {
+  // Spelled out rather than read from the module: a cap asserted against itself
+  // moves whenever the constant does, which is the one thing it must not do.
+  assert.equal(MAX_CAPTURE_BYTES, 64 * 1024);
+  assert.equal(capCaptureBody('a'.repeat(64 * 1024)).truncated, false, 'a body AT the cap fits');
+  assert.equal(capCaptureBody('a'.repeat(64 * 1024 + 1)).truncated, true, 'one byte over is clipped');
+});
+
 test('an oversize body is truncated with a visible marker, never silently', () => {
   const huge = 'x'.repeat(MAX_CAPTURE_BYTES * 2);
   const capped = capCaptureBody(huge);

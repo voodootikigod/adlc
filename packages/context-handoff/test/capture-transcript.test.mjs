@@ -102,3 +102,13 @@ test('a huge narrative is capped with a visible marker', () => {
   assert.ok(got.endsWith(NARRATIVE_TRUNCATION_MARKER), 'truncation must be visible');
   assert.ok(Buffer.byteLength(got, 'utf8') <= MAX_NARRATIVE_BYTES);
 });
+
+test('the narrative cap is 32 KiB and bites exactly there', () => {
+  // Spelled out rather than read from the module: a cap asserted against itself
+  // moves whenever the constant does.
+  assert.equal(MAX_NARRATIVE_BYTES, 32 * 1024);
+  const atCap = extractFinalAssistantMessage(assistant('req_1', 'z'.repeat(32 * 1024)));
+  assert.equal(atCap.endsWith(NARRATIVE_TRUNCATION_MARKER), false, 'a message AT the cap is whole');
+  const overCap = extractFinalAssistantMessage(assistant('req_1', 'z'.repeat(32 * 1024 + 1)));
+  assert.equal(overCap.endsWith(NARRATIVE_TRUNCATION_MARKER), true, 'one byte over is clipped');
+});
