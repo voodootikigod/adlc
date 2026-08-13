@@ -1,8 +1,8 @@
 # @adlc/context-handoff
 
 **ADLC phase: P4 continuity (F3)** — absolute context bands, session-terminal
-mutation deny (D1–D3), and the operator CLI for write/resume/bypass/repair/unlock.
-Binding design:
+mutation deny (D1–D3), and the operator CLI for
+write/resume/bypass/repair/unlock/continue. Binding design:
 [`docs/specs/context-rot-handoff.md`](../../docs/specs/context-rot-handoff.md).
 
 ```sh
@@ -11,6 +11,7 @@ adlc handoff resume --session <consumer> --deny-session <denier> [--write]
 adlc handoff bypass --session <id> [--unbound-reason <text>] [--write]
 adlc handoff repair --session <id> --ticket <id> --content-hash <h> [--write]
 adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --nonce <n> [--write]
+adlc handoff continue --deny-session <denier> [--session <new>] [--capture-from <transcript>] [--write]
 ```
 
 Mutating `--write` requires `ADLC_MANIFEST_KEY` (never silent success).
@@ -31,6 +32,28 @@ onto the final it writes — `ensureDenyMarker` is idempotent, so without that a
 refreshed hash would wedge every later resume — and refuses to unbind or to
 refresh a consumed deny. When the manifest append fails, the run's file
 mutations are rolled back so no bind survives that nothing attests.
+
+## Continuation
+
+`continue` is the sanctioned recovery from a handoff deny: it captures the
+denied session, binds the final to that capture, and consumes the deny for ONE
+successor. The denier is never un-denied — D2 stays sticky and the work moves to
+a new session. It composes capture → write → resume in a single run under the
+denier's lock, records `context-handoff-continue`, and rolls back every file it
+touched when that evidence append fails.
+
+The capture body lives at `.adlc/handoffs/content/<session_id>.md` and is
+written only by host-privileged code; `isProtectedHandoffPath` denies agent
+writes to `.adlc/handoffs/content/**`, and `continue` joins the mutating
+subcommands an agent's shell must not run under deny. `content_hash` is sha256
+over the canonicalized capture body (LF line endings, no trailing whitespace),
+so re-deriving it from disk catches an edited capture that a valid signature
+cannot.
+
+Degrades with exit 2 and nothing consumed: an unbound deny (bind it with
+`repair` first), a consumed deny, a missing or corrupt `--capture-from` source,
+or an active ticket that disagrees with the deny's bind. The successor id comes
+from `--session` or is minted by the command — never from agent input.
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';
