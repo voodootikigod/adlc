@@ -12,6 +12,7 @@ import {
   checkRail, checkToolCall, checkShellCall, extractTargets, spoofCandidateTargets, spoofCandidates, namesAFile, resolveActiveTicketId,
   targetIsRailAncestor, RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
 } from '../rails-checker.mjs';
+import { globMatch } from '@adlc/core';
 import { adlcRailsGuard } from '../index.mjs';
 
 function repo({ tickets, current } = {}) {
@@ -1115,6 +1116,58 @@ test('r: narrowed ancestor matching stays linear on a hostile target path', () =
     const r = checkToolCall({ tool: 'task', args: { filePath: `${target}/x.mjs` }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
     assert.equal(r.decision, 'allow', r.reason);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: ancestor detection never misses a rail globMatch can reach', () => {
+  // Enumerating shapes stopped converging: five review rounds each produced one
+  // more rail spelling this predicate read differently from the matcher that
+  // decides direct hits. So state the invariant behind all of them and check it
+  // against @adlc/core over GENERATED rails instead of remembered cases:
+  //
+  //   if some path the rail matches has `target` as a proper prefix,
+  //   then `target` is an ancestor of that rail.
+  //
+  // One-directional on purpose. Over-approximating is the safe direction and
+  // the predicate does it deliberately for spellings a segment walk cannot
+  // decide (`?`, character classes, an embedded `**`); MISSING one is the
+  // failure that lets a mutation destroy a frozen rail.
+  const RAIL_SEGMENTS = ['a', 'b', '*', '**', 'a*', 'a**b'];
+  const NAMES = ['a', 'b', 'ab'];
+  const combos = (alphabet, maxLen) => {
+    const out = [];
+    let level = [[]];
+    for (let n = 0; n < maxLen; n++) {
+      level = level.flatMap((prefix) => alphabet.map((s) => [...prefix, s]));
+      out.push(...level);
+    }
+    return out;
+  };
+  const rails = combos(RAIL_SEGMENTS, 3).map((s) => s.join('/'));
+  const targets = combos(NAMES, 2).map((s) => s.join('/'));
+  // The concrete paths a rail could match, deep enough to run past a `**`.
+  const universe = combos(NAMES, 4).map((s) => s.join('/'));
+  const isProperPrefix = (prefix, path) => path.startsWith(`${prefix}/`);
+  let checked = 0;
+  for (const rail of rails) {
+    // A LEADING `**` is the one documented exception: it anchors nothing, so
+    // ancestor-destruction has no fixed root to be defined against and the
+    // predicate returns false by design. Direct hits still cover it.
+    if (rail.startsWith('**')) continue;
+    for (const target of targets) {
+      const reachable = universe.some((path) => globMatch(rail, path) && isProperPrefix(target, path));
+      if (reachable) {
+        assert.ok(targetIsRailAncestor(target, rail), `missed ancestor: target ${target} of rail ${rail}`);
+        checked += 1;
+      }
+      // The narrowed mode answers a deliberately narrower question, so it may
+      // say no where the full mode says yes — but never the reverse, or a
+      // claimed file would be denied where a directory is not.
+      if (targetIsRailAncestor(target, rail, { throughDoubleStar: false })) {
+        assert.ok(targetIsRailAncestor(target, rail), `narrowed exceeded full: ${target} vs ${rail}`);
+      }
+    }
+  }
+  assert.ok(checked > 100, `property exercised only ${checked} real ancestor pairs`);
 });
 
 test('r: an embedded-globstar rail still denies its ancestor directory', () => {

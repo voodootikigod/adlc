@@ -556,6 +556,18 @@ function ancestorWalk(T, R, throughDoubleStar) {
         ti += 1;
         continue;
       }
+      // An embedded `**` spans `/`, so the rail keeps going INSIDE this segment
+      // and can cover any number of the target's remaining segments: `a**b`
+      // matches `a/b`, and `a/foo**bar/**` matches `a/foo/x/bar/frozen.mjs`.
+      // Nothing past the `**` is decidable one segment at a time, so all that
+      // is checked is the literal text before it, which the target's segment
+      // must still begin with — enough to keep `b` from reading as an ancestor
+      // of `a**b` while never claiming less than the glob does.
+      const span = seg.indexOf('**');
+      if (span !== -1) {
+        if (T[ti].startsWith(seg.slice(0, span).replace(/[*?[][\s\S]*$/, ''))) return true;
+        break;
+      }
       if (!segmentMatches(seg, T[ti])) break;       // mismatch → not an ancestor
       ti += 1; ri += 1;
     }
