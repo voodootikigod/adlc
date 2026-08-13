@@ -541,6 +541,13 @@ for (const path of [
   '.github/workflows/ci.yml',
   'scripts/check-reviewer-directed-comments.mjs',
   'scripts/test/check-reviewer-directed-comments.test.mjs',
+  // #489: the toolkit-floor enforcement inputs and the preflight caller that
+  // invokes the check — behaviorally frozen, not merely listed.
+  'scripts/toolkit-floor.json',
+  'scripts/toolkit-floor-check.mjs',
+  'scripts/test/toolkit-floor.test.mjs',
+  'scripts/preflight.mjs',
+  'scripts/test/preflight.test.mjs',
 ]) {
   test(`REPO_TRUST_ROOTS: PR edits ${path} while base rails exist → exit 2`, () => {
     const code = runScenario({

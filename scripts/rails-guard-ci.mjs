@@ -42,10 +42,26 @@ import { fileURLToPath } from 'node:url';
 // DEFAULT_IMMUTABLE_TRUST_ROOTS: passing them in made it possible for one PR to drop these
 // arguments AND remove this wrapper from the defaults, unprotecting both enforcement
 // sources at once (cross-model review, #363).
+// The toolkit-floor enforcement inputs (#489): the ci.yml rails-guard job
+// delegates its floor verdict to the checker below and the value in the floor
+// file, and the checker's test is what keeps that verdict load-bearing. Without
+// these entries a PR could lower the floor or rewrite the checker (adjusting
+// its candidate-controlled test in the same change) while the protected
+// workflow still invokes the expected path. Every floor change — raise or
+// lower — now routes through the #141 trust-root ceremony.
 const REPO_TRUST_ROOTS = [
   '.github/workflows/ci.yml',
   'scripts/check-reviewer-directed-comments.mjs',
   'scripts/test/check-reviewer-directed-comments.test.mjs',
+  'scripts/toolkit-floor.json',
+  'scripts/toolkit-floor-check.mjs',
+  'scripts/test/toolkit-floor.test.mjs',
+  // The floor's enforcement CALLER: preflight is the entry point that invokes
+  // the global check, so an edit that neuters the call (e.g. suppressing the
+  // PATH the standalone-writer probe scans) disables the control without
+  // touching any of the files above. Its test is what pins the wiring.
+  'scripts/preflight.mjs',
+  'scripts/test/preflight.test.mjs',
 ];
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';

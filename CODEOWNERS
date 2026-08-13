@@ -51,6 +51,15 @@
 /scripts/check-reviewer-directed-comments.mjs         @voodootikigod
 /scripts/test/check-reviewer-directed-comments.test.mjs   @voodootikigod
 
+# The toolkit-floor enforcement inputs (#489). The rails-guard CI job delegates
+# its floor verdict to this checker and the value in this floor file; the test
+# is what keeps the verdict load-bearing. Same shape as the entries above.
+/scripts/toolkit-floor.json                           @voodootikigod
+/scripts/toolkit-floor-check.mjs                      @voodootikigod
+/scripts/test/toolkit-floor.test.mjs                  @voodootikigod
+/scripts/preflight.mjs                                @voodootikigod
+/scripts/test/preflight.test.mjs                      @voodootikigod
+
 # #141: the enforcement engine's verdict-producing code. The in-gate trust-root
 # freeze cannot be transitively complete (the gate delegates through check.mjs ->
 # rails.mjs -> ... -> @adlc/tickets), so these subtrees rely on branch-protection

@@ -313,7 +313,24 @@ jobs:
         run: node scripts/toolkit-floor-check.mjs in-tree
 
       - name: Install
-        run: npm install
+        # #489: `npm ci --ignore-scripts` — the lockfile is the trust anchor and
+        # no candidate lifecycle script runs in a job that later holds GH_TOKEN.
+        # The gate scripts are zero-dependency; the workspace links they need are
+        # created without scripts, so no selective rebuild is required here.
+        run: npm ci --ignore-scripts
+
+      # #489: nothing between checkout and here may have mutated tracked files —
+      # a lifecycle script rewriting a gate script in the working tree would
+      # otherwise run as the gate. Diffed against HEAD so a mutation that was
+      # also STAGED (working tree == index != HEAD) is caught too. `npm ci`
+      # does not rewrite the lockfile, so a clean tree stays clean; any diff at
+      # all is grounds to stop.
+      - name: Tracked tree is unmodified before privileged gates
+        run: |
+          dirty=$(git diff --name-only HEAD --)
+          if [ -n "$dirty" ]; then
+            echo "tracked files were modified between checkout and the gates:"; echo "$dirty"; exit 1
+          fi
 
       - name: Fetch base ref
         # env (not direct interpolation) + explicit refspec so origin/<base> is

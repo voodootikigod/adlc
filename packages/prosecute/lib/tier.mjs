@@ -45,6 +45,22 @@ const TRUST_ROOT_FILES = [
   // packages/, so it does not match an ENFORCEMENT_PREFIXES entry either.
   'scripts/check-reviewer-directed-comments.mjs',
   'scripts/test/check-reviewer-directed-comments.test.mjs',
+  // The toolkit-floor enforcement inputs (#489, T-01KZXG6XAYFZ62TF4P6YBW6WXG):
+  // the protected rails-guard CI job delegates its floor verdict to the checker
+  // and the value it reads from the floor file, and the checker's own test is
+  // what proves the verdict is load-bearing. Same shape as the
+  // check-reviewer-directed-comments trio above: not under packages/, so the
+  // prefix rules never reach them, and a PR lowering the floor or rewriting the
+  // checker plus its test in one change would otherwise merge with no
+  // cross-model review.
+  'scripts/toolkit-floor.json',
+  'scripts/toolkit-floor-check.mjs',
+  'scripts/test/toolkit-floor.test.mjs',
+  // The floor's enforcement CALLER and the test that pins its wiring: an edit
+  // to preflight alone can suppress the check (drop the call, feed the probe
+  // an empty PATH) while every protected file above stays untouched.
+  'scripts/preflight.mjs',
+  'scripts/test/preflight.test.mjs',
 ];
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
