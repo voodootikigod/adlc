@@ -482,7 +482,7 @@ export function matchableSpellings(target) {
 //                                                            says nothing about
 //                                                            this name)
 export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } = {}) {
-  return ancestorWalk(railSegments(target), railSegments(rail), 0, 0, throughDoubleStar, new Set());
+  return ancestorWalk(railSegments(target), railSegments(rail), throughDoubleStar);
 }
 
 // One rail segment against one target segment, with the SAME semantics as the
@@ -502,44 +502,57 @@ const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[
 // Deliberately NOT solved with a segment-count cap: a numeric ceiling on a path
 // is itself a bypass, and there is nothing left to cap once the bound holds.
 //
-// Recursion is bounded by the rail's segment count (only the skip branch
-// recurses, and it always advances `ri`); the target is walked iteratively, so
-// a long path cannot exhaust the stack either.
-function ancestorWalk(T, R, ti, ri, throughDoubleStar, seen) {
-  for (;;) {
-    // Keyed as text rather than packed into one number: any multiplier larger
-    // than the rail length encodes the pair just as well, so the arithmetic
-    // form has a free constant in it that no behaviour depends on.
-    const state = `${ti}:${ri}`;
-    if (seen.has(state)) return false;              // already explored; it did not pan out
-    seen.add(state);
-    if (ti === T.length) return ri < R.length;      // target is a proper prefix of the rail pattern
-    if (ri === R.length) return false;              // target deeper than the rail, no ** seen
-    const seg = R[ri];
-    if (seg === '**') {
-      // A `**` here can absorb target segments — but ONLY if some
-      // literal/wildcard prefix already ANCHORED the match. A LEADING `**`
-      // anchors nothing: it would make every path an ancestor of e.g.
-      // `**/*.test.mjs`, denying all edits. Such a floating rail has no fixed
-      // root directory, so ancestor-destruction isn't well-defined — rely on
-      // globMatch (direct hits), the repo-root check, and the file.edited
-      // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
-      if (ri === 0) return false;
-      if (throughDoubleStar) return true;
-      // Narrowed: two constant-work moves, never a scan of the remaining
-      // segments. Either the `**` takes nothing more and the rail advances, or
-      // it eats one segment and the rail stays put — repeated, that reaches
-      // every split. The one split it must not reach is the `**` swallowing the
-      // target's LAST segment: that segment is the one whose directory-ness is
-      // in question, and a `**` matches any name at all, so it is not evidence.
-      if (ancestorWalk(T, R, ti, ri + 1, throughDoubleStar, seen)) return true;
-      if (ti >= T.length - 1) return false;
-      ti += 1;                                      // eat one; iterate rather
-      continue;                                     // than recurse per segment
+// Walked with an explicit worklist, not recursion. The skip branch would cost
+// one stack frame per rail segment, and a rail is a string in the ticket store:
+// a few thousand `**` segments is syntactically valid and would raise a
+// RangeError out of the hook instead of a rail decision. Nothing here needs the
+// call stack, so it does not use it.
+function ancestorWalk(T, R, throughDoubleStar) {
+  const seen = new Set();
+  // Each entry is a (target index, rail index) branch still to explore. A `**`
+  // forks; the fork is queued here instead of taking a stack frame.
+  const pending = [[0, 0]];
+  while (pending.length > 0) {
+    let [ti, ri] = pending.pop();
+    for (;;) {
+      // Keyed as text rather than packed into one number: any multiplier larger
+      // than the rail length encodes the pair just as well, so the arithmetic
+      // form has a free constant in it that no behaviour depends on.
+      const state = `${ti}:${ri}`;
+      if (seen.has(state)) break;                   // already explored; it did not pan out
+      seen.add(state);
+      if (ti === T.length) {                        // target is a proper prefix of the rail pattern
+        if (ri < R.length) return true;
+        break;
+      }
+      if (ri === R.length) break;                   // target deeper than the rail, no ** seen
+      const seg = R[ri];
+      if (seg === '**') {
+        // A `**` here can absorb target segments — but ONLY if some
+        // literal/wildcard prefix already ANCHORED the match. A LEADING `**`
+        // anchors nothing: it would make every path an ancestor of e.g.
+        // `**/*.test.mjs`, denying all edits. Such a floating rail has no fixed
+        // root directory, so ancestor-destruction isn't well-defined — rely on
+        // globMatch (direct hits), the repo-root check, and the file.edited
+        // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
+        if (ri === 0) break;
+        if (throughDoubleStar) return true;
+        // Narrowed: two constant-work moves, never a scan of the remaining
+        // segments. Either the `**` takes nothing more and the rail advances, or
+        // it eats one segment and the rail stays put — repeated, that reaches
+        // every split. The one split it must not reach is the `**` swallowing the
+        // target's LAST segment: that segment is the one whose directory-ness is
+        // in question, and a `**` matches any name at all, so it is not evidence.
+        pending.push([ti, ri + 1]);
+        if (ti >= T.length - 1) break;
+        ti += 1;
+        continue;
+      }
+      if (!segmentMatches(seg, T[ti])) break;       // mismatch → not an ancestor
+      ti += 1; ri += 1;
     }
-    if (!segmentMatches(seg, T[ti])) return false;  // mismatch → not an ancestor
-    ti += 1; ri += 1;
   }
+  return false;
 }
 
 // Does `target` hit a frozen rail? Matches the lexical path AND the

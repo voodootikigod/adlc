@@ -1117,6 +1117,24 @@ test('r: narrowed ancestor matching stays linear on a hostile target path', () =
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: a rail thousands of globstars deep still yields a decision', () => {
+  // The other direction of the same hostile input: the RAIL is a string in the
+  // ticket store, and a few thousand `**` segments is syntactically valid. A
+  // per-segment stack frame would raise a RangeError out of the hook instead of
+  // a rail decision, which is a broken gate rather than a strict one.
+  const deep = `a/${'**/'.repeat(5000)}z`;
+  assert.equal(targetIsRailAncestor('a/b.mjs', deep, { throughDoubleStar: false }), false);
+  assert.equal(targetIsRailAncestor('a/b.mjs', deep), true);
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: [deep] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    // A claimed file takes the narrowed walk; an ambiguous key takes the full
+    // one, which stops at the first `**`. Both must answer rather than throw.
+    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'a/b.mjs' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'task', args: { target: 'a/b.mjs' }, root: dir, env }).decision, 'deny');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('r: a file-specific key does not make an absent extensionless path a file', () => {
   // The key licenses the extension heuristic; it is not authoritative on its
   // own, because `filePath` is a key plenty of tools hand a directory. So an
