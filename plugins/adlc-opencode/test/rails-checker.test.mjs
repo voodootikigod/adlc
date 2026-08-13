@@ -1033,6 +1033,25 @@ test('r: a generic path key does not assert file-ness, so a rail parent still hi
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: a claimed file is still denied when the rail NAMES it past a zero-width **', () => {
+  // End-to-end form of the narrowed-ancestor boundary. `src/cache.bundle` is
+  // absent and dotted, so a file-specific key gets it classified as a claimed
+  // file — but `src/**/cache.bundle/**` names it outright once the `**` takes
+  // zero segments, and the rail set outranks the claim.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/cache.bundle/**'] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    for (const args of [{ filePath: 'src/cache.bundle' }, { targetFile: 'src/cache.bundle' }, { files: ['src/cache.bundle'] }]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+    // The over-block requirement 3 removed stays removed: here only the `**`
+    // relates the rail to the target, so a claimed file still runs.
+    const unrelated = checkToolCall({ tool: 'task', args: { filePath: 'src/index.mjs' }, root: dir, env });
+    assert.equal(unrelated.decision, 'allow', unrelated.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('r: a file-specific key does not make an absent extensionless path a file', () => {
   // The key licenses the extension heuristic; it is not authoritative on its
   // own, because `filePath` is a key plenty of tools hand a directory. So an
@@ -1176,6 +1195,16 @@ test('r: targetIsRailAncestor honors an anchored ** by default and can be narrow
   // A LEADING ** anchors nothing, in either mode.
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs'), false);
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs', { throughDoubleStar: false }), false);
+  // Narrowing stops the ** from ABSORBING segments; it does not stop reading
+  // the rail past one. A `**` that takes zero segments leaves the rail's own
+  // literal segments naming the target, which is the strongest evidence there
+  // is that it is a directory — stopping at the first ** would discard it.
+  assert.equal(targetIsRailAncestor('src/cache.bundle', 'src/**/cache.bundle/**', { throughDoubleStar: false }), true);
+  assert.equal(targetIsRailAncestor('a/b', 'a/**/**/b/**', { throughDoubleStar: false }), true);
+  // The boundary: a segment the rail can only match THROUGH the ** carries no
+  // literal evidence about that segment, so the narrowed mode declines it.
+  assert.equal(targetIsRailAncestor('a/b/c', 'a/**/c/**', { throughDoubleStar: false }), false);
+  assert.equal(targetIsRailAncestor('a/b/c', 'a/**/c/**'), true);
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {

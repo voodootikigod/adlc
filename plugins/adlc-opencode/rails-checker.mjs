@@ -453,25 +453,42 @@ const railSegments = (s) => s.split('/').filter((x) => x !== '');
 // `opts.throughDoubleStar` (default true) allows the second form: an anchored
 // `**` absorbing the target's remaining segments. A caller that has been told
 // the target is a FILE turns it off — see railHit's `ancestors: 'literal'`.
+// Narrowed, a `**` may still take ZERO segments and matching continues on the
+// rail's next segment, so the rail's own literal structure keeps its say:
+//   `src/cache.bundle` covers `src/**/cache.bundle/**`  (the rail NAMES it)
+//   `src/index.mjs`    does NOT cover `src/**/test/*.mjs` (only `**` relates them)
+// Stopping at the first `**` instead would drop the first case, and it is the
+// one where the rail set states outright that the target is a directory.
 export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } = {}) {
   const T = railSegments(target);
   const R = railSegments(rail);
-  for (let i = 0; ; i++) {
-    if (i === T.length) return R.length > T.length; // target is a proper prefix of the rail pattern
-    if (i === R.length) return false;               // target deeper than the rail, no ** seen
-    const seg = R[i];
+  // Indices move together except across a zero-width `**`, which advances the
+  // rail alone. No backtracking: a `**` that consumed one or more of the
+  // target's segments would be matching them by wildcard, which is exactly the
+  // evidence the narrowed mode declines to accept.
+  let ti = 0;
+  for (let ri = 0; ; ) {
+    if (ti === T.length) return R.length > ri;      // target is a proper prefix of the rail pattern
+    if (ri === R.length) return false;              // target deeper than the rail, no ** seen
+    const seg = R[ri];
     if (seg === '**') {
       // A `**` here can absorb the target's remaining segments — but ONLY if
       // some literal/wildcard prefix already ANCHORED the match. A LEADING `**`
-      // (i === 0) anchors nothing: it would make every path an ancestor of e.g.
+      // anchors nothing: it would make every path an ancestor of e.g.
       // `**/*.test.mjs`, denying all edits. Such a floating rail has no fixed
       // root directory, so ancestor-destruction isn't well-defined — rely on
       // globMatch (direct hits), the repo-root check, and the file.edited
       // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
-      return throughDoubleStar && i > 0;
+      if (ri === 0) return false;
+      if (throughDoubleStar) return true;
+      ri += 1;                                      // narrowed: zero-width only
+      continue;
     }
-    if (/[*?[]/.test(seg)) continue;                // wildcard segment matches this target segment
-    if (seg !== T[i]) return false;                 // literal mismatch → not an ancestor
+    if (/[*?[]/.test(seg) || seg === T[ti]) {       // wildcard, or a literal that matches
+      ti += 1; ri += 1;
+      continue;
+    }
+    return false;                                   // literal mismatch → not an ancestor
   }
 }
 
