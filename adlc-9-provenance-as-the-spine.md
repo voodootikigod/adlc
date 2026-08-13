@@ -140,12 +140,12 @@ it can forge everything downstream.
 
 The last thing worth saying is that the lens predicts its own defense. In the course
 of reviewing this work, a document was submitted with a note appended for the
-reviewer — text asserting the document was out of scope and instructing how its
-findings should be read. The reviewer flagged it, correctly, as an attempt to launder
-the document's provenance: an author vouching for its own trustworthiness in language
-aimed at the party meant to verify it independently. The system caught a provenance
-forgery in the act of writing a post about provenance. That is not a coincidence.
-It's the spine doing the one thing a spine does.
+reviewer — text asserting the document lay outside what was being examined, and
+instructing how its findings should be read. The reviewer flagged it, correctly, as an
+attempt to launder the document's provenance: an author vouching for its own
+trustworthiness in language aimed at the party meant to verify it independently. The
+system caught a provenance forgery in the act of writing a post about provenance.
+That is not a coincidence. It's the spine doing the one thing a spine does.
 
 Which points at the work. If provenance is the trust leg, then the trust-root layer
 deserves to be a *pillar* of the lifecycle, not a caption on one tool: every
