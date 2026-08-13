@@ -33,6 +33,9 @@ export const HANDOFF_MUTATING_SUBCOMMANDS = new Set([
   'bypass',
   'repair',
   'unlock',
+  // `continue` consumes a deny for a successor it mints — an agent that can run
+  // it authorizes its own replacement out of its own session.
+  'continue',
 ]);
 
 /**
@@ -80,6 +83,9 @@ export function isProtectedHandoffPath(rel) {
     .join('/');
   if (norm === '.adlc/.deny-store' || norm === '.adlc/handoffs/.deny-store') return true;
   if (norm === '.adlc/handoffs/denies' || norm.startsWith('.adlc/handoffs/denies/')) return true;
+  // Capture bodies: a session that can rewrite its own capture rewrites the
+  // content its successor's authorization is bound to.
+  if (norm === '.adlc/handoffs/content' || norm.startsWith('.adlc/handoffs/content/')) return true;
   if (!norm.startsWith('.adlc/handoffs/')) return false;
   const leaf = basename(norm);
   return (
