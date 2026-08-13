@@ -1060,6 +1060,50 @@ test('r: a claimed file is still denied when the rail NAMES it past a zero-width
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: a padded spelling is classified on the same paths it is matched on', () => {
+  // The classification and the rail matching must read the same list of
+  // spellings. A padded ` src/cache.bundle` misses the stat that finds the real
+  // directory and reads as an absent dotted FILE, while railHit goes on to
+  // match the trimmed spelling — so classifying the raw form alone handed the
+  // narrowed ancestor mode a directory and dropped the check.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    mkdirSync(join(dir, 'src', 'cache.bundle'), { recursive: true });
+    for (const spelling of [' src/cache.bundle', 'src/cache.bundle ', '  src/cache.bundle  ', 'src/cache.bundle']) {
+      const r = checkToolCall({ tool: 'task', args: { filePath: spelling }, root: dir, env });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(spelling)} → ${r.reason}`);
+    }
+    // The conservative merge costs the file claim outright: a padded spelling
+    // is not a name the heuristic can read, so the target keeps full ancestor
+    // detection and an absent file named this way is over-denied. Cheap and
+    // correct-direction — the caller passed a path with padding on it, and
+    // trimming it is one edit.
+    const padded = checkToolCall({ tool: 'task', args: { filePath: ' src/index.mjs ' }, root: dir, env });
+    assert.equal(padded.decision, 'deny', padded.reason);
+    // It does NOT turn every padded path into a rail hit, which would make the
+    // guard useless rather than strict.
+    const unrelated = checkToolCall({ tool: 'task', args: { filePath: ' other/thing.mjs ' }, root: dir, env });
+    assert.equal(unrelated.decision, 'allow', unrelated.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: narrowed ancestor matching stays linear on a hostile target path', () => {
+  // Each ** explores every remaining target position. Without memoizing the
+  // (target, rail) state that is combinatorial in the number of globstars over
+  // an ATTACKER-CONTROLLED path, inside a synchronous pre-execution hook: this
+  // input took minutes before, and a caller only has to name a long path.
+  const target = `a/${Array.from({ length: 2000 }, (_, i) => `s${i}`).join('/')}`;
+  const started = process.hrtime.bigint();
+  for (const rail of ['a/**/z/**', 'a/**/**/z/**', 'a/**/**/**/z/**']) {
+    assert.equal(targetIsRailAncestor(target, rail, { throughDoubleStar: false }), false, rail);
+  }
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  // Two orders of magnitude of headroom over the memoized cost, so this fails
+  // on the combinatorial blowup rather than on a slow machine.
+  assert.ok(elapsedMs < 5000, `narrowed ancestor walk took ${elapsedMs | 0}ms`);
+});
+
 test('r: a file-specific key does not make an absent extensionless path a file', () => {
   // The key licenses the extension heuristic; it is not authoritative on its
   // own, because `filePath` is a key plenty of tools hand a directory. So an

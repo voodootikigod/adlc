@@ -440,6 +440,22 @@ function collectTargetKeyed(root, out, directories = new Set(), files = new Set(
 
 const railSegments = (s) => s.split('/').filter((x) => x !== '');
 
+/**
+ * Every spelling of a target that a decision must account for: the raw one and,
+ * when it differs, the trimmed one. A padded ` test/x.mjs ` is a different
+ * lexical path here while any tool that normalizes its input acts on the frozen
+ * one, so a check that reads a single form is a spelling bypass — and the
+ * classification and the matching must read the SAME list, or the two disagree
+ * about which path they are talking about.
+ *
+ * @param {unknown} target
+ * @returns {string[]}
+ */
+export function matchableSpellings(target) {
+  const raw = String(target ?? '');
+  return raw === raw.trim() ? [raw] : [raw, raw.trim()];
+}
+
 // True if directory `target` is a proper ANCESTOR of the concrete paths a rail
 // glob can match — i.e. deleting/moving target destroys the frozen rail even
 // though target never matches the glob directly. Walks segments in lockstep,
@@ -466,7 +482,7 @@ const railSegments = (s) => s.split('/').filter((x) => x !== '');
 //                                                            says nothing about
 //                                                            this name)
 export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } = {}) {
-  return ancestorWalk(railSegments(target), railSegments(rail), 0, 0, throughDoubleStar);
+  return ancestorWalk(railSegments(target), railSegments(rail), 0, 0, throughDoubleStar, new Set());
 }
 
 // One rail segment against one target segment, with the SAME semantics as the
@@ -476,8 +492,18 @@ export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } 
 // permissive reading so the ancestor check never matches LESS than the glob.
 const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[]/.test(pattern);
 
-function ancestorWalk(T, R, ti, ri, throughDoubleStar) {
+// `seen` holds the (target index, rail index) pairs already explored. The
+// answer depends on nothing else, so a state reached twice cannot answer
+// differently — and without that memo two `**`s in one rail turn a long target
+// into seconds of work, three into minutes, inside a synchronous pre-execution
+// hook. Deliberately NOT solved with a segment-count cap: a numeric ceiling on
+// a path is itself a bypass, and memoizing makes the walk linear in
+// segments × rail segments, so there is nothing left to cap.
+function ancestorWalk(T, R, ti, ri, throughDoubleStar, seen) {
   for (;;) {
+    const state = ti * (R.length + 1) + ri;
+    if (seen.has(state)) return false;              // already explored; it did not pan out
+    seen.add(state);
     if (ti === T.length) return ri < R.length;      // target is a proper prefix of the rail pattern
     if (ri === R.length) return false;              // target deeper than the rail, no ** seen
     const seg = R[ri];
@@ -495,7 +521,7 @@ function ancestorWalk(T, R, ti, ri, throughDoubleStar) {
       // target's last segment. That segment is the one whose directory-ness is
       // in question, and a `**` matches any name at all — it is not evidence.
       for (let k = ti; k < T.length; k++) {
-        if (ancestorWalk(T, R, k, ri + 1, throughDoubleStar)) return true;
+        if (ancestorWalk(T, R, k, ri + 1, throughDoubleStar, seen)) return true;
       }
       return false;
     }
@@ -527,12 +553,8 @@ function ancestorWalk(T, R, ti, ri, throughDoubleStar) {
 export function railHit(target, rails, root, { ancestors = true } = {}) {
   const ancestorsOn = ancestors !== false;
   const throughDoubleStar = ancestors !== 'literal';
-  // Both the raw spelling and the trimmed one: a padded ` test/x.mjs ` resolves
-  // to a different lexical path here while any tool that normalizes its input
-  // acts on the frozen one, so checking a single form is a spelling bypass. Same
-  // reason both the lexical and the symlink-resolved path are checked.
   const candidates = new Set();
-  for (const form of new Set([String(target ?? ''), String(target ?? '').trim()])) {
+  for (const form of matchableSpellings(target)) {
     candidates.add(canonicalizePath(form, root));
     candidates.add(resolveRailPath(form, root));
   }
@@ -656,7 +678,15 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         // form (the over-block) while keeping the form where the rail set itself
         // says the target is a directory, which is the spelling a spoofing call
         // would otherwise use to shed the check.
-        const claimedFile = !directories.has(target) && namesAFile(target, root, { fileKeyed: files.has(target) });
+        //
+        // Classified on every spelling railHit will match, and conservatively:
+        // one spelling that is not a file keeps full ancestor detection. A
+        // padded ` src/cache.bundle` misses the stat that would find the real
+        // directory and reads as an absent dotted file, while railHit goes on
+        // to match the trimmed spelling — so classifying the raw form alone
+        // handed the narrowed mode a directory.
+        const claimedFile = !directories.has(target)
+          && matchableSpellings(target).every((spelling) => namesAFile(spelling, root, { fileKeyed: files.has(target) }));
         const hit = railHit(target, force.rails, root, { ancestors: claimedFile ? 'literal' : true });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
