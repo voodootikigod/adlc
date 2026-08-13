@@ -799,10 +799,22 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
   // tools already get this distinction; the ungated branch did not.
   const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
   try {
-    for (const args of [{ targetFile: 'src/index.mjs' }, { path: 'src/index.mjs' }, { target: 'src/index.mjs' }]) {
+    // File-specific keys license file semantics, so ancestor detection is off
+    // and a non-rail file runs.
+    for (const args of [{ targetFile: 'src/index.mjs' }, { path: 'src/index.mjs' }, { filePath: 'src/index.mjs' }]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
     }
+    // A bare `target` is ambiguous, and ambiguity resolves to DIRECTORY so the
+    // ancestor check stays on. That over-denies an absent file named this way —
+    // the deliberate cost of not guessing, recoverable by naming the key. An
+    // EXISTING file is still resolved by stat, so this is only the absent case.
+    const ambiguous = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(ambiguous.decision, 'deny', ambiguous.reason);
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'index.mjs'), '');
+    const stated = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(stated.decision, 'allow', `an existing file is resolved by stat → ${stated.reason}`);
     // A file the rail actually matches, and a DIRECTORY that holds one, both stay denied.
     for (const args of [{ target: 'src/app/test/a.mjs' }, { target: 'src' }]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -820,24 +832,30 @@ test('r: namesAFile prefers the filesystem and falls back to the name', () => {
     assert.equal(namesAFile('src/index.mjs', dir), true, 'an existing file is a file');
     // A target that does not exist yet — a tool is about to create it — falls
     // back to the name.
-    assert.equal(namesAFile('src/new.mjs', dir), true);
-    assert.equal(namesAFile('src/newdir', dir), false);
+    assert.equal(namesAFile('src/new.mjs', dir, { fileKeyed: true }), true);
+    assert.equal(namesAFile('src/newdir', dir, { fileKeyed: true }), false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 
   const absent = '/nonexistent-root-for-heuristic';
+  // Absent path: the extension heuristic runs ONLY for a file-specific key.
   for (const f of ['a.mjs', 'src/index.mjs', '/abs/x.json', 'a/b.test.mjs']) {
-    assert.equal(namesAFile(f, absent), true, f);
+    assert.equal(namesAFile(f, absent, { fileKeyed: true }), true, f);
+    assert.equal(namesAFile(f, absent), false, `${f} is ambiguous without a file-specific key`);
   }
-  for (const d of ['src', 'test/', 'a/b/c', '']) assert.equal(namesAFile(d, absent), false, d);
+  for (const d of ['src', 'test/', 'a/b/c', '']) {
+    assert.equal(namesAFile(d, absent, { fileKeyed: true }), false, d);
+  }
   // A LEADING dot is a hidden name, not an extension. Reading these as files
   // would switch off ancestor detection for the trees most likely to hold rails.
   for (const d of ['.adlc', '.github', '.claude', '.adlc/handoffs']) {
-    assert.equal(namesAFile(d, absent), false, d);
+    assert.equal(namesAFile(d, absent, { fileKeyed: true }), false, d);
   }
   // Trailing bare dot is not an extension either.
-  assert.equal(namesAFile('a.', absent), false);
+  assert.equal(namesAFile('a.', absent, { fileKeyed: true }), false);
   // Digits past 1 are still extension characters — .mp3/.7z name files.
-  for (const f of ['song.mp3', 'a.7z', 'v.h264']) assert.equal(namesAFile(f, absent), true, f);
+  for (const f of ['song.mp3', 'a.7z', 'v.h264']) {
+    assert.equal(namesAFile(f, absent, { fileKeyed: true }), true, f);
+  }
 });
 
 test('r: an existing dotted-name DIRECTORY is not a file, by either spelling', () => {
@@ -852,7 +870,7 @@ test('r: an existing dotted-name DIRECTORY is not a file, by either spelling', (
     assert.equal(namesAFile('assets.bundle', dir), false, 'relative');
     assert.equal(namesAFile(join(dir, 'assets.bundle'), dir), false, 'absolute, same root');
     assert.equal(namesAFile(join(dir, 'assets.bundle'), '/nonexistent-other-root'), false, 'absolute, other root');
-    assert.equal(namesAFile(join(dir, 'assets.bundle', 'x.mjs'), '/nonexistent-other-root'), true, 'absolute file');
+    assert.equal(namesAFile(join(dir, 'assets.bundle', 'x.mjs'), '/nonexistent-other-root', { fileKeyed: true }), true, 'absolute file');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -904,9 +922,22 @@ test('r: conflicted ticket state denies ungated tools too, not just mutators', (
     }
     // A no-target ungated call is the normal case and stays allowed — denying it
     // would take down the very tools needed to repair the broken store.
-    for (const [tool, args] of [['skill', {}], ['adlc_gate', { gate: 'spec-lint' }]]) {
+    for (const [tool, args] of [['skill', {}], ['adlc_prosecute', {}], ['adlc_gate', { gate: 'spec-lint' }]]) {
       const r = checkToolCall({ tool, args, root: dir, env });
       assert.equal(r.decision, 'allow', `${tool} → ${r.reason}`);
+    }
+    // adlc_gate forwards a nested argv that carries no extractable target, so
+    // the target check above cannot see it. A command-executor flag runs an
+    // arbitrary program and a derived-write gate writes targets no argv scan can
+    // vet — neither may run while the rail set is unresolved.
+    for (const args of [
+      { gate: 'preflight', args: ['--test-cmd', 'echo pwned'] },
+      { gate: 'model-ratchet', args: ['--review-cmd', 'echo pwned'] },
+      { gate: 'hollow-test' },
+      { gate: 'spec-lint', args: ['--write'] },
+    ]) {
+      const r = checkToolCall({ tool: 'adlc_gate', args, root: dir, env });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -208,6 +208,9 @@ export function spoofCandidateTargets(args) {
 /** Keys that name a DIRECTORY outright, so ancestor detection must stay on. */
 const DIR_KEY = /^target_?(?:dir|directory)$/i;
 
+/** Keys that name a FILE outright, licensing the extension heuristic. */
+const FILE_KEY = /^(?:target_?file|file_?path|file|path)$/i;
+
 /**
  * Spoof candidates plus the subset a directory-named key produced.
  *
@@ -220,10 +223,14 @@ const DIR_KEY = /^target_?(?:dir|directory)$/i;
  * @returns {{ targets: string[], directories: Set<string> }}
  */
 export function spoofCandidates(args) {
-  const out = new Set(extractTargets(args));
+  const fromExtract = extractTargets(args);
+  const out = new Set(fromExtract);
   const directories = new Set();
-  collectTargetKeyed(args, out, directories);
-  return { targets: [...out], directories };
+  // extractTargets only ever reads file-specific keys, so its results carry
+  // file provenance.
+  const files = new Set(fromExtract);
+  collectTargetKeyed(args, out, directories, files);
+  return { targets: [...out], directories, files };
 }
 
 /** Target-ish argument names. Narrower than a path heuristic, broader than one spelling. */
@@ -233,18 +240,27 @@ const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
 const PATH_FIELD = /^(?:path|file|file_?path)$/i;
 
 /**
- * True when a candidate names a concrete FILE rather than a directory.
+ * True when a candidate is KNOWN to name a concrete file.
  *
- * Decided from the path text because the target usually does not exist yet (a
- * tool is about to create it), so a stat cannot answer. A trailing extension is
- * the signal; an extensionless leaf is treated as a directory, which keeps
- * ancestor detection on for the case it exists to catch — deleting a directory
- * that holds a rail.
+ * Ambiguity resolves to DIRECTORY, not file, because "file" is what switches
+ * ancestor detection off. Guessing "file" from a dotted leaf is what rounds of
+ * review kept finding holes in: `assets.bundle`, `.adlc`, and `.github` are all
+ * directories that read as files under that guess, and each miss disabled the
+ * check for the rail's own parent. Only two things make a target a file here:
+ * a stat that says so, or a caller that named it with a file-specific key.
+ *
+ * The extension heuristic is therefore NOT used for an ambiguous key. It costs
+ * some over-denial on an absent file named through a bare `target`, which is
+ * the safe direction for a rail guard and is recoverable by naming the key.
  *
  * @param {string} target repo-relative or absolute path text
+ * @param {string} [root] repo root for a relative path
+ * @param {{ fileKeyed?: boolean }} [opts] the key that produced this candidate
+ *        was file-specific (filePath/targetFile/file), so an absent path may be
+ *        inferred a file from its name
  * @returns {boolean}
  */
-export function namesAFile(target, root = process.cwd()) {
+export function namesAFile(target, root = process.cwd(), { fileKeyed = false } = {}) {
   const raw = String(target ?? '').replace(/\\/g, '/');
   // A trailing slash is the caller SAYING directory; never second-guess it.
   if (/\/$/.test(raw)) return false;
@@ -256,6 +272,9 @@ export function namesAFile(target, root = process.cwd()) {
   } catch {
     // Unreadable — fall through to the name heuristic rather than guessing file.
   }
+  // Absent path: only a file-specific KEY licenses inferring a file from the
+  // name. A bare `target` stays a directory so ancestor detection stays on.
+  if (!fileKeyed) return false;
   const leaf = rel.split('/').pop() ?? '';
   // A LEADING dot is a hidden name, not an extension: `.adlc`, `.github`, and
   // `.claude` are directories, and reading them as files would switch off
@@ -282,7 +301,7 @@ export function namesAFile(target, root = process.cwd()) {
  * @param {unknown} root
  * @param {Set<string>} out
  */
-function collectTargetKeyed(root, out, directories = new Set()) {
+function collectTargetKeyed(root, out, directories = new Set(), files = new Set()) {
   const stack = [{ value: root, inTarget: false, dirKeyed: false }];
   const seen = new Set();
   while (stack.length > 0) {
@@ -312,6 +331,7 @@ function collectTargetKeyed(root, out, directories = new Set()) {
       if (names && typeof child === 'string' && child.trim() !== '') {
         out.add(child);
         if (dirNamed) directories.add(child);
+        else if (FILE_KEY.test(key)) files.add(child);
         continue;
       }
       stack.push({ value: child, inTarget: inTarget || targetKey, dirKeyed: dirNamed });
@@ -440,17 +460,42 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
           reason: `ungated tool "${name}" carries a target that cannot be vetted — ${force.reason}`,
         };
       }
+      // adlc_gate forwards a NESTED argv that carries no extractable target, so
+      // the check above cannot see it. Under conflict the rail-dependent halves
+      // of the gate policy below cannot run at all, and its rail-INDEPENDENT
+      // halves are the ones that matter here: a command-executor flag runs an
+      // arbitrary program, and a derived-write gate writes targets no argv scan
+      // can vet. Allow only a bare read-only gate — enough to diagnose the
+      // broken store, and nothing that executes or writes while it is broken.
+      if (name === 'adlc_gate') {
+        const gate = String(args?.gate ?? '').trim().toLowerCase();
+        const nested = (Array.isArray(args?.args) ? args.args : []).filter((t) => typeof t === 'string');
+        if (nested.length > 0) {
+          return {
+            decision: 'deny',
+            reason: `adlc_gate(${gate || '?'}): arguments cannot be vetted — ${force.reason} — run it via the adlc CLI, where the CI diff gate backstops it`,
+          };
+        }
+        if (!RAILS_SAFE_GATES.has(gate)) {
+          return {
+            decision: 'deny',
+            reason: `adlc_gate(${gate || '?'}): only a read-only gate may run — ${force.reason}`,
+          };
+        }
+      }
       return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
     }
     if (force.active) {
-      const { targets, directories } = spoofCandidates(args);
+      const { targets, directories, files } = spoofCandidates(args);
       for (const target of targets) {
         // Same file-vs-directory distinction MUTATING_TOOLS already gets below:
         // ancestor detection asks "would acting on this directory destroy a
         // rail", which is the wrong question for a concrete file and over-blocks
         // under an interior-wildcard rail (`src/index.mjs` reads as an ancestor
         // of `src/**/test/*.mjs`). A file is matched against the globs directly.
-        const hit = railHit(target, force.rails, root, { ancestors: directories.has(target) || !namesAFile(target, root) });
+        const hit = railHit(target, force.rails, root, {
+          ancestors: directories.has(target) || !namesAFile(target, root, { fileKeyed: files.has(target) }),
+        });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }
