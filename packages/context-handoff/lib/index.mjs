@@ -12,3 +12,7 @@ export * from './deny-persist.mjs';
 export * from './adapter.mjs';
 export * from './secret-scrub.mjs';
 export * from './recovery-exception.mjs';
+export * from './text-cap.mjs';
+export * from './capture.mjs';
+export * from './brief.mjs';
+export * from './transcript-extract.mjs';

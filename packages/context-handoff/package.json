@@ -42,7 +42,11 @@
     "./lib/bypass-grant.mjs": "./lib/bypass-grant.mjs",
     "./lib/deny-persist.mjs": "./lib/deny-persist.mjs",
     "./lib/adapter.mjs": "./lib/adapter.mjs",
-    "./lib/secret-scrub.mjs": "./lib/secret-scrub.mjs"
+    "./lib/secret-scrub.mjs": "./lib/secret-scrub.mjs",
+    "./lib/text-cap.mjs": "./lib/text-cap.mjs",
+    "./lib/capture.mjs": "./lib/capture.mjs",
+    "./lib/brief.mjs": "./lib/brief.mjs",
+    "./lib/transcript-extract.mjs": "./lib/transcript-extract.mjs"
   },
   "dependencies": {
     "@adlc/core": "1.10.0",
