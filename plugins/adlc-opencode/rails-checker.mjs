@@ -73,6 +73,32 @@ export const RAILS_SAFE_GATES = new Set([
   'lesson-foundry', 'skill-rot', 'model-ratchet', 'flail-detector', 'rails-guard',
 ]);
 
+// Gates that may run through adlc_gate while the rail set cannot be RESOLVED —
+// a conflicting active-ticket signal, an unloadable store, a missing ticket.
+//
+// A different question from RAILS_SAFE_GATES, which answers "may this run while
+// rails are FROZEN": there a rail set exists, so a known write target can be
+// vetted against it (that is what the --record-verdict and preflight-scratch
+// checks below do). Under conflict there is nothing to vet against, so the only
+// gate that is safe is one that writes NOTHING. `preflight` is the case that
+// separates the two sets: it is rails-safe because its scratch writes are fixed
+// and checkable (.adlc/tmp/preflight-test, .worktrees/preflight-test, the
+// branch metadata its probes churn), and it is NOT conflict-safe for the same
+// reason — those writes still happen and nothing can say whether they land on a
+// frozen rail.
+//
+// Membership is a source property, not a judgement call: each package listed
+// here contains no fs write and no child_process use outside its own tests, so
+// a bare invocation (nested argv is denied under conflict) can only read.
+// Deliberately absent, each with a write or exec path: preflight (scratch
+// probes, spawns the suite), premortem (--out report), rejection-mining and
+// lesson-foundry (emit plans/skills), skill-rot (rewrites skill headers),
+// model-ratchet (findings ledger, review subprocess), rails-guard (CI bootstrap
+// copies a runner to disk and executes it).
+export const CONFLICT_SAFE_GATES = new Set([
+  'spec-lint', 'parallax', 'coldstart', 'merge-forecast', 'model-router', 'flail-detector',
+]);
+
 /** Canonicalize a path to a forward-slash path relative to the repo root (lexical). */
 export function canonicalizePath(filePath, root) {
   const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
@@ -155,15 +181,42 @@ export function normalizeRails(rails) {
  * fails closed (mutating/unknown tool while rails are in force) or is benign.
  */
 export function extractTargets(args) {
-  if (!args || typeof args !== 'object') return [];
+  return extractTargetsKeyed(args).targets;
+}
+
+/**
+ * extractTargets, plus the subset whose KEY asserts the target names a concrete
+ * FILE rather than a directory.
+ *
+ * The provenance is per-key because these keys do not agree. `filePath`, `file`
+ * and a `files[]` entry all say "file" outright; a patch envelope names the
+ * files it updates. `path` says nothing — `{path: 'assets.bundle'}` is a
+ * directory as readily as a file — and a bare string in `edits[]` names an edit,
+ * not a file. Marking the whole extraction file-provenanced (what this used to
+ * do) switched ancestor detection off for every `path` argument, so a rail's own
+ * parent directory passed as `path` never hit the rail it contains.
+ *
+ * Ambiguity therefore stays out of the file set: see `namesAFile` for why that
+ * is the safe direction.
+ *
+ * @param {object} args
+ * @returns {{ targets: string[], files: Set<string> }}
+ */
+function extractTargetsKeyed(args) {
   const targets = [];
-  const push = (v) => { if (typeof v === 'string' && v.trim()) targets.push(v); };
-  push(args.filePath); push(args.path); push(args.file);
-  for (const list of [args.files, args.edits]) {
+  const files = new Set();
+  if (!args || typeof args !== 'object') return { targets, files };
+  const push = (v, fileKeyed) => {
+    if (typeof v !== 'string' || !v.trim()) return;
+    targets.push(v);
+    if (fileKeyed) files.add(v);
+  };
+  push(args.filePath, true); push(args.path, false); push(args.file, true);
+  for (const [list, entriesNameFiles] of [[args.files, true], [args.edits, false]]) {
     if (!Array.isArray(list)) continue;
     for (const entry of list) {
-      if (typeof entry === 'string') push(entry);
-      else if (entry && typeof entry === 'object') { push(entry.filePath); push(entry.path); push(entry.file); }
+      if (typeof entry === 'string') push(entry, entriesNameFiles);
+      else if (entry && typeof entry === 'object') { push(entry.filePath, true); push(entry.path, false); push(entry.file, true); }
     }
   }
   // apply_patch-style envelope bodies declare their targets in-band
@@ -174,10 +227,11 @@ export function extractTargets(args) {
     if (typeof body === 'string' && body.includes('*** ')) {
       const out = new Set();
       collectPatchPaths(body, out);
-      for (const p of out) push(p);
+      // A patch envelope names the FILES it adds/updates/deletes.
+      for (const p of out) push(p, true);
     }
   }
-  return targets;
+  return { targets, files };
 }
 
 /**
@@ -208,27 +262,37 @@ export function spoofCandidateTargets(args) {
 /** Keys that name a DIRECTORY outright, so ancestor detection must stay on. */
 const DIR_KEY = /^target_?(?:dir|directory)$/i;
 
-/** Keys that name a FILE outright, licensing the extension heuristic. */
-const FILE_KEY = /^(?:target_?file|file_?path|file|path)$/i;
+/**
+ * Keys that name a FILE outright, licensing the extension heuristic.
+ *
+ * `path` is deliberately absent even though PATH_FIELD accepts it as a target
+ * spelling: naming a target is a different question from asserting it is a
+ * file. `{target: {path: 'assets.bundle'}}` names a directory, and treating the
+ * key as file-specific would switch ancestor detection off for a rail's parent.
+ */
+const FILE_KEY = /^(?:target_?file|file_?path|file)$/i;
 
 /**
- * Spoof candidates plus the subset a directory-named key produced.
+ * Spoof candidates, plus the subsets a directory-named and a file-named key
+ * produced. A candidate in neither subset is AMBIGUOUS and gets directory
+ * treatment.
  *
  * Provenance matters because `namesAFile` can only guess for a path that does
  * not exist yet, and it guesses "file" for any dotted leaf. `{targetDir:
  * 'assets.bundle'}` says directory outright; discarding that and guessing would
- * switch off the ancestor check for the rail's own parent.
+ * switch off the ancestor check for the rail's own parent. The file subset is
+ * the same statement in the other direction, and it is why membership is
+ * decided per key rather than per source function.
  *
  * @param {object} args
- * @returns {{ targets: string[], directories: Set<string> }}
+ * @returns {{ targets: string[], directories: Set<string>, files: Set<string> }}
  */
 export function spoofCandidates(args) {
-  const fromExtract = extractTargets(args);
+  // Per-key, not bulk: extractTargets reads the generic `path` alongside the
+  // file-specific keys, so its output is a mix of both provenances.
+  const { targets: fromExtract, files } = extractTargetsKeyed(args);
   const out = new Set(fromExtract);
   const directories = new Set();
-  // extractTargets only ever reads file-specific keys, so its results carry
-  // file provenance.
-  const files = new Set(fromExtract);
   collectTargetKeyed(args, out, directories, files);
   return { targets: [...out], directories, files };
 }
@@ -464,9 +528,10 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
       // the check above cannot see it. Under conflict the rail-dependent halves
       // of the gate policy below cannot run at all, and its rail-INDEPENDENT
       // halves are the ones that matter here: a command-executor flag runs an
-      // arbitrary program, and a derived-write gate writes targets no argv scan
-      // can vet. Allow only a bare read-only gate — enough to diagnose the
-      // broken store, and nothing that executes or writes while it is broken.
+      // arbitrary program, and a writing gate writes targets nothing can vet
+      // while the rail set is unresolved. Allow only a bare NON-WRITING gate —
+      // enough to diagnose the broken store, and nothing that executes or
+      // writes while it is broken.
       if (name === 'adlc_gate') {
         const gate = String(args?.gate ?? '').trim().toLowerCase();
         const nested = (Array.isArray(args?.args) ? args.args : []).filter((t) => typeof t === 'string');
@@ -476,10 +541,13 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
             reason: `adlc_gate(${gate || '?'}): arguments cannot be vetted — ${force.reason} — run it via the adlc CLI, where the CI diff gate backstops it`,
           };
         }
-        if (!RAILS_SAFE_GATES.has(gate)) {
+        // CONFLICT_SAFE_GATES, not RAILS_SAFE_GATES: the rails-safe set permits
+        // gates whose writes are fixed and vettable against a KNOWN rail set,
+        // and there is no known rail set here.
+        if (!CONFLICT_SAFE_GATES.has(gate)) {
           return {
             decision: 'deny',
-            reason: `adlc_gate(${gate || '?'}): only a read-only gate may run — ${force.reason}`,
+            reason: `adlc_gate(${gate || '?'}): only a non-writing gate may run — ${force.reason}`,
           };
         }
       }

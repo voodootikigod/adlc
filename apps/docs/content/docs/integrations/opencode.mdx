@@ -76,6 +76,16 @@ tuple (env vars override); see the integration guide for the option table.
    check additionally reads `target`, `targetPath`, and `target_path`. Anything
    neither shape can see (a nested CLI argv, a derived or defaulted write path)
    is covered by the commit-time gate below, not in-session.
+
+   Whether a target names a **file** or a **directory** decides whether the
+   check also asks "would acting on this destroy a rail underneath it". An
+   existing path is resolved by `stat`. For a path that does not exist yet the
+   KEY decides: `filePath`, `file`, `files[]`, `targetFile`, and apply_patch
+   envelopes assert a file; `target`, `path`, `targetPath`, and `edits[]`
+   entries are ambiguous and resolve to **directory**, so `{path:
+   'assets.bundle'}` still hits an `assets.bundle/**` rail. `targetDir` and a
+   trailing slash say directory outright. The cost is over-denial on an absent
+   file named ambiguously — the safe direction, recoverable by naming the key.
 2. **Commit-time (unbypassable).** The real control is
    `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
    frozen rail set **from the trusted base ref** and rejects any PR that edits a
@@ -87,7 +97,14 @@ tuple (env vars override); see the integration guide for the option table.
 Mirrors the sibling integrations; all glob/ticket logic delegates to `@adlc/core`:
 
 - Active ticket via `ADLC_TICKET` **or** `.adlc/current-ticket.json`; a conflict
-  fails closed.
+  fails closed. With the rail set unresolved — a conflicting pointer, a store
+  that will not load, a missing ticket — nothing can be vetted against it: an
+  ungated tool carrying any target is denied, and `adlc_gate` may run only a
+  bare **non-writing** gate (`spec-lint`, `parallax`, `coldstart`,
+  `merge-forecast`, `model-router`, `flail-detector`), enough to diagnose the
+  broken store. Gates that write wait until it is repaired — `preflight`
+  included, since its scratch probes are checkable only against a rail set that
+  exists.
 - Enforcement is phase-scoped to `ADLC_P4_ENFORCEMENT=1`; otherwise no-op.
 - Rails in force = the **single** active ticket's `rails` plus the trust-root
   rails `.adlc/tickets.json` and `.adlc/current-ticket.json`.

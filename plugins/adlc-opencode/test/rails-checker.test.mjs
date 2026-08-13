@@ -5,10 +5,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkRail, checkToolCall, extractTargets, spoofCandidateTargets, namesAFile, resolveActiveTicketId } from '../rails-checker.mjs';
+import {
+  checkRail, checkToolCall, extractTargets, spoofCandidateTargets, namesAFile, resolveActiveTicketId,
+  RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
+} from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
 function repo({ tickets, current } = {}) {
@@ -801,7 +804,13 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
   try {
     // File-specific keys license file semantics, so ancestor detection is off
     // and a non-rail file runs.
-    for (const args of [{ targetFile: 'src/index.mjs' }, { path: 'src/index.mjs' }, { filePath: 'src/index.mjs' }]) {
+    for (const args of [
+      { targetFile: 'src/index.mjs' },
+      { filePath: 'src/index.mjs' },
+      { file: 'src/index.mjs' },
+      { files: ['src/index.mjs'] },
+      { edits: [{ filePath: 'src/index.mjs' }] },
+    ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
     }
@@ -809,8 +818,14 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
     // ancestor check stays on. That over-denies an absent file named this way —
     // the deliberate cost of not guessing, recoverable by naming the key. An
     // EXISTING file is still resolved by stat, so this is only the absent case.
-    const ambiguous = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
-    assert.equal(ambiguous.decision, 'deny', ambiguous.reason);
+    //
+    // `path` sits on the ambiguous side too: it is the key a caller reaches for
+    // when passing a DIRECTORY, so it may not assert file-ness. `targetPath` is
+    // the same word with a target prefix.
+    for (const args of [{ target: 'src/index.mjs' }, { path: 'src/index.mjs' }, { targetPath: 'src/index.mjs' }, { edits: [{ path: 'src/index.mjs' }] }]) {
+      const ambiguous = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(ambiguous.decision, 'deny', `${JSON.stringify(args)} → ${ambiguous.reason}`);
+    }
     mkdirSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src', 'index.mjs'), '');
     const stated = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -904,6 +919,42 @@ test('r: a directory-named key keeps ancestor detection even when it looks dotte
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: a generic path key does not assert file-ness, so a rail parent still hits', () => {
+  // File provenance is per KEY, not per extractor. `path` is what a caller
+  // reaches for when naming a directory, so bulk-marking every extractTargets
+  // result as file-provenanced switched ancestor detection off for it and let a
+  // rail's own parent directory through under an absent dotted name.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['assets.bundle/**'] }] } });
+  try {
+    for (const args of [
+      { path: 'assets.bundle' },
+      { edits: [{ path: 'assets.bundle' }] },
+      { files: [{ path: 'assets.bundle' }] },
+      { edits: ['assets.bundle'] },
+      { target: { path: 'assets.bundle' } },
+    ]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+      assert.match(r.reason, /frozen rail "assets\.bundle\/\*\*"/);
+    }
+    // A key that DOES assert file-ness keeps its file semantics: the caller has
+    // said this is a file, so the ancestor question is not the one being asked.
+    for (const args of [
+      { filePath: 'assets.bundle' },
+      { file: 'assets.bundle' },
+      { files: ['assets.bundle'] },
+      { targetFile: 'assets.bundle' },
+    ]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+    // …and a stat still overrules the key, in both directions.
+    mkdirSync(join(dir, 'assets.bundle'), { recursive: true });
+    const stated = checkToolCall({ tool: 'task', args: { filePath: 'assets.bundle' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(stated.decision, 'deny', `an existing directory is not a file → ${stated.reason}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('r: conflicted ticket state denies ungated tools too, not just mutators', () => {
   // The ungated branch is the one that allows by DEFAULT, so falling through on
   // an unresolved rail set is the fail-open the other branches close.
@@ -940,6 +991,68 @@ test('r: conflicted ticket state denies ungated tools too, not just mutators', (
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: under conflict a gate must be non-writing, not merely rails-safe', () => {
+  // RAILS_SAFE_GATES answers "may this run while rails are FROZEN" — a known
+  // rail set exists there, so a gate's fixed write targets can be vetted against
+  // it. Under conflict there is no rail set to vet against, so a gate that
+  // writes at all cannot be cleared. preflight is exactly that case: rails-safe
+  // (its scratch probes are checkable) and NOT conflict-safe (they still write).
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T-DOES-NOT-EXIST' };
+    for (const gate of [...RAILS_SAFE_GATES].filter((g) => !CONFLICT_SAFE_GATES.has(g))) {
+      const r = checkToolCall({ tool: 'adlc_gate', args: { gate }, root: dir, env });
+      assert.equal(r.decision, 'deny', `${gate} → ${r.reason}`);
+      assert.match(r.reason, /only a non-writing gate may run/);
+    }
+    // The diagnostics an operator needs to inspect the broken store stay usable.
+    for (const gate of CONFLICT_SAFE_GATES) {
+      const r = checkToolCall({ tool: 'adlc_gate', args: { gate }, root: dir, env });
+      assert.equal(r.decision, 'allow', `${gate} → ${r.reason}`);
+    }
+    // Every conflict-safe gate is rails-safe: the conflict question is strictly
+    // harder, so its answer set cannot be wider.
+    for (const gate of CONFLICT_SAFE_GATES) {
+      assert.ok(RAILS_SAFE_GATES.has(gate), `${gate} must also be rails-safe`);
+    }
+    // While rails are merely FROZEN the wider set still applies — this is a
+    // conflict-only tightening, not a blanket demotion of preflight.
+    const frozen = checkToolCall({ tool: 'adlc_gate', args: { gate: 'preflight', args: [] }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(frozen.decision, 'allow', frozen.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: no conflict-safe gate package writes files or spawns processes', () => {
+  // Membership in CONFLICT_SAFE_GATES is a claim about the gate's SOURCE: a
+  // bare invocation can only read. Pin the claim to the source rather than to a
+  // reviewer's memory of it, so a gate that grows a write path fails here
+  // instead of quietly becoming allowed while the ticket store is broken.
+  //
+  // Scope of the claim: the gate's OWN sources. A few of these can reach a
+  // ledger writer in @adlc/gate-manifest, but only through a verdict flag, and
+  // under conflict any nested argv is denied before the gate name is consulted.
+  const root = new URL('../../../packages/', import.meta.url);
+  const WRITES = /\b(?:writeFileSync|appendFileSync|mkdirSync|rmSync|renameSync|copyFileSync|createWriteStream|writeFile|node:child_process)\b/;
+  for (const gate of CONFLICT_SAFE_GATES) {
+    const pkgDir = new URL(`${gate}/`, root);
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === 'test') continue;
+        const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir);
+        if (entry.isDirectory()) walk(child);
+        else if (entry.name.endsWith('.mjs')) files.push(child);
+      }
+    };
+    walk(pkgDir);
+    assert.ok(files.length > 0, `${gate}: no sources scanned — is the package path right?`);
+    for (const file of files) {
+      const src = readFileSync(file, 'utf8');
+      assert.ok(!WRITES.test(src), `${gate}: ${file.pathname} writes or spawns — it cannot be conflict-safe`);
+    }
+  }
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {
