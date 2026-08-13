@@ -360,22 +360,30 @@ export function namesAFile(target, root = process.cwd(), { fileKeyed = false } =
  * the same shape this helper exists to close — nest one level past it and the
  * scan stops looking — and an explicit stack also removes the recursion depth
  * a hostile payload could otherwise exhaust. `seen` keeps a self-referencing
- * object from looping forever.
+ * object from looping forever, tracked per (object, inTarget, dirKeyed) — not
+ * per object alone. What a visit collects depends on that context, so an
+ * object aliased under both a non-target and a target key must be walked once
+ * per context: identity-only tracking let whichever alias popped first (the
+ * non-target one, under LIFO order) suppress the target-context visit
+ * entirely, and the rail target was never collected. Termination holds — each
+ * object is visited at most once per context, and there are only four.
  *
  * @param {unknown} root
  * @param {Set<string>} out
  */
 function collectTargetKeyed(root, out, directories = new Set(), files = new Set()) {
   const stack = [{ value: root, inTarget: false, dirKeyed: false }];
-  const seen = new Set();
+  const seen = new Map(); // object → bitmask of (inTarget, dirKeyed) contexts already walked
   while (stack.length > 0) {
     const { value, inTarget, dirKeyed } = stack.pop();
     // Split from the cycle check on purpose: folded into one condition, a
     // swapped operator turns the loop-termination guard into an infinite loop
     // on self-referencing args, which a test can only hang on rather than fail.
     if (!value || typeof value !== 'object') continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
+    const ctxBit = 1 << ((inTarget ? 1 : 0) | (dirKeyed ? 2 : 0));
+    const seenCtx = seen.get(value) ?? 0;
+    if ((seenCtx & ctxBit) !== 0) continue;
+    seen.set(value, seenCtx | ctxBit);
     if (Array.isArray(value)) {
       for (const item of value) {
         if (inTarget && typeof item === 'string' && item.trim() !== '') {

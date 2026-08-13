@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  checkRail, checkToolCall, extractTargets, spoofCandidateTargets, namesAFile, resolveActiveTicketId,
+  checkRail, checkToolCall, extractTargets, spoofCandidateTargets, spoofCandidates, namesAFile, resolveActiveTicketId,
   RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
 } from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
@@ -800,6 +800,38 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets(cyclic), ['a']);
   assert.deepEqual(spoofCandidateTargets({ path: 'b', target: 'a' }), ['b', 'a']);
   assert.deepEqual(spoofCandidateTargets({}), []);
+});
+
+test('r: an object aliased outside the target subtree still yields its target-context candidates', () => {
+  // Cross-model finding (codex): `seen` tracked object identity alone, while
+  // what a visit collects depends on the (inTarget, dirKeyed) context. With ONE
+  // object aliased under both a non-target and a target key, the non-target
+  // visit pops first (the stack is LIFO), marks the object seen, and the
+  // target-context visit is skipped — the rail target is never collected.
+  const shared = { path: 'a' };
+  assert.deepEqual(spoofCandidateTargets({ target: shared, other: shared }), ['a']);
+  assert.deepEqual(spoofCandidateTargets({ other: shared, target: shared }), ['a']);
+  // Directory provenance survives aliasing too: dirKeyed is part of the context
+  // a revisit must re-establish, not just target-ness.
+  const sharedList = ['docs'];
+  const viaDir = spoofCandidates({ target_dir: sharedList, other: sharedList });
+  assert.deepEqual(viaDir.targets, ['docs']);
+  assert.ok(viaDir.directories.has('docs'));
+  // An aliased cycle across contexts still terminates: each object is visited
+  // at most once per (inTarget, dirKeyed) context.
+  const cyc = {};
+  cyc.target = cyc;
+  cyc.other = cyc;
+  assert.deepEqual(spoofCandidateTargets(cyc), []);
+});
+
+test('r: aliased args cannot slip an ungated tool past an active rail', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    const shared = { path: 'test/frozen.test.mjs' };
+    const r = checkToolCall({ tool: 'task', args: { target: shared, other: shared }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny', r.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('r: a concrete non-rail file is not read as a rail ancestor', () => {
