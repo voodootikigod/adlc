@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkRail, checkToolCall, extractTargets, spoofCandidateTargets, resolveActiveTicketId } from '../rails-checker.mjs';
+import { checkRail, checkToolCall, extractTargets, spoofCandidateTargets, namesAFile, resolveActiveTicketId } from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
 function repo({ tickets, current } = {}) {
@@ -790,6 +790,31 @@ test('r: extractTargets still does not read target — the breadth is spoof-only
   assert.deepEqual(spoofCandidateTargets(cyclic), ['a']);
   assert.deepEqual(spoofCandidateTargets({ path: 'b', target: 'a' }), ['b', 'a']);
   assert.deepEqual(spoofCandidateTargets({}), []);
+});
+
+test('r: a concrete non-rail file is not read as a rail ancestor', () => {
+  // Ancestor detection asks "would acting on this DIRECTORY destroy a rail",
+  // which is the wrong question for a file: under an interior-wildcard rail,
+  // src/index.mjs otherwise reads as an ancestor of src/**/test/*.mjs. Mutating
+  // tools already get this distinction; the ungated branch did not.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  try {
+    for (const args of [{ targetFile: 'src/index.mjs' }, { path: 'src/index.mjs' }, { target: 'src/index.mjs' }]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+    // A file the rail actually matches, and a DIRECTORY that holds one, both stay denied.
+    for (const args of [{ target: 'src/app/test/a.mjs' }, { target: 'src' }]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: namesAFile decides from the path text, not the filesystem', () => {
+  // The target usually does not exist yet, so a stat cannot answer.
+  for (const f of ['a.mjs', 'src/index.mjs', '/abs/x.json', 'a/b.test.mjs']) assert.equal(namesAFile(f), true, f);
+  for (const d of ['src', 'test/', '.adlc/handoffs', 'a/b/c', '']) assert.equal(namesAFile(d), false, d);
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {

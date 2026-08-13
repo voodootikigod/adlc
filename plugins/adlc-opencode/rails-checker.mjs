@@ -214,6 +214,23 @@ const TARGET_KEY = /^target(?:_?(?:path|file|dir|directory))?$/i;
 const PATH_FIELD = /^(?:path|file|file_?path)$/i;
 
 /**
+ * True when a candidate names a concrete FILE rather than a directory.
+ *
+ * Decided from the path text because the target usually does not exist yet (a
+ * tool is about to create it), so a stat cannot answer. A trailing extension is
+ * the signal; an extensionless leaf is treated as a directory, which keeps
+ * ancestor detection on for the case it exists to catch — deleting a directory
+ * that holds a rail.
+ *
+ * @param {string} target repo-relative or absolute path text
+ * @returns {boolean}
+ */
+export function namesAFile(target) {
+  const leaf = String(target ?? '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? '';
+  return /\.[A-Za-z0-9]+$/.test(leaf);
+}
+
+/**
  * Collect strings under a target-ish key at any reachable depth.
  *
  * Depth matters: `extractTargets` walks `files[]`/`edits[]` but reads only
@@ -371,7 +388,12 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     const force = resolveRailsInForce(root, env);
     if (force.active && !force.conflict) {
       for (const target of spoofCandidateTargets(args)) {
-        const hit = railHit(target, force.rails, root);
+        // Same file-vs-directory distinction MUTATING_TOOLS already gets below:
+        // ancestor detection asks "would acting on this directory destroy a
+        // rail", which is the wrong question for a concrete file and over-blocks
+        // under an interior-wildcard rail (`src/index.mjs` reads as an ancestor
+        // of `src/**/test/*.mjs`). A file is matched against the globs directly.
+        const hit = railHit(target, force.rails, root, { ancestors: !namesAFile(target) });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }
