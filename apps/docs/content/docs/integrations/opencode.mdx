@@ -90,6 +90,14 @@ tuple (env vars override); see the integration guide for the option table.
    added alias cannot relax the check. The cost is over-denial on an absent file
    named ambiguously or without an extension; that is the safe direction here,
    and these tools do not write files in the first place.
+
+   A claimed file is not taken at face value, because the argument spelling is
+   what a spoofing caller controls: it sheds only the ancestor form an anchored
+   `**` creates (`src/index.mjs` under a `src/**/test/*.mjs` rail). Where the
+   **rail set itself** says the target is a directory — `assets.bundle` under an
+   `assets.bundle/**` rail — the rails win over the key, so `{filePath:
+   'assets.bundle'}` is still denied. Every target is matched in both its raw
+   and its trimmed spelling, so padding a path is not a bypass either.
 2. **Commit-time (unbypassable).** The real control is
    `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
    frozen rail set **from the trusted base ref** and rejects any PR that edits a

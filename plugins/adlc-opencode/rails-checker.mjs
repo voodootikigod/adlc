@@ -449,7 +449,11 @@ const railSegments = (s) => s.split('/').filter((x) => x !== '');
 //   `packages/foo/src`  does NOT cover it          (literal mismatch)
 //   `test2`           does NOT cover `test/**`     (sibling, no over-block)
 //   `test/x.txt`      does NOT cover `test/*.mjs`  (same depth → globMatch's job)
-export function targetIsRailAncestor(target, rail) {
+//
+// `opts.throughDoubleStar` (default true) allows the second form: an anchored
+// `**` absorbing the target's remaining segments. A caller that has been told
+// the target is a FILE turns it off — see railHit's `ancestors: 'literal'`.
+export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } = {}) {
   const T = railSegments(target);
   const R = railSegments(rail);
   for (let i = 0; ; i++) {
@@ -464,7 +468,7 @@ export function targetIsRailAncestor(target, rail) {
       // root directory, so ancestor-destruction isn't well-defined — rely on
       // globMatch (direct hits), the repo-root check, and the file.edited
       // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
-      return i > 0;
+      return throughDoubleStar && i > 0;
     }
     if (/[*?[]/.test(seg)) continue;                // wildcard segment matches this target segment
     if (seg !== T[i]) return false;                 // literal mismatch → not an ancestor
@@ -481,18 +485,38 @@ export function targetIsRailAncestor(target, rail) {
 // not be denied just because an interior-`**` rail could nest a match under a
 // same-named dir. Callers that know the op targets one concrete file
 // (edit/write/apply_patch, the file.edited watcher) pass `{ ancestors: false }`.
+//
+// `'literal'` is the middle setting, for a target something UNTRUSTED called a
+// file — an arg key, not a stat. It keeps every ancestor form except the one an
+// anchored `**` creates. The distinction is the rail set's own evidence: a rail
+// `assets.bundle/**` states that `assets.bundle` is a DIRECTORY, so a caller
+// naming it as a file contradicts the frozen rails, and the rails are the
+// trusted side. But `src/**/test/*.mjs` states nothing about `src/index.mjs` —
+// only the `**` relates them — so a file there is left alone. That is the
+// over-block requirement 3 exists to prevent, and the bypass a caller would get
+// by spelling a rail's parent directory as `filePath`.
 export function railHit(target, rails, root, { ancestors = true } = {}) {
-  const candidates = new Set([canonicalizePath(target, root), resolveRailPath(target, root)]);
+  const ancestorsOn = ancestors !== false;
+  const throughDoubleStar = ancestors !== 'literal';
+  // Both the raw spelling and the trimmed one: a padded ` test/x.mjs ` resolves
+  // to a different lexical path here while any tool that normalizes its input
+  // acts on the frozen one, so checking a single form is a spelling bypass. Same
+  // reason both the lexical and the symlink-resolved path are checked.
+  const candidates = new Set();
+  for (const form of new Set([String(target ?? ''), String(target ?? '').trim()])) {
+    candidates.add(canonicalizePath(form, root));
+    candidates.add(resolveRailPath(form, root));
+  }
   for (const path of candidates) {
     // A mutation targeting the repo ROOT (e.g. `rm -rf .`) destroys every rail.
     // Return a guaranteed-truthy token even if the rail set is somehow blank.
-    if (ancestors && (path === '' || path === '.')) return rails.find(Boolean) ?? '(repo root)';
+    if (ancestorsOn && (path === '' || path === '.')) return rails.find(Boolean) ?? '(repo root)';
     for (const rail of rails) {
       // (a) target is the rail or inside it (normal case).
       if (rail === path || globMatch(rail, path)) return rail;
       // (b) target is an ANCESTOR directory of the rail — deleting/moving it
       // destroys the frozen rail without ever matching the glob.
-      if (ancestors && targetIsRailAncestor(path, rail)) return rail;
+      if (ancestorsOn && targetIsRailAncestor(path, rail, { throughDoubleStar })) return rail;
     }
   }
   return null;
@@ -595,10 +619,16 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         // ancestor detection asks "would acting on this directory destroy a
         // rail", which is the wrong question for a concrete file and over-blocks
         // under an interior-wildcard rail (`src/index.mjs` reads as an ancestor
-        // of `src/**/test/*.mjs`). A file is matched against the globs directly.
-        const hit = railHit(target, force.rails, root, {
-          ancestors: directories.has(target) || !namesAFile(target, root, { fileKeyed: files.has(target) }),
-        });
+        // of `src/**/test/*.mjs`).
+        //
+        // But "file" here is at best a claim by the caller, and this is the
+        // branch whose whole job is not to trust that caller — so a claimed file
+        // gets `'literal'`, not `false`. It stops the `**`-absorbed ancestor
+        // form (the over-block) while keeping the form where the rail set itself
+        // says the target is a directory, which is the spelling a spoofing call
+        // would otherwise use to shed the check.
+        const claimedFile = !directories.has(target) && namesAFile(target, root, { fileKeyed: files.has(target) });
+        const hit = railHit(target, force.rails, root, { ancestors: claimedFile ? 'literal' : true });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }

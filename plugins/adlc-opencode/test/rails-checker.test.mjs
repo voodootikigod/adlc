@@ -873,6 +873,33 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
       const ambiguous = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(ambiguous.decision, 'deny', `${JSON.stringify(args)} → ${ambiguous.reason}`);
     }
+    // Provenance merges CONSERVATIVELY across the deduplicated candidate: one
+    // ambiguous spelling revokes the file assertion another key made about the
+    // same path, so a caller cannot shed the ancestor check by ADDING an alias.
+    // Both property orders, because a walk order that only works one way is the
+    // same defect waiting for a different serializer.
+    for (const args of [
+      { target: 'src/index.mjs', filePath: 'src/index.mjs' },
+      { filePath: 'src/index.mjs', target: 'src/index.mjs' },
+      { files: ['src/index.mjs'], path: 'src/index.mjs' },
+      { targetFile: 'src/index.mjs', edits: [{ path: 'src/index.mjs' }] },
+    ]) {
+      const aliased = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(aliased.decision, 'deny', `${JSON.stringify(args)} → ${aliased.reason}`);
+    }
+    // Padding is a spelling, not a different path: a tool that trims its input
+    // would act on the frozen one. Checked on the mutating branch too, which is
+    // the branch that actually writes.
+    for (const [tool, args] of [
+      ['task', { target: ' src/app/test/a.mjs ' }],
+      ['task', { filePath: 'src/app/test/a.mjs ' }],
+      ['task', { edits: [{ target: '  src/app/test/a.mjs' }] }],
+      ['write', { filePath: ' src/app/test/a.mjs ' }],
+      ['custom_writer', { path: ' src/app/test/a.mjs ' }],
+    ]) {
+      const padded = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(padded.decision, 'deny', `${tool} ${JSON.stringify(args)} → ${padded.reason}`);
+    }
     mkdirSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src', 'index.mjs'), '');
     const stated = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
@@ -984,28 +1011,17 @@ test('r: a generic path key does not assert file-ness, so a rail parent still hi
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
       assert.match(r.reason, /frozen rail "assets\.bundle\/\*\*"/);
     }
-    // A key that DOES assert file-ness keeps its file semantics: the caller has
-    // said this is a file, so the ancestor question is not the one being asked.
+    // A key that asserts file-ness does NOT rescue this one, because the rail
+    // set contradicts it: `assets.bundle/**` states that `assets.bundle` is a
+    // directory, and the rails are the trusted side of that disagreement. Only
+    // the `**`-absorbed ancestor form is dropped for a claimed file — see the
+    // interior-wildcard test above, where the rails say nothing about the
+    // target and it is allowed.
     for (const args of [
       { filePath: 'assets.bundle' },
       { file: 'assets.bundle' },
       { files: ['assets.bundle'] },
       { targetFile: 'assets.bundle' },
-    ]) {
-      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
-      assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
-    }
-    // Provenance merges CONSERVATIVELY across the deduplicated candidate: one
-    // ambiguous spelling revokes the file assertion another key made about the
-    // same path. Otherwise the arg shape — which is what a spoofing caller
-    // controls — could switch ancestor detection off by ADDING an alias. Both
-    // property orders, because a walk order that only works one way is the same
-    // defect waiting for a different serializer.
-    for (const args of [
-      { target: 'assets.bundle', filePath: 'assets.bundle' },
-      { filePath: 'assets.bundle', target: 'assets.bundle' },
-      { files: ['assets.bundle'], path: 'assets.bundle' },
-      { targetFile: 'assets.bundle', edits: [{ path: 'assets.bundle' }] },
     ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
