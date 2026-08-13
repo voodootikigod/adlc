@@ -987,10 +987,52 @@ test('r: a generic path key does not assert file-ness, so a rail parent still hi
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
     }
+    // Provenance merges CONSERVATIVELY across the deduplicated candidate: one
+    // ambiguous spelling revokes the file assertion another key made about the
+    // same path. Otherwise the arg shape — which is what a spoofing caller
+    // controls — could switch ancestor detection off by ADDING an alias. Both
+    // property orders, because a walk order that only works one way is the same
+    // defect waiting for a different serializer.
+    for (const args of [
+      { target: 'assets.bundle', filePath: 'assets.bundle' },
+      { filePath: 'assets.bundle', target: 'assets.bundle' },
+      { files: ['assets.bundle'], path: 'assets.bundle' },
+      { targetFile: 'assets.bundle', edits: [{ path: 'assets.bundle' }] },
+    ]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+    }
     // …and a stat still overrules the key, in both directions.
     mkdirSync(join(dir, 'assets.bundle'), { recursive: true });
     const stated = checkToolCall({ tool: 'task', args: { filePath: 'assets.bundle' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
     assert.equal(stated.decision, 'deny', `an existing directory is not a file → ${stated.reason}`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: a file-specific key does not make an absent extensionless path a file', () => {
+  // The key licenses the extension heuristic; it is not authoritative on its
+  // own, because `filePath` is a key plenty of tools hand a directory. So an
+  // absent `src/Makefile` keeps ancestor detection and is over-denied under an
+  // interior-wildcard rail. Pinned as a DECISION, not left to be rediscovered:
+  // the alternative direction (key wins outright) switches the check off for an
+  // absent `{filePath: '.adlc'}` too, and this predicate only gates tools that
+  // never write files, so over-denial here is a visible refusal rather than a
+  // miss. A stat flips it the moment the file exists.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    for (const leaf of ['Makefile', 'Dockerfile', 'LICENSE']) {
+      const r = checkToolCall({ tool: 'task', args: { targetFile: `src/${leaf}` }, root: dir, env });
+      assert.equal(r.decision, 'deny', `absent src/${leaf} → ${r.reason}`);
+    }
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'Makefile'), '');
+    const stated = checkToolCall({ tool: 'task', args: { targetFile: 'src/Makefile' }, root: dir, env });
+    assert.equal(stated.decision, 'allow', `an existing file is resolved by stat → ${stated.reason}`);
+    // The structured mutators are unaffected either way: they take the
+    // singleFile path, which never asks the ancestor question.
+    const writer = checkToolCall({ tool: 'write', args: { filePath: 'src/Dockerfile' }, root: dir, env });
+    assert.equal(writer.decision, 'allow', writer.reason);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -197,19 +197,26 @@ export function extractTargets(args) {
  * parent directory passed as `path` never hit the rail it contains.
  *
  * Ambiguity therefore stays out of the file set: see `namesAFile` for why that
- * is the safe direction.
+ * is the safe direction. It is reported alongside rather than merely omitted,
+ * because candidates are deduplicated by string and provenance must merge
+ * CONSERVATIVELY when one path arrives under two keys. Otherwise adding a
+ * second spelling weakens the check — `{target: 'x', filePath: 'x'}` would drop
+ * the ambiguous half and turn ancestor detection off — and in the branch this
+ * feeds, the arg shape is exactly what a spoofing caller controls.
  *
  * @param {object} args
- * @returns {{ targets: string[], files: Set<string> }}
+ * @returns {{ targets: string[], files: Set<string>, ambiguous: Set<string> }}
  */
 function extractTargetsKeyed(args) {
   const targets = [];
   const files = new Set();
-  if (!args || typeof args !== 'object') return { targets, files };
+  const ambiguous = new Set();
+  if (!args || typeof args !== 'object') return { targets, files, ambiguous };
   const push = (v, fileKeyed) => {
     if (typeof v !== 'string' || !v.trim()) return;
     targets.push(v);
     if (fileKeyed) files.add(v);
+    else ambiguous.add(v);
   };
   push(args.filePath, true); push(args.path, false); push(args.file, true);
   for (const [list, entriesNameFiles] of [[args.files, true], [args.edits, false]]) {
@@ -231,7 +238,7 @@ function extractTargetsKeyed(args) {
       for (const p of out) push(p, true);
     }
   }
-  return { targets, files };
+  return { targets, files, ambiguous };
 }
 
 /**
@@ -290,10 +297,15 @@ const FILE_KEY = /^(?:target_?file|file_?path|file)$/i;
 export function spoofCandidates(args) {
   // Per-key, not bulk: extractTargets reads the generic `path` alongside the
   // file-specific keys, so its output is a mix of both provenances.
-  const { targets: fromExtract, files } = extractTargetsKeyed(args);
+  const { targets: fromExtract, files, ambiguous } = extractTargetsKeyed(args);
   const out = new Set(fromExtract);
   const directories = new Set();
-  collectTargetKeyed(args, out, directories, files);
+  collectTargetKeyed(args, out, directories, files, ambiguous);
+  // Conservative merge over the deduplicated candidates: one ambiguous spelling
+  // of a path revokes the file assertion another key made about it, so a caller
+  // cannot switch ancestor detection off by ADDING an alias. `directories` needs
+  // no such pass — the consumer already lets it override.
+  for (const target of ambiguous) files.delete(target);
   return { targets: [...out], directories, files };
 }
 
@@ -310,12 +322,19 @@ const PATH_FIELD = /^(?:path|file|file_?path)$/i;
  * ancestor detection off. Guessing "file" from a dotted leaf is what rounds of
  * review kept finding holes in: `assets.bundle`, `.adlc`, and `.github` are all
  * directories that read as files under that guess, and each miss disabled the
- * check for the rail's own parent. Only two things make a target a file here:
- * a stat that says so, or a caller that named it with a file-specific key.
+ * check for the rail's own parent.
  *
- * The extension heuristic is therefore NOT used for an ambiguous key. It costs
- * some over-denial on an absent file named through a bare `target`, which is
- * the safe direction for a rail guard and is recoverable by naming the key.
+ * So a stat decides whenever the path exists. For an absent path the key and
+ * the name must BOTH say file: a file-specific key licenses the extension
+ * heuristic, and it is not authoritative on its own, because `filePath` is a
+ * key plenty of tools hand a directory. An absent `{filePath: 'src/Makefile'}`
+ * therefore keeps ancestor detection and can be over-denied under an
+ * interior-wildcard rail — deliberate, since this predicate only gates tools
+ * that do not write files (the structured mutators take the `singleFile` path),
+ * and over-denial there is a visible, explained refusal rather than a miss.
+ *
+ * The extension heuristic is NOT used at all for an ambiguous key, which costs
+ * the same over-denial on an absent file named through a bare `target`.
  *
  * @param {string} target repo-relative or absolute path text
  * @param {string} [root] repo root for a relative path
@@ -368,10 +387,15 @@ export function namesAFile(target, root = process.cwd(), { fileKeyed = false } =
  * entirely, and the rail target was never collected. Termination holds — each
  * object is visited at most once per context, and there are only four.
  *
+ * Provenance is recorded per occurrence, not per candidate: `directories` and
+ * `files` are the keys that said so outright, `ambiguous` is every other
+ * occurrence. The caller merges them (see `spoofCandidates`); recording only
+ * the assertions would let an added alias erase an ambiguous one.
+ *
  * @param {unknown} root
  * @param {Set<string>} out
  */
-function collectTargetKeyed(root, out, directories = new Set(), files = new Set()) {
+function collectTargetKeyed(root, out, directories = new Set(), files = new Set(), ambiguous = new Set()) {
   const stack = [{ value: root, inTarget: false, dirKeyed: false }];
   const seen = new Map(); // object → bitmask of (inTarget, dirKeyed) contexts already walked
   while (stack.length > 0) {
@@ -388,7 +412,9 @@ function collectTargetKeyed(root, out, directories = new Set(), files = new Set(
       for (const item of value) {
         if (inTarget && typeof item === 'string' && item.trim() !== '') {
           out.add(item);
+          // An array under a target key states no file-ness of its own.
           if (dirKeyed) directories.add(item);
+          else ambiguous.add(item);
         } else stack.push({ value: item, inTarget, dirKeyed });
       }
       continue;
@@ -404,6 +430,7 @@ function collectTargetKeyed(root, out, directories = new Set(), files = new Set(
         out.add(child);
         if (dirNamed) directories.add(child);
         else if (FILE_KEY.test(key)) files.add(child);
+        else ambiguous.add(child);
         continue;
       }
       stack.push({ value: child, inTarget: inTarget || targetKey, dirKeyed: dirNamed });

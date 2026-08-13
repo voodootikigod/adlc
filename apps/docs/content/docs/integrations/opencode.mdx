@@ -79,13 +79,17 @@ tuple (env vars override); see the integration guide for the option table.
 
    Whether a target names a **file** or a **directory** decides whether the
    check also asks "would acting on this destroy a rail underneath it". An
-   existing path is resolved by `stat`. For a path that does not exist yet the
-   KEY decides: `filePath`, `file`, `files[]`, `targetFile`, and apply_patch
-   envelopes assert a file; `target`, `path`, `targetPath`, and `edits[]`
-   entries are ambiguous and resolve to **directory**, so `{path:
-   'assets.bundle'}` still hits an `assets.bundle/**` rail. `targetDir` and a
-   trailing slash say directory outright. The cost is over-denial on an absent
-   file named ambiguously — the safe direction, recoverable by naming the key.
+   existing path is resolved by `stat`. A path that does not exist yet is a file
+   only if the key **and** the name both say so: `filePath`, `file`, `files[]`,
+   `targetFile`, and apply_patch envelopes license the extension heuristic,
+   which then wants a dotted leaf. Everything else resolves to **directory** —
+   an ambiguous key (`target`, `path`, `targetPath`, an `edits[]` entry), an
+   extensionless leaf, a leading-dot name, `targetDir`, a trailing slash — so
+   `{path: 'assets.bundle'}` still hits an `assets.bundle/**` rail. One
+   ambiguous spelling wins over a file-specific one for the same path, so an
+   added alias cannot relax the check. The cost is over-denial on an absent file
+   named ambiguously or without an extension; that is the safe direction here,
+   and these tools do not write files in the first place.
 2. **Commit-time (unbypassable).** The real control is
    `scripts/rails-guard-ci.mjs` (via `docs/ci/rails-guard.yml`): it reads the
    frozen rail set **from the trusted base ref** and rejects any PR that edits a
