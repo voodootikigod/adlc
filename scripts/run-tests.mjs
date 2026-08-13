@@ -125,7 +125,7 @@ export function packageSegments({ existsSync: exists = existsSync, readdirSync: 
     });
 }
 
-const SEGMENTS = [
+export const SEGMENTS = [
   ['generated-reader drift', 'node scripts/ticket-readers/generate.mjs --check'],
   ...packageSegments(),
   ['claude-code hooks', 'node --test plugins/adlc-claude-code/hooks/test/*.test.mjs'],
