@@ -7,7 +7,7 @@
 // enforcement contract (active-ticket resolution, phase gating, trust-root
 // freeze) that adlc-codex and adlc-pi already implement.
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
@@ -225,9 +225,20 @@ const PATH_FIELD = /^(?:path|file|file_?path)$/i;
  * @param {string} target repo-relative or absolute path text
  * @returns {boolean}
  */
-export function namesAFile(target) {
-  const leaf = String(target ?? '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? '';
-  return /\.[A-Za-z0-9]+$/.test(leaf);
+export function namesAFile(target, root = process.cwd()) {
+  const rel = String(target ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (rel === '') return false;
+  try {
+    const abs = isAbsolute(rel) ? rel : join(root, rel);
+    if (existsSync(abs)) return !statSync(abs).isDirectory();
+  } catch {
+    // Unreadable — fall through to the name heuristic rather than guessing file.
+  }
+  const leaf = rel.split('/').pop() ?? '';
+  // A LEADING dot is a hidden name, not an extension: `.adlc`, `.github`, and
+  // `.claude` are directories, and reading them as files would switch off
+  // ancestor detection for exactly the trees most likely to hold rails.
+  return /.\.[A-Za-z0-9]+$/.test(leaf);
 }
 
 /**
@@ -393,7 +404,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         // rail", which is the wrong question for a concrete file and over-blocks
         // under an interior-wildcard rail (`src/index.mjs` reads as an ancestor
         // of `src/**/test/*.mjs`). A file is matched against the globs directly.
-        const hit = railHit(target, force.rails, root, { ancestors: !namesAFile(target) });
+        const hit = railHit(target, force.rails, root, { ancestors: !namesAFile(target, root) });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }

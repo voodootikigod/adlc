@@ -811,10 +811,40 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('r: namesAFile decides from the path text, not the filesystem', () => {
-  // The target usually does not exist yet, so a stat cannot answer.
-  for (const f of ['a.mjs', 'src/index.mjs', '/abs/x.json', 'a/b.test.mjs']) assert.equal(namesAFile(f), true, f);
-  for (const d of ['src', 'test/', '.adlc/handoffs', 'a/b/c', '']) assert.equal(namesAFile(d), false, d);
+test('r: namesAFile prefers the filesystem and falls back to the name', () => {
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'index.mjs'), '');
+    assert.equal(namesAFile('.adlc', dir), false, 'an existing directory is not a file');
+    assert.equal(namesAFile('src/index.mjs', dir), true, 'an existing file is a file');
+    // A target that does not exist yet — a tool is about to create it — falls
+    // back to the name.
+    assert.equal(namesAFile('src/new.mjs', dir), true);
+    assert.equal(namesAFile('src/newdir', dir), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+
+  const absent = '/nonexistent-root-for-heuristic';
+  for (const f of ['a.mjs', 'src/index.mjs', '/abs/x.json', 'a/b.test.mjs']) {
+    assert.equal(namesAFile(f, absent), true, f);
+  }
+  for (const d of ['src', 'test/', 'a/b/c', '']) assert.equal(namesAFile(d, absent), false, d);
+  // A LEADING dot is a hidden name, not an extension. Reading these as files
+  // would switch off ancestor detection for the trees most likely to hold rails.
+  for (const d of ['.adlc', '.github', '.claude', '.adlc/handoffs']) {
+    assert.equal(namesAFile(d, absent), false, d);
+  }
+  // Trailing bare dot is not an extension either.
+  assert.equal(namesAFile('a.', absent), false);
+});
+
+test('r: a dot-directory holding a rail keeps ancestor detection', () => {
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['.adlc/handoffs/**'] }] } });
+  try {
+    mkdirSync(join(dir, '.adlc', 'handoffs'), { recursive: true });
+    const r = checkToolCall({ tool: 'task', args: { target: '.adlc' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(r.decision, 'deny', r.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {
