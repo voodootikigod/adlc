@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  checkRail, checkToolCall, extractTargets, spoofCandidateTargets, spoofCandidates, namesAFile, resolveActiveTicketId,
+  checkRail, checkToolCall, checkShellCall, extractTargets, spoofCandidateTargets, spoofCandidates, namesAFile, resolveActiveTicketId,
   targetIsRailAncestor, RAILS_SAFE_GATES, CONFLICT_SAFE_GATES,
 } from '../rails-checker.mjs';
 import { adlcRailsGuard } from '../index.mjs';
@@ -1117,6 +1117,23 @@ test('r: narrowed ancestor matching stays linear on a hostile target path', () =
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: an embedded-globstar rail still denies its ancestor directory', () => {
+  // End-to-end witness for the spelling a segment-wise matcher cannot decide.
+  // The rail's concrete matches live under `a/foo`, so acting on that directory
+  // destroys them even though it never matches the glob itself.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['a/foo**bar/**'] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    // A directory-affecting op: an unknown tool, and a shell removal.
+    assert.equal(checkToolCall({ tool: 'custom_writer', args: { path: 'a/foo' }, root: dir, env }).decision, 'deny');
+    assert.equal(checkShellCall({ command: 'rm -rf a/foo', root: dir, env }).decision, 'deny');
+    // And through the narrowed mode, which a claimed file selects.
+    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'a/foo' }, root: dir, env }).decision, 'deny');
+    // A sibling directory the rail cannot reach still runs.
+    assert.equal(checkToolCall({ tool: 'custom_writer', args: { path: 'b/foo' }, root: dir, env }).decision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('r: a rail thousands of globstars deep still yields a decision', () => {
   // The other direction of the same hostile input: the RAIL is a string in the
   // ticket store, and a few thousand `**` segments is syntactically valid. A
@@ -1301,6 +1318,12 @@ test('r: targetIsRailAncestor honors an anchored ** by default and can be narrow
   assert.equal(targetIsRailAncestor('packages/foo-x/cache.bundle', 'packages/foo-*/cache.bundle/**', { throughDoubleStar: false }), true);
   assert.equal(targetIsRailAncestor('packages/bar/cache.bundle', 'packages/foo-*/cache.bundle/**', { throughDoubleStar: false }), false);
   assert.equal(targetIsRailAncestor('packages/bar/test', 'packages/foo-*/test/**'), false);
+  // An EMBEDDED `**` is the exception, because it spans `/` in @adlc/core:
+  // `a/foo**bar/**` really does cover `a/foo/x/bar/frozen.mjs`, so `a/foo` is
+  // an ancestor of it and no single segment can see that. Matching one segment
+  // at a time must not read this as a mismatch.
+  assert.equal(targetIsRailAncestor('a/foo', 'a/foo**bar/**'), true);
+  assert.equal(targetIsRailAncestor('a/foo', 'a/foo**bar/**', { throughDoubleStar: false }), true);
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {

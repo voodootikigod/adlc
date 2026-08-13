@@ -487,10 +487,18 @@ export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } 
 
 // One rail segment against one target segment, with the SAME semantics as the
 // direct hit check — `foo-*` must not read as matching `bar`, or ancestor
-// detection denies paths the rail could never match. `?` and character classes
-// are syntax @adlc/core's matcher does not implement; those keep the older
-// permissive reading so the ancestor check never matches LESS than the glob.
-const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[]/.test(pattern);
+// detection denies paths the rail could never match. A single `*` stays inside
+// its segment in @adlc/core, so segment-by-segment is the right shape for it.
+//
+// Three spellings are NOT decidable one segment at a time, and each keeps the
+// older permissive reading so the ancestor check never matches LESS than the
+// glob: `?` and character classes, which core does not implement at all, and an
+// EMBEDDED `**` (`foo**bar`), which core lets span `/` — `a/foo**bar/**` really
+// does cover `a/foo/x/bar/frozen.mjs`, so `a/foo` is an ancestor of it and one
+// segment cannot see that. A segment that IS `**` never reaches here.
+const segmentMatches = (pattern, segment) => (
+  globMatch(pattern, segment) || /[?[]/.test(pattern) || pattern.includes('**')
+);
 
 // `seen` holds the (target index, rail index) pairs already explored. The
 // answer depends on nothing else, so a state reached twice cannot answer
