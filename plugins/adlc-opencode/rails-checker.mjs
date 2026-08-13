@@ -202,9 +202,28 @@ export function extractTargets(args) {
  * @returns {string[]}
  */
 export function spoofCandidateTargets(args) {
+  return spoofCandidates(args).targets;
+}
+
+/** Keys that name a DIRECTORY outright, so ancestor detection must stay on. */
+const DIR_KEY = /^target_?(?:dir|directory)$/i;
+
+/**
+ * Spoof candidates plus the subset a directory-named key produced.
+ *
+ * Provenance matters because `namesAFile` can only guess for a path that does
+ * not exist yet, and it guesses "file" for any dotted leaf. `{targetDir:
+ * 'assets.bundle'}` says directory outright; discarding that and guessing would
+ * switch off the ancestor check for the rail's own parent.
+ *
+ * @param {object} args
+ * @returns {{ targets: string[], directories: Set<string> }}
+ */
+export function spoofCandidates(args) {
   const out = new Set(extractTargets(args));
-  collectTargetKeyed(args, out);
-  return [...out];
+  const directories = new Set();
+  collectTargetKeyed(args, out, directories);
+  return { targets: [...out], directories };
 }
 
 /** Target-ish argument names. Narrower than a path heuristic, broader than one spelling. */
@@ -226,7 +245,10 @@ const PATH_FIELD = /^(?:path|file|file_?path)$/i;
  * @returns {boolean}
  */
 export function namesAFile(target, root = process.cwd()) {
-  const rel = String(target ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const raw = String(target ?? '').replace(/\\/g, '/');
+  // A trailing slash is the caller SAYING directory; never second-guess it.
+  if (/\/$/.test(raw)) return false;
+  const rel = raw.replace(/\/+$/, '');
   if (rel === '') return false;
   try {
     const abs = isAbsolute(rel) ? rel : join(root, rel);
@@ -260,11 +282,11 @@ export function namesAFile(target, root = process.cwd()) {
  * @param {unknown} root
  * @param {Set<string>} out
  */
-function collectTargetKeyed(root, out) {
-  const stack = [{ value: root, inTarget: false }];
+function collectTargetKeyed(root, out, directories = new Set()) {
+  const stack = [{ value: root, inTarget: false, dirKeyed: false }];
   const seen = new Set();
   while (stack.length > 0) {
-    const { value, inTarget } = stack.pop();
+    const { value, inTarget, dirKeyed } = stack.pop();
     // Split from the cycle check on purpose: folded into one condition, a
     // swapped operator turns the loop-termination guard into an infinite loop
     // on self-referencing args, which a test can only hang on rather than fail.
@@ -273,8 +295,10 @@ function collectTargetKeyed(root, out) {
     seen.add(value);
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (inTarget && typeof item === 'string' && item.trim() !== '') out.add(item);
-        else stack.push({ value: item, inTarget });
+        if (inTarget && typeof item === 'string' && item.trim() !== '') {
+          out.add(item);
+          if (dirKeyed) directories.add(item);
+        } else stack.push({ value: item, inTarget, dirKeyed });
       }
       continue;
     }
@@ -284,11 +308,13 @@ function collectTargetKeyed(root, out) {
       // `{target: {path: '…'}}` names a file just as plainly as `{target: '…'}`.
       // Descending without carrying that context loses the whole shape.
       const names = targetKey || (inTarget && PATH_FIELD.test(key));
+      const dirNamed = dirKeyed || DIR_KEY.test(key);
       if (names && typeof child === 'string' && child.trim() !== '') {
         out.add(child);
+        if (dirNamed) directories.add(child);
         continue;
       }
-      stack.push({ value: child, inTarget: inTarget || targetKey });
+      stack.push({ value: child, inTarget: inTarget || targetKey, dirKeyed: dirNamed });
     }
   }
 }
@@ -397,14 +423,34 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     // extractable target that resolves to a frozen rail, treat the name as
     // spoofed/abused and deny rather than allow purely by name.
     const force = resolveRailsInForce(root, env);
-    if (force.active && !force.conflict) {
-      for (const target of spoofCandidateTargets(args)) {
+    // Conflicted ticket state: the rail set is unresolved, so a target cannot be
+    // vetted. Previously the whole block was skipped and the branch fell through
+    // to allow — the ONE branch that allows by default also failing open exactly
+    // when rail state is broken.
+    //
+    // Deny only a call that actually carries a target. A no-target ungated call
+    // is the normal case (that is why these names are ungated at all), and
+    // blanket-denying would take `adlc_gate` and `adlc_prosecute` down with it —
+    // the tools an operator needs to diagnose and repair the broken store.
+    if (force.conflict) {
+      const { targets } = spoofCandidates(args);
+      if (targets.length > 0) {
+        return {
+          decision: 'deny',
+          reason: `ungated tool "${name}" carries a target that cannot be vetted — ${force.reason}`,
+        };
+      }
+      return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
+    }
+    if (force.active) {
+      const { targets, directories } = spoofCandidates(args);
+      for (const target of targets) {
         // Same file-vs-directory distinction MUTATING_TOOLS already gets below:
         // ancestor detection asks "would acting on this directory destroy a
         // rail", which is the wrong question for a concrete file and over-blocks
         // under an interior-wildcard rail (`src/index.mjs` reads as an ancestor
         // of `src/**/test/*.mjs`). A file is matched against the globs directly.
-        const hit = railHit(target, force.rails, root, { ancestors: !namesAFile(target, root) });
+        const hit = railHit(target, force.rails, root, { ancestors: directories.has(target) || !namesAFile(target, root) });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };
         }

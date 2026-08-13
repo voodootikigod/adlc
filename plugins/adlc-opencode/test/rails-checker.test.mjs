@@ -865,6 +865,52 @@ test('r: a dot-directory holding a rail keeps ancestor detection', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('r: a directory-named key keeps ancestor detection even when it looks dotted', () => {
+  // namesAFile can only guess for a path that does not exist yet, and guesses
+  // "file" for any dotted leaf. targetDir says directory outright, and a
+  // trailing slash is the caller saying so too.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['assets.bundle/**'] }] } });
+  try {
+    for (const args of [
+      { targetDir: 'assets.bundle' },
+      { targetDir: 'assets.bundle/' },
+      { targetDirectory: 'assets.bundle' },
+      { target: 'assets.bundle/' },
+      { edits: [{ targetDir: 'assets.bundle' }] },
+    ]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
+    }
+    const ok = checkToolCall({ tool: 'task', args: { targetDir: 'other.bundle' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(ok.decision, 'allow', ok.reason);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: conflicted ticket state denies ungated tools too, not just mutators', () => {
+  // The ungated branch is the one that allows by DEFAULT, so falling through on
+  // an unresolved rail set is the fail-open the other branches close.
+  const dir = repo({ tickets: T1_RAILED });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T-DOES-NOT-EXIST' };
+    // Carrying a target while the rail set is unresolved: nothing can vet it.
+    for (const [tool, args] of [
+      ['task', { target: 'src/anything.mjs' }],
+      ['skill', { targetDir: 'src' }],
+      ['todowrite', { edits: [{ target: 'src/x.mjs' }] }],
+      ['write', { filePath: 'src/anything.mjs' }],
+    ]) {
+      const r = checkToolCall({ tool, args, root: dir, env });
+      assert.equal(r.decision, 'deny', `${tool} → ${r.reason}`);
+    }
+    // A no-target ungated call is the normal case and stays allowed — denying it
+    // would take down the very tools needed to repair the broken store.
+    for (const [tool, args] of [['skill', {}], ['adlc_gate', { gate: 'spec-lint' }]]) {
+      const r = checkToolCall({ tool, args, root: dir, env });
+      assert.equal(r.decision, 'allow', `${tool} → ${r.reason}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('r: a mutating/unknown tool with only a target still fails closed', () => {
   const dir = repo({ tickets: T1_RAILED });
   try {
