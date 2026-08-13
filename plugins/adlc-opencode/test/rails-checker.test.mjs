@@ -1192,6 +1192,10 @@ test('r: targetIsRailAncestor honors an anchored ** by default and can be narrow
   // single-star segment, which is why this is not just "ancestors off".
   assert.equal(targetIsRailAncestor('assets.bundle', 'assets.bundle/**', { throughDoubleStar: false }), true);
   assert.equal(targetIsRailAncestor('packages/foo/test', 'packages/*/test/**', { throughDoubleStar: false }), true);
+  // A target DEEPER than the rail is not its ancestor: `a/b/c` cannot be a
+  // parent of `a/b`. Without a `**` the rail simply runs out first.
+  assert.equal(targetIsRailAncestor('a/b/c', 'a/b'), false);
+  assert.equal(targetIsRailAncestor('a/b/c', 'a/b', { throughDoubleStar: false }), false);
   // A LEADING ** anchors nothing, in either mode.
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs'), false);
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs', { throughDoubleStar: false }), false);
