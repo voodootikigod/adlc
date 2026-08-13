@@ -1041,7 +1041,15 @@ test('r: a claimed file is still denied when the rail NAMES it past a zero-width
   const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/cache.bundle/**'] }] } });
   try {
     const env = { ...ON, ADLC_TICKET: 'T1' };
-    for (const args of [{ filePath: 'src/cache.bundle' }, { targetFile: 'src/cache.bundle' }, { files: ['src/cache.bundle'] }]) {
+    for (const args of [
+      { filePath: 'src/cache.bundle' },
+      { targetFile: 'src/cache.bundle' },
+      { files: ['src/cache.bundle'] },
+      // …and with the ** absorbing a segment on the way, which is no less a
+      // naming of the last one.
+      { filePath: 'src/foo/cache.bundle' },
+      { filePath: 'src/foo/bar/cache.bundle' },
+    ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env });
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
@@ -1199,16 +1207,25 @@ test('r: targetIsRailAncestor honors an anchored ** by default and can be narrow
   // A LEADING ** anchors nothing, in either mode.
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs'), false);
   assert.equal(targetIsRailAncestor('anything', '**/*.test.mjs', { throughDoubleStar: false }), false);
-  // Narrowing stops the ** from ABSORBING segments; it does not stop reading
-  // the rail past one. A `**` that takes zero segments leaves the rail's own
-  // literal segments naming the target, which is the strongest evidence there
-  // is that it is a directory — stopping at the first ** would discard it.
+  // Narrowed, the question is whether the rail NAMES the target's LAST segment
+  // and continues past it. How the earlier segments lined up is irrelevant, so
+  // the ** may take zero segments or several.
   assert.equal(targetIsRailAncestor('src/cache.bundle', 'src/**/cache.bundle/**', { throughDoubleStar: false }), true);
+  assert.equal(targetIsRailAncestor('src/foo/cache.bundle', 'src/**/cache.bundle/**', { throughDoubleStar: false }), true);
   assert.equal(targetIsRailAncestor('a/b', 'a/**/**/b/**', { throughDoubleStar: false }), true);
-  // The boundary: a segment the rail can only match THROUGH the ** carries no
-  // literal evidence about that segment, so the narrowed mode declines it.
-  assert.equal(targetIsRailAncestor('a/b/c', 'a/**/c/**', { throughDoubleStar: false }), false);
-  assert.equal(targetIsRailAncestor('a/b/c', 'a/**/c/**'), true);
+  assert.equal(targetIsRailAncestor('a/b/c', 'a/**/c/**', { throughDoubleStar: false }), true);
+  // The boundary is the LAST segment: only the ** could hold `index.mjs` here,
+  // and a ** matches any name at all, so the rail says nothing about this one.
+  assert.equal(targetIsRailAncestor('src/index.mjs', 'src/**/cache.bundle/**', { throughDoubleStar: false }), false);
+  // A rail that names the target and then STOPS is a direct hit, not ancestry —
+  // globMatch's job, and not a reason to widen this one.
+  assert.equal(targetIsRailAncestor('src/cache.bundle', 'src/**/cache.bundle', { throughDoubleStar: false }), false);
+  // Segment matching uses the same semantics as the direct check: a partially
+  // literal wildcard must not read as matching everything, or ancestor
+  // detection denies paths the rail could never match.
+  assert.equal(targetIsRailAncestor('packages/foo-x/cache.bundle', 'packages/foo-*/cache.bundle/**', { throughDoubleStar: false }), true);
+  assert.equal(targetIsRailAncestor('packages/bar/cache.bundle', 'packages/foo-*/cache.bundle/**', { throughDoubleStar: false }), false);
+  assert.equal(targetIsRailAncestor('packages/bar/test', 'packages/foo-*/test/**'), false);
 });
 
 test('r: a mutating/unknown tool with only a target still fails closed', () => {

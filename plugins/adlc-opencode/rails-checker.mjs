@@ -453,27 +453,37 @@ const railSegments = (s) => s.split('/').filter((x) => x !== '');
 // `opts.throughDoubleStar` (default true) allows the second form: an anchored
 // `**` absorbing the target's remaining segments. A caller that has been told
 // the target is a FILE turns it off — see railHit's `ancestors: 'literal'`.
-// Narrowed, a `**` may still take ZERO segments and matching continues on the
-// rail's next segment, so the rail's own literal structure keeps its say:
-//   `src/cache.bundle` covers `src/**/cache.bundle/**`  (the rail NAMES it)
-//   `src/index.mjs`    does NOT cover `src/**/test/*.mjs` (only `**` relates them)
-// Stopping at the first `**` instead would drop the first case, and it is the
-// one where the rail set states outright that the target is a directory.
+//
+// Narrowed, the question becomes: does the rail NAME this target as a directory?
+// It does when the target's LAST segment lines up with a real rail segment that
+// has more rail after it. How the earlier segments lined up does not matter, so
+// a `**` may still absorb them:
+//   `src/cache.bundle`     covers `src/**/cache.bundle/**`  (named, ** took none)
+//   `src/foo/cache.bundle` covers `src/**/cache.bundle/**`  (named, ** took foo)
+//   `src/index.mjs` does NOT cover `src/**/test/*.mjs`      (only the ** could
+//                                                            hold the last
+//                                                            segment — the rail
+//                                                            says nothing about
+//                                                            this name)
 export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } = {}) {
-  const T = railSegments(target);
-  const R = railSegments(rail);
-  // Indices move together except across a zero-width `**`, which advances the
-  // rail alone. No backtracking: a `**` that consumed one or more of the
-  // target's segments would be matching them by wildcard, which is exactly the
-  // evidence the narrowed mode declines to accept.
-  let ti = 0;
-  for (let ri = 0; ; ) {
-    if (ti === T.length) return R.length > ri;      // target is a proper prefix of the rail pattern
+  return ancestorWalk(railSegments(target), railSegments(rail), 0, 0, throughDoubleStar);
+}
+
+// One rail segment against one target segment, with the SAME semantics as the
+// direct hit check — `foo-*` must not read as matching `bar`, or ancestor
+// detection denies paths the rail could never match. `?` and character classes
+// are syntax @adlc/core's matcher does not implement; those keep the older
+// permissive reading so the ancestor check never matches LESS than the glob.
+const segmentMatches = (pattern, segment) => globMatch(pattern, segment) || /[?[]/.test(pattern);
+
+function ancestorWalk(T, R, ti, ri, throughDoubleStar) {
+  for (;;) {
+    if (ti === T.length) return ri < R.length;      // target is a proper prefix of the rail pattern
     if (ri === R.length) return false;              // target deeper than the rail, no ** seen
     const seg = R[ri];
     if (seg === '**') {
-      // A `**` here can absorb the target's remaining segments — but ONLY if
-      // some literal/wildcard prefix already ANCHORED the match. A LEADING `**`
+      // A `**` here can absorb target segments — but ONLY if some
+      // literal/wildcard prefix already ANCHORED the match. A LEADING `**`
       // anchors nothing: it would make every path an ancestor of e.g.
       // `**/*.test.mjs`, denying all edits. Such a floating rail has no fixed
       // root directory, so ancestor-destruction isn't well-defined — rely on
@@ -481,14 +491,16 @@ export function targetIsRailAncestor(target, rail, { throughDoubleStar = true } 
       // backstop instead. Anchored `**` (a/**) legitimately covers the subtree.
       if (ri === 0) return false;
       if (throughDoubleStar) return true;
-      ri += 1;                                      // narrowed: zero-width only
-      continue;
+      // Narrowed: try every split, EXCEPT the one that lets the `**` swallow the
+      // target's last segment. That segment is the one whose directory-ness is
+      // in question, and a `**` matches any name at all — it is not evidence.
+      for (let k = ti; k < T.length; k++) {
+        if (ancestorWalk(T, R, k, ri + 1, throughDoubleStar)) return true;
+      }
+      return false;
     }
-    if (/[*?[]/.test(seg) || seg === T[ti]) {       // wildcard, or a literal that matches
-      ti += 1; ri += 1;
-      continue;
-    }
-    return false;                                   // literal mismatch → not an ancestor
+    if (!segmentMatches(seg, T[ti])) return false;  // mismatch → not an ancestor
+    ti += 1; ri += 1;
   }
 }
 
