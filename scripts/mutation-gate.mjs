@@ -140,6 +140,15 @@ export function testTargetFor(file, root = ROOT) {
   }
   if ((m = /^scripts\/(?:.+\/)?([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
     const base = m[1];
+    // An EXACT-path mapping, for a source whose tests are named after what they
+    // assert rather than after the file. It precedes the basename convention
+    // below because it does not depend on it: naming one file's test outright
+    // says nothing about how many other files share its basename. Without this,
+    // the generator has no fast target, the whole run drops to the slow path,
+    // and that path's budget cap is 3 mutants for the ENTIRE diff — so touching
+    // the generator silently stops prosecuting everything changed beside it.
+    const EXACT = { 'scripts/ticket-readers/generate.mjs': 'scripts/test/ticket-reader-generation.test.mjs' };
+    if (EXACT[file] && existsSync(join(root, EXACT[file]))) return EXACT[file];
     // A NESTED source may use the same-basename convention only when that
     // basename identifies exactly one source under scripts/**. Two files
     // sharing a name are still different files, and handing one the other's
@@ -151,13 +160,6 @@ export function testTargetFor(file, root = ROOT) {
     const f = `scripts/test/${base}.test.mjs`;
     if (existsSync(join(root, f))) return f;
     if (base === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
-    // The artifact generator's tests are named for what they assert rather than
-    // for the file, so the basename convention misses them and the whole run
-    // drops to the slow path — where the budget cap is 3 mutants for the ENTIRE
-    // diff, and a change touching the generator silently stops prosecuting
-    // everything beside it.
-    const generatorTest = 'scripts/test/ticket-reader-generation.test.mjs';
-    if (file === 'scripts/ticket-readers/generate.mjs' && existsSync(join(root, generatorTest))) return generatorTest;
     return null;
   }
   return null;

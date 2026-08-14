@@ -378,6 +378,30 @@ test('testTargetFor maps scripts/pi-live-deny.mjs to plugins/adlc-pi/test/*.test
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor maps the artifact generator to the tests that cover it', () => {
+  // Named for what they assert rather than for the file, so the same-basename
+  // convention misses them. Without the mapping the whole run drops to the slow
+  // path, whose budget cap is 3 mutants for the ENTIRE diff — so touching the
+  // generator would silently stop prosecuting everything changed beside it.
+  const root = fixtureRoot(['scripts/test'], ['scripts/test/ticket-reader-generation.test.mjs']);
+  try {
+    assert.equal(
+      testTargetFor('scripts/ticket-readers/generate.mjs', root),
+      'scripts/test/ticket-reader-generation.test.mjs',
+    );
+    // Only that file: a sibling under the same directory has no claim on those
+    // tests, and handing it theirs would be coverage that does not exist.
+    assert.equal(testTargetFor('scripts/ticket-readers/read-only-loader.mjs', root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor gives the generator no target when those tests are absent', () => {
+  const root = fixtureRoot(['scripts/test']);
+  try {
+    assert.equal(testTargetFor('scripts/ticket-readers/generate.mjs', root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor does not match a nested scripts/ path as a top-level script', () => {
   const root = fixtureRoot(['scripts/test'], ['scripts/test/mutation-gate.test.mjs']);
   try {
