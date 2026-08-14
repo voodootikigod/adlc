@@ -124,6 +124,32 @@ describe('resolveChangeSetRevision anchors to the merge-base, not the base tip',
     } finally { cleanup(repo.dir); }
   });
 
+  it('criss-cross histories (multiple best common ancestors) fail closed to null', () => {
+    // main: A → Y, then merges feat@X; feat: A → X, then merges main@Y. Both X and Y
+    // are best common ancestors, so `git merge-base --all` prints two — an identity
+    // anchored to an arbitrarily-picked one would be an identity nobody chose.
+    const repo = scratchRepo();
+    try {
+      const { dir, g } = repo;
+      g('checkout', '-q', '-b', 'feat');
+      writeFileSync(join(dir, 'feature.txt'), 'changed on feat\n');
+      g('add', '-A'); g('commit', '-qm', 'X');
+      const shaX = g('rev-parse', 'HEAD').trim();
+      g('checkout', '-q', 'main');
+      writeFileSync(join(dir, 'main-side.txt'), 'Y\n');
+      g('add', '-A'); g('commit', '-qm', 'Y');
+      g('checkout', '-q', 'feat');
+      g('merge', '-q', '--no-edit', 'main');
+      g('checkout', '-q', 'main');
+      g('merge', '-q', '--no-edit', shaX);
+      g('checkout', '-q', 'feat');
+      const all = g('merge-base', '--all', 'main', 'HEAD').trim().split('\n');
+      assert.equal(all.length, 2, 'precondition: the topology really has two best ancestors');
+      assert.equal(resolveChangeSetRevision({ cwd: dir, base: 'main' }), null,
+        'an ambiguous merge-base must refuse the identity, never guess an anchor');
+    } finally { cleanup(repo.dir); }
+  });
+
   it('AC5: disjoint histories (no merge-base) fail closed to null', () => {
     const repo = scratchRepo();
     try {

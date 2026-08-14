@@ -338,15 +338,17 @@ function renamedSources(base, root) {
 // disjoint histories; the throw reaches each caller's existing refuse-the-run
 // path — never a fall-back to the base tip, never an ungated run.
 function tierChangedFiles(base, root) {
-  const mergeBase = git(['merge-base', base, 'HEAD'], { cwd: root }).trim();
-  // Exactly ONE full sha, asserted — not assumed. Default `git merge-base` prints a
-  // single best ancestor even on criss-cross histories (verified empirically; only
-  // `--all` lists several), but if any git ever emitted more, silently taking the
-  // first would pick an ARBITRARY ancestor as the tier basis — the diff would be
-  // computed against a base nobody chose. Refuse instead: fail closed, never guess.
-  if (!/^[0-9a-f]{40,64}$/.test(mergeBase)) {
-    throw new Error(`no single merge-base between '${base}' and HEAD (git merge-base printed: ${JSON.stringify(mergeBase)})`);
+  // `--all`, then demand exactly ONE full sha. A criss-cross history has SEVERAL
+  // best common ancestors; bare `git merge-base` silently picks one of them, and an
+  // arbitrarily-picked ancestor would be a tier basis nobody chose (local and CI
+  // could even disagree). `--all` makes the ambiguity visible so it can be REFUSED:
+  // fail closed, never guess (agy cross-model review R2).
+  const mergeBases = git(['merge-base', '--all', base, 'HEAD'], { cwd: root })
+    .trim().split('\n').filter(Boolean);
+  if (mergeBases.length !== 1 || !/^[0-9a-f]{40,64}$/.test(mergeBases[0])) {
+    throw new Error(`no single unambiguous merge-base between '${base}' and HEAD (git merge-base --all printed ${mergeBases.length} entries)`);
   }
+  const mergeBase = mergeBases[0];
   const tracked = changedFiles(mergeBase, root); // working tree (and index) vs merge-base
   const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
     .split('\0').filter(Boolean);

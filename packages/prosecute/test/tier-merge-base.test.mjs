@@ -155,6 +155,33 @@ describe('adlc-prosecute tier-check anchors the diff to the merge-base (T-01M00B
     assert.match(r.stdout, /git diff --name-only <merge-base>/);
   });
 
+  it('criss-cross histories (multiple best common ancestors) fail closed (exit 1), never an arbitrary basis', () => {
+    // After mutual merges, main and feat share TWO best common ancestors —
+    // `git merge-base --all` prints both. Bare `merge-base` would silently pick
+    // one, making the tier basis (and what tiers) depend on an anchor nobody
+    // chose; the gate must refuse instead.
+    const { dir, g } = scratchRepo({
+      baseTickets: [T({ rails: [] })],
+      mutate: benignDocsEdit,
+    });
+    try {
+      const shaFeat = g('rev-parse', 'HEAD').trim();
+      g('checkout', '-q', 'main');
+      writeFileSync(join(dir, 'main-side.txt'), 'Y\n');
+      g('add', '-A'); g('commit', '-qm', 'Y');
+      g('checkout', '-q', 'feat');
+      g('merge', '-q', '--no-edit', 'main');
+      g('checkout', '-q', 'main');
+      g('merge', '-q', '--no-edit', shaFeat);
+      g('checkout', '-q', 'feat');
+      const all = g('merge-base', '--all', 'main', 'HEAD').trim().split('\n');
+      assert.equal(all.length, 2, 'precondition: the topology really has two best ancestors');
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+      assert.equal(r.status, 1, 'an ambiguous merge-base must refuse the run');
+      assert.match(r.stderr, /cannot determine the changed-file set/);
+    } finally { cleanup(dir); }
+  });
+
   it('AC5: a --base that resolves but shares NO history fails closed (exit 1), never an ungated pass', () => {
     const { dir, g } = scratchRepo({
       baseTickets: [T({ rails: [] })],
