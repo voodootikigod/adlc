@@ -429,9 +429,9 @@ export function verifyManifest({ git, trustedBase, base, migration }) {
   }
 }
 
-function isExemptManifestTrustRoot(path, base, cwd) {
+function isExemptManifestTrustRoot(path, base, head, cwd) {
   if (!isManifestFile(path)) return false;
-  const contents = resolveManifestRevisionPair({ base, cwd, file: path });
+  const contents = resolveManifestRevisionPair({ base, head, cwd, file: path });
   return Boolean(contents && isVersionOnlyChange(contents.before, contents.after, path));
 }
 
@@ -443,7 +443,11 @@ function isExemptManifestTrustRoot(path, base, cwd) {
  * never lifted; only the specific trust-root paths this PR was authorized to change.
  */
 function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, rails, messages, cwd }) {
-  const diff = git(['diff', '--name-status', '-M', `${trustedBase}...HEAD`, '--', ...immutableTrustRoots], 'git diff trust roots');
+  const headRes = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
+  if (headRes.status !== 0 || !headRes.stdout.trim()) fail('git rev-parse HEAD failed (operational error) — failing closed.');
+  const headOid = headRes.stdout.trim();
+
+  const diff = git(['diff', '--name-status', '-M', `${trustedBase}...${headOid}`, '--', ...immutableTrustRoots], 'git diff trust roots');
   if (diff.status !== 0) fail('git diff trust roots failed (operational error) — failing closed.');
   if (!diff.stdout.trim()) return unique;
 
@@ -461,7 +465,7 @@ function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique,
   // differences are version fields and lockstep repins is not an unauthorized
   // trust-root change. Filter it out before checking ceremony authorization.
   const nonExemptChangedRoots = changedTrustRoots.filter(
-    (path) => !isExemptManifestTrustRoot(path, trustedBase, cwd)
+    (path) => !isExemptManifestTrustRoot(path, trustedBase, headOid, cwd)
   );
 
   if (nonExemptChangedRoots.length === 0) return unique;
