@@ -199,13 +199,24 @@ export function untrackedNonIgnoredPaths({ cwd = process.cwd(), ignorePaths = []
 // recorded in an attestation is therefore never consulted as authority; matching the full
 // identity string is what proves the base agrees.
 //
-// BASIS — `base` → WORKING TREE, tracked paths only. NOT `base..HEAD`.
+// BASIS — MERGE-BASE of `base` and HEAD → WORKING TREE, tracked paths only. NOT `base..HEAD`,
+// and NOT the base TIP (T-01M00BNADHBEP8N4VPG9J84V8W).
 // An earlier build compared base to HEAD. It was reverted: prosecution here is
 // working-tree-inclusive on purpose, proven by `FIX A` in
 // packages/prosecute/test/prosecute-cross-model-cli.test.mjs, which asserts that an UNCOMMITTED
 // edit to a trust-root file still tiers. A committed-only identity would describe something the
 // gate does not prosecute — a fail-open. So the diff below takes ONE commit argument (compare to
 // the working tree), never two.
+//
+// That one commit is the MERGE-BASE, not the base tip. Anchored to the tip, every advance of
+// the base branch moved the identity twice over — the embedded base sha changed AND base-side
+// churn entered the digest as reversed entries — invalidating a recorded attestation for a
+// change that had not moved (the #362/#367 defect class, reintroduced one level down; the
+// carry-forward ceremony existed to paper over it). A file the change leaves at its merge-base
+// content contributes nothing when the change merges (three-way merge resolves to the base
+// side), so the merge-base anchor is faithful to what merging applies — and it is the diff a
+// reviewer actually reviewed. No merge-base (disjoint histories, unborn HEAD) → null: no
+// identity means the gate finds no attestation and refuses, the safe direction.
 //
 // The CURRENT side is always COMPUTED, never read from `git diff --raw`. Measured against git
 // 2.x, comparing a commit to the working tree reports `dstsha` as 40 zeros for an unstaged
@@ -247,11 +258,16 @@ export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, 
   }
   if (!base || String(base).trim() === '') return null;
   try {
-    const baseSha = git(['rev-parse', String(base)], cwd).toString('utf8').trim();
+    const baseTip = git(['rev-parse', String(base)], cwd).toString('utf8').trim();
+    if (!baseTip) return null;
+    // The identity's anchor: the merge-base, never the tip (see BASIS above). `git merge-base`
+    // exits non-zero when no common ancestor exists, which the enclosing catch turns into the
+    // fail-closed null.
+    const baseSha = git(['merge-base', baseTip, 'HEAD'], cwd).toString('utf8').trim();
     if (!baseSha) return null;
     // --raw: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0"
     // --abbrev=40 so blob shas are full, never abbreviated.
-    // ONE commit argument: compare `base` to the WORKING TREE (see BASIS above).
+    // ONE commit argument: compare the merge-base to the WORKING TREE (see BASIS above).
     //
     // Pass the Buffer straight to splitNull/splitNulPaths — NOT a pre-decoded string. A premature
     // .toString('utf8') here lossily replaces any invalid byte sequence with U+FFFD before

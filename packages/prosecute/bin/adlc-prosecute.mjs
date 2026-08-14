@@ -320,10 +320,38 @@ function renamedSources(base, root) {
   ];
 }
 
+// The changed-file set a tier classification runs on: the change's OWN files,
+// anchored to the MERGE-BASE of `base` and HEAD — never the base TIP
+// (T-01M00BNADHBEP8N4VPG9J84V8W).
+//
+// A diff against the base tip reports every base-side file changed since the
+// branch point as a reversed difference, so a change sitting BEHIND a busy base
+// tiers trust-root on files it never touched (PR #493 tiered on packages/**,
+// plugins/**, .github/workflows/** while only adding ticket shards). A file the
+// change leaves at its merge-base content contributes nothing when the change
+// merges (three-way merge resolves to the base side), so anchoring to the
+// merge-base is faithful to what merging applies — and to the diff a reviewer
+// actually reviews. The diff stays ONE-COMMIT-ARG against the WORKING TREE
+// (never merge-base..HEAD), so an uncommitted trust-root edit still tiers.
+//
+// FAIL CLOSED: `git merge-base` exits non-zero for an unresolvable base OR
+// disjoint histories; the throw reaches each caller's existing refuse-the-run
+// path — never a fall-back to the base tip, never an ungated run.
+function tierChangedFiles(base, root) {
+  const mergeBase = git(['merge-base', base, 'HEAD'], { cwd: root }).trim();
+  if (!mergeBase) throw new Error(`no merge-base between '${base}' and HEAD`);
+  const tracked = changedFiles(mergeBase, root); // working tree (and index) vs merge-base
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
+    .split('\0').filter(Boolean);
+  return [...new Set([...tracked, ...untracked, ...renamedSources(mergeBase, root)])];
+}
+
 function loadTicketsForTier(dir, root, base) {
   // UNION, never replace: rails from the base and from the worktree both apply.
   // The classifier ORs deny-paths across tickets, so adding a source can only
-  // widen the trust-root surface (fail-safe), never narrow it.
+  // widen the trust-root surface (fail-safe), never narrow it. Read at the base
+  // TIP deliberately (not the merge-base): a ticket added on the base after the
+  // branch point still contributes its rails — widening only, so fail-safe.
   const tickets = [...readBaseTickets(root, base), ...readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
@@ -381,7 +409,8 @@ ADLC P5 review-evidence recorder.
 
   When the change under prosecution is TRUST-ROOT TIER (touches an enforcement
   package, a gated-artifact producer, a rails deny-path, or a trust-root file —
-  computed from the WORKING TREE vs <base>: two-dot 'git diff --name-only <base>'
+  computed from the WORKING TREE vs the MERGE-BASE of <base> and HEAD (one-commit-arg
+  'git diff --name-only <merge-base>' — base-side churn never tiers a change)
   unioned with untracked files, so an UNCOMMITTED trust-root edit still tiers), a
   clean P5 ALSO requires a recorded cross-model adversarial approve from a provider
   DISTINCT from the author, bound to the reviewed revision. A tiered run MUST declare
@@ -666,13 +695,10 @@ if (positionals[0] === 'tier-check') {
   let tickets;
   try {
     root = repoRoot();
-    const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
-    const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
-      .split('\0').filter(Boolean);
-    changed = [...new Set([...tracked, ...untracked, ...renamedSources(values.base, root)])];
+    changed = tierChangedFiles(values.base, root); // merge-base-anchored, working-tree-inclusive
     tickets = loadTicketsForTier(values.dir, root, values.base); // rails deny-path source
   } catch (err) {
-    opError(`tier-check: cannot determine the changed-file set — base ref '${values.base}' unresolvable. Fetch it (git fetch origin ${values.base}) or pass --base <ref>. Underlying: ${err.message}`);
+    opError(`tier-check: cannot determine the changed-file set — base ref '${values.base}' unresolvable or shares no history with HEAD. Fetch it (git fetch origin ${values.base}) or pass --base <ref>. Underlying: ${err.message}`);
   }
   let tier;
   try {
@@ -858,26 +884,24 @@ for (const warning of usageDiagnostics) console.error(`warning: ${warning}`);
 //
 // WORKING-TREE-INCLUSIVE: prosecution binds to the working-tree revision
 // (resolveRevision hashes the worktree), so the tier's changed-file set MUST match
-// what is actually prosecuted — not just committed history. A three-dot
-// `base...HEAD` diff misses an UNCOMMITTED edit to a trust-root file, which would
-// let a converged P5 exit 0 with no attestation (fail-open). We therefore union:
-//   • tracked changes of the working tree vs base (two-dot `git diff --name-only <base>`)
+// what is actually prosecuted — not just committed history. A committed-only
+// `..HEAD` diff misses an UNCOMMITTED edit to a trust-root file, which would
+// let a converged P5 exit 0 with no attestation (fail-open). tierChangedFiles
+// therefore unions (anchored to the merge-base of base and HEAD — see its comment):
+//   • tracked changes of the working tree vs the merge-base (one-commit-arg diff)
 //   • untracked, non-ignored files (`git ls-files --others --exclude-standard`)
 //
 // FAIL CLOSED: if the changed-file set cannot be computed (base ref unresolvable,
-// or not a git repo), we cannot decide whether the tier gate applies, so we REFUSE
-// the run (exit 1) rather than fall back to an ungated P5. CI must provide the base
-// (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
+// no merge-base, or not a git repo), we cannot decide whether the tier gate
+// applies, so we REFUSE the run (exit 1) rather than fall back to an ungated P5.
+// CI must provide the base (fetch it or pass --base <ref>); see docs/ci/rails-guard.yml.
 let changed;
 let root;
 try {
   root = repoRoot();
-  const tracked = changedFiles(values.base, root); // two-dot: working tree vs base
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
-    .split('\0').filter(Boolean);
-  changed = [...new Set([...tracked, ...untracked, ...renamedSources(values.base, root)])];
+  changed = tierChangedFiles(values.base, root);
 } catch (err) {
-  opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
+  opError(`cannot determine trust-root tier: base ref '${values.base}' unresolvable or shares no history with HEAD — fetch the base (e.g. git fetch origin main) or pass --base <ref>. Underlying: ${err.message}`);
 }
 let tier;
 try {
