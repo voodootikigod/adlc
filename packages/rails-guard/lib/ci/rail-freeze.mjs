@@ -431,12 +431,8 @@ export function verifyManifest({ git, trustedBase, base, migration }) {
 
 function isExemptManifestTrustRoot(path, base, cwd) {
   if (!isManifestFile(path)) return false;
-  try {
-    const contents = resolveManifestRevisionPair({ base, cwd, file: path });
-    return Boolean(contents && isVersionOnlyChange(contents.before, contents.after, path));
-  } catch {
-    return false;
-  }
+  const contents = resolveManifestRevisionPair({ base, cwd, file: path });
+  return Boolean(contents && isVersionOnlyChange(contents.before, contents.after, path));
 }
 
 /**
