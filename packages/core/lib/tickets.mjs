@@ -149,41 +149,45 @@ const SLASH = '/'.charCodeAt(0);
  */
 export function globMatch(pattern, path) {
   const tokens = pattern.split(/(\*\*\/|\*\*|\*)/).filter((part) => part !== '');
-  const end = path.length;
-  // reach[i] = the pattern consumed so far can end at offset i.
-  let reach = new Uint8Array(end + 1);
+  // reach[i] = the pattern consumed so far can end at offset i. One slot per
+  // offset INTO the path, plus the offset just past its last character, which
+  // is the accepting one — `end` is read back off the buffer rather than
+  // recomputed, so the two can never drift apart.
+  let reach = new Uint8Array(path.length + 1);
+  const end = reach.length - 1;
   reach[0] = 1;
   for (const token of tokens) {
-    const next = new Uint8Array(end + 1);
-    let live = false;
+    const next = new Uint8Array(reach.length);
     if (token === '**') {
       // Any run: once an offset is reachable, so is every later one.
       let open = false;
       for (let i = 0; i <= end; i++) {
         if (reach[i]) open = true;
-        if (open) { next[i] = 1; live = true; }
+        if (open) next[i] = 1;
       }
     } else if (token === '**/') {
       // Either nothing, or a run ending at a slash.
       let open = false;
       for (let i = 0; i <= end; i++) {
-        if (reach[i]) { next[i] = 1; live = true; open = true; }
-        if (open && i < end && path.charCodeAt(i) === SLASH) { next[i + 1] = 1; live = true; }
+        if (reach[i]) { next[i] = 1; open = true; }
+        if (open && i < end && path.charCodeAt(i) === SLASH) next[i + 1] = 1;
       }
     } else if (token === '*') {
       // A run that stops at the segment boundary rather than crossing it.
       let open = false;
       for (let i = 0; i <= end; i++) {
         if (reach[i]) open = true;
-        if (open) { next[i] = 1; live = true; }
+        if (open) next[i] = 1;
         if (i < end && path.charCodeAt(i) === SLASH) open = false;
       }
     } else {
       for (let i = 0; i + token.length <= end; i++) {
-        if (reach[i] && path.startsWith(token, i)) { next[i + token.length] = 1; live = true; }
+        if (reach[i] && path.startsWith(token, i)) next[i + token.length] = 1;
       }
     }
-    if (!live) return false;                         // nothing reachable; no later token can revive it
+    // No early exit on an all-zero pass: an empty reach set propagates zeros
+    // through the remaining tokens and reaches the same answer, so bailing out
+    // would be an optimization no result can distinguish.
     reach = next;
   }
   return reach[end] === 1;

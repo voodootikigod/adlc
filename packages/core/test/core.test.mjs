@@ -201,6 +201,13 @@ test('globMatch: *, ** and literals', () => {
   assert.ok(globMatch('[ab]', '[ab]'));
   assert.ok(globMatch('a.b', 'a.b'));
   assert.ok(!globMatch('a.b', 'axb'));
+  // A wildcard resumes from where the pattern actually got to, not from the
+  // start of the path: `ab**b` needs a `b` AFTER the `ab`, so a two-character
+  // path cannot satisfy it however the run is placed.
+  assert.ok(!globMatch('ab**b', 'ab'));
+  assert.ok(globMatch('ab**b', 'abb'));
+  assert.ok(!globMatch('ab*b', 'ab'));
+  assert.ok(!globMatch('ab**/b', 'ab'));
 });
 
 test('globMatch: answers exactly what the reference regex answers', () => {
