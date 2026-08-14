@@ -151,6 +151,13 @@ export function testTargetFor(file, root = ROOT) {
     const f = `scripts/test/${base}.test.mjs`;
     if (existsSync(join(root, f))) return f;
     if (base === 'pi-live-deny' && existsSync(join(root, 'plugins/adlc-pi/test'))) return 'plugins/adlc-pi/test/*.test.mjs';
+    // The artifact generator's tests are named for what they assert rather than
+    // for the file, so the basename convention misses them and the whole run
+    // drops to the slow path — where the budget cap is 3 mutants for the ENTIRE
+    // diff, and a change touching the generator silently stops prosecuting
+    // everything beside it.
+    const generatorTest = 'scripts/test/ticket-reader-generation.test.mjs';
+    if (file === 'scripts/ticket-readers/generate.mjs' && existsSync(join(root, generatorTest))) return generatorTest;
     return null;
   }
   return null;
