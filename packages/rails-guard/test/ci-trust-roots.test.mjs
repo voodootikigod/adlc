@@ -45,6 +45,7 @@ test('the default set covers the paths that decide enforcement in any repo', () 
     '.github/CODEOWNERS',
     'docs/CODEOWNERS',
     'package.json',
+    '.npmrc',
   ]) {
     assert.ok(DEFAULT_IMMUTABLE_TRUST_ROOTS.includes(path), `${path} must be frozen by default`);
   }

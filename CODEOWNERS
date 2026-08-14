@@ -46,6 +46,7 @@
 /.github/workflows/ci.yml                            @voodootikigod
 /packages/rails-guard/bin/rails-guard.mjs             @voodootikigod
 /package.json                                         @voodootikigod
+/.npmrc                                               @voodootikigod
 
 # A required CI gate whose own source and test otherwise controlled both the
 # enforcement logic and the tests that verify it in the same change.

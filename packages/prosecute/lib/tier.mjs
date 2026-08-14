@@ -36,6 +36,7 @@ const TRUST_ROOT_FILES = [
   // NESTED package.json tiers solely via its package prefix, not this rule. The gate
   // step additionally reinstalls with --ignore-scripts as defense-in-depth.
   'package.json',
+  '.npmrc',
   'package-lock.json',
   // A required CI gate whose own source and test control both the enforcement
   // logic and the tests that verify it in the same change — declared a trust root

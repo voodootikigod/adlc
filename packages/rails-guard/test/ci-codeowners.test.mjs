@@ -141,9 +141,10 @@ test('ownersForPaths: distinct changed paths each resolve to their own last-matc
   );
 });
 
-test('the repository CODEOWNERS explicitly covers /package.json with @voodootikigod (#501)', () => {
+test('the repository CODEOWNERS explicitly covers /package.json and /.npmrc with @voodootikigod (#501)', () => {
   const codeownersPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'CODEOWNERS');
   const content = readFileSync(codeownersPath, 'utf8');
   const git = fakeGit({ CODEOWNERS: content });
   assert.deepEqual(ownersForPaths(git, 'base', ['package.json']), ['voodootikigod']);
+  assert.deepEqual(ownersForPaths(git, 'base', ['.npmrc']), ['voodootikigod']);
 });

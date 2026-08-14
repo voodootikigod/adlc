@@ -755,6 +755,15 @@ test('trust root #501: PR commits script tampering to HEAD but working tree is c
   }
 });
 
+test('trust root #501: PR adds .npmrc with script-shell bypass → exit 2', () => {
+  const code = runScenario({
+    baseTickets: RAILED,
+    seedFiles: ['src/critical/auth.mjs'],
+    mutate: (d) => writeFileSync(join(d, '.npmrc'), 'script-shell=/usr/bin/true\n'),
+  });
+  assert.equal(code, 2);
+});
+
 for (const [path, renamedPath] of [
   ['.adlc/tickets.json', 'tickets-renamed.json'],
   ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],
@@ -762,6 +771,7 @@ for (const [path, renamedPath] of [
   ['CODEOWNERS', 'CODEOWNERS.renamed'],
   ['.github/workflows/adlc-rails-guard.yml', '.github/workflows/renamed.yml'],
   ['package.json', 'package-renamed.json'],
+  ['.npmrc', '.npmrc.renamed'],
 ]) {
   test(`trust root: PR renames ${path} → exit 2`, () => {
     const seedFiles = ['src/critical/auth.mjs'];
