@@ -1,7 +1,7 @@
 // verify.mjs — walk raw lines and validate the hash chain, across the whole
 // chain forest (root + segments) per docs/specs/segmented-gate-manifest.md §5.
 // Each entry's `prev` must equal sha256(previous raw line).
-// Sequence numbers must be strictly monotonically increasing, per chain.
+// Sequence numbers must start at 1 and increase strictly by 1, per chain (spec §4.3).
 
 import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { verifyEntrySig } from './sign.mjs';
@@ -27,7 +27,7 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
  */
 
 /**
- * Verify ONE chain's raw lines: `seq` strictly increasing from 1, `prev` =
+ * Verify ONE chain's raw lines: `seq` contiguous from 1 (spec §4.3), `prev` =
  * sha256(previous raw line), fork-anchor placement (§4.4), and — when a key
  * is configured — HMAC signatures.
  *
@@ -135,9 +135,13 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
       }
     }
 
-    // Check seq monotonicity
-    if (prevSeq !== null && entry.seq <= prevSeq) {
-      return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'seq not monotonically increasing' }, `chain broken at seq ${entry.seq} (line ${lineNo}): seq must be strictly increasing`);
+    // Check seq contiguity (§4.3: seq starts at 1 and increases strictly by 1)
+    if (isFirst) {
+      if (entry.seq !== 1) {
+        return fail(0, { seq: entry.seq, lineNo, reason: 'first entry seq must be 1' }, `chain broken at seq ${entry.seq} (line ${lineNo}): first entry seq must be 1`);
+      }
+    } else if (entry.seq !== prevSeq + 1) {
+      return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'seq not contiguous' }, `chain broken at seq ${entry.seq} (line ${lineNo}): seq must be contiguous (+1 from previous)`);
     }
 
     // §4.4 fork anchor placement: required on a segment's first entry, absent

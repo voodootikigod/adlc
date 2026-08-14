@@ -271,6 +271,31 @@ describe('forest verify() — AC1 adversarial rejections', () => {
     } finally { cleanTmp(dir); }
   });
 
+  it('rejects a segment whose first entry has seq !== 1 (AC4)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const line1 = JSON.stringify({ seq: 2, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null, anchor: null });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), [line1]);
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /first entry seq must be 1/);
+    } finally { cleanTmp(dir); }
+  });
+
+  it('rejects a segment with non-contiguous sequence numbers (AC4)', () => {
+    const dir = makeTmp();
+    try {
+      const adlc = join(dir, '.adlc');
+      const line1 = JSON.stringify({ seq: 1, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: null, anchor: null });
+      const line2 = JSON.stringify({ seq: 4, gate: 'x', ts: '2026-01-01T00:00:00.000Z', files: {}, prev: sha256(line1) });
+      writeLines(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), [line1, line2]);
+      const result = verify(adlc, { requireSignatures: false });
+      assert.equal(result.valid, false);
+      assert.match(result.message, /seq must be contiguous/);
+    } finally { cleanTmp(dir); }
+  });
+
   it('rejects bad filename grammar', () => {
     const dir = makeTmp();
     try {

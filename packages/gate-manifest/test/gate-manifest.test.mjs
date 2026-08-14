@@ -610,6 +610,65 @@ describe('tamper detection', () => {
     }
   });
 
+  it('rejects a first entry whose sequence number is not 1 (AC1)', () => {
+    const dir = makeTmp();
+    try {
+      writeFileSync(ledgerPath('manifest', dir), '{"seq":2,"gate":"forged","prev":null}\n');
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'first entry seq must be 1');
+      assert.equal(result.break.seq, 2);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects non-contiguous sequence numbers with a gap (AC2)', () => {
+    const dir = makeTmp();
+    try {
+      const line1 = '{"seq":1,"gate":"plan","prev":null}';
+      const line2 = `{"seq":3,"gate":"build","prev":"${sha256(line1)}"}`;
+      writeFileSync(ledgerPath('manifest', dir), `${line1}\n${line2}\n`);
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'seq not contiguous');
+      assert.equal(result.break.seq, 3);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects non-contiguous sequence numbers with duplicate seq (AC2)', () => {
+    const dir = makeTmp();
+    try {
+      const line1 = '{"seq":1,"gate":"plan","prev":null}';
+      const line2 = `{"seq":1,"gate":"build","prev":"${sha256(line1)}"}`;
+      writeFileSync(ledgerPath('manifest', dir), `${line1}\n${line2}\n`);
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'seq not contiguous');
+      assert.equal(result.break.seq, 1);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
+  it('rejects non-contiguous sequence numbers with decreasing seq (AC2)', () => {
+    const dir = makeTmp();
+    try {
+      const line1 = '{"seq":1,"gate":"plan","prev":null}';
+      const line2 = `{"seq":2,"gate":"build","prev":"${sha256(line1)}"}`;
+      const line3 = `{"seq":1,"gate":"test","prev":"${sha256(line2)}"}`;
+      writeFileSync(ledgerPath('manifest', dir), `${line1}\n${line2}\n${line3}\n`);
+      const result = verify(dir);
+      assert.equal(result.valid, false);
+      assert.equal(result.break.reason, 'seq not contiguous');
+      assert.equal(result.break.seq, 1);
+    } finally {
+      cleanTmp(dir);
+    }
+  });
+
   it('rejects a JSON value that is not an entry object', () => {
     const dir = makeTmp();
     try {

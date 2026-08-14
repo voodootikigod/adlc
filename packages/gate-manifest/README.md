@@ -61,7 +61,7 @@ When `ADLC_MANIFEST_KEY` is set, `record` appends a `sig` (the human output prin
 
 ### verify
 
-Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must equal `sha256` of the exact raw bytes of the previous line; sequence numbers must be strictly monotonically increasing.
+Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must equal `sha256` of the exact raw bytes of the previous line; sequence numbers must start at 1 and increase strictly by 1 (contiguous from 1).
 
 ```sh
 gate-manifest verify                            # human-readable
