@@ -339,7 +339,14 @@ function renamedSources(base, root) {
 // path — never a fall-back to the base tip, never an ungated run.
 function tierChangedFiles(base, root) {
   const mergeBase = git(['merge-base', base, 'HEAD'], { cwd: root }).trim();
-  if (!mergeBase) throw new Error(`no merge-base between '${base}' and HEAD`);
+  // Exactly ONE full sha, asserted — not assumed. Default `git merge-base` prints a
+  // single best ancestor even on criss-cross histories (verified empirically; only
+  // `--all` lists several), but if any git ever emitted more, silently taking the
+  // first would pick an ARBITRARY ancestor as the tier basis — the diff would be
+  // computed against a base nobody chose. Refuse instead: fail closed, never guess.
+  if (!/^[0-9a-f]{40,64}$/.test(mergeBase)) {
+    throw new Error(`no single merge-base between '${base}' and HEAD (git merge-base printed: ${JSON.stringify(mergeBase)})`);
+  }
   const tracked = changedFiles(mergeBase, root); // working tree (and index) vs merge-base
   const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root })
     .split('\0').filter(Boolean);

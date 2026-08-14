@@ -264,7 +264,11 @@ export function resolveChangeSetRevision({ cwd = process.cwd(), base, revision, 
     // exits non-zero when no common ancestor exists, which the enclosing catch turns into the
     // fail-closed null.
     const baseSha = git(['merge-base', baseTip, 'HEAD'], cwd).toString('utf8').trim();
-    if (!baseSha) return null;
+    // Exactly ONE full sha, asserted — not assumed. Default `git merge-base` prints a
+    // single best ancestor even on criss-cross histories (only `--all` lists several),
+    // but an identity anchored to an arbitrarily-picked ancestor would be an identity
+    // nobody chose. Anything else than one sha → null: fail closed, never guess.
+    if (!/^[0-9a-f]{40,64}$/.test(baseSha)) return null;
     // --raw: ":<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0"
     // --abbrev=40 so blob shas are full, never abbreviated.
     // ONE commit argument: compare the merge-base to the WORKING TREE (see BASIS above).
