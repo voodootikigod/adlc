@@ -24,6 +24,15 @@ const SLASH = '/'.charCodeAt(0);
  *
  * Here each token advances a set of reachable offsets in ONE left-to-right pass,
  * so the work is bounded by tokens × path length with nothing to backtrack.
+ *
+ * ONE deliberate change of answer comes with that, and only one: `**` now
+ * crosses a LINE TERMINATOR (LF, CR, U+2028, U+2029). The regex expanded it to
+ * `.*`, and JavaScript's `.` excludes those characters unless the `s` flag is
+ * set — which it never was. Git allows a newline in a path, so a rail
+ * `src/**\/frozen.mjs` simply stopped freezing `src/a<LF>b/frozen.mjs`: a
+ * matcher artefact, never a decision, and a hole in exactly the direction a
+ * freeze must not have one. `*` is unaffected — it expanded to `[^/]*`, whose
+ * negated class always admitted them.
  */
 export function globMatch(pattern, path) {
   const tokens = pattern.split(/(\*\*\/|\*\*|\*)/).filter((part) => part !== '');
