@@ -86,7 +86,8 @@ export function evidenceTail(adlcDir, { limit = EVIDENCE_TAIL_ENTRIES } = {}) {
  * starts mid-line drops that partial line rather than handing a truncated JSON
  * object to the parser.
  *
- * @returns {{ ok: true, text: string, truncated: boolean } | { ok: false, error: string }}
+ * @returns {{ ok: true, text: string, truncated: boolean, mtimeMs: number }
+ *          | { ok: false, error: string }}
  */
 export function readTranscriptTail(path, { maxBytes = TRANSCRIPT_TAIL_BYTES } = {}) {
   let fd;
@@ -109,9 +110,15 @@ export function readTranscriptTail(path, { maxBytes = TRANSCRIPT_TAIL_BYTES } = 
       read += n;
     }
     const text = buf.toString('utf8', 0, read);
-    if (start === 0) return { ok: true, text, truncated: false };
+    const mtimeMs = stat.mtimeMs;
+    if (start === 0) return { ok: true, text, truncated: false, mtimeMs };
     const firstBreak = text.indexOf('\n');
-    return { ok: true, text: firstBreak === -1 ? '' : text.slice(firstBreak + 1), truncated: true };
+    return {
+      ok: true,
+      text: firstBreak === -1 ? '' : text.slice(firstBreak + 1),
+      truncated: true,
+      mtimeMs,
+    };
   } catch (err) {
     return { ok: false, error: err?.code || err?.message || 'unreadable' };
   } finally {

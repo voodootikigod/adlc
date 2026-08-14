@@ -74,6 +74,52 @@ test('a writer that bypasses the lock is not clobbered by the continuation', () 
   });
 });
 
+test('a successor authorized by someone else mid-run keeps its authorization', () => {
+  withTempRepo((cwd) => {
+    seedBoundDeny(cwd, 'denier-claim', 'T155');
+    const before = readJson(denyPathFor(cwd, 'denier-claim'));
+
+    // Another run mints the successor's auth AFTER this one's pre-check and
+    // BEFORE it takes the lock — the window the CLI check alone cannot cover.
+    const binDir = join(cwd, 'fake-bin');
+    mkdirSync(binDir, { recursive: true });
+    const planted = JSON.stringify({ schema: 1, planted_by: 'another-run' }, null, 2);
+    const script = join(binDir, 'git');
+    writeFileSync(
+      script,
+      [
+        '#!/bin/sh',
+        'mkdir -p "$(dirname "$0")/../.adlc/handoffs"',
+        `cat > "$(dirname "$0")/../.adlc/handoffs/successor-claimed.resume-auth.json" <<'AUTH'`,
+        planted,
+        'AUTH',
+        'exit 0',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(script, 0o755);
+
+    const r = run(
+      ['continue', '--deny-session', 'denier-claim', '--session', 'successor-claimed', '--write', '--json'],
+      { cwd, env: { ...KEYED, PATH: `${binDir}:${process.env.PATH}` }, expectOk: false },
+    );
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /already holds a resume-auth/);
+
+    // The refusal must not take the other run's grant with it: this run never
+    // minted that file, so its rollback has no business deleting it.
+    assert.equal(
+      readFileSync(join(cwd, '.adlc', 'handoffs', 'successor-claimed.resume-auth.json'), 'utf8'),
+      `${planted}\n`,
+      "a refused run must not delete another run's authorization",
+    );
+    assert.deepEqual(readJson(denyPathFor(cwd, 'denier-claim')), before);
+    assert.equal(existsSync(contentPathFor(cwd, 'denier-claim')), false, 'the capture is rolled back');
+    assert.equal(manifestEntries(cwd, 'context-handoff-continue').length, 0);
+  });
+});
+
 test('the PATH stand-in only fires when the CLI actually shells out to git', () => {
   // The control for the test above: the same stand-in, no continuation running,
   // proves the mechanism is the CLI's git call and not something ambient.

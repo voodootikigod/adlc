@@ -84,15 +84,18 @@ test('git state reports nothing rather than failing when git cannot answer', () 
   assert.deepEqual(clean, { branch: 'main', status: [] });
 });
 
-test('a small transcript is read whole', () => {
+test('a small transcript is read whole, with the mtime staleness falls back to', () => {
   withTempRoot((root) => {
     const path = join(root, 't.jsonl');
     writeFileSync(path, '{"a":1}\n{"b":2}\n', 'utf8');
-    assert.deepEqual(readTranscriptTail(path), {
-      ok: true,
-      text: '{"a":1}\n{"b":2}\n',
-      truncated: false,
-    });
+    const got = readTranscriptTail(path);
+    assert.equal(got.ok, true);
+    assert.equal(got.text, '{"a":1}\n{"b":2}\n');
+    assert.equal(got.truncated, false);
+    // The mtime is the only age evidence for a transcript whose entries carry
+    // no timestamp, so the reader has to surface it.
+    assert.equal(typeof got.mtimeMs, 'number');
+    assert.ok(Math.abs(got.mtimeMs - Date.now()) < 60_000);
   });
 });
 

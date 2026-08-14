@@ -52,9 +52,26 @@ cannot.
 
 Degrades with exit 2 and nothing consumed: an unbound deny (bind it with
 `repair` first), a consumed deny, a missing or corrupt `--capture-from` source,
-a successor id that already holds a resume-auth, or an active ticket that
-disagrees with the deny's bind. The successor id comes from `--session` or is
-minted by the command — never from agent input.
+a successor id that already holds a resume-auth, an id that cannot be safely
+quoted in the prompt, or an active ticket that disagrees with the deny's bind.
+The successor id comes from `--session` or is minted by the command — never from
+agent input.
+
+A `--capture-from` transcript older than `HANDOFF_MAX_AGE_HOURS` contributes no
+model narrative: the brief still ships, with the omission stated in it. Age is
+read from the transcript's own newest timestamp, falling back to the file mtime
+only when no entry carries one.
+
+**The bind is enforced, not advisory.** A capture-backed record carries
+`content_kind: 'capture'` on both the final and the deny marker. Every enforcing
+adapter re-derives the capture's sha256 from disk on each mutation check, so an
+edited, oversized, or deleted capture denies with a `capture_tamper:<session>`
+reason — including for the successor that already consumed the deny. It is plain
+sha256, so a keyless hook enforces exactly what the keyed CLI does. Records
+written before this field exist keep their previous semantics untouched: their
+hash was never re-derivable, so there is nothing to check. `repair` clears
+`content_kind` when it rebinds a hash, which is the documented way out of a lost
+capture.
 
 **Reading a capture back.** Use `readVerifiedCapture(root, sessionId, expectedHash)`.
 It returns the body only when the bytes on disk still hash to the value the

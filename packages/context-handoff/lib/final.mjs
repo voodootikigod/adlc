@@ -20,11 +20,23 @@ export function hashFinalBody(body) {
 }
 
 /**
+ * `content_kind` value meaning "content_hash is sha256 over a stored capture
+ * body", which readers must re-derive from disk rather than trust.
+ */
+export const CONTENT_KIND_CAPTURE = 'capture';
+
+/**
  * Build a schema-1 final checkpoint object.
+ *
+ * `content_kind` is additive and omitted unless asked for: a record without it
+ * means exactly what it meant before — a metadata hash nobody can re-derive —
+ * so existing finals need no migration and their body hash does not move.
+ *
  * @param {object} opts
  * @param {string} opts.sessionId
  * @param {string|null} [opts.ticketId]
  * @param {string|null} [opts.contentHash] — when null/absent, derived from body
+ * @param {string|null} [opts.contentKind] — e.g. 'capture'
  * @param {string} [opts.host='local']
  * @param {() => string} [opts.now]
  */
@@ -32,6 +44,7 @@ export function buildFinal({
   sessionId,
   ticketId = null,
   contentHash = null,
+  contentKind = null,
   host = 'local',
   now = () => new Date().toISOString(),
 }) {
@@ -44,7 +57,8 @@ export function buildFinal({
   };
   const provided = normalizeBindField(contentHash);
   const content_hash = provided ?? hashFinalBody(draft);
-  return { ...draft, content_hash };
+  const kind = normalizeBindField(contentKind);
+  return kind ? { ...draft, content_hash, content_kind: kind } : { ...draft, content_hash };
 }
 
 /**

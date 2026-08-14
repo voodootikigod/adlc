@@ -32,8 +32,14 @@ import { resumeAuthPath } from './paths.mjs';
  * @param {object} opts.expected the deny record the caller preflighted on
  * @param {() => object} opts.recordEvidence appends durable evidence; throwing
  *        means the run is unauditable and everything here is rolled back
- * @returns {{ ok: true, record: object, resumeAuth: object, evidence: object }
- *          | { ok: false, error: string, exitCode?: number }}
+ *
+ * `ownedAuth` says whether THIS invocation minted the successor's resume-auth.
+ * A caller's rollback must not delete an authorization it never issued — the
+ * collision refusal below is precisely the case where one already exists and
+ * belongs to somebody else.
+ *
+ * @returns {{ ok: true, record: object, resumeAuth: object, evidence: object, ownedAuth: true }
+ *          | { ok: false, error: string, exitCode?: number, ownedAuth: boolean }}
  */
 export function authorizeSuccessor({
   root,
@@ -54,6 +60,7 @@ export function authorizeSuccessor({
       ok: false,
       error: `successor session ${successorId} already holds a resume-auth — successor ids must be fresh`,
       exitCode: 2,
+      ownedAuth: false,
     };
   }
 
@@ -63,7 +70,9 @@ export function authorizeSuccessor({
     { ticketId, contentHash, denySessionId },
     { key },
   );
-  if (!authWrote.ok) return { ok: false, error: `failed to write resume-auth: ${authWrote.error}` };
+  if (!authWrote.ok) {
+    return { ok: false, error: `failed to write resume-auth: ${authWrote.error}`, ownedAuth: false };
+  }
   const rollback = () => removeResumeAuth(root, successorId);
 
   // Authorize with the document that was actually signed and read back, not
@@ -71,13 +80,13 @@ export function authorizeSuccessor({
   const resumeAuth = authWrote.resumeAuth;
   if (!resumeAuth?.verified) {
     rollback();
-    return { ok: false, error: 'resume-auth failed HMAC verification after write' };
+    return { ok: false, error: 'resume-auth failed HMAC verification after write', ownedAuth: true };
   }
 
   const consumed = consumeDenyRecord(expected, successorId, { resumeAuth });
   if (!consumed.ok) {
     rollback();
-    return { ok: false, error: consumed.error, exitCode: consumed.exitCode };
+    return { ok: false, error: consumed.error, exitCode: consumed.exitCode, ownedAuth: true };
   }
 
   let evidence;
@@ -85,20 +94,20 @@ export function authorizeSuccessor({
     evidence = recordEvidence();
   } catch (err) {
     rollback();
-    return { ok: false, error: `failed to record evidence: ${err.message}` };
+    return { ok: false, error: `failed to record evidence: ${err.message}`, ownedAuth: true };
   }
 
   const stillOurs = markerUnchanged(root, denySessionId, expected);
   if (!stillOurs.ok) {
     rollback();
-    return { ok: false, error: stillOurs.error, exitCode: stillOurs.exitCode };
+    return { ok: false, error: stillOurs.error, exitCode: stillOurs.exitCode, ownedAuth: true };
   }
 
   const persisted = writeDenyRecord(root, consumed.record);
   if (!persisted.ok) {
     rollback();
-    return { ok: false, error: `failed to persist consumed deny: ${persisted.error}` };
+    return { ok: false, error: `failed to persist consumed deny: ${persisted.error}`, ownedAuth: true };
   }
 
-  return { ok: true, record: persisted.record, resumeAuth, evidence };
+  return { ok: true, record: persisted.record, resumeAuth, evidence, ownedAuth: true };
 }

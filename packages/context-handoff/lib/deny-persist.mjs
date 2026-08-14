@@ -70,9 +70,20 @@ export function markerUnchanged(root, sessionId, expected, opts = {}) {
 
 /**
  * Update an open deny's ticket_id + content_hash (host repair). Leaves status=open.
+ *
+ * `contentKind` travels with the hash it describes, and is CLEARED when absent.
+ * A hash rebound to something else is not the old capture, so carrying a stale
+ * `content_kind: 'capture'` forward would leave readers demanding a capture that
+ * this hash was never derived from — a deny nothing could clear.
+ *
  * @returns {{ ok: true, record: object } | { ok: false, error: string }}
  */
-export function repairDenyBinds(root, sessionId, { ticketId, contentHash, host }, opts = {}) {
+export function repairDenyBinds(
+  root,
+  sessionId,
+  { ticketId, contentHash, contentKind = null, host },
+  opts = {},
+) {
   const existing = readDenyMarker(root, sessionId, opts);
   if (!existing.ok || !existing.record) {
     return { ok: false, error: existing.reason || 'missing deny marker' };
@@ -91,6 +102,9 @@ export function repairDenyBinds(root, sessionId, { ticketId, contentHash, host }
     content_hash,
     status: 'open',
   };
+  const content_kind = normalizeBindField(contentKind);
+  if (content_kind) next.content_kind = content_kind;
+  else delete next.content_kind;
   if (host != null) next.host = host;
   return writeDenyRecord(root, next, opts);
 }

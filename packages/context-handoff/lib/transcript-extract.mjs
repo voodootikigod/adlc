@@ -99,3 +99,28 @@ export function finalAssistantMessageFrom(entries) {
 export function extractFinalAssistantMessage(jsonlText) {
   return finalAssistantMessageFrom(parseTranscript(jsonlText).entries);
 }
+
+/**
+ * Newest timestamp the transcript itself claims, in epoch milliseconds.
+ *
+ * Read from the entries rather than the file's mtime because a transcript can
+ * be copied, restored, or touched long after the session that wrote it ended —
+ * and staleness is a question about the CONVERSATION, not about the file. Null
+ * when no entry carries a parseable timestamp; the caller then falls back to
+ * the mtime, which is the only other evidence available.
+ *
+ * @param {object[]} entries
+ * @returns {number|null}
+ */
+export function transcriptTimestamp(entries) {
+  if (!Array.isArray(entries)) return null;
+  let newest = null;
+  for (const entry of entries) {
+    const raw = entry?.timestamp;
+    if (typeof raw !== 'string' && typeof raw !== 'number') continue;
+    const ms = new Date(raw).getTime();
+    if (!Number.isFinite(ms)) continue;
+    if (newest === null || ms > newest) newest = ms;
+  }
+  return newest;
+}

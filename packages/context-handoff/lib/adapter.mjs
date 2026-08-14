@@ -25,6 +25,8 @@ import { evaluateMutationGate } from './mutation-gate.mjs';
 import { readResumeAuth } from './resume-auth.mjs';
 import { readBypassGrant, removeBypassGrant } from './bypass-grant.mjs';
 import { HANDOFF_DEPTH } from './thresholds.mjs';
+import { readVerifiedCapture } from './capture.mjs';
+import { CONTENT_KIND_CAPTURE } from './final.mjs';
 
 /** Mutating `adlc handoff` subcommands agents must not run under deny-set. */
 export const HANDOFF_MUTATING_SUBCOMMANDS = new Set([
@@ -264,6 +266,41 @@ export function classifyProtectedTarget(root, rel) {
 }
 
 /**
+ * Deny reasons for records whose capture no longer backs the hash they bind.
+ *
+ * A `content_kind: 'capture'` record says something stronger than "here is a
+ * hash": it says the hash was derived from a stored capture body, so a reader
+ * can re-derive it. That is what makes tampering detectable at all — signatures
+ * attest that a hash was authorized, never that the file still matches it — and
+ * it is why deleting the capture must fail closed rather than read as "no
+ * content to check". Legacy records carry no `content_kind` and are untouched:
+ * their hash was never re-derivable, so there is nothing here to verify.
+ *
+ * Keyless by construction (plain sha256), so a hook holding no manifest key
+ * enforces it exactly as the CLI does.
+ *
+ * @param {string} root repo root
+ * @param {object[]} records valid deny records from `loadDenyRecords`
+ * @returns {string[]} deny reasons, empty when every capture-bound record verifies
+ */
+export function captureBindingFailures(root, records) {
+  const reasons = [];
+  if (!Array.isArray(records)) return reasons;
+  for (const record of records) {
+    if (!record || record.content_kind !== CONTENT_KIND_CAPTURE) continue;
+    if (!isSafeSessionId(record.session_id)) {
+      reasons.push('capture_tamper:unsafe_session_id');
+      continue;
+    }
+    const verified = readVerifiedCapture(root, record.session_id, record.content_hash);
+    if (!verified.ok) {
+      reasons.push(`capture_tamper:${record.session_id}:${verified.error}`);
+    }
+  }
+  return reasons;
+}
+
+/**
  * True when the deny store is in play at all: any record, any invalid record,
  * any registered session, or a store that could not be read. A cold store on a
  * repo that never hit the handoff band is the fail-OPEN case — an adapter
@@ -493,6 +530,17 @@ export function evaluateHandoffPreToolUse({
     if (gate.deny) {
       mutationDenied = true;
       for (const r of gate.reasons) reasons.push(r);
+    }
+
+    // Content binding, checked against the filesystem rather than a signature.
+    // Applies to consumed records too: a successor authorized on a capture is
+    // working from content the store still claims to hold, so an edited or
+    // deleted capture invalidates that authorization no matter which side of
+    // the consume it happens on.
+    const captureFailures = captureBindingFailures(root, loadedAfter?.records);
+    if (captureFailures.length > 0) {
+      mutationDenied = true;
+      for (const r of captureFailures) reasons.push(r);
     }
 
     // Diagnostic only, and only once the call is already denied: an operator who

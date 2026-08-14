@@ -9,7 +9,7 @@
 
 import { existsSync, unlinkSync } from 'node:fs';
 import { ensureDenyMarker, readDenyMarker } from './deny-marker.mjs';
-import { writeDenyRecord, repairDenyBinds } from './deny-persist.mjs';
+import { writeDenyRecord, repairDenyBinds, markerUnchanged } from './deny-persist.mjs';
 import { readFinal, writeFinal } from './final.mjs';
 import { finalPath } from './paths.mjs';
 import { writeJsonAtomic } from './atomic-json.mjs';
@@ -40,19 +40,24 @@ export function rebindOpenDeny(root, sessionId, record, planned) {
     return repairDenyBinds(root, sessionId, {
       ticketId: planned.ticket_id,
       contentHash: planned.content_hash,
+      contentKind: planned.content_kind ?? null,
       host: planned.host,
     });
   }
   // Still-unbound refresh: repairDenyBinds demands both binds, and an unbound
   // deny is the stricter state (only an unbound bypass clears it), so persist
   // the marker directly rather than refusing a legitimate no-ticket refresh.
-  return writeDenyRecord(root, {
+  const next = {
     ...record,
     ticket_id: null,
     content_hash: planned.content_hash,
     host: planned.host,
     status: 'open',
-  });
+  };
+  // Same rule as repair: the kind describes the hash, so it never outlives it.
+  if (planned.content_kind) next.content_kind = planned.content_kind;
+  else delete next.content_kind;
+  return writeDenyRecord(root, next);
 }
 
 /**
@@ -62,17 +67,25 @@ export function rebindOpenDeny(root, sessionId, record, planned) {
  * A failure restores the final before returning: the caller's own rollback only
  * has to cover what it did after this step.
  *
+ * `expected` makes the rebind a compare-and-swap. The caller claimed a record
+ * before it started writing, and the rebind happens several I/O steps later; a
+ * writer that never took the lock can land in between, and rebinding onto
+ * whatever is on disk would silently overwrite it. When the claim no longer
+ * matches, this aborts with exitCode 2 and writes no marker at all.
+ *
  * @param {object} planned — a `buildFinal()` result
+ * @param {{ expected?: object|null }} [opts] — the record the caller claimed
  * @returns {{ ok: true, final: object, denyReason: string, rebound: boolean,
  *            priorFinal: object, priorRecord: object|null }
- *          | { ok: false, error: string }}
+ *          | { ok: false, error: string, exitCode?: number }}
  */
-export function writeCheckpoint(root, sessionId, planned) {
+export function writeCheckpoint(root, sessionId, planned, { expected = null } = {}) {
   const priorFinal = readFinal(root, sessionId);
   const written = writeFinal(root, {
     sessionId,
     ticketId: planned.ticket_id,
     contentHash: planned.content_hash,
+    contentKind: planned.content_kind ?? null,
     host: planned.host,
   });
   if (!written.ok) return { ok: false, error: `failed to write final: ${written.error}` };
@@ -96,9 +109,18 @@ export function writeCheckpoint(root, sessionId, planned) {
   }
   const stale =
     marker.record.ticket_id !== planned.ticket_id ||
-    marker.record.content_hash !== planned.content_hash;
+    marker.record.content_hash !== planned.content_hash ||
+    (marker.record.content_kind ?? null) !== (planned.content_kind ?? null);
   let priorRecord = null;
   if (stale) {
+    if (expected) {
+      // Compare-and-swap: the claim was taken before the final was written.
+      const unchanged = markerUnchanged(root, sessionId, expected);
+      if (!unchanged.ok) {
+        restoreFinal(root, sessionId, priorFinal);
+        return { ok: false, error: unchanged.error, exitCode: unchanged.exitCode };
+      }
+    }
     const rebound = rebindOpenDeny(root, sessionId, marker.record, planned);
     if (!rebound.ok) {
       restoreFinal(root, sessionId, priorFinal);
