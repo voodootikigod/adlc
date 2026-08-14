@@ -9,7 +9,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { canonicalJson } from '@adlc/core';
 import { resumeAuthPath } from './paths.mjs';
-import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
+import { readJsonFile, writeJsonAtomic, writeTextExclusive } from './atomic-json.mjs';
 
 export const SCHEMA = 1;
 
@@ -107,16 +107,36 @@ export function readResumeAuth(root, sessionId, { key = null, fs } = {}) {
 
 /**
  * Persist a signed resume-auth cache for the consumer session.
+ *
+ * `exclusive` makes the write a CLAIM on the session id: the file is created
+ * with O_EXCL, so two continuations naming the same successor cannot both
+ * believe they authorized it. Checking `existsSync` first and then renaming
+ * leaves a window where both pass the check and the later rename silently
+ * replaces the earlier grant — and the denier's lock cannot close it, because
+ * the two runs are consuming DIFFERENT denies.
+ *
+ * @param {{ key: string, exclusive?: boolean, fs?: object }} opts
+ * @returns {{ ok: true, path, doc, resumeAuth, created: boolean }
+ *          | { ok: false, error: string, exists?: boolean }}
  */
-export function writeResumeAuth(root, consumerSessionId, fields, { key, fs } = {}) {
+export function writeResumeAuth(root, consumerSessionId, fields, { key, exclusive = false, fs } = {}) {
   if (typeof key !== 'string' || key.length === 0) {
     return { ok: false, error: 'missing signing key' };
   }
   const doc = buildResumeAuthDoc({ ...fields, consumerSessionId, key });
   const path = resumeAuthPath(root, consumerSessionId);
-  const wrote = writeJsonAtomic(path, doc, fs ? { fs } : {});
-  if (!wrote.ok) return { ok: false, error: wrote.error };
-  return { ok: true, path, doc, resumeAuth: readResumeAuth(root, consumerSessionId, { key, fs }) };
+  const body = `${JSON.stringify(doc, null, 2)}\n`;
+  const wrote = exclusive
+    ? writeTextExclusive(path, body, fs ? { fs } : {})
+    : writeJsonAtomic(path, doc, fs ? { fs } : {});
+  if (!wrote.ok) return { ok: false, error: wrote.error, exists: wrote.exists === true };
+  return {
+    ok: true,
+    path,
+    doc,
+    created: exclusive,
+    resumeAuth: readResumeAuth(root, consumerSessionId, { key, fs }),
+  };
 }
 
 /**

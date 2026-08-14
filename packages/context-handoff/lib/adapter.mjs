@@ -212,8 +212,16 @@ export function shellPathCandidates(command) {
   return [...out];
 }
 
-/** Repo-relative artifacts a shell target must not be able to reach. */
-const PROTECTED_SHELL_ROOTS = ['.adlc/handoffs/denies', '.adlc/.deny-store'];
+/**
+ * Repo-relative artifacts a shell target must not be able to reach.
+ *
+ * The whole `handoffs/` tree, not only `denies/`: a successor whose deny is
+ * CONSUMED holds no D1-D3 and is otherwise free to run shell, so without this
+ * it can `rm -rf .adlc/handoffs` and take the captures, finals, resume-auths
+ * and locks with it — the evidence its own authorization rests on. These paths
+ * are gitignored, so no diff would ever show the deletion.
+ */
+const PROTECTED_SHELL_ROOTS = ['.adlc/handoffs', '.adlc/.deny-store'];
 
 /**
  * True when deleting `rel` would take a protected artifact with it — `rel` is
@@ -230,7 +238,13 @@ const PROTECTED_SHELL_ROOTS = ['.adlc/handoffs/denies', '.adlc/.deny-store'];
  */
 function coversProtectedRoot(rel) {
   if (rel === '') return false;
-  return PROTECTED_SHELL_ROOTS.some((p) => p === rel || p.startsWith(`${rel}/`));
+  return PROTECTED_SHELL_ROOTS.some(
+    // An ancestor of a protected root reaches it by deletion…
+    (p) => p === rel || p.startsWith(`${rel}/`)
+      // …and so does anything INSIDE one. `.adlc/handoffs/finals` is not itself
+      // a named artifact, but removing it takes every final with it.
+      || rel.startsWith(`${p}/`),
+  );
 }
 
 /**

@@ -9,13 +9,45 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { closeSync, fstatSync, openSync, readSync, constants as fsConstants } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  openSync,
+  readdirSync,
+  readSync,
+  constants as fsConstants,
+} from 'node:fs';
 import { join } from 'node:path';
 import { loadTickets } from '@adlc/core';
-import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
 
 /** Manifest entries carried into the brief. */
 export const EVIDENCE_TAIL_ENTRIES = 12;
+
+/** Bytes read from the tail of the newest manifest chain. */
+export const EVIDENCE_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The newest manifest chain to read entries from: the highest-sorting segment
+ * under `manifest.d/` (segment names end in a ULID, which sorts by creation
+ * time), or the root ledger when the repo has no segments.
+ *
+ * @param {string} adlcDir
+ * @returns {string|null} path, or null when there is no ledger at all
+ */
+export function newestManifestChain(adlcDir) {
+  const segmentDir = join(adlcDir, 'manifest.d');
+  try {
+    const segments = readdirSync(segmentDir)
+      .filter((name) => name.endsWith('.jsonl'))
+      .sort();
+    if (segments.length > 0) return join(segmentDir, segments[segments.length - 1]);
+  } catch {
+    // No segment directory — a pre-forest repo, or one that has never split.
+  }
+  const root = join(adlcDir, 'manifest.jsonl');
+  return existsSync(root) ? root : null;
+}
 
 /** Working-tree lines carried into the brief before it summarizes the rest. */
 export const GIT_STATUS_MAX_LINES = 40;
@@ -61,19 +93,41 @@ export function gitState(root, { run = git } = {}) {
 
 /**
  * The last few gate-manifest entries, one line each.
+ *
+ * BOUNDED BEFORE PARSING. The forest read (`readManifestForest`) parses every
+ * line of the root ledger and every segment to hand back a fully ordered
+ * history — for a dozen display lines in a brief. That cost grows without limit
+ * with the repo's history, and it makes a brief's content depend on files this
+ * command has no reason to read. So this reads the NEWEST chain only, from its
+ * tail, with a byte cap.
+ *
+ * The trade is deliberate and it is a real one: if the newest segment holds
+ * fewer than `limit` entries, the brief carries fewer rather than reaching back
+ * into older segments. A short evidence tail costs a successor a little
+ * context; an unbounded read costs every continuation the whole ledger.
+ *
  * @param {string} adlcDir absolute `.adlc` directory
  * @returns {string[]}
  */
 export function evidenceTail(adlcDir, { limit = EVIDENCE_TAIL_ENTRIES } = {}) {
-  let entries;
-  try {
-    entries = loadFiltered({ dir: adlcDir }).entries;
-  } catch {
-    return [];
+  const path = newestManifestChain(adlcDir);
+  if (path === null) return [];
+  const tail = readFileTail(path, { maxBytes: EVIDENCE_TAIL_BYTES });
+  if (!tail.ok) return [];
+  const lines = [];
+  for (const line of tail.text.split('\n')) {
+    if (line.trim().length === 0) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) lines.push(entry);
+    } catch {
+      // A half-flushed or clipped line is skipped, never guessed at.
+    }
   }
-  if (!Array.isArray(entries)) return [];
-  return entries
-    .slice(-limit)
+  // Not `slice(-limit)`: a limit of 0 negates to -0, which slices from the
+  // start and hands back the whole chain — the opposite of the bound asked for.
+  return lines
+    .slice(Math.max(0, lines.length - Math.max(0, limit)))
     .map((e) => `seq=${e.seq} gate=${e.gate} ts=${e.ts}${e.ticket ? ` ticket=${e.ticket}` : ''}`);
 }
 
@@ -89,7 +143,7 @@ export function evidenceTail(adlcDir, { limit = EVIDENCE_TAIL_ENTRIES } = {}) {
  * @returns {{ ok: true, text: string, truncated: boolean, mtimeMs: number }
  *          | { ok: false, error: string }}
  */
-export function readTranscriptTail(path, { maxBytes = TRANSCRIPT_TAIL_BYTES } = {}) {
+export function readFileTail(path, { maxBytes = TRANSCRIPT_TAIL_BYTES } = {}) {
   let fd;
   try {
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
@@ -128,6 +182,16 @@ export function readTranscriptTail(path, { maxBytes = TRANSCRIPT_TAIL_BYTES } = 
       // best-effort: a throwing close must not break the never-throw contract
     }
   }
+}
+
+/**
+ * Bounded tail read of a harness transcript. Named for its caller because the
+ * transcript is the one whose size is genuinely unbounded.
+ * @returns {{ ok: true, text: string, truncated: boolean, mtimeMs: number }
+ *          | { ok: false, error: string }}
+ */
+export function readTranscriptTail(path, opts = {}) {
+  return readFileTail(path, opts);
 }
 
 /**

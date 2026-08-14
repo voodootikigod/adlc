@@ -49,6 +49,8 @@
     "./lib/transcript-extract.mjs": "./lib/transcript-extract.mjs",
     "./lib/checkpoint.mjs": "./lib/checkpoint.mjs",
     "./lib/consume.mjs": "./lib/consume.mjs",
+    "./lib/redact.mjs": "./lib/redact.mjs",
+    "./lib/rollback.mjs": "./lib/rollback.mjs",
     "./lib/continue-inputs.mjs": "./lib/continue-inputs.mjs"
   },
   "dependencies": {

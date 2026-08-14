@@ -21,6 +21,7 @@ import { writeBypassGrant, removeBypassGrant } from '../lib/bypass-grant.mjs';
 import { writeDenyRecord, repairDenyBinds, markerUnchanged } from '../lib/deny-persist.mjs';
 import { unlockSession } from '../lib/lock.mjs';
 import { restoreFinal, rollbackCheckpoint, writeCheckpoint } from '../lib/checkpoint.mjs';
+import { conflictReport, currentBytes, restoreIfOurs } from '../lib/rollback.mjs';
 import { authorizeSuccessor } from '../lib/consume.mjs';
 import {
   capCaptureBody,
@@ -556,14 +557,19 @@ active ticket that disagrees with the deny's bind.
   const claimed = markerUnchanged(root, denySessionId, marker.record);
   if (!claimed.ok) exitFrom(claimed);
 
-  const priorCapture = readCapture(root, denySessionId);
-  const rollbackCapture = () => {
-    if (priorCapture.ok) writeCapture(root, denySessionId, priorCapture.body);
-    else removeCapture(root, denySessionId);
-  };
+  const capturePath = contentPath(root, denySessionId);
+  const priorCaptureBytes = currentBytes(capturePath);
   // Writes and then proves the bytes on disk hash to what everything downstream
   // will authorize against.
   const wroteCapture = writeVerifiedCapture(root, denySessionId, body);
+  const wroteCaptureBytes = currentBytes(capturePath);
+  const rollbackCapture = () =>
+    restoreIfOurs({
+      path: capturePath,
+      wroteBytes: wroteCaptureBytes,
+      priorBytes: priorCaptureBytes,
+      label: 'capture',
+    });
   if (!wroteCapture.ok) {
     rollbackCapture();
     opError(`failed to write capture: ${wroteCapture.error}`);
@@ -584,18 +590,27 @@ active ticket that disagrees with the deny's bind.
     rollbackCapture();
     exitFrom(checkpoint);
   }
-  // The resume-auth is authorizeSuccessor's to own; this only removes what THIS
-  // run minted, so a refused collision cannot delete another run's grant.
+  // Every undo is a compare-and-swap on the bytes this run wrote. The failure
+  // that triggers a rollback is often a concurrent writer, so restoring a
+  // pre-command snapshot unconditionally would delete the record that just beat
+  // us. The resume-auth is authorizeSuccessor's to own; this only removes what
+  // THIS run minted, so a refused collision cannot delete another run's grant.
   const undoFiles = (ownedAuth = false) => {
     if (ownedAuth) removeResumeAuth(root, successorId);
-    rollbackCheckpoint(root, denySessionId, checkpoint);
-    rollbackCapture();
+    return [...rollbackCheckpoint(root, denySessionId, checkpoint), rollbackCapture()];
+  };
+  /** Exit reporting both the failure and anything the undo could not reclaim. */
+  const undoAndExit = (result, ownedAuth = false) => {
+    const conflicts = conflictReport(undoFiles(ownedAuth));
+    exitFrom({
+      ...result,
+      message: conflicts ? `${result.error || result.message} — ${conflicts}` : result.error || result.message,
+    });
   };
 
   const bound = readDenyMarker(root, denySessionId);
   if (!bound.ok) {
-    undoFiles(false);
-    opError(`deny marker unreadable after bind: ${bound.reason}`);
+    undoAndExit({ error: `deny marker unreadable after bind: ${bound.reason}`, exitCode: 1 });
   }
 
   const authorized = authorizeSuccessor({
@@ -623,11 +638,11 @@ active ticket that disagrees with the deny's bind.
       }),
   });
   if (!authorized.ok) {
-    // Every file this run touched goes back: an un-evidenced or refused
-    // continuation must leave the deny open, no capture behind, and nothing
-    // half-authorized. `ownedAuth` keeps that undo off another run's grant.
-    undoFiles(authorized.ownedAuth === true);
-    exitFrom(authorized);
+    // An un-evidenced or refused continuation must leave the deny open, no
+    // capture behind, and nothing half-authorized — except where another writer
+    // has since taken ownership of an artifact, which the undo reports instead
+    // of overwriting.
+    undoAndExit(authorized, authorized.ownedAuth === true);
   }
 
   finish({

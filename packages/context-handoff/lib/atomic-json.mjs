@@ -61,6 +61,31 @@ export function writeJsonAtomic(path, value, opts = {}) {
 }
 
 /**
+ * Create a file that must not already exist (O_EXCL).
+ *
+ * `exists` is the whole point: an exists-then-write pair has a window between
+ * the two in which another process can win, so a claim that must be exclusive
+ * has to be made by the create itself. Not atomic-rename — a rename would
+ * happily replace the file it is racing.
+ *
+ * @returns {{ ok: true } | { ok: false, error: string, exists?: boolean }}
+ */
+export function writeTextExclusive(
+  path,
+  text,
+  { fs = { mkdirSync, writeFileSync } } = {},
+) {
+  try {
+    fs.mkdirSync(dirname(path), { recursive: true });
+    fs.writeFileSync(path, text, { encoding: 'utf8', flag: 'wx' });
+    return { ok: true };
+  } catch (err) {
+    const code = err?.code || err?.message || 'write_failed';
+    return { ok: false, error: code, exists: code === 'EEXIST' };
+  }
+}
+
+/**
  * @returns {{ ok: true, text: string } | { ok: false, error: string }}
  */
 export function readTextFile(path, { fs = { readFileSync, existsSync } } = {}) {

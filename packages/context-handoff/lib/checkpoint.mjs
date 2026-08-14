@@ -8,11 +8,12 @@
  */
 
 import { existsSync, unlinkSync } from 'node:fs';
-import { ensureDenyMarker, readDenyMarker } from './deny-marker.mjs';
+import { ensureDenyMarker, readDenyMarker, denyPath } from './deny-marker.mjs';
 import { writeDenyRecord, repairDenyBinds, markerUnchanged } from './deny-persist.mjs';
 import { readFinal, writeFinal } from './final.mjs';
 import { finalPath } from './paths.mjs';
 import { writeJsonAtomic } from './atomic-json.mjs';
+import { currentBytes, restoreIfOurs } from './rollback.mjs';
 
 /**
  * Put a final back the way we found it. Evidence is what makes a mutation
@@ -81,6 +82,10 @@ export function rebindOpenDeny(root, sessionId, record, planned) {
  */
 export function writeCheckpoint(root, sessionId, planned, { expected = null } = {}) {
   const priorFinal = readFinal(root, sessionId);
+  // Bytes, not parsed values: a rollback has to prove the file still holds what
+  // THIS run put there before it puts anything back.
+  const priorFinalBytes = currentBytes(finalPath(root, sessionId));
+  const priorRecordBytes = currentBytes(denyPath(root, sessionId));
   const written = writeFinal(root, {
     sessionId,
     ticketId: planned.ticket_id,
@@ -136,16 +141,44 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     rebound: stale,
     priorFinal,
     priorRecord,
+    sessionId,
+    priorFinalBytes,
+    priorRecordBytes,
+    wroteFinalBytes: currentBytes(finalPath(root, sessionId)),
+    wroteRecordBytes: currentBytes(denyPath(root, sessionId)),
   };
 }
 
 /**
- * Undo a `writeCheckpoint`. A marker created fresh by this run stays — the
- * sentinel already names the session, so deleting it would trade an open deny
- * for an unclearable D3.
- * @param {{ priorFinal: object, priorRecord: object|null }} checkpoint
+ * Undo a `writeCheckpoint`, artifact by artifact, and only where this run's
+ * bytes are still the ones on disk. A marker created fresh by this run stays —
+ * the sentinel already names the session, so deleting it would trade an open
+ * deny for an unclearable D3.
+ *
+ * @param {object} checkpoint a `writeCheckpoint` result
+ * @returns {{ restored: boolean, conflict: boolean, label: string }[]}
  */
 export function rollbackCheckpoint(root, sessionId, checkpoint) {
-  restoreFinal(root, sessionId, checkpoint?.priorFinal);
-  if (checkpoint?.priorRecord) writeDenyRecord(root, checkpoint.priorRecord);
+  if (!checkpoint) return [];
+  const results = [
+    restoreIfOurs({
+      path: finalPath(root, sessionId),
+      wroteBytes: checkpoint.wroteFinalBytes ?? null,
+      priorBytes: checkpoint.priorFinalBytes ?? null,
+      label: 'final',
+    }),
+  ];
+  // Only a rebind moved the marker; a run that left it alone has nothing to put
+  // back and must not write one.
+  if (checkpoint.priorRecord) {
+    results.push(
+      restoreIfOurs({
+        path: denyPath(root, sessionId),
+        wroteBytes: checkpoint.wroteRecordBytes ?? null,
+        priorBytes: checkpoint.priorRecordBytes ?? null,
+        label: 'deny marker',
+      }),
+    );
+  }
+  return results;
 }

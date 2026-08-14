@@ -20,6 +20,8 @@
  * closed early from inside it.
  */
 
+import { redactSecrets } from './redact.mjs';
+
 const NONE = '_none_';
 
 /** Markers naming the boundary of session-supplied data. */
@@ -60,7 +62,10 @@ export function fenceUntrusted(body) {
     .join(DELIMITER_REDACTION)
     .split(UNTRUSTED_CLOSE)
     .join(DELIMITER_REDACTION);
-  return `${UNTRUSTED_OPEN}\n${inert}\n${UNTRUSTED_CLOSE}`;
+  // Credentials are stripped as part of fencing, not as a step a caller has to
+  // remember: the capture is written to disk AND pasted into the successor's
+  // prompt, so "composed a brief without redacting it" must not be reachable.
+  return `${UNTRUSTED_OPEN}\n${redactSecrets(inert).text}\n${UNTRUSTED_CLOSE}`;
 }
 
 /**

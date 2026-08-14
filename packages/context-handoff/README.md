@@ -87,6 +87,27 @@ const got = readVerifiedCapture(root, denySessionId, denyRecord.content_hash);
 if (!got.ok) return; // absent, oversize, or edited — inject nothing
 ```
 
+**Capture content is redacted.** Credentials are stripped as part of composing
+the brief, not as a step a caller remembers — the capture is persisted AND
+pasted into the successor's prompt on one path. The shapes mirror the findings
+ledger's (`packages/core/lib/ledger.mjs`), which refuses to commit a finding
+containing one; `test/capture-redact.test.mjs` pins the two behaviourally.
+Removed spans leave an explicit `[adlc: redacted <kind>]` so a reader knows.
+Pure-hex runs are exempt at any length — a brief's job includes quoting the
+sha256 `content_hash` the successor verifies against. Best-effort, not a proof
+of secret-freedom.
+
+**One successor id, one authorization.** The resume-auth is created with
+`O_EXCL`, so two continuations of different denies naming the same successor
+cannot both believe they authorized it — the denier's lock cannot serialize
+that, since they hold different locks. The loser degrades with exit 2 and the
+winner's grant is untouched.
+
+**Rollback never overwrites a stranger.** Every undo is a compare-and-swap on
+the bytes this run wrote: an artifact another writer has since taken is left
+alone and named in the error, because the failure that triggers a rollback is
+often that writer.
+
 **Capture content is fenced.** Everything the brief carries is attacker-reachable
 — a branch name, a filename in `git status`, a ticket title, the previous
 session's own words — so each section is wrapped in `<<<UNTRUSTED-CAPTURE-DATA`

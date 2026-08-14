@@ -51,36 +51,47 @@ export function authorizeSuccessor({
   expected,
   recordEvidence,
 }) {
-  // A successor that already holds an authorization is not a fresh session. Two
-  // reasons to refuse rather than overwrite: the existing auth belongs to a
-  // continuation this run knows nothing about, and a rollback here would delete
-  // it — destroying an authorization this run never issued.
-  if (existsSync(resumeAuthPath(root, successorId))) {
-    return {
-      ok: false,
-      error: `successor session ${successorId} already holds a resume-auth — successor ids must be fresh`,
-      exitCode: 2,
-      ownedAuth: false,
-    };
-  }
-
+  // The exclusive create IS the claim on this successor id. An existsSync
+  // check first would only narrow the window: two continuations of DIFFERENT
+  // denies can both pass it, and the denier's lock cannot serialize them
+  // because they hold different locks. Losing the create means somebody else
+  // owns the id, so this run must not delete their grant on the way out.
   const authWrote = writeResumeAuth(
     root,
     successorId,
     { ticketId, contentHash, denySessionId },
-    { key },
+    { key, exclusive: true },
   );
   if (!authWrote.ok) {
+    if (authWrote.exists) {
+      return {
+        ok: false,
+        error: `successor session ${successorId} already holds a resume-auth — successor ids must be fresh`,
+        exitCode: 2,
+        ownedAuth: false,
+      };
+    }
     return { ok: false, error: `failed to write resume-auth: ${authWrote.error}`, ownedAuth: false };
   }
   const rollback = () => removeResumeAuth(root, successorId);
 
   // Authorize with the document that was actually signed and read back, not
-  // with a hand-built verified:true.
+  // with a hand-built verified:true. Read back through the filesystem, so the
+  // bound fields are the ones the exclusive create actually landed.
   const resumeAuth = authWrote.resumeAuth;
-  if (!resumeAuth?.verified) {
+  if (
+    !resumeAuth?.verified ||
+    resumeAuth.ticket_id !== ticketId ||
+    resumeAuth.content_hash !== contentHash ||
+    resumeAuth.deny_session_id !== denySessionId ||
+    resumeAuth.consumer_session_id !== successorId
+  ) {
     rollback();
-    return { ok: false, error: 'resume-auth failed HMAC verification after write', ownedAuth: true };
+    return {
+      ok: false,
+      error: 'resume-auth did not read back as the document this run created',
+      ownedAuth: true,
+    };
   }
 
   const consumed = consumeDenyRecord(expected, successorId, { resumeAuth });
