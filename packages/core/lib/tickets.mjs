@@ -125,25 +125,68 @@ export function computeFloat(tickets) {
   return { floats, criticalPath, makespan };
 }
 
+const SLASH = '/'.charCodeAt(0);
+
 /**
  * Minimal glob match supporting '*' (within a segment) and '**' (across
  * segments). Enough for declared-scope checks; not a full glob engine.
+ *
+ * The token vocabulary is exactly what the split below produces:
+ *   `**\/` an optional run ending in a slash   (was `(?:.*\/)?`)
+ *   `**`   any run, slashes included           (was `.*`)
+ *   `*`    any run inside one segment          (was `[^/]*`)
+ *   else   a literal, `?` and `[` included — they are not glob syntax here
+ *
+ * Matched by simulating the automaton rather than by compiling a regex. The
+ * regex form was correct and backtracked catastrophically: adjacent `**\/`
+ * tokens overlap, so a pattern with a dozen of them took SECONDS on a path that
+ * nearly matched, and 200 of them did not finish in ten minutes. Rails are
+ * patterns from the ticket store and every rail check calls this first, so that
+ * was one unusual rail away from wedging a synchronous pre-execution hook.
+ *
+ * Here each token advances a set of reachable offsets in ONE left-to-right pass,
+ * so the work is bounded by tokens × path length with nothing to backtrack.
  */
 export function globMatch(pattern, path) {
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .split(/(\*\*\/|\*\*|\*)/)
-        .map((part) => {
-          if (part === '**/') return '(?:.*/)?';
-          if (part === '**') return '.*';
-          if (part === '*') return '[^/]*';
-          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        })
-        .join('') +
-      '$'
-  );
-  return regex.test(path);
+  const tokens = pattern.split(/(\*\*\/|\*\*|\*)/).filter((part) => part !== '');
+  const end = path.length;
+  // reach[i] = the pattern consumed so far can end at offset i.
+  let reach = new Uint8Array(end + 1);
+  reach[0] = 1;
+  for (const token of tokens) {
+    const next = new Uint8Array(end + 1);
+    let live = false;
+    if (token === '**') {
+      // Any run: once an offset is reachable, so is every later one.
+      let open = false;
+      for (let i = 0; i <= end; i++) {
+        if (reach[i]) open = true;
+        if (open) { next[i] = 1; live = true; }
+      }
+    } else if (token === '**/') {
+      // Either nothing, or a run ending at a slash.
+      let open = false;
+      for (let i = 0; i <= end; i++) {
+        if (reach[i]) { next[i] = 1; live = true; open = true; }
+        if (open && i < end && path.charCodeAt(i) === SLASH) { next[i + 1] = 1; live = true; }
+      }
+    } else if (token === '*') {
+      // A run that stops at the segment boundary rather than crossing it.
+      let open = false;
+      for (let i = 0; i <= end; i++) {
+        if (reach[i]) open = true;
+        if (open) { next[i] = 1; live = true; }
+        if (i < end && path.charCodeAt(i) === SLASH) open = false;
+      }
+    } else {
+      for (let i = 0; i + token.length <= end; i++) {
+        if (reach[i] && path.startsWith(token, i)) { next[i + token.length] = 1; live = true; }
+      }
+    }
+    if (!live) return false;                         // nothing reachable; no later token can revive it
+    reach = next;
+  }
+  return reach[end] === 1;
 }
 
 /** Does a file path fall inside a ticket's declared scope? */
