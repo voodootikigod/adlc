@@ -144,6 +144,17 @@ describe('adlc-prosecute tier-check anchors the diff to the merge-base (T-01M00B
     } finally { cleanup(dir); }
   });
 
+  it('the --help contract documents the merge-base basis, not the base tip', () => {
+    // The help text is the CLI's user-facing contract for HOW the tier's
+    // changed-file set is computed; an operator follows it when CI fails. Pin the
+    // merge-base anchor so the documented basis cannot silently drift from the
+    // implemented one (this also makes the help text mutation-visible).
+    const r = runBin(['--help'], tmpdir());
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /MERGE-BASE of <base> and HEAD/);
+    assert.match(r.stdout, /git diff --name-only <merge-base>/);
+  });
+
   it('AC5: a --base that resolves but shares NO history fails closed (exit 1), never an ungated pass', () => {
     const { dir, g } = scratchRepo({
       baseTickets: [T({ rails: [] })],
