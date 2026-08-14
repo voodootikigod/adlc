@@ -52,8 +52,30 @@ cannot.
 
 Degrades with exit 2 and nothing consumed: an unbound deny (bind it with
 `repair` first), a consumed deny, a missing or corrupt `--capture-from` source,
-or an active ticket that disagrees with the deny's bind. The successor id comes
-from `--session` or is minted by the command — never from agent input.
+a successor id that already holds a resume-auth, or an active ticket that
+disagrees with the deny's bind. The successor id comes from `--session` or is
+minted by the command — never from agent input.
+
+**Reading a capture back.** Use `readVerifiedCapture(root, sessionId, expectedHash)`.
+It returns the body only when the bytes on disk still hash to the value the
+deny record and resume-auth are bound to; missing, oversize, and altered all
+fail closed with no body. Supervisors and session-start injectors must go
+through it rather than reading the file — a signature proves the hash was
+authorized, never that the file still matches it.
+
+```js
+import { readVerifiedCapture } from '@adlc/context-handoff/lib/capture.mjs';
+
+const got = readVerifiedCapture(root, denySessionId, denyRecord.content_hash);
+if (!got.ok) return; // absent, oversize, or edited — inject nothing
+```
+
+**Capture content is fenced.** Everything the brief carries is attacker-reachable
+— a branch name, a filename in `git status`, a ticket title, the previous
+session's own words — so each section is wrapped in `<<<UNTRUSTED-CAPTURE-DATA`
+/ `END-UNTRUSTED>>>` markers, with those delimiters stripped from the content so
+the fence cannot be closed from inside. `bootstrap_prompt` repeats, before and
+after the body, that fenced content is recorded data rather than instructions.
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';

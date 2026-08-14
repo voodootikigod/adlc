@@ -18,6 +18,7 @@ import {
   poisonManifest,
   readJson,
   resumeAuthFiles,
+  resumeAuthPathFor,
   run,
   seedBoundDeny,
   transcript,
@@ -105,6 +106,36 @@ test('the rolled-back deny can still be continued once the ledger is sound', () 
     assert.equal(retry.code, 0);
     assert.equal(readJson(denyPathFor(cwd, 'denier-retry')).consumed_by, 'successor-retry');
     assert.deepEqual(resumeAuthFiles(cwd), ['successor-retry.resume-auth.json']);
+  });
+});
+
+test('a rollback deletes only the authorization this run minted', () => {
+  withTempRepo((cwd) => {
+    // An unrelated continuation that already happened: its successor holds a
+    // live authorization that has nothing to do with the failing run below.
+    seedBoundDeny(cwd, 'denier-other', 'T155');
+    run(['continue', '--deny-session', 'denier-other', '--session', 'successor-other', '--write', '--json'], {
+      cwd,
+      env: KEYED,
+    });
+    const bystander = resumeAuthPathFor(cwd, 'successor-other');
+    const bystanderAuth = readFileSync(bystander, 'utf8');
+
+    seedBoundDeny(cwd, 'denier-fail', 'T155');
+    poisonManifest(cwd);
+    const r = run(
+      ['continue', '--deny-session', 'denier-fail', '--session', 'successor-fail', '--write', '--json'],
+      { cwd, env: KEYED, expectOk: false },
+    );
+    assert.equal(r.code, 1);
+
+    assert.equal(existsSync(resumeAuthPathFor(cwd, 'successor-fail')), false, 'ours is gone');
+    assert.equal(readFileSync(bystander, 'utf8'), bystanderAuth, "someone else's is untouched");
+    assert.equal(readJson(denyPathFor(cwd, 'denier-other')).status, 'consumed');
+    assert.equal(readJson(denyPathFor(cwd, 'denier-fail')).status, 'open');
+    // The other continuation's capture must also survive our rollback.
+    assert.equal(existsSync(contentPathFor(cwd, 'denier-other')), true);
+    assert.equal(existsSync(contentPathFor(cwd, 'denier-fail')), false);
   });
 });
 

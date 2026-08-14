@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -16,6 +16,7 @@ import {
   manifestEntries,
   readJson,
   resumeAuthFiles,
+  resumeAuthPathFor,
   run,
   seedBoundDeny,
   seedUnboundDeny,
@@ -216,6 +217,53 @@ test('a malformed active-ticket pointer fails closed rather than being ignored',
     });
     assert.equal(r.code, 2);
     assertUntouched(cwd, 'denier-ptr', before);
+  });
+});
+
+test('a successor that already holds a resume-auth is refused, not overwritten', () => {
+  withTempRepo((cwd) => {
+    // `successor-taken` was authorized by an earlier continuation of its own.
+    seedBoundDeny(cwd, 'denier-first', 'T155');
+    run(['continue', '--deny-session', 'denier-first', '--session', 'successor-taken', '--write', '--json'], {
+      cwd,
+      env: KEYED,
+    });
+    const heldAuth = readFileSync(resumeAuthPathFor(cwd, 'successor-taken'), 'utf8');
+
+    seedBoundDeny(cwd, 'denier-second', 'T155');
+    const before = snapshot(cwd, 'denier-second');
+    const r = run(
+      ['continue', '--deny-session', 'denier-second', '--session', 'successor-taken', '--write', '--json'],
+      { cwd, env: KEYED, expectOk: false },
+    );
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /already holds a resume-auth/);
+
+    // The prior authorization is the thing at risk here: overwriting it would
+    // rebind it to another deny, and this run's rollback would delete it.
+    assert.equal(readFileSync(resumeAuthPathFor(cwd, 'successor-taken'), 'utf8'), heldAuth);
+    assert.deepEqual(readJson(denyPathFor(cwd, 'denier-second')), before.deny);
+    assert.equal(readJson(denyPathFor(cwd, 'denier-second')).status, 'open');
+    assert.equal(existsSync(contentPathFor(cwd, 'denier-second')), false);
+    assert.equal(manifestEntries(cwd, 'context-handoff-continue').length, 1);
+  });
+});
+
+test('a dry run reports the successor collision instead of promising a run that would fail', () => {
+  withTempRepo((cwd) => {
+    seedBoundDeny(cwd, 'denier-dry', 'T155');
+    run(['continue', '--deny-session', 'denier-dry', '--session', 'successor-dry', '--write', '--json'], {
+      cwd,
+      env: KEYED,
+    });
+    seedBoundDeny(cwd, 'denier-dry2', 'T155');
+
+    const r = run(
+      ['continue', '--deny-session', 'denier-dry2', '--session', 'successor-dry', '--json'],
+      { cwd, env: KEYED, expectOk: false },
+    );
+    assert.equal(r.code, 2);
+    assert.match(r.stderr, /already holds a resume-auth/);
   });
 });
 

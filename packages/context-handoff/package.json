@@ -48,6 +48,7 @@
     "./lib/brief.mjs": "./lib/brief.mjs",
     "./lib/transcript-extract.mjs": "./lib/transcript-extract.mjs",
     "./lib/checkpoint.mjs": "./lib/checkpoint.mjs",
+    "./lib/consume.mjs": "./lib/consume.mjs",
     "./lib/continue-inputs.mjs": "./lib/continue-inputs.mjs"
   },
   "dependencies": {

@@ -17,3 +17,4 @@ export * from './capture.mjs';
 export * from './brief.mjs';
 export * from './transcript-extract.mjs';
 export * from './checkpoint.mjs';
+export * from './consume.mjs';

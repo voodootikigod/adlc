@@ -114,15 +114,19 @@ export function removeCapture(root, sessionId, { fs = { existsSync, unlinkSync }
 }
 
 /**
- * Re-derive the stored capture's hash and compare it to the value a final /
- * deny record / resume-auth is bound to.
+ * Read a capture ONLY when it still hashes to the value it is bound to.
  *
- * This is the check that makes the bind mean something: a signature over
- * `content_hash` proves the hash was authorized, never that the file on disk
- * still hashes to it.
- * @returns {{ ok: true, hash: string } | { ok: false, error: string, actual?: string }}
+ * This is the API every consumer must use — supervisors, the SessionStart
+ * injector, anything that puts capture text in front of a model. A signature
+ * over `content_hash` proves the hash was authorized; it says nothing about the
+ * bytes on disk now, and re-deriving the hash is the only thing that does.
+ * Every failure — absent, oversize, altered — is one refusal to hand back
+ * content, never a body with a warning attached.
+ *
+ * @returns {{ ok: true, path: string, body: string, hash: string }
+ *          | { ok: false, error: string, actual?: string }}
  */
-export function verifyCaptureHash(root, sessionId, expectedHash) {
+export function readVerifiedCapture(root, sessionId, expectedHash) {
   if (typeof expectedHash !== 'string' || expectedHash.length === 0) {
     return { ok: false, error: 'missing expected content_hash' };
   }
@@ -132,5 +136,39 @@ export function verifyCaptureHash(root, sessionId, expectedHash) {
   if (actual !== expectedHash) {
     return { ok: false, error: 'content_hash mismatch', actual };
   }
-  return { ok: true, hash: actual };
+  return { ok: true, path: got.path, body: got.body, hash: actual };
+}
+
+/**
+ * Verify without taking the body — for callers that only need the verdict.
+ * @returns {{ ok: true, hash: string } | { ok: false, error: string, actual?: string }}
+ */
+export function verifyCaptureHash(root, sessionId, expectedHash) {
+  const got = readVerifiedCapture(root, sessionId, expectedHash);
+  return got.ok ? { ok: true, hash: got.hash } : got;
+}
+
+/**
+ * Write a capture and prove the bytes that landed hash to what we will bind to.
+ *
+ * The verification lives INSIDE the write rather than at the call site on
+ * purpose: a guard a caller can forget is a guard that is eventually forgotten,
+ * and "wrote a capture without checking what landed" is not a state this store
+ * should be able to express. It re-reads through the real filesystem, so an
+ * injected writer cannot vouch for itself.
+ *
+ * @returns {{ ok: true, path: string, body: string, hash: string, truncated: boolean }
+ *          | { ok: false, error: string }}
+ */
+export function writeVerifiedCapture(root, sessionId, body, opts = {}) {
+  const wrote = writeCapture(root, sessionId, body, opts);
+  if (!wrote.ok) return wrote;
+  const verified = readVerifiedCapture(root, sessionId, wrote.hash);
+  if (!verified.ok) {
+    return {
+      ok: false,
+      error: `capture does not match its content_hash after write (${verified.error})`,
+    };
+  }
+  return wrote;
 }
