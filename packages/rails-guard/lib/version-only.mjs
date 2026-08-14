@@ -40,6 +40,10 @@
 // exactly `JSON.stringify(obj, null, 2)`, so every manifest in this repo is
 // already canonical. A manifest that is not simply fails closed.
 
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 const MANIFEST_BASENAMES = new Set(['package.json', 'plugin.json', 'marketplace.json']);
 
 const DEP_FIELDS = new Set([
@@ -318,4 +322,80 @@ export function isVersionOnlyChange(beforeText, afterText, file) {
   }
 
   return true;
+}
+
+const GIT_TIMEOUT_MS = 60_000;
+const MAX_BUFFER = 512 * 1024 * 1024;
+
+/**
+ * Resolve baseline and working-tree contents for a manifest path under full
+ * mode, attribute, and encoding verification (matching bin/rails-guard.mjs).
+ * Fails closed (returns null) on any deviation, error, or unreadable content.
+ *
+ * @param {object} options
+ * @param {string} options.base git ref of freeze baseline
+ * @param {string} [options.cwd] working directory
+ * @param {string} options.file repo-relative path to manifest
+ * @returns {{before: string, after: string} | null}
+ */
+export function resolveManifestRevisionPair({ base, cwd = process.cwd(), file }) {
+  if (typeof file !== 'string' || file === '') return null;
+  if (Buffer.from(file, 'utf8').toString('utf8') !== file) return null;
+  if (typeof base !== 'string' || !base.trim()) return null;
+
+  try {
+    const fullPath = join(cwd, file);
+    if (!existsSync(fullPath) || !lstatSync(fullPath).isFile()) return null;
+
+    const attrRes = spawnSync('git', ['check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file], {
+      cwd,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+    });
+    if (attrRes.status !== 0 || !attrRes.stdout) return null;
+    for (const line of attrRes.stdout.split('\n')) {
+      if (!line.trim()) continue;
+      const value = line.slice(line.lastIndexOf(': ') + 2).trim();
+      if (value !== 'unspecified' && value !== 'unset') return null;
+    }
+
+    const lsRes = spawnSync('git', ['--literal-pathspecs', 'ls-tree', base, '--', file], {
+      cwd,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+    });
+    if (lsRes.status !== 0 || !lsRes.stdout) return null;
+    const baseMode = lsRes.stdout.trim().split(/\s+/)[0];
+    if (baseMode !== '100644' && baseMode !== '100755') return null;
+
+    const headExecutable = (lstatSync(fullPath).mode & 0o111) !== 0;
+    if ((baseMode === '100755') !== headExecutable) return null;
+
+    const showRes = spawnSync('git', ['show', `${base}:${file}`], {
+      cwd,
+      encoding: 'buffer',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+    });
+    if (showRes.status !== 0 || !showRes.stdout) return null;
+
+    const decode = (buf) => {
+      const text = buf.toString('utf8');
+      if (!Buffer.from(text, 'utf8').equals(buf)) return null;
+      return text;
+    };
+
+    const before = decode(showRes.stdout);
+    if (before === null) return null;
+
+    const afterBuf = readFileSync(fullPath);
+    const after = decode(afterBuf);
+    if (after === null) return null;
+
+    return { before, after };
+  } catch {
+    return null;
+  }
 }

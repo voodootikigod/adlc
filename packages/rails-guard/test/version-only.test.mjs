@@ -114,6 +114,20 @@ test('adding a scripts block is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(pkg('1.5.0'), pkg('1.5.1', {}, { scripts: { postinstall: 'x' } }), PKG), false);
 });
 
+test('modifying scripts.preflight or scripts.test is NOT exempt', () => {
+  const before = pkg('1.5.0', {}, { scripts: { preflight: 'node scripts/preflight.mjs', test: 'node scripts/run-tests.mjs' } });
+  const afterPreflight = pkg('1.5.1', {}, { scripts: { preflight: 'echo bypassed', test: 'node scripts/run-tests.mjs' } });
+  const afterTest = pkg('1.5.1', {}, { scripts: { preflight: 'node scripts/preflight.mjs', test: 'echo bypassed' } });
+  assert.equal(isVersionOnlyChange(before, afterPreflight, PKG), false);
+  assert.equal(isVersionOnlyChange(before, afterTest, PKG), false);
+});
+
+test('unchanged scripts during a canonical version bump ARE exempt', () => {
+  const before = pkg('1.5.0', {}, { scripts: { preflight: 'node scripts/preflight.mjs', test: 'node scripts/run-tests.mjs' } });
+  const after = pkg('1.5.1', {}, { scripts: { preflight: 'node scripts/preflight.mjs', test: 'node scripts/run-tests.mjs' } });
+  assert.equal(isVersionOnlyChange(before, after, PKG), true);
+});
+
 test('adding or removing a dependency is NOT exempt', () => {
   assert.equal(isVersionOnlyChange(pkg('1.5.0', { '@adlc/core': '1.5.0' }),
     pkg('1.5.1', { '@adlc/core': '1.5.1', evil: '^1.0.0' }), PKG), false);
