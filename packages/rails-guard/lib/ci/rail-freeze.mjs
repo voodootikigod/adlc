@@ -429,6 +429,16 @@ export function verifyManifest({ git, trustedBase, base, migration }) {
   }
 }
 
+function isExemptManifestTrustRoot(path, base, cwd) {
+  if (!isManifestFile(path)) return false;
+  try {
+    const contents = resolveManifestRevisionPair({ base, cwd, file: path });
+    return Boolean(contents && isVersionOnlyChange(contents.before, contents.after, path));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Deny a trust-root change unless the #141 ceremony authorizes it.
  *
@@ -454,19 +464,9 @@ function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique,
   // #501 / ADR 0012: a manifest trust root (such as root package.json) whose ONLY
   // differences are version fields and lockstep repins is not an unauthorized
   // trust-root change. Filter it out before checking ceremony authorization.
-  const nonExemptChangedRoots = changedTrustRoots.filter((path) => {
-    if (isManifestFile(path)) {
-      try {
-        const contents = resolveManifestRevisionPair({ base: trustedBase, cwd, file: path });
-        if (contents && isVersionOnlyChange(contents.before, contents.after, path)) {
-          return false; // exempt: version-only release bump
-        }
-      } catch {
-        // fail closed: retain path as non-exempt
-      }
-    }
-    return true;
-  });
+  const nonExemptChangedRoots = changedTrustRoots.filter(
+    (path) => !isExemptManifestTrustRoot(path, trustedBase, cwd)
+  );
 
   if (nonExemptChangedRoots.length === 0) return unique;
 
