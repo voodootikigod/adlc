@@ -6,7 +6,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { DEFAULT_IMMUTABLE_TRUST_ROOTS, resolveImmutableTrustRoots } from '../lib/ci/trust-roots.mjs';
+import { runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
+import { GateDeny } from '../lib/ci/errors.mjs';
 
 // #363 cross-model review, blocking finding 1: these were briefly passed in via
 // --trust-root from scripts/rails-guard-ci.mjs. That let ONE PR drop the arguments AND
@@ -94,4 +100,88 @@ test('an unbootstrapped repo has no trust roots at all', () => {
 
 test('resolving with no arguments still yields the full default set', () => {
   assert.deepEqual(resolveImmutableTrustRoots(), [...DEFAULT_IMMUTABLE_TRUST_ROOTS]);
+});
+
+test('runRailFreezeGate allows version-only bump on root package.json trust root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'rf-trust-roots-'));
+  const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  try {
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.email', 'test@test.invalid');
+    run('config', 'user.name', 'Test');
+    run('config', 'commit.gpgsign', 'false');
+
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'config.json'), JSON.stringify({
+      schema: 1,
+      securityMode: 'unsigned-fallback',
+      acknowledgedNewRailBypass: true,
+    }, null, 2) + '\n');
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({
+      schema: 1,
+      tickets: [
+        { id: 'T-1', title: 'test', rails: ['src/critical/**'] },
+      ],
+    }, null, 2) + '\n');
+    mkdirSync(join(root, 'src', 'critical'), { recursive: true });
+    writeFileSync(join(root, 'src', 'critical', 'auth.mjs'), 'export const a = 1;\n');
+
+    const pkgV1 = JSON.stringify({
+      name: 'root',
+      version: '1.0.0',
+      scripts: { preflight: 'echo preflight', test: 'echo test' },
+    }, null, 2) + '\n';
+    writeFileSync(join(root, 'package.json'), pkgV1);
+
+    run('add', '-A');
+    run('commit', '-q', '-m', 'base');
+    const base = run('rev-parse', 'HEAD').trim();
+
+    // 1. Version-only bump on package.json -> passes
+    run('checkout', '-q', '-b', 'feat-bump');
+    const pkgV2 = JSON.stringify({
+      name: 'root',
+      version: '1.0.1',
+      scripts: { preflight: 'echo preflight', test: 'echo test' },
+    }, null, 2) + '\n';
+    writeFileSync(join(root, 'package.json'), pkgV2);
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'chore: bump to 1.0.1');
+    const res = runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' });
+    assert.equal(res.status, 0);
+
+    // 2. Modifying scripts in package.json -> throws GateDeny
+    run('checkout', '-q', 'main');
+    run('checkout', '-q', '-b', 'feat-tampered');
+    const pkgTampered = JSON.stringify({
+      name: 'root',
+      version: '1.0.1',
+      scripts: { preflight: 'echo bypassed', test: 'echo test' },
+    }, null, 2) + '\n';
+    writeFileSync(join(root, 'package.json'), pkgTampered);
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'tamper scripts');
+    assert.throws(
+      () => runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' }),
+      (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message)
+    );
+
+    // 3. Modifying non-manifest trust root (e.g. .adlc/config.json) -> throws GateDeny
+    run('checkout', '-q', 'main');
+    run('checkout', '-q', '-b', 'feat-config');
+    writeFileSync(join(root, '.adlc', 'config.json'), JSON.stringify({
+      schema: 1,
+      securityMode: 'unsigned-fallback',
+      acknowledgedNewRailBypass: true,
+      extra: true,
+    }, null, 2) + '\n');
+    run('add', '.adlc/config.json');
+    run('commit', '-q', '-m', 'modify config');
+    assert.throws(
+      () => runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' }),
+      (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message)
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

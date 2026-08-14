@@ -12,11 +12,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { isManifestFile, isVersionOnlyChange } from '../lib/version-only.mjs';
+import { isManifestFile, isVersionOnlyChange, resolveManifestRevisionPair } from '../lib/version-only.mjs';
 
 const PKG = 'package.json';
 const MKT = '.claude-plugin/marketplace.json';
@@ -609,4 +611,50 @@ test('npm MAX_LENGTH is an exact boundary, not an approximate one', () => {
   assert.equal(at257.length, 257);
   assert.equal(isVersionOnlyChange(mk('1.5.0'), mk(at256), MKT), true, '256 chars is a version');
   assert.equal(isVersionOnlyChange(mk('1.5.0'), mk(at257), MKT), false, '257 chars is a dist-tag');
+});
+
+// ------------------------------- resolveManifestRevisionPair tests
+
+test('resolveManifestRevisionPair returns null for invalid file argument', () => {
+  for (const badFile of [null, undefined, 123, {}, [], true, '']) {
+    assert.equal(resolveManifestRevisionPair({ base: 'main', file: badFile }), null);
+  }
+  // Lone surrogate cannot round-trip UTF-8
+  assert.equal(resolveManifestRevisionPair({ base: 'main', file: 'package.json\uD800' }), null);
+});
+
+test('resolveManifestRevisionPair returns null for invalid base argument', () => {
+  for (const badBase of [null, undefined, 123, {}, [], '', '   ']) {
+    assert.equal(resolveManifestRevisionPair({ base: badBase, file: 'package.json' }), null);
+  }
+});
+
+test('resolveManifestRevisionPair in a repo resolves before/after or returns null on non-regular file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'resolve-manifest-pair-'));
+  const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  try {
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.email', 'test@test.invalid');
+    run('config', 'user.name', 'Test');
+    run('config', 'commit.gpgsign', 'false');
+
+    const pkgV1 = JSON.stringify({ name: 'foo', version: '1.0.0' }, null, 2) + '\n';
+    writeFileSync(join(root, 'package.json'), pkgV1);
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'base');
+    const base = run('rev-parse', 'HEAD').trim();
+
+    // Valid bump on disk
+    const pkgV2 = JSON.stringify({ name: 'foo', version: '1.0.1' }, null, 2) + '\n';
+    writeFileSync(join(root, 'package.json'), pkgV2);
+    const resolved = resolveManifestRevisionPair({ base, cwd: root, file: 'package.json' });
+    assert.ok(resolved !== null);
+    assert.equal(resolved.before, pkgV1);
+    assert.equal(resolved.after, pkgV2);
+
+    // Non-existent file
+    assert.equal(resolveManifestRevisionPair({ base, cwd: root, file: 'nonexistent.json' }), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
