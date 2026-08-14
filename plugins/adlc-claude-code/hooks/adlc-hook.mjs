@@ -821,25 +821,10 @@ function review(input = {}) {
   emit({ systemMessage: msg });
 }
 
-// Minimal glob matcher — ported VERBATIM from @adlc/core lib/tickets.mjs
-// `globMatch` (the hook can't resolve @adlc/core at runtime). Supports `*`
-// within a segment and `**` across segments. KEEP IN SYNC with core.
-function globMatch(pattern, path) {
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .split(/(\*\*\/|\*\*|\*)/)
-        .map((part) => {
-          if (part === '**/') return '(?:.*/)?';
-          if (part === '**') return '.*';
-          if (part === '*') return '[^/]*';
-          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        })
-        .join('') +
-      '$'
-  );
-  return regex.test(path);
-}
+// The rail/scope glob matcher is a GENERATED verbatim copy of
+// packages/core/lib/glob.mjs: this file is installed without node_modules, so it
+// cannot import @adlc/core, and a hand-kept copy is what drifted before.
+import { globMatch } from './generated-glob-match.mjs';
 
 /**
  * Every file path a structured edit tool would touch. Reads the top-level

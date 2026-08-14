@@ -45,19 +45,9 @@ export function loadTickets(path = TICKETS_PATH) {
   }
 }
 
-export function globMatch(pattern, path) {
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .split(/(\*\*\/|\*\*|\*)/)
-        .map((part) => {
-          if (part === '**/') return '(?:.*/)?';
-          if (part === '**') return '.*';
-          if (part === '*') return '[^/]*';
-          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        })
-        .join('') +
-      '$'
-  );
-  return regex.test(path);
-}
+// The rail/scope glob matcher is a GENERATED verbatim copy of
+// packages/core/lib/glob.mjs: this file is installed without node_modules, so it
+// cannot import @adlc/core, and a hand-kept copy is what drifted before.
+import { globMatch } from './generated-glob-match.mjs';
+
+export { globMatch };

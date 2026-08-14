@@ -6,13 +6,17 @@
 // time is the complementary hygiene fix: steer authors to `packages/x/lib/**`.
 //
 // SELF-CONTAINED ON PURPOSE. `@adlc/core` depends on `@adlc/tickets`, so importing
-// `globMatch` from core here would create a dependency cycle. This module
-// reimplements the same tiny glob semantics; manifest-rails.test.mjs cross-checks
-// it against core's globMatch on a shared corpus so the two cannot diverge
-// silently.
+// `globMatch` from core here would create a dependency cycle. It takes the same
+// GENERATED verbatim copy of core's matcher the installed harnesses take, so the
+// semantics cannot drift; manifest-rails.test.mjs still cross-checks it against
+// core's globMatch on a shared corpus.
 
 import { readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+// Generated verbatim from packages/core/lib/glob.mjs — see that file. Imported
+// rather than re-implemented so this cannot drift from the matcher the rails
+// are actually enforced with.
+import { globMatch } from './generated-glob-match.mjs';
 
 export const MANIFEST_BASENAMES = Object.freeze(['package.json', 'plugin.json', 'marketplace.json']);
 
@@ -60,24 +64,6 @@ export function discoverManifests(root = process.cwd()) {
 }
 
 /**
- * Compile a rail glob to a RegExp with the SAME semantics as @adlc/core's
- * globMatch: `**` spans any characters (including `/`), `*` spans any non-`/`,
- * everything else literal.
- */
-function globToRegExp(pattern) {
-  const body = pattern
-    .split(/(\*\*\/|\*\*|\*)/)
-    .map((part) => {
-      if (part === '**/') return '(?:.*/)?';
-      if (part === '**') return '.*';
-      if (part === '*') return '[^/]*';
-      return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-    })
-    .join('');
-  return new RegExp(`^${body}$`);
-}
-
-/**
  * True when `glob` matches at least one manifest a lockstep release rewrites.
  *
  * @param {unknown} glob a rail glob
@@ -93,13 +79,7 @@ export function coversManifest(glob, manifestPaths) {
     throw new TypeError('coversManifest requires an explicit manifestPaths array (use discoverManifests())');
   }
   if (typeof glob !== 'string' || glob === '') return false;
-  let regex;
-  try {
-    regex = globToRegExp(glob);
-  } catch {
-    return false;
-  }
-  return manifestPaths.some((path) => regex.test(path));
+  return manifestPaths.some((path) => globMatch(glob, path));
 }
 
 /**

@@ -85,27 +85,12 @@ const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/curre
 const MANIFEST_PATH = '.adlc/manifest.jsonl';
 const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 
-export function globMatch(pattern, path) {
-  // KEEP IN SYNC with @adlc/core's globMatch (packages/core/lib/tickets.mjs).
-  // Tokenized like the canonical implementation -- a naive replace-** chain
-  // fails to match a root-level path against a leading `**/` pattern (the
-  // canonical `**/` -> `(?:.*/)?` is an OPTIONAL group). T50's risk-tier
-  // patterns are almost all `**/`-prefixed, so this must be exact.
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .split(/(\*\*\/|\*\*|\*)/)
-        .map((part) => {
-          if (part === '**/') return '(?:.*/)?';
-          if (part === '**') return '.*';
-          if (part === '*') return '[^/]*';
-          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        })
-        .join('') +
-      '$',
-  );
-  return regex.test(path);
-}
+// The rail/scope glob matcher is a GENERATED verbatim copy of
+// packages/core/lib/glob.mjs: this file is installed without node_modules, so it
+// cannot import @adlc/core, and a hand-kept copy is what drifted before.
+import { globMatch } from './generated-glob-match.mjs';
+
+export { globMatch };
 
 function touchesAny(globs, paths) {
   return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p)));

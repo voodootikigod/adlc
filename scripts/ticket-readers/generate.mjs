@@ -22,6 +22,19 @@ const ARTIFACTS = [
     ],
   },
   {
+    source: 'packages/core/lib/glob.mjs',
+    marker: '// GENERATED-GLOB SOURCE.',
+    outputs: [
+      'plugins/adlc-codex/hooks/generated-glob-match.mjs',
+      'plugins/adlc-claude-code/hooks/generated-glob-match.mjs',
+      'plugins/adlc-copilot/hooks/generated-glob-match.mjs',
+      'plugins/adlc-gemini/generated-glob-match.mjs',
+      // @adlc/tickets cannot import @adlc/core — core depends on IT, so the
+      // copy goes the same way as the harnesses' rather than inverting that.
+      'packages/tickets/lib/generated-glob-match.mjs',
+    ],
+  },
+  {
     source: 'packages/tickets/lib/pointer.mjs',
     marker: '// GENERATED-POINTER SOURCE.',
     outputs: [

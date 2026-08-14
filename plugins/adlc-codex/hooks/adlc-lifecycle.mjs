@@ -136,26 +136,12 @@ export const RISK_TIER_PATTERNS = Object.freeze({
   ]),
 });
 
-// KEEP IN SYNC with @adlc/core's globMatch (packages/core/lib/tickets.mjs).
-// Tokenized like the canonical implementation — see the T49 fix in
-// adlc-build-gate.mjs's own globMatch for why a naive replace-** chain is
-// wrong for these `**/`-prefixed patterns.
-export function globMatch(pattern, path) {
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .split(/(\*\*\/|\*\*|\*)/)
-        .map((part) => {
-          if (part === '**/') return '(?:.*/)?';
-          if (part === '**') return '.*';
-          if (part === '*') return '[^/]*';
-          return part.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-        })
-        .join('') +
-      '$',
-  );
-  return regex.test(path);
-}
+// The rail/scope glob matcher is a GENERATED verbatim copy of
+// packages/core/lib/glob.mjs: this file is installed without node_modules, so it
+// cannot import @adlc/core, and a hand-kept copy is what drifted before.
+import { globMatch } from './generated-glob-match.mjs';
+
+export { globMatch };
 
 export function matchRiskTier(path) {
   const norm = String(path).split('\\').join('/');

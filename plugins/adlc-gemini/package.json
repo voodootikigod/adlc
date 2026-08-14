@@ -61,6 +61,7 @@
     "flail-inline.mjs",
     "generated-active-ticket.mjs",
     "generated-ticket-reader.mjs",
+    "generated-glob-match.mjs",
     "hooks/",
     "hooks.json",
     "rails-checker.mjs",

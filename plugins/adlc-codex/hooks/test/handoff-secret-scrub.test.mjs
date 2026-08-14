@@ -78,6 +78,7 @@ function isolatedPluginDir() {
     'adlc-build-gate.mjs',
     'generated-active-ticket.mjs',
     'generated-ticket-reader.mjs',
+    'generated-glob-match.mjs',
   ]) {
     writeFileSync(join(hooks, f), readFileSync(join(HOOKS_DIR, f), 'utf8'));
   }
