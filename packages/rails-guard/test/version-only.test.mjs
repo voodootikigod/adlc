@@ -629,7 +629,13 @@ test('resolveManifestRevisionPair returns null for invalid base argument', () =>
   }
 });
 
-test('resolveManifestRevisionPair in a repo resolves before/after or returns null on non-regular file', () => {
+test('resolveManifestRevisionPair returns null for invalid head argument', () => {
+  for (const badHead of [123, {}, [], '', '   ']) {
+    assert.equal(resolveManifestRevisionPair({ base: 'main', head: badHead, file: 'package.json' }), null);
+  }
+});
+
+test('resolveManifestRevisionPair in a repo resolves before/after from git revisions', () => {
   const root = mkdtempSync(join(tmpdir(), 'resolve-manifest-pair-'));
   const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   try {
@@ -644,16 +650,20 @@ test('resolveManifestRevisionPair in a repo resolves before/after or returns nul
     run('commit', '-q', '-m', 'base');
     const base = run('rev-parse', 'HEAD').trim();
 
-    // Valid bump on disk
+    // Commit valid bump to HEAD
     const pkgV2 = JSON.stringify({ name: 'foo', version: '1.0.1' }, null, 2) + '\n';
     writeFileSync(join(root, 'package.json'), pkgV2);
-    const resolved = resolveManifestRevisionPair({ base, cwd: root, file: 'package.json' });
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'bump');
+    const head = run('rev-parse', 'HEAD').trim();
+
+    const resolved = resolveManifestRevisionPair({ base, head, cwd: root, file: 'package.json' });
     assert.ok(resolved !== null);
     assert.equal(resolved.before, pkgV1);
     assert.equal(resolved.after, pkgV2);
 
     // Non-existent file
-    assert.equal(resolveManifestRevisionPair({ base, cwd: root, file: 'nonexistent.json' }), null);
+    assert.equal(resolveManifestRevisionPair({ base, head, cwd: root, file: 'nonexistent.json' }), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

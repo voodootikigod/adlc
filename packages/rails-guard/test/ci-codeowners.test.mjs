@@ -7,6 +7,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CODEOWNERS_FILES, parseCodeowners } from '../lib/ci/codeowners.mjs';
 
 test('GitHub file precedence order is preserved', () => {
@@ -136,4 +139,11 @@ test('ownersForPaths: distinct changed paths each resolve to their own last-matc
     ownersForPaths(git, 'base', ['.adlc/config.json', 'docs/ci/rails-guard.yml']).sort(),
     ['alice', 'bob']
   );
+});
+
+test('the repository CODEOWNERS explicitly covers /package.json with @voodootikigod (#501)', () => {
+  const codeownersPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'CODEOWNERS');
+  const content = readFileSync(codeownersPath, 'utf8');
+  const git = fakeGit({ CODEOWNERS: content });
+  assert.deepEqual(ownersForPaths(git, 'base', ['package.json']), ['voodootikigod']);
 });

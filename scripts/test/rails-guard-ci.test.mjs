@@ -703,6 +703,58 @@ test('trust root #501: PR changes non-@adlc dependency in root package.json with
   assert.equal(code, 2);
 });
 
+test('trust root #501: PR commits script tampering to HEAD but working tree is clean/restored → exit 2', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rgci-head-tamper-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const parsedTickets = JSON.parse(RAILED);
+    for (const t of parsedTickets.tickets ?? []) t.title ??= `${t.id} fixture`;
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedTickets));
+    const basePkg = JSON.stringify({
+      name: '@adlc/root',
+      version: '1.5.0',
+      scripts: {
+        preflight: 'node scripts/preflight.mjs',
+        test: 'node scripts/run-tests.mjs',
+      },
+    }, null, 2) + '\n';
+    writeFileSync(join(dir, 'package.json'), basePkg);
+    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+
+    git(dir, ['checkout', '-q', '-b', 'feat']);
+    const tamperedPkg = JSON.stringify({
+      name: '@adlc/root',
+      version: '1.5.0',
+      scripts: {
+        preflight: 'echo bypassed',
+        test: 'node scripts/run-tests.mjs',
+      },
+    }, null, 2) + '\n';
+    writeFileSync(join(dir, 'package.json'), tamperedPkg);
+    git(dir, ['add', 'package.json']);
+    git(dir, ['commit', '-qm', 'tamper scripts']);
+
+    // Restore working-tree package.json to basePkg without committing
+    writeFileSync(join(dir, 'package.json'), basePkg);
+
+    let code = 0;
+    try {
+      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '' } });
+    } catch (e) {
+      code = e.status ?? 1;
+    }
+    assert.equal(code, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 for (const [path, renamedPath] of [
   ['.adlc/tickets.json', 'tickets-renamed.json'],
   ['.adlc/manifest.jsonl', 'manifest-renamed.jsonl'],

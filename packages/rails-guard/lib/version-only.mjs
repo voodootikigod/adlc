@@ -328,25 +328,25 @@ const GIT_TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 512 * 1024 * 1024;
 
 /**
- * Resolve baseline and working-tree contents for a manifest path under full
+ * Resolve baseline and candidate (head) contents for a manifest path under full
  * mode, attribute, and encoding verification (matching bin/rails-guard.mjs).
+ * Pinned to immutable git object revisions to prevent working-tree divergence attacks.
  * Fails closed (returns null) on any deviation, error, or unreadable content.
  *
  * @param {object} options
  * @param {string} options.base git ref of freeze baseline
+ * @param {string} [options.head='HEAD'] git ref of candidate revision
  * @param {string} [options.cwd] working directory
  * @param {string} options.file repo-relative path to manifest
  * @returns {{before: string, after: string} | null}
  */
-export function resolveManifestRevisionPair({ base, cwd = process.cwd(), file }) {
+export function resolveManifestRevisionPair({ base, head = 'HEAD', cwd = process.cwd(), file }) {
   if (typeof file !== 'string' || file === '') return null;
   if (Buffer.from(file, 'utf8').toString('utf8') !== file) return null;
   if (typeof base !== 'string' || !base.trim()) return null;
+  if (typeof head !== 'string' || !head.trim()) return null;
 
   try {
-    const fullPath = join(cwd, file);
-    if (!existsSync(fullPath) || !lstatSync(fullPath).isFile()) return null;
-
     const attrRes = spawnSync('git', ['check-attr', 'filter', 'ident', 'working-tree-encoding', '--', file], {
       cwd,
       encoding: 'utf8',
@@ -360,26 +360,26 @@ export function resolveManifestRevisionPair({ base, cwd = process.cwd(), file })
       if (value !== 'unspecified' && value !== 'unset') return null;
     }
 
-    const lsRes = spawnSync('git', ['--literal-pathspecs', 'ls-tree', base, '--', file], {
+    const lsBaseRes = spawnSync('git', ['--literal-pathspecs', 'ls-tree', base, '--', file], {
       cwd,
       encoding: 'utf8',
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     });
-    if (lsRes.status !== 0 || !lsRes.stdout) return null;
-    const baseMode = lsRes.stdout.trim().split(/\s+/)[0];
+    if (lsBaseRes.status !== 0 || !lsBaseRes.stdout) return null;
+    const baseMode = lsBaseRes.stdout.trim().split(/\s+/)[0];
     if (baseMode !== '100644' && baseMode !== '100755') return null;
 
-    const headExecutable = (lstatSync(fullPath).mode & 0o111) !== 0;
-    if ((baseMode === '100755') !== headExecutable) return null;
-
-    const showRes = spawnSync('git', ['show', `${base}:${file}`], {
+    const lsHeadRes = spawnSync('git', ['--literal-pathspecs', 'ls-tree', head, '--', file], {
       cwd,
-      encoding: 'buffer',
+      encoding: 'utf8',
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_BUFFER,
     });
-    if (showRes.status !== 0 || !showRes.stdout) return null;
+    if (lsHeadRes.status !== 0 || !lsHeadRes.stdout) return null;
+    const headMode = lsHeadRes.stdout.trim().split(/\s+/)[0];
+    if (headMode !== '100644' && headMode !== '100755') return null;
+    if (baseMode !== headMode) return null;
 
     const decode = (buf) => {
       const text = buf.toString('utf8');
@@ -387,11 +387,24 @@ export function resolveManifestRevisionPair({ base, cwd = process.cwd(), file })
       return text;
     };
 
-    const before = decode(showRes.stdout);
+    const showBaseRes = spawnSync('git', ['show', `${base}:${file}`], {
+      cwd,
+      encoding: 'buffer',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+    });
+    if (showBaseRes.status !== 0 || !showBaseRes.stdout) return null;
+    const before = decode(showBaseRes.stdout);
     if (before === null) return null;
 
-    const afterBuf = readFileSync(fullPath);
-    const after = decode(afterBuf);
+    const showHeadRes = spawnSync('git', ['show', `${head}:${file}`], {
+      cwd,
+      encoding: 'buffer',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_BUFFER,
+    });
+    if (showHeadRes.status !== 0 || !showHeadRes.stdout) return null;
+    const after = decode(showHeadRes.stdout);
     if (after === null) return null;
 
     return { before, after };
