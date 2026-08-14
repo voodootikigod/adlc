@@ -618,6 +618,7 @@ describe('tamper detection', () => {
       assert.equal(result.valid, false);
       assert.equal(result.break.reason, 'first entry seq must be 1');
       assert.equal(result.break.seq, 2);
+      assert.equal(result.count, 0);
     } finally {
       cleanTmp(dir);
     }
@@ -633,6 +634,7 @@ describe('tamper detection', () => {
       assert.equal(result.valid, false);
       assert.equal(result.break.reason, 'seq not contiguous');
       assert.equal(result.break.seq, 3);
+      assert.equal(result.count, 1);
     } finally {
       cleanTmp(dir);
     }
@@ -648,6 +650,7 @@ describe('tamper detection', () => {
       assert.equal(result.valid, false);
       assert.equal(result.break.reason, 'seq not contiguous');
       assert.equal(result.break.seq, 1);
+      assert.equal(result.count, 1);
     } finally {
       cleanTmp(dir);
     }
@@ -664,6 +667,7 @@ describe('tamper detection', () => {
       assert.equal(result.valid, false);
       assert.equal(result.break.reason, 'seq not contiguous');
       assert.equal(result.break.seq, 1);
+      assert.equal(result.count, 2);
     } finally {
       cleanTmp(dir);
     }
