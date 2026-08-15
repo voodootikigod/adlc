@@ -31,14 +31,14 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  *   { file, type: 'rail-edit', globs }          — froze path was edited
  *   { file, type: 'suppression', marker, lineNo }  — unapproved marker added
  */
-export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced, resolveContents }) {
+export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced, resolveContents, sanctionedAdditions }) {
   const { globs: railGlobs, error: railGlobError } = resolveRailGlobs(cliRails, ticket);
 
   const violations = [];
 
   // CHECK 1: rail edits
   if (railGlobs.length > 0) {
-    const railEdits = checkRailEdits(changedFiles, railGlobs, resolveContents);
+    const railEdits = checkRailEdits(changedFiles, railGlobs, resolveContents, sanctionedAdditions ?? null);
     violations.push(...railEdits);
   }
 

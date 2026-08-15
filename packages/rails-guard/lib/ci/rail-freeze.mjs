@@ -152,8 +152,15 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
     unique = enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, rails, messages, cwd });
   }
 
+  // ---- sanctioned rail AUTHORING (T-01M0122Y3JYM04D2VZC3026G3B) ---------------------
+  const sanctionedAdds = sanctionedRailAdditions({ git, trustedBase, baseTickets, immutableTrustRoots, messages });
+
   // ---- render the verdict -----------------------------------------------------------
-  const argv = ['--base', trustedBase, ...unique.flatMap((rail) => ['--rails', rail])];
+  const argv = [
+    '--base', trustedBase,
+    ...unique.flatMap((rail) => ['--rails', rail]),
+    ...sanctionedAdds.flatMap((path) => ['--sanctioned-add', path]),
+  ];
   const bin = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'rails-guard.mjs');
   const result = spawnSync(process.execPath, [bin, ...argv], { cwd, stdio, timeout: RAILS_GUARD_TIMEOUT_MS });
   if (result.error) fail(`could not run rails-guard: ${result.error.message}`);
@@ -427,6 +434,88 @@ export function verifyManifest({ git, trustedBase, base, migration }) {
   if (snapshot.root.text.trim()) {
     deny('.adlc/manifest.jsonl cannot be created with evidence in a PR; create it empty during bootstrap or use the protected-base runner ceremony');
   }
+}
+
+/**
+ * The one sanctioned escape from the rail freeze: AUTHORING a rail file that the
+ * declaring ticket froze before it existed (T-01M0122Y3JYM04D2VZC3026G3B).
+ *
+ * Once a railed ticket merges, its rail globs freeze paths that may not exist yet,
+ * and the build PR that creates the rail test then fails this gate with no escape:
+ * T36 expires rails only on `completed: true`, a PR may complete only RAILLESS
+ * tickets, and the #141 ceremony never lifts ticket rails. In-session the PreToolUse
+ * hook has ADLC_RAILS_BYPASS for exactly this authoring act; this is its CI
+ * equivalent, strictly narrower — the FIRST ADDITION only.
+ *
+ * A path qualifies only when ALL hold, each computed from the PINNED trustedBase:
+ *   1. PURE ADDITION — status `A` in every diff view it appears in (worktree AND
+ *      --cached, both with rename detection on), so a rename/copy destination is
+ *      disqualified by its own `R`/`C` status. An UNDETECTED rename (similarity
+ *      below git's threshold surfaces as A+D) cannot slip through either: the `D`
+ *      of the source is itself a rail violation, so the gate still denies.
+ *   2. ABSENT AT BASE — `git ls-tree <trustedBase> -- <path>` proves the freeze
+ *      never covered real content here. Any git failure → not sanctioned.
+ *   3. TICKET RAILS ONLY — every matching frozen glob is an in-flight base
+ *      ticket's rail; matching ANY immutable trust root disqualifies (the #141
+ *      surface is untouched by this exemption).
+ *
+ * SECURITY: what the freeze protects — an existing rail's CONTENT — stays frozen.
+ * The authored file's content faces the same defenses the in-session bypass
+ * already relies on: P5 prosecution, the mutation gate, and cross-model review.
+ * Every sanction is reported loudly with the declaring ticket id(s), never silent.
+ *
+ * Fail-closed throughout: any unparseable/failed git output yields NO sanctions,
+ * which leaves today's denial in place.
+ */
+function sanctionedRailAdditions({ git, trustedBase, baseTickets, immutableTrustRoots, messages }) {
+  // status per path across both views; a path seen with two DIFFERENT statuses
+  // (or any non-A status anywhere) is disqualified.
+  const statusByPath = new Map();
+  const note = (path, kind) => {
+    statusByPath.set(path, statusByPath.has(path) && statusByPath.get(path) !== kind ? 'mixed' : kind);
+  };
+  for (const cached of [[], ['--cached']]) {
+    const res = git(
+      ['diff', '--name-status', '-z', '-M', ...cached, trustedBase, '--'],
+      `git diff --name-status${cached.length ? ' --cached' : ''} (sanctioned-addition scan)`
+    );
+    if (res.status !== 0) return []; // fail closed — no sanctions
+    const tokens = res.stdout.split('\0').filter((t) => t !== '');
+    for (let index = 0; index < tokens.length;) {
+      const status = tokens[index++];
+      const pathCount = /^[RC]\d*$/.test(status) ? 2 : 1;
+      const kind = pathCount === 2 ? 'rename-or-copy' : status;
+      for (let p = 0; p < pathCount && index < tokens.length; p++) note(tokens[index++], kind);
+    }
+  }
+
+  const inFlightRailOwners = new Map(); // glob → ticket ids (completed tickets excluded)
+  for (const ticket of baseTickets) {
+    if (ticket.completed === true) continue;
+    for (const rail of ticket.rails ?? []) {
+      if (typeof rail !== 'string' || !rail) continue;
+      inFlightRailOwners.set(rail, [...(inFlightRailOwners.get(rail) ?? []), ticket.id]);
+    }
+  }
+
+  const sanctioned = [];
+  for (const [path, status] of statusByPath) {
+    if (status !== 'A') continue;
+    const owningTickets = new Set();
+    for (const [glob, ids] of inFlightRailOwners) {
+      if (globMatch(glob, path)) for (const id of ids) owningTickets.add(id);
+    }
+    if (owningTickets.size === 0) continue; // matches no in-flight ticket rail
+    if (immutableTrustRoots.some((root) => root === path || globMatch(root, path))) continue;
+    const atBase = git(['--literal-pathspecs', 'ls-tree', trustedBase, '--', path], 'git ls-tree (sanctioned-addition scan)');
+    if (atBase.status !== 0 || atBase.stdout.trim() !== '') continue; // exists at base, or unknowable → not an authoring act
+    sanctioned.push(path);
+    messages.push(
+      `sanctioned rail authoring: ${path} — first addition of a declared rail `
+      + `(ticket ${[...owningTickets].sort().join(', ')})`
+    );
+  }
+  return sanctioned;
 }
 
 function isExemptManifestTrustRoot(path, base, head, cwd) {

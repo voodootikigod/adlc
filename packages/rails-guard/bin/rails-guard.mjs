@@ -31,6 +31,7 @@ const { values } = parseArgs({
     ticket:  { type: 'string'  },
     tickets: { type: 'string'  },
     rails:   { type: 'string',  multiple: true },
+    'sanctioned-add': { type: 'string', multiple: true },
     record:  { type: 'boolean', default: false },
     json:    { type: 'boolean', default: false },
     help:    { type: 'boolean', default: false },
@@ -51,6 +52,12 @@ Rail-freeze enforcement + suppression-marker gate (ADLC C5).
   --tickets <path>   Path to tickets.json (default: .adlc/tickets.json)
   --rails <glob>     One or more glob patterns declaring frozen rail paths
                      (repeatable; overrides ticket.rails)
+  --sanctioned-add <path>
+                     Exact file path whose rail match is a sanctioned AUTHORING
+                     addition (repeatable). Plumbing for the CI wrapper, which
+                     alone computes the policy (pure addition at the trusted
+                     base, ticket-rail-only match, never a trust root) — see
+                     lib/ci/rail-freeze.mjs. Do not pass by hand.
   --record           On a clean pass, append a manifest entry to .adlc/manifest.jsonl
   --json             Machine-readable JSON output
   --help             Show this help
@@ -233,7 +240,10 @@ function resolveContents(file) {
 
 // --- run checks ---
 const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean } =
-  runChecks({ changedFiles: files, diffText: diff, cliRails, ticket, isFenced, resolveContents });
+  runChecks({
+    changedFiles: files, diffText: diff, cliRails, ticket, isFenced, resolveContents,
+    sanctionedAdditions: new Set(values['sanctioned-add'] ?? []),
+  });
 
 const result = buildResult({
   violations,
