@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -518,5 +518,174 @@ test('doctor current-ticket: reports that it could not validate when the store i
     assert.equal(check.ok, false);
     assert.equal(check.code, 'ACTIVE_STORE_UNREADABLE');
     assert.equal(report.ok, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------
+// manifest-forest: dangling references nothing else reports (spec §12 AC10).
+//
+// An orphaned anchor and a stale `.lineage` token are both invisible to the
+// rest of the system by design. Every resolver swallows a broken token —
+// peekOpenSegment falls through and the next writer mints a fresh segment,
+// which is right for a writer and silent for an operator — and an orphaned
+// anchor surfaces only under a full verify(), which `adlc ticket doctor` does
+// not run. Both then fail somewhere far from the cause.
+//
+// The existing chain-integrity codes answer the OTHER question: whether what
+// IS there verifies, not whether something it points at is gone.
+// ---------------------------------------------------------------------------
+
+const forestCheck = (report) => report.checks.find((c) => c.name === 'manifest-forest');
+
+/**
+ * A repo whose root carries real evidence and whose branch then opened a
+ * segment anchored into it — the ordinary shape since the root was frozen.
+ * Segments only capture appends once `.store.json` exists, so the marker is
+ * written between the two transactions.
+ */
+function gitStoreWithAnchoredSegment() {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-forest-'));
+  const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  g('init', '-q', '-b', 'feat/doctor-forest-test');
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'init');
+  writeDirectory(root, []);
+  const store = new DirectoryTicketStore(join(root, '.adlc', 'tickets'));
+  const service = new TicketService(store, { root });
+  service.apply(service.planCreate(ticket('A')));
+  service.apply(service.planComplete('A')); // evidence-required → lands in ROOT
+  mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+  service.apply(service.planCreate(ticket('B')));
+  service.apply(service.planComplete('B')); // → mints a segment anchored at root's tip
+  const segments = readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+  return { root, store, segment: segments[0] };
+}
+
+const segFile = (root, name) => join(root, '.adlc', 'manifest.d', name);
+
+// Every byte under .adlc/, so "read-only" is asserted against the whole store
+// and manifest rather than a directory listing that would miss an in-place edit.
+function fingerprint(dir) {
+  const out = [];
+  const walk = (rel) => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const next = rel === '' ? e.name : `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(next);
+      else out.push(`${next}:${createHash('sha256').update(readFileSync(join(dir, next))).digest('hex')}`);
+    }
+  };
+  walk('');
+  return out.join('\n');
+}
+
+test('doctor manifest-forest: a healthy forest reports the check ok', () => {
+  const { root, store, segment } = gitStoreWithAnchoredSegment();
+  try {
+    const check = forestCheck(doctorTicketStore(store, { root }));
+    assert.ok(check, 'the manifest-forest check is present');
+    assert.equal(check.ok, true, JSON.stringify(check));
+    assert.equal(check.segmented, true);
+    assert.equal(check.segments, 1);
+    assert.deepEqual(check.orphanedAnchors, []);
+    assert.equal(check.staleLineage, null);
+    assert.ok(segment, 'the fixture opened a segment');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: a repo that never segmented is inert, not a failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-doctor-forest-flat-'));
+  try {
+    const path = writeDirectory(root, [ticket('A')]);
+    const check = forestCheck(doctorTicketStore(new DirectoryTicketStore(path), { root }));
+    assert.equal(check.ok, true);
+    assert.equal(check.segmented, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: reports an anchor whose root line no longer exists', () => {
+  const { root, store } = gitStoreWithAnchoredSegment();
+  try {
+    // Drop root's last entry — the exact line the segment forked from.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const lines = readFileSync(manifestPath, 'utf8').split('\n').filter((l) => l.trim());
+    writeFileSync(manifestPath, lines.slice(0, -1).join('\n') + '\n');
+
+    const check = forestCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.orphanedAnchors.length, 1);
+    assert.equal(check.orphanedAnchors[0].anchor.segment, 'root');
+    assert.match(check.orphanedAnchors[0].reason, /no longer exists/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: reports an anchor naming a segment that is not in the forest', () => {
+  const { root, store, segment } = gitStoreWithAnchoredSegment();
+  try {
+    const lines = readFileSync(segFile(root, segment), 'utf8').split('\n').filter((l) => l.trim());
+    const first = JSON.parse(lines[0]);
+    first.anchor = { segment: `gone-${'0'.repeat(26)}.jsonl`, seq: 1, lineHash: 'a'.repeat(64) };
+    writeFileSync(segFile(root, segment), [JSON.stringify(first), ...lines.slice(1)].join('\n') + '\n');
+
+    const check = forestCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.orphanedAnchors.length, 1);
+    assert.equal(check.orphanedAnchors[0].segment, segment);
+    assert.match(check.orphanedAnchors[0].reason, /not a segment in this forest/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: reports a .lineage token whose segment no longer exists', () => {
+  const { root, store, segment } = gitStoreWithAnchoredSegment();
+  try {
+    rmSync(segFile(root, segment));
+
+    const check = forestCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.staleLineage.segment, segment);
+    assert.match(check.staleLineage.reason, /no longer exists/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: reports a .lineage token whose cached ULID no longer matches the segment file', () => {
+  const { root, store, segment } = gitStoreWithAnchoredSegment();
+  try {
+    const tokenPath = join(root, '.adlc', 'manifest.d', '.lineage');
+    const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
+    writeFileSync(tokenPath, JSON.stringify({ ...token, ulid: 'Z'.repeat(26) }));
+
+    const check = forestCheck(doctorTicketStore(store, { root }));
+    assert.equal(check.ok, false);
+    assert.equal(check.staleLineage.segment, segment);
+    assert.equal(check.staleLineage.ulid, 'Z'.repeat(26));
+    assert.match(check.staleLineage.reason, /whose own ULID is/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor manifest-forest: reports both faults and repairs neither — every byte under .adlc/ is unchanged', () => {
+  const { root, store, segment } = gitStoreWithAnchoredSegment();
+  try {
+    // Fault 1: the root line this segment forked from is gone.
+    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+    const lines = readFileSync(manifestPath, 'utf8').split('\n').filter((l) => l.trim());
+    writeFileSync(manifestPath, lines.slice(0, -1).join('\n') + '\n');
+    // Fault 2: the token caches a ULID the segment file does not carry.
+    const tokenPath = join(root, '.adlc', 'manifest.d', '.lineage');
+    const token = JSON.parse(readFileSync(tokenPath, 'utf8'));
+    writeFileSync(tokenPath, JSON.stringify({ ...token, ulid: 'Z'.repeat(26) }));
+
+    const before = fingerprint(join(root, '.adlc'));
+    const report = doctorTicketStore(store, { root, archive: true });
+    const check = forestCheck(report);
+
+    assert.equal(check.ok, false);
+    assert.equal(check.orphanedAnchors.length, 1);
+    assert.equal(check.staleLineage.segment, segment);
+    assert.equal(report.ok, false, 'a faulty forest fails the overall report');
+    assert.equal(fingerprint(join(root, '.adlc')), before, 'doctor reports; it never repairs');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

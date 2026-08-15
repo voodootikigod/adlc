@@ -85,7 +85,17 @@ export function lineagePath(dir) {
   return join(segmentDirPath(dir), LINEAGE_NAME);
 }
 
-/** Real segment filenames only — structural files and anything not matching the grammar excluded. */
+/**
+ * Real segment filenames only — structural files and anything not matching the
+ * grammar excluded.
+ *
+ * Exported for `doctor.mjs`'s forest-reference check (spec §12 AC10), which
+ * needs the same "which segments actually exist" answer the resolvers use in
+ * order to say whether an anchor or a `.lineage` token still points at one.
+ * Reusing this rather than re-deriving it is the point: a doctor with its own
+ * notion of which files count would report faults the writers do not see, and
+ * miss the ones they do.
+ */
 // Mirrors @adlc/gate-manifest/lib/forest.mjs's discoverSegments SHAPE
 // ({valid, invalid}), not just its valid-name list (adversarial-review
 // finding, P5 prosecution): a non-conforming filesystem object under
@@ -98,7 +108,7 @@ export function lineagePath(dir) {
 // needs-attention revocation) should be, while forestChainsIntact still
 // reported the forest valid. Case-collision detection and *.lock content-
 // awareness are still deliberately out of scope — see this file's header.
-function discoverSegments(dir) {
+export function discoverSegments(dir) {
   const segDir = segmentDirPath(dir);
   let dirStat;
   try {
@@ -619,7 +629,13 @@ export function currentBranch(cwd) {
   }
 }
 
-function readLineageToken(dir) {
+// Exported for doctor.mjs's forest-reference check: a token that no longer
+// resolves is silently ignored by every RESOLVER (peekOpenSegment just falls
+// through and a fresh segment gets minted), so nothing reports it. Doctor is
+// the only place that says so out loud, and it needs the raw token — not a
+// resolver's already-swallowed verdict — to tell "no token" from "a token
+// pointing at nothing".
+export function readLineageToken(dir) {
   const token = readBoundedJsonNoFollow(lineagePath(dir));
   if (!token || typeof token !== 'object') return null;
   if (typeof token.segment !== 'string' || typeof token.ulid !== 'string' || typeof token.branch !== 'string') return null;
@@ -653,8 +669,10 @@ function writeLineageToken(dir, token) {
   }
 }
 
-// spec §4.2: ULID is the last 26 chars before `.jsonl`.
-function ulidOf(segmentName) {
+// spec §4.2: ULID is the last 26 chars before `.jsonl`. Exported alongside
+// readLineageToken so doctor applies the SAME derivation peekOpenSegment
+// applies when it decides a token still matches its file.
+export function ulidOf(segmentName) {
   return segmentName.slice(segmentName.length - '.jsonl'.length - 26, segmentName.length - '.jsonl'.length);
 }
 

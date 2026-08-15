@@ -6,7 +6,10 @@ import { readTicketLock } from './lock.mjs';
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from './pointer.mjs';
 import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
-import { isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid } from './manifest-segments.mjs';
+import {
+  isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid,
+  discoverSegments, readLineageToken, ulidOf,
+} from './manifest-segments.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
 /**
@@ -218,6 +221,104 @@ function storeHashBindingCheck(root, snapshot, key) {
   return check;
 }
 
+/**
+ * The seq numbers one chain actually holds, so an anchor pointing into it can
+ * be told from one pointing at a line that is gone.
+ *
+ * Deliberately lenient about entry CONTENT: a line that will not parse, or one
+ * carrying no integer `seq`, contributes nothing here rather than failing the
+ * check. Whether what IS there verifies is `storehash-manifest-bind`'s question
+ * (MANIFEST_MALFORMED / MANIFEST_CHAIN_INVALID / MANIFEST_SIGNATURE_INVALID);
+ * this one asks the different question of whether something a segment points AT
+ * is still there, and answering it must not turn into a second, weaker copy of
+ * the integrity check.
+ */
+function seqsIn(path) {
+  const seqs = new Set();
+  if (!existsSync(path)) return seqs;
+  let content;
+  try { content = readFileSync(path, 'utf8'); } catch { return seqs; }
+  for (const line of content.split('\n')) {
+    if (line.trim() === '') continue;
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (Number.isInteger(entry?.seq)) seqs.add(entry.seq);
+  }
+  return seqs;
+}
+
+function firstEntryOfSegment(dir, name) {
+  let content;
+  try { content = readFileSync(segmentPath(dir, name), 'utf8'); } catch { return null; }
+  const first = content.split('\n').find((line) => line.trim() !== '');
+  if (first === undefined) return null;
+  try { return JSON.parse(first); } catch { return null; }
+}
+
+/**
+ * Report two dangling references the rest of the system cannot see (spec §12
+ * AC10): a segment whose anchor names a line that no longer exists, and a
+ * `.lineage` token whose segment is gone or whose cached ULID no longer matches
+ * the name it caches.
+ *
+ * Both are invisible until something far away fails. Every RESOLVER swallows a
+ * broken token by design — `peekOpenSegment` simply falls through and the next
+ * writer mints a fresh segment, which is correct behaviour for a writer and
+ * silence for an operator. An orphaned anchor surfaces only when a full
+ * `verify()` walks the forest, which is not what `adlc ticket doctor` runs.
+ *
+ * READ-ONLY, never repaired, like every other check in this file: repairing an
+ * anchor needs its own design and belongs to the migration and recovery
+ * ceremonies. Added as a NEW check name rather than folded into an existing
+ * one because `active-store`, `archive`, `current-ticket`,
+ * `storehash-manifest-bind`, `transactions` and `writer-lock` are read by
+ * operators and by ticket-store tooling.
+ */
+function manifestForestCheck(root) {
+  const check = { name: 'manifest-forest', ok: true };
+  const dir = join(root, '.adlc');
+  if (!isSegmentedRepo(dir)) return { ...check, segmented: false };
+
+  const { valid } = discoverSegments(dir);
+  const seqsByChain = new Map([['root', seqsIn(join(dir, 'manifest.jsonl'))]]);
+  for (const name of valid) seqsByChain.set(name, seqsIn(segmentPath(dir, name)));
+
+  const orphanedAnchors = [];
+  for (const name of valid) {
+    const anchor = firstEntryOfSegment(dir, name)?.anchor;
+    // `anchor: null` is a rootless segment (§4.4) and points at nothing by
+    // design. A missing or malformed anchor is a shape violation, which
+    // verifyChain owns — not a reference to something that has gone.
+    if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) continue;
+    if (typeof anchor.segment !== 'string' || !Number.isInteger(anchor.seq)) continue;
+    const target = seqsByChain.get(anchor.segment);
+    if (target === undefined) {
+      orphanedAnchors.push({ segment: name, anchor: { segment: anchor.segment, seq: anchor.seq }, reason: `anchored to '${anchor.segment}', which is not a segment in this forest` });
+    } else if (!target.has(anchor.seq)) {
+      orphanedAnchors.push({ segment: name, anchor: { segment: anchor.segment, seq: anchor.seq }, reason: `anchored to '${anchor.segment}' seq ${anchor.seq}, which no longer exists` });
+    }
+  }
+
+  let staleLineage = null;
+  const token = readLineageToken(dir);
+  if (token) {
+    if (!valid.includes(token.segment)) {
+      staleLineage = { segment: token.segment, ulid: token.ulid, reason: `.lineage names segment '${token.segment}', which no longer exists` };
+    } else if (ulidOf(token.segment) !== token.ulid) {
+      staleLineage = { segment: token.segment, ulid: token.ulid, reason: `.lineage caches ULID '${token.ulid}' for segment '${token.segment}', whose own ULID is '${ulidOf(token.segment)}'` };
+    }
+  }
+
+  return {
+    ...check,
+    ok: orphanedAnchors.length === 0 && staleLineage === null,
+    segmented: true,
+    segments: valid.length,
+    orphanedAnchors,
+    staleLineage,
+  };
+}
+
 export function doctorTicketStore(store, { root = '.', archive = false, key: keyParam = null } = {}) {
   const checks = [];
   let snapshot = null;
@@ -233,6 +334,7 @@ export function doctorTicketStore(store, { root = '.', archive = false, key: key
   checks.push({ name: 'writer-lock', ok: !existsSync(lockPath), present: existsSync(lockPath), metadata: readTicketLock(root) });
   checks.push(currentTicketCheck(root, snapshot));
   checks.push(storeHashBindingCheck(root, snapshot, validateKeyParam(keyParam)));
+  checks.push(manifestForestCheck(root));
   if (archive) {
     const path = join(root, ARCHIVE_DIRECTORY);
     if (!existsSync(path)) checks.push({ name: 'archive', ok: true, present: false, ticketCount: 0 });
