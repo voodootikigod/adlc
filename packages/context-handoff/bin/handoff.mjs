@@ -23,14 +23,7 @@ import { unlockSession } from '../lib/lock.mjs';
 import { restoreFinal, rollbackCheckpoint, writeCheckpoint } from '../lib/checkpoint.mjs';
 import { conflictReport, currentBytes, restoreIfOurs } from '../lib/rollback.mjs';
 import { authorizeSuccessor } from '../lib/consume.mjs';
-import {
-  capCaptureBody,
-  hashCaptureBody,
-  readCapture,
-  removeCapture,
-  writeCapture,
-  writeVerifiedCapture,
-} from '../lib/capture.mjs';
+import { capCaptureBody, hashCaptureBody, writeVerifiedCapture } from '../lib/capture.mjs';
 import { buildBootstrapPrompt, composeBrief } from '../lib/brief.mjs';
 import {
   finalAssistantMessageFrom,

@@ -15,11 +15,9 @@
  * that no longer exists.
  */
 
-import { existsSync } from 'node:fs';
 import { consumeDenyRecord } from './deny-lifecycle.mjs';
 import { markerUnchanged, writeDenyRecord } from './deny-persist.mjs';
 import { removeResumeAuth, writeResumeAuth } from './resume-auth.mjs';
-import { resumeAuthPath } from './paths.mjs';
 
 /**
  * @param {object} opts

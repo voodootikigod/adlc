@@ -105,11 +105,17 @@ test('a long chain is capped at the newest entries', () => {
   });
 });
 
+test('the read window is 64 KiB', () => {
+  // Spelled out rather than compared to itself: a window asserted against its
+  // own constant moves with it, which is exactly what a widened read would do.
+  assert.equal(EVIDENCE_TAIL_BYTES, 64 * 1024);
+});
+
 test('the read is byte-bounded, so a huge chain cannot be slurped', () => {
   withLedger((adlcDir) => {
     // One entry far larger than the window, followed by the entries that matter:
     // the oversized line must fall outside the tail rather than be buffered.
-    const huge = JSON.stringify({ seq: 1, gate: 'HUGE', ts: 'x', pad: 'z'.repeat(EVIDENCE_TAIL_BYTES) });
+    const huge = JSON.stringify({ seq: 1, gate: 'HUGE', ts: 'x', pad: 'z'.repeat(64 * 1024) });
     const lines = [huge];
     for (let seq = 2; seq <= 15; seq += 1) lines.push(entryLine(seq, `late-${seq}`));
     writeFileSync(join(adlcDir, 'manifest.jsonl'), `${lines.join('\n')}\n`, 'utf8');

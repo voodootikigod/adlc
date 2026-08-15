@@ -122,6 +122,32 @@ test('rebinding away from a capture clears content_kind rather than carrying it'
   });
 });
 
+test('an UNBOUND deny is refreshed in place rather than refused', () => {
+  // The pre-bind state: a marker armed with no ticket. `repairDenyBinds`
+  // demands both binds, so this path persists the record directly — and an
+  // unbound deny is the stricter state, so a legitimate no-ticket refresh must
+  // not be turned into a failure.
+  const root = mkdtempSync(join(tmpdir(), 'handoff-checkpoint-unbound-'));
+  try {
+    ensureDenyMarker(root, { sessionId: 'denier', ticketId: null, contentHash: null, host: 'test' });
+    const claimed = readDenyMarker(root, 'denier').record;
+    assert.equal(claimed.ticket_id, null);
+
+    const planned = buildFinal({ sessionId: 'denier', ticketId: null, contentHash: 'b'.repeat(64), host: 'test' });
+    const got = writeCheckpoint(root, 'denier', planned, { expected: claimed });
+    assert.equal(got.ok, true, `unbound refresh must succeed: ${got.error}`);
+    assert.equal(got.rebound, true);
+
+    const marker = readDenyMarker(root, 'denier').record;
+    assert.equal(marker.content_hash, 'b'.repeat(64), 'the new hash is persisted');
+    assert.equal(marker.ticket_id, null, 'and it stays unbound');
+    assert.equal(marker.status, 'open');
+    assert.equal(marker.since, claimed.since, 'a refresh must not restart the deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a rollback restores both the final and the binds the checkpoint moved', () => {
   withArmedDeny((root, claimed) => {
     const first = writeCheckpoint(root, 'denier', planFor('b'.repeat(64), CONTENT_KIND_CAPTURE), {

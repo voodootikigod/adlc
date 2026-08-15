@@ -17,6 +17,9 @@ import { assertPublishableFinding } from '@adlc/core';
 /** [name, the secret value itself, the near-miss that must survive intact] */
 const CASES = [
   ['AWS access key id', 'AKIAIOSFODNN7EXAMPLE', 'AKIA is a prefix, AKIASHORT is not a key'],
+  // Same shape with a ZERO in the body: the character class is [0-9A-Z], and a
+  // table that only ever tests 1-9 cannot tell that from [1-9A-Z].
+  ['AWS access key id', 'AKIA0IOSFODNN7EXAMPL', 'AKIA0 alone is not a key'],
   ['AWS temporary access key id', 'ASIAIOSFODNN7EXAMPLE', 'ASIA region notes'],
   ['GitHub token', 'ghp_abcdefghij0123456789ABCDEFGHIJ0123', 'ghp_short'],
   ['GitHub fine-grained token', 'github_pat_11ABCDE0123456789abcdefghij', 'github_pat_x'],
@@ -26,6 +29,10 @@ const CASES = [
   ['Google API key', 'AIzaSyA0123456789abcdefghijklmnopqrstuv', 'AIza'],
   ['bearer token', 'Bearer abcdefghij0123456789ABCDEF', 'Bearer with no token'],
   ['JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N', 'eyJ short'],
+  // A head of EXACTLY the minimum length — 10 characters after `eyJ` — so the
+  // boundary of the quantifier is exercised rather than only its comfortable
+  // middle.
+  ['JWT', 'eyJ0123456789.abcdefghij0.sig', 'eyJ0123456.short'],
   ['private key block', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----', 'a note about a PRIVATE KEY policy'],
 ];
 

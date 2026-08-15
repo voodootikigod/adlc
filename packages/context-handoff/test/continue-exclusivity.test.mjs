@@ -37,6 +37,26 @@ test('writeTextExclusive creates once and refuses thereafter', () => {
   });
 });
 
+test('the exclusively-created auth is written in the ledger artifact format', () => {
+  withTempDir((root) => {
+    // The exclusive path builds its own body rather than going through
+    // writeJsonAtomic, so its serialization is a second place the artifact
+    // format can drift — and every other test parses it back, which cannot see
+    // that happen.
+    const got = writeResumeAuth(
+      root,
+      'successor',
+      { ticketId: 'T155', contentHash: 'a'.repeat(64), denySessionId: 'denier-a' },
+      { key: TEST_KEY, exclusive: true },
+    );
+    assert.equal(got.ok, true);
+    const raw = readFileSync(resumeAuthPath(root, 'successor'), 'utf8');
+    assert.equal(raw, `${JSON.stringify(got.doc, null, 2)}\n`);
+    assert.ok(raw.startsWith('{\n  "schema"'), 'two-space indented');
+    assert.ok(raw.endsWith('}\n'), 'newline terminated');
+  });
+});
+
 test('an exclusive resume-auth cannot be minted twice for one successor', () => {
   withTempDir((root) => {
     const fields = { ticketId: 'T155', contentHash: 'a'.repeat(64), denySessionId: 'denier-a' };
