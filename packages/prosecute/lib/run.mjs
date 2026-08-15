@@ -1,5 +1,11 @@
 import { ADLC_DIR, canonicalJson, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
+// Two readers, deliberately: the finding-lifecycle replay needs a causal order
+// and so reads only this checkout's own chain (own-chain.mjs), while the usage
+// ledger asks a position-free question — "has this call already been recorded
+// ANYWHERE" — where reading the whole forest is the safe direction, since
+// missing a record would double-count real spend.
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
+import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -177,9 +183,29 @@ function findingIdentity(finding) {
   }));
 }
 
-function seedOpenFindingsFromManifest(dir, ticket, revision) {
+/**
+ * Replay this ticket+revision's finding lifecycle to find what is still open.
+ *
+ * The replay is sequential — `set` on verified, `delete` on killed — so it is
+ * only correct over entries whose ARRAY POSITION is a causal order. That is
+ * why it reads `readOwnManifestChain` and not the whole forest: two segments
+ * sort by anchor topology, so a kill written after a verification can arrive
+ * BEFORE it in the forest array and `delete` an entry that has not been added
+ * yet, leaving the finding open forever. See own-chain.mjs.
+ *
+ * An unrelated segment's findings are not this chain's to resolve — the branch
+ * that owns them prosecutes them as ITS own chain.
+ *
+ * @returns {{openFindings: Map<string, object>, errors: string[]}} `errors` is
+ *   non-empty when this checkout's own segment could not be identified. The
+ *   caller must refuse rather than proceed on a partial replay: proceeding
+ *   would seed FEWER open findings than really exist, which is exactly how a
+ *   verified finding gets completed past.
+ */
+function seedOpenFindingsFromManifest(dir, ticket, revision, cwd) {
   const openFindings = new Map();
-  const { entries } = readManifestForest(dir);
+  const { entries, identityError } = readOwnManifestChain(dir, { cwd });
+  if (identityError) return { openFindings, errors: [`refusing to prosecute: ${identityError}`] };
   for (const entry of entries) {
     if (entry.ticket !== ticket || entry.revision !== revision || !entry.finding) continue;
     const type = entry.type ?? entry.gate;
@@ -191,7 +217,7 @@ function seedOpenFindingsFromManifest(dir, ticket, revision) {
       openFindings.delete(identity);
     }
   }
-  return openFindings;
+  return { openFindings, errors: [] };
 }
 
 /**
@@ -403,7 +429,11 @@ export function runProsecution(input, {
 
   let consecutiveDry = 0;
   const passResults = [];
-  const openFindings = seedOpenFindingsFromManifest(dir, ticket, resolvedRevision);
+  const seeded = seedOpenFindingsFromManifest(dir, ticket, resolvedRevision, cwd);
+  // Before the first append, like every other refusal in this function — see
+  // the rollback note below: a rejected run must leave no trace.
+  if (seeded.errors.length > 0) return { status: 'op-error', exitCode: 1, errors: seeded.errors };
+  const openFindings = seeded.openFindings;
   // Packet identity for the usage carrier: the review packet's own inputs hash
   // when it has one, so "the same call" means the same reviewed content.
   const usagePacketHash = packetIdentity(input?.review_packet);

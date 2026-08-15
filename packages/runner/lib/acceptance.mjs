@@ -1,6 +1,9 @@
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
-import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
+// Scoped to root + this checkout's own segment: `latestP5Entry`'s `.at(-1)`
+// below is a chronology claim, and only this chain can carry one. See
+// own-chain.mjs.
+import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
@@ -179,7 +182,7 @@ export function recordAcceptancePacket({
     }
   }
 
-  const { entries } = readManifestForest(dir);
+  const { entries } = readOwnManifestChain(dir, { cwd });
   const p5Revision = latestP5Revision(entries, ticket);
   const assertedP5Entry = latestP5Entry(entries, ticket, revision ?? p5Revision);
   if (ticket && !assertedP5Entry) {

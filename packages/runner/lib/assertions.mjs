@@ -1,5 +1,9 @@
 import { ADLC_DIR, canonicalJson, hashFiles, resolveRevision, sha256 } from '@adlc/core';
-import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
+// Scoped to root + this checkout's own segment, NOT the whole forest: every
+// `.at(-1)`, `indexOf`, and `slice` below reads array position as chronology,
+// which is only true of a chain this checkout can place in sequence. See
+// own-chain.mjs for why the forest's own order cannot carry that weight.
+import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
@@ -377,7 +381,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     return { ok: false, operational: true, phase, errors: [`${phase} requires --ticket`] };
   }
 
-  const { entries, skipped } = readManifestForest(dir);
+  const { entries, skipped } = readOwnManifestChain(dir, { cwd });
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
   const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
