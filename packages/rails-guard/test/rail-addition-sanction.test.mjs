@@ -44,6 +44,15 @@ test('checkRailEdits skips exactly the sanctioned paths, never their neighbors',
   assert.equal(violations[0].file, 'test/frozen/other.mjs');
 });
 
+test('the --help contract documents --sanctioned-add as CI plumbing, not an operator flag', () => {
+  // The flag is invoker-trusted plumbing; the help text is the contract that says
+  // so. Pin it so the documented meaning cannot silently drift from the wiring.
+  const BIN = join(import.meta.dirname, '..', 'bin', 'rails-guard.mjs');
+  const stdout = execFileSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.match(stdout, /--sanctioned-add <path>/);
+  assert.match(stdout, /Do not pass by hand/);
+});
+
 // ── end-to-end: the CI gate in a real scratch repo ─────────────────────────────
 
 function scratchRepo({ tickets, seedFiles = {} }) {
