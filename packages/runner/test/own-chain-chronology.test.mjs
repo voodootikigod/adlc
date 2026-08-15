@@ -205,7 +205,7 @@ describe('assertPhase p5: a foreign segment cannot be this ticket\'s latest evid
 
       const result = assertPhase('p5', { dir, ticket: 'T1', revision: REVISION, cwd: root });
       assert.equal(result.ok, false);
-      assert.equal(result.skipped.some((s) => /cannot identify this checkout's own segment/.test(s.error)), true);
+      assert.equal(result.skipped.some((s) => /cannot establish this checkout's own causal chain/.test(s.error)), true);
     } finally { clean(root); }
   });
 });
@@ -229,6 +229,48 @@ describe('recordAcceptancePacket: binds our P5 revision, not a foreign segment\'
       assert.equal(result.errors.some((e) => /P5 evidence is missing: no p5-complete for ticket T1/.test(e)), true);
       // And nothing was appended on the way to refusing.
       assert.equal(existsSync(join(dir, 'manifest.d', OURS)), false);
+    } finally { clean(root); }
+  });
+});
+
+// A CI checkout of a PR SHA is detached, which is where these gates actually
+// run. recoverOpenSegment answers that case with `null` — the same value it
+// uses for the benign "this branch has no segment yet" — so a reader that only
+// catches would silently validate root-only evidence and ignore every segment
+// (adversarial-review, distinct provider).
+describe('a detached checkout refuses rather than validating root-only evidence', () => {
+  function detach(root) {
+    execFileSync('git', ['checkout', '-q', '--detach', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  }
+
+  it('assertPhase p5 fails closed when HEAD is detached and committed segments exist', () => {
+    const { root, dir } = repo();
+    try {
+      writeTicketDefinition(dir);
+      const ours = p5Entries(dir);
+      writeRoot(dir, ours);
+      writeSegment(dir, THEIRS_LATER, { branch: OTHER_BRANCH, anchorSeq: ours.length, entries: [{ gate: 'noop' }] });
+      detach(root);
+
+      const result = assertPhase('p5', { dir, ticket: 'T1', revision: REVISION, cwd: root });
+      assert.equal(result.ok, false);
+      assert.equal(result.skipped.some((s) => /detached HEAD has no branch identity/.test(s.error)), true);
+    } finally { clean(root); }
+  });
+
+  it('recordAcceptancePacket says WHY it refused, not "P5 evidence is missing"', () => {
+    const { root, dir } = repo();
+    try {
+      writeTicketDefinition(dir);
+      writeRoot(dir, p5Entries(dir));
+      writeSegment(dir, THEIRS_LATER, { branch: OTHER_BRANCH, anchorSeq: 7, entries: [{ gate: 'noop' }] });
+      detach(root);
+      const packet = join(dir, 'acceptance.md');
+      writeFileSync(packet, '# acceptance fixture\n');
+
+      const result = recordAcceptancePacket({ key: null, dir, ticket: 'T1', packet, cwd: root });
+      assert.equal(result.ok, false);
+      assert.equal(result.errors.some((e) => /cannot establish this checkout's own causal chain/.test(e)), true);
     } finally { clean(root); }
   });
 });

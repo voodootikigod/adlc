@@ -11,109 +11,150 @@
 // by construction, and no single branch can observe an order between them.
 //
 // Consumers that must answer "latest", "before", or "already killed" therefore
-// cannot read the whole forest. This reader hands back only the entries this
-// checkout can honestly place in sequence:
+// cannot read the whole forest. This reader walks the anchor graph UPWARD from
+// this checkout's own segment to root and returns that ancestry, oldest first:
 //
-//   1. the root chain's entries, in seq order, up to and including the seq
-//      this checkout's own segment anchors at — every one of them is provably
-//      prior to every entry in that segment (spec §4.4: a segment's anchor
-//      names the exact root line it forked from);
-//   2. this checkout's own open segment's entries, in seq order.
+//   root prefix → … → grandparent → parent → own segment
 //
-// Root entries BEYOND the anchor are dropped rather than assumed prior: they
-// were appended after this segment forked, so they are concurrent with it, not
-// before it. With the frozen root every segment in this repo anchors at the
-// root tip, so that prefix is the whole of root and the truncation never
-// fires — it exists so the "array position is causal" claim holds for a repo
-// where it would.
+// Every chain is cut at the seq its CHILD anchored into (spec §4.4: an anchor
+// names the exact line it forked from). Entries beyond that point were appended
+// after the fork, so they are concurrent with the child, not before it. With
+// the frozen root every segment in this repo anchors at the root tip and the
+// truncation never fires — it exists so the "array position is causal" claim
+// holds for a repo where it would.
 //
-// UNRELATED segments are not read at all. Their evidence is not "resolved" or
-// "unresolved" for this chain; it belongs to a prosecution this checkout is not
-// running, and the branch that owns it reads it as ITS own chain. Dropping it
-// is conservative in both directions the two consumers care about: assertPhase
-// sees less evidence and so cannot pass on it, and prosecute seeds fewer
-// killed-findings and so leaves more findings open.
+// UNRELATED segments — anything not on that ancestry path — are not read at
+// all. Their evidence is not "resolved" or "unresolved" for this chain; it
+// belongs to a prosecution this checkout is not running, and the branch that
+// owns it reads it as ITS own chain.
 //
-// This is the `readOwnChains`/`peekOpenSegment` scoping `@adlc/tickets`'
-// doctor, and ticket-sync's reassign and push, already apply for the same
-// reason. It stays a LENIENT read, like `readManifestForest` and unlike
-// `readOwnChains`: trust decisions belong to `verify()`, run separately, and
-// these callers report rather than throw.
+// ANCESTRY IS WALKED, NOT ASSUMED FLAT (adversarial-review, distinct provider,
+// round 1). An earlier version kept the whole of root and the own segment, and
+// justified dropping an intermediate parent as "conservative". It is not:
+// keeping root's `p5-complete` while dropping a parent segment's still-open
+// finding is a FALSE PASS, not a cautious one. Conservatism only holds when
+// evidence is dropped in both directions at once, which a partial ancestry does
+// not do.
+//
+// "CANNOT DETERMINE" IS NEVER "NOTHING IS THERE" (same review, round 1). The
+// detached HEAD a CI checkout normally sits in has no branch identity, and
+// `recoverOpenSegment` returns null there rather than throwing — indistinguish-
+// able, to a caller that only catches, from "this branch has no segment". That
+// silently collapsed a segmented ledger to root-only in exactly the environment
+// the gates run in. Every unresolvable case now returns `identityError` and NO
+// entries; `@adlc/tickets`' readOwnChains refuses on the identical condition.
+//
+// It stays a LENIENT read of entry CONTENT, like `readManifestForest` and
+// unlike `readOwnChains`: trust decisions belong to `verify()`, run separately.
+// The refusals here are about IDENTITY and ANCESTRY — which entries are ours —
+// never about whether their content verifies.
 
 import { ADLC_DIR } from '@adlc/core';
-import { readManifestForest } from './forest.mjs';
-import { recoverOpenSegment } from './lineage.mjs';
+import { discoverSegments, readManifestForest } from './forest.mjs';
+import { currentBranch, recoverOpenSegment } from './lineage.mjs';
 
 /**
- * Root's causally-prior prefix plus this checkout's own open segment, in an
- * order whose array position IS a causal order.
+ * This checkout's own causal chain: root's prior prefix, then each ancestor
+ * segment cut at its child's fork point, then the own segment.
  *
  * @param {string} [dir]  ledger directory (default ADLC_DIR)
  * @param {{cwd?: string}} [opts]  `cwd` locates the git checkout whose branch
  *   identifies "our own" segment.
  * @returns {{entries: object[], skipped: object[], ownSegment: string|null,
- *   identityError: string|null}}  `skipped` carries everything
- *   `readManifestForest` reports, plus one record whenever `identityError` is
- *   set. Both channels exist because the two consumers refuse differently:
- *   assertPhase already treats a non-empty `skipped` as "do not pass"
- *   (`ok: … && skipped.length === 0`), while prosecute has no `skipped`
- *   channel and reads `identityError` to return an op-error before its first
- *   append. Neither may read an unidentifiable checkout as "no evidence".
+ *   identityError: string|null}}  When `identityError` is set, `entries` is
+ *   EMPTY and the same message is appended to `skipped`. Two channels because
+ *   the consumers refuse differently: assertPhase already treats a non-empty
+ *   `skipped` as "do not pass" (`ok: … && skipped.length === 0`), while
+ *   prosecute and acceptance read `identityError` and return an error before
+ *   writing anything. Empty entries is the belt to that braces — a consumer
+ *   that forgets to check still cannot read a stale completion as ours.
  */
 export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
   const { entries, skipped } = readManifestForest(dir);
+  const inSegment = (name) => entries.filter((entry) => entry.segment === name);
 
-  let own = null;
-  try {
-    // recoverOpenSegment consults the local `.lineage` token first
-    // (peekOpenSegment) and falls back to the exact `branch` field every
-    // segment's first entry carries. The fallback is what keeps this working
-    // in CI, where `.lineage` is gitignored (spec §7 point 1) and a token-only
-    // lookup would report "no segment of ours" for a branch whose committed
-    // segment is sitting right there. It never mints and never guesses among
-    // candidates — it throws instead, which is the case below.
-    own = recoverOpenSegment(dir, { cwd });
-  } catch (err) {
-    // Two committed segments both claiming this branch, or a non-conforming
-    // object in manifest.d/ that could be a disguised one. Either way we
-    // cannot say which entries are ours, and "cannot determine" must not read
-    // as "there is nothing" — that is the shape an attacker would use to
-    // strand a verified finding in one segment and complete P5 from another.
-    const identityError = `cannot identify this checkout's own segment: ${err.message}`;
+  const refuse = (reason) => {
+    const identityError = `cannot establish this checkout's own causal chain: ${reason}`;
     return {
-      entries: entries.filter((entry) => entry.segment === 'root'),
+      entries: [],
       skipped: [...skipped, { segment: null, line: null, error: identityError }],
       ownSegment: null,
       identityError,
     };
+  };
+
+  const segments = discoverSegments(dir).valid;
+
+  // Checked BEFORE recoverOpenSegment, because that function answers this case
+  // with `null` — the same value it uses for the genuinely benign "this branch
+  // simply has no segment yet". A catch cannot tell them apart, so the
+  // distinction has to be drawn here.
+  if (segments.length > 0 && currentBranch(cwd) === null) {
+    return refuse(
+      'detached HEAD has no branch identity to recover by, and committed segments exist '
+      + '— refusing to treat them as absent'
+    );
   }
 
-  const ownName = own?.name ?? null;
-  const anchorSeq = ownName === null ? null : rootAnchorSeq(entries, ownName);
-  const rootPrefix = entries.filter((entry) =>
-    entry.segment === 'root' && (anchorSeq === null || seqOf(entry) === null || seqOf(entry) <= anchorSeq)
-  );
-  const ownEntries = ownName === null ? [] : entries.filter((entry) => entry.segment === ownName);
+  let own = null;
+  try {
+    // Consults the local `.lineage` token first (peekOpenSegment), then falls
+    // back to the exact `branch` field every segment's first entry carries.
+    // The fallback is what keeps this working in CI, where `.lineage` is
+    // gitignored (spec §7 point 1). It never mints and never guesses among
+    // candidates — it throws instead.
+    own = recoverOpenSegment(dir, { cwd });
+  } catch (err) {
+    return refuse(err.message);
+  }
 
-  return { entries: [...rootPrefix, ...ownEntries], skipped, ownSegment: ownName, identityError: null };
+  // A branch we could identify that owns no segment: root is the whole of our
+  // chain, and nothing was forked from, so there is no prefix to cut.
+  if (own === null) return { entries: inSegment('root'), skipped, ownSegment: null, identityError: null };
+
+  const firstOf = new Map(segments.map((name) => [name, entries.find((entry) => entry.segment === name)]));
+
+  // Walk own → parent → … → root, remembering the seq each hop's CHILD forked
+  // at so the hop can be cut there on the way back down.
+  const hops = []; // own first; `bound` is the child's fork seq, null for own itself
+  const seen = new Set();
+  let cursor = own.name;
+  let childBound = null;
+  let rootBound = null;
+  let reachedRoot = false;
+  for (;;) {
+    if (seen.has(cursor)) return refuse(`anchor cycle through segment '${cursor}'`);
+    seen.add(cursor);
+    hops.push({ name: cursor, bound: childBound });
+
+    const first = firstOf.get(cursor);
+    if (first === undefined) return refuse(`segment '${cursor}' has no readable first entry, so its anchor cannot be resolved`);
+
+    const anchor = first.anchor;
+    // `anchor: null` is a rootless segment (§4.4) — nothing in root precedes
+    // it, so root is left out entirely rather than assumed prior. A first entry
+    // carrying no `anchor` key at all is read the same way readManifestForest
+    // reads it, rather than inventing a stricter rule here.
+    if (anchor === null || anchor === undefined) break;
+    if (typeof anchor !== 'object' || Array.isArray(anchor) || typeof anchor.segment !== 'string' || !Number.isInteger(anchor.seq)) {
+      return refuse(`segment '${cursor}' has a malformed anchor, so its ancestry cannot be established`);
+    }
+    if (anchor.segment === 'root') { rootBound = anchor.seq; reachedRoot = true; break; }
+    if (!firstOf.has(anchor.segment)) {
+      return refuse(`segment '${cursor}' anchors to '${anchor.segment}', which is not a segment in this forest`);
+    }
+    childBound = anchor.seq;
+    cursor = anchor.segment;
+  }
+
+  const upTo = (list, bound) => (bound === null ? list : list.filter((entry) => seqOf(entry) === null || seqOf(entry) <= bound));
+
+  const chain = reachedRoot ? [...upTo(inSegment('root'), rootBound)] : [];
+  for (const hop of [...hops].reverse()) chain.push(...upTo(inSegment(hop.name), hop.bound));
+
+  return { entries: chain, skipped, ownSegment: own.name, identityError: null };
 }
 
 function seqOf(entry) {
   return Number.isInteger(entry?.seq) ? entry.seq : null;
-}
-
-/**
- * The root seq our own segment forked at, or null when it does not fork from
- * root at all (an `anchor: null` rootless segment, or one anchored to another
- * segment — §4.4 permits both). Null means "no root prefix to bound", so the
- * whole of root is kept: for a rootless segment root is empty anyway, and for
- * a segment-anchored one the chain back to root is longer than this reader
- * claims to walk, so keeping root whole stays on the conservative side of the
- * two consumers rather than inventing a bound.
- */
-function rootAnchorSeq(entries, ownName) {
-  const first = entries.find((entry) => entry.segment === ownName);
-  const anchor = first?.anchor;
-  if (!anchor || typeof anchor !== 'object' || anchor.segment !== 'root') return null;
-  return Number.isInteger(anchor.seq) ? anchor.seq : null;
 }

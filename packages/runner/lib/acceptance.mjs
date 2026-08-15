@@ -182,7 +182,13 @@ export function recordAcceptancePacket({
     }
   }
 
-  const { entries } = readOwnManifestChain(dir, { cwd });
+  const { entries, identityError } = readOwnManifestChain(dir, { cwd });
+  // Refused explicitly, not left to the empty-entries fallback: without this,
+  // "we cannot tell which evidence is ours" would surface as the ordinary
+  // "P5 evidence is missing", which reads as a fixable gap rather than a
+  // checkout that cannot be identified. Unlike assertPhase this function has no
+  // `skipped` channel, so `identityError` is the only place it can be said.
+  if (identityError) errors.push(identityError);
   const p5Revision = latestP5Revision(entries, ticket);
   const assertedP5Entry = latestP5Entry(entries, ticket, revision ?? p5Revision);
   if (ticket && !assertedP5Entry) {

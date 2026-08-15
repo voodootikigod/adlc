@@ -200,7 +200,7 @@ describe('finding replay: a foreign segment does not dispose of this chain\'s fi
       const result = prosecute(root, dir);
       assert.equal(result.status, 'op-error');
       assert.equal(result.exitCode, 1);
-      assert.equal(result.errors.some((e) => /refusing to prosecute: cannot identify this checkout's own segment/.test(e)), true);
+      assert.equal(result.errors.some((e) => /refusing to prosecute: cannot establish this checkout's own causal chain/.test(e)), true);
       // A rejected run leaves no trace: no fresh segment minted, nothing appended.
       assert.deepEqual(segmentNames(dir).sort(), before);
       assert.equal(readFileSync(join(dir, 'manifest.jsonl'), 'utf8'), rootLinesBefore);

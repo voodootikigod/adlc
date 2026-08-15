@@ -152,13 +152,14 @@ describe('readOwnManifestChain: an unidentifiable checkout refuses, it does not 
 
       const result = readOwnManifestChain(dir, { cwd: root });
       assert.equal(result.ownSegment, null);
-      assert.match(result.identityError, /cannot identify this checkout's own segment/);
+      assert.match(result.identityError, /cannot establish this checkout's own causal chain/);
       assert.match(result.identityError, /ambiguous/);
-      // Reported on BOTH channels: assertPhase reads `skipped`, prosecute reads
-      // `identityError`, and neither may see "no evidence" here.
+      // Reported on BOTH channels: assertPhase reads `skipped`, the other two
+      // read `identityError`, and none may see "no evidence" here.
       assert.equal(result.skipped.some((s) => s.error === result.identityError), true);
-      // Root still comes back — it is unambiguously ours — but no segment does.
-      assert.deepEqual(gates(result), ['r1']);
+      // NO entries at all — not even root. A consumer that forgets to check
+      // must not be able to read a stale root completion as ours.
+      assert.deepEqual(gates(result), []);
     } finally { clean(root); }
   });
 
@@ -184,8 +185,131 @@ describe('readOwnManifestChain: an unidentifiable checkout refuses, it does not 
       writeFileSync(join(dir, 'manifest.d', 'not-a-segment.jsonl'), '{"seq":1}\n');
 
       const result = readOwnManifestChain(dir, { cwd: root });
-      assert.match(result.identityError, /cannot identify this checkout's own segment/);
-      assert.deepEqual(gates(result), ['r1']);
+      assert.match(result.identityError, /cannot establish this checkout's own causal chain/);
+      assert.deepEqual(gates(result), []);
+    } finally { clean(root); }
+  });
+});
+
+// A segment anchored to ANOTHER segment rather than to root (§4.4 permits it;
+// the repair chain, §10, produces it). Its own anchor must therefore be written
+// by hand — writeSegment above always anchors to root.
+function writeChildSegment(dir, name, { branch, parent, parentSeq, entries }) {
+  activateSegments(dir);
+  const lines = entries.map((e, i) => JSON.stringify(
+    i === 0
+      ? { seq: 1, anchor: { segment: parent, seq: parentSeq, lineHash: 'a'.repeat(64) }, branch, ...e }
+      : { seq: i + 1, ...e }
+  ));
+  writeFileSync(join(dir, 'manifest.d', name), lines.join('\n') + '\n');
+}
+
+describe('readOwnManifestChain: a detached HEAD cannot be read as "no segment"', () => {
+  // A CI checkout of a PR SHA is detached, which is where these gates actually
+  // run. recoverOpenSegment answers that case with `null` — the same value it
+  // uses for the benign "this branch has no segment yet" — so a caller that
+  // only catches would collapse a whole segmented ledger to root-only exactly
+  // where it matters most (adversarial-review, distinct provider).
+  it('refuses when HEAD is detached and committed segments exist', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      writeSegment(dir, OURS, { branch: OUR_BRANCH, entries: [{ gate: 'ours1' }] });
+      const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      g('checkout', '-q', '--detach', 'HEAD');
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.match(result.identityError, /detached HEAD has no branch identity/);
+      assert.deepEqual(gates(result), []);
+      assert.equal(result.ownSegment, null);
+    } finally { clean(root); }
+  });
+
+  it('is content with a detached HEAD when the forest holds no segments at all', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }, { gate: 'r2' }]);
+      const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      g('checkout', '-q', '--detach', 'HEAD');
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.equal(result.identityError, null);
+      assert.deepEqual(gates(result), ['r1', 'r2']);
+    } finally { clean(root); }
+  });
+});
+
+describe('readOwnManifestChain: ancestry is walked, not assumed flat', () => {
+  // Dropping an intermediate parent is NOT the conservative direction: keeping
+  // root's completion while losing the parent's still-open finding is a false
+  // pass. The whole ancestry comes back, oldest first.
+  it('includes the parent segment our own segment anchors to', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }, { gate: 'r2' }]);
+      writeSegment(dir, `parent-${ULID_FIRST}.jsonl`, { branch: OTHER_BRANCH, anchorSeq: 2, entries: [{ gate: 'p1' }, { gate: 'p2' }] });
+      writeChildSegment(dir, `ours-${ULID_LAST}.jsonl`, {
+        branch: OUR_BRANCH, parent: `parent-${ULID_FIRST}.jsonl`, parentSeq: 2, entries: [{ gate: 'ours1' }],
+      });
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.equal(result.identityError, null);
+      assert.deepEqual(gates(result), ['r1', 'r2', 'p1', 'p2', 'ours1']);
+    } finally { clean(root); }
+  });
+
+  it('cuts the parent at the seq we forked from — its later entries are concurrent with us', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      writeSegment(dir, `parent-${ULID_FIRST}.jsonl`, { branch: OTHER_BRANCH, anchorSeq: 1, entries: [{ gate: 'p1' }, { gate: 'p2' }, { gate: 'p3' }] });
+      writeChildSegment(dir, `ours-${ULID_LAST}.jsonl`, {
+        branch: OUR_BRANCH, parent: `parent-${ULID_FIRST}.jsonl`, parentSeq: 2, entries: [{ gate: 'ours1' }],
+      });
+
+      assert.deepEqual(gates(readOwnManifestChain(dir, { cwd: root })), ['r1', 'p1', 'p2', 'ours1']);
+    } finally { clean(root); }
+  });
+
+  it('refuses when an ancestor anchors to a segment that is not in the forest', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      writeChildSegment(dir, `ours-${ULID_LAST}.jsonl`, {
+        branch: OUR_BRANCH, parent: `gone-${ULID_FIRST}.jsonl`, parentSeq: 1, entries: [{ gate: 'ours1' }],
+      });
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.match(result.identityError, /is not a segment in this forest/);
+      assert.deepEqual(gates(result), []);
+    } finally { clean(root); }
+  });
+
+  it('refuses on an anchor cycle instead of walking forever', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      const a = `ours-${ULID_LAST}.jsonl`;
+      const b = `cycle-${ULID_FIRST}.jsonl`;
+      writeChildSegment(dir, a, { branch: OUR_BRANCH, parent: b, parentSeq: 1, entries: [{ gate: 'a1' }] });
+      writeChildSegment(dir, b, { branch: OTHER_BRANCH, parent: a, parentSeq: 1, entries: [{ gate: 'b1' }] });
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.match(result.identityError, /anchor cycle/);
+      assert.deepEqual(gates(result), []);
+    } finally { clean(root); }
+  });
+
+  it('leaves root out entirely for a rootless segment — nothing in root precedes it', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      activateSegments(dir);
+      writeFileSync(join(dir, 'manifest.d', OURS), JSON.stringify({ seq: 1, anchor: null, branch: OUR_BRANCH, gate: 'ours1' }) + '\n');
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.equal(result.identityError, null);
+      assert.deepEqual(gates(result), ['ours1']);
     } finally { clean(root); }
   });
 });
