@@ -222,8 +222,9 @@ function storeHashBindingCheck(root, snapshot, key) {
 }
 
 /**
- * The seq numbers one chain actually holds, so an anchor pointing into it can
- * be told from one pointing at a line that is gone.
+ * One chain, read ONCE: the seq numbers it actually holds (so an anchor
+ * pointing into it can be told from one pointing at a line that is gone) and
+ * its first entry (which is where a segment's own anchor lives, §4.4).
  *
  * Deliberately lenient about entry CONTENT: a line that will not parse, or one
  * carrying no integer `seq`, contributes nothing here rather than failing the
@@ -233,26 +234,25 @@ function storeHashBindingCheck(root, snapshot, key) {
  * is still there, and answering it must not turn into a second, weaker copy of
  * the integrity check.
  */
-function seqsIn(path) {
+function readChain(path) {
   const seqs = new Set();
-  if (!existsSync(path)) return seqs;
+  let first = null;
+  let sawFirst = false;
   let content;
-  try { content = readFileSync(path, 'utf8'); } catch { return seqs; }
+  try { content = readFileSync(path, 'utf8'); } catch { return { seqs, first }; }
   for (const line of content.split('\n')) {
     if (line.trim() === '') continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { /* leave null — an unparseable line contributes nothing */ }
+    // The FIRST non-blank line, parseable or not — never "the first line that
+    // happened to parse". A segment whose opening line is malformed has no
+    // usable anchor; taking the next one instead would read line 2's fields as
+    // if they were the anchor's and report a fault, or clear one, on evidence
+    // that is not there.
+    if (!sawFirst) { first = entry; sawFirst = true; }
     if (Number.isInteger(entry?.seq)) seqs.add(entry.seq);
   }
-  return seqs;
-}
-
-function firstEntryOfSegment(dir, name) {
-  let content;
-  try { content = readFileSync(segmentPath(dir, name), 'utf8'); } catch { return null; }
-  const first = content.split('\n').find((line) => line.trim() !== '');
-  if (first === undefined) return null;
-  try { return JSON.parse(first); } catch { return null; }
+  return { seqs, first };
 }
 
 /**
@@ -280,21 +280,21 @@ function manifestForestCheck(root) {
   if (!isSegmentedRepo(dir)) return { ...check, segmented: false };
 
   const { valid } = discoverSegments(dir);
-  const seqsByChain = new Map([['root', seqsIn(join(dir, 'manifest.jsonl'))]]);
-  for (const name of valid) seqsByChain.set(name, seqsIn(segmentPath(dir, name)));
+  const chains = new Map([['root', readChain(join(dir, 'manifest.jsonl'))]]);
+  for (const name of valid) chains.set(name, readChain(segmentPath(dir, name)));
 
   const orphanedAnchors = [];
   for (const name of valid) {
-    const anchor = firstEntryOfSegment(dir, name)?.anchor;
+    const anchor = chains.get(name).first?.anchor;
     // `anchor: null` is a rootless segment (§4.4) and points at nothing by
     // design. A missing or malformed anchor is a shape violation, which
     // verifyChain owns — not a reference to something that has gone.
     if (!anchor || typeof anchor !== 'object' || Array.isArray(anchor)) continue;
     if (typeof anchor.segment !== 'string' || !Number.isInteger(anchor.seq)) continue;
-    const target = seqsByChain.get(anchor.segment);
+    const target = chains.get(anchor.segment);
     if (target === undefined) {
       orphanedAnchors.push({ segment: name, anchor: { segment: anchor.segment, seq: anchor.seq }, reason: `anchored to '${anchor.segment}', which is not a segment in this forest` });
-    } else if (!target.has(anchor.seq)) {
+    } else if (!target.seqs.has(anchor.seq)) {
       orphanedAnchors.push({ segment: name, anchor: { segment: anchor.segment, seq: anchor.seq }, reason: `anchored to '${anchor.segment}' seq ${anchor.seq}, which no longer exists` });
     }
   }
