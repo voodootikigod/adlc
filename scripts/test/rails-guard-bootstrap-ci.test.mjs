@@ -961,11 +961,17 @@ for (const [path, renamedPath] of [
 // The trust-root set reaches enforcement even when ticket rails are also in play — the
 // two sets are unioned, not one-or-the-other.
 test('rail-freeze gate enforces trust roots alongside declared ticket rails', () => {
+  // The railed file is seeded at BASE: what the freeze protects is an EXISTING
+  // rail's content. (A declared-but-absent rail path may be ADDED — the sanctioned
+  // authoring act, T-01M0122Y3JYM04D2VZC3026G3B — pinned separately below.)
   const scenario = (mutateHead) => runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] },
     headConfig: BASE_UNSIGNED,
-    mutateBase: editAtHead('docs/CODEOWNERS', '* @adlc-admins\n'),
+    mutateBase: (dir) => {
+      editAtHead('docs/CODEOWNERS', '* @adlc-admins\n')(dir);
+      editAtHead('src/critical/thing.txt', 'original\n')(dir);
+    },
     mutateHead,
   });
 
@@ -978,6 +984,23 @@ test('rail-freeze gate enforces trust roots alongside declared ticket rails', ()
 
   const unrelated = scenario(editAtHead('src/ordinary.txt'));
   assert.equal(unrelated.status, 0);
+});
+
+test('adding a declared-but-absent rail path is the sanctioned authoring act (T-01M0122Y3JYM04D2VZC3026G3B)', () => {
+  // The build PR of the ticket that declared the rail must be able to CREATE the
+  // rail file the freeze covers — the CI equivalent of the in-session
+  // ADLC_RAILS_BYPASS authoring path, addition-only. Full matrix in
+  // packages/rails-guard/test/rail-addition-sanction.test.mjs; this pins the
+  // contract at the template gate level, where the old addition-as-proxy
+  // fixtures used to assert a denial.
+  const result = runRailFreezeScenario({
+    baseConfig: BASE_UNSIGNED,
+    baseTickets: { tickets: [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }] },
+    headConfig: BASE_UNSIGNED,
+    mutateBase: editAtHead('docs/CODEOWNERS', '* @adlc-admins\n'),
+    mutateHead: editAtHead('src/critical/thing.txt', 'authored rail test\n'),
+  });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 // ---- #283: the directory (sharded) ticket store backend ----
@@ -1006,12 +1029,12 @@ function writeDirStore(dir, tickets) {
 // locked with the gate and not shimmable by a PATH entry — so the stub can no longer see
 // it. Asserting the verdict is the better test anyway: "editing this path is denied" is
 // the property that matters, and it holds regardless of how the rail set is plumbed.
-function runDirBackend({ baseTickets, mutateHead }) {
+function runDirBackend({ baseTickets, mutateHead, seedBase }) {
   const result = runRailFreezeScenario({
     baseConfig: BASE_UNSIGNED,
     // no baseTickets → no legacy tickets.json; the directory store is seeded via mutateBase
     headConfig: BASE_UNSIGNED,
-    mutateBase: (dir) => writeDirStore(dir, baseTickets),
+    mutateBase: (dir) => { writeDirStore(dir, baseTickets); seedBase?.(dir); },
     mutateHead,
   });
   return { status: result.status, stderr: result.stderr };
@@ -1031,8 +1054,14 @@ test('#283: directory-backend base enforces shard ticket rails (fail-open fix)',
   const baseTickets = [{ id: 'T1', title: 'Fixture T1', rails: ['src/critical/**'] }];
 
   // Before the fix the gate read only tickets.json, so a directory-store repo silently
-  // degraded to "trust roots only" and STOPPED enforcing ticket rails.
-  const denied = runDirBackend({ baseTickets, mutateHead: editAtHead('src/critical/thing.txt') });
+  // degraded to "trust roots only" and STOPPED enforcing ticket rails. The railed
+  // file is seeded at base: an EDIT is the act the freeze denies (a first ADDITION
+  // is the sanctioned authoring path, T-01M0122Y3JYM04D2VZC3026G3B).
+  const denied = runDirBackend({
+    baseTickets,
+    seedBase: editAtHead('src/critical/thing.txt', 'original\n'),
+    mutateHead: editAtHead('src/critical/thing.txt'),
+  });
   assert.equal(denied.status, 2, denied.stderr);
 
   // The store manifest is itself a frozen trust root.
@@ -1055,7 +1084,11 @@ test('#283: directory-backend completed ticket rails auto-expire; active rails s
   const expired = runDirBackend({ baseTickets, mutateHead: editAtHead('src/shipped/thing.txt') });
   assert.equal(expired.status, 0, `completed ticket rail must expire: ${expired.stderr}`);
 
-  const stillFrozen = runDirBackend({ baseTickets, mutateHead: editAtHead('src/active/thing.txt') });
+  const stillFrozen = runDirBackend({
+    baseTickets,
+    seedBase: editAtHead('src/active/thing.txt', 'original\n'),
+    mutateHead: editAtHead('src/active/thing.txt'),
+  });
   assert.equal(stillFrozen.status, 2, `active ticket rail must stay frozen: ${stillFrozen.stderr}`);
 });
 
@@ -1072,6 +1105,7 @@ test('#283: directory-backend allows adding a new shard while preserving existin
   // The existing ticket's rail must STILL be frozen after a sibling shard is added.
   const stillFrozen = runDirBackend({
     baseTickets,
+    seedBase: editAtHead('src/critical/thing.txt', 'original\n'),
     mutateHead: (dir) => { addShard(dir); editAtHead('src/critical/thing.txt')(dir); },
   });
   assert.equal(stillFrozen.status, 2, stillFrozen.stderr);
