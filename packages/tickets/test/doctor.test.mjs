@@ -562,7 +562,17 @@ function gitStoreWithAnchoredSegment() {
   writeFileSync(join(root, '.adlc', 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
   service.apply(service.planCreate(ticket('B')));
   service.apply(service.planComplete('B')); // → mints a segment anchored at root's tip
+  // A SECOND evidenced transaction, so the segment is more than one line long.
+  // Only the first entry carries the anchor (§4.4), so a reader that took the
+  // last entry instead — or any entry but the first — would find no anchor at
+  // all and report a genuinely orphaned segment as healthy.
+  service.apply(service.planCreate(ticket('C')));
+  service.apply(service.planComplete('C'));
   const segments = readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl'));
+  const lines = readFileSync(join(root, '.adlc', 'manifest.d', segments[0]), 'utf8').split('\n').filter((l) => l.trim());
+  assert.ok(lines.length > 1, 'the fixture segment must carry more than one entry');
+  assert.equal(JSON.parse(lines[0]).anchor?.segment, 'root', 'only the FIRST entry carries the anchor');
+  assert.equal(JSON.parse(lines.at(-1)).anchor, undefined, 'a later entry carries none');
   return { root, store, segment: segments[0] };
 }
 
