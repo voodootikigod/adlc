@@ -27,6 +27,7 @@ test('recordResult: writes a spec-lint entry bound to the ticket and spec file',
     const entry = recordResult({ ticket: 'T1', specPath, dir: adlc, key: null });
     assert.equal(entry.gate, GATE_NAME);
     assert.equal(entry.ticket, 'T1');
+    assert.equal(entry.data.verified, true, 'a genuinely passing run records verified:true, never false');
     assert.ok(entry.files[specPath], 'spec file is hashed into entry.files');
     const manifest = readFileSync(join(adlc, 'manifest.jsonl'), 'utf8');
     assert.match(manifest, /"gate":"spec-lint"/);

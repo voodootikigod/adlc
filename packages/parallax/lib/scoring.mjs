@@ -69,13 +69,8 @@ export function renderReport({ agreements, divergences, score, threshold }) {
  * @returns {{mode: string, questions: Array<{point: string, options: Array<{label: string, reading: string}>}>, score: number, threshold: number, gate: boolean}}
  */
 export function renderQuestionsJson({ mode, divergences, score, threshold }) {
-  return {
-    mode,
-    questions: divergences.map((d) => ({ point: d.point, options: d.options })),
-    score,
-    threshold,
-    gate: score <= threshold,
-  };
+  const questions = divergences.map((d) => ({ point: d.point, options: d.options }));
+  return { mode, questions, score, threshold, gate: score <= threshold };
 }
 
 const ROUTE_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'];
