@@ -23,8 +23,8 @@ the user runs `npm i -g @adlc/cli`. Run `/adlc:adlc-init` once per repo to creat
 ## Where am I? → which gate
 
 ```
-Vague request, no ticket yet? ───────────────→ P0  /adlc:adlc-ticket
-Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax · adversarial-review
+Vague request, no ticket yet? ───────────────→ P0  /adlc:adlc-ticket (interrogate, then write)
+Have a spec / acceptance criteria? ──────────→ P1  /adlc:adlc-spec → /adlc:adlc-approve-spec (parallax · spec-lint · premortem · adversarial-review)
 Have tickets, planning fan-out? ─────────────→ P2  adlc coldstart · model-router · merge-forecast
 About to build, want to freeze tests? ───────→ P3  adlc rails-guard · adversarial-review
 Mid-build, agent looping or drifting? ───────→ P4  adlc flail-detector
@@ -53,9 +53,23 @@ on PATH. See ADR-0008 (adversarial-review coverage map) in the ADLC repo.
 Turn a request into a self-contained ticket through the unified ticket service. New repositories
 use one canonical shard per ticket under `.adlc/tickets/`; legacy
 `.adlc/tickets.json` remains supported until an approved migration. Everything
-downstream reads the logical store.
+downstream reads the logical store. The mechanism is **human interrogation
+before the store write** (`docs/interrogation-protocol.md` in the ADLC repo):
+frontier rounds of numbered questions, each codebase-checked before it is
+asked; applicable `.adlc/lessons/interrogation-template.md` checkboxes are
+mandatory candidates. After the write, coldstart gaps drive the loop until
+none remain, and the verdict is recorded (`--record-verdict`) so the p0 gate
+has evidence.
 
-### P1 — Interrogate (spec is testable and stress-tested)
+### P1 — Interrogate (spec is testable and stress-tested) → `/adlc:adlc-spec`
+The phase's mechanism is the interrogation loop (`docs/interrogation-protocol.md`
+in the ADLC repo): parallax divergences, premortem questions, and applicable
+`.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
+question is codebase-checked before it reaches the human; answers fold into the
+spec and parallax re-runs, capped at 3 rounds with an approved-assumptions
+escape hatch. `/adlc:adlc-spec` runs the loop; `/adlc:adlc-approve-spec`
+records Gate 1 with the interrogation summary (`adlc-runner run p1` requires
+and validates the `spec-approval` record). The tools:
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
   (or `--prompt-only`) to also catch vacuous methods.
@@ -63,6 +77,8 @@ downstream reads the logical store.
   failure modes before implementation.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
+  `--questions-json` emits the divergences as structured
+  `{questions: [{point, options}]}` for the interrogation loop.
 - Design review is recommended practice today via `adversarial-review --prompt-only`
   (feed the ticket/spec to a model yourself) or `adversarial-review --base <ref>`
   (review the diff that introduces it); `exit 0 = SHIP`. First-class artifact input

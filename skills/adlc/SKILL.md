@@ -62,8 +62,24 @@ service. New repositories use one canonical shard per ticket under
 approved migration. Everything downstream reads the logical store.
 `adlc ticket list`, `show <id>`, `edit <id>`, `complete <id>`, and `doctor` round
 out the surface. **All mutations are dry-run without `--write`.**
+The phase's mechanism is **human interrogation before the store write**
+(`docs/interrogation-protocol.md` in the ADLC repo): frontier rounds of
+numbered questions, each codebase-checked before it is asked; applicable
+`.adlc/lessons/interrogation-template.md` checkboxes are mandatory candidates.
+After the write, coldstart gaps drive the loop until none remain, and the
+verdict is recorded (`adlc coldstart <id> --prompt-only --record-verdict
+<file|->`) so the p0 gate has evidence.
 
 ### P1 — Interrogate (spec is testable and stress-tested)
+The phase's mechanism is the interrogation loop (`docs/interrogation-protocol.md`
+in the ADLC repo): parallax divergences, premortem questions, and applicable
+`.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
+question is codebase-checked before it reaches the human; answers fold into the
+spec and parallax re-runs, capped at 3 rounds with an approved-assumptions
+escape hatch. Gate 1 is recorded with `adlc gate-manifest record spec-approval
+--files <spec> --data '{"approver":…,"rounds":…,"questions":…,"sources":[…],
+"unresolved":0,"approved_assumptions":[]}'` — `adlc-runner run p1` requires and
+validates that record. The tools:
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
   (or `--prompt-only`) to also catch vacuous methods.
@@ -71,6 +87,8 @@ out the surface. **All mutations are dry-run without `--write`.**
   failure modes before implementation.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
+  `--questions-json` emits the divergences as structured
+  `{questions: [{point, options}]}` for the interrogation loop.
 - Design review via `npx adversarial-review --prompt-only` (feed the ticket/spec
   to a model yourself) or `--base <ref>` (review the diff that introduces it).
 
