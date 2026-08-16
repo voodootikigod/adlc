@@ -72,31 +72,31 @@ escape hatch. Gate 1 is recorded as a `spec-approval` manifest entry —
 "rounds":…,"questions":…,"sources":[…],"unresolved":0,"approved_assumptions":[]}'`
 through the `adlc` dispatcher — and `adlc-runner run p1` requires and
 validates that record. The tools:
-- `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
+- `adlc spec-lint SPEC.MD` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
   (or `--prompt-only`) to also catch vacuous methods.
-- `adlc premortem <spec.md> [--prompt-only]` — stress-test the approved spec for
+- `adlc premortem SPEC.MD [--prompt-only]` — stress-test the approved spec for
   failure modes before implementation.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
   `--questions-json` emits the divergences as structured
   `{questions: [{point, options}]}` for the interrogation loop.
 - Design review is recommended practice today via `adversarial-review --prompt-only`
-  (feed the ticket/spec to a model yourself) or `adversarial-review --base <ref>`
+  (feed the ticket/spec to a model yourself) or `adversarial-review --base REF`
   (review the diff that introduces it); `exit 0 = SHIP`. First-class artifact input
   (`--input`) is a deferred follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P2 — Decompose (an agent can execute without guessing)
-- `adlc coldstart <ticket-id> --prompt-only` (or `--all`) — gate ticket
+- `adlc coldstart TICKET-ID --prompt-only` (or `--all`) — gate ticket
   executability. LLM-backed: in Claude, use `--prompt-only` and answer the
   printed audit yourself (the bare form needs an API key and exits 1 without one).
-- `adlc model-router [--floor <n>]` — assign tickets to frontier/direct/ladder
+- `adlc model-router [--floor N]` — assign tickets to frontier/direct/ladder
   model strategies. The cost dial (D1).
 - `adlc merge-forecast` — estimate fan-out width, dependency pressure, and merge
   backpressure. The time dial (D2).
 
 ### P3 — Rail (frozen paths are protected)
-- `adlc rails-guard --base <ref> --ticket <id>` — diff-based check that no
+- `adlc rails-guard --base REF --ticket ID` — diff-based check that no
   committed change touched a frozen rail (exit 2 = a rail was edited). This is the
   **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
   rail hook** is the in-session layer: it precisely denies Edit/Write/MultiEdit to
@@ -118,7 +118,7 @@ validates that record. The tools:
   follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P4 — Build (supervised execution)
-- `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
+- `adlc flail-detector LOG-FILE [--scope GLOB]` — detect repeated errors,
   scope violations, edit churn, oversized logs.
 - `adlc consensus-fix --test-cmd "…" --files a.mjs,b.mjs` — for a hard failing
   test, fan out independent candidate repairs and select a gated consensus
@@ -131,23 +131,23 @@ validates that record. The tools:
   behavior change visible for the P6 human gate.
 - `adlc review-calibration --review-cmd "… {base} …"` — measure reviewer recall
   by scoring whether review catches injected mutants ("who reviews the reviewer").
-- `adversarial-review --providers <a,b> [--verify]` — ≥2 distinct providers, cross-model
+- `adversarial-review --providers A,B [--verify]` — ≥2 distinct providers, cross-model
   and fresh-context, on the risk gate; loop review→fix→re-review until `exit 0 = SHIP`.
 - **Cross-model is GATED (not just advised) for the trust-root tier.** If the change
   touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
   a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
   trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
   `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`), a clean
-  **same-model** P5 is NOT enough: the P5 prosecute runner (given `--base <ref>`) exits 2
+  **same-model** P5 is NOT enough: the P5 prosecute runner (given `--base REF`) exits 2
   until the manifest holds a `cross-model-review` approve from a provider DISTINCT from the
   author, bound to the reviewed revision. Record it with the runner's `record-cross-model`
-  subcommand (`--ticket <id> --provider <p> --author-provider <a> --verdict approve
-  [--input <passes.json>]`) (T39).
+  subcommand (`--ticket ID --provider PROVIDER --author-provider AUTHOR-PROVIDER --verdict approve
+  [--input PASSES.JSON]`) (T39).
 
 ### P6 — Integrate (the human gate)
 This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
-let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
+let the human decide. Record outcomes with `adlc gate-manifest record GATE`.
 
 ### P7 — Distill (turn findings into defenses) → `/adlc-distill`
 - `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic
