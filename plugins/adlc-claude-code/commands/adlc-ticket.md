@@ -51,8 +51,30 @@ A ticket must be **executable without guesswork** (that is exactly what
 - **category** — free-form routing hint (e.g. `feature`, `bugfix`, `refactor`).
 - **budget** — optional token budget (omit if unknown).
 
-If anything required for a *self-contained* ticket is ambiguous, ask the user
-rather than guessing — a vague ticket fails `coldstart`.
+Anything required for a *self-contained* ticket that you cannot settle from
+the request or the repository goes to §1b — a vague ticket fails `coldstart`.
+
+## 1b. Interrogate the human
+
+Do not write a ticket built on silent assumptions. Run the interrogation loop
+defined in `docs/interrogation-protocol.md` before the dry-run:
+
+1. Build the design tree from the §1 field checklist: every open decision the
+   request leaves unsettled (behavior, boundaries, scope, rails, ordering,
+   verification methods). If `.adlc/lessons/interrogation-template.md` exists,
+   its applicable checkboxes are mandatory candidates.
+2. **Check the codebase before asking each question.** A question the repo
+   answers is researched, folded in, and never asked — only questions the repo
+   cannot answer reach the human.
+3. Ask each round's full frontier in **one `AskUserQuestion` call**: numbered
+   questions, the recommended answer as the first option. No one-question
+   drips; no question whose premise depends on an unanswered one.
+4. Fold answers into the ticket body as revised prose (not an appended Q&A
+   log), then repeat with the newly exposed frontier.
+5. Stop when the frontier is empty — then read back the resolved decisions in
+   one screen and get explicit confirmation. If the frontier refuses to empty,
+   the protocol's 5-round cap applies: surviving questions become explicit
+   approved assumptions in the body.
 
 ## 2. Apply the change safely through the store service
 
@@ -162,10 +184,22 @@ configured it exits `1`. Use the prompt-only flow instead:
    ask a human) and exits `0` without calling any provider.
 2. **Answer that prompt yourself**, applying its own rubric: list every genuine
    gap that would block a fresh agent (information not derivable from the repo).
-3. Report the verdict:
-   - No gaps → the ticket is executable; done.
-   - Gaps found → summarize them and offer to revise the ticket body/scope to
-     close them, then re-run the prompt-only check.
+3. Act on the verdict — this is the post-write half of the interrogation loop
+   (`docs/interrogation-protocol.md`), not a report-and-stop:
+   - Gaps found → each gap's `{what, why_blocking}` becomes a frontier
+     question. Check the codebase first (a gap the repo answers is folded in
+     without asking), put the rest to the human via `AskUserQuestion`, fold the
+     answers into the ticket body with `adlc ticket update <id> --input <file>
+     --expect <ticketHash> --write`, and re-run the prompt-only check. Loop
+     until the gap list is empty (the protocol's 5-round cap applies).
+     `--expect` takes the ticket's **current** hash: each `--write` changes it,
+     so capture the `ticketHash` from the update's output (or re-run
+     `adlc ticket show <id> --json`) before the next round — reusing round 1's
+     hash fails the compare-and-swap on round 2.
+   - No gaps → the ticket is executable. Record the passing verdict so the
+     p0 gate has evidence — `--prompt-only` alone writes no manifest record:
+     write your `{"gaps":[]}` answer to a file (or stdin with `-`) and run
+     `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
 (If the user has explicitly configured an API key and prefers a real provider
 call, `adlc coldstart <id> --json` returns the same verdict as exit `0`/`2`; but
@@ -173,8 +207,8 @@ prompt-only is the default in-Claude path.)
 
 ## 5. Summarize
 
-Report the new ticket id and title, what scope/rails it declared, the
+Report the new ticket id and title, what scope/rails it declared, how many
+interrogation rounds ran and any approved assumptions recorded, the
 formatter/linter check result from step 3 (pass, warned, or skipped/no script),
-and the coldstart verdict. If the ticket passed, point the user at the `adlc`
-discovery skill (or `/adlc-spec`-style spec gates) for the P1 interrogation
-phase next.
+and the coldstart verdict (and that it was recorded). If the ticket passed,
+point the user at `/adlc:adlc-spec` for the P1 interrogation phase next.

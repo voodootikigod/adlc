@@ -46,8 +46,14 @@ checks. Gather or infer:
 - **duration**, **category**, **budget** — as needed; `duration` defaults to
   `1` if unknown.
 
-If anything required for a self-contained ticket is ambiguous, ask rather
-than guess — a vague ticket fails `coldstart`.
+Before the dry-run, interrogate the human per the shared protocol
+(`docs/interrogation-protocol.md` in the ADLC repo): frontier rounds of
+numbered questions with a recommended answer first, **codebase-checked before
+asking** (only what the repo cannot answer reaches the human; applicable
+`.adlc/lessons/interrogation-template.md` checkboxes are mandatory
+candidates), answers folded into the body as revised prose, stopping when the
+frontier is empty (5-round cap with approved assumptions otherwise). A ticket
+built on silent assumptions fails `coldstart`.
 
 ### Apply the change through the store service (atomic, locked, evidenced)
 
@@ -84,8 +90,15 @@ without one:
 2. Answer that prompt yourself, applying its own rubric: list every genuine
    gap that would block a fresh agent (information not derivable from the
    repo).
-3. No gaps → the ticket is executable, done. Gaps found → summarize and offer
-   to revise the ticket body/scope, then re-check.
+3. Act on the verdict — the post-write half of the interrogation loop
+   (`docs/interrogation-protocol.md`): gaps found → codebase-check each gap,
+   ask the human the rest, fold answers into the body via
+   `adlc ticket update <id> --input <file> --expect <ticketHash> --write`,
+   re-check until the gap list is empty (5-round cap; `--expect` takes the
+   **current** hash — capture the `ticketHash` each update prints, a stale
+   one fails the CAS). No gaps → executable;
+   record the verdict so the p0 gate has evidence:
+   `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
 ## P1-P2 commands
 

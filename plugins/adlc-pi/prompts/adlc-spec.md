@@ -20,8 +20,12 @@ skill for the full command reference.
 Run `adlc parallax --file <spec-or-request> --record-verdict <file>` (add
 `--prompt-only` to answer it yourself). Produce the N independent readings, then
 the divergence analysis. Every divergence above the threshold is an ambiguity you
-must resolve (ask the user or research) before proceeding. Write the converged
-spec to a file under `.adlc/specs/`.
+must resolve before proceeding, via the shared interrogation protocol
+(`docs/interrogation-protocol.md` in the ADLC repo): codebase-check each one,
+ask the human the rest in numbered frontier rounds with a recommended answer
+first, fold answers into the spec, and re-run parallax — capped at 3 rounds,
+after which surviving divergences are recorded as approved assumptions. Write
+the converged spec to a file under `.adlc/specs/`.
 
 ## 2. Lint acceptance criteria — `spec-lint`
 Run `adlc spec-lint <spec.md> --json` (or `--prompt-only`) and answer the

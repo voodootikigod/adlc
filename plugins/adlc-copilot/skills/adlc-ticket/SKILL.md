@@ -52,8 +52,15 @@ A ticket must be **executable without guesswork** (that is exactly what
 - **category** — free-form routing hint (e.g. `feature`, `bugfix`, `refactor`).
 - **budget** — optional token budget (omit if unknown).
 
-If anything required for a *self-contained* ticket is ambiguous, ask the user
-rather than guessing — a vague ticket fails `coldstart`.
+Before the dry-run, interrogate the human per `docs/interrogation-protocol.md`
+(the ADLC repo's shared protocol): build the frontier of open decisions from
+the checklist above (plus `.adlc/lessons/interrogation-template.md` checkboxes
+when present, filtered by the codebase-check clause), **check the codebase
+before asking each question**, ask each round's full frontier as numbered chat
+questions with a recommended answer first, and fold answers into the ticket
+body as revised prose. Stop when the frontier is empty (5-round cap with
+approved assumptions otherwise) — a ticket built on silent assumptions fails
+`coldstart`.
 
 ## 2. Apply the change safely through the store service
 
@@ -118,10 +125,16 @@ provider configured it exits `1`. Use the prompt-only flow instead:
    ask a human) and exits `0` without calling any provider.
 2. **Answer that prompt yourself**, applying its own rubric: list every genuine gap
    that would block a fresh agent (information not derivable from the repo).
-3. Report the verdict:
-   - No gaps → the ticket is executable; done.
-   - Gaps found → summarize them and offer to revise the ticket body/scope to close
-     them, then re-run the prompt-only check.
+3. Act on the verdict — the post-write half of the interrogation loop
+   (`docs/interrogation-protocol.md`):
+   - Gaps found → each gap becomes a frontier question: check the codebase
+     first, ask the human the rest, fold answers into the body with
+     `adlc ticket update <id> --input <file> --expect <ticketHash> --write`,
+     and re-run the prompt-only check until the gap list is empty (5-round cap).
+     `--expect` takes the ticket's **current** hash — capture the `ticketHash`
+     each update prints before the next round; a stale hash fails the CAS.
+   - No gaps → executable. Record the verdict so the p0 gate has evidence:
+     `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
 (If the user has explicitly configured an API key and prefers a real provider call,
 `adlc coldstart <id> --json` returns the same verdict as exit `0`/`2`; but

@@ -20,7 +20,13 @@ Gather: `id`, `title` (imperative), `body` (self-contained: what to build,
 acceptance criteria with concrete verification commands, context), `scope` (file
 globs it may touch), `rails` (frozen paths, default `[]`), `edges` (prerequisite→
 dependent ordering, default `[]`), `duration` (positive number), `category`,
-optional `budget`. Ask the user rather than guess if anything required is ambiguous.
+optional `budget`. Before the dry-run, interrogate the human per the shared
+protocol (`docs/interrogation-protocol.md` in the ADLC repo): frontier rounds of
+numbered questions with a recommended answer first, **codebase-checked before
+asking** (only what the repo cannot answer reaches the human; applicable
+`.adlc/lessons/interrogation-template.md` checkboxes are mandatory candidates),
+answers folded into the body as revised prose, stopping when the frontier is
+empty (5-round cap with approved assumptions otherwise).
 
 ## 3. Write safely (dry-run first)
 Write the full proposed ticket to a temporary JSON file. Preview
@@ -62,10 +68,15 @@ can silently red the next PR. Check now, non-blocking:
 
 ## 5. Check executability (coldstart, keyless)
 `coldstart` is LLM-backed and inside Cursor **you are the model** — no API keys.
-Run `adlc coldstart <id> --prompt-only`, answer the printed audit yourself, and
-report gaps (none → executable; gaps → offer to revise and re-check). To make
-the verdict auditable, write your answer to a file and record it into the
-manifest: `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
+Run `adlc coldstart <id> --prompt-only` and answer the printed audit yourself.
+Gaps found → the post-write interrogation loop (`docs/interrogation-protocol.md`):
+codebase-check each gap, ask the human the rest, fold answers into the body via
+`adlc ticket update <id> --input <file> --expect <ticketHash> --write`, re-check
+until the gap list is empty (5-round cap; `--expect` takes the **current**
+hash — capture the `ticketHash` each update prints, a stale one fails the
+CAS). No gaps → executable; record the
+verdict so the p0 gate has evidence:
+`adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
 ## 6. Summarize
 Report the new id, title, scope/rails, the formatter/linter check result, and
