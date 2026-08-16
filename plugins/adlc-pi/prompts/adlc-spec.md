@@ -16,28 +16,47 @@ also support `--record-verdict <file|->` so the verdict lands in
 `.adlc/manifest.jsonl` instead of vanishing with the session. See the `adlc-spec`
 skill for the full command reference.
 
+This is one interrogation loop (`docs/interrogation-protocol.md`), not a
+linear pipeline: premortem needs a spec file to stress-test, so it cannot run
+before one exists, and its questions must reach the human through the SAME
+loop parallax's divergences do — never folded back unilaterally. The steps
+below sequence around that constraint; the 3-round cap covers the loop as a
+whole, not each source separately.
+
 ## 1. Measure ambiguity — `parallax`
 Run `adlc parallax --file <spec-or-request> --record-verdict <file>` (add
-`--prompt-only` to answer it yourself). Produce the N independent readings, then
-the divergence analysis. Every divergence above the threshold is an ambiguity you
-must resolve before proceeding, via the shared interrogation protocol
-(`docs/interrogation-protocol.md` in the ADLC repo): codebase-check each one,
-ask the human the rest in numbered frontier rounds with a recommended answer
-first, fold answers into the spec, and re-run parallax — capped at 3 rounds,
-after which surviving divergences are recorded as approved assumptions. Write
-the converged spec to a file under `.adlc/specs/`.
+`--prompt-only` to answer it yourself). Produce the N independent readings,
+then the divergence analysis.
 
-## 2. Lint acceptance criteria — `spec-lint`
+## 2. Interrogate round 1, write the draft — parallax's divergences
+Every divergence above the threshold is an ambiguity you must resolve via the
+shared interrogation protocol (`docs/interrogation-protocol.md` in the ADLC
+repo): codebase-check each one, ask the human the rest in numbered frontier
+rounds with a recommended answer first, fold answers into the spec. Write the
+draft spec to a file under `.adlc/specs/` — premortem (step 3) needs this
+file to exist.
+
+## 3. Failure-first, then interrogate round 2 — `premortem`'s questions
+Run `adlc premortem <spec.md> --record-verdict <file>` (add `--prompt-only` to
+answer it yourself) and produce 5–10 concrete, mechanism-specific failure
+causes against the draft from step 2. Its interrogation questions become this
+round's frontier — run the loop again (codebase-check first, ask the human
+the rest, fold answers into the spec), then re-run parallax to confirm
+convergence.
+
+Still above threshold, or new divergences opened by the rewrite? Repeat the
+codebase-check → ask → fold → re-run-parallax cycle — **capped at 3 rounds
+total across steps 2 and 3 combined**. Still above threshold after the cap?
+Record the surviving divergences in the spec as approved assumptions.
+
+## 4. Lint acceptance criteria — `spec-lint`
 Run `adlc spec-lint <spec.md> --json` (or `--prompt-only`) and answer the
 vacuousness audit: every acceptance criterion needs a concrete, runnable
-verification (command, test file, or assertion). Rewrite any vacuous criterion.
+verification (command, test file, or assertion). Rewrite any vacuous
+criterion — this can reopen a question; if it does, it re-enters the step 2/3
+loop rather than being resolved unilaterally.
 
-## 3. Failure-first — `premortem`
-Run `adlc premortem <spec.md> --record-verdict <file>` (add `--prompt-only` to
-answer it yourself) and produce 5–10 concrete, mechanism-specific failure causes.
-Fold the material ones back into the spec / acceptance criteria.
-
-## 4. Summarize
+## 5. Summarize
 Report the converged spec, the resolved ambiguities, and the premortem causes you
 folded in. When the spec is clean, point the user at `/adlc-approve-spec` (P1 G1)
 and then `/adlc-decompose` (P2).

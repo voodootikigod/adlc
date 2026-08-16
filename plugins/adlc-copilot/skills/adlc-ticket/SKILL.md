@@ -133,8 +133,15 @@ provider configured it exits `1`. Use the prompt-only flow instead:
      and re-run the prompt-only check until the gap list is empty (5-round cap).
      `--expect` takes the ticket's **current** hash — capture the `ticketHash`
      each update prints before the next round; a stale hash fails the CAS.
-   - No gaps → executable. Record the verdict so the p0 gate has evidence:
+   - No gaps → executable. The p0 assertion re-checks the ticket's CURRENT
+     hash (a ticket edited after coldstart ran must re-run it), so record the
+     hash it audited, not just the empty gap list: get it with
+     `adlc ticket show <id> --json` (the `ticketHash` field) and write
+     `{"gaps":[],"ticketHash":"<that hash>"}` before recording:
      `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
+
+`adlc-runner run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
+global presence check.
 
 (If the user has explicitly configured an API key and prefers a real provider call,
 `adlc coldstart <id> --json` returns the same verdict as exit `0`/`2`; but

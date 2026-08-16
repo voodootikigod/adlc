@@ -96,9 +96,15 @@ without one:
    `adlc ticket update <id> --input <file> --expect <ticketHash> --write`,
    re-check until the gap list is empty (5-round cap; `--expect` takes the
    **current** hash — capture the `ticketHash` each update prints, a stale
-   one fails the CAS). No gaps → executable;
-   record the verdict so the p0 gate has evidence:
+   one fails the CAS). No gaps → executable. The p0 assertion re-checks the
+   ticket's CURRENT hash (a ticket edited after coldstart ran must re-run
+   it), so record the hash it audited: get it with `adlc ticket show <id>
+   --json` (the `ticketHash` field), write
+   `{"gaps":[],"ticketHash":"<that hash>"}`, then
    `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
+
+`adlc-runner run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
+global presence check.
 
 ## P1-P2 commands
 
@@ -110,10 +116,19 @@ capped at 3 rounds, after which surviving divergences are recorded as approved
 assumptions in the spec. `adlc parallax --questions-json` returns the
 divergences as structured `{questions: [{point, options}]}` for this loop.
 
+`premortem` needs a written spec to stress-test, so it runs only after the
+first interrogation round has produced one — never before, and never as a
+step whose questions get silently resolved by the model. Its output feeds a
+SECOND round of the same loop (codebase-check, ask the human, fold answers,
+re-run parallax) before spec-lint; the 3-round cap covers both rounds
+combined, not each source separately.
+
 ```sh
 adlc parallax --request "<request>"
-adlc spec-lint spec.md --json
+# … interrogation round 1, write the draft spec …
 adlc premortem spec.md --json
+# … interrogation round 2 on premortem's questions …
+adlc spec-lint spec.md --json
 adlc coldstart --all --tickets .adlc/tickets.json --json
 adlc merge-forecast --tickets .adlc/tickets.json --json
 adlc model-router --tickets .adlc/tickets.json --json

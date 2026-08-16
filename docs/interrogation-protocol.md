@@ -62,7 +62,11 @@ evidence, not intuition:
    multiple-choice. Each divergence becomes one frontier question.
 3. **premortem interrogation questions** — `adlc premortem` outputs one
    question per postulated failure cause ("Questions to fold into
-   interrogation"). Fold them into the frontier.
+   interrogation"). Fold them into the frontier. Timing: premortem stress-tests
+   a written spec, so it cannot run before one exists — run it after the first
+   interrogation round has produced a draft, and route its questions through a
+   further round of this same loop rather than resolving them unilaterally
+   after the human is already done.
 4. **`.adlc/lessons/interrogation-template.md`** — when present, the P7
    lesson miner's recurring spec-gap checklist. Every checkbox that applies to
    the work at hand is a mandatory frontier **candidate** — it must be

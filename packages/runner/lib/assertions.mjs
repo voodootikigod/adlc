@@ -28,7 +28,7 @@ function matchesTicket(entry, ticket) {
 }
 
 function requiresTicket(phase) {
-  return phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
+  return phase === 'p0' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
 }
 
 function requiresRevision(phase) {
@@ -330,12 +330,51 @@ function p6IntegrityErrors(entry, currentBinding) {
   return errors;
 }
 
+// P0's coldstart requirement is presence-only by default (any coldstart
+// record anywhere satisfies it) unless this validator narrows it: bound to
+// THIS ticket (not an --all sweep, which records no entry.ticket at all —
+// see coldstart's bin/adlc-coldstart.mjs), a zero-gap verdict, and a
+// ticketHash matching the CURRENT ticket definition (a ticket edited after
+// coldstart ran must re-run it). Validates the LATEST matching coldstart
+// entry, so a fixed re-run heals a failing one.
+function coldstartIntegrityErrors(entries, ticket, cwd, dir) {
+  const entry = entries
+    .filter((candidate) => entryType(candidate) === 'coldstart' && candidate.ticket === ticket)
+    .at(-1);
+  if (!entry) return [];
+  const errors = [];
+  let parsed;
+  try {
+    parsed = JSON.parse(entry.data?.verdict ?? '');
+  } catch {
+    return ['P0 evidence is incomplete: coldstart verdict is not valid JSON (expected {"gaps":[...],"ticketHash":"…"})'];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.gaps)) {
+    errors.push('P0 evidence is incomplete: coldstart verdict missing a gaps array');
+  } else if (parsed.gaps.length > 0) {
+    errors.push(`P0 evidence is contradictory: coldstart recorded ${parsed.gaps.length} unresolved gap(s)`);
+  }
+  const binding = ticketDefinitionBinding(cwd, ticket, dir);
+  if (!binding) {
+    errors.push('P0 evidence is stale: ticket definition is absent');
+  } else if (parsed?.ticketHash !== binding.ticketHash) {
+    errors.push('P0 evidence is stale: ticket definition changed after coldstart ran');
+  }
+  return errors;
+}
+
 // Gate 1 is a human decision with machine-checked evidence: the approval must
-// carry the interrogation summary the protocol produced, and nothing may be
-// left unresolved. Validates the LATEST spec-approval so a corrected
-// re-approval heals a rejected one. Emitters: the adlc-approve-spec command in
-// every harness plugin (updated atomically with this validator).
-function specApprovalIntegrityErrors(entries, ticket) {
+// carry the interrogation summary the protocol produced, an explicit approved
+// verdict (not rejected, not missing), a non-empty human approver, a ticket
+// binding, and exactly one bound spec file whose recorded hash matches both
+// the payload's claimed spec_hash (the approver's stated hash is genuine, not
+// fabricated) and the file's CURRENT content (the spec has not been edited
+// since approval) — plus recording after the latest spec-lint/premortem
+// evidence, so the approval covers the audited spec, not a pre-audit draft.
+// Validates the LATEST spec-approval so a corrected re-approval heals a
+// rejected one. Emitters: the adlc-approve-spec command in every harness
+// plugin (updated atomically with this validator).
+function specApprovalIntegrityErrors(entries, ticket, cwd) {
   const entry = entries
     .filter((candidate) => entryType(candidate) === 'spec-approval' && matchesTicket(candidate, ticket))
     .at(-1);
@@ -344,6 +383,15 @@ function specApprovalIntegrityErrors(entries, ticket) {
   const data = entry.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return ['P1 evidence is incomplete: spec-approval missing interrogation payload (data)'];
+  }
+  if (data.verdict !== 'approved') {
+    errors.push('P1 evidence is contradictory: spec-approval verdict is not "approved" (a rejected, pending, or missing verdict cannot pass Gate 1)');
+  }
+  if (typeof data.approver !== 'string' || data.approver.trim().length === 0) {
+    errors.push('P1 evidence is incomplete: spec-approval missing a non-empty approver');
+  }
+  if (typeof entry.ticket !== 'string' || entry.ticket.length === 0) {
+    errors.push('P1 evidence is incomplete: spec-approval is not bound to a ticket');
   }
   if (!Number.isInteger(data.rounds) || data.rounds < 0) {
     errors.push('P1 evidence is incomplete: spec-approval missing integer rounds');
@@ -360,6 +408,39 @@ function specApprovalIntegrityErrors(entries, ticket) {
   if (data.approved_assumptions !== undefined && !Array.isArray(data.approved_assumptions)) {
     errors.push('P1 evidence is incomplete: spec-approval approved_assumptions must be an array');
   }
+
+  const filePaths = Object.keys(entry.files ?? {});
+  if (filePaths.length !== 1) {
+    errors.push('P1 evidence is incomplete: spec-approval must bind exactly one spec file via --files');
+  } else {
+    const [path] = filePaths;
+    const recordedHash = entry.files[path];
+    if (typeof data.spec_hash !== 'string' || data.spec_hash.length === 0) {
+      errors.push('P1 evidence is incomplete: spec-approval missing spec_hash');
+    } else if (recordedHash !== data.spec_hash) {
+      errors.push('P1 evidence is contradictory: spec-approval spec_hash does not match the recorded file hash');
+    }
+    try {
+      const currentHash = sha256(readFileSync(resolve(cwd, path)));
+      if (currentHash !== recordedHash) {
+        errors.push(`P1 evidence is stale: spec file changed after approval was recorded: ${path}`);
+      }
+    } catch (err) {
+      errors.push(`P1 evidence is stale: spec file cannot be read: ${path}: ${err.message}`);
+    }
+  }
+
+  const types = entries.map(entryType);
+  const entryIndex = entries.indexOf(entry);
+  const latestSpecLintIndex = types.lastIndexOf('spec-lint');
+  const latestPremortemIndex = types.lastIndexOf('premortem');
+  if (latestSpecLintIndex === -1 || entryIndex < latestSpecLintIndex) {
+    errors.push('P1 evidence is stale: spec-approval was recorded before the latest spec-lint evidence');
+  }
+  if (latestPremortemIndex === -1 || entryIndex < latestPremortemIndex) {
+    errors.push('P1 evidence is stale: spec-approval was recorded before the latest premortem evidence');
+  }
+
   return errors;
 }
 
@@ -515,7 +596,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)
     : [];
   const p1Errors = phase === 'p1'
-    ? specApprovalIntegrityErrors(entries, ticket)
+    ? specApprovalIntegrityErrors(entries, ticket, cwd)
     : [];
   if (p1Errors.length > 0) {
     return {
@@ -524,6 +605,18 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       phase,
       ticket,
       errors: p1Errors,
+    };
+  }
+  const p0Errors = phase === 'p0' && ticket
+    ? coldstartIntegrityErrors(entries, ticket, cwd, dir)
+    : [];
+  if (p0Errors.length > 0) {
+    return {
+      ok: false,
+      operational: true,
+      phase,
+      ticket,
+      errors: p0Errors,
     };
   }
   if (p6Errors.length > 0) {

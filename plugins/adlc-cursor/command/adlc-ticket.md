@@ -74,9 +74,14 @@ codebase-check each gap, ask the human the rest, fold answers into the body via
 `adlc ticket update <id> --input <file> --expect <ticketHash> --write`, re-check
 until the gap list is empty (5-round cap; `--expect` takes the **current**
 hash — capture the `ticketHash` each update prints, a stale one fails the
-CAS). No gaps → executable; record the
-verdict so the p0 gate has evidence:
+CAS). No gaps → executable. The p0 assertion re-checks the ticket's CURRENT
+hash (a ticket edited after coldstart ran must re-run it), so record the hash
+it audited: get it with `adlc ticket show <id> --json` (the `ticketHash`
+field), write `{"gaps":[],"ticketHash":"<that hash>"}`, then
 `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
+
+`adlc-runner run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
+global presence check.
 
 ## 6. Summarize
 Report the new id, title, scope/rails, the formatter/linter check result, and

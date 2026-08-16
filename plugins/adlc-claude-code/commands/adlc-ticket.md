@@ -197,13 +197,21 @@ configured it exits `1`. Use the prompt-only flow instead:
      `adlc ticket show <id> --json`) before the next round — reusing round 1's
      hash fails the compare-and-swap on round 2.
    - No gaps → the ticket is executable. Record the passing verdict so the
-     p0 gate has evidence — `--prompt-only` alone writes no manifest record:
-     write your `{"gaps":[]}` answer to a file (or stdin with `-`) and run
+     p0 gate has evidence — `--prompt-only` alone writes no manifest record.
+     The p0 assertion is ticket-scoped and re-checks the ticket's CURRENT
+     hash (a ticket edited after coldstart ran must re-run it), so the
+     verdict JSON must carry the hash it audited, not just the empty gap
+     list: get it with `adlc ticket show <id> --json` (the `ticketHash`
+     field), write `{"gaps":[],"ticketHash":"<that hash>"}` to a file (or
+     stdin with `-`), and run
      `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
 (If the user has explicitly configured an API key and prefers a real provider
 call, `adlc coldstart <id> --json` returns the same verdict as exit `0`/`2`; but
 prompt-only is the default in-Claude path.)
+
+`adlc-runner run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
+global presence check.
 
 ## 5. Summarize
 

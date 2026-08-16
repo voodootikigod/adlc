@@ -12,14 +12,17 @@ import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { createExtension } from '../lib/extension.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { migrateLegacyStore, migrationPlan } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, '..');
+const REPO_ROOT = resolve(HERE, '..', '..', '..');
+const RUNNER_BIN = join(REPO_ROOT, 'packages', 'runner', 'bin', 'adlc.mjs');
 
 const T1 = {
   id: 'T1', title: 'First ticket', body: 'Do the first thing',
@@ -466,5 +469,64 @@ test('AC5: /adlc-init with the adlc CLI returning non-zero also refuses to scaff
     await pi.commands['adlc-init'].handler('', ctx);
     assert.ok(ctx.notices.some((n) => n.level === 'error' && /npm install -g @adlc\/cli/.test(n.msg)));
     assert.equal(existsSync(join(root, '.adlc')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// =========================================================================
+// /adlc-approve-spec producer/consumer round-trip: the recorded entry must
+// satisfy the REAL runner's p1 assertion, not just look chain-valid. Codex
+// cross-model review (adversarial-review, feat/p1-interrogation full-branch
+// pass) found this command recorded only {spec, sha256, verdict} while the
+// runner's specApprovalIntegrityErrors requires approver/rounds/questions/
+// sources/unresolved and a --files binding — every real Pi approval was
+// unusable as P1 evidence. This test spawns the real `adlc run p1` CLI
+// against the manifest the real handler wrote.
+// =========================================================================
+
+test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (producer/consumer round-trip)', async () => {
+  const root = makeRepo({ current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    const specRel = '.adlc/specs/feature.md';
+    writeFileSync(join(root, specRel), '# Spec\nacceptance criteria: `test -f feature.md`\n');
+
+    // p1 also requires spec-lint/premortem evidence (unrelated to this
+    // command) recorded BEFORE the approval (the real /adlc-spec ->
+    // /adlc-approve-spec sequence); record minimal real entries first so the
+    // round-trip proves the FULL gate, not just this one record in isolation.
+    const { appendManifestEntry } = await import('@adlc/gate-manifest');
+    appendManifestEntry({ gate: 'spec-lint' }, join(root, '.adlc'), { key: null });
+    appendManifestEntry({ gate: 'premortem' }, join(root, '.adlc'), { key: null });
+
+    const ctx = fakeCtx(root, { confirm: () => true });
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+
+    // p1 is not ticket-required (spec-lint/premortem entries never carry an
+    // entry.ticket today, so ticket-scoping the outer call would exclude
+    // them); the round-trip invokes it the same way real callers do.
+    const result = spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p1', '--dir', '.adlc', '--json'], {
+      cwd: root, encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `real p1 assertion must accept Pi's recorded approval: status=${result.status} ${result.stdout}${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('AC4: /adlc-approve-spec with no active ticket errors without a dialog (p1 requires a ticket-bound approval)', async () => {
+  const root = makeRepo({ current: null });
+  try {
+    const { pi } = await boot(root);
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    const specRel = '.adlc/specs/feature.md';
+    writeFileSync(join(root, specRel), '# Spec\n');
+    const ctx = fakeCtx(root, { confirm: () => true });
+
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+
+    assert.equal(ctx.calls.confirm, 0, 'no dialog opened without an active ticket');
+    assert.ok(ctx.notices.some((n) => n.level === 'error' && /active ticket/.test(n.msg)));
+    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

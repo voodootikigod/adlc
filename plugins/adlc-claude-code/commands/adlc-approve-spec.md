@@ -24,7 +24,7 @@ Target ticket: **$ARGUMENTS** (default to `.adlc/current-ticket.json`).
    `/adlc:adlc-spec` run:
 
    ```
-   adlc gate-manifest record spec-approval --files <spec path> --data '{
+   adlc gate-manifest record spec-approval --ticket <id> --files <spec path> --data '{
      "approver": "<who>",
      "spec_hash": "<sha256 of the spec file>",
      "verdict": "approved",
@@ -40,9 +40,20 @@ Target ticket: **$ARGUMENTS** (default to `.adlc/current-ticket.json`).
    `sources` lists only the question sources actually consumed. `unresolved`
    must be `0` — the gate rejects anything else; a divergence the human chose
    not to resolve belongs in `approved_assumptions`, not in the unresolved
-   count. (There is no runner verb for P1 approval — `adlc-runner accept` is
+   count. `--ticket <id>` and `--files <spec path>` are both required: the p1
+   assertion rejects an approval that is not bound to exactly one ticket and
+   exactly one spec file, checks that `spec_hash` matches the file's actual
+   hash at record time (catches a fabricated hash), checks that the spec
+   file's CURRENT content still matches (catches editing the spec after
+   approval), and requires the approval to be recorded after the latest
+   `spec-lint`/`premortem` evidence (catches approving a pre-audit draft).
+   (There is no runner verb for P1 approval — `adlc-runner accept` is
    the P6 acceptance-packet recorder and takes `--packet`, not `--gate`.)
-4. On changes requested, loop back to `/adlc:adlc-spec`; on rejection, stop.
+4. On changes requested, loop back to `/adlc:adlc-spec`; on rejection, **record
+   nothing** and stop — do not record a `spec-approval` entry with
+   `"verdict":"rejected"` or any other non-`"approved"` value; the gate
+   rejects it either way, and a stray rejected record is confusing evidence to
+   leave in the manifest.
 
 ## Summarize
 

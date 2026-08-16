@@ -14,6 +14,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { userInfo } from 'node:os';
 import { loadTickets, sha256 } from '@adlc/core';
 import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
@@ -277,6 +278,16 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         return;
       }
 
+      // The p1 assertion (packages/runner/lib/assertions.mjs) requires the
+      // spec-approval record to be bound to exactly one ticket — check before
+      // opening a dialog, same as the missing-spec-path guard above.
+      const active = typeof getActive === 'function' ? getActive() : null;
+      const ticketId = active && active.ticketId ? active.ticketId : undefined;
+      if (!ticketId) {
+        ctx.ui.notify('ADLC: /adlc-approve-spec needs an active ticket (the p1 gate requires a ticket-bound approval) — nothing recorded.', 'error');
+        return;
+      }
+
       // G1 is a human decision — the model cannot self-approve, and there is no
       // dialog to prompt with in non-TUI modes. Record nothing and say so.
       if (!ctx.hasUI) {
@@ -295,14 +306,31 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       }
 
       const hash = sha256(bytes);
-      const active = typeof getActive === 'function' ? getActive() : null;
-      const ticketId = active && active.ticketId ? active.ticketId : undefined;
       try {
-        // Chain-valid manifest entry naming the spec + its sha256 (spec AC4).
+        // Chain-valid manifest entry naming the spec + its sha256 (spec AC4),
+        // plus the interrogation-summary fields the p1 assertion requires
+        // (packages/runner/lib/assertions.mjs specApprovalIntegrityErrors).
+        // Pi has no native interrogation loop wired to this confirm dialog
+        // yet (unlike Claude Code's AskUserQuestion-driven /adlc-spec), so
+        // rounds/questions/sources are honestly reported as 0/0/[] rather
+        // than fabricated — this dialog is a direct human confirmation, not
+        // a substitute for the frontier loop in docs/interrogation-protocol.md.
         record({
           gate: 'spec-approval',
           ticket: ticketId,
-          rawData: JSON.stringify({ spec: specArg, sha256: hash, verdict: 'approved' }),
+          rawData: JSON.stringify({
+            spec: specArg,
+            sha256: hash,
+            verdict: 'approved',
+            approver: userInfo().username,
+            spec_hash: hash,
+            rounds: 0,
+            questions: 0,
+            sources: [],
+            unresolved: 0,
+            approved_assumptions: [],
+          }),
+          rawFiles: specPath,
           dir: join(root, '.adlc'),
           key: manifestKey,
         });
@@ -311,7 +339,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         return;
       }
       ctx.ui.notify(
-        `ADLC: recorded spec approval for "${specArg}" (sha256 ${hash.slice(0, 12)}…)${ticketId ? ' on ticket ' + ticketId : ''}.`,
+        `ADLC: recorded spec approval for "${specArg}" (sha256 ${hash.slice(0, 12)}…) on ticket ${ticketId}.`,
         'info'
       );
     },
