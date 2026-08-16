@@ -14,13 +14,17 @@ Target ticket: **$ARGUMENTS** (default to `.adlc/current-ticket.json`).
 1. Show the user the converged spec and its acceptance criteria (from `/adlc-spec`).
 2. Ask the user to explicitly approve, request changes, or reject. Do **not**
    proceed on silence or assume approval.
-3. On approval, record P1 completion evidence to `.adlc/manifest.jsonl` for the
-   ticket. P1 is recorded as the spec gates the runner's phase model recognizes
-   (`spec-lint` / `premortem` — see `@adlc/runner` `requirementsForPhase('p1')`),
-   plus an explicit human-approval note: append a `spec-lint` (or `premortem`)
-   entry `{ type, ticket, ... }` if not already present, and record the approver
-   and spec hash. When signing is unavailable, flag the entry `unsigned_fallback:
-   true`. (There is no `accept --gate` flag; `adlc accept` records the P6
+3. On approval, record the `spec-approval` evidence the runner's phase model
+   requires (`@adlc/runner` `requirementsForPhase('p1')` is
+   `spec-lint` / `premortem` / `spec-approval`), with the interrogation summary
+   from the `/adlc-spec` run — the p1 assertion validates this payload and
+   rejects `unresolved != 0` (a divergence the human chose not to resolve
+   belongs in `approved_assumptions`, not the unresolved count):
+   `adlc gate-manifest record spec-approval --files <spec path> --data
+   '{"approver":"<who>","spec_hash":"<sha256 of the spec file>","verdict":"approved",
+   "rounds":<n>,"questions":<n>,"sources":["coldstart","parallax","premortem"],
+   "unresolved":0,"approved_assumptions":[]}'`.
+   (There is no `accept --gate` flag; `adlc accept` records the P6
    acceptance packet, a different phase.)
 4. On changes requested, loop back to `/adlc-spec`; on rejection, stop.
 

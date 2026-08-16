@@ -9,7 +9,8 @@ import { join, relative, resolve } from 'node:path';
 import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
 
 const PHASE_REQUIREMENTS = {
-  p1: ['spec-lint', 'premortem'],
+  p0: ['coldstart'],
+  p1: ['spec-lint', 'premortem', 'spec-approval'],
   p2: ['coldstart', 'merge-forecast'],
   p3: ['rails-red', 'hollow-test', 'rails-frozen'],
   p4: ['rails-green', 'rails-check', 'flail-check'],
@@ -329,6 +330,39 @@ function p6IntegrityErrors(entry, currentBinding) {
   return errors;
 }
 
+// Gate 1 is a human decision with machine-checked evidence: the approval must
+// carry the interrogation summary the protocol produced, and nothing may be
+// left unresolved. Validates the LATEST spec-approval so a corrected
+// re-approval heals a rejected one. Emitters: the adlc-approve-spec command in
+// every harness plugin (updated atomically with this validator).
+function specApprovalIntegrityErrors(entries, ticket) {
+  const entry = entries
+    .filter((candidate) => entryType(candidate) === 'spec-approval' && matchesTicket(candidate, ticket))
+    .at(-1);
+  if (!entry) return [];
+  const errors = [];
+  const data = entry.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return ['P1 evidence is incomplete: spec-approval missing interrogation payload (data)'];
+  }
+  if (!Number.isInteger(data.rounds) || data.rounds < 0) {
+    errors.push('P1 evidence is incomplete: spec-approval missing integer rounds');
+  }
+  if (!Number.isInteger(data.questions) || data.questions < 0) {
+    errors.push('P1 evidence is incomplete: spec-approval missing integer questions');
+  }
+  if (!Array.isArray(data.sources)) {
+    errors.push('P1 evidence is incomplete: spec-approval missing sources array');
+  }
+  if (data.unresolved !== 0) {
+    errors.push('P1 evidence is contradictory: spec-approval requires unresolved === 0 (record unresolved divergences as approved_assumptions instead)');
+  }
+  if (data.approved_assumptions !== undefined && !Array.isArray(data.approved_assumptions)) {
+    errors.push('P1 evidence is incomplete: spec-approval approved_assumptions must be an array');
+  }
+  return errors;
+}
+
 function latestRailCheckEntry(entries, ticket, revision) {
   return entries
     .filter((entry) => entryType(entry) === 'rails-check' && matchesTicket(entry, ticket))
@@ -480,6 +514,18 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const p4Errors = phase === 'p4'
     ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)
     : [];
+  const p1Errors = phase === 'p1'
+    ? specApprovalIntegrityErrors(entries, ticket)
+    : [];
+  if (p1Errors.length > 0) {
+    return {
+      ok: false,
+      operational: true,
+      phase,
+      ticket,
+      errors: p1Errors,
+    };
+  }
   if (p6Errors.length > 0) {
     return {
       ok: false,
