@@ -37,9 +37,12 @@ draft spec to a file under `.adlc/specs/` — premortem (step 3) needs this
 file to exist.
 
 ## 3. Failure-first, then interrogate round 2 — `premortem`'s questions
-Run `adlc premortem <spec.md> --record-verdict <file>` (add `--prompt-only` to
-answer it yourself) and produce 5–10 concrete, mechanism-specific failure
-causes against the draft from step 2. Its interrogation questions become this
+Run `adlc premortem <spec.md> --record-verdict <file> --ticket <id>` (add
+`--prompt-only` to answer it yourself) and produce 5–10 concrete,
+mechanism-specific failure causes against the draft from step 2. `--ticket`
+is required — the p1 gate scopes evidence per-ticket, and `/adlc-approve-spec`
+reads this recorded entry to prove interrogation actually happened before it
+will open its confirm dialog. Its interrogation questions become this
 round's frontier — run the loop again (codebase-check first, ask the human
 the rest, fold answers into the spec), then re-run parallax to confirm
 convergence.
@@ -52,9 +55,11 @@ Record the surviving divergences in the spec as approved assumptions.
 ## 4. Lint acceptance criteria — `spec-lint`
 Run `adlc spec-lint <spec.md> --json` (or `--prompt-only`) and answer the
 vacuousness audit: every acceptance criterion needs a concrete, runnable
-verification (command, test file, or assertion). Rewrite any vacuous
-criterion — this can reopen a question; if it does, it re-enters the step 2/3
-loop rather than being resolved unilaterally.
+verification (command, test file, or assertion). Once it passes cleanly,
+record it as P1 evidence: `adlc spec-lint <spec.md> --record --ticket <id>`
+(`--record` requires `--ticket`, same reasoning as premortem's). Rewrite any
+vacuous criterion — this can reopen a question; if it does, it re-enters the
+step 2/3 loop rather than being resolved unilaterally.
 
 ## 5. Summarize
 Report the converged spec, the resolved ambiguities, and the premortem causes you

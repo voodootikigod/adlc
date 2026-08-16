@@ -20,9 +20,15 @@ import { renderReport } from './render.mjs';
  * @param {string}  [opts.recordVerdictSource] — with promptOnlyMode: file path (or '-'
  *                  for stdin) to read the operator's verdict from and record into
  *                  the gate-manifest ledger
+ * @param {string}  [opts.ticket]       — required alongside recordVerdictSource: an
+ *                  unbound premortem record can satisfy any ticket's P1 gate
  */
 export async function run(opts) {
-  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource, key = null } = opts;
+  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource, ticket, key = null } = opts;
+
+  if (recordVerdictSource !== undefined && !ticket) {
+    opError('--record-verdict requires --ticket (an unbound premortem record cannot count as this ticket\'s P1 evidence)');
+  }
 
   // --- read spec ---
   let specContent;
@@ -46,7 +52,7 @@ export async function run(opts) {
       console.log(display);
       const { readVerdictSource, recordVerdict } = await import('./verdict.mjs');
       const verdict = await readVerdictSource(recordVerdictSource);
-      const entry = recordVerdict({ verdict, extra: { specPath }, key });
+      const entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, key });
       console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
       process.exit(0);
     }

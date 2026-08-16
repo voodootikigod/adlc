@@ -14,7 +14,7 @@ Runs once per spec. Cheap. No bespoke judgement needed.
 ## Usage
 
 ```
-premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|->]
+premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|-> --ticket <id>]
 ```
 
 ### Arguments
@@ -26,7 +26,8 @@ premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--pr
 | `--out <path>` | Write markdown report to this file instead of stdout | stdout |
 | `--json` | Emit machine-readable JSON `{ causes: [...] }` | false |
 | `--prompt-only` | Print the exact system + user prompt, then exit 0 — **no API key needed** | false |
-| `--record-verdict <file\|->` | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` | — |
+| `--record-verdict <file\|->` | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest`. Requires `--ticket` — an unbound record could satisfy another ticket's P1 gate | — |
+| `--ticket <id>` | Ticket to bind the recorded verdict to (required with `--record-verdict`) | — |
 | `--help` | Print usage and exit 0 | false |
 
 ### Examples

@@ -48,9 +48,11 @@ frontier (parallax's divergences plus applicable
 
 ## 3. Failure-first, then interrogate round 2 — `premortem`'s questions
 
-Run `adlc premortem <spec.md> --prompt-only --record-verdict <file>` and answer
-it: list 5–10 concrete, mechanism-specific failure causes against the draft
-from step 2. Its interrogation questions become this round's frontier — run
+Run `adlc premortem <spec.md> --prompt-only --record-verdict <file> --ticket <id>`
+and answer it: list 5–10 concrete, mechanism-specific failure causes against
+the draft from step 2. `--ticket` is required — the p1 gate scopes evidence
+per-ticket (P1 D4: an unbound premortem record could otherwise satisfy
+another ticket's approval). Its interrogation questions become this round's frontier — run
 the loop again (codebase-check first, one `AskUserQuestion` call, fold answers
 into the spec), then re-run parallax on the revised spec to confirm
 convergence.
@@ -69,7 +71,10 @@ Run `adlc spec-lint <spec.md> --prompt-only` and answer the vacuousness audit:
 every acceptance criterion needs a concrete, runnable verification (command,
 test file, or assertion). Rewrite any vacuous criterion — this can reopen a
 question; if it does, it re-enters the step 2/3 loop rather than being
-resolved unilaterally.
+resolved unilaterally. Once it passes cleanly (no `--llm`/`--prompt-only`
+needed for the deterministic check itself), record it as P1 evidence —
+`--record` requires `--ticket`, same reasoning as premortem's:
+`adlc spec-lint <spec.md> --record --ticket <id>`.
 
 ## 5. Summarize
 

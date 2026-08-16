@@ -361,7 +361,7 @@ test('CLI: --prompt-only --record-verdict <file> writes a gate-manifest entry wi
     );
 
     const result = spawnSync(process.execPath, [
-      CLI, specPath, '--prompt-only', '--record-verdict', verdictPath,
+      CLI, specPath, '--prompt-only', '--record-verdict', verdictPath, '--ticket', 'T1',
     ], { cwd: tmpDir, encoding: 'utf8' });
 
     assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
@@ -373,6 +373,8 @@ test('CLI: --prompt-only --record-verdict <file> writes a gate-manifest entry wi
 
     const entry = JSON.parse(lines[0]);
     assert.equal(entry.gate, 'premortem');
+    assert.equal(entry.ticket, 'T1');
+    assert.ok(entry.files[specPath], 'spec file is hashed into entry.files');
     assert.equal(entry.data.promptOnly, true);
     assert.ok(entry.data.verdict.includes('process.chdir throws'), 'entry captures the operator verdict text');
     assert.equal(entry.data.specPath, specPath);
@@ -388,14 +390,33 @@ test('CLI: --record-verdict - reads the verdict from stdin', () => {
     writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
 
     const result = spawnSync(process.execPath, [
-      CLI, specPath, '--prompt-only', '--record-verdict', '-',
+      CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1',
     ], { cwd: tmpDir, input: 'No failure modes found.\n', encoding: 'utf8' });
 
     assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
     const manifestPath = join(tmpDir, '.adlc', 'manifest.jsonl');
     const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
     assert.equal(entry.gate, 'premortem');
+    assert.equal(entry.ticket, 'T1');
     assert.ok(entry.data.verdict.includes('No failure modes found'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --record-verdict without --ticket exits 1 (fail closed, never an unbound record)', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-test-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--prompt-only', '--record-verdict', '-',
+    ], { cwd: tmpDir, input: 'No failure modes found.\n', encoding: 'utf8' });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--ticket/);
+    assert.equal(existsSync(join(tmpDir, '.adlc', 'manifest.jsonl')), false);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

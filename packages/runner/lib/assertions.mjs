@@ -28,7 +28,7 @@ function matchesTicket(entry, ticket) {
 }
 
 function requiresTicket(phase) {
-  return phase === 'p0' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
+  return phase === 'p0' || phase === 'p1' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
 }
 
 function requiresRevision(phase) {
@@ -337,27 +337,53 @@ function p6IntegrityErrors(entry, currentBinding) {
 // ticketHash matching the CURRENT ticket definition (a ticket edited after
 // coldstart ran must re-run it). Validates the LATEST matching coldstart
 // entry, so a fixed re-run heals a failing one.
+// coldstart records evidence in one of two shapes depending on how it ran:
+//   live, provider-backed (packages/coldstart/lib/cache.mjs buildCacheData):
+//     entry.data.cache = { ticketHash, model, gaps }
+//   --prompt-only, operator-recorded (packages/coldstart/lib/verdict.mjs):
+//     entry.data.verdict = '{"gaps":[...],"ticketHash":"…"}' (a JSON STRING,
+//     matching the exact text the P0 authoring flow instructs writing before
+//     --record-verdict)
+// Both must be understood, or a real successful audit reads as a P0 failure.
+function coldstartEvidenceShape(data) {
+  if (data?.cache && typeof data.cache === 'object' && !Array.isArray(data.cache)) {
+    return { gaps: data.cache.gaps, ticketHash: data.cache.ticketHash };
+  }
+  if (typeof data?.verdict === 'string') {
+    let parsed;
+    try {
+      parsed = JSON.parse(data.verdict);
+    } catch {
+      return { parseError: true };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { parseError: true };
+    return { gaps: parsed.gaps, ticketHash: parsed.ticketHash };
+  }
+  return null;
+}
+
 function coldstartIntegrityErrors(entries, ticket, cwd, dir) {
   const entry = entries
     .filter((candidate) => entryType(candidate) === 'coldstart' && candidate.ticket === ticket)
     .at(-1);
   if (!entry) return [];
-  const errors = [];
-  let parsed;
-  try {
-    parsed = JSON.parse(entry.data?.verdict ?? '');
-  } catch {
+  const shape = coldstartEvidenceShape(entry.data);
+  if (shape === null) {
+    return ['P0 evidence is incomplete: coldstart record has neither a live cache result (data.cache) nor a prompt-only verdict (data.verdict)'];
+  }
+  if (shape.parseError) {
     return ['P0 evidence is incomplete: coldstart verdict is not valid JSON (expected {"gaps":[...],"ticketHash":"…"})'];
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.gaps)) {
-    errors.push('P0 evidence is incomplete: coldstart verdict missing a gaps array');
-  } else if (parsed.gaps.length > 0) {
-    errors.push(`P0 evidence is contradictory: coldstart recorded ${parsed.gaps.length} unresolved gap(s)`);
+  const errors = [];
+  if (!Array.isArray(shape.gaps)) {
+    errors.push('P0 evidence is incomplete: coldstart record missing a gaps array');
+  } else if (shape.gaps.length > 0) {
+    errors.push(`P0 evidence is contradictory: coldstart recorded ${shape.gaps.length} unresolved gap(s)`);
   }
   const binding = ticketDefinitionBinding(cwd, ticket, dir);
   if (!binding) {
     errors.push('P0 evidence is stale: ticket definition is absent');
-  } else if (parsed?.ticketHash !== binding.ticketHash) {
+  } else if (shape.ticketHash !== binding.ticketHash) {
     errors.push('P0 evidence is stale: ticket definition changed after coldstart ran');
   }
   return errors;
@@ -390,17 +416,18 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
   if (typeof data.approver !== 'string' || data.approver.trim().length === 0) {
     errors.push('P1 evidence is incomplete: spec-approval missing a non-empty approver');
   }
-  if (typeof entry.ticket !== 'string' || entry.ticket.length === 0) {
-    errors.push('P1 evidence is incomplete: spec-approval is not bound to a ticket');
-  }
+  // No separate "is entry.ticket bound" check here: p1 now requires --ticket
+  // (requiresTicket), and `entry` above was selected via matchesTicket(candidate,
+  // ticket) — an entry with no matching ticket binding is never selected at
+  // all, so it surfaces as "missing: spec-approval" instead, not a data error.
   if (!Number.isInteger(data.rounds) || data.rounds < 0) {
     errors.push('P1 evidence is incomplete: spec-approval missing integer rounds');
   }
   if (!Number.isInteger(data.questions) || data.questions < 0) {
     errors.push('P1 evidence is incomplete: spec-approval missing integer questions');
   }
-  if (!Array.isArray(data.sources)) {
-    errors.push('P1 evidence is incomplete: spec-approval missing sources array');
+  if (!Array.isArray(data.sources) || data.sources.length === 0) {
+    errors.push('P1 evidence is incomplete: spec-approval sources must name at least one interrogation source actually consulted (an empty list proves nothing was checked)');
   }
   if (data.unresolved !== 0) {
     errors.push('P1 evidence is contradictory: spec-approval requires unresolved === 0 (record unresolved divergences as approved_assumptions instead)');
@@ -430,15 +457,18 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
     }
   }
 
-  const types = entries.map(entryType);
+  // Scoped to THIS ticket, not "latest anywhere in the manifest" — otherwise
+  // ticket T2's approval could borrow ticket T1's spec-lint/premortem audits
+  // (P1 D4). p1 is ticket-required (see requiresTicket) specifically so this
+  // scoping is always meaningful, never a silent no-op over the whole ledger.
   const entryIndex = entries.indexOf(entry);
-  const latestSpecLintIndex = types.lastIndexOf('spec-lint');
-  const latestPremortemIndex = types.lastIndexOf('premortem');
+  const latestSpecLintIndex = entries.findLastIndex((e) => entryType(e) === 'spec-lint' && matchesTicket(e, ticket));
+  const latestPremortemIndex = entries.findLastIndex((e) => entryType(e) === 'premortem' && matchesTicket(e, ticket));
   if (latestSpecLintIndex === -1 || entryIndex < latestSpecLintIndex) {
-    errors.push('P1 evidence is stale: spec-approval was recorded before the latest spec-lint evidence');
+    errors.push('P1 evidence is stale: spec-approval was recorded before the latest spec-lint evidence for this ticket');
   }
   if (latestPremortemIndex === -1 || entryIndex < latestPremortemIndex) {
-    errors.push('P1 evidence is stale: spec-approval was recorded before the latest premortem evidence');
+    errors.push('P1 evidence is stale: spec-approval was recorded before the latest premortem evidence for this ticket');
   }
 
   return errors;

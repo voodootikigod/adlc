@@ -12,12 +12,13 @@ const { values, positionals } = parseArgs({
     json:         { type: 'boolean', default: false },
     'prompt-only':{ type: 'boolean', default: false },
     'record-verdict': { type: 'string' },
+    ticket:       { type: 'string' },
     help:         { type: 'boolean', default: false },
   },
 });
 
 if (values.help) {
-  console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|->]
+  console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|-> --ticket <id>]
 
 Failure-first spec stress test (ADLC C2).
 
@@ -28,7 +29,10 @@ Failure-first spec stress test (ADLC C2).
   --prompt-only    Print the exact prompt and exit 0 (no API key needed)
   --record-verdict <file|->  With --prompt-only: read the operator's answer
                    from <file> (or stdin when '-') and record it into
-                   .adlc/manifest.jsonl via gate-manifest
+                   .adlc/manifest.jsonl via gate-manifest. Requires --ticket
+                   — an unbound record can satisfy any ticket's P1 gate.
+  --ticket <id>    Ticket to bind the recorded verdict to (required with
+                   --record-verdict)
   --help           Show this help
 
 Exit codes:
@@ -59,5 +63,6 @@ await run({
   json: values.json,
   promptOnlyMode: values['prompt-only'],
   recordVerdictSource: values['record-verdict'],
+  ticket: values.ticket,
   key: getKey(),
 });

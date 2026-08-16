@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // spec-lint — ADLC C1 acceptance-criteria gate.
 // Usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]
+//                   [--record --ticket <id> [--dir .adlc]]
 
 import { readFileSync } from 'node:fs';
 import { parseArgs, pass, gateFail, opError, printJson, promptOnly } from '@adlc/core';
@@ -8,8 +9,11 @@ import { parseCriteria } from '../lib/parse.mjs';
 import { classifyAll, applyLlmDemotion } from '../lib/classify.mjs';
 import { buildJsonResult, buildHumanReport } from '../lib/report.mjs';
 import { buildVacuousPrompt, detectVacuous } from '../lib/llm.mjs';
+import { recordResult } from '../lib/record.mjs';
+import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
-const USAGE = 'usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]';
+const USAGE = 'usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]\n' +
+  '                  [--record --ticket <id> [--dir .adlc]]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,
@@ -18,6 +22,9 @@ const { values: flags, positionals } = parseArgs({
     tier: { type: 'string', default: 'cheap' },
     json: { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
+    record: { type: 'boolean', default: false },
+    ticket: { type: 'string' },
+    dir: { type: 'string' },
   },
 });
 
@@ -25,6 +32,13 @@ const specPath = positionals[0];
 
 if (!specPath) {
   opError(USAGE);
+}
+
+// P1 D4: an unbound spec-lint record can satisfy any ticket's gate (one
+// ticket's audit reused for another's approval) — never write one without a
+// ticket to bind it to.
+if (flags.record && !flags.ticket) {
+  opError('--record requires --ticket (an unbound spec-lint record cannot count as this ticket\'s P1 evidence)');
 }
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
@@ -99,6 +113,13 @@ if (wishes.length > 0) {
   gateFail(
     `spec-lint: ${wishes.length} wish(es) found — every criterion needs a verification method.`,
   );
+}
+
+// Both fail checks above exit(2) on any problem, so reaching here means a
+// genuine pass: every criterion is VERIFIED. Record it now, before the
+// process exits, so a real audit leaves real evidence.
+if (flags.record) {
+  recordResult({ ticket: flags.ticket, specPath, dir: flags.dir, key: getKey() });
 }
 
 if (flags.json) {

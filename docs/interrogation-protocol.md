@@ -66,7 +66,10 @@ evidence, not intuition:
    a written spec, so it cannot run before one exists — run it after the first
    interrogation round has produced a draft, and route its questions through a
    further round of this same loop rather than resolving them unilaterally
-   after the human is already done.
+   after the human is already done. Recording: `--record-verdict` requires
+   `--ticket <id>` — a P1 gate that scopes spec-lint/premortem evidence by
+   ticket cannot see an unbound record, and an unbound one could otherwise
+   satisfy a *different* ticket's approval.
 4. **`.adlc/lessons/interrogation-template.md`** — when present, the P7
    lesson miner's recurring spec-gap checklist. Every checkbox that applies to
    the work at hand is a mandatory frontier **candidate** — it must be

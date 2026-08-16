@@ -28,7 +28,7 @@ function runVerdict() {
   const dir = mkdtempSync(join(tmpdir(), 'premortem-usage-'));
   const specPath = join(dir, 'spec.md');
   writeFileSync(specPath, SPEC, 'utf8');
-  const res = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-'], {
+  const res = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
     cwd: dir, input: 'No failure modes found.\n', encoding: 'utf8',
   });
   const entries = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8')

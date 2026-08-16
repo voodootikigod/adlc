@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createExtension } from '../lib/extension.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
+import { appendManifestEntry } from '@adlc/gate-manifest';
 import { migrateLegacyStore, migrationPlan } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -303,7 +304,19 @@ test('AC3: /adlc-ticket with no args in non-TUI mode requires an id (no hang, no
 // =========================================================================
 // AC4 — /adlc-approve-spec: confirm=true records a chain-valid entry; false
 // records nothing; missing path errors without a dialog
+//
+// Every case below first seeds a ticket-bound premortem entry: since codex's
+// cross-model review found the confirm dialog alone proved no interrogation
+// occurred, the handler now refuses (before even opening the dialog) unless
+// real parallax/premortem/spec-lint evidence exists for the active ticket —
+// see ticketInterrogationSources in lib/commands.mjs. Seeding it here isolates
+// these tests to what they're actually about (the confirm/decline/missing-path
+// paths), not the evidence-refusal path, which has its own dedicated test.
 // =========================================================================
+
+function seedInterrogationEvidence(root, ticket = 'T1') {
+  appendManifestEntry({ gate: 'premortem', ticket }, join(root, '.adlc'), { key: null });
+}
 
 test('AC4: /adlc-approve-spec on an existing file with confirm=true appends a chain-valid entry naming the spec', async () => {
   const root = makeRepo({ current: 'T1' });
@@ -312,6 +325,7 @@ test('AC4: /adlc-approve-spec on an existing file with confirm=true appends a ch
     mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
     const specRel = '.adlc/specs/feature.md';
     writeFileSync(join(root, specRel), '# Spec\nacceptance criteria\n');
+    seedInterrogationEvidence(root);
     const ctx = fakeCtx(root, { confirm: () => true });
 
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
@@ -331,10 +345,27 @@ test('AC4: /adlc-approve-spec with confirm=false records nothing', async () => {
     const specRel = '.adlc/specs/feature.md';
     mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
     writeFileSync(join(root, specRel), '# Spec\n');
+    seedInterrogationEvidence(root);
     const ctx = fakeCtx(root, { confirm: () => false });
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
-    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no manifest written on decline');
+    const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
+    assert.equal(/spec-approval/.test(manifest), false, 'no spec-approval written on decline');
     assert.ok(ctx.notices.some((n) => /declined/.test(n.msg)));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('AC4: /adlc-approve-spec with no prior interrogation evidence refuses before opening a dialog', async () => {
+  const root = makeRepo({ current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    const specRel = '.adlc/specs/feature.md';
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    writeFileSync(join(root, specRel), '# Spec\n');
+    const ctx = fakeCtx(root, { confirm: () => true });
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+    assert.equal(ctx.calls.confirm, 0, 'no dialog opened without prior interrogation evidence');
+    assert.ok(ctx.notices.some((n) => n.level === 'error' && /adlc-spec/.test(n.msg)));
+    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -491,21 +522,22 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
     const specRel = '.adlc/specs/feature.md';
     writeFileSync(join(root, specRel), '# Spec\nacceptance criteria: `test -f feature.md`\n');
 
-    // p1 also requires spec-lint/premortem evidence (unrelated to this
-    // command) recorded BEFORE the approval (the real /adlc-spec ->
+    // p1 also requires ticket-bound spec-lint/premortem evidence (unrelated
+    // to this command) recorded BEFORE the approval (the real /adlc-spec ->
     // /adlc-approve-spec sequence); record minimal real entries first so the
     // round-trip proves the FULL gate, not just this one record in isolation.
-    const { appendManifestEntry } = await import('@adlc/gate-manifest');
-    appendManifestEntry({ gate: 'spec-lint' }, join(root, '.adlc'), { key: null });
-    appendManifestEntry({ gate: 'premortem' }, join(root, '.adlc'), { key: null });
+    // This also supplies /adlc-approve-spec's own prior-evidence requirement
+    // (ticketInterrogationSources) — no separate seeding needed here.
+    appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, join(root, '.adlc'), { key: null });
+    appendManifestEntry({ gate: 'premortem', ticket: 'T1' }, join(root, '.adlc'), { key: null });
 
     const ctx = fakeCtx(root, { confirm: () => true });
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
 
-    // p1 is not ticket-required (spec-lint/premortem entries never carry an
-    // entry.ticket today, so ticket-scoping the outer call would exclude
-    // them); the round-trip invokes it the same way real callers do.
-    const result = spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p1', '--dir', '.adlc', '--json'], {
+    // p1 is ticket-required (P1 D4 — an unscoped check let one ticket's
+    // audits satisfy another's approval); invoke it the same way real
+    // callers now must.
+    const result = spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p1', '--dir', '.adlc', '--ticket', 'T1', '--json'], {
       cwd: root, encoding: 'utf8',
     });
     assert.equal(result.status, 0, `real p1 assertion must accept Pi's recorded approval: status=${result.status} ${result.stdout}${result.stderr}`);

@@ -121,14 +121,18 @@ first interrogation round has produced one — never before, and never as a
 step whose questions get silently resolved by the model. Its output feeds a
 SECOND round of the same loop (codebase-check, ask the human, fold answers,
 re-run parallax) before spec-lint; the 3-round cap covers both rounds
-combined, not each source separately.
+combined, not each source separately. Both `premortem --record-verdict` and
+`spec-lint --record` require `--ticket <id>` — the p1 gate scopes evidence
+per-ticket (P1 D4: an unbound record could otherwise satisfy another
+ticket's approval).
 
 ```sh
 adlc parallax --request "<request>"
 # … interrogation round 1, write the draft spec …
-adlc premortem spec.md --json
+adlc premortem spec.md --prompt-only --record-verdict <file> --ticket <id>
 # … interrogation round 2 on premortem's questions …
-adlc spec-lint spec.md --json
+adlc spec-lint spec.md --prompt-only  # answer the vacuousness audit
+adlc spec-lint spec.md --record --ticket <id>  # once it passes cleanly
 adlc coldstart --all --tickets .adlc/tickets.json --json
 adlc merge-forecast --tickets .adlc/tickets.json --json
 adlc model-router --tickets .adlc/tickets.json --json

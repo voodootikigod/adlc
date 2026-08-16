@@ -58,6 +58,40 @@ describe('p0 gate', () => {
     assert.equal(result.ok, true, JSON.stringify(result));
   });
 
+  it('passes with a live provider-backed coldstart record (data.cache shape, not data.verdict)', () => {
+    const dir = tmpAdlc();
+    const hash = writeTicketDefinition(dir, 'T1');
+    writeManifest(dir, [{ gate: 'coldstart', ticket: 'T1', data: { tier: 'cheap', cache: { ticketHash: hash, model: 'x', gaps: [] } } }]);
+    const result = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  });
+
+  it('rejects a live provider-backed coldstart record with unresolved gaps', () => {
+    const dir = tmpAdlc();
+    const hash = writeTicketDefinition(dir, 'T1');
+    writeManifest(dir, [{ gate: 'coldstart', ticket: 'T1', data: { tier: 'cheap', cache: { ticketHash: hash, model: 'x', gaps: [{ what: 'x', why_blocking: 'y' }] } } }]);
+    const result = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('gap')));
+  });
+
+  it('rejects a live provider-backed coldstart record with a stale ticketHash', () => {
+    const dir = tmpAdlc();
+    writeManifest(dir, [{ gate: 'coldstart', ticket: 'T1', data: { tier: 'cheap', cache: { ticketHash: 'stale-hash', model: 'x', gaps: [] } } }]);
+    writeTicketDefinition(dir, 'T1');
+    const result = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('stale')));
+  });
+
+  it('rejects a coldstart record with neither a cache nor a verdict shape', () => {
+    const dir = tmpAdlc();
+    writeTicketDefinition(dir, 'T1');
+    writeManifest(dir, [{ gate: 'coldstart', ticket: 'T1', data: { tier: 'cheap' } }]);
+    const result = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+  });
+
   it('rejects a coldstart record with unresolved gaps', () => {
     const dir = tmpAdlc();
     const hash = writeTicketDefinition(dir, 'T1');
@@ -130,11 +164,21 @@ function validApprovalFor(specPath, hash, overrides = {}) {
   };
 }
 
+function sl(ticket = 'T1') { return { gate: 'spec-lint', ticket }; }
+function pm(ticket = 'T1') { return { gate: 'premortem', ticket }; }
+
 describe('p1 gate spec-approval requirement', () => {
+  it('requires --ticket', () => {
+    const dir = tmpAdlc();
+    const result = assertPhase('p1', { dir });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('requires --ticket')));
+  });
+
   it('fails when spec-lint and premortem exist but no spec-approval', () => {
     const dir = tmpAdlc();
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm()]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.missing.includes('spec-approval'));
   });
@@ -142,16 +186,16 @@ describe('p1 gate spec-approval requirement', () => {
   it('passes with a valid spec-approval bound to the real spec file, ticket, and recorded after the audits', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash)]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash)]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, true, JSON.stringify(result));
   });
 
   it('rejects a spec-approval with unresolved > 0', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash, { unresolved: 2 })]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { unresolved: 2 })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('unresolved')));
   });
@@ -159,19 +203,18 @@ describe('p1 gate spec-approval requirement', () => {
   it('rejects a legacy spec-approval with no interrogation payload', () => {
     const dir = tmpAdlc();
     writeManifest(dir, [
-      { gate: 'spec-lint' },
-      { gate: 'premortem' },
-      { gate: 'spec-approval', data: { approver: 'human', verdict: 'approved' } },
+      sl(), pm(),
+      { gate: 'spec-approval', ticket: 'T1', data: { approver: 'human', verdict: 'approved' } },
     ]);
-    const result = assertPhase('p1', { dir });
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.length > 0);
   });
 
   it('rejects a spec-approval with no data at all', () => {
     const dir = tmpAdlc();
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, { gate: 'spec-approval' }]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), { gate: 'spec-approval', ticket: 'T1' }]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.length > 0);
   });
@@ -179,30 +222,38 @@ describe('p1 gate spec-approval requirement', () => {
   it('rejects non-array approved_assumptions', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash, { approved_assumptions: 'trust me' })]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { approved_assumptions: 'trust me' })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('approved_assumptions')));
+  });
+
+  it('rejects an empty sources array (proves nothing was actually checked)', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { sources: [] })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('sources')));
   });
 
   it('validates the latest spec-approval, so a corrected re-approval heals a bad one', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
     writeManifest(dir, [
-      { gate: 'spec-lint' },
-      { gate: 'premortem' },
+      sl(), pm(),
       validApprovalFor(specPath, hash, { unresolved: 1 }),
       validApprovalFor(specPath, hash),
     ]);
-    const result = assertPhase('p1', { dir });
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, true, JSON.stringify(result));
   });
 
   it('rejects a rejected verdict, even with an otherwise-complete payload', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash, { verdict: 'rejected' })]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { verdict: 'rejected' })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('verdict')));
   });
@@ -212,8 +263,8 @@ describe('p1 gate spec-approval requirement', () => {
     const { specPath, hash } = specFixture(dir);
     const approval = validApprovalFor(specPath, hash);
     delete approval.data.verdict;
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, approval]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), approval]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('verdict')));
   });
@@ -221,29 +272,29 @@ describe('p1 gate spec-approval requirement', () => {
   it('rejects an empty approver', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash, { approver: '' })]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { approver: '' })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('approver')));
   });
 
-  it('rejects an approval not bound to a ticket', () => {
+  it('rejects an approval not bound to a ticket — surfaces as missing spec-approval, not a data error, since an unbound entry never matches the ticket-scoped selector', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
     const approval = validApprovalFor(specPath, hash);
     delete approval.ticket;
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, approval]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), approval]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
-    assert.ok(result.errors.some((e) => e.includes('ticket')));
+    assert.ok(result.missing.includes('spec-approval'), JSON.stringify(result));
   });
 
   it('rejects an approval with no bound file', () => {
     const dir = tmpAdlc();
     specFixture(dir);
     const approval = validApprovalFor(undefined, undefined);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, approval]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), approval]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('exactly one spec file')));
   });
@@ -251,8 +302,8 @@ describe('p1 gate spec-approval requirement', () => {
   it('rejects a spec_hash that does not match the actually-recorded file hash (a fabricated hash)', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash, { spec_hash: 'a-lie-of-a-hash' })]);
-    const result = assertPhase('p1', { dir });
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash, { spec_hash: 'a-lie-of-a-hash' })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('spec_hash')));
   });
@@ -260,36 +311,57 @@ describe('p1 gate spec-approval requirement', () => {
   it('rejects a stale approval — the spec file changed after approval was recorded', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
-    writeManifest(dir, [{ gate: 'spec-lint' }, { gate: 'premortem' }, validApprovalFor(specPath, hash)]);
+    writeManifest(dir, [sl(), pm(), validApprovalFor(specPath, hash)]);
     writeFileSync(specPath, '# Spec\nEDITED after approval — a materially different spec.\n');
-    const result = assertPhase('p1', { dir });
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('changed after approval')));
   });
 
-  it('rejects an approval recorded before the latest spec-lint evidence', () => {
+  it('rejects an approval recorded before the latest spec-lint evidence for this ticket', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
     writeManifest(dir, [
-      { gate: 'premortem' },
+      pm(),
       validApprovalFor(specPath, hash),
-      { gate: 'spec-lint' },
+      sl(),
     ]);
-    const result = assertPhase('p1', { dir });
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('before the latest spec-lint')));
   });
 
-  it('rejects an approval recorded before the latest premortem evidence', () => {
+  it('rejects an approval recorded before the latest premortem evidence for this ticket', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
     writeManifest(dir, [
-      { gate: 'spec-lint' },
+      sl(),
       validApprovalFor(specPath, hash),
-      { gate: 'premortem' },
+      pm(),
     ]);
-    const result = assertPhase('p1', { dir });
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('before the latest premortem')));
+  });
+
+  // Finding D (codex cross-model review, feat/p1-interrogation full-branch
+  // pass): unscoped spec-lint/premortem matching let ticket T2's approval
+  // borrow ticket T1's audits. Both p1 ticket-requirement and the
+  // ticket-scoped ordering check exist specifically to close this.
+  it('does not let one ticket\'s audits satisfy another ticket\'s approval (cross-ticket evidence reuse)', () => {
+    const dir = tmpAdlc();
+    specFixture(dir); // T1's audited spec exists on disk; only its manifest entries matter here
+    const specPathB = join(dir, 'spec-b.md');
+    writeFileSync(specPathB, '# Spec B\nacceptance criteria: `test -f spec-b.md`\n');
+    const hashB = sha256(readFileSync(specPathB));
+    const approvalB = validApprovalFor(specPathB, hashB);
+    approvalB.ticket = 'T2';
+    writeManifest(dir, [
+      sl('T1'), pm('T1'), // T1 audited spec A
+      approvalB, // T2 approves spec B, never audited
+    ]);
+    const result = assertPhase('p1', { dir, ticket: 'T2' });
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.ok(result.missing?.includes('spec-lint') || result.errors?.some((e) => e.includes('spec-lint')), JSON.stringify(result));
   });
 });
