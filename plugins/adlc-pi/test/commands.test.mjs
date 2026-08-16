@@ -595,3 +595,77 @@ test('AC4: /adlc-approve-spec with no active ticket errors without a dialog (p1 
     assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// =========================================================================
+// Codex cross-model review round 4: ticketInterrogationSources read only
+// the legacy root .adlc/manifest.jsonl. A segmented ("forest") repo — this
+// repo included, per docs/specs/segmented-gate-manifest.md — records current
+// evidence under .adlc/manifest.d/ instead, so a real /adlc-spec run there
+// would leave /adlc-approve-spec unable to see it. Fixed by switching to
+// readOwnManifestChain, the same reader packages/runner/lib/assertions.mjs
+// uses. This test builds a real segmented repo (git-initialized branch
+// identity + a hand-built segment, mirroring
+// packages/gate-manifest/test/own-chain.test.mjs's own fixture pattern) and
+// proves the approval command finds the segment's evidence.
+// =========================================================================
+
+function segmentedRepo(branch = 'feat/pi-segment-fixture') {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-cmd-seg-')));
+  const g = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  g('init', '-q', '-b', branch);
+  g('config', 'user.email', 't@t.co');
+  g('config', 'user.name', 'tester');
+  g('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'README.md'), 'fixture\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'init');
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T1] }));
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  return { root, branch };
+}
+
+function writeForestSegment(root, name, { branch, ticket, gate }) {
+  const dir = join(root, '.adlc');
+  // The segment's anchor (segment:'root', seq:1) must resolve to a real
+  // root-manifest entry — matching line hash included — or the forest
+  // reader refuses the whole chain as a dangling/mismatched anchor.
+  const rootLine = JSON.stringify({ seq: 1, gate: 'cutover', prev: null });
+  writeFileSync(join(dir, 'manifest.jsonl'), rootLine + '\n');
+  mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+  writeFileSync(join(dir, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+  const entry = {
+    seq: 1,
+    anchor: { segment: 'root', seq: 1, lineHash: sha256(rootLine) },
+    branch,
+    gate,
+    ticket,
+    prev: null,
+  };
+  writeFileSync(join(dir, 'manifest.d', name), JSON.stringify(entry) + '\n');
+}
+
+test('AC4: /adlc-approve-spec finds interrogation evidence recorded in a segmented (forest) manifest, not just the legacy root file', async () => {
+  const { root, branch } = segmentedRepo();
+  try {
+    writeForestSegment(root, `seg-${'0'.repeat(26)}.jsonl`, { branch, ticket: 'T1', gate: 'premortem' });
+
+    const { pi } = await boot(root);
+    const specRel = '.adlc/specs/feature.md';
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    writeFileSync(join(root, specRel), '# Spec\n');
+    // Decline the dialog: the write side (recording spec-approval INTO the
+    // same segment) exercises the segment writer's own unrelated anti-fork
+    // safety check (an unsigned append to an already-committed segment is
+    // refused to prevent shadowing evidence) — a different subsystem than
+    // what this finding is about. Scoping to decline isolates the assertion
+    // to what ticketInterrogationSources actually owns: finding the
+    // evidence and opening the dialog at all.
+    const ctx = fakeCtx(root, { confirm: () => false });
+
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+
+    assert.equal(ctx.calls.confirm, 1, 'segment evidence was found, so the dialog opened (a root-only reader would have refused before this point)');
+    assert.ok(!ctx.notices.some((n) => /run \/adlc-spec first/.test(n.msg)), JSON.stringify(ctx.notices));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

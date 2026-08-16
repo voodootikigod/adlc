@@ -76,15 +76,26 @@ in the ADLC repo): parallax divergences, premortem questions, and applicable
 `.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
 question is codebase-checked before it reaches the human; answers fold into the
 spec and parallax re-runs, capped at 3 rounds with an approved-assumptions
-escape hatch. Gate 1 is recorded with `adlc gate-manifest record spec-approval
---files <spec> --data '{"approver":…,"rounds":…,"questions":…,"sources":[…],
-"unresolved":0,"approved_assumptions":[]}'` — `adlc-runner run p1` requires and
-validates that record. The tools:
+escape hatch. Gate 1 is recorded through the `adlc` dispatcher:
+```
+adlc \
+  gate-manifest record spec-approval --ticket ID --files SPEC.MD --data '{
+  "approver":…,"verdict":"approved","spec_hash":…,"rounds":…,"questions":…,
+  "sources":[…],"unresolved":0,"approved_assumptions":[]}'
+```
+(the trailing `\` is a shell line-continuation — paste both lines as one
+command) — `adlc-runner run p1` requires and validates that record: it
+rejects a missing `--ticket`/`--files` binding, a non-`"approved"` verdict, a
+`spec_hash` that does not match the file's actual hash, and an approval
+recorded before the ticket's own spec-lint/premortem evidence. The tools:
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
-  (or `--prompt-only`) to also catch vacuous methods.
-- `adlc premortem <spec.md> [--prompt-only]` — stress-test the approved spec for
-  failure modes before implementation.
+  (or `--prompt-only`) to also catch vacuous methods. Once it passes cleanly,
+  record it as P1 evidence: `adlc spec-lint <spec.md> --record --ticket <id>`
+  (`--record` requires `--ticket`).
+- `adlc premortem <spec.md> --prompt-only --record-verdict <file|-> --ticket <id>`
+  — stress-test the approved spec for failure modes before implementation.
+  `--ticket` is required alongside `--record-verdict`.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
   `--questions-json` emits the divergences as structured

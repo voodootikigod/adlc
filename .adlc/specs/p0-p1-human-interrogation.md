@@ -202,28 +202,26 @@ P7→P1 loop closes.
    divergences instead of scraping rendered markdown; small addition
    scoped inside T-C.
 
-## Known limitation: `approver` is not a cryptographic identity claim
+## Open question: `approver` identity is not cryptographically verified
 
-Cross-model review (adversarial-review, round 3) correctly noted that
-`specApprovalIntegrityErrors` treats a non-empty `approver` string as
-sufficient — nothing prevents an agent with ordinary CLI/manifest-key access
-from hand-authoring a complete-looking `spec-approval` record and skipping
-the human entirely.
+`specApprovalIntegrityErrors` (`packages/runner/lib/assertions.mjs`) checks
+that `data.approver` is a non-empty string. It does not verify `entry.sig`
+against `ADLC_MANIFEST_KEY`, and `assertPhase` does not call
+`gate-manifest verify`/`verifyEntrySig` for any phase's evidence today —
+this is checkable directly: `grep -n "verify\|sig\\b"
+packages/runner/lib/assertions.mjs packages/runner/bin/adlc.mjs` returns no
+matches as of this commit. A process with manifest write access (a holder
+of `ADLC_MANIFEST_KEY`, which is not distinct from the working agent's own
+access in this repository's current key model) can write a `spec-approval`
+entry with an arbitrary `approver` string and no human interaction.
 
-This is real, and it is **not unique to this gate**: it is the trust model
-for every manifest entry in ADLC today. The manifest's HMAC signing
-(`ADLC_MANIFEST_KEY`) proves an entry was written by a holder of the signing
-key — it does not, and has never, distinguished a human typing a command
-from an agent typing the same command with the same key. P6 acceptance
-(`p6-acceptance-packet`) has the identical property. The actual enforcement
-mechanism for "a human decided this" is the harness UI pausing for input
-(`AskUserQuestion`, a confirm dialog) *before* the CLI is invoked — a
-process-level guarantee backed by the harness's instructions to the agent,
-not a cryptographic one.
-
-Building genuine human-vs-agent identity binding (e.g., a signing capability
-scoped to authenticated human sessions and withheld from the working agent)
-is a real, valuable follow-on — but it is a system-wide authentication
-project, not a P1-specific fix, and out of scope for this change. Filed as a
-gap to revisit, not silently accepted: any future work on manifest identity
-should cover P1 and P6 together.
+Adding `verifyEntrySig` to `specApprovalIntegrityErrors` would require the
+entry to be *signed*, but would not by itself distinguish a human from an
+agent holding the same key — the signing key is not currently scoped to
+authenticated human sessions anywhere in this repository. Whether to (a)
+add signature verification as a partial mitigation, (b) build a
+human-scoped signing capability, (c) accept the current harness-UI-pause
+convention (`AskUserQuestion`/confirm dialog before the CLI runs) as the
+system's existing human-gate model — which `p6-acceptance-packet` also
+relies on with the same property — or (d) block this change until resolved,
+is a decision this spec does not make.

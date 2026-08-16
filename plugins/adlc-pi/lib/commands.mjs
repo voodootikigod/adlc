@@ -18,6 +18,7 @@ import { userInfo } from 'node:os';
 import { loadTickets, sha256 } from '@adlc/core';
 import { ensureGitignore, ensureFormatterIgnores, ensureTicketStore } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { ticketHash, writeActiveTicket } from '@adlc/tickets';
 import { recordGateEvent } from './evidence.mjs';
 import { buildRollbackCandidates } from './rollback.mjs';
@@ -36,31 +37,28 @@ function parseJsonStdout(stdout) {
 }
 
 // The distinct interrogation-source gate names actually recorded for this
-// ticket (parallax / premortem / spec-lint), read directly from
-// .adlc/manifest.jsonl. Used by /adlc-approve-spec to derive a spec-approval
-// payload's `sources` from REAL evidence instead of a fabricated summary —
-// see the codex cross-model finding cited at the call site. Fails open to an
-// empty array on any read/parse problem: an approval that cannot prove
-// interrogation happened must be refused, not silently approved.
+// ticket (parallax / premortem / spec-lint). Used by /adlc-approve-spec to
+// derive a spec-approval payload's `sources` from REAL evidence instead of a
+// fabricated summary — see the codex cross-model finding cited at the call
+// site. Reads via readOwnManifestChain (the same reader
+// packages/runner/lib/assertions.mjs uses), not a hand-rolled parse of
+// .adlc/manifest.jsonl directly: a segmented ("forest") repo — this one
+// included, per docs — records current evidence under .adlc/manifest.d/, not
+// the legacy root file, and a naive root-only read would silently see none
+// of it. Fails CLOSED to an empty array on any read/identity problem: an
+// approval that cannot prove interrogation happened must be refused, not
+// silently approved.
 const INTERROGATION_SOURCE_GATES = ['parallax', 'premortem', 'spec-lint'];
 
 function ticketInterrogationSources(root, ticketId) {
-  const manifestPath = join(root, '.adlc', 'manifest.jsonl');
-  if (!existsSync(manifestPath)) return [];
-  let lines;
+  let entries;
   try {
-    lines = readFileSync(manifestPath, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+    ({ entries } = readOwnManifestChain(join(root, '.adlc'), { cwd: root }));
   } catch {
     return [];
   }
   const found = new Set();
-  for (const line of lines) {
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  for (const entry of entries) {
     const gate = entry?.type ?? entry?.gate;
     if (entry?.ticket === ticketId && INTERROGATION_SOURCE_GATES.includes(gate)) {
       found.add(gate);
