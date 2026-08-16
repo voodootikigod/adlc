@@ -1,0 +1,25 @@
+{
+  "body": "Spec: .adlc/specs/p0-p1-human-interrogation.md (design D2; the interrogation protocol itself is docs/interrogation-protocol.md, built by the prerequisite ticket).\n\nToday `plugins/adlc-claude-code/commands/adlc-ticket.md` is a template fill: its only questioning content is one conditional sentence, and its §4 coldstart check ends at 'summarize gaps and offer to revise' — the structured `{gaps:[{what, why_blocking}]}` list of exactly the questions a human must answer is never asked. Change the flow:\n\n1. Add a '§1b Interrogate' step between shaping (§1) and the dry-run (§2): run the frontier-question loop from docs/interrogation-protocol.md, seeded from the §1 field checklist, using AskUserQuestion in Claude Code (numbered questions, recommended answer first, rounds until the frontier is empty). Fold resolved Q→A pairs into the ticket body itself.\n2. Rewrite §4: convert each coldstart gap into a frontier question, put it to the human via AskUserQuestion, fold answers into the body, re-run `adlc coldstart <id> --prompt-only` until the gap list is empty. Then record the passing verdict with `adlc coldstart <id> --record-verdict -` — prompt-only alone writes no manifest record, and the p0 gate assertion (sibling gate ticket) requires one.\n3. Thin peer edits referencing the same protocol doc: `plugins/adlc-copilot/skills/adlc-ticket/SKILL.md`, `plugins/adlc-cursor/command/adlc-ticket.md` (and `commands/` duplicate), `plugins/adlc-opencode/command/adlc-ticket.md`, `plugins/adlc-codex/skills/adlc-spec/SKILL.md` (P0 half), and the pi ticket flow. Each names its harness-native ask affordance; headless contexts skip interrogation and must find answers already folded into the body.\n\nAcceptance criteria:\n- `grep -c 'AskUserQuestion' plugins/adlc-claude-code/commands/adlc-ticket.md` is ≥ 1.\n- `grep -q 'record-verdict' plugins/adlc-claude-code/commands/adlc-ticket.md` succeeds.\n- `grep -l 'interrogation-protocol' plugins/adlc-copilot/skills/adlc-ticket/SKILL.md plugins/adlc-cursor/command/adlc-ticket.md plugins/adlc-opencode/command/adlc-ticket.md plugins/adlc-codex/skills/adlc-spec/SKILL.md` matches every listed file.\n- §4 text instructs looping until zero gaps then recording (verified in review; prose-driven behavior).\n- Full suite green: `npm test` exits 0.",
+  "category": "feature",
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T-01M05MH142KEXEY28HM4SRSDC8"
+    },
+    {
+      "to": "T-01M05MHJEH0EE239J1401478GE"
+    }
+  ],
+  "id": "T-01M05MJR1E645A1Q26Z8VSDF7X",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-claude-code/commands/adlc-ticket.md",
+    "plugins/adlc-copilot/skills/adlc-ticket/**",
+    "plugins/adlc-cursor/command/adlc-ticket.md",
+    "plugins/adlc-cursor/commands/adlc-ticket.md",
+    "plugins/adlc-opencode/command/adlc-ticket.md",
+    "plugins/adlc-codex/skills/adlc-spec/**",
+    "plugins/adlc-pi/**"
+  ],
+  "title": "P0 ticket authoring interrogates the human before the store write"
+}

@@ -1,0 +1,15 @@
+{
+  "body": "Spec: .adlc/specs/p0-p1-human-interrogation.md (design D5).\n\nThe `adlc` router skill's P0 section says nothing about questioning and its P1 section (titled 'Interrogate') routes only to bare CLI names — including a `/adlc-spec` that now exists (built by the sibling P1 ticket). Separately, `lesson-foundry` (P7) emits `.adlc/lessons/interrogation-template.md` ('Answer these questions in your spec (P1)') that no P1 flow reads, so the decay loop's spec-gap output dead-ends.\n\nUpdate all four copies of the router skill — `plugins/adlc-claude-code/skills/adlc/SKILL.md`, `skills/adlc/SKILL.md`, `plugins/adlc-copilot/skills/adlc/SKILL.md`, `plugins/adlc-gemini/skills/adlc/SKILL.md` (keep them byte-identical as today):\n1. P0 section: name human interrogation (per docs/interrogation-protocol.md) as the mechanism before the store write.\n2. P1 section: route to the `/adlc-spec` command (harness-appropriate wording) rather than bare CLI names, and describe the interrogation round.\n3. Both sections: list `.adlc/lessons/interrogation-template.md` (when present) as a mandatory question source, closing the P7→P1 loop.\n\nAcceptance criteria:\n- `grep -c 'interrogation-protocol' plugins/adlc-claude-code/skills/adlc/SKILL.md` is ≥ 1.\n- `grep -c 'interrogation-template' plugins/adlc-claude-code/skills/adlc/SKILL.md` is ≥ 1.\n- All four copies stay identical: `diff plugins/adlc-claude-code/skills/adlc/SKILL.md skills/adlc/SKILL.md` (and the copilot/gemini pair-wise diffs) exit 0.\n- Full suite green: `npm test` exits 0 (a parity test guards the router copies).",
+  "category": "docs",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M05MHJEH0EE239J1401478GE",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-claude-code/skills/adlc/SKILL.md",
+    "skills/adlc/SKILL.md",
+    "plugins/adlc-copilot/skills/adlc/SKILL.md",
+    "plugins/adlc-gemini/skills/adlc/SKILL.md"
+  ],
+  "title": "Router names interrogation as the P0/P1 mechanism; close the P7 lesson-template loop"
+}

@@ -1,0 +1,23 @@
+{
+  "body": "Spec: .adlc/specs/p0-p1-human-interrogation.md (design D3 and resolved decision 3; the interrogation protocol itself is docs/interrogation-protocol.md, built by the prerequisite ticket).\n\nP1 has no Claude Code command at all — `plugins/adlc-claude-code/commands/` lacks `adlc-spec.md` even though the P0 command's §5 points users at it, and the router routes P1 to bare CLI names. Meanwhile parallax renders '## Divergences — answer these' with lettered options and premortem renders 'Questions to fold into interrogation', and both dead-end as markdown.\n\n1. Port `plugins/adlc-cursor/command/adlc-spec.md` to `plugins/adlc-claude-code/commands/adlc-spec.md`, inserting the interrogation round between parallax and spec-lint: parallax divergences and premortem interrogation questions become the frontier; put them to the human via AskUserQuestion (protocol per docs/interrogation-protocol.md); fold answers into the spec text; re-run parallax, CAPPED AT 3 ROUNDS. If divergence is still above threshold after the cap, do not spin: put the surviving divergences to the human one final time as explicit decisions, record them in the spec as approved assumptions, and proceed to Gate 1 with the residual divergence score carried in the spec-approval payload.\n2. Add `--questions-json` to `packages/parallax` (bin + lib): emit the divergence questions as structured JSON ({point, options[], recommendation?}) instead of consumers scraping rendered markdown. Keep the rendered markdown output unchanged for existing flows.\n3. Update the cursor and opencode `/adlc-spec` commands with the same capped-loop wording (thin edits; they share the protocol doc).\n\nAcceptance criteria:\n- `test -f plugins/adlc-claude-code/commands/adlc-spec.md` exits 0 and `grep -q parallax plugins/adlc-claude-code/commands/adlc-spec.md` succeeds.\n- `grep -c 'AskUserQuestion' plugins/adlc-claude-code/commands/adlc-spec.md` is ≥ 1.\n- New test covers `--questions-json` output shape; verified by `node --test packages/parallax/test/`.\n- The 3-round cap and escape hatch appear in the command text and in docs/interrogation-protocol.md (`grep -q 'questions-json' packages/parallax/bin/parallax.mjs` and review of the cap wording).\n- Full suite green: `npm test` exits 0.",
+  "category": "feature",
+  "duration": 2,
+  "edges": [
+    {
+      "to": "T-01M05MH142KEXEY28HM4SRSDC8"
+    },
+    {
+      "to": "T-01M05MHJEH0EE239J1401478GE"
+    }
+  ],
+  "id": "T-01M05MJXYFRB8BKY5ZWFQDPG05",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-claude-code/commands/adlc-spec.md",
+    "plugins/adlc-cursor/command/adlc-spec.md",
+    "plugins/adlc-cursor/commands/adlc-spec.md",
+    "plugins/adlc-opencode/command/adlc-spec.md",
+    "packages/parallax/**"
+  ],
+  "title": "/adlc-spec for Claude Code: P1 interrogation round between parallax and spec-lint, plus parallax --questions-json"
+}
