@@ -387,6 +387,23 @@ test('KEEP-IN-SYNC: BUILD_GATE_DEPTH_THRESHOLD tracks HARD_DEPTH; BUILD_GATE_BYT
   assert.match(src, /sessionBytes >= BUILD_GATE_BYTES_THRESHOLD/);
 });
 
+test('BUILD_GATE_SCAN_BYTES is exactly 8 MiB, matching BUILD_GATE_BYTES_THRESHOLD (Round-9)', () => {
+  // BUILD_GATE_SCAN_BYTES must be AT LEAST BUILD_GATE_BYTES_THRESHOLD (see its
+  // own comment) — pinning it below the threshold, or silently letting it drift
+  // above without anyone noticing, both defeat the purpose of a documented
+  // "deliberately separate but synchronized" constant. Pin the exact value so an
+  // off-by-one (or any other) drift is caught here rather than by a much harder
+  // to diagnose depth-undercounting bug at some untested boundary size.
+  const src = readFileSync(HOOK, 'utf8');
+  const scan = src.match(/const BUILD_GATE_SCAN_BYTES = ([^;]+);/);
+  assert.ok(scan, 'scan-window constant present');
+  const scanBytes = Function(`"use strict"; return (${scan[1]});`)();
+  assert.equal(scanBytes, 8 * 1024 * 1024);
+  const bytes = src.match(/const BUILD_GATE_BYTES_THRESHOLD = ([^;]+);/);
+  const thresholdBytes = Function(`"use strict"; return (${bytes[1]});`)();
+  assert.ok(scanBytes >= thresholdBytes, 'scan window must be at least the byte threshold');
+});
+
 test('high-risk ticket at exact HARD_DEPTH is denied (inclusive edge)', () => {
   const r = runBuildGate({
     tickets: [{ id: 'T1', title: 'x', category: 'contract' }],

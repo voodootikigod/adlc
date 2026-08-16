@@ -182,6 +182,52 @@ test('the full declared 3-hook pipeline still denies an ordinary shell command f
   }
 });
 
+test('rails-guard alone denies the recovery command when a second, single-character command-bearing field is present', () => {
+  // Pins the candidates filter's `c.length > 0` boundary: collectCommandText
+  // walks the WHOLE payload for any command/cmd/input/script/chars key, so a
+  // stray single-character value elsewhere in the payload becomes a second
+  // "candidate" alongside the real recovery command. The exception only
+  // fires when EXACTLY ONE non-empty candidate is found (an unambiguous
+  // single command) — with two candidates present it must fall through to
+  // ordinary enforcement and deny, exactly as it would for any other
+  // multi-command-field payload it can't safely disambiguate.
+  const { dir, transcriptPath } = setupHighRiskRailedDegradedSession();
+  try {
+    const r = runHook(RAILS_GUARD_HOOK, dir, {
+      tool_name: 'exec_command',
+      session_id: 'consumer-noise-onechar',
+      transcript_path: transcriptPath,
+      command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-noise-onechar --write`,
+      note: { chars: 'x' },
+    });
+    assert.notEqual(r.status, 0, `expected the ambiguous two-candidate payload to be denied, got status=${r.status} out=${r.out}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rails-guard alone still allows the recovery command when a second, EMPTY command-bearing field is present', () => {
+  // Pins the candidates filter's `typeof c === 'string' && c.length > 0`
+  // conjunction: collectCommandText can legitimately surface an empty
+  // string from an unrelated payload field (e.g. an empty `script`/`chars`
+  // key elsewhere). The filter must still discard it — an empty string is
+  // never a real second command — leaving exactly one real candidate so the
+  // exception still fires and allows.
+  const { dir, transcriptPath } = setupHighRiskRailedDegradedSession();
+  try {
+    const r = runHook(RAILS_GUARD_HOOK, dir, {
+      tool_name: 'exec_command',
+      session_id: 'consumer-noise-empty',
+      transcript_path: transcriptPath,
+      command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-noise-empty --write`,
+      note: { chars: '' },
+    });
+    assert.equal(r.status, 0, `expected the empty-string noise field to be filtered out, got status=${r.status} out=${r.out}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('rails-guard alone allows bare pwd even with a corrupt/unreadable ticket store', () => {
   // Round-3 review found that rails-guard resolved the active ticket and
   // loaded the ticket store BEFORE the recovery/inspection exception ran —

@@ -6,10 +6,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-build-gate.mjs');
 
 // recordBuildGateBypass spawnSync's `adlc` from ambient PATH, and this test file
 // calls it IN-PROCESS — so the resolved binary is whatever the test runner's PATH
@@ -126,6 +128,18 @@ test('the hook build-gate DEFAULT_BYTES_THRESHOLD is deliberately recalibrated t
   // old 256 KiB threshold, comfortably under the new 8 MiB one) must NOT be
   // classified as degraded.
   assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 400 * 1024 }), false);
+});
+
+test('MAX_SCAN_BYTES is exactly 8 MiB, matching DEFAULT_BYTES_THRESHOLD (Round-9)', () => {
+  // MAX_SCAN_BYTES must be AT LEAST DEFAULT_BYTES_THRESHOLD (see its own
+  // comment) — pin the exact value so an off-by-one drift is caught here
+  // directly, mirroring the Codex sibling hook's equivalent test.
+  const src = readFileSync(HOOK, 'utf8');
+  const scan = src.match(/const MAX_SCAN_BYTES = ([^;]+);/);
+  assert.ok(scan, 'scan-window constant present');
+  const scanBytes = Function(`"use strict"; return (${scan[1]});`)();
+  assert.equal(scanBytes, 8 * 1024 * 1024);
+  assert.ok(scanBytes >= 8 * 1024 * 1024, 'scan window must be at least the byte threshold');
 });
 
 function withTempTranscript(content, fn) {
