@@ -67,9 +67,9 @@ in the ADLC repo): parallax divergences, premortem questions, and applicable
 `.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
 question is codebase-checked before it reaches the human; answers fold into the
 spec and parallax re-runs, capped at 3 rounds with an approved-assumptions
-escape hatch. `/adlc:adlc-spec` runs the loop; `/adlc:adlc-approve-spec`
-records Gate 1 with the interrogation summary (`adlc-runner run p1` requires
-and validates the `spec-approval` record). The tools:
+escape hatch. `/adlc:adlc-spec` runs the loop;
+`/adlc:adlc-approve-spec` records Gate 1 with the interrogation summary
+(`adlc-runner run p1` requires and validates the `spec-approval` record). The tools:
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
   (or `--prompt-only`) to also catch vacuous methods.

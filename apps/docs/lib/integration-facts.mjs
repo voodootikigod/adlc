@@ -212,11 +212,11 @@ export const CLAUDE_CODE_INTEGRATION = {
   surfaces: [
     {
       key: 'commands',
-      count: 5,
+      count: 7,
       label: 'commands',
       title: 'Slash commands for each gate',
-      detail: 'Each of init, ticket, prosecute, distill, and maintain has its own /adlc:* command.',
-      items: ['/adlc:adlc-init', '/adlc:adlc-ticket', '/adlc:adlc-prosecute', '/adlc:adlc-distill', '/adlc:adlc-maintain'],
+      detail: 'Each of init, ticket, spec, approve-spec, prosecute, distill, and maintain has its own /adlc:* command — P1 interrogation and the Gate 1 human approval included.',
+      items: ['/adlc:adlc-init', '/adlc:adlc-ticket', '/adlc:adlc-spec', '/adlc:adlc-approve-spec', '/adlc:adlc-prosecute', '/adlc:adlc-distill', '/adlc:adlc-maintain'],
     },
     {
       key: 'hooks',

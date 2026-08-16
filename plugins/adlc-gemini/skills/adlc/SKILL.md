@@ -23,7 +23,7 @@ the user runs `npm i -g @adlc/cli`. Run `/adlc-init` once per repo to create the
 ## Where am I? → which gate
 
 ```
-Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket
+Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket (interrogate, then write)
 Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax · adversarial-review
 Have tickets, planning fan-out? ─────────────→ P2  adlc coldstart · model-router · merge-forecast
 About to build, want to freeze tests? ───────→ P3  adlc rails-guard · adversarial-review
@@ -67,9 +67,10 @@ in the ADLC repo): parallax divergences, premortem questions, and applicable
 `.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
 question is codebase-checked before it reaches the human; answers fold into the
 spec and parallax re-runs, capped at 3 rounds with an approved-assumptions
-escape hatch. Gate 1 is recorded with `adlc gate-manifest record spec-approval
---files <spec> --data '{"approver":…,"rounds":…,"questions":…,"sources":[…],
-"unresolved":0,"approved_assumptions":[]}'` — `adlc-runner run p1` requires and
+escape hatch. Gate 1 is recorded as a `spec-approval` manifest entry —
+`gate-manifest record spec-approval --files <spec> --data '{"approver":…,
+"rounds":…,"questions":…,"sources":[…],"unresolved":0,"approved_assumptions":[]}'`
+through the `adlc` dispatcher — and `adlc-runner run p1` requires and
 validates that record. The tools:
 - `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
