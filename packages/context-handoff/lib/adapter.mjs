@@ -23,6 +23,7 @@ import {
 import { evaluateBands, nagSuppression, handoffDenyActive } from './bands.mjs';
 import { evaluateMutationGate } from './mutation-gate.mjs';
 import { readResumeAuth } from './resume-auth.mjs';
+import { readBypassGrant, removeBypassGrant } from './bypass-grant.mjs';
 import { HANDOFF_DEPTH } from './thresholds.mjs';
 
 /** Mutating `adlc handoff` subcommands agents must not run under deny-set. */
@@ -411,17 +412,39 @@ export function evaluateHandoffPreToolUse({
       sessionId,
       typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
     );
+    // Without a key `readBypassGrant` reports verified:false for every
+    // document, same reasoning as resumeAuth above — a signed grant only
+    // ever authorizes when the adapter supplies the key it was signed with.
+    const bypassGrant = readBypassGrant(
+      root,
+      sessionId,
+      typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
+    );
+    const bypassActive = bypassGrant != null && bypassGrant.verified === true;
+    const bypassForSession = bypassActive
+      ? bypassGrant.unbound_reason
+        ? { sessionId, unboundReason: bypassGrant.unbound_reason }
+        : { sessionId }
+      : false;
     const gateInput = mutationGateInputFromLoad(loadedAfter, {
       currentSessionId: sessionId,
       processStickyDeny,
       resumeAuth,
-      bypassForSession: false,
+      bypassForSession,
       manifestVerifyFailed: false,
     });
     const gate = evaluateMutationGate(gateInput);
     if (gate.deny) {
       mutationDenied = true;
       for (const r of gate.reasons) reasons.push(r);
+    } else if (bypassActive) {
+      // One-shot consumption (spec §1.3 residual, T-01M03J291182MXD1KEKM2PRKTS
+      // Round-11): this grant just authorized an allowed mutation — delete it
+      // so the NEXT tool call finds no grant and falls back to ordinary deny
+      // evaluation. Best-effort by construction, same as removeResumeAuth: a
+      // failed delete leaves a residual grant bounded by BYPASS_GRANT_TTL_MS,
+      // not a permanent bypass.
+      removeBypassGrant(root, sessionId);
     }
 
     // Diagnostic only, and only once the call is already denied: an operator who

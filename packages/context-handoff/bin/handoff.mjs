@@ -14,6 +14,7 @@ import { consumeDenyRecord } from '../lib/deny-lifecycle.mjs';
 import { normalizeBypassGrant, authorized } from '../lib/mutation-gate.mjs';
 import { writeFinal, readFinal, buildFinal } from '../lib/final.mjs';
 import { writeResumeAuth, removeResumeAuth } from '../lib/resume-auth.mjs';
+import { writeBypassGrant } from '../lib/bypass-grant.mjs';
 import { writeDenyRecord, repairDenyBinds, markerUnchanged } from '../lib/deny-persist.mjs';
 import { unlockSession } from '../lib/lock.mjs';
 import { writeJsonAtomic } from '../lib/atomic-json.mjs';
@@ -423,9 +424,14 @@ One-shot bypass grant for adapters. Bound (no --unbound-reason) lifts D2 for
 bound denies only. Unbound (--unbound-reason=…) also authorizes null-ticket /
 null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
 
-The grant printed on stdout is for the calling adapter invocation only; it is
-not a stored credential. The durable proof of the bypass is the manifest
-context-handoff-bypass entry written by --write.
+--write persists a signed, session-bound grant the adapter reads back on its
+NEXT mutation-gate evaluation for this session and consumes (deletes) the
+moment it authorizes one — true one-shot, not just an audit trail. The grant
+also expires on its own after a short TTL (BYPASS_GRANT_TTL_MS) as a
+defense-in-depth ceiling if consumption itself fails. The manifest
+context-handoff-bypass entry --write also writes remains the durable AUDIT
+record of the grant having been issued; it is not itself consulted for
+authorization.
 `);
     process.exit(0);
   }
@@ -463,7 +469,7 @@ context-handoff-bypass entry written by --write.
     currentSessionId: sessionId,
   });
 
-  const { adlcDir, write, json } = commonOrExit(values);
+  const { root, adlcDir, write, json } = commonOrExit(values);
 
   if (!write) {
     finish({
@@ -482,6 +488,15 @@ context-handoff-bypass entry written by --write.
   }
 
   const key = requireKeyOrExit();
+
+  // The functional grant the adapter actually reads back and consumes — see
+  // lib/bypass-grant.mjs. Written BEFORE the audit record: if this fails, the
+  // operator needs to know the bypass did NOT take effect, not just that an
+  // audit trail was left behind for a grant that was never live.
+  const grantWrite = writeBypassGrant(root, sessionId, { unboundReason: unbound }, { key });
+  if (!grantWrite.ok) {
+    opError(`bypass grant could not be persisted: ${grantWrite.error} — the recovery command did NOT unblock the next mutation`);
+  }
 
   const recorded = recordOrExit({
     gate: 'context-handoff-bypass',
@@ -507,7 +522,7 @@ context-handoff-bypass entry written by --write.
       allowsUnboundRecord: allowsUnbound,
       evidence: { gate: 'context-handoff-bypass', seq: recorded?.seq },
     },
-    human: `handoff bypass: recorded ${unbound ? 'unbound' : 'bound'} grant for session=${sessionId}`,
+    human: `handoff bypass: recorded ${unbound ? 'unbound' : 'bound'} grant for session=${sessionId} (consumed by the next authorized mutation)`,
   });
 }
 

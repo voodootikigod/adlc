@@ -45,6 +45,11 @@ export function resumeAuthPath(root, sessionId) {
   return join(root, LEDGER_DIRNAME, 'handoffs', `${sessionId}.resume-auth.json`);
 }
 
+export function bypassGrantPath(root, sessionId) {
+  assertSafeSessionId(sessionId);
+  return join(root, LEDGER_DIRNAME, 'handoffs', `${sessionId}.bypass-grant.json`);
+}
+
 export function lockPath(root, sessionId) {
   assertSafeSessionId(sessionId);
   return join(root, LEDGER_DIRNAME, 'handoffs', `${sessionId}.lock`);

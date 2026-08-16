@@ -32,6 +32,23 @@ export const MAX_ACTIVE_CONTEXT_BYTES = 8 * 1024 * 1024;
  */
 export const MAX_SCAN_WALL_MS = 500;
 
+/**
+ * Round-11 review (T-01M03J291182MXD1KEKM2PRKTS): before this, `handoff
+ * bypass --write` only appended an audit-trail manifest entry — the adapter's
+ * mutation gate hardcoded `bypassForSession: false` and never read it back,
+ * so the recovery command every deny diagnostic instructs the operator to
+ * run had no actual effect on the next mutation. This TTL bounds the signed
+ * grant file (lib/bypass-grant.mjs) that closes that gap. Phase 0 has no
+ * ledger, lock, or host-authenticated expiry (spec §1.3's "stronger fix" is
+ * explicitly Phase 1 target hardening) — the grant is consumed (deleted) by
+ * the first mutation it authorizes, and this TTL is only a defense-in-depth
+ * ceiling against a failed delete leaving a stale grant file readable, not
+ * the primary bound. 10 minutes is generous enough for an operator to read
+ * the diagnostic, copy-paste the command, and retry their mutation, while
+ * still keeping a residual grant's exposure window short.
+ */
+export const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
+
 export const HANDOFF_COOLDOWN_TOOLS = 15;
 /**
  * Suppress advisory nags when remaining-to-hard is BELOW this fraction

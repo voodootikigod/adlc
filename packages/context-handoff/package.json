@@ -39,6 +39,7 @@
     "./lib/final.mjs": "./lib/final.mjs",
     "./lib/lock.mjs": "./lib/lock.mjs",
     "./lib/resume-auth.mjs": "./lib/resume-auth.mjs",
+    "./lib/bypass-grant.mjs": "./lib/bypass-grant.mjs",
     "./lib/deny-persist.mjs": "./lib/deny-persist.mjs",
     "./lib/adapter.mjs": "./lib/adapter.mjs",
     "./lib/secret-scrub.mjs": "./lib/secret-scrub.mjs"
