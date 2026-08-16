@@ -319,6 +319,23 @@ describe('p1 gate spec-approval requirement', () => {
     assert.ok(result.errors.some((e) => e.includes('spec_hash')));
   });
 
+  // Codex cross-model review round 4: Pi resolves its approval argument to
+  // an ABSOLUTE path before recording, while the documented spec-lint/
+  // premortem CLI invocations pass through whatever spelling (often
+  // relative) the caller typed — the same file, two legitimate spellings.
+  it('accepts a spec-lint/premortem audit recorded under a RELATIVE path matching an approval recorded under the ABSOLUTE path to the same file', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    const relativePath = 'spec.md'; // resolves to the same file as specPath, given cwd: dir below
+    writeManifest(dir, [
+      sl('T1', { specPath: relativePath, hash }),
+      pm('T1', { specPath: relativePath, hash }),
+      validApprovalFor(specPath, hash), // absolute, as Pi records it
+    ]);
+    const result = assertPhase('p1', { dir, ticket: 'T1', cwd: dir });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  });
+
   it('rejects a stale approval — the spec file changed after approval was recorded', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);

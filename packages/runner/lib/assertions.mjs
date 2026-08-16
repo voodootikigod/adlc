@@ -474,10 +474,18 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
   const latestSpecLint = entries.reduce((acc, e, i) => (entryType(e) === 'spec-lint' && matchesTicket(e, ticket) ? { entry: e, index: i } : acc), null);
   const latestPremortem = entries.reduce((acc, e, i) => (entryType(e) === 'premortem' && matchesTicket(e, ticket) ? { entry: e, index: i } : acc), null);
 
+  // Path comparison is by RESOLVED absolute location, not raw string —
+  // codex cross-model review, round 4: Pi resolves its approval argument to
+  // an absolute path before recording, while the documented spec-lint/
+  // premortem commands pass through whatever spelling (often relative) the
+  // caller typed. The same file audited via two different, both-legitimate
+  // spellings must still match.
   function auditMatchesApprovedSpec(audit) {
     if (!path) return true; // approval's own file binding already flagged above; don't double-report
     const auditPaths = Object.keys(audit.entry.files ?? {});
-    return auditPaths.length === 1 && auditPaths[0] === path && audit.entry.files[auditPaths[0]] === recordedHash;
+    if (auditPaths.length !== 1) return false;
+    const [auditPath] = auditPaths;
+    return resolve(cwd, auditPath) === resolve(cwd, path) && audit.entry.files[auditPath] === recordedHash;
   }
 
   if (!latestSpecLint || entryIndex < latestSpecLint.index) {
@@ -650,13 +658,19 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const p4Errors = phase === 'p4'
     ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)
     : [];
+  // operational: false — an unresolved gap, a rejected verdict, or stale
+  // evidence is a normal, expected GATE rejection with concrete reasons
+  // (exit 2), not an infrastructure failure that couldn't be evaluated at
+  // all (exit 1). Codex cross-model review, round 4: the CLI's opError-on-
+  // operational path exits 1 for these, which misreports a fixable content
+  // problem as an outage to any automation branching on exit code.
   const p1Errors = phase === 'p1'
     ? specApprovalIntegrityErrors(entries, ticket, cwd)
     : [];
   if (p1Errors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       errors: p1Errors,
@@ -668,7 +682,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (p0Errors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       errors: p0Errors,

@@ -25,6 +25,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, '..');
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const RUNNER_BIN = join(REPO_ROOT, 'packages', 'runner', 'bin', 'adlc.mjs');
+const SPEC_LINT_BIN = join(REPO_ROOT, 'packages', 'spec-lint', 'bin', 'spec-lint.mjs');
+const PREMORTEM_BIN = join(REPO_ROOT, 'packages', 'premortem', 'bin', 'premortem.mjs');
 
 const T1 = {
   id: 'T1', title: 'First ticket', body: 'Do the first thing',
@@ -540,32 +542,31 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
   try {
     const { pi } = await boot(root);
     mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    // A RELATIVE path, matching what a real user types — Pi's own command
+    // resolves this to an ABSOLUTE path when it records the approval
+    // (isAbsolute(specArg) ? specArg : join(root, specArg)). Codex
+    // cross-model review round 4: an earlier version of this test hid a
+    // real path-normalization bug by using the SAME absolute path for
+    // every entry, which the raw-string comparison the finding caught
+    // would never have exposed. Using the CLI producers here (not
+    // appendManifestEntry) and a relative path proves the actual
+    // documented /adlc-spec -> /adlc-approve-spec sequence works.
     const specRel = '.adlc/specs/feature.md';
-    writeFileSync(join(root, specRel), '# Spec\nacceptance criteria: `test -f feature.md`\n');
+    writeFileSync(join(root, specRel), '# Spec\n\n## Acceptance Criteria\n- foo: `test -f feature.md`\n');
 
-    // p1 also requires ticket-bound spec-lint/premortem evidence (unrelated
-    // to this command) recorded BEFORE the approval (the real /adlc-spec ->
-    // /adlc-approve-spec sequence); record minimal real entries first so the
-    // round-trip proves the FULL gate, not just this one record in isolation.
-    // This also supplies /adlc-approve-spec's own prior-evidence requirement
-    // (ticketInterrogationSources) — no separate seeding needed here.
-    // The audits must bind the SAME (path, hash) the approval will bind
-    // (P1 D4 round 2 — evidence-laundering closure), and spec-lint's own
-    // verified:true, matching what the real spec-lint --record and
-    // premortem --record-verdict emitters produce.
-    const specAbsPath = join(root, specRel);
-    const specHash = sha256(readFileSync(specAbsPath));
-    appendManifestEntry(
-      { gate: 'spec-lint', ticket: 'T1', files: { [specAbsPath]: specHash }, data: { verified: true } },
-      join(root, '.adlc'), { key: null }
-    );
-    appendManifestEntry(
-      { gate: 'premortem', ticket: 'T1', files: { [specAbsPath]: specHash } },
-      join(root, '.adlc'), { key: null }
-    );
+    const specLintResult = spawnSync(process.execPath, [SPEC_LINT_BIN, specRel, '--record', '--ticket', 'T1', '--dir', '.adlc'], {
+      cwd: root, encoding: 'utf8',
+    });
+    assert.equal(specLintResult.status, 0, `spec-lint --record must pass: ${specLintResult.stdout}${specLintResult.stderr}`);
+
+    const premortemResult = spawnSync(process.execPath, [
+      PREMORTEM_BIN, specRel, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1',
+    ], { cwd: root, encoding: 'utf8', input: 'No failure modes found.\n' });
+    assert.equal(premortemResult.status, 0, `premortem --record-verdict must pass: ${premortemResult.stdout}${premortemResult.stderr}`);
 
     const ctx = fakeCtx(root, { confirm: () => true });
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+    assert.ok(ctx.notices.some((n) => n.level === 'info' && /recorded spec approval/.test(n.msg)), JSON.stringify(ctx.notices));
 
     // p1 is ticket-required (P1 D4 — an unscoped check let one ticket's
     // audits satisfy another's approval); invoke it the same way real

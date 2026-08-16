@@ -77,6 +77,11 @@ if (values.json) {
   printJson(result);
 } else if (result.ok) {
   console.log(`adlc ${phase}: required evidence present`);
+} else if (Array.isArray(result.errors)) {
+  // A content-level gate failure (stale/incomplete/contradictory evidence,
+  // e.g. p0/p1's integrity checks) — a normal exit-2 rejection with reasons,
+  // not the "evidence missing entirely" shape below.
+  console.error(`adlc ${phase}: evidence rejected:\n  ${result.errors.join('\n  ')}`);
 } else {
   console.error(`adlc ${phase}: missing evidence: ${result.missing.join(', ') || 'none'}`);
   if (result.skipped.length > 0) console.error(`malformed manifest lines: ${result.skipped.length}`);
