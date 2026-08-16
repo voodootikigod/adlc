@@ -94,11 +94,38 @@ test('drift: depth-signal computation is identical to packages/build-gate/lib/de
     assert.equal(hookCountToolCalls(text), coreCountToolCalls(text));
     assert.deepEqual(hookComputeDepthSignal({ text }), coreComputeDepthSignal({ text }));
   }
+  // isDegraded's COMPARISON LOGIC (inclusive >= against whichever thresholds
+  // are resolved) must stay identical between the hook's copy and the
+  // canonical — proven here with an EXPLICIT, shared threshold on both
+  // sides. This deliberately does NOT compare the two DEFAULTS against each
+  // other: since Round-5 (context-rot-threshold-calibration), the hook's own
+  // DEFAULT_BYTES_THRESHOLD is intentionally recalibrated to 8 MiB while the
+  // canonical package's default stays at the old 256 KiB (its own test file
+  // is a rail frozen by ticket T156, not completed — and unlike a plain
+  // constant rename, that frozen test directly asserts the OLD numeric
+  // behavior, so recalibrating the library would break it; there is no
+  // override mechanism for a rail-edit violation) — see
+  // plugins/adlc-copilot/hooks/adlc-build-gate.mjs's DEFAULT_BYTES_THRESHOLD
+  // comment for the full rationale. Asserting default equality here would
+  // pin exactly the divergence this fix intentionally introduces.
   for (const depth of [0, 40, 41, 100]) {
     for (const sessionBytes of [0, 256 * 1024, 256 * 1024 + 1, 1024 * 1024]) {
-      assert.equal(hookIsDegraded({ depth, sessionBytes }), coreIsDegraded({ depth, sessionBytes }), `isDegraded drift for depth=${depth} bytes=${sessionBytes}`);
+      assert.equal(
+        hookIsDegraded({ depth, sessionBytes, depthThreshold: 40, bytesThreshold: 256 * 1024 }),
+        coreIsDegraded({ depth, sessionBytes, depthThreshold: 40, bytesThreshold: 256 * 1024 }),
+        `isDegraded drift for depth=${depth} bytes=${sessionBytes}`,
+      );
     }
   }
+});
+
+test('the hook build-gate DEFAULT_BYTES_THRESHOLD is deliberately recalibrated to 8 MiB, not the canonical package default (Round-5)', () => {
+  assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 }), true);
+  assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 - 1 }), false);
+  // The exact reported bug: a routine fresh-session baseline (well over the
+  // old 256 KiB threshold, comfortably under the new 8 MiB one) must NOT be
+  // classified as degraded.
+  assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 400 * 1024 }), false);
 });
 
 function withTempTranscript(content, fn) {
@@ -151,6 +178,24 @@ test('decide: high-risk ticket with missing transcript_path fails closed (deny),
 test('decide: high-risk ticket with unreadable transcript_path fails closed (deny)', () => {
   const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: '/nonexistent/path/does-not-exist.jsonl', bypassRequested: false });
   assert.equal(result.decision, 'deny');
+});
+
+test('decide: deep tool-call history EARLY in a transcript, pushed out of the old 256 KiB window by later padding, is still denied (Round-9 regression)', () => {
+  // Round-9 review: DEFAULT_BYTES_THRESHOLD was recalibrated to 8 MiB, but if
+  // the depth-counting SCAN WINDOW had stayed at the old 256 KiB, a
+  // transcript sized between 256 KiB and 8 MiB with its real tool-call depth
+  // EARLY in the file (pushed out of a 256 KiB tail window by later
+  // non-tool-call padding) would be undercounted to a false "shallow" depth,
+  // AND no longer trip the (now much higher) byte threshold either — the two
+  // signals would stop jointly covering that size range. This is the exact
+  // scenario: 50 real tool calls, then ~500 KiB of padding, total ~500 KiB
+  // (under the new 8 MiB byte threshold, over the OLD 256 KiB window).
+  const deep = Array.from({ length: 50 }, () => '"type": "tool_use"').join('\n');
+  const padding = 'x'.repeat(500 * 1024);
+  withTempTranscript(`${deep}\n${padding}`, (path) => {
+    const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: path, bypassRequested: false });
+    assert.equal(result.decision, 'deny', `expected the early tool-call depth to still be counted; got: ${JSON.stringify(result)}`);
+  });
 });
 
 test('recordBuildGateBypass writes a real build-gate-bypass entry to the gate-manifest', () => {

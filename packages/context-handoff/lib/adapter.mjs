@@ -23,6 +23,7 @@ import {
 import { evaluateBands, nagSuppression, handoffDenyActive } from './bands.mjs';
 import { evaluateMutationGate } from './mutation-gate.mjs';
 import { readResumeAuth } from './resume-auth.mjs';
+import { HANDOFF_DEPTH } from './thresholds.mjs';
 
 /** Mutating `adlc handoff` subcommands agents must not run under deny-set. */
 export const HANDOFF_MUTATING_SUBCOMMANDS = new Set([
@@ -301,6 +302,18 @@ export function denyStoreHot(loaded) {
  *        one call and then fails open once the band cools. Only a caller with
  *        memory across calls can carry it; the spec makes it caller-threaded for
  *        exactly that reason.
+ * @param {boolean} [opts.scanTruncated] Phase 0 hotfix (context-rot-threshold-
+ *        calibration spec §1.2.2): true when the caller's transcript scan hit
+ *        its byte/wall-clock budget before reaching start-of-file, so
+ *        `observed.depth` is a LOWER bound, not an exact count. A lower bound
+ *        is only safe to act on as an implicit allow once it already reaches
+ *        HANDOFF_DEPTH (more unseen calls only make a deny more correct,
+ *        never less) — below that, this restricts the call even when the
+ *        raw depth number alone would read as WARN or clean. Callers that
+ *        completed a full scan (or have no scan at all) omit this or pass
+ *        false — the default preserves prior behavior exactly. The Recovery
+ *        Exception and Inspection Bash Exception are evaluated by the CALLER
+ *        before this function is ever invoked and are unaffected by it.
  * @returns {{ deny: boolean, reasons: string[], ensuredMarker: boolean, denyEverWritten: boolean }}
  */
 export function evaluateHandoffPreToolUse({
@@ -314,11 +327,27 @@ export function evaluateHandoffPreToolUse({
   host = 'unknown',
   manifestKey = null,
   denyEverWritten = false,
+  scanTruncated = false,
 }) {
   const reasons = [];
   let ensuredMarker = false;
   let mutationDenied = false;
   let sawDeny = denyEverWritten === true;
+
+  // Incomplete-scan lower-bound restriction (Phase 0 hotfix, spec §1.2.2).
+  // Independent of, and additional to, every other D0-D3/band cause below —
+  // OR'd in the same way. Only fires on a genuinely finite, in-domain depth:
+  // a NaN/Infinity depth already fails closed via evaluateBands itself.
+  if (
+    scanTruncated === true &&
+    typeof observed.depth === 'number' &&
+    Number.isFinite(observed.depth) &&
+    observed.depth >= 0 &&
+    observed.depth < HANDOFF_DEPTH
+  ) {
+    reasons.push('incomplete_scan_lower_bound');
+    mutationDenied = true;
+  }
 
   for (const rel of editRelPaths) {
     const verdict = classifyProtectedTarget(root, rel);

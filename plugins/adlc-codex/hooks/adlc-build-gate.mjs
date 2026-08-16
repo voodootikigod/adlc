@@ -22,6 +22,19 @@ import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync } fr
 import { spawnSync } from 'node:child_process';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import {
+  isRecoveryEligibleToolName,
+  isBareInspectionPwd,
+  matchRecoveryCommand,
+  resolveTrustedBinary,
+  recordRecoveryUnderBand,
+  collectCommandText,
+  toolNameOf,
+  resolveHandoffSessionIdLocal,
+} from './adlc-handoff-gate.mjs';
+import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
+import { join, dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 function fail(message) {
   console.error(`adlc-build-gate: ${message}`);
@@ -86,12 +99,32 @@ export function computeRiskTier(ticket) {
 }
 
 // ---------------------------------------------------------------------------
-// KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs.
+// KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs, comparison
+// logic only. packages/build-gate/lib/depth-signal.mjs's own
+// DEFAULT_BYTES_THRESHOLD currently equals HARD_BYTES (256 KiB); this
+// file's DEFAULT_BYTES_THRESHOLD is 8 MiB. The two values are not equal.
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_DEPTH_THRESHOLD = 40;
-export const DEFAULT_BYTES_THRESHOLD = 256 * 1024;
-const MAX_SCAN_BYTES = 256 * 1024;
+/**
+ * Transcript byte count at which a session is considered context-degraded.
+ * A raw byte count alone does not indicate tool-call depth: system-prompt
+ * and schema content contributes bytes independent of any tool call, so a
+ * threshold near the low end of ordinary session sizes classifies sessions
+ * with zero tool calls as degraded. 8 MiB is the SAME ceiling
+ * `@adlc/context-handoff`'s MAX_ACTIVE_CONTEXT_BYTES uses for its own scan
+ * budget.
+ */
+export const DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
+/**
+ * The tail window `decide()` scans to compute tool-call depth. Must be at
+ * least DEFAULT_BYTES_THRESHOLD: a smaller window can, for a transcript
+ * sized between this constant and DEFAULT_BYTES_THRESHOLD, both (a)
+ * truncate away tool calls that occurred earlier than the window and (b)
+ * leave the byte-based signal below threshold — the two signals no longer
+ * jointly cover that size range, and depth is undercounted.
+ */
+const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 
 export function countToolCalls(text) {
   if (!text) return 0;
@@ -107,8 +140,8 @@ export function computeDepthSignal({ text, bytes } = {}) {
 }
 
 export function isDegraded({ depth, sessionBytes, bytes, depthThreshold = DEFAULT_DEPTH_THRESHOLD, bytesThreshold = DEFAULT_BYTES_THRESHOLD }) {
-  // Inclusive >= — KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs
-  // (default path uses @adlc/context-handoff isHardDegraded).
+  // Inclusive >= — comparison logic tracks packages/build-gate/lib/depth-signal.mjs;
+  // see DEFAULT_BYTES_THRESHOLD's comment for the deliberate default-value divergence.
   const resolvedBytes = typeof sessionBytes === 'number' ? sessionBytes : bytes;
   const depthDegraded = typeof depth === 'number' && depth >= depthThreshold;
   const bytesDegraded = typeof resolvedBytes === 'number' && resolvedBytes >= bytesThreshold;
@@ -217,6 +250,61 @@ async function main() {
   if (!ticketStoreExists(process.cwd(), process.env)) process.exit(0); // no tickets → nothing to gate → allow
 
   const payload = await stdinJson();
+
+  // Recovery Exception & Inspection Bash Exception (context-rot-threshold-
+  // calibration spec §1.3), applied to THIS gate too — evaluated before any
+  // of build-gate's own high-risk/degraded-context deny logic below. This
+  // gate runs BEFORE adlc-handoff-gate.mjs in hooks.json's PreToolUse
+  // pipeline for every shell tool identity; without this check, a session
+  // working a high-risk ticket with a >256 KiB transcript would have `pwd`
+  // and the recovery CLI denied HERE, before the handoff gate's own,
+  // otherwise-unconditional exception ever got a chance to run — the exact
+  // total-lockout bug this whole hotfix exists to close, reached through a
+  // sibling gate instead of the handoff gate itself. Reuses the same
+  // trusted, package-independent matcher as the handoff gate (imported from
+  // the sibling adlc-handoff-gate.mjs — a plugin-owned, trusted file, never
+  // the dynamically-loaded project-resolved package) so both gates share one
+  // definition of what an authorized recovery/inspection command is. Unlike
+  // the handoff gate, this file never imports untrusted project-resolved
+  // code at all (it's a fully self-contained inline copy, per its own header
+  // comment), so there's no NODE_OPTIONS/PATH-poisoning window to guard
+  // against here — the audit spawn can use process.env directly.
+  const name = toolNameOf(payload);
+  if (isRecoveryEligibleToolName(name)) {
+    const candidates = collectCommandText(payload).filter((c) => typeof c === 'string' && c.length > 0);
+    if (candidates.length === 1) {
+      const [candidateCommand] = candidates;
+      if (isBareInspectionPwd(candidateCommand)) process.exit(0); // unconditional allow, no audit record
+      // Resolution walks the PROJECT's own node_modules, the same way
+      // loadContextHandoff does elsewhere — this does not import/execute
+      // the package, only locates it, but a repository that ships its own
+      // @adlc/context-handoff controls what path this resolves to (see
+      // adlc-handoff-gate.mjs's identical comment for the full residual).
+      const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+      const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
+      if (trustedRecoveryCliPath) {
+        const sessionId = resolveHandoffSessionIdLocal({
+          candidates: [payload.session_id, payload.sessionId],
+          transcriptPath: payload.transcript_path,
+        });
+        const recoveryMatch = matchRecoveryCommand(candidateCommand, {
+          interpreterPath: process.execPath,
+          scriptPath: trustedRecoveryCliPath,
+          sessionId,
+        });
+        if (recoveryMatch.matched) {
+          recordRecoveryUnderBand({
+            subcommand: recoveryMatch.subcommand,
+            sessionId,
+            trustedEnv: process.env,
+            adlcBinPath: resolveTrustedBinary('adlc', process.env.PATH),
+          });
+          process.exit(0); // allow — never gated on the audit record above succeeding
+        }
+      }
+    }
+  }
+
   const active = resolveActiveTicketId();
   if (!active.id) process.exit(0); // no active ticket declared → allow (opt-in gate)
 
@@ -242,7 +330,14 @@ async function main() {
 // Only run as a hook when executed directly (`node adlc-build-gate.mjs`), not
 // when imported — the drift test imports this module for its pure exports
 // (computeRiskTier, decide, ...) and must not trigger a live stdin read.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+//
+// pathToFileURL, never `file://${argv[1]}`: Node percent-encodes
+// import.meta.url (a space becomes %20) but a manually built template
+// string does not, so ANY install path containing a space (or other
+// percent-encoded character) made this comparison always false — main()
+// silently never ran and the hook exited 0 (allow) unconditionally,
+// regardless of ticket risk or session degradation (Round-5 review).
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   main().catch((err) => {
     // Enforcing hook — a crash must fail closed, never fall through to allow.

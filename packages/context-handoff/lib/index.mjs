@@ -10,3 +10,4 @@ export * from './resume-auth.mjs';
 export * from './deny-persist.mjs';
 export * from './adapter.mjs';
 export * from './secret-scrub.mjs';
+export * from './recovery-exception.mjs';

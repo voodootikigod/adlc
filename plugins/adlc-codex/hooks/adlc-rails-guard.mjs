@@ -7,12 +7,22 @@
 // script cannot resolve npm packages at runtime, hence the copy; a drift test
 // (packages/core/test/shell.test.mjs) pins the two together.
 import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
+import { isAbsolute, relative, resolve, dirname, basename, join } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
 } from './generated-active-ticket.mjs';
+import {
+  toolNameOf,
+  isRecoveryEligibleToolName,
+  isBareInspectionPwd,
+  matchRecoveryCommand,
+  resolveTrustedBinary,
+  recordRecoveryUnderBand,
+  resolveHandoffSessionIdLocal,
+} from './adlc-handoff-gate.mjs';
+import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
 
 function fail(message) {
   console.error(`adlc-rails-guard: ${message}`);
@@ -414,6 +424,79 @@ function normalizePath(path, baseCwd = process.cwd()) {
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
+// Payload parsing happens FIRST, before ANY ticket/pointer/rails resolution
+// below — see the Recovery/Inspection Exception block immediately following
+// for why. It must not be moved back down past that block.
+let payload = {};
+const raw = await stdinText();
+if (raw.trim()) {
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    fail(`malformed hook payload JSON: ${err.message}`);
+  }
+}
+
+// Recovery Exception & Inspection Bash Exception (context-rot-threshold-
+// calibration spec §1.3), applied to THIS gate too — evaluated before
+// EVERYTHING else in this file, including active-ticket resolution and
+// ticket-store loading, not just the shell-classification logic further
+// down. This gate runs FIRST in hooks.json's PreToolUse pipeline
+// (rails-guard, then build-gate, then handoff-gate) for every shell tool
+// identity. Two independent lockout causes were found and fixed here in
+// sequence: (1) the shell classifier has no concept of the recovery CLI's
+// argument shape — a bypass/unlock/repair/write/resume invocation is
+// neither a recognized read-only command nor a recognized path-transparent
+// mutation, so it was denied by that classifier; (2) even after this check
+// was added AFTER active-ticket/store resolution, a corrupt pointer, an
+// unreadable/malformed ticket store, an unknown ticket id, or a hash
+// mismatch would `fail()` during THAT resolution — before this check ever
+// ran — reproducing the identical total-lockout failure through the
+// gate's OWN state-validation path instead of its shell classifier. Moving
+// this block to run on nothing but the raw stdin payload closes both.
+// Reuses the same trusted, package-independent matcher as the other two
+// gates (imported from the sibling adlc-handoff-gate.mjs — a plugin-owned,
+// trusted file, never the dynamically-loaded project-resolved package), so
+// all three gates share one definition of what an authorized
+// recovery/inspection command is.
+{
+  const name = toolNameOf(payload);
+  if (isRecoveryEligibleToolName(name)) {
+    const candidates = collectCommandText(payload).filter((c) => typeof c === 'string' && c.length > 0);
+    if (candidates.length === 1) {
+      const [candidateCommand] = candidates;
+      if (isBareInspectionPwd(candidateCommand)) process.exit(0); // unconditional allow, no audit record
+      // Resolution walks the PROJECT's own node_modules, the same way
+      // loadContextHandoff does elsewhere — this does not import/execute
+      // the package, only locates it, but a repository that ships its own
+      // @adlc/context-handoff controls what path this resolves to (see
+      // adlc-handoff-gate.mjs's identical comment for the full residual).
+      const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+      const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
+      if (trustedRecoveryCliPath) {
+        const sessionId = resolveHandoffSessionIdLocal({
+          candidates: [payload.session_id, payload.sessionId],
+          transcriptPath: payload.transcript_path,
+        });
+        const recoveryMatch = matchRecoveryCommand(candidateCommand, {
+          interpreterPath: process.execPath,
+          scriptPath: trustedRecoveryCliPath,
+          sessionId,
+        });
+        if (recoveryMatch.matched) {
+          recordRecoveryUnderBand({
+            subcommand: recoveryMatch.subcommand,
+            sessionId,
+            trustedEnv: process.env,
+            adlcBinPath: resolveTrustedBinary('adlc', process.env.PATH),
+          });
+          process.exit(0); // allow — never gated on the audit record above succeeding
+        }
+      }
+    }
+  }
+}
+
 const explicitEnforcement = process.env.ADLC_P4_ENFORCEMENT;
 if (explicitEnforcement === '0') {
   notice('P4 rail hook explicitly disabled');
@@ -456,16 +539,6 @@ if (declaredRails.length === 0) {
   process.exit(0);
 }
 const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
-
-let payload = {};
-const raw = await stdinText();
-if (raw.trim()) {
-  try {
-    payload = JSON.parse(raw);
-  } catch (err) {
-    fail(`malformed hook payload JSON: ${err.message}`);
-  }
-}
 
 const rawPaths = collectPaths(payload);
 const paths = Array.from(rawPaths).map((path) => normalizePath(path));

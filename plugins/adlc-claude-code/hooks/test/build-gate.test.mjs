@@ -220,9 +220,41 @@ test('high-risk ticket, deep session by BYTES (large transcript, low tool-call c
     tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
     activeTicketEnv: 'T1',
     transcriptToolCalls: 1,
-    transcriptPadBytes: 300_000, // > 256 KiB threshold
+    transcriptPadBytes: 9 * 1024 * 1024, // > the recalibrated 8 MiB threshold
   });
   assert.equal(r.verdict, 'deny');
+});
+
+test('high-risk ticket, a routine fresh-session-sized transcript (well over the OLD 256 KiB threshold) is NOT treated as degraded (Round-5 regression pin)', () => {
+  // The exact reported bug this recalibration fixes: system-prompt/schema
+  // overhead alone can push a fresh session's transcript well past 256 KiB
+  // with zero real tool-call depth.
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: 1,
+    transcriptPadBytes: 400_000,
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('high-risk ticket, deep tool-call history EARLY in a transcript, pushed out of the old 256 KiB window by later padding, is still denied (Round-9 regression)', () => {
+  // Round-9 review: BUILD_GATE_BYTES_THRESHOLD was recalibrated to 8 MiB, but
+  // if the depth-counting SCAN WINDOW had stayed at the old 256 KiB, a
+  // transcript sized between 256 KiB and 8 MiB with its real tool-call depth
+  // EARLY in the file (pushed out of a 256 KiB tail window by later
+  // non-tool-call padding) would be undercounted to a false "shallow" depth,
+  // AND no longer trip the (now much higher) byte threshold either — the two
+  // signals would stop jointly covering that size range. makeTranscript
+  // appends padBytes AFTER the tool-call lines, so the tool calls sit early
+  // and the padding dominates the tail — exactly this scenario.
+  const r = runBuildGate({
+    tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+    activeTicketEnv: 'T1',
+    transcriptToolCalls: 50,
+    transcriptPadBytes: 500 * 1024,
+  });
+  assert.equal(r.verdict, 'deny', r.out);
 });
 
 test('high-risk ticket via declared risk:"high" (not category) → deny once deep', () => {
@@ -337,14 +369,20 @@ test('the PreToolUse matcher includes a buildgate hook entry (excludes Bash)', (
   assert.equal(/\bBash\b/.test(entry.matcher), false);
 });
 
-test('KEEP-IN-SYNC: BUILD_GATE_* literals track HARD_DEPTH / HARD_BYTES', () => {
+test('KEEP-IN-SYNC: BUILD_GATE_DEPTH_THRESHOLD tracks HARD_DEPTH; BUILD_GATE_BYTES_THRESHOLD is the deliberately recalibrated 8 MiB (Round-5)', () => {
   const src = readFileSync(HOOK, 'utf8');
   const depth = src.match(/const BUILD_GATE_DEPTH_THRESHOLD = (\d+);/);
   const bytes = src.match(/const BUILD_GATE_BYTES_THRESHOLD = ([^;]+);/);
   assert.ok(depth, 'depth constant present');
   assert.ok(bytes, 'bytes constant present');
   assert.equal(Number(depth[1]), HARD_DEPTH);
-  assert.equal(Function(`"use strict"; return (${bytes[1]});`)(), HARD_BYTES);
+  // Deliberately NOT HARD_BYTES (256 KiB) — see BUILD_GATE_BYTES_THRESHOLD's
+  // own comment: that would reproduce the exact false-lockout bug this
+  // recalibration fixes. Pinned to the new, independently-chosen 8 MiB value
+  // instead of context-handoff's own MAX_ACTIVE_CONTEXT_BYTES export so this
+  // test still catches an accidental revert to HARD_BYTES.
+  assert.equal(Function(`"use strict"; return (${bytes[1]});`)(), 8 * 1024 * 1024);
+  assert.notEqual(Function(`"use strict"; return (${bytes[1]});`)(), HARD_BYTES);
   assert.match(src, /depth >= BUILD_GATE_DEPTH_THRESHOLD/);
   assert.match(src, /sessionBytes >= BUILD_GATE_BYTES_THRESHOLD/);
 });

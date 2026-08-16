@@ -11,6 +11,8 @@ import {
   rmSync,
   existsSync,
   readFileSync,
+  realpathSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -20,7 +22,11 @@ import {
   ensureDenyMarker,
   writeDenyRecord,
   HANDOFF_DEPTH,
+  RECOVERY_CLI_PATH,
 } from '@adlc/context-handoff';
+
+const REAL_NODE = realpathSync(process.execPath);
+const REAL_RECOVERY_CLI = realpathSync(RECOVERY_CLI_PATH);
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-hook.mjs');
@@ -415,11 +421,11 @@ test('under deny-set, Bash `adlc handoff bypass` is tagged mutating-cli', () => 
   assert.match(r.out, /bash_handoff_mutating_cli/);
 });
 
-test('Shell tool_name is fail-closed under deny-set', () => {
+test('Shell tool_name (a non-pwd, non-recovery command) is fail-closed under deny-set', () => {
   const r = runHandoff({
     sessionId: 'consumer-shell',
     toolName: 'Shell',
-    toolInput: { command: 'pwd' },
+    toolInput: { command: 'echo hi' },
     seedDeny: (root) => {
       assert.equal(
         ensureDenyMarker(root, {
@@ -434,6 +440,170 @@ test('Shell tool_name is fail-closed under deny-set', () => {
   });
   assert.equal(r.verdict, 'deny');
   assert.match(r.out, /bash_fail_closed_under_deny/);
+});
+
+// --- Recovery Exception & Inspection Bash Exception (spec §1.3, AC0) -------
+//
+// The production incident this ticket exists to fix denied EVERY Bash
+// invocation on a hard-degraded session — including `pwd` and the operator's
+// own recovery CLI. Both MUST now be allowed unconditionally, regardless of
+// band state, evaluated before any other Hard-Degraded/deny check.
+
+test('Inspection Bash Exception: bare pwd is allowed even under an open deny-set', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-pwd',
+    toolName: 'Bash',
+    toolInput: { command: 'pwd' },
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-pwd',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('Inspection Bash Exception: pwd with an argument or shell chaining is NOT exempt', () => {
+  for (const decoy of ['pwd -L', 'pwd; ls', 'pwd && rm -rf /']) {
+    const r = runHandoff({
+      sessionId: 'consumer-pwd-decoy',
+      toolName: 'Bash',
+      toolInput: { command: decoy },
+      seedDeny: (root) => {
+        assert.equal(
+          ensureDenyMarker(root, {
+            sessionId: 'denier-pwd-decoy',
+            ticketId: 'T1',
+            contentHash: 'abc',
+            host: 'test',
+          }).ok,
+          true,
+        );
+      },
+    });
+    assert.equal(r.verdict, 'deny', `decoy should still deny: ${decoy}`);
+  }
+});
+
+test('Recovery Exception: the real bypass command is allowed even under an open deny-set', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery',
+    toolName: 'Bash',
+    toolInput: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery --write` },
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-recovery',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('Recovery Exception: a decoy that merely resembles the recovery command is still denied', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery-decoy',
+    toolName: 'Bash',
+    toolInput: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery-decoy --write; rm -rf /` },
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-recovery-decoy',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('Recovery Exception: --session naming a DIFFERENT session than this one is denied', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery-other',
+    toolName: 'Bash',
+    toolInput: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session some-other-session --write` },
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-recovery-other',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('deny diagnostic includes the literal, copy-pasteable recovery command for the resolved session', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-diag',
+    toolName: 'Edit',
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-diag',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.ok(r.out.includes(REAL_NODE), r.out);
+  assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
+  assert.match(r.out, /bypass --session consumer-diag --write/);
+});
+
+test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
+  // A padded fixture that exceeds MAX_ACTIVE_CONTEXT_BYTES forces the scan to
+  // truncate (spec §1.2.2's lower-bound rule) even though the reported depth
+  // itself is small.
+  const oversized = { transcriptToolCalls: 2, transcriptPadBytes: 9 * 1024 * 1024 };
+  const edit = runHandoff({ sessionId: 'consumer-truncated-edit', toolName: 'Edit', ...oversized });
+  assert.equal(edit.verdict, 'deny', edit.out);
+  assert.match(edit.out, /incomplete_scan_lower_bound/);
+
+  const pwd = runHandoff({
+    sessionId: 'consumer-truncated-pwd',
+    toolName: 'Bash',
+    toolInput: { command: 'pwd' },
+    ...oversized,
+  });
+  assert.equal(pwd.verdict, 'allow', pwd.out);
+});
+
+test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows ordinary mutations', () => {
+  // Deliberately sized between the OLD 256 KiB ceiling and the new 8 MiB one —
+  // this is the exact regression the hotfix exists to close (AC0 bullet 2):
+  // large enough to have tripped the retired MAX_SCAN_BYTES, well within
+  // MAX_ACTIVE_CONTEXT_BYTES, so the scan completes and ordinary mutators
+  // (not just pwd) are allowed.
+  const r = runHandoff({
+    sessionId: 'consumer-large-baseline',
+    toolName: 'Edit',
+    transcriptToolCalls: 2,
+    transcriptPadBytes: 400 * 1024,
+  });
+  assert.equal(r.verdict, 'allow', r.out);
 });
 
 test('hooks.json wires handoff for Edit matcher and Bash|Shell', () => {
@@ -616,4 +786,410 @@ test('Write via dotted handoffs path is still protected', async () => {
   const { isProtectedHandoffPath } = await import('../handoff-gate.mjs');
   assert.equal(isProtectedHandoffPath('.adlc/./handoffs/denies/x.json'), true);
   assert.equal(isProtectedHandoffPath('.adlc/handoffs/denies'), true);
+});
+
+test('Recovery Exception check happens BEFORE package load, not after (source order pin)', () => {
+  // The whole point of the trusted local copy (spec §1.3, AC0): a
+  // broken/incompatible/hostile @adlc/context-handoff must never be able to
+  // deny pwd or the recovery CLI before this check even runs. A regression
+  // that moves the check back to after loadContextHandoff() would silently
+  // reproduce the original total-lockout bug — pin the ordering structurally.
+  const source = readFileSync(HOOK, 'utf8');
+  const handoffStart = source.indexOf('async function handoff(input)');
+  assert.ok(handoffStart >= 0, 'handoff() not found');
+  const body = source.slice(handoffStart);
+  const exceptionCallIdx = body.indexOf('tryRecoveryOrInspectionException(input)');
+  const loadIdx = body.indexOf('await loadContextHandoff(');
+  assert.ok(exceptionCallIdx >= 0, 'tryRecoveryOrInspectionException call not found in handoff()');
+  assert.ok(loadIdx >= 0, 'loadContextHandoff call not found in handoff()');
+  assert.ok(exceptionCallIdx < loadIdx, 'tryRecoveryOrInspectionException must be checked BEFORE loadContextHandoff');
+});
+
+test('Recovery Exception check ALSO happens BEFORE either chdir in main(), not only inside handoff() (source order pin)', () => {
+  // main()'s dispatcher performs two independent chdir calls before ever
+  // invoking handoff() — each can fail closed via failClosedHandoffEnter,
+  // denying pwd/recovery before handoff()'s own (correctly early) check ever
+  // runs. A regression that removes or reorders this early call would
+  // silently reopen that lockout window even though handoff()'s own check
+  // still looks correct in isolation.
+  const source = readFileSync(HOOK, 'utf8');
+  const mainStart = source.indexOf('async function main()');
+  assert.ok(mainStart >= 0, 'main() not found');
+  const body = source.slice(mainStart);
+  const exceptionCallIdx = body.indexOf('tryRecoveryOrInspectionException(input)');
+  const firstChdirIdx = body.indexOf('process.chdir(dir)');
+  assert.ok(exceptionCallIdx >= 0, 'tryRecoveryOrInspectionException call not found in main()');
+  assert.ok(firstChdirIdx >= 0, 'process.chdir(dir) not found in main()');
+  assert.ok(exceptionCallIdx < firstChdirIdx, 'tryRecoveryOrInspectionException must be checked BEFORE the first chdir in main()');
+});
+
+test('a stale/inaccessible CLAUDE_PROJECT_DIR does not block bare pwd', () => {
+  // Round-3 review found that main()'s dispatcher performs two chdir calls
+  // BEFORE ever invoking handoff() — a stale CLAUDE_PROJECT_DIR that cannot
+  // be entered denied pwd/recovery via failClosedHandoffEnter, before
+  // handoff()'s own (correctly early) exception check ever ran.
+  const r = runHandoff({
+    sessionId: 'consumer-stale-dir',
+    toolName: 'Bash',
+    toolInput: { command: 'pwd' },
+    env: { CLAUDE_PROJECT_DIR: '/definitely/does/not/exist/nope' },
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('a stale/inaccessible CLAUDE_PROJECT_DIR does not block the real recovery command', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-stale-dir-recovery',
+    toolName: 'Bash',
+    toolInput: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-stale-dir-recovery --write` },
+    env: { CLAUDE_PROJECT_DIR: '/definitely/does/not/exist/nope' },
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('a stale/inaccessible CLAUDE_PROJECT_DIR still denies an ORDINARY edit, but the denial includes the real recovery command (Round-5 Finding 4)', () => {
+  // Round-5 review: an ordinary (non-recovery, non-pwd) call that hits
+  // failClosedHandoffEnter previously got only a bare "could not enter the
+  // project directory" message — no copy-pasteable recovery command, even
+  // though a safe session id was resolvable from the payload. This
+  // reproduces the reviewer's named exploit scenario directly.
+  const r = runHandoff({
+    sessionId: 'consumer-stale-dir-deny',
+    env: { CLAUDE_PROJECT_DIR: '/definitely/does/not/exist/nope' },
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+  assert.match(r.out, /could not enter the project directory/);
+  assert.match(r.out, /bypass --session consumer-stale-dir-deny --write/);
+});
+
+// --- recordRecoveryUnderBand: env allowlist (mirrors the Codex hook) -------
+
+test('recordRecoveryUnderBand never forwards ADLC_MANIFEST_KEY or ADLC_ADMIN_KEY to the spawned recorder', async () => {
+  const { recordRecoveryUnderBand } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-record-recovery-strip-'));
+  const cwdBefore = process.cwd();
+  try {
+    const envDumpPath = join(dir, 'env-dump.json');
+    const fakeAdlc = join(dir, 'fake-adlc.mjs');
+    writeFileSync(
+      fakeAdlc,
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify(process.env));\n`,
+    );
+    // recordRecoveryUnderBand now invokes via process.execPath directly
+    // (Round-5 fix) rather than executing adlcBinPath as a shebang script,
+    // so the fake recorder can just be the plain .mjs module itself.
+
+    // No .adlc/ under `dir` -> repoManifestChainIsSigned(dir) is false; this
+    // test isolates the secret-stripping property from the separate
+    // signed-chain guard (covered by its own tests below).
+    process.chdir(dir);
+    recordRecoveryUnderBand({
+      subcommand: 'bypass',
+      sessionId: 'sess-a',
+      trustedEnv: { ...process.env, ADLC_MANIFEST_KEY: 'super-secret-key', ADLC_ADMIN_KEY: 'super-secret-admin' },
+      adlcBinPath: fakeAdlc,
+    });
+
+    const dumped = JSON.parse(readFileSync(envDumpPath, 'utf8'));
+    assert.equal(dumped.ADLC_MANIFEST_KEY, undefined, 'ADLC_MANIFEST_KEY must never reach the spawned recorder');
+    assert.equal(dumped.ADLC_ADMIN_KEY, undefined, 'ADLC_ADMIN_KEY must never reach the spawned recorder');
+  } finally {
+    process.chdir(cwdBefore);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordRecoveryUnderBand forwards only the env allowlist — an unresolvable-provenance binary cannot exfiltrate unrelated credentials', async () => {
+  // Round-4 review: resolveTrustedBinary's PATH search cannot fully verify
+  // the resolved executable's provenance, so a denylist of only the two
+  // manifest/admin keys still hands a possibly-malicious binary everything
+  // else the operator's shell exports (e.g. cloud credentials). This proves
+  // the fix is a genuine allowlist, not merely a bigger denylist: a
+  // plausible third-party credential var is stripped, while an allowlisted
+  // var (PATH) still reaches the child.
+  const { recordRecoveryUnderBand } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-record-recovery-allowlist-'));
+  const cwdBefore = process.cwd();
+  try {
+    const envDumpPath = join(dir, 'env-dump.json');
+    const fakeAdlc = join(dir, 'fake-adlc.mjs');
+    writeFileSync(
+      fakeAdlc,
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify(process.env));\n`,
+    );
+    // recordRecoveryUnderBand now invokes via process.execPath directly
+    // (Round-5 fix) rather than executing adlcBinPath as a shebang script,
+    // so the fake recorder can just be the plain .mjs module itself.
+
+    process.chdir(dir);
+    recordRecoveryUnderBand({
+      subcommand: 'bypass',
+      sessionId: 'sess-a',
+      trustedEnv: { ...process.env, AWS_SECRET_ACCESS_KEY: 'not-on-the-allowlist' },
+      adlcBinPath: fakeAdlc,
+    });
+
+    const dumped = JSON.parse(readFileSync(envDumpPath, 'utf8'));
+    assert.equal(dumped.AWS_SECRET_ACCESS_KEY, undefined, 'a non-allowlisted credential var must never reach the spawned recorder');
+    assert.equal(dumped.PATH, process.env.PATH, 'an allowlisted var (PATH) must still reach the spawned recorder');
+  } finally {
+    process.chdir(cwdBefore);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- repoManifestChainIsSigned / recordRecoveryUnderBand: signed-chain guard (Round-5) ---
+
+test('repoManifestChainIsSigned: false for a repo with no manifest at all', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-none-'));
+  try {
+    assert.equal(repoManifestChainIsSigned(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: false for a root manifest with only unsigned entries', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-unsigned-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now' })}\n`);
+    assert.equal(repoManifestChainIsSigned(dir), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: true for a root manifest with a signed entry', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-root-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now', sig: 'deadbeef' })}\n`);
+    assert.equal(repoManifestChainIsSigned(dir), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: true for a signed entry inside .adlc/manifest.d/ (segmented/forest repo)', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-segment-'));
+  try {
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(
+      join(dir, '.adlc', 'manifest.d', 'some-branch-01ABCDEF.jsonl'),
+      `${JSON.stringify({ seq: 1, gate: 'ticket-update', ts: 'now', sig: 'deadbeef' })}\n`,
+    );
+    assert.equal(repoManifestChainIsSigned(dir), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordRecoveryUnderBand refuses to spawn the recorder at all when the chain is already signed', async () => {
+  // Round-5 review (confirmed against this exact repo's own manifest.d
+  // segment, which already has a signed seq:1 entry): gate-manifest record
+  // does NOT fail closed on a missing key — key:null is a legal, silently
+  // unsigned append. Without this guard, recordRecoveryUnderBand would
+  // append an unsigned entry directly after a signed one, corrupting the
+  // chain for every later key-aware verification. Proven here by asserting
+  // the fake recorder's env-dump file (proof the child ran at all) is never
+  // created when the chain is signed.
+  const { recordRecoveryUnderBand } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-record-recovery-signed-chain-'));
+  const cwdBefore = process.cwd();
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now', sig: 'deadbeef' })}\n`);
+
+    const envDumpPath = join(dir, 'env-dump.json');
+    const fakeAdlc = join(dir, 'fake-adlc.mjs');
+    writeFileSync(
+      fakeAdlc,
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify(process.env));\n`,
+    );
+    // recordRecoveryUnderBand now invokes via process.execPath directly
+    // (Round-5 fix) rather than executing adlcBinPath as a shebang script,
+    // so the fake recorder can just be the plain .mjs module itself.
+
+    process.chdir(dir);
+    recordRecoveryUnderBand({
+      subcommand: 'bypass',
+      sessionId: 'sess-a',
+      trustedEnv: process.env,
+      adlcBinPath: fakeAdlc,
+    });
+
+    assert.equal(existsSync(envDumpPath), false, 'the recorder child must never run against a signed chain');
+  } finally {
+    process.chdir(cwdBefore);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- recoveryDiagnostic: independent of the dynamically-loaded package -----
+// (Round-4 Finding 6 + Round-5 Finding 4)
+
+test('recoveryDiagnostic prints a real, absolute, session-bound recovery command — built entirely from trusted local code, no api parameter', async () => {
+  // Round-5 review: the OLD implementation formatted via api.formatRecoveryCommand
+  // / api.RECOVERY_CLI_PATH — the same dynamically-loaded, project-resolved
+  // package whose failure to load or export what's expected is exactly what
+  // every early denyHandoff() in handoff() is reporting when it appends this
+  // diagnostic. A stale/incompatible install left the operator with a
+  // generic, non-actionable message. recoveryDiagnostic no longer takes an
+  // api parameter at all — it resolves the CLI path via the same trusted,
+  // execution-free resolveContextHandoffEntry the allow-path exception uses,
+  // and formats via handoff-gate.mjs's trusted local twins. This proves the
+  // resulting command is real (matches the shape the matcher itself accepts).
+  const { recoveryDiagnostic } = await import('../adlc-hook.mjs');
+  const out = recoveryDiagnostic('sess-a');
+  assert.match(out, /bypass --session sess-a --write/);
+  assert.doesNotMatch(out, /Recovery command unavailable/);
+});
+
+test('recoveryDiagnostic degrades to the no-safe-session-id message when sessionId is null', async () => {
+  const { recoveryDiagnostic } = await import('../adlc-hook.mjs');
+  const out = recoveryDiagnostic(null);
+  assert.match(out, /No session id could be resolved/);
+  assert.match(out, /pwd/);
+});
+
+test('recordRecoveryUnderBand never lets a PATH-planted "node" shim run (Round-5 Finding 2: shebang/env second lookup)', async () => {
+  const { recordRecoveryUnderBand } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-record-recovery-no-shebang-hijack-'));
+  const cwdBefore = process.cwd();
+  try {
+    const maliciousMarker = join(dir, 'malicious-ran.marker');
+    const safeMarker = join(dir, 'safe-ran.marker');
+
+    const maliciousNodeDir = join(dir, 'node_modules', '.bin');
+    mkdirSync(maliciousNodeDir, { recursive: true });
+    const maliciousNode = join(maliciousNodeDir, 'node');
+    writeFileSync(maliciousNode, `#!/bin/sh\ntouch "${maliciousMarker}"\nexit 1\n`, { mode: 0o755 });
+
+    const adlcBinPath = join(dir, 'fake-adlc-with-shebang.mjs');
+    writeFileSync(
+      adlcBinPath,
+      `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(safeMarker)}, 'ran');\n`,
+      { mode: 0o755 },
+    );
+
+    const hijackPath = [maliciousNodeDir, dirname(process.execPath)].join(':');
+
+    process.chdir(dir);
+    recordRecoveryUnderBand({
+      subcommand: 'bypass',
+      sessionId: 'sess-a',
+      trustedEnv: { ...process.env, PATH: hijackPath },
+      adlcBinPath,
+    });
+
+    assert.equal(existsSync(maliciousMarker), false, 'the PATH-planted node shim must never run');
+    assert.equal(existsSync(safeMarker), true, 'the real recorder must still have run, via process.execPath directly');
+  } finally {
+    process.chdir(cwdBefore);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the top-level crash handler appends recoveryDiagnostic(lastKnownSessionId), not a bare error message (Round-5 Finding 4, source pin)', () => {
+  const source = readFileSync(HOOK, 'utf8');
+  assert.match(source, /let lastKnownSessionId = null;/);
+  assert.match(source, /lastKnownSessionId = resolveSessionId\(input, \{ isSafeSessionId \}\);/);
+  assert.match(
+    source,
+    /denyHandoff\(`handoff hook errored \(\$\{err\?\.message \?\? 'unknown'\}\) — failing closed\\n\\n\$\{recoveryDiagnostic\(lastKnownSessionId\)\}`\);/,
+  );
+});
+
+// --- repoManifestChainIsSigned: bounded scan (Round-5 Finding 5) -----------
+
+test('repoManifestChainIsSigned: a file larger than the per-file byte cap is treated as signed (truncated -> inconclusive -> fail closed), not fully read', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-oversized-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const line = `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now' })}\n`;
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), line.repeat(Math.ceil((2 * 1024 * 1024) / line.length)));
+    const start = Date.now();
+    const result = repoManifestChainIsSigned(dir);
+    const elapsedMs = Date.now() - start;
+    assert.equal(result, true, 'an oversized file cannot be proven unsigned within bounds -> treat as signed');
+    assert.ok(elapsedMs < 2000, `expected a bounded, fast return; took ${elapsedMs}ms`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: more segment files than the fan-out cap is treated as signed, without opening any of them', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-fanout-'));
+  try {
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    for (let i = 0; i < 501; i += 1) {
+      writeFileSync(
+        join(dir, '.adlc', 'manifest.d', `seg-${i}.jsonl`),
+        `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now' })}\n`,
+      );
+    }
+    const start = Date.now();
+    const result = repoManifestChainIsSigned(dir);
+    const elapsedMs = Date.now() - start;
+    assert.equal(result, true);
+    assert.ok(elapsedMs < 2000, `expected a bounded, fast return; took ${elapsedMs}ms`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: a symlinked manifest file is rejected outright, never followed', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-symlink-'));
+  const targetDir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-symlink-target-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    const target = join(targetDir, 'real.jsonl');
+    writeFileSync(target, `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now' })}\n`);
+    symlinkSync(target, join(dir, '.adlc', 'manifest.jsonl'));
+    assert.equal(repoManifestChainIsSigned(dir), true, 'a symlinked manifest file must be rejected, not followed and read');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(targetDir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: a symlinked manifest.d DIRECTORY is rejected outright, never listed (Round-5 Finding 4)', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-dir-symlink-'));
+  const targetDir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-dir-symlink-target-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(targetDir, 'real.jsonl'), `${JSON.stringify({ seq: 1, gate: 'x', ts: 'now' })}\n`);
+    symlinkSync(targetDir, join(dir, '.adlc', 'manifest.d'));
+    assert.equal(repoManifestChainIsSigned(dir), true, 'a symlinked manifest.d directory must be rejected, not listed');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(targetDir, { recursive: true, force: true });
+  }
+});
+
+test('repoManifestChainIsSigned: many NON-.jsonl entries still trip the fan-out cap (Round-9 Finding 5)', async () => {
+  const { repoManifestChainIsSigned } = await import('../adlc-hook.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'cc-chain-signed-nonjsonl-fanout-'));
+  try {
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    for (let i = 0; i < 501; i += 1) {
+      writeFileSync(join(dir, '.adlc', 'manifest.d', `junk-${i}.tmp`), 'x');
+    }
+    const start = Date.now();
+    const result = repoManifestChainIsSigned(dir);
+    const elapsedMs = Date.now() - start;
+    assert.equal(result, true, 'a directory dominated by non-.jsonl entries must still be bounded');
+    assert.ok(elapsedMs < 2000, `expected a bounded, fast return; took ${elapsedMs}ms`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

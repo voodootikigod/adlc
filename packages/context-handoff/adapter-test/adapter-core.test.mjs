@@ -22,6 +22,7 @@ import {
   writeDenyRecord,
   writeResumeAuth,
   HANDOFF_DEPTH,
+  WARN_DEPTH,
 } from '@adlc/context-handoff';
 
 /** Disposable repo root with a .adlc/ directory. */
@@ -720,6 +721,82 @@ test('symlink resolution does not flag ordinary aliases', () => {
       host: 'test',
     });
     assert.equal(r.deny, false, r.reasons.join());
+  });
+});
+
+// --- incomplete-scan lower-bound restriction (Phase 0 hotfix, spec §1.2.2) --
+//
+// A scan that hit its budget before reaching start-of-file reports a finite
+// LOWER BOUND, never +Infinity. That lower bound is only safe to act on as an
+// implicit allow once it already reaches HANDOFF_DEPTH (more unseen calls
+// only make a deny more correct, never less) — below that, ordinary
+// mutations must stay restricted even though `observed.depth` alone would
+// otherwise read as WARN or clean.
+
+test('scanTruncated with a lower bound below HANDOFF_DEPTH restricts an ordinary mutation', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: WARN_DEPTH + 1 }, // in WARN range — would otherwise just warn, not deny
+      scanTruncated: true,
+      host: 'test',
+    });
+    assert.equal(r.deny, true);
+    assert.ok(r.reasons.includes('incomplete_scan_lower_bound'), r.reasons.join());
+  });
+});
+
+test('scanTruncated with a lower bound already at HANDOFF_DEPTH is NOT separately restricted (bands already deny)', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: HANDOFF_DEPTH },
+      scanTruncated: true,
+      host: 'test',
+    });
+    assert.equal(r.deny, true);
+    assert.ok(!r.reasons.includes('incomplete_scan_lower_bound'), r.reasons.join());
+  });
+});
+
+test('scanTruncated false (a complete scan) never adds the restriction even below HANDOFF_DEPTH', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: WARN_DEPTH + 1 },
+      scanTruncated: false,
+      host: 'test',
+    });
+    assert.equal(r.deny, false, r.reasons.join());
+  });
+});
+
+test('scanTruncated omitted defaults to false — no behavior change for existing callers', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: 1 },
+      host: 'test',
+    });
+    assert.equal(r.deny, false, r.reasons.join());
+  });
+});
+
+test('scanTruncated with a fresh clean session (depth 0) still restricts below HANDOFF_DEPTH', () => {
+  withRepo((root) => {
+    const r = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-a',
+      observed: { depth: 0 },
+      scanTruncated: true,
+      host: 'test',
+    });
+    assert.equal(r.deny, true);
+    assert.ok(r.reasons.includes('incomplete_scan_lower_bound'), r.reasons.join());
   });
 });
 

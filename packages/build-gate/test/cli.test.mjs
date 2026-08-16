@@ -120,6 +120,28 @@ test('--session-bytes past --bytes-threshold triggers deny', () => {
   });
 });
 
+test('the --bytes-threshold DEFAULT (no flag passed) is the recalibrated 8 MiB, matching every host hook (Round-5)', () => {
+  // Before this fix, the CLI's own default silently stayed at the old,
+  // uncalibrated 256 KiB (packages/build-gate/lib/depth-signal.mjs's own
+  // DEFAULT_BYTES_THRESHOLD, frozen by ticket T156) even after every host
+  // hook's own copy was recalibrated — so a caller running this CLI
+  // directly (rather than through a host hook) still denied the exact
+  // routine session the hooks now correctly allow.
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    // A routine fresh-session-sized transcript: well over the OLD 256 KiB
+    // threshold, comfortably under the new 8 MiB one.
+    const routine = run(['T1', '--session-bytes', String(400 * 1024), '--json'], { cwd: dir });
+    assert.equal(routine.code, 0, routine.stdout || routine.stderr);
+    const genuinelyOversized = run(['T1', '--session-bytes', String(9 * 1024 * 1024), '--json'], { cwd: dir });
+    assert.equal(genuinelyOversized.code, 2);
+  });
+});
+
+test('--help documents the recalibrated 8 MiB default, not the frozen library default', () => {
+  const r = run(['--help']);
+  assert.match(r.stdout, /--bytes-threshold <n>\s+default 8388608/);
+});
+
 test('no --depth/--session-bytes supplied at all → defaults to not-degraded (allow)', () => {
   withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
     const r = run(['T1', '--json'], { cwd: dir });

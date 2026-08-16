@@ -175,15 +175,21 @@ test('the allowlist is documented and stays small', () => {
 });
 
 test('the read window is taken from the package, not re-declared', () => {
-  // A local window constant equal to HARD_BYTES cannot be killed by any
-  // behavioural test — a transcript large enough to trigger windowing already
-  // denies on the bytes signal — so it must not exist in the first place.
+  // A local window constant cannot be killed by any behavioural test — so it
+  // must not exist in the first place. Phase 0 hotfix (context-rot-threshold-
+  // calibration spec §1.2.2): the window used to equal HARD_BYTES (256 KiB),
+  // which a routine fresh-session baseline already exceeds — that equation,
+  // and the separate MAX_SCAN_BYTES constant it lived under, are retired.
+  // The scan's two budgets now come from the package as
+  // MAX_ACTIVE_CONTEXT_BYTES / MAX_SCAN_WALL_MS.
   const source = readFileSync(
     join(REPO_ROOT, 'plugins/adlc-codex/hooks/adlc-handoff-gate.mjs'),
     'utf8',
   );
-  assert.match(source, /maxScanBytes:\s*api\.HARD_BYTES/);
+  assert.match(source, /maxActiveContextBytes:\s*api\.MAX_ACTIVE_CONTEXT_BYTES/);
+  assert.match(source, /maxScanWallMs:\s*api\.MAX_SCAN_WALL_MS/);
   assert.doesNotMatch(stripComments(source), /MAX_SCAN_BYTES\s*=/);
+  assert.doesNotMatch(stripComments(source), /maxScanBytes:\s*api\.HARD_BYTES/);
 });
 
 test('the scan bites', () => {

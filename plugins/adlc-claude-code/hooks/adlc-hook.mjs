@@ -55,16 +55,24 @@ import {
   rmSync,
   realpathSync,
   readlinkSync,
+  statSync,
+  opendirSync,
 } from 'node:fs';
 import { join, relative, resolve, dirname, basename, isAbsolute } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
-import { loadContextHandoff } from './handoff-resolve.mjs';
+import { loadContextHandoff, resolveContextHandoffEntry } from './handoff-resolve.mjs';
 import {
   resolveSessionId,
   bashCommandFromInput,
+  isBareInspectionPwd,
+  matchRecoveryCommand,
+  isSafeSessionId,
+  formatRecoveryCommand,
+  formatNoSessionIdMessage,
 } from './handoff-gate.mjs';
 
 const MODE = process.argv[2];
@@ -87,6 +95,15 @@ function isInside(child, parent) {
 // against this, not the walked-up cwd, or `secret.js` from `src/` would resolve
 // to repo-root `secret.js` and dodge the `src/**` rail.
 let baseDir = null;
+
+// Round-5 review: the top-level crash handler (below, wrapping `await main()`)
+// cannot see `main()`'s local `input`, so an unexpected error before/around
+// it previously denied with no recovery command at all — the same
+// recovery-message-invariant gap failClosedHandoffEnter had. Set as early as
+// possible inside main() (best-effort; never throws), so the crash handler
+// can still append a real, session-bound recoveryDiagnostic when the crash
+// happens after session identity was resolvable.
+let lastKnownSessionId = null;
 
 // Flail detection only needs the RECENT window of a session — flailing is a
 // "looping right now" signal, not a whole-history property. Cap the scan so a
@@ -164,6 +181,21 @@ async function main() {
     return; // unreachable: denyHandoff exits non-zero
   }
   const input = parsed ?? {};
+  try {
+    lastKnownSessionId = resolveSessionId(input, { isSafeSessionId });
+  } catch {
+    /* best-effort only — see lastKnownSessionId's declaration comment */
+  }
+
+  // Recovery Exception & Inspection Bash Exception (spec §1.3) — attempted
+  // HERE, before either of the two `chdir` calls below, using whatever
+  // `process.cwd()` this process started with. See
+  // tryRecoveryOrInspectionException's own comment for why: both chdirs can
+  // fail closed via failClosedHandoffEnter, which would otherwise deny
+  // `pwd`/recovery before `handoff()` (which re-attempts this same check)
+  // ever runs. A no-match here is expected and harmless for every OTHER
+  // mode/tool call — normal flow continues unchanged.
+  if (MODE === 'handoff' && tryRecoveryOrInspectionException(input)) return;
 
   // The base for resolving RELATIVE edit targets is the TOOL's working directory
   // (`input.cwd`), captured BEFORE any chdir. It must NOT be CLAUDE_PROJECT_DIR:
@@ -196,7 +228,7 @@ async function main() {
       process.exit(2);
     }
     if (['handoff'].includes(MODE)) {
-      failClosedHandoffEnter('could not enter the project directory');
+      failClosedHandoffEnter('could not enter the project directory', input);
     }
     return;
   }
@@ -273,7 +305,7 @@ async function main() {
         process.exit(2);
       }
       if (['handoff'].includes(MODE)) {
-        failClosedHandoffEnter('found the ADLC root but could not enter it');
+        failClosedHandoffEnter('found the ADLC root but could not enter it', input);
       }
       return;
     }
@@ -1387,8 +1419,32 @@ function computeRiskTierForBuildGate(ticket) {
 
 /** KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs's DEFAULT_DEPTH_THRESHOLD. */
 const BUILD_GATE_DEPTH_THRESHOLD = 40;
-/** KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs's DEFAULT_BYTES_THRESHOLD. */
-const BUILD_GATE_BYTES_THRESHOLD = 256 * 1024;
+/**
+ * Transcript byte count at which a session is considered context-degraded.
+ * A raw byte count alone does not indicate tool-call depth: system-prompt
+ * and schema content contributes bytes independent of any tool call, so a
+ * threshold near the low end of ordinary session sizes classifies sessions
+ * with zero tool calls as degraded. 8 MiB is the SAME ceiling
+ * MAX_ACTIVE_CONTEXT_BYTES uses for the handoff scan budget below.
+ *
+ * KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs, comparison
+ * logic only — that package's own DEFAULT_BYTES_THRESHOLD currently equals
+ * HARD_BYTES (256 KiB), not this value; see hooks/test/build-gate.test.mjs's
+ * KEEP-IN-SYNC test.
+ */
+const BUILD_GATE_BYTES_THRESHOLD = 8 * 1024 * 1024;
+/**
+ * The tail window buildgate() scans (below) to compute tool-call depth.
+ * Deliberately separate from MAX_SCAN_BYTES (used by flail() for an
+ * unrelated purpose — recent-error-loop detection — with its own correct
+ * window size). Must be at least BUILD_GATE_BYTES_THRESHOLD: a smaller
+ * window can, for a transcript sized between this constant and
+ * BUILD_GATE_BYTES_THRESHOLD, both (a) truncate away tool calls that
+ * occurred earlier than the window and (b) leave the byte-based signal
+ * below threshold — the two signals no longer jointly cover that size
+ * range, and depth is undercounted.
+ */
+const BUILD_GATE_SCAN_BYTES = 8 * 1024 * 1024;
 
 /**
  * Tool-call-count depth signal — KEEP IN SYNC with
@@ -1475,11 +1531,13 @@ function buildgate(input) {
   const { tier, signals } = computeRiskTierForBuildGate(ticket);
   if (tier !== 'high') return; // this gate only guards high-risk tickets → allow
 
-  // Context-fitness signal: bounded transcript scan, mirroring flail()'s own
-  // MAX_SCAN_BYTES windowing so this stays O(MAX_SCAN_BYTES) regardless of how
-  // long the session runs. `sessionBytes` reflects the WHOLE transcript file
-  // (fileSize), while the tool-call count is over a bounded recent window —
-  // same split flail() already makes.
+  // Context-fitness signal: bounded transcript scan using
+  // BUILD_GATE_SCAN_BYTES (see its own comment for why this is a dedicated
+  // constant, not flail()'s MAX_SCAN_BYTES), so this stays
+  // O(BUILD_GATE_SCAN_BYTES) regardless of how long the session runs.
+  // `sessionBytes` reflects the WHOLE transcript file (fileSize), while the
+  // tool-call count is over a bounded recent window — same split flail()
+  // makes with its own window.
   const tp = input.transcript_path;
   if (!tp || !existsSync(tp)) {
     // We already know the ticket is high-risk; without a readable transcript
@@ -1507,8 +1565,8 @@ function buildgate(input) {
   }
 
   let windowText;
-  if (sessionBytes > MAX_SCAN_BYTES) {
-    windowText = tailBytes(tp, MAX_SCAN_BYTES);
+  if (sessionBytes > BUILD_GATE_SCAN_BYTES) {
+    windowText = tailBytes(tp, BUILD_GATE_SCAN_BYTES);
   } else {
     try {
       windowText = readFileSync(tp, 'utf8');
@@ -1528,8 +1586,9 @@ function buildgate(input) {
   }
   const depth = countToolCallsForBuildGate(windowText);
 
-  // Inclusive >= — KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs /
-  // @adlc/context-handoff isHardDegraded (HARD_DEPTH / HARD_BYTES).
+  // Inclusive >= — depth tracks HARD_DEPTH (see BUILD_GATE_DEPTH_THRESHOLD's
+  // comment); bytes uses this file's own recalibrated BUILD_GATE_BYTES_THRESHOLD
+  // (see its comment for why it deliberately no longer aliases HARD_BYTES).
   const degraded = depth >= BUILD_GATE_DEPTH_THRESHOLD || sessionBytes >= BUILD_GATE_BYTES_THRESHOLD;
   if (!degraded) return; // high-risk, but this session isn't deep yet → allow
 
@@ -1568,52 +1627,155 @@ function denyHandoff(reason) {
   process.exit(2);
 }
 
-/** Fail closed when handoff cannot operate in the project / ADLC root. */
-function failClosedHandoffEnter(why) {
-  denyHandoff(`handoff hook ${why} — failing closed`);
+/**
+ * Fail closed when handoff cannot operate in the project / ADLC root.
+ *
+ * Round-5 review: an ORDINARY (non-recovery, non-pwd) call that hits this
+ * path — e.g. a stale CLAUDE_PROJECT_DIR — previously got only a bare
+ * "could not enter the project directory" message, violating the
+ * recovery-message invariant (spec §1.3: every Hard-Degraded/deny
+ * diagnostic MUST print the literal, copy-pasteable recovery command).
+ * `sessionId` is resolved from the raw hook `input` — cheap, execution-free,
+ * and safe to compute even though `process.cwd()` may not yet be the
+ * project root at this point in `main()`.
+ */
+function failClosedHandoffEnter(why, input) {
+  const sessionId = resolveSessionId(input ?? {}, { isSafeSessionId });
+  denyHandoff(`handoff hook ${why} — failing closed\n\n${recoveryDiagnostic(sessionId)}`);
 }
 
 /**
- * Observe depth/bytes for evaluateBands — thresholds come from @adlc/context-handoff
- * via evaluateBands / handoffDenyActive (no local HANDOFF_/HARD_ threshold copies).
+ * Observe depth for evaluateBands — thresholds come from @adlc/context-handoff
+ * via evaluateBands / handoffDenyActive (no local HANDOFF_/HARD_ threshold
+ * copies). `observed.bytes` is deliberately never populated (Phase 0 hotfix,
+ * context-rot-threshold-calibration spec §1.2.1): WARN_BYTES/HANDOFF_BYTES/
+ * HARD_BYTES were calibrated against nothing and were tripped on turn 0-2 by
+ * system-prompt/MCP-schema/rules overhead alone. `evaluateBands` already
+ * treats an absent signal as `{warn:false,...}` for that signal, so omitting
+ * it is sufficient — no change to `evaluateBands` itself.
+ *
+ * The scan's only two budgets are `maxActiveContextBytes` (the package's
+ * MAX_ACTIVE_CONTEXT_BYTES, 8 MiB) and `maxScanWallMs` (MAX_SCAN_WALL_MS) —
+ * the OLD, separate 256 KiB MAX_SCAN_BYTES ceiling (equated to HARD_BYTES,
+ * root cause of the production +Infinity lockout) is retired entirely and
+ * MUST NOT be reintroduced under either name for this signal. A scan that
+ * cannot complete within either budget before reaching start-of-file reports
+ * the depth actually accumulated — a FINITE lower bound, never +Infinity —
+ * and `truncated: true`, which the caller must use to restrict mutating
+ * tools until a complete scan succeeds (spec §1.2.2's lower-bound rule; see
+ * `evaluateHandoffPreToolUse`'s `scanTruncated` param).
+ *
+ * Phase 0 has no compaction-boundary authentication (no K_host/MAC), so this
+ * scan never stops early at a boundary-looking record — it always reads
+ * toward start-of-file (or the budgets), which the regex count over the raw
+ * window already does by construction: it never looks for a compaction
+ * marker at all.
+ *
+ * The read goes through `boundedHandoffRead` (a dedicated chunked reader for
+ * THIS signal only — never `fileSize`/`tailBytes` above, which flail() and
+ * buildgate() still use unchanged for their own, unrelated windows), which
+ * reads in fixed-size chunks and checks `maxScanWallMs` BETWEEN chunks — so
+ * the wall-clock budget is a real, enforced ceiling on this hook's own
+ * blocking time, not merely a validated-but-inert parameter. (Same fix, same
+ * reasoning, as the Codex adapter's `observeHandoffSignals`/
+ * `boundedTailRead`, unit-tested there since this function isn't exported
+ * for direct testing.)
+ *
+ * @param {object} input
+ * @param {{ maxActiveContextBytes: number, maxScanWallMs: number, read?: Function }} opts
+ * @returns {{ observed: { depth?: number }, truncated: boolean }}
  */
-function observeHandoffSignals(input) {
-  const observed = {};
+function observeHandoffSignals(input, { maxActiveContextBytes, maxScanWallMs, read = boundedHandoffRead } = {}) {
+  if (
+    !Number.isFinite(maxActiveContextBytes) ||
+    maxActiveContextBytes <= 0 ||
+    !Number.isFinite(maxScanWallMs) ||
+    maxScanWallMs <= 0
+  ) {
+    // No usable budget means the signal cannot be bounded — do not guess.
+    return { observed: { depth: Number.NaN }, truncated: false };
+  }
   const tp = input.transcript_path;
-  if (!tp || !existsSync(tp)) return observed;
-  const sessionBytes = fileSize(tp);
-  if (sessionBytes < 0) {
-    // Present-but-unreadable → fail closed as hard via evaluateBands invalid path
-    // by supplying a non-finite sentinel the classifier treats as invalid.
-    observed.bytes = Number.NaN;
-    observed.depth = Number.NaN;
-    return observed;
+  if (!tp || !existsSync(tp)) return { observed: {}, truncated: false };
+
+  const result = read(tp, { maxBytes: maxActiveContextBytes, deadlineMs: maxScanWallMs });
+  if (result == null) {
+    // Present-but-unreadable → fail closed as hard via evaluateBands invalid
+    // path by supplying a non-finite sentinel the classifier treats as invalid.
+    return { observed: { depth: Number.NaN }, truncated: false };
   }
-  observed.bytes = sessionBytes;
-  // MAX_SCAN_BYTES equals HARD_BYTES (256 KiB) today, so a truncated read means
-  // bytes already satisfy the hard band. Still fail-closed on depth when we only
-  // saw a window: set depth to +Infinity so evaluateBands stays hard if the two
-  // constants ever diverge.
-  let windowText;
-  let truncated = false;
-  if (sessionBytes > MAX_SCAN_BYTES) {
-    windowText = tailBytes(tp, MAX_SCAN_BYTES);
-    truncated = true;
-  } else {
-    try {
-      windowText = readFileSync(tp, 'utf8');
-    } catch {
-      windowText = null;
+  const depth = countToolCallsForBuildGate(result.text);
+  return { observed: { depth }, truncated: result.truncated };
+}
+
+/**
+ * Read the tail `maxBytes` of `path` in fixed-size chunks, checking a
+ * wall-clock deadline BETWEEN chunks. Dedicated to the handoff scan signal
+ * only — flail()/buildgate() keep using `fileSize`/`tailBytes` above
+ * unchanged for their own windows. See `observeHandoffSignals`'s comment for
+ * why this exists and the Codex adapter's identically-behaved
+ * `boundedTailRead` for the unit-tested twin.
+ * @param {string} path
+ * @param {{ maxBytes: number, deadlineMs: number, now?: Function, chunkBytes?: number }} opts
+ * @returns {{ size: number, text: string, truncated: boolean }|null}
+ */
+function boundedHandoffRead(path, { maxBytes, deadlineMs, now = Date.now, chunkBytes = 256 * 1024 }) {
+  const startMs = now();
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, maxBytes);
+    const truncatedByBytes = length < size;
+    const windowStart = size - length;
+    const buf = Buffer.alloc(length);
+    let readSoFar = 0;
+    let deadlineHit = false;
+    while (readSoFar < length) {
+      if (now() - startMs > deadlineMs) {
+        deadlineHit = true;
+        break;
+      }
+      const want = Math.min(chunkBytes, length - readSoFar);
+      let got;
+      try {
+        got = readSync(fd, buf, readSoFar, want, windowStart + readSoFar);
+      } catch {
+        break;
+      }
+      if (got <= 0) break;
+      readSoFar += got;
     }
+    // A short/failed readSync (I/O error, unexpected EOF, or a concurrent
+    // shrink) can leave readSoFar < length WITHOUT either truncatedByBytes
+    // or deadlineHit being set — that partial buffer is just as incomplete
+    // as a byte-cap or deadline truncation and must be reported as such,
+    // never silently treated as an exact, complete depth.
+    const shortRead = readSoFar < length;
+    // A concurrent GROWTH or SHRINK while this read was in progress means
+    // the byte range read no longer corresponds to a stable snapshot of the
+    // file — re-check size after the read completes (not just before) and
+    // treat any change as incomplete too.
+    let postSize = size;
+    try {
+      postSize = fstatSync(fd).size;
+    } catch {
+      /* if the post-read stat itself fails, fall through — the pre-read
+         size/read result already determined below still applies */
+    }
+    const grewOrShrank = postSize !== size;
+    return {
+      size,
+      text: buf.subarray(0, readSoFar).toString('utf8'),
+      truncated: truncatedByBytes || deadlineHit || shortRead || grewOrShrank,
+    };
+  } finally {
+    closeSync(fd);
   }
-  if (windowText == null) {
-    observed.depth = Number.NaN;
-    return observed;
-  }
-  observed.depth = truncated
-    ? Number.POSITIVE_INFINITY
-    : countToolCallsForBuildGate(windowText);
-  return observed;
 }
 
 /**
@@ -1632,6 +1794,35 @@ function observeHandoffSignals(input) {
  * precisely the step it protects.
  */
 const HOOK_SECRET_ENV_VARS = ['ADLC_MANIFEST_KEY', 'ADLC_ADMIN_KEY'];
+
+/**
+ * The only environment variables forwarded to the `recordRecoveryUnderBand`
+ * child. `resolveTrustedBinary`'s PATH search cannot fully verify the
+ * resolved executable's provenance (see that function's comment), so this
+ * spawn must assume the resolved binary could be attacker-controlled and
+ * bound what it can read from the environment accordingly — a denylist of
+ * just the two manifest/admin keys still forwards everything else the
+ * operator's shell happens to export (cloud credentials, other tool tokens,
+ * an SSH agent socket). An allowlist scoped to what `adlc gate-manifest
+ * record` and the `git` probe it shells out to actually need bounds that
+ * exposure instead. Because this record is explicitly best-effort and never
+ * gates the recovery allow decision, an audit failure caused by a missing
+ * environment variable is an acceptable, disclosed degradation — the same
+ * class of residual as any other recording failure this path already
+ * tolerates.
+ */
+const RECOVERY_AUDIT_ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'NODE_PATH',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LC_ALL',
+  'USER',
+  'LOGNAME',
+];
 
 /**
  * Delete credentials from this process's environment.
@@ -1653,8 +1844,367 @@ function scrubHandoffSecrets(env = process.env) {
   return removed;
 }
 
+/**
+ * Resolve the absolute path of `name` on PATH, using an environment captured
+ * BEFORE any project-controlled code has run. `loadContextHandoff` executes
+ * a project-resolved package's top-level module code, which — as this
+ * file's own secret-scrubbing comments already establish — must not be
+ * trusted. A bare `spawnSync('adlc', ...)` issued AFTER that import does a
+ * fresh PATH lookup against whatever `process.env.PATH` is AT THAT TIME; if
+ * the imported package mutated it (prepending a directory with a malicious
+ * `adlc`), the spawn in `recordRecoveryUnderBand` would run that
+ * attacker-controlled binary instead of the real one. Binding the
+ * executable's identity to the PRE-import PATH closes that specific window
+ * (a runtime PATH mutation via the untrusted import).
+ *
+ * A separate exposure exists independent of runtime mutation: an ordinary
+ * (never-mutated) PATH can already contain a project-local
+ * `node_modules/.bin/adlc` shim ahead of a real global install — a
+ * repository can ship that shim itself. Every PATH entry that resolves
+ * inside a `node_modules` directory is skipped for that reason (a genuine
+ * global install is never itself inside `node_modules`), and every
+ * remaining candidate must also be owned by the CURRENT process's uid
+ * (skipped otherwise, platforms where `process.getuid` exists) — a
+ * project-writable or shared directory earlier on PATH can still contain a
+ * file owned by this same user, which this check cannot distinguish from a
+ * genuine install, but it does rule out a candidate owned by a different
+ * (or root/system) account landing on PATH ahead of the real binary. Given
+ * that, this function still cannot verify a same-uid candidate's symlink
+ * target or content. `recordRecoveryUnderBand` does not hand this spawn the
+ * manifest signing key or the admin key regardless of what runs here, and
+ * `repoManifestChainIsSigned` refuses to spawn it at all once the manifest
+ * has adopted signing, so the exposure this function cannot close is
+ * limited to arbitrary code execution under the hook's own privileges by an
+ * attacker who can already write same-uid files onto PATH, not credential
+ * exfiltration through this path. Never throws; returns null (audit logging
+ * is then skipped, best-effort) rather than guess.
+ */
+export function resolveTrustedBinary(name, pathEnv) {
+  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return null;
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const dir of pathEnv.split(sep)) {
+    if (!dir) continue;
+    if (dir.includes('node_modules')) continue; // see the function comment
+    const candidate = join(dir, name);
+    try {
+      const st = statSync(candidate);
+      if (!st.isFile()) continue;
+      if (selfUid !== null && st.uid !== selfUid) continue; // see the function comment
+      return candidate;
+    } catch {
+      /* try next PATH entry */
+    }
+  }
+  return null;
+}
+
+/** Bounds for `repoManifestChainIsSigned` — see that function's comment for why. */
+const MANIFEST_SCAN_MAX_FILES = 500;
+const MANIFEST_SCAN_MAX_BYTES_PER_FILE = 1 * 1024 * 1024;
+const MANIFEST_SCAN_DEADLINE_MS = 1000;
+
+/**
+ * Whether ANY manifest entry reachable from `repoRoot` (root `.adlc/manifest.jsonl`
+ * or any segment under `.adlc/manifest.d/`) carries a signature. Deliberately
+ * fail-CLOSED (returns true — "treat as signed") whenever this cannot
+ * positively prove otherwise: an unreadable file, a malformed JSONL line, or
+ * an unexpected directory-listing failure all return true. `gate-manifest
+ * record` does NOT fail closed on a missing key the way an earlier version of
+ * this file's own comment claimed — `key: null` is a legal, silently-unsigned
+ * append (see packages/tickets/lib/key-contract.mjs's `validateKeyParam` and
+ * packages/gate-manifest/lib/record.mjs's `if (signingKey)` guard), and the
+ * chain-integrity check it runs first only verifies the EXISTING prefix, not
+ * whether the entry it is about to add would break an already-signed chain.
+ * Appending an unsigned entry directly after a signed one silently corrupts
+ * the chain for every later key-aware verification/preflight/tier-check.
+ * `recordRecoveryUnderBand` never has a signing key to offer (see its own
+ * comment), so it must refuse to append at all once the chain has adopted
+ * signing — this is the check that makes "skip the append when no safe
+ * signer exists" concrete.
+ *
+ * BOUNDED (Round-5 review): this runs SYNCHRONOUSLY, INLINE, before the
+ * "unconditional" recovery allow decision returns — an earlier version read
+ * every reachable file to completion with no byte, file-count, symlink, or
+ * time bound. A huge or hostile `.adlc/manifest.d/` (a giant file, hundreds
+ * of segments, or a symlink to an unbounded/blocking source such as a FIFO)
+ * could hang or exhaust memory HERE, reproducing the exact "even the
+ * recovery command itself is denied" total-lockout class of bug this ticket
+ * exists to close — just triggered by manifest size instead of a threshold.
+ * Every one of these limits degrades the SAME direction as every other
+ * check in this function: hitting any of them proves nothing about
+ * "unsigned", so the answer is "treat as signed" (skip the audit record),
+ * never a hang and never a false "safe to append".
+ * - `MANIFEST_SCAN_MAX_FILES`: caps directory fan-out.
+ * - `MANIFEST_SCAN_MAX_BYTES_PER_FILE` + `boundedHandoffRead`: caps any
+ *   single file's read, chunked with a deadline check between chunks (the
+ *   same reader `observeHandoffSignals` already uses for the transcript
+ *   scan) — a `truncated` result is treated as inconclusive, not partially
+ *   parsed.
+ * - `lstatSync(...).isFile()`, checked WITHOUT following symlinks: rejects
+ *   symlinks, FIFOs, device files, and directories outright, before ever
+ *   attempting to open them. `boundedHandoffRead`'s own `openSync` can still
+ *   block on a genuine blocking special file it wasn't given a chance to
+ *   reject — this check is what prevents that file from ever reaching it.
+ * - `MANIFEST_SCAN_DEADLINE_MS`: an OVERALL wall-clock budget checked
+ *   between files (not just within one), so many small files cannot
+ *   collectively exceed it either.
+ */
+export function repoManifestChainIsSigned(repoRoot) {
+  const startMs = Date.now();
+  const files = [];
+  try {
+    const root = join(repoRoot, '.adlc', 'manifest.jsonl');
+    if (existsSync(root)) files.push(root);
+    const segDir = join(repoRoot, '.adlc', 'manifest.d');
+    if (existsSync(segDir)) {
+      // lstat the DIRECTORY itself, not following symlinks — a symlinked
+      // manifest.d pointing at an unbounded/hostile directory must be
+      // rejected before ever listing it (Round-5 review).
+      let segDirStat;
+      try {
+        segDirStat = lstatSync(segDir);
+      } catch {
+        return true; // can't stat -> can't prove unsigned -> treat as signed
+      }
+      if (!segDirStat.isDirectory()) return true;
+      // opendirSync + iterative reads, not readdirSync: readdirSync
+      // materializes the ENTIRE directory listing into memory in one call
+      // before this function ever gets a chance to check the file-count
+      // cap — a directory with a huge number of entries would be fully
+      // read regardless. Iterating lets the cap stop enumeration early.
+      let dir;
+      try {
+        dir = opendirSync(segDir);
+      } catch {
+        return true; // can't enumerate -> can't prove unsigned -> treat as signed
+      }
+      try {
+        let dirent;
+        // Bound on EVERY entry examined, not just ones matching `.jsonl` —
+        // files.length alone would never trip on a directory dominated by
+        // non-.jsonl entries. Deadline checked here too, not only in the
+        // later per-file loop below: enumeration itself is unbounded work.
+        let examined = 0;
+        while ((dirent = dir.readSync()) !== null) {
+          examined += 1;
+          if (examined > MANIFEST_SCAN_MAX_FILES) return true; // too much fan-out to bound -> treat as signed
+          if (Date.now() - startMs > MANIFEST_SCAN_DEADLINE_MS) return true; // overall budget exceeded
+          if (dirent.name.endsWith('.jsonl')) files.push(join(segDir, dirent.name));
+        }
+      } finally {
+        try {
+          dir.closeSync();
+        } catch {
+          /* best-effort close */
+        }
+      }
+    }
+  } catch {
+    return true; // can't enumerate -> can't prove unsigned -> treat as signed
+  }
+  if (files.length > MANIFEST_SCAN_MAX_FILES) return true; // too much fan-out to bound -> treat as signed
+  for (const file of files) {
+    if (Date.now() - startMs > MANIFEST_SCAN_DEADLINE_MS) return true; // overall budget exceeded
+    let st;
+    try {
+      st = lstatSync(file); // NOT following symlinks — see this function's comment
+    } catch {
+      return true; // can't stat -> can't prove unsigned -> treat as signed
+    }
+    if (!st.isFile()) return true; // symlink/FIFO/device/etc. -> can't safely bound a read -> treat as signed
+    const result = boundedHandoffRead(file, {
+      maxBytes: MANIFEST_SCAN_MAX_BYTES_PER_FILE,
+      deadlineMs: Math.max(1, MANIFEST_SCAN_DEADLINE_MS - (Date.now() - startMs)),
+    });
+    if (result == null || result.truncated) return true; // unreadable or incomplete -> can't prove unsigned -> treat as signed
+    for (const line of result.text.split('\n')) {
+      if (!line.trim()) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        return true; // malformed line -> can't prove unsigned -> treat as signed
+      }
+      if (entry && typeof entry.sig === 'string' && entry.sig.length > 0) return true;
+    }
+  }
+  return false; // every reachable entry examined and none carried a signature
+}
+
+/**
+ * Best-effort audit record for an allowed Recovery Exception invocation
+ * (spec §1.3). Attempted AFTER the allow decision is already final — this
+ * function's own success or failure MUST NEVER affect that decision, and
+ * MUST NEVER be allowed to block it either: a bounded `timeout` ensures a
+ * stuck recorder cannot consume the hook's own execution budget and prevent
+ * the "unconditional" recovery exception from actually completing.
+ *
+ * `trustedEnv` MUST be a snapshot of `process.env` captured BEFORE any
+ * project-controlled code ran (see `handoff`'s capture, before
+ * `scrubHandoffSecrets`/`loadContextHandoff`) — never the LIVE
+ * `process.env` at call time. Resolving only the `adlc` executable's own
+ * path from the pre-import PATH is not sufficient by itself: `adlc` is
+ * itself a `#!/usr/bin/env node` script, and Node reads `NODE_OPTIONS` (and
+ * other loader-affecting variables) from whatever environment the CHILD
+ * process is spawned with. If that environment were rebuilt from the LIVE
+ * `process.env` after importing a hostile project-resolved package, the
+ * package could set `NODE_OPTIONS=--require=/malicious/preload.js` (or
+ * otherwise poison the environment) and have it inherited by this spawn —
+ * defeating the secret scrub via the child's own startup, not via `adlc`'s
+ * resolved path at all. Using the frozen pre-import snapshot for the ENTIRE
+ * child environment (not just PATH) closes that window for every OTHER
+ * variable, but `resolveTrustedBinary`'s PATH search cannot fully verify the
+ * resolved executable's provenance (ownership, symlink target, or content) —
+ * a project-local PATH entry outside `node_modules` is still a possible
+ * candidate. Given that, this function does NOT forward `ADLC_MANIFEST_KEY`
+ * or `ADLC_ADMIN_KEY` to the child AT ALL, regardless of what `trustedEnv`
+ * contains: the audit record this spawns is explicitly best-effort and never
+ * gates the recovery allow decision, so it is not worth risking the
+ * permanent manifest signing key to attempt it. Because there is never a key
+ * to offer, `repoManifestChainIsSigned` is checked FIRST and the record is
+ * skipped entirely once the chain has adopted signing — see that function's
+ * comment for why a keyless append is not merely unsigned but actively
+ * corrupting in that case.
+ * `adlcBinPath` MUST be the pre-import-resolved absolute path from
+ * `resolveTrustedBinary` — never a bare `'adlc'` string (see that function's
+ * comment) — so this never runs against a null path.
+ */
+export function recordRecoveryUnderBand({ subcommand, sessionId, trustedEnv, adlcBinPath }) {
+  if (repoManifestChainIsSigned(process.cwd())) {
+    console.error(
+      'ADLC context-handoff: recovery audit record skipped — the manifest chain already contains a signed entry and this hook has no signing key to offer; appending unsigned would corrupt the chain'
+    );
+    return;
+  }
+  if (!adlcBinPath) {
+    console.error('ADLC context-handoff: recovery audit record skipped — adlc binary not found on PATH');
+    return;
+  }
+  try {
+    // Build the child's environment from RECOVERY_AUDIT_ENV_ALLOWLIST only —
+    // never from trustedEnv wholesale minus a denylist — because
+    // resolveTrustedBinary's PATH search cannot fully verify the resolved
+    // executable's provenance (ownership, symlink target, content); see this
+    // function's own doc comment and RECOVERY_AUDIT_ENV_ALLOWLIST's comment.
+    const env = {};
+    for (const name of RECOVERY_AUDIT_ENV_ALLOWLIST) {
+      if (trustedEnv[name] !== undefined) env[name] = trustedEnv[name];
+    }
+    // Invoke via THIS process's own already-running interpreter
+    // (process.execPath), never by executing adlcBinPath directly. `adlc` is
+    // itself a `#!/usr/bin/env node` script — spawnSync(adlcBinPath, ...)
+    // would let the OS's shebang handling hand off to `/usr/bin/env`, which
+    // does its OWN, SEPARATE PATH lookup for `node` using this child's PATH
+    // (Round-5 review). That second lookup is not filtered by
+    // resolveTrustedBinary's node_modules exclusion — a repository dependency
+    // that plants `node_modules/.bin/node` ahead of the real Node install on
+    // PATH would have it picked up here, defeating that exclusion entirely.
+    // Passing adlcBinPath as an argument to the CURRENT interpreter bypasses
+    // the shebang/env indirection altogether: no second PATH lookup happens.
+    const args = ['gate-manifest', 'record', 'context-handoff-recovery-under-band', '--data', JSON.stringify({ subcommand, sessionId, host: 'claude-code' })];
+    const r = spawnSync(process.execPath, [adlcBinPath, ...args], { encoding: 'utf8', env, timeout: 5000 });
+    if (r.error || (typeof r.status === 'number' && r.status !== 0) || r.signal) {
+      console.error(
+        `ADLC context-handoff: recovery audit record failed (${r.error?.message ?? `status=${r.status} signal=${r.signal}`}) — recovery command was still allowed`
+      );
+    }
+  } catch (err) {
+    console.error(`ADLC context-handoff: recovery audit record errored (${err?.message ?? 'unknown'}) — recovery command was still allowed`);
+  }
+}
+
+/**
+ * Recovery Exception & Inspection Bash Exception (spec §1.3), using ONLY
+ * trusted local code and the raw hook input — no dependency on `.adlc`
+ * existing at the current directory, on `chdir`/ADLC-root discovery having
+ * succeeded, or on `@adlc/context-handoff` having loaded. Two independent
+ * lockout causes were found and fixed here in sequence: (1) if this check
+ * depended on the project-resolved package loading successfully, a
+ * stale/incompatible install or a hostile package could deny `pwd` and the
+ * recovery CLI before ever reaching it; (2) even after this was made
+ * package-independent, `main()`'s dispatcher still performed TWO `chdir`
+ * calls (into the tool's project dir, then into the discovered ADLC root)
+ * BEFORE ever invoking `handoff()` at all — a stale/inaccessible
+ * `CLAUDE_PROJECT_DIR`, or a discovered root the process couldn't enter,
+ * failed closed via `failClosedHandoffEnter` in `main()` itself, denying
+ * `pwd` and recovery without this function ever running. `main()` now calls
+ * this BEFORE either `chdir`, using whatever `process.cwd()` the hook
+ * process started with; `handoff()` calls it again after both `chdir`s
+ * succeed, since a different `process.cwd()` can change what
+ * `resolveContextHandoffEntry` finds. Tool-identity gate reuses the SAME
+ * `isBash` check used elsewhere in this file: Claude Code's wire shape has
+ * one unambiguous `tool_name` field, so there is nothing narrower to gate on
+ * here (unlike Codex — see adlc-handoff-gate.mjs's own comment). MUST allow
+ * regardless of band state, and regardless of any Hard-Degraded/deny check.
+ *
+ * @param {object} input hook payload
+ * @returns {boolean} true when matched and allowed (caller must return
+ *   immediately, no further output); false when nothing matched (caller
+ *   continues its normal flow).
+ */
+function tryRecoveryOrInspectionException(input) {
+  const toolName = typeof input.tool_name === 'string' ? input.tool_name : '';
+  const isBash = toolName === 'Bash' || toolName === 'Shell';
+  if (!isBash) return false;
+  const bashCommand = bashCommandFromInput(input);
+  if (isBareInspectionPwd(bashCommand)) return true; // unconditional allow, no audit record
+
+  // A full snapshot of process.env captured BEFORE any project-controlled
+  // code has run — see recordRecoveryUnderBand's comment for why the
+  // audit-record spawn must use this frozen copy rather than ever re-reading
+  // the live process.env once loadContextHandoff has executed untrusted
+  // code. recordRecoveryUnderBand itself strips ADLC_MANIFEST_KEY/
+  // ADLC_ADMIN_KEY from this snapshot before spawning — see its comment.
+  const trustedEnvSnapshot = { ...process.env };
+  // Resolved from the PRE-import PATH — see resolveTrustedBinary's comment
+  // for why this must happen before loadContextHandoff runs project code.
+  const trustedAdlcBinPath = resolveTrustedBinary('adlc', trustedEnvSnapshot.PATH);
+  const sessionId = resolveSessionId(input, { isSafeSessionId });
+
+  // resolveContextHandoffEntry only resolves the package's on-disk location
+  // (a filesystem/module-resolution lookup) — it does NOT `import()`/execute
+  // the package, so THIS RESOLUTION STEP stays safe even when the package's
+  // own code is broken or hostile: nothing here runs untrusted code to
+  // compute trustedRecoveryCliPath. Resolution itself, however, walks the
+  // PROJECT's own node_modules the same way loadContextHandoff does
+  // elsewhere in this file — a repository that ships its own
+  // @adlc/context-handoff package controls what path this resolves to, and
+  // therefore what script the matcher below treats as "the" recovery CLI.
+  // matchRecoveryCommand proves the invoked command targets that resolved
+  // path (by realpath identity); it does not independently prove that path
+  // is the genuine, unmodified package this repository was built against
+  // (same residual as the Codex adapter's identical comment in
+  // adlc-handoff-gate.mjs).
+  const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+  const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
+  if (!trustedRecoveryCliPath) return false;
+
+  const recoveryMatch = matchRecoveryCommand(bashCommand, {
+    interpreterPath: process.execPath,
+    scriptPath: trustedRecoveryCliPath,
+    sessionId,
+  });
+  if (!recoveryMatch.matched) return false;
+
+  recordRecoveryUnderBand({
+    subcommand: recoveryMatch.subcommand,
+    sessionId,
+    trustedEnv: trustedEnvSnapshot,
+    adlcBinPath: trustedAdlcBinPath,
+  });
+  return true; // allow — never gated on the audit record above succeeding
+}
+
 async function handoff(input) {
+  if (tryRecoveryOrInspectionException(input)) return;
   if (!existsSync('.adlc')) return; // not an ADLC repo → allow
+
+  const sessionId = resolveSessionId(input, { isSafeSessionId });
+
+  const toolName = typeof input.tool_name === 'string' ? input.tool_name : '';
+  const isBash = toolName === 'Bash' || toolName === 'Shell';
+  const bashCommand = isBash ? bashCommandFromInput(input) : '';
 
   // Before anything project-controlled can be imported.
   scrubHandoffSecrets();
@@ -1662,7 +2212,7 @@ async function handoff(input) {
   const api = await loadContextHandoff({ projectRoot: process.cwd() });
   if (!api) {
     return denyHandoff(
-      'cannot load @adlc/context-handoff — install @adlc/cli (or the workspace package) so D1–D3 can be evaluated; failing closed'
+      `cannot load @adlc/context-handoff — install @adlc/cli (or the workspace package) so D1–D3 can be evaluated; failing closed\n\n${recoveryDiagnostic(sessionId)}`
     );
   }
 
@@ -1676,13 +2226,18 @@ async function handoff(input) {
   for (const method of required) {
     if (typeof api[method] !== 'function') {
       return denyHandoff(
-        `@adlc/context-handoff missing export: ${method} — failing closed`
+        `@adlc/context-handoff missing export: ${method} — failing closed\n\n${recoveryDiagnostic(sessionId)}`
       );
     }
   }
+  if (!Number.isFinite(api.MAX_ACTIVE_CONTEXT_BYTES) || !Number.isFinite(api.MAX_SCAN_WALL_MS)) {
+    return denyHandoff(`@adlc/context-handoff missing scan-budget exports — failing closed\n\n${recoveryDiagnostic(sessionId)}`);
+  }
 
-  const sessionId = resolveSessionId(input, { isSafeSessionId: api.isSafeSessionId });
-  const observed = observeHandoffSignals(input);
+  const { observed, truncated: scanTruncated } = observeHandoffSignals(input, {
+    maxActiveContextBytes: api.MAX_ACTIVE_CONTEXT_BYTES,
+    maxScanWallMs: api.MAX_SCAN_WALL_MS,
+  });
 
   let ticketId = null;
   try {
@@ -1692,17 +2247,13 @@ async function handoff(input) {
     /* unbound marker is fine */
   }
 
-  const toolName = typeof input.tool_name === 'string' ? input.tool_name : '';
-  const isBash = toolName === 'Bash' || toolName === 'Shell';
-  const bashCommand = isBash ? bashCommandFromInput(input) : '';
-
   let editRelPaths = [];
   if (!isBash) {
     try {
       editRelPaths = targetFilePaths(input).map((fp) => toRepoRelative(fp));
     } catch (err) {
       return denyHandoff(
-        `could not resolve edit target for handoff path protection (${err?.message ?? 'unknown'}) — failing closed`
+        `could not resolve edit target for handoff path protection (${err?.message ?? 'unknown'}) — failing closed\n\n${recoveryDiagnostic(sessionId)}`
       );
     }
   }
@@ -1729,47 +2280,108 @@ async function handoff(input) {
     // later call whose band has cooled will not know — a residual gap that needs
     // host-owned storage surviving the subprocess, not a flag here.
     denyEverWritten: false,
+    scanTruncated,
   });
 
   if (!result.deny) return;
 
   return denyHandoff(
     `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
-      `or continue in a fresh session. Agent Shell cannot clear deny-set.`
+      `or continue in a fresh session. Agent Shell cannot clear deny-set.\n\n${recoveryDiagnostic(sessionId)}`
   );
 }
 
-try {
-  await main();
-} catch (err) {
-  // The `rails`/`buildgate`/`handoff` modes are ENFORCING — a crash must FAIL CLOSED,
-  // never fall through to exit 0 (which the harness reads as "allow"). Emit a
-  // deny and exit 2 so the PreToolUse call is blocked even if the deny
-  // payload is missed. The advisory modes (preflight/flail/manifest/review)
-  // legitimately swallow their own errors.
-  if (MODE === 'rails') {
-    try {
-      denyRail(`rails hook errored (${err?.message ?? 'unknown'}) — failing closed`);
-    } catch {
-      /* even emit failed — the non-zero exit below still blocks */
-    }
-    process.exit(2);
+/**
+ * The recovery-command (or no-safe-session-id) tail every Hard-Degraded/deny
+ * diagnostic message MUST include (spec §1.3) — not just a description of
+ * why telemetry degraded, but the literal, copy-pasteable command itself.
+ *
+ * Round-5 review: this used to format via `api.formatRecoveryCommand` /
+ * `api.RECOVERY_CLI_PATH` — the SAME dynamically-loaded, project-resolved
+ * package whose failure to load or export what's expected is exactly what
+ * every early denyHandoff() in `handoff()` is reporting when it appends this
+ * diagnostic. A stale/incompatible install left the operator with a generic,
+ * repo-relative "run the CLI manually" message that named no absolute path
+ * `matchRecoveryCommand` would actually accept — stranding them with only
+ * `pwd`. This now builds the diagnostic ENTIRELY from trusted local code —
+ * `formatRecoveryCommand`/`formatNoSessionIdMessage` (this file's own
+ * imports from handoff-gate.mjs, twins of the package's, see the "KEEP IN
+ * SYNC (2)" note there) and `resolveContextHandoffEntry` (a pure,
+ * execution-free module-resolution lookup, not an `import()` of the
+ * package) — the same trusted resolution `tryRecoveryOrInspectionException`
+ * already uses for the matcher itself, so the diagnostic and the exception
+ * it describes can never disagree about where the CLI lives.
+ */
+export function recoveryDiagnostic(sessionId) {
+  const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+  const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
+  if (!trustedRecoveryCliPath) {
+    return 'Recovery command unavailable: @adlc/context-handoff could not be resolved from this project. Run the operator recovery CLI manually (packages/context-handoff/bin/handoff.mjs bypass|unlock|repair|write|resume), or `pwd` remains usable regardless.';
   }
-  if (MODE === 'buildgate') {
+  if (typeof sessionId === 'string' && sessionId.length > 0) {
+    let interpreterPath = process.execPath;
+    let scriptPath = trustedRecoveryCliPath;
     try {
-      denyBuildGate(`build-gate hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+      interpreterPath = realpathSync(interpreterPath);
     } catch {
-      /* even emit failed — the non-zero exit below still blocks */
+      /* fall back to the unresolved path rather than throw from a diagnostic */
     }
-    process.exit(2);
-  }
-  if (MODE === 'handoff') {
     try {
-      denyHandoff(`handoff hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+      scriptPath = realpathSync(scriptPath);
     } catch {
-      /* even emit failed — the non-zero exit below still blocks */
+      /* fall back to the unresolved path rather than throw from a diagnostic */
     }
-    process.exit(2);
+    return formatRecoveryCommand({ interpreterPath, scriptPath, sessionId });
   }
+  return formatNoSessionIdMessage();
 }
-process.exit(0);
+
+// Only run as a hook when executed directly — tests import this module for
+// its pure exports (recordRecoveryUnderBand, recoveryDiagnostic,
+// resolveTrustedBinary, tryRecoveryOrInspectionException, ...) and must not
+// trigger a live stdin read + process.exit as a side effect of the import.
+// Mirrors the equivalent guard in plugins/adlc-codex/hooks/adlc-handoff-gate.mjs.
+//
+// pathToFileURL, never `file://${argv[1]}`: a path containing a space (or any
+// character a file URL percent-encodes, and every Windows path) would not match
+// import.meta.url, so main() would silently never run and the hook would exit 0
+// — reading as ALLOW. An enforcing gate that no-ops on an install path is worse
+// than one that errors.
+const isMain =
+  Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  try {
+    await main();
+  } catch (err) {
+    // The `rails`/`buildgate`/`handoff` modes are ENFORCING — a crash must FAIL CLOSED,
+    // never fall through to exit 0 (which the harness reads as "allow"). Emit a
+    // deny and exit 2 so the PreToolUse call is blocked even if the deny
+    // payload is missed. The advisory modes (preflight/flail/manifest/review)
+    // legitimately swallow their own errors.
+    if (MODE === 'rails') {
+      try {
+        denyRail(`rails hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+      } catch {
+        /* even emit failed — the non-zero exit below still blocks */
+      }
+      process.exit(2);
+    }
+    if (MODE === 'buildgate') {
+      try {
+        denyBuildGate(`build-gate hook errored (${err?.message ?? 'unknown'}) — failing closed`);
+      } catch {
+        /* even emit failed — the non-zero exit below still blocks */
+      }
+      process.exit(2);
+    }
+    if (MODE === 'handoff') {
+      try {
+        denyHandoff(`handoff hook errored (${err?.message ?? 'unknown'}) — failing closed\n\n${recoveryDiagnostic(lastKnownSessionId)}`);
+      } catch {
+        /* even emit failed — the non-zero exit below still blocks */
+      }
+      process.exit(2);
+    }
+  }
+  process.exit(0);
+}

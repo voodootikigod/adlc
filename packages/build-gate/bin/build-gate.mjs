@@ -12,10 +12,22 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs, opError, printJson, loadTickets, ADLC_DIR } from '@adlc/core';
 import { computeRiskTier } from '../lib/risk.mjs';
-import { computeDepthSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD, DEFAULT_BYTES_THRESHOLD } from '../lib/depth-signal.mjs';
+import { computeDepthSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD } from '../lib/depth-signal.mjs';
 import { decideBuildGate } from '../lib/decide.mjs';
 import { recordOverride } from '../lib/override.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
+
+/**
+ * The CLI's own `--bytes-threshold` default. `../lib/depth-signal.mjs`'s
+ * own DEFAULT_BYTES_THRESHOLD currently equals HARD_BYTES (256 KiB); a raw
+ * byte count alone does not indicate tool-call depth, so a threshold that
+ * low classifies an ordinary session with zero tool calls as degraded. This
+ * override is scoped to the flag default only — `isDegraded` itself takes
+ * an explicit `bytesThreshold`, so nothing about the library's own contract
+ * or behavior changes; only what this binary asks for when the caller
+ * doesn't say otherwise.
+ */
+const CLI_DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
 
 const { values, positionals } = parseArgs({
   options: {
@@ -23,7 +35,7 @@ const { values, positionals } = parseArgs({
     'session-bytes': { type: 'string' },
     transcript: { type: 'string' },
     'depth-threshold': { type: 'string', default: String(DEFAULT_DEPTH_THRESHOLD) },
-    'bytes-threshold': { type: 'string', default: String(DEFAULT_BYTES_THRESHOLD) },
+    'bytes-threshold': { type: 'string', default: String(CLI_DEFAULT_BYTES_THRESHOLD) },
     tickets: { type: 'string' },
     reason: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -48,7 +60,7 @@ Options:
   --transcript <path>      Derive depth/session-bytes from this transcript file
                            (a --depth/--session-bytes passed alongside it wins)
   --depth-threshold <n>    default ${DEFAULT_DEPTH_THRESHOLD}
-  --bytes-threshold <n>    default ${DEFAULT_BYTES_THRESHOLD}
+  --bytes-threshold <n>    default ${CLI_DEFAULT_BYTES_THRESHOLD}
   --tickets <path>         default .adlc/tickets.json
   --reason <text>          Free-text reason recorded with an override
   --json                   Machine-readable JSON output

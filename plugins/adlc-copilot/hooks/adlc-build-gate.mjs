@@ -37,6 +37,7 @@
 
 import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
@@ -120,12 +121,32 @@ export function computeRiskTier(ticket) {
 }
 
 // ---------------------------------------------------------------------------
-// KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs.
+// KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs, comparison
+// logic only. packages/build-gate/lib/depth-signal.mjs's own
+// DEFAULT_BYTES_THRESHOLD currently equals HARD_BYTES (256 KiB); this
+// file's DEFAULT_BYTES_THRESHOLD is 8 MiB. The two values are not equal.
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_DEPTH_THRESHOLD = 40;
-export const DEFAULT_BYTES_THRESHOLD = 256 * 1024;
-const MAX_SCAN_BYTES = 256 * 1024;
+/**
+ * Transcript byte count at which a session is considered context-degraded.
+ * A raw byte count alone does not indicate tool-call depth: system-prompt
+ * and schema content contributes bytes independent of any tool call, so a
+ * threshold near the low end of ordinary session sizes classifies sessions
+ * with zero tool calls as degraded. 8 MiB is the SAME ceiling
+ * `@adlc/context-handoff`'s MAX_ACTIVE_CONTEXT_BYTES uses for its own scan
+ * budget.
+ */
+export const DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
+/**
+ * The tail window `decide()` scans to compute tool-call depth. Must be at
+ * least DEFAULT_BYTES_THRESHOLD: a smaller window can, for a transcript
+ * sized between this constant and DEFAULT_BYTES_THRESHOLD, both (a)
+ * truncate away tool calls that occurred earlier than the window and (b)
+ * leave the byte-based signal below threshold — the two signals no longer
+ * jointly cover that size range, and depth is undercounted.
+ */
+const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 
 export function countToolCalls(text) {
   if (!text) return 0;
@@ -141,8 +162,8 @@ export function computeDepthSignal({ text, bytes } = {}) {
 }
 
 export function isDegraded({ depth, sessionBytes, bytes, depthThreshold = DEFAULT_DEPTH_THRESHOLD, bytesThreshold = DEFAULT_BYTES_THRESHOLD }) {
-  // Inclusive >= — KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs
-  // (default path uses @adlc/context-handoff isHardDegraded).
+  // Inclusive >= — comparison logic tracks packages/build-gate/lib/depth-signal.mjs;
+  // see DEFAULT_BYTES_THRESHOLD's comment for the deliberate default-value divergence.
   const resolvedBytes = typeof sessionBytes === 'number' ? sessionBytes : bytes;
   const depthDegraded = typeof depth === 'number' && depth >= depthThreshold;
   const bytesDegraded = typeof resolvedBytes === 'number' && resolvedBytes >= bytesThreshold;
@@ -286,7 +307,14 @@ async function main() {
 // Only run as a hook when executed directly (`node adlc-build-gate.mjs`), not
 // when imported — the drift test imports this module for its pure exports
 // (computeRiskTier, decide, ...) and must not trigger a live stdin read.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+//
+// pathToFileURL, never `file://${argv[1]}`: Node percent-encodes
+// import.meta.url (a space becomes %20) but a manually built template
+// string does not, so ANY install path containing a space (or other
+// percent-encoded character) made this comparison always false — main()
+// silently never ran and the hook exited 0 (allow) unconditionally,
+// regardless of ticket risk or session degradation (Round-5 review).
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   main().catch((err) => {
     // Enforcing hook — a crash must fail closed, never fall through to allow.

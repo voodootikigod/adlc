@@ -24,11 +24,15 @@ import {
   writeDenyRecord,
   writeResumeAuth,
   HANDOFF_DEPTH,
+  RECOVERY_CLI_PATH,
 } from '@adlc/context-handoff';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-handoff-gate.mjs');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
+
+const REAL_NODE = realpathSync(process.execPath);
+const REAL_RECOVERY_CLI = realpathSync(RECOVERY_CLI_PATH);
 
 /** Build a transcript file with N tool_use JSONL lines. */
 function makeTranscript(dir, name, toolUseCount) {
@@ -475,4 +479,267 @@ test('a parallel envelope carrying only ordinary work is still allowed', () => {
     },
   });
   assert.equal(r.verdict, 'allow', r.out);
+});
+
+// --- Recovery Exception & Inspection Bash Exception (spec §1.3, AC0) -------
+//
+// The production incident this ticket exists to fix denied EVERY shell
+// invocation on a hard-degraded session — including `pwd` and the operator's
+// own recovery CLI. Both MUST now be allowed unconditionally, regardless of
+// band state, evaluated before any other Hard-Degraded/deny check.
+
+test('Inspection Bash Exception: bare pwd is allowed even under an open deny-set', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-pwd',
+    toolName: 'exec_command',
+    payloadExtra: { command: 'pwd' },
+    seedDeny: seedForeignDeny('denier-pwd'),
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('Inspection Bash Exception: pwd with an argument or shell chaining is NOT exempt', () => {
+  for (const decoy of ['pwd -L', 'pwd; ls', 'pwd && rm -rf /']) {
+    const r = runHandoff({
+      sessionId: 'consumer-pwd-decoy',
+      toolName: 'exec_command',
+      payloadExtra: { command: decoy },
+      seedDeny: seedForeignDeny('denier-pwd-decoy'),
+    });
+    assert.equal(r.verdict, 'deny', `decoy should still deny: ${decoy}`);
+  }
+});
+
+test('Recovery Exception: write_stdin carrying the literal text "pwd" is NOT the Inspection Exception', () => {
+  // write_stdin delivers input to an EXISTING process, not a standalone
+  // command — the same literal text means something entirely different.
+  const r = runHandoff({
+    sessionId: 'consumer-write-stdin',
+    toolName: 'write_stdin',
+    payloadExtra: { chars: 'pwd' },
+    seedDeny: seedForeignDeny('denier-write-stdin'),
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('Recovery Exception: evil.exec_command (attacker prefix before the dot) is NOT eligible', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-evil',
+    toolName: 'evil.exec_command',
+    payloadExtra: { command: 'pwd' },
+    seedDeny: seedForeignDeny('denier-evil'),
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('Recovery Exception: the real bypass command is allowed even under an open deny-set', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery',
+    toolName: 'exec_command',
+    payloadExtra: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery --write` },
+    seedDeny: seedForeignDeny('denier-recovery'),
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('Recovery Exception: functions.exec_command via recipient_name/cmd field also matches', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery-alias',
+    rawInput: JSON.stringify({
+      recipient_name: 'functions.exec_command',
+      session_id: 'consumer-recovery-alias',
+      tool_input: { cmd: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery-alias --write` },
+    }),
+    seedDeny: seedForeignDeny('denier-recovery-alias'),
+  });
+  assert.equal(r.verdict, 'allow', r.out);
+});
+
+test('Recovery Exception: a decoy that merely resembles the recovery command is still denied', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery-decoy',
+    toolName: 'exec_command',
+    payloadExtra: {
+      command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery-decoy --write; rm -rf /`,
+    },
+    seedDeny: seedForeignDeny('denier-recovery-decoy'),
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('Recovery Exception: --session naming a DIFFERENT session than this one is denied', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-recovery-other',
+    toolName: 'exec_command',
+    payloadExtra: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session some-other-session --write` },
+    seedDeny: seedForeignDeny('denier-recovery-other'),
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('a multi_tool_use.parallel envelope carrying an eligible nested exec is NOT the Recovery Exception at the top level', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-parallel-recovery',
+    toolName: 'multi_tool_use.parallel',
+    payloadExtra: {
+      tool_uses: [
+        {
+          recipient_name: 'functions.exec_command',
+          parameters: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-parallel-recovery --write` },
+        },
+      ],
+    },
+    seedDeny: seedForeignDeny('denier-parallel-recovery'),
+  });
+  assert.equal(r.verdict, 'deny', r.out);
+});
+
+test('deny diagnostic includes the literal, copy-pasteable recovery command for the resolved session', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-diag',
+    seedDeny: seedForeignDeny('denier-diag'),
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.ok(r.out.includes(REAL_NODE), r.out);
+  assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
+  assert.match(r.out, /bypass --session consumer-diag --write/);
+});
+
+test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-truncated-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+    const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
+    const transcriptPath = join(dir, 'oversized.jsonl');
+    // 9 MiB of padding pushes the file past MAX_ACTIVE_CONTEXT_BYTES (8 MiB).
+    writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(9 * 1024 * 1024)}`);
+
+    const applyPatchEnv = {
+      ...process.env,
+      NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
+    };
+
+    const applyPatchPayload = JSON.stringify({
+      tool_name: 'apply_patch',
+      session_id: 'consumer-truncated-apply',
+      transcript_path: transcriptPath,
+      input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
+    });
+    let applyOut = '';
+    let applyStatus = 0;
+    try {
+      execFileSync(process.execPath, [HOOK], { input: applyPatchPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+      applyOut = e.stderr ?? '';
+      applyStatus = e.status ?? 1;
+    }
+    assert.equal(applyStatus, 2, applyOut);
+    assert.match(applyOut, /incomplete_scan_lower_bound/);
+
+    const pwdPayload = JSON.stringify({
+      tool_name: 'exec_command',
+      session_id: 'consumer-truncated-pwd',
+      transcript_path: transcriptPath,
+      command: 'pwd',
+    });
+    let pwdStatus = 0;
+    try {
+      execFileSync(process.execPath, [HOOK], { input: pwdPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+      pwdStatus = e.status ?? 1;
+    }
+    assert.equal(pwdStatus, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows ordinary mutations', () => {
+  // Deliberately sized between the OLD 256 KiB ceiling and the new 8 MiB one —
+  // this is the exact regression the hotfix exists to close (AC0 bullet 2).
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-largebaseline-'));
+  try {
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+    const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
+    const transcriptPath = join(dir, 'large.jsonl');
+    writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(400 * 1024)}`);
+
+    const payload = JSON.stringify({
+      tool_name: 'apply_patch',
+      session_id: 'consumer-large-baseline',
+      transcript_path: transcriptPath,
+      input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
+    });
+    let status = 0;
+    let out = '';
+    try {
+      execFileSync(process.execPath, [HOOK], {
+        input: payload,
+        encoding: 'utf8',
+        cwd: dir,
+        env: { ...process.env, NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':') },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      out = e.stderr ?? '';
+      status = e.status ?? 1;
+    }
+    assert.equal(status, 0, out);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Recovery Exception check happens BEFORE package load, not after (source order pin)', () => {
+  // Same regression class as the Claude Code hook's own pin: a
+  // broken/incompatible/hostile @adlc/context-handoff must never be able to
+  // deny pwd or the recovery CLI before this check even runs.
+  const source = readFileSync(HOOK, 'utf8');
+  const mainStart = source.indexOf('async function main()');
+  assert.ok(mainStart >= 0, 'main() not found');
+  const body = source.slice(mainStart);
+  const pwdCheckIdx = body.indexOf('isBareInspectionPwd(candidateCommand)');
+  const loadIdx = body.indexOf('await loadContextHandoff(');
+  assert.ok(pwdCheckIdx >= 0, 'isBareInspectionPwd check not found in main()');
+  assert.ok(loadIdx >= 0, 'loadContextHandoff call not found in main()');
+  assert.ok(pwdCheckIdx < loadIdx, 'isBareInspectionPwd must be checked BEFORE loadContextHandoff');
+});
+
+// --- recoveryDiagnostic: independent of the dynamically-loaded package -----
+// (Round-4 Finding 6 + Round-5 Finding 4)
+
+test('recoveryDiagnostic prints a real, absolute, session-bound recovery command — built entirely from trusted local code, no api parameter', async () => {
+  // Round-5 review: the OLD implementation formatted via api.formatRecoveryCommand
+  // / api.RECOVERY_CLI_PATH — the same dynamically-loaded, project-resolved
+  // package whose failure to load or export what's expected is exactly what
+  // every early fail() in main() is reporting when it appends this
+  // diagnostic. recoveryDiagnostic no longer takes an api parameter at all —
+  // it resolves the CLI path via the same trusted, execution-free
+  // resolveContextHandoffEntry the allow-path exception uses, and formats
+  // via this file's own trusted local twins.
+  const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
+  const out = recoveryDiagnostic('sess-a');
+  assert.match(out, /bypass --session sess-a --write/);
+  assert.doesNotMatch(out, /Recovery command unavailable/);
+});
+
+test('recoveryDiagnostic degrades to the no-safe-session-id message when sessionId is null', async () => {
+  const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
+  const out = recoveryDiagnostic(null);
+  assert.match(out, /No session id could be resolved/);
+  assert.match(out, /pwd/);
+});
+
+test('the top-level crash handler appends recoveryDiagnostic(lastKnownSessionId), not a bare error message (Round-5 Finding 4, source pin)', () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-handoff-gate.mjs'), 'utf8');
+  assert.match(source, /let lastKnownSessionId = null;/);
+  assert.match(source, /lastKnownSessionId = sessionId;/);
+  assert.match(
+    source,
+    /fail\(`handoff hook errored \(\$\{err\?\.message \?\? 'unknown'\}\) — failing closed\\n\\n\$\{recoveryDiagnostic\(lastKnownSessionId\)\}`\);/,
+  );
 });
