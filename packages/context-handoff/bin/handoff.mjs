@@ -426,8 +426,8 @@ null-hash and may clear D0/D3. --write requires ADLC_MANIFEST_KEY.
 
 --write persists a signed, session-bound grant the adapter reads back on its
 NEXT mutation-gate evaluation for this session and consumes (deletes) the
-moment it authorizes one — true one-shot, not just an audit trail. The grant
-also expires on its own after a short TTL (BYPASS_GRANT_TTL_MS) as a
+moment it authorizes one — genuinely one-shot, not just an audit trail. The
+grant also expires on its own after a short TTL (BYPASS_GRANT_TTL_MS) as a
 defense-in-depth ceiling if consumption itself fails. The manifest
 context-handoff-bypass entry --write also writes remains the durable AUDIT
 record of the grant having been issued; it is not itself consulted for

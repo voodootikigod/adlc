@@ -27,6 +27,7 @@ import {
   writeDenyRecord,
   writeBypassGrant,
   bypassGrantPath,
+  BYPASS_GRANT_SCHEMA,
 } from '@adlc/context-handoff';
 
 const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
@@ -54,6 +55,10 @@ function selfDeny(root, sessionId) {
     schema: 1,
   });
 }
+
+test('BYPASS_GRANT_SCHEMA is exactly 1', () => {
+  assert.equal(BYPASS_GRANT_SCHEMA, 1);
+});
 
 test('no grant: a self-denied session stays denied (baseline)', () => {
   withRepo((root) => {
@@ -118,7 +123,7 @@ test('a bypass grant past BYPASS_GRANT_TTL_MS never authorizes (defense-in-depth
     // stamps "now", so this fixture bypasses that to simulate a failed-delete
     // residual grant aging past the TTL.
     const path = bypassGrantPath(root, 'sess-stale');
-    const stalePayload = { schema: 1, session_id: 'sess-stale', unbound_reason: null };
+    const stalePayload = { schema: BYPASS_GRANT_SCHEMA, session_id: 'sess-stale', unbound_reason: null };
     const sig = createHmac('sha256', KEY).update(canonicalJson(stalePayload)).digest('hex');
     writeFileSync(
       path,

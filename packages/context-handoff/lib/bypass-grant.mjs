@@ -18,10 +18,10 @@ import { bypassGrantPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
 import { BYPASS_GRANT_TTL_MS } from './thresholds.mjs';
 
-export const SCHEMA = 1;
+export const BYPASS_GRANT_SCHEMA = 1;
 
 function payloadBytes({ session_id, unbound_reason }) {
-  return canonicalJson({ schema: SCHEMA, session_id, unbound_reason });
+  return canonicalJson({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason });
 }
 
 /**
@@ -57,7 +57,7 @@ export function buildBypassGrantDoc({ sessionId, unboundReason = null, key, now 
     unbound_reason: typeof unboundReason === 'string' && unboundReason.trim().length > 0 ? unboundReason : null,
   };
   return {
-    schema: SCHEMA,
+    schema: BYPASS_GRANT_SCHEMA,
     ...fields,
     written_at: now(),
     sig: signBypassGrant(key, fields),
