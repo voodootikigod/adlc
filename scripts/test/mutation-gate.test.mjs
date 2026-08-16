@@ -402,6 +402,31 @@ test('testTargetFor gives the generator no target when those tests are absent', 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor maps the router generator model to the drift test that covers it', () => {
+  // router-model.mjs is named for what it declares (the canonical router
+  // content), not for what asserts it, so the same-basename convention misses
+  // it too (there is no scripts/test/router-model.test.mjs). Without this
+  // mapping the file has no fast target, the whole run drops to the slow
+  // path, and that path's budget cap (3 mutants) is spent across the ENTIRE
+  // diff — so touching this file silently stops prosecuting everything
+  // changed beside it (#517 CI: mutation-gate capped at 3 for a 6-source-file
+  // diff and one mutant landed on syntactically invalid code).
+  const root = fixtureRoot(['scripts/test'], ['scripts/test/router-drift.test.mjs']);
+  try {
+    assert.equal(
+      testTargetFor('scripts/router/router-model.mjs', root),
+      'scripts/test/router-drift.test.mjs',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor gives the router generator model no target when its drift test is absent', () => {
+  const root = fixtureRoot(['scripts/test']);
+  try {
+    assert.equal(testTargetFor('scripts/router/router-model.mjs', root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor does not match a nested scripts/ path as a top-level script', () => {
   const root = fixtureRoot(['scripts/test'], ['scripts/test/mutation-gate.test.mjs']);
   try {

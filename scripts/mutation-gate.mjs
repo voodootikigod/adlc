@@ -147,7 +147,16 @@ export function testTargetFor(file, root = ROOT) {
     // the generator has no fast target, the whole run drops to the slow path,
     // and that path's budget cap is 3 mutants for the ENTIRE diff — so touching
     // the generator silently stops prosecuting everything changed beside it.
-    const EXACT = { 'scripts/ticket-readers/generate.mjs': 'scripts/test/ticket-reader-generation.test.mjs' };
+    const EXACT = {
+      'scripts/ticket-readers/generate.mjs': 'scripts/test/ticket-reader-generation.test.mjs',
+      // router-model.mjs is named for what it declares, not for what asserts
+      // it (no scripts/test/router-model.test.mjs) — router-drift.test.mjs is
+      // what actually exercises it (drift = generateAll(model) vs committed
+      // routers). Without this, the file has no fast target and the whole run
+      // drops to the slow path, whose budget cap (3 mutants) is spent across
+      // the ENTIRE diff.
+      'scripts/router/router-model.mjs': 'scripts/test/router-drift.test.mjs',
+    };
     if (EXACT[file] && existsSync(join(root, EXACT[file]))) return EXACT[file];
     // A NESTED source may use the same-basename convention only when that
     // basename identifies exactly one source under scripts/**. Two files
