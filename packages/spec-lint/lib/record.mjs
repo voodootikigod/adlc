@@ -25,12 +25,6 @@ export const GATE_NAME = 'spec-lint';
  * @returns the recorded manifest entry
  */
 export function recordResult({ ticket, specPath, dir, key = null } = {}) {
-  return record({
-    gate: GATE_NAME,
-    ticket,
-    rawData: JSON.stringify({ verified: true }),
-    rawFiles: specPath,
-    dir,
-    key,
-  });
+  const rawData = JSON.stringify({ verified: true });
+  return record({ gate: GATE_NAME, ticket, rawData, rawFiles: specPath, dir, key });
 }

@@ -369,6 +369,26 @@ test('AC4: /adlc-approve-spec with no prior interrogation evidence refuses befor
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('AC4: /adlc-approve-spec recognizes spec-lint alone as sufficient prior evidence (not just parallax/premortem)', async () => {
+  const root = makeRepo({ current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    const specRel = '.adlc/specs/feature.md';
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    writeFileSync(join(root, specRel), '# Spec\n');
+    appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, join(root, '.adlc'), { key: null });
+    const ctx = fakeCtx(root, { confirm: () => true });
+
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+
+    assert.equal(ctx.calls.confirm, 1, 'a spec-lint-only ticket still opens the dialog');
+    const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
+    const approval = manifest.trim().split('\n').map((l) => JSON.parse(l)).find((e) => e.gate === 'spec-approval');
+    assert.ok(approval, 'spec-approval was recorded');
+    assert.deepEqual(approval.data.sources, ['spec-lint']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('AC4: /adlc-approve-spec on a nonexistent path errors without opening a dialog', async () => {
   const root = makeRepo({ current: 'T1' });
   try {

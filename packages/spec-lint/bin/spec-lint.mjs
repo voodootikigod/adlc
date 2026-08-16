@@ -12,8 +12,8 @@ import { buildVacuousPrompt, detectVacuous } from '../lib/llm.mjs';
 import { recordResult } from '../lib/record.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
-const USAGE = 'usage: spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]\n' +
-  '                  [--record --ticket <id> [--dir .adlc]]';
+const USAGE = 'usage: spec-lint SPEC.MD [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]\n' +
+  '                  [--record --ticket ID [--dir .adlc]]';
 
 const { values: flags, positionals } = parseArgs({
   usage: USAGE,

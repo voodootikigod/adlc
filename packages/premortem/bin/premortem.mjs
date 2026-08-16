@@ -18,7 +18,7 @@ const { values, positionals } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|-> --ticket <id>]
+  console.log(`premortem SPEC.MD [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict FILE-OR-DASH --ticket ID]
 
 Failure-first spec stress test (ADLC C2).
 
@@ -31,7 +31,7 @@ Failure-first spec stress test (ADLC C2).
                    from <file> (or stdin when '-') and record it into
                    .adlc/manifest.jsonl via gate-manifest. Requires --ticket
                    — an unbound record can satisfy any ticket's P1 gate.
-  --ticket <id>    Ticket to bind the recorded verdict to (required with
+  --ticket ID      Ticket to bind the recorded verdict to (required with
                    --record-verdict)
   --help           Show this help
 
