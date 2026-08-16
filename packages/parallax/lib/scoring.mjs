@@ -59,6 +59,47 @@ export function renderReport({ agreements, divergences, score, threshold }) {
 }
 
 /**
+ * Structured question payload for --questions-json: the machine contract
+ * consumed by P1 interrogation flows instead of scraping the markdown report.
+ * @param {object} params
+ * @param {string} params.mode - 'spec' | 'edge'
+ * @param {Array<{point: string, options: Array<{label: string, reading: string}>}>} params.divergences
+ * @param {number} params.score
+ * @param {number} params.threshold
+ * @returns {{mode: string, questions: Array<{point: string, options: Array<{label: string, reading: string}>}>, score: number, threshold: number, gate: boolean}}
+ */
+export function renderQuestionsJson({ mode, divergences, score, threshold }) {
+  return {
+    mode,
+    questions: divergences.map((d) => ({ point: d.point, options: d.options })),
+    score,
+    threshold,
+    gate: score <= threshold,
+  };
+}
+
+const ROUTE_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+/**
+ * Structured question payload for a route conflict (answers not equivalent).
+ * @param {string} question
+ * @param {string[]} variants
+ * @returns {{mode: 'route', questions: Array<{point: string, options: Array<{label: string, reading: string}>}>, gate: false}}
+ */
+export function renderRouteQuestionsJson(question, variants) {
+  return {
+    mode: 'route',
+    questions: [
+      {
+        point: question,
+        options: variants.map((v, i) => ({ label: ROUTE_LABELS[i] ?? String(i + 1), reading: v })),
+      },
+    ],
+    gate: false,
+  };
+}
+
+/**
  * Render route mode output when answers are NOT equivalent.
  * @param {string} question
  * @param {string[]} variants

@@ -20,7 +20,12 @@ import {
   buildRouteJudgePrompt,
   buildDivergencePrompt,
 } from '../lib/prompts.mjs';
-import { renderReport, renderRouteConflict } from '../lib/scoring.mjs';
+import {
+  renderReport,
+  renderRouteConflict,
+  renderQuestionsJson,
+  renderRouteQuestionsJson,
+} from '../lib/scoring.mjs';
 import { runSpecMode, runEdgeMode, runRouteMode } from '../lib/modes.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
@@ -38,6 +43,10 @@ Flags:
   --threshold <0-1>   ambiguity gate threshold (default 0.25)
   --tier cheap|mid|frontier  override LLM tier
   --json              machine-readable output
+  --questions-json    emit open questions as structured JSON
+                      ({questions: [{point, options}]}) for interrogation
+                      consumers; live mode only, mutually exclusive with
+                      --json and --prompt-only
   --prompt-only       print prompts and exit 0 (no API key needed)
   --record-verdict <file|->  with --prompt-only: read the operator's answer
                       from <file> (or stdin when '-') and record it into
@@ -66,6 +75,7 @@ const { values, positionals } = parseArgs({
     threshold: { type: 'string', default: '0.25' },
     tier: { type: 'string' },
     json: { type: 'boolean', default: false },
+    'questions-json': { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
     'record-verdict': { type: 'string' },
   },
@@ -86,6 +96,13 @@ if (values.tier !== undefined && !VALID_TIERS.includes(values.tier)) {
 
 if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
+}
+
+if (values['questions-json'] && values['prompt-only']) {
+  opError('--questions-json needs a live divergence analysis; with --prompt-only the questions come from your own answer to the printed prompt');
+}
+if (values['questions-json'] && values.json) {
+  opError('--questions-json and --json are mutually exclusive; pick one output contract');
 }
 
 const tierOverride = values.tier ?? undefined;
@@ -166,7 +183,9 @@ if (values.edge) {
   const { agreements, divergences, score, errors } = result;
   const report = renderReport({ agreements, divergences, score, threshold });
 
-  if (values.json) {
+  if (values['questions-json']) {
+    printJson({ ...renderQuestionsJson({ mode: 'edge', divergences, score, threshold }), tickets: [idA, idB], warnings: errors });
+  } else if (values.json) {
     printJson({ mode: 'edge', tickets: [idA, idB], agreements, divergences, score, threshold, gate: score <= threshold, warnings: errors });
   } else {
     console.log(`# Edge contract: ${idA} ↔ ${idB}\n`);
@@ -219,7 +238,13 @@ if (values.route) {
 
   const { equivalent, answer, variants, errors } = result;
 
-  if (values.json) {
+  if (values['questions-json']) {
+    printJson(
+      equivalent
+        ? { mode: 'route', questions: [], gate: true, answer, warnings: errors }
+        : { ...renderRouteQuestionsJson(question, variants), warnings: errors }
+    );
+  } else if (values.json) {
     printJson({ mode: 'route', question, equivalent, answer, variants, warnings: errors });
   } else if (equivalent) {
     console.log(answer);
@@ -303,7 +328,9 @@ try {
 const { agreements, divergences, score, errors } = result;
 const report = renderReport({ agreements, divergences, score, threshold });
 
-if (values.json) {
+if (values['questions-json']) {
+  printJson({ ...renderQuestionsJson({ mode: 'spec', divergences, score, threshold }), warnings: errors });
+} else if (values.json) {
   printJson({
     mode: 'spec',
     agreements,

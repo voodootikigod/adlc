@@ -18,9 +18,15 @@ instead of vanishing with the session.
 ## 1. Measure ambiguity — `parallax`
 Run `adlc parallax --file <spec-or-request> --prompt-only --record-verdict <file>`.
 Produce the N independent readings, then the divergence analysis. Every
-divergence above the threshold is an ambiguity you must resolve (ask the user or
-research) before proceeding. Write the converged spec to a file under
-`.adlc/specs/`.
+divergence is a frontier question — resolve it via the shared interrogation
+protocol (`docs/interrogation-protocol.md` in the ADLC repo): codebase-check
+each one, ask the human the rest in numbered rounds with a recommended answer
+first, fold answers into the spec as revised prose, and re-run parallax —
+**capped at 3 rounds**, after which surviving divergences are recorded in the
+spec as approved assumptions and the residual score is carried into the
+`spec-approval` payload. (With a live provider, `--questions-json` returns the
+divergences as structured `{questions: [{point, options}]}`.) Write the
+converged spec to a file under `.adlc/specs/`.
 
 ## 2. Lint acceptance criteria — `spec-lint`
 Run `adlc spec-lint <spec.md> --prompt-only` and answer the vacuousness audit:

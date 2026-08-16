@@ -102,6 +102,14 @@ without one:
 
 ## P1-P2 commands
 
+P1's parallax divergences are frontier questions — resolve them via the shared
+interrogation protocol (`docs/interrogation-protocol.md` in the ADLC repo):
+codebase-check each one, ask the human the rest in numbered rounds with a
+recommended answer first, fold answers into the spec, and re-run parallax —
+capped at 3 rounds, after which surviving divergences are recorded as approved
+assumptions in the spec. `adlc parallax --questions-json` returns the
+divergences as structured `{questions: [{point, options}]}` for this loop.
+
 ```sh
 adlc parallax --request "<request>"
 adlc spec-lint spec.md --json
