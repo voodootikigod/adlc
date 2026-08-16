@@ -45,15 +45,37 @@ test('AC3: /adlc-decompose with NO P1 evidence → warns', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: /adlc-decompose WITH P1 evidence → no warning (spec-lint & premortem, type & gate keys)', () => {
-  for (const evidence of ['spec-lint', 'premortem']) {
+// A single P1 gate (or even two of the three) must NOT silence the warning —
+// codex cross-model review (adversarial-review --provider codex,
+// feat/p1-interrogation full-branch pass): the runner's real p1 assertion
+// requires spec-lint AND premortem AND spec-approval together, so an
+// any-of check here would silently let /adlc-decompose proceed with Gate 1
+// still unrecorded.
+test('AC3: /adlc-decompose with only ONE of the three P1 gates → still warns', () => {
+  for (const evidence of ['spec-lint', 'premortem', 'spec-approval']) {
     for (const key of ['type', 'gate']) {
       const dir = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry(evidence, 'T1', key) });
       try {
-        assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null, `${evidence}/${key}`);
+        assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /P1 spec gate/, `${evidence}/${key}`);
       } finally { rmSync(dir, { recursive: true, force: true }); }
     }
   }
+});
+
+test('AC3: /adlc-decompose with TWO of the three P1 gates → still warns (missing the third)', () => {
+  const manifest = evEntry('spec-lint', 'T1') + evEntry('premortem', 'T1');
+  const dir = repo({ tickets: [{ id: 'T1', rails: [] }], manifest });
+  try {
+    assert.match(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, /P1 spec gate/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('AC3: /adlc-decompose WITH ALL THREE P1 gates → no warning', () => {
+  const manifest = evEntry('spec-lint', 'T1') + evEntry('premortem', 'T1') + evEntry('spec-approval', 'T1');
+  const dir = repo({ tickets: [{ id: 'T1', rails: [] }], manifest });
+  try {
+    assert.equal(checkCommandOrder('/adlc-decompose', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('AC3: a P2 gate (coldstart) does NOT satisfy the P1 prerequisite for /adlc-decompose', () => {
@@ -70,16 +92,18 @@ test('AC3: P1 evidence for a DIFFERENT ticket does not satisfy this one', () => 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('AC3: /adlc-prosecute with no P2 evidence → warns; with coldstart (type or gate) → silent', () => {
+test('AC3: /adlc-prosecute with no P2 evidence → warns; with only coldstart (missing merge-forecast) → still warns; with both → silent', () => {
   const noEvidence = repo({ tickets: [{ id: 'T1', rails: [] }] });
   const typeEv = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1', 'type') });
   const gateEv = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1', 'gate') });
+  const both = repo({ tickets: [{ id: 'T1', rails: [] }], manifest: evEntry('coldstart', 'T1') + evEntry('merge-forecast', 'T1') });
   try {
     assert.match(checkCommandOrder('/adlc-prosecute', noEvidence, { ...ON, ADLC_TICKET: 'T1' }).warn, /P2 evidence/);
-    assert.equal(checkCommandOrder('/adlc-prosecute', typeEv, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
-    assert.equal(checkCommandOrder('/adlc-prosecute', gateEv, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+    assert.match(checkCommandOrder('/adlc-prosecute', typeEv, { ...ON, ADLC_TICKET: 'T1' }).warn, /P2 evidence/, 'coldstart alone is not the full P2 prerequisite');
+    assert.match(checkCommandOrder('/adlc-prosecute', gateEv, { ...ON, ADLC_TICKET: 'T1' }).warn, /P2 evidence/, 'coldstart alone is not the full P2 prerequisite');
+    assert.equal(checkCommandOrder('/adlc-prosecute', both, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
   } finally {
-    for (const d of [noEvidence, typeEv, gateEv]) rmSync(d, { recursive: true, force: true });
+    for (const d of [noEvidence, typeEv, gateEv, both]) rmSync(d, { recursive: true, force: true });
   }
 });
 

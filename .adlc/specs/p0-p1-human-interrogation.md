@@ -201,3 +201,29 @@ P7→P1 loop closes.
 3. **parallax gains `--questions-json`.** Consumers get structured
    divergences instead of scraping rendered markdown; small addition
    scoped inside T-C.
+
+## Known limitation: `approver` is not a cryptographic identity claim
+
+Cross-model review (adversarial-review, round 3) correctly noted that
+`specApprovalIntegrityErrors` treats a non-empty `approver` string as
+sufficient — nothing prevents an agent with ordinary CLI/manifest-key access
+from hand-authoring a complete-looking `spec-approval` record and skipping
+the human entirely.
+
+This is real, and it is **not unique to this gate**: it is the trust model
+for every manifest entry in ADLC today. The manifest's HMAC signing
+(`ADLC_MANIFEST_KEY`) proves an entry was written by a holder of the signing
+key — it does not, and has never, distinguished a human typing a command
+from an agent typing the same command with the same key. P6 acceptance
+(`p6-acceptance-packet`) has the identical property. The actual enforcement
+mechanism for "a human decided this" is the harness UI pausing for input
+(`AskUserQuestion`, a confirm dialog) *before* the CLI is invoked — a
+process-level guarantee backed by the harness's instructions to the agent,
+not a cryptographic one.
+
+Building genuine human-vs-agent identity binding (e.g., a signing capability
+scoped to authenticated human sessions and withheld from the working agent)
+is a real, valuable follow-on — but it is a system-wide authentication
+project, not a P1-specific fix, and out of scope for this change. Filed as a
+gap to revisit, not silently accepted: any future work on manifest identity
+should cover P1 and P6 together.

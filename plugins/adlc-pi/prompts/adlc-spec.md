@@ -24,9 +24,11 @@ below sequence around that constraint; the 3-round cap covers the loop as a
 whole, not each source separately.
 
 ## 1. Measure ambiguity — `parallax`
-Run `adlc parallax --file <spec-or-request> --record-verdict <file>` (add
-`--prompt-only` to answer it yourself). Produce the N independent readings,
-then the divergence analysis.
+Run `adlc parallax --file <spec-or-request> --prompt-only --record-verdict <file>`
+and answer it yourself. `--prompt-only` is required alongside
+`--record-verdict`, not optional — the CLI errors otherwise (keyless
+operation; recording without it is undefined). Produce the N independent
+readings, then the divergence analysis.
 
 ## 2. Interrogate round 1, write the draft — parallax's divergences
 Every divergence above the threshold is an ambiguity you must resolve via the
@@ -37,12 +39,14 @@ draft spec to a file under `.adlc/specs/` — premortem (step 3) needs this
 file to exist.
 
 ## 3. Failure-first, then interrogate round 2 — `premortem`'s questions
-Run `adlc premortem <spec.md> --record-verdict <file> --ticket <id>` (add
-`--prompt-only` to answer it yourself) and produce 5–10 concrete,
-mechanism-specific failure causes against the draft from step 2. `--ticket`
-is required — the p1 gate scopes evidence per-ticket, and `/adlc-approve-spec`
-reads this recorded entry to prove interrogation actually happened before it
-will open its confirm dialog. Its interrogation questions become this
+Run `adlc premortem <spec.md> --prompt-only --record-verdict <file> --ticket <id>`
+and answer it yourself — `--prompt-only` is required alongside
+`--record-verdict`; without it the record branch never runs and nothing is
+recorded, even on a live provider call. `--ticket` is also required — the p1
+gate scopes evidence per-ticket, and `/adlc-approve-spec` reads this recorded
+entry to prove interrogation actually happened before it will open its
+confirm dialog. Produce 5–10 concrete, mechanism-specific failure causes
+against the draft from step 2. Its interrogation questions become this
 round's frontier — run the loop again (codebase-check first, ask the human
 the rest, fold answers into the spec), then re-run parallax to confirm
 convergence.

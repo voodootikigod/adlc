@@ -437,11 +437,12 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
   }
 
   const filePaths = Object.keys(entry.files ?? {});
+  let path, recordedHash;
   if (filePaths.length !== 1) {
     errors.push('P1 evidence is incomplete: spec-approval must bind exactly one spec file via --files');
   } else {
-    const [path] = filePaths;
-    const recordedHash = entry.files[path];
+    [path] = filePaths;
+    recordedHash = entry.files[path];
     if (typeof data.spec_hash !== 'string' || data.spec_hash.length === 0) {
       errors.push('P1 evidence is incomplete: spec-approval missing spec_hash');
     } else if (recordedHash !== data.spec_hash) {
@@ -461,14 +462,38 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
   // ticket T2's approval could borrow ticket T1's spec-lint/premortem audits
   // (P1 D4). p1 is ticket-required (see requiresTicket) specifically so this
   // scoping is always meaningful, never a silent no-op over the whole ledger.
+  //
+  // Ticket-scoping alone still lets the SAME ticket launder a stale or
+  // different spec: T1 lints spec-A.md, then approves an edited spec-A.md or
+  // an entirely different spec-B.md without re-running spec-lint/premortem
+  // (codex cross-model review round 2). So beyond ordering, each audit's OWN
+  // --files binding must name the exact same (path, hash) the approval
+  // bound — and a hand-crafted `gate-manifest record spec-lint` with no
+  // --files at all (or spec-lint's own verified:false) must not count either.
   const entryIndex = entries.indexOf(entry);
-  const latestSpecLintIndex = entries.findLastIndex((e) => entryType(e) === 'spec-lint' && matchesTicket(e, ticket));
-  const latestPremortemIndex = entries.findLastIndex((e) => entryType(e) === 'premortem' && matchesTicket(e, ticket));
-  if (latestSpecLintIndex === -1 || entryIndex < latestSpecLintIndex) {
-    errors.push('P1 evidence is stale: spec-approval was recorded before the latest spec-lint evidence for this ticket');
+  const latestSpecLint = entries.reduce((acc, e, i) => (entryType(e) === 'spec-lint' && matchesTicket(e, ticket) ? { entry: e, index: i } : acc), null);
+  const latestPremortem = entries.reduce((acc, e, i) => (entryType(e) === 'premortem' && matchesTicket(e, ticket) ? { entry: e, index: i } : acc), null);
+
+  function auditMatchesApprovedSpec(audit) {
+    if (!path) return true; // approval's own file binding already flagged above; don't double-report
+    const auditPaths = Object.keys(audit.entry.files ?? {});
+    return auditPaths.length === 1 && auditPaths[0] === path && audit.entry.files[auditPaths[0]] === recordedHash;
   }
-  if (latestPremortemIndex === -1 || entryIndex < latestPremortemIndex) {
+
+  if (!latestSpecLint || entryIndex < latestSpecLint.index) {
+    errors.push('P1 evidence is stale: spec-approval was recorded before the latest spec-lint evidence for this ticket');
+  } else {
+    if (!auditMatchesApprovedSpec(latestSpecLint)) {
+      errors.push('P1 evidence is contradictory: the latest spec-lint evidence for this ticket does not audit the approved spec file');
+    }
+    if (latestSpecLint.entry.data?.verified !== true) {
+      errors.push('P1 evidence is incomplete: the latest spec-lint evidence for this ticket is not a verified (passing) result');
+    }
+  }
+  if (!latestPremortem || entryIndex < latestPremortem.index) {
     errors.push('P1 evidence is stale: spec-approval was recorded before the latest premortem evidence for this ticket');
+  } else if (!auditMatchesApprovedSpec(latestPremortem)) {
+    errors.push('P1 evidence is contradictory: the latest premortem evidence for this ticket does not analyze the approved spec file');
   }
 
   return errors;

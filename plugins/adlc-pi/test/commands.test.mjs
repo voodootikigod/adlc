@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { createExtension } from '../lib/extension.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
+import { sha256 } from '@adlc/core';
 import { migrateLegacyStore, migrationPlan } from '@adlc/tickets';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -548,8 +549,20 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
     // round-trip proves the FULL gate, not just this one record in isolation.
     // This also supplies /adlc-approve-spec's own prior-evidence requirement
     // (ticketInterrogationSources) — no separate seeding needed here.
-    appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, join(root, '.adlc'), { key: null });
-    appendManifestEntry({ gate: 'premortem', ticket: 'T1' }, join(root, '.adlc'), { key: null });
+    // The audits must bind the SAME (path, hash) the approval will bind
+    // (P1 D4 round 2 — evidence-laundering closure), and spec-lint's own
+    // verified:true, matching what the real spec-lint --record and
+    // premortem --record-verdict emitters produce.
+    const specAbsPath = join(root, specRel);
+    const specHash = sha256(readFileSync(specAbsPath));
+    appendManifestEntry(
+      { gate: 'spec-lint', ticket: 'T1', files: { [specAbsPath]: specHash }, data: { verified: true } },
+      join(root, '.adlc'), { key: null }
+    );
+    appendManifestEntry(
+      { gate: 'premortem', ticket: 'T1', files: { [specAbsPath]: specHash } },
+      join(root, '.adlc'), { key: null }
+    );
 
     const ctx = fakeCtx(root, { confirm: () => true });
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);

@@ -54,8 +54,11 @@ function manifestEntries(root) {
 /**
  * Advisory lifecycle-order check. Returns { warn: string|null }.
  * Only warns when: the command has a declared prerequisite, enforcement is on
- * with an unambiguous active ticket, AND the manifest has NO entry for any of
- * the prerequisite gates on that ticket. Fail-OPEN everywhere else — advisory.
+ * with an unambiguous active ticket, AND the manifest is missing ANY ONE of
+ * the prerequisite gates on that ticket (all must be present — P1's
+ * requirement is spec-lint AND premortem AND spec-approval; a single early
+ * spec-lint row must not silence the warning for the other two). Fail-OPEN
+ * everywhere else — advisory.
  */
 export function checkCommandOrder(command, root, env = process.env) {
   const name = normalizeCommandName(command);
@@ -64,7 +67,8 @@ export function checkCommandOrder(command, root, env = process.env) {
   const active = resolveActiveTicketId(root, env);
   if (active.conflict || !active.id) return { warn: null };
   const entries = manifestEntries(root);
-  const satisfied = entries.some((e) => e?.ticket === active.id && prereq.gates.includes(entryEvidence(e)));
+  const present = new Set(entries.filter((e) => e?.ticket === active.id).map(entryEvidence));
+  const satisfied = prereq.gates.every((gate) => present.has(gate));
   if (satisfied) return { warn: null };
   return { warn: `ADLC lifecycle: /${name} — ${prereq.hint}. (advisory; not blocked)` };
 }
