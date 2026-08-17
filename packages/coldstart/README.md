@@ -108,13 +108,18 @@ hash-chaining/signing logic rather than reimplementing it.
 coldstart T1 --prompt-only --record-verdict verdict.txt
 
 # Or pipe the answer straight from stdin
-echo "PASS: no gaps found" | coldstart T1 --prompt-only --record-verdict -
+echo '{"gaps":[],"ticketHash":"<ticketHash from `adlc ticket show T1 --json`>"}' \
+  | coldstart T1 --prompt-only --record-verdict -
 ```
 
 `--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
 entry's `gate` is `coldstart`, `data.verdict` holds the operator's text
 verbatim, and `data.ticketIds` lists every ticket the prompt covered (useful
-with `--all`).
+with `--all`). The P0 gate (`packages/runner/lib/assertions.mjs`) further
+requires `data.verdict` to be JSON matching `{"gaps":[...],"ticketHash":"…"}`
+with an empty `gaps` array and a `ticketHash` matching the ticket's current
+definition — free-form prose (e.g. `"PASS: no gaps found"`) records
+successfully but fails the P0 assertion as invalid JSON.
 
 ---
 
