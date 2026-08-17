@@ -142,6 +142,18 @@ export function writeBypassGrant(root, sessionId, { unboundReason = null } = {},
   }
   const doc = buildBypassGrantDoc({ sessionId, unboundReason, key });
   const path = bypassGrantPath(root, sessionId);
+  // Round-16 review: writeJsonAtomic serializes as `JSON.stringify(doc, null,
+  // 2) + '\n'` — matching that exactly here, not a compact stringify, so this
+  // check agrees with what every reader's lstat.size will actually see.
+  // unboundReason is operator-supplied free text with no length limit at the
+  // CLI's own parseArgs layer; without this, a long --unbound-reason would
+  // report `bypass --write` as successful (and audited) while persisting a
+  // grant every reader's MAX_BYPASS_GRANT_BYTES cap silently rejects as
+  // absent — recording success for a recovery that never took effect.
+  const serializedBytes = Buffer.byteLength(`${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+  if (serializedBytes > MAX_BYPASS_GRANT_BYTES) {
+    return { ok: false, error: `grant document (${serializedBytes} bytes) exceeds MAX_BYPASS_GRANT_BYTES (${MAX_BYPASS_GRANT_BYTES}) — no reader would ever accept it; shorten --unbound-reason` };
+  }
   const wrote = writeJsonAtomic(path, doc, fs ? { fs } : {});
   if (!wrote.ok) return { ok: false, error: wrote.error };
   return { ok: true, path, doc };

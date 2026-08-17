@@ -29,6 +29,7 @@ import {
   removeBypassGrant,
   bypassGrantPath,
   BYPASS_GRANT_SCHEMA,
+  MAX_BYPASS_GRANT_BYTES,
 } from '@adlc/context-handoff';
 
 const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
@@ -308,6 +309,30 @@ test('removeBypassGrant is the atomic one-shot claim: exactly one of two concurr
     const second = removeBypassGrant(root, 'sess-race');
     assert.equal(first, true, 'the first caller must win the claim');
     assert.equal(second, false, 'the second caller must lose it (ENOENT), never double-claim');
+  });
+});
+
+test('writeBypassGrant refuses (rather than silently writing) a document that exceeds MAX_BYPASS_GRANT_BYTES', () => {
+  withRepo((root) => {
+    // Round-16 review: --unbound-reason is operator free text with no length
+    // cap at the CLI layer. Without a write-time check, this would report
+    // success and persist a grant every reader's size guard rejects as
+    // absent — "successful recovery" that was never actually reachable.
+    const result = writeBypassGrant(root, 'sess-oversized', { unboundReason: 'x'.repeat(5000) }, { key: KEY });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /exceeds MAX_BYPASS_GRANT_BYTES/);
+    assert.equal(existsSync(bypassGrantPath(root, 'sess-oversized')), false, 'a refused write must not leave a dead grant file behind');
+  });
+});
+
+test('writeBypassGrant accepts a document right at the size boundary', () => {
+  withRepo((root) => {
+    // A short, ordinary bound grant (no unbound_reason) is always well under
+    // the cap — sanity check the guard isn't so tight it rejects real usage.
+    const result = writeBypassGrant(root, 'sess-normal', {}, { key: KEY });
+    assert.equal(result.ok, true, result.error);
+    const written = readFileSync(bypassGrantPath(root, 'sess-normal'), 'utf8');
+    assert.ok(Buffer.byteLength(written, 'utf8') <= MAX_BYPASS_GRANT_BYTES);
   });
 });
 
