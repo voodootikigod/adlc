@@ -1,11 +1,11 @@
-// readme-record-example.test.mjs — codex cross-model review, round 11:
-// the README's --record-verdict worked example piped free-form prose
-// ("PASS: no gaps found"), which records successfully but fails the P0
-// assertion (packages/runner/lib/assertions.mjs) as invalid JSON — the
-// gate requires data.verdict to parse to {gaps:[...], ticketHash:"…"}.
-// This test extracts the JSON literal from the README's stdin example and
-// asserts it actually parses to that shape, so the doc can't drift stale
-// again without this test catching it.
+// readme-record-example.test.mjs — the README's --record-verdict worked
+// example must pipe JSON that parses to {gaps:[...], ticketHash:"…"}: the
+// P0 assertion (packages/runner/lib/assertions.mjs) JSON.parses
+// data.verdict and requires that shape, so free-form prose recorded via
+// this example would satisfy the CLI but fail the gate. This test extracts
+// the JSON literal from the README's stdin example and asserts it parses
+// to that shape, so the doc can't drift stale again without this test
+// catching it.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
