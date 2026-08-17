@@ -55,8 +55,8 @@ evidence, not intuition:
    store. In P0 the pre-write rounds run from the field checklist and the
    design tree (sources 4–5); coldstart gaps drive the **post-write** rounds,
    which loop until the gap list is empty and end with
-   `adlc coldstart <id> --record-verdict -`. In P1 the ticket already exists,
-   so coldstart gaps are available from the first round.
+   `adlc coldstart <id> --prompt-only --record-verdict -`. In P1 the ticket
+   already exists, so coldstart gaps are available from the first round.
 2. **parallax divergences** — `adlc parallax` fans out independent readings
    and renders the points where they split, already shaped as lettered
    multiple-choice. Each divergence becomes one frontier question.

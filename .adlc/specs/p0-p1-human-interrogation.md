@@ -97,9 +97,10 @@ checklist. §4 changes from "summarize gaps and offer to revise" to: convert
 each coldstart gap into a frontier question, put it to the human, fold
 answers into the body, re-run `adlc coldstart <id> --prompt-only` until the
 gap list is empty. Once it is, record the passing verdict with
-`adlc coldstart <id> --record-verdict -` — `--prompt-only` alone writes no
-manifest record, and the D4 p0 assertion requires one; a flow that stops at
-the prompt-only loop would author tickets that can never pass p0. Peer
+`adlc coldstart <id> --prompt-only --record-verdict -` — `--prompt-only`
+alone writes no manifest record, and the D4 p0 assertion requires one; a
+flow that stops at the prompt-only loop would author tickets that can never
+pass p0. Peer
 edits: copilot / cursor / opencode / codex / pi ticket flows reference the
 same protocol doc.
 

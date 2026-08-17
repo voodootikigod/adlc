@@ -48,23 +48,40 @@ function parseJsonStdout(stdout) {
 // of it. Fails CLOSED to an empty array on any read/identity problem: an
 // approval that cannot prove interrogation happened must be refused, not
 // silently approved.
-const INTERROGATION_SOURCE_GATES = ['parallax', 'premortem', 'spec-lint'];
+// spec-lint is deliberately NOT a source here: it is a deterministic
+// acceptance-criteria linter that asks a human zero questions, so its
+// presence proves nothing about interrogation having occurred (codex
+// cross-model review, feat/p1-interrogation round 7: "Pi fabricates
+// interrogation counts ... treats spec-lint as interrogation evidence").
+// p1 still separately requires a spec-lint record (PHASE_REQUIREMENTS.p1)
+// — this list only governs what THIS approval claims it consulted.
+const INTERROGATION_SOURCE_GATES = ['parallax', 'premortem'];
 
-function ticketInterrogationSources(root, ticketId) {
+/**
+ * @returns {{sources: string[], entryCount: number}} sources — the distinct
+ *   interrogation gates with evidence for this ticket; entryCount — the
+ *   total number of matching recorded entries (a real, if approximate,
+ *   floor on how many separate interrogation artifacts were recorded —
+ *   NOT the number of distinct gate names, which double-counts nothing but
+ *   also never reflects a gate recorded more than once across rounds).
+ */
+function ticketInterrogationEvidence(root, ticketId) {
   let entries;
   try {
     ({ entries } = readOwnManifestChain(join(root, '.adlc'), { cwd: root }));
   } catch {
-    return [];
+    return { sources: [], entryCount: 0 };
   }
   const found = new Set();
+  let entryCount = 0;
   for (const entry of entries) {
     const gate = entry?.type ?? entry?.gate;
     if (entry?.ticket === ticketId && INTERROGATION_SOURCE_GATES.includes(gate)) {
       found.add(gate);
+      entryCount += 1;
     }
   }
-  return [...found];
+  return { sources: [...found], entryCount };
 }
 
 /**
@@ -331,7 +348,7 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
       // parallax/premortem through the real CLI and record real, ticket-bound
       // evidence — so read the manifest for that evidence instead of
       // fabricating a summary. Refuse if none exists: run /adlc-spec first.
-      const priorSources = ticketInterrogationSources(root, ticketId);
+      const { sources: priorSources, entryCount: priorEntryCount } = ticketInterrogationEvidence(root, ticketId);
       if (priorSources.length === 0) {
         ctx.ui.notify('ADLC: no parallax/premortem evidence recorded for this ticket yet — run /adlc-spec first, then /adlc-approve-spec. Nothing recorded.', 'error');
         return;
@@ -359,19 +376,19 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         // Chain-valid manifest entry naming the spec + its sha256 (spec AC4),
         // plus the interrogation-summary fields the p1 assertion requires
         // (packages/runner/lib/assertions.mjs specApprovalIntegrityErrors).
-        // rounds/questions used to be derived from priorSources.length — the
-        // COUNT OF DISTINCT GATE NAMES with evidence — which conflates "how
-        // many kinds of evidence exist" with "how many rounds of
-        // interrogation happened" (spec-lint alone asks zero human
-        // questions, so priorSources.length === 1 there would falsely claim
-        // one round occurred; codex cross-model review, feat/p1-interrogation
-        // round 5: "Pi invents interrogation rounds and question counts from
-        // unrelated gate names"). The actual AskUserQuestion-equivalent
-        // round/question count happens client-side during /adlc-spec and is
-        // not recoverable from the manifest, so this records the minimal
-        // claim the evidence actually supports — "at least one round of
-        // recorded interrogation evidence exists" — rather than inventing a
-        // number tied to unrelated source cardinality.
+        // rounds/questions used to be a hand-fixed 1/1 (or, before that, the
+        // count of distinct gate names) — neither reflects reality: a real
+        // /adlc-spec run can re-record premortem/parallax across several
+        // rounds of the interrogation loop, and a fixed constant would
+        // always undercount that (codex cross-model review,
+        // feat/p1-interrogation round 7: "Pi fabricates interrogation
+        // counts"). priorEntryCount is the actual number of recorded
+        // parallax/premortem entries for this ticket — a genuine floor on
+        // how many interrogation artifacts exist, not a number invented from
+        // unrelated source cardinality. The true per-round question count
+        // (the AskUserQuestion-equivalent exchange) happens client-side
+        // during /adlc-spec and is not recoverable from the manifest, so
+        // this still never claims more precision than the evidence proves.
         record({
           gate: 'spec-approval',
           ticket: ticketId,
@@ -381,8 +398,8 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
             verdict: 'approved',
             approver: userInfo().username,
             spec_hash: hash,
-            rounds: 1,
-            questions: 1,
+            rounds: priorEntryCount,
+            questions: priorEntryCount,
             sources: priorSources,
             unresolved: 0,
             approved_assumptions: [],

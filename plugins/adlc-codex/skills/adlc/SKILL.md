@@ -26,10 +26,10 @@ adlc preflight --json
 For strict phase assertions, use:
 
 ```sh
-adlc run <p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json
+adlc run <p0|p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json
 ```
 
-P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for
+P0, P1, P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for
 those phases.
 
 ## The adversarial-review loop

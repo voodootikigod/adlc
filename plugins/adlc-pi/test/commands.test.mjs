@@ -311,8 +311,9 @@ test('AC3: /adlc-ticket with no args in non-TUI mode requires an id (no hang, no
 // Every case below first seeds a ticket-bound premortem entry: since codex's
 // cross-model review found the confirm dialog alone proved no interrogation
 // occurred, the handler now refuses (before even opening the dialog) unless
-// real parallax/premortem/spec-lint evidence exists for the active ticket —
-// see ticketInterrogationSources in lib/commands.mjs. Seeding it here isolates
+// real parallax/premortem evidence exists for the active ticket — spec-lint
+// is deliberately excluded (it asks a human zero questions) — see
+// ticketInterrogationEvidence in lib/commands.mjs. Seeding it here isolates
 // these tests to what they're actually about (the confirm/decline/missing-path
 // paths), not the evidence-refusal path, which has its own dedicated test.
 // =========================================================================
@@ -372,7 +373,13 @@ test('AC4: /adlc-approve-spec with no prior interrogation evidence refuses befor
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('AC4: /adlc-approve-spec recognizes spec-lint alone as sufficient prior evidence (not just parallax/premortem)', async () => {
+// Codex cross-model review (adversarial-review, feat/p1-interrogation
+// round 7): "Pi fabricates interrogation counts ... treats spec-lint as
+// interrogation evidence". spec-lint is a deterministic acceptance-criteria
+// linter — it asks a human zero questions — so it must NOT count as proof
+// that interrogation occurred, even though p1 still separately requires a
+// spec-lint record via PHASE_REQUIREMENTS.
+test('AC4: /adlc-approve-spec refuses when spec-lint is the ONLY prior evidence (spec-lint asks zero human questions)', async () => {
   const root = makeRepo({ current: 'T1' });
   try {
     const { pi } = await boot(root);
@@ -384,11 +391,10 @@ test('AC4: /adlc-approve-spec recognizes spec-lint alone as sufficient prior evi
 
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
 
-    assert.equal(ctx.calls.confirm, 1, 'a spec-lint-only ticket still opens the dialog');
+    assert.equal(ctx.calls.confirm, 0, 'spec-lint alone must not open the approval dialog');
+    assert.ok(ctx.notices.some((n) => n.level === 'error' && /adlc-spec/.test(n.msg)));
     const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
-    const approval = manifest.trim().split('\n').map((l) => JSON.parse(l)).find((e) => e.gate === 'spec-approval');
-    assert.ok(approval, 'spec-approval was recorded');
-    assert.deepEqual(approval.data.sources, ['spec-lint']);
+    assert.doesNotMatch(manifest, /spec-approval/, 'spec-lint alone records no spec-approval');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -581,15 +587,16 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
 });
 
 // Codex cross-model review (adversarial-review, feat/p1-interrogation
-// round 5): rounds/questions were derived from priorSources.length — the
-// COUNT OF DISTINCT GATE NAMES with evidence (max 3: spec-lint, premortem,
-// parallax), not an actual count of interrogation rounds or questions asked.
-// spec-lint is a deterministic linter that asks a human zero questions; two
-// unrelated sources being present does not mean "2 rounds" occurred. This
-// test records BOTH spec-lint and premortem evidence (priorSources.length
-// === 2) and asserts the recorded rounds/questions are NOT 2 — the field
-// must never scale with unrelated source cardinality.
-test('AC4: recorded rounds/questions do not scale with unrelated source-gate cardinality', async () => {
+// rounds 5 and 7): rounds/questions must never be derived from
+// priorSources.length (the count of DISTINCT GATE NAMES, max 2 now that
+// spec-lint is excluded) — that undercounts a real multi-round /adlc-spec
+// session, where premortem can be re-recorded across several rounds of the
+// interrogation loop. This test records premortem TWICE (simulating two
+// rounds) plus one unrelated spec-lint entry, and asserts: (a) sources
+// stays a single distinct name (['premortem'] — spec-lint excluded), while
+// (b) rounds/questions reflect the real entry count (2), not the distinct
+// source count (1) and not a hand-fixed constant.
+test('AC4: recorded rounds/questions reflect real entry count, not distinct-source cardinality or a fixed constant', async () => {
   const root = makeRepo({ current: 'T1' });
   try {
     const { pi } = await boot(root);
@@ -597,29 +604,19 @@ test('AC4: recorded rounds/questions do not scale with unrelated source-gate car
     const specRel = '.adlc/specs/feature.md';
     writeFileSync(join(root, specRel), '# Spec\n\n## Acceptance Criteria\n- foo: `test -f feature.md`\n');
 
-    const specLintResult = spawnSync(process.execPath, [SPEC_LINT_BIN, specRel, '--record', '--ticket', 'T1', '--dir', '.adlc'], {
-      cwd: root, encoding: 'utf8',
-    });
-    assert.equal(specLintResult.status, 0, `spec-lint --record must pass: ${specLintResult.stdout}${specLintResult.stderr}`);
-
-    const premortemResult = spawnSync(process.execPath, [
-      PREMORTEM_BIN, specRel, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1',
-    ], { cwd: root, encoding: 'utf8', input: 'No failure modes found.\n' });
-    assert.equal(premortemResult.status, 0, `premortem --record-verdict must pass: ${premortemResult.stdout}${premortemResult.stderr}`);
+    appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, join(root, '.adlc'), { key: null });
+    appendManifestEntry({ gate: 'premortem', ticket: 'T1', data: { round: 1 } }, join(root, '.adlc'), { key: null });
+    appendManifestEntry({ gate: 'premortem', ticket: 'T1', data: { round: 2 } }, join(root, '.adlc'), { key: null });
 
     const ctx = fakeCtx(root, { confirm: () => true });
     await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
     assert.ok(ctx.notices.some((n) => n.level === 'info' && /recorded spec approval/.test(n.msg)), JSON.stringify(ctx.notices));
 
-    // Two distinct evidence gates (spec-lint, premortem) are present for T1.
-    // The recorded rounds/questions must NOT equal that count — that would
-    // conflate "how many kinds of evidence exist" with "how many rounds of
-    // interrogation happened" (spec-lint alone asks zero human questions).
     const lines = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n');
-    const approval = JSON.parse(lines.at(-1));
-    assert.equal(approval.gate, 'spec-approval');
-    assert.notEqual(approval.data.rounds, 2, 'rounds must not equal the count of distinct evidence gates');
-    assert.notEqual(approval.data.questions, 2, 'questions must not equal the count of distinct evidence gates');
+    const approval = JSON.parse(lines.find((l) => JSON.parse(l).gate === 'spec-approval'));
+    assert.deepEqual(approval.data.sources, ['premortem'], 'spec-lint must not appear as a claimed interrogation source');
+    assert.equal(approval.data.rounds, 2, 'rounds must reflect the two recorded premortem entries');
+    assert.equal(approval.data.questions, 2, 'questions must reflect the two recorded premortem entries');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -641,7 +638,7 @@ test('AC4: /adlc-approve-spec with no active ticket errors without a dialog (p1 
 });
 
 // =========================================================================
-// Codex cross-model review round 4: ticketInterrogationSources read only
+// Codex cross-model review round 4: ticketInterrogationEvidence read only
 // the legacy root .adlc/manifest.jsonl. A segmented ("forest") repo — this
 // repo included, per docs/specs/segmented-gate-manifest.md — records current
 // evidence under .adlc/manifest.d/ instead, so a real /adlc-spec run there
@@ -703,7 +700,7 @@ test('AC4: /adlc-approve-spec finds interrogation evidence recorded in a segment
     // safety check (an unsigned append to an already-committed segment is
     // refused to prevent shadowing evidence) — a different subsystem than
     // what this finding is about. Scoping to decline isolates the assertion
-    // to what ticketInterrogationSources actually owns: finding the
+    // to what ticketInterrogationEvidence actually owns: finding the
     // evidence and opening the dialog at all.
     const ctx = fakeCtx(root, { confirm: () => false });
 

@@ -63,7 +63,7 @@ adlc rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] [--rails <glo
 adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>] [--depth-threshold <n>] [--bytes-threshold <n>] [--tickets <path>] [--reason <text>] [--json]
 adlc rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--prompt-only] [--json]
 adlc review-calibration --review-cmd "cmd with {base} placeholder" [options]
-adlc run <p1|p2|p3|p4|p5|p6|p7> [--ticket id for p0-p1,p3-p6] [--revision rev for p5-p6] [--dir .adlc] [--json]
+adlc run <p0|p1|p2|p3|p4|p5|p6|p7> [--ticket id for p0-p1,p3-p6] [--revision rev for p5-p6] [--dir .adlc] [--json]
 adlc accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--revision rev] [--dir .adlc] [--json]
 adlc skill-rot [path ...] [--write] [--json]
 adlc spec-lint <spec.md> [--llm] [--json] [--prompt-only] [--record --ticket <id>]

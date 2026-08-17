@@ -29,9 +29,9 @@ adlc run p6 --ticket T1 --dir .adlc
 ```
 
 The runner does not treat "a command ran" as a gate. It checks `.adlc/manifest.jsonl`
-for the evidence each phase requires. P3, P4, P5, and P6 evidence must be scoped to a
-ticket; `adlc run p3`, `adlc run p4`, `adlc run p5`, and `adlc run p6` fail operationally
-without `--ticket`.
+for the evidence each phase requires. P0, P1, P3, P4, P5, and P6 evidence must be scoped
+to a ticket; `adlc run p0`, `adlc run p1`, `adlc run p3`, `adlc run p4`, `adlc run p5`,
+and `adlc run p6` fail operationally without `--ticket`.
 
 For normal git worktree use, omit `--revision`. P5 and P6 use the current content
 fingerprint and fail closed if reviewed content changes. Committing the exact content
