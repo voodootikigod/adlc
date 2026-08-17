@@ -225,7 +225,7 @@ human-scoped signing capability, (c) accept the current harness-UI-pause
 convention (`AskUserQuestion`/confirm dialog before the CLI runs) as the
 system's existing human-gate model — which `p6-acceptance-packet` also
 relies on with the same property — or (d) block this change until resolved,
-is a decision this spec does not make.
+is a decision this spec does not make. Tracked as T-01M07VMFBMC28FNKZAMN32Q13Q.
 
 ## Open question: `rounds`/`questions` are self-reported counts, not verified content
 
@@ -257,4 +257,4 @@ only the harnesses/flows that do conduct a real, instrumented dialog, or (c)
 accept the current artifact-count floor as sufficient given `unresolved: 0`
 and the file-hash/ticket binding already prevent the more severe failure
 (spec approved before ANY interrogation artifact exists), is a decision this
-spec does not make.
+spec does not make. Tracked as T-01M07VMV85W3SX2ZZHTR23DD0A.
