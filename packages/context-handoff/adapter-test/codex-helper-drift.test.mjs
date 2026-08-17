@@ -238,6 +238,26 @@ const GRANT_CASES = [
     },
     { key: GRANT_KEY },
   ],
+  [
+    // Parses fine but is not an object — and `typeof null === 'object'`, so a
+    // shape guard whose || decays to && lets JSON null through to a property
+    // access (throw) instead of reading as absent. Must agree with the
+    // canonical's invalid_shape rejection, never crash.
+    'file contains the JSON literal null',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      writeFileSync(bypassGrantPath(root, 'sess-a'), 'null');
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    'file contains a JSON array',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      writeFileSync(bypassGrantPath(root, 'sess-a'), '[1,2]');
+    },
+    { key: GRANT_KEY },
+  ],
 ];
 
 test('the Codex readVerifiedBypassGrant agrees with the canonical readBypassGrant', () => {
