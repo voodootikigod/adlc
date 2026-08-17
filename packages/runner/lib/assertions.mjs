@@ -420,14 +420,16 @@ function specApprovalIntegrityErrors(entries, ticket, cwd) {
   // (requiresTicket), and `entry` above was selected via matchesTicket(candidate,
   // ticket) — an entry with no matching ticket binding is never selected at
   // all, so it surfaces as "missing: spec-approval" instead, not a data error.
-  if (!Number.isInteger(data.rounds) || data.rounds < 0) {
-    errors.push('P1 evidence is incomplete: spec-approval missing integer rounds');
+  if (!Number.isInteger(data.rounds) || data.rounds < 1) {
+    errors.push('P1 evidence is incomplete: spec-approval missing a positive integer rounds (zero proves no interrogation activity)');
   }
-  if (!Number.isInteger(data.questions) || data.questions < 0) {
-    errors.push('P1 evidence is incomplete: spec-approval missing integer questions');
+  if (!Number.isInteger(data.questions) || data.questions < 1) {
+    errors.push('P1 evidence is incomplete: spec-approval missing a positive integer questions (zero proves no interrogation activity)');
   }
   if (!Array.isArray(data.sources) || data.sources.length === 0) {
     errors.push('P1 evidence is incomplete: spec-approval sources must name at least one interrogation source actually consulted (an empty list proves nothing was checked)');
+  } else if (!data.sources.every((source) => typeof source === 'string' && source.trim().length > 0)) {
+    errors.push('P1 evidence is incomplete: spec-approval sources must be non-empty strings naming the interrogation source actually consulted');
   }
   if (data.unresolved !== 0) {
     errors.push('P1 evidence is contradictory: spec-approval requires unresolved === 0 (record unresolved divergences as approved_assumptions instead)');

@@ -226,3 +226,35 @@ convention (`AskUserQuestion`/confirm dialog before the CLI runs) as the
 system's existing human-gate model — which `p6-acceptance-packet` also
 relies on with the same property — or (d) block this change until resolved,
 is a decision this spec does not make.
+
+## Open question: `rounds`/`questions` are self-reported counts, not verified content
+
+`specApprovalIntegrityErrors` requires `data.rounds`/`data.questions` to be
+positive integers and `data.sources` to be an array of non-empty strings, but
+it does not verify those numbers against any recorded transcript of the
+actual interrogation exchange — this is checkable directly:
+`grep -n "rounds\|questions" packages/runner/lib/assertions.mjs` shows only
+type/positivity checks, no cross-reference to interrogation content. Claude
+Code's `/adlc-approve-spec` (`plugins/adlc-claude-code/commands/adlc-approve-spec.md`)
+is answered by the same session that ran the interactive
+`AskUserQuestion`-driven `/adlc-spec` loop, so its counts reflect that
+session's actual activity. Pi's `/adlc-approve-spec`
+(`plugins/adlc-pi/lib/commands.mjs`) has no such loop wired to it; it derives
+`rounds`/`questions` from the number of ticket-scoped parallax/premortem
+manifest entries recorded by the separate `/adlc-spec` prompt-template flow —
+a real, non-empty, floor on recorded interrogation artifacts, but not a
+count of individual questions asked or answered within them (one premortem
+record could contain one proposed question or ten).
+
+Building a structured interrogation transcript — persisted by the component
+that actually conducts the dialog, containing the real per-round question
+list and answers, and consumed (rather than approximated) by `/adlc-approve-spec` —
+would close this gap, but is a larger, cross-package change (parallax,
+premortem, and every harness's `/adlc-spec` flow would need to emit and
+propagate that structure) than this spec's scope. Whether to (a) build that
+structured-transcript mechanism, (b) restrict Pi's `/adlc-approve-spec` to
+only the harnesses/flows that do conduct a real, instrumented dialog, or (c)
+accept the current artifact-count floor as sufficient given `unresolved: 0`
+and the file-hash/ticket binding already prevent the more severe failure
+(spec approved before ANY interrogation artifact exists), is a decision this
+spec does not make.

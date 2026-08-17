@@ -248,6 +248,50 @@ describe('p1 gate spec-approval requirement', () => {
     assert.ok(result.errors.some((e) => e.includes('sources')));
   });
 
+  // Codex cross-model review (adversarial-review, feat/p1-interrogation
+  // round 8): rounds:0/questions:0/sources:[null] all satisfied the old
+  // type-only checks (Number.isInteger(0) is true, [null] has length 1),
+  // letting a hand-crafted approval claim ZERO interrogation activity and
+  // a null source name while still passing P1. This does not solve
+  // approver identity (see the spec's "Open question" section, out of
+  // scope), but it closes a cheap, deterministic, degenerate-value gap
+  // the reviewer demonstrated concretely.
+  it('rejects zero rounds (a degenerate value proving no interrogation activity)', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    writeManifest(dir, [sl('T1', { specPath, hash }), pm('T1', { specPath, hash }), validApprovalFor(specPath, hash, { rounds: 0 })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('rounds')));
+  });
+
+  it('rejects zero questions (a degenerate value proving no interrogation activity)', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    writeManifest(dir, [sl('T1', { specPath, hash }), pm('T1', { specPath, hash }), validApprovalFor(specPath, hash, { questions: 0 })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('questions')));
+  });
+
+  it('rejects a sources array containing a non-string element (e.g. null)', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    writeManifest(dir, [sl('T1', { specPath, hash }), pm('T1', { specPath, hash }), validApprovalFor(specPath, hash, { sources: [null] })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('sources')));
+  });
+
+  it('rejects a sources array containing an empty-string element', () => {
+    const dir = tmpAdlc();
+    const { specPath, hash } = specFixture(dir);
+    writeManifest(dir, [sl('T1', { specPath, hash }), pm('T1', { specPath, hash }), validApprovalFor(specPath, hash, { sources: ['parallax', ''] })]);
+    const result = assertPhase('p1', { dir, ticket: 'T1' });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.includes('sources')));
+  });
+
   it('validates the latest spec-approval, so a corrected re-approval heals a bad one', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
