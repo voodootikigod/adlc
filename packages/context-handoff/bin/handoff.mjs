@@ -14,7 +14,7 @@ import { consumeDenyRecord } from '../lib/deny-lifecycle.mjs';
 import { normalizeBypassGrant, authorized } from '../lib/mutation-gate.mjs';
 import { writeFinal, readFinal, buildFinal } from '../lib/final.mjs';
 import { writeResumeAuth, removeResumeAuth } from '../lib/resume-auth.mjs';
-import { writeBypassGrant } from '../lib/bypass-grant.mjs';
+import { writeBypassGrant, removeBypassGrant } from '../lib/bypass-grant.mjs';
 import { writeDenyRecord, repairDenyBinds, markerUnchanged } from '../lib/deny-persist.mjs';
 import { unlockSession } from '../lib/lock.mjs';
 import { writeJsonAtomic } from '../lib/atomic-json.mjs';
@@ -498,18 +498,26 @@ authorization.
     opError(`bypass grant could not be persisted: ${grantWrite.error} — the recovery command did NOT unblock the next mutation`);
   }
 
-  const recorded = recordOrExit({
-    gate: 'context-handoff-bypass',
-    ticket: values.ticket ?? undefined,
-    data: {
-      session_id: sessionId,
-      unbound_reason: unbound,
-      bound: !unbound,
-      grant,
+  // Round-14 review: recordOrExit's own onFailure rollback exists precisely
+  // for this — grant and audit record must be atomic from the operator's
+  // perspective. Without this, a manifest-write failure AFTER the grant is
+  // already on disk would report overall failure while leaving a live,
+  // unrecorded bypass capability consumable for up to BYPASS_GRANT_TTL_MS.
+  const recorded = recordOrExit(
+    {
+      gate: 'context-handoff-bypass',
+      ticket: values.ticket ?? undefined,
+      data: {
+        session_id: sessionId,
+        unbound_reason: unbound,
+        bound: !unbound,
+        grant,
+      },
+      adlcDir,
+      key,
     },
-    adlcDir,
-    key,
-  });
+    () => removeBypassGrant(root, sessionId),
+  );
 
   finish({
     json,

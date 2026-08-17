@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authorized, evaluateMutationGate } from '../lib/mutation-gate.mjs';
+import { bypassGrantPath } from '../lib/paths.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
 const TEST_KEY = 'c'.repeat(64);
@@ -136,5 +137,26 @@ test('bypass --write without key exits 1', () => {
     });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /ADLC_MANIFEST_KEY/);
+  });
+});
+
+test('Round-14: a manifest-recording failure rolls back the already-written grant (atomicity)', () => {
+  withTempRepo((cwd) => {
+    // The grant write (.adlc/handoffs/<session>.bypass-grant.json) succeeds —
+    // that directory is untouched. Forcing manifest.jsonl to be a DIRECTORY
+    // makes the evidence append throw (EISDIR) without touching the grant
+    // path at all, isolating exactly the failure this test targets.
+    mkdirSync(join(cwd, '.adlc', 'manifest.jsonl'), { recursive: true });
+    const r = run(['bypass', '--session', 'sess-atomic', '--write'], {
+      cwd,
+      env: { ADLC_MANIFEST_KEY: TEST_KEY },
+      expectOk: false,
+    });
+    assert.equal(r.code, 1);
+    assert.equal(
+      existsSync(bypassGrantPath(cwd, 'sess-atomic')),
+      false,
+      'a failed audit record must roll back the grant it was supposed to accompany — an operator seeing "failed" must not have a live, unrecorded bypass capability',
+    );
   });
 });
