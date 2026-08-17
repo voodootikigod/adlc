@@ -7,7 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { boundedHandoffRead } from '../adlc-hook.mjs';
 
@@ -54,6 +55,17 @@ test('a deadline that is never exceeded reads the whole window', () => {
 test('an unopenable path returns null rather than throwing', () => {
   const result = boundedHandoffRead('/definitely/does/not/exist.jsonl', { maxBytes: 100, deadlineMs: MAX_SCAN_WALL_MS });
   assert.equal(result, null);
+});
+
+test('tail-read-worker.mjs exits exactly 1 on any failure — its own stable contract, not an accident of "some nonzero code"', () => {
+  const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'tail-read-worker.mjs');
+  let status = 0;
+  try {
+    execFileSync(process.execPath, [workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    status = e.status ?? 1;
+  }
+  assert.equal(status, 1);
 });
 
 test('size is read fresh each call, never cached across independent reads', () => {

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { observeHandoffSignals, boundedTailRead } from '../adlc-handoff-gate.mjs';
 
@@ -132,6 +133,17 @@ test(
 test('boundedTailRead: an unopenable path returns null rather than throwing', () => {
   const result = boundedTailRead('/definitely/does/not/exist.jsonl', { maxBytes: 100, deadlineMs: MAX_SCAN_WALL_MS });
   assert.equal(result, null);
+});
+
+test('tail-read-worker.mjs exits exactly 1 on any failure — its own stable contract, not an accident of "some nonzero code"', () => {
+  const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'tail-read-worker.mjs');
+  let status = 0;
+  try {
+    execFileSync(process.execPath, [workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    status = e.status ?? 1;
+  }
+  assert.equal(status, 1);
 });
 
 // --- resolveTrustedBinary: node_modules exclusion ---------------------------
