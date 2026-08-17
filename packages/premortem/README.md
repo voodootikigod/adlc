@@ -112,16 +112,19 @@ logic rather than reimplementing it.
 
 ```sh
 # Operator writes their conclusion to a file, then records it
-premortem specs/checkout-v2.md --prompt-only --record-verdict verdict.txt
+premortem specs/checkout-v2.md --prompt-only --record-verdict verdict.txt --ticket T1
 
 # Or pipe the answer straight from stdin
 echo "confirmed: process.chdir throws under vitest threads pool" \
-  | premortem specs/checkout-v2.md --prompt-only --record-verdict -
+  | premortem specs/checkout-v2.md --prompt-only --record-verdict - --ticket T1
 ```
 
-`--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
-entry's `gate` is `premortem`, `data.verdict` holds the operator's text
-verbatim, and `data.specPath` records which spec the prompt covered.
+`--record-verdict` requires `--prompt-only` (exit 1 otherwise) and `--ticket`
+(exit 1 otherwise — the p1 gate scopes spec-lint/premortem evidence per
+ticket, so an unbound record could otherwise satisfy a different ticket's
+approval). The recorded entry's `gate` is `premortem`, `data.verdict` holds
+the operator's text verbatim, and `data.specPath` records which spec the
+prompt covered.
 
 ---
 

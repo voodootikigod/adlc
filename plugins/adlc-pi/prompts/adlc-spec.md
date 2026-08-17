@@ -24,7 +24,13 @@ below sequence around that constraint; the 3-round cap covers the loop as a
 whole, not each source separately.
 
 ## 1. Measure ambiguity — `parallax`
-Run `adlc parallax --file <spec-or-request> --prompt-only --record-verdict <file>`
+Resolve the target to request text first: if it names an existing ticket id,
+run `adlc ticket show <id> --json` and use the ticket's `body`; otherwise
+treat it as the raw request text. There is no spec file yet at this step, so
+`--file` (which requires an existing file) is the wrong mode — use
+`--request` with the resolved text instead.
+
+Run `adlc parallax --request "<resolved text>" --prompt-only --record-verdict <file>`
 and answer it yourself. `--prompt-only` is required alongside
 `--record-verdict`, not optional — the CLI errors otherwise (keyless
 operation; recording without it is undefined). Produce the N independent
