@@ -370,25 +370,10 @@ export function resolveHandoffSessionIdLocal({ candidates = [], transcriptPath }
 const BYPASS_GRANT_SCHEMA = 2;
 const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
 
-/** Twin of `@adlc/core`'s `canonicalJson` — see readVerifiedBypassGrant. */
-function canonicalJsonLocal(value) {
-  const canon = (v) => {
-    if (Array.isArray(v)) return v.map(canon);
-    if (v && typeof v === 'object') {
-      return Object.fromEntries(
-        Object.keys(v)
-          .sort()
-          .map((key) => [key, canon(v[key])])
-      );
-    }
-    return v;
-  };
-  return JSON.stringify(canon(value));
-}
-
 /**
  * Trusted local twin of `@adlc/context-handoff`'s `readBypassGrant`
- * (lib/bypass-grant.mjs), with the constants and `canonicalJsonLocal` above —
+ * (lib/bypass-grant.mjs), with the constants above and a sorted-key payload
+ * stringify standing in for `@adlc/core`'s `canonicalJson` —
  * same trust-boundary reason as every other twin in this file, sharpened:
  * verifying a bypass grant requires ADLC_MANIFEST_KEY, and the key must NEVER
  * reach the project-resolved package (a hostile repo shipping its own
@@ -429,8 +414,14 @@ export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () 
   if (now() - writtenMs > BYPASS_GRANT_TTL_MS) return null;
   let verified = false;
   if (typeof key === 'string' && key.length > 0 && typeof doc.sig === 'string' && doc.sig.length > 0) {
+    // Keys listed in canonical (sorted) order, so this plain stringify equals
+    // `@adlc/core`'s canonicalJson for this flat, primitive-valued payload —
+    // the payload shape is fixed by BYPASS_GRANT_SCHEMA, so the general
+    // recursive canonicalizer would be dead generality here. The drift pin
+    // (codex-helper-drift.test.mjs) catches any divergence from the canonical
+    // signer, including a future payload change that breaks this equality.
     const expected = createHmac('sha256', key)
-      .update(canonicalJsonLocal({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason, written_at }))
+      .update(JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason, written_at }))
       .digest('hex');
     const a = Buffer.from(doc.sig, 'utf8');
     const b = Buffer.from(expected, 'utf8');

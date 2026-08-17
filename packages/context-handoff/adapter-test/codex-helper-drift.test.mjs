@@ -207,6 +207,20 @@ const GRANT_CASES = [
     { key: GRANT_KEY },
   ],
   [
+    // TTL boundary pin: 10.5 minutes old sits between the real 10-minute TTL
+    // and an off-by-one 11-minute mutant of the twin's local constant — with
+    // only far-past/fresh fixtures both sides agree under either TTL and the
+    // mutant survives. Deterministic via the injected `now`.
+    'validly-signed, 10.5 minutes old (straddles the TTL boundary)',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const fields = { session_id: 'sess-a', unbound_reason: null, written_at: '2026-01-01T00:00:00.000Z' };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: BYPASS_GRANT_SCHEMA, ...fields })).digest('hex');
+      writeFileSync(bypassGrantPath(root, 'sess-a'), JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, ...fields, sig }));
+    },
+    { key: GRANT_KEY, now: () => Date.parse('2026-01-01T00:00:00.000Z') + Math.round(10.5 * 60 * 1000) },
+  ],
+  [
     'legacy schema-1 document',
     (root) => {
       mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });

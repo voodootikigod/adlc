@@ -153,6 +153,24 @@ test("a grant for a DIFFERENT session in this session's slot → deny", () => {
   assert.equal(r.verdict, 'deny', 'a grant bound to another session must never authorize this one');
 });
 
+test('a minimal single-character key still verifies (the guard is non-empty, not length > 1)', () => {
+  // Pins the hook's key-presence guard at exactly `length > 0`: an off-by-one
+  // mutant (`length > 1`) silently drops a legitimate 1-char key back to the
+  // "host makes no claim" path and re-opens the dead-code lockout this file
+  // exists to prevent. Key strength policy belongs to the operator, not this
+  // guard.
+  const r = runHookOnce({
+    sessionId: 'sess-cdx-shortkey',
+    manifestKeyEnv: 'k',
+    seed: (root) => {
+      selfDeny(root, 'sess-cdx-shortkey');
+      assert.equal(writeBypassGrant(root, 'sess-cdx-shortkey', {}, { key: 'k' }).ok, true);
+    },
+  });
+  assert.equal(r.verdict, 'allow', `a 1-char key must verify its own grant: ${r.out}`);
+  assert.equal(r.grantExists, false, 'the grant must be consumed');
+});
+
 test('the deny-store baseline itself still denies (the fixtures above prove the grant, not a broken gate)', () => {
   const r = runHookOnce({
     sessionId: 'sess-cdx-base',
