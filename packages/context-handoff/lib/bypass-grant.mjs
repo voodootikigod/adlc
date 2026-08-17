@@ -17,6 +17,22 @@
  * via `evaluateHandoffPreToolUse`'s `verifiedBypassGrant` option. Those twins
  * are pinned against this file by cc-helper-drift.test.mjs /
  * codex-helper-drift.test.mjs — keep them in sync when editing here.
+ *
+ * Honest scope of "one-shot" (Round-15 review, disclosed not silently
+ * accepted — same posture as spec §1.3's other residuals): `removeBypassGrant`
+ * guarantees exactly one WINNER per directory-entry incarnation, not
+ * cryptographic single-use. The signed payload carries no per-issuance nonce
+ * and this file keeps no consumed-grant ledger (Phase 0 has none — spec
+ * §1.3), so a process that captured the exact signed bytes before consumption
+ * could, in principle, recreate the file and have it re-verify for the
+ * remainder of BYPASS_GRANT_TTL_MS. In practice this requires first defeating
+ * `isProtectedHandoffPath`'s denial of ordinary Edit/Write/Bash writes to
+ * this exact path — itself already a disclosed, best-effort defense (see
+ * adapter.mjs's `path_protected_shell` comment: "cannot see through
+ * variables, expansion, or an interpreter one-liner"), not a hole this file
+ * introduces on its own. Closing this fully needs the same host-owned,
+ * non-tool-writable integrity anchor Phase 1 target-hardens for the recovery
+ * script itself (spec §1.3) — out of Phase 0's reach for the same reason.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';

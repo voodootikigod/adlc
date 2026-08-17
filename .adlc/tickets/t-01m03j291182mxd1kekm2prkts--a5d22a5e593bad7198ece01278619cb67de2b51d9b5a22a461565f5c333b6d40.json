@@ -6,6 +6,7 @@
   "id": "T-01M03J291182MXD1KEKM2PRKTS",
   "rails": [],
   "scope": [
+    ".adlc/specs/context-rot-threshold-calibration.md",
     "packages/context-handoff/adapter-test/**",
     "packages/context-handoff/adapter-test/recovery-exception.test.mjs",
     "packages/context-handoff/bin/handoff.mjs",
