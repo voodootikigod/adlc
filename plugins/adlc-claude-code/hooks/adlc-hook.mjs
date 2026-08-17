@@ -73,6 +73,7 @@ import {
   isSafeSessionId,
   formatRecoveryCommand,
   formatNoSessionIdMessage,
+  readVerifiedBypassGrant,
 } from './handoff-gate.mjs';
 
 const MODE = process.argv[2];
@@ -2206,6 +2207,25 @@ async function handoff(input) {
   const isBash = toolName === 'Bash' || toolName === 'Shell';
   const bashCommand = isBash ? bashCommandFromInput(input) : '';
 
+  // Host-side bypass-grant verification — MUST run here, after session
+  // resolution but BEFORE the secret scrub below and before the
+  // project-resolved package is imported: it is the only point where trusted
+  // code holds ADLC_MANIFEST_KEY and no
+  // project-controlled code has executed. The key is used to verify the
+  // grant with this plugin's own trusted twin (readVerifiedBypassGrant,
+  // handoff-gate.mjs "KEEP IN SYNC (3)") and never crosses into the
+  // project-resolved package — only the three-state verdict below does.
+  //   undefined = no key in this environment (or no session): the host makes
+  //               no claim, the adapter behaves exactly as before.
+  //   null      = key present, no valid grant: authoritative "no grant".
+  //   object    = key present, grant verified: authorizes one mutation.
+  let verifiedBypassGrant;
+  const manifestKeyPreScrub = process.env.ADLC_MANIFEST_KEY;
+  if (typeof manifestKeyPreScrub === 'string' && manifestKeyPreScrub.length > 0 && sessionId) {
+    const grant = readVerifiedBypassGrant(process.cwd(), sessionId, { key: manifestKeyPreScrub });
+    verifiedBypassGrant = grant && grant.verified === true ? grant : null;
+  }
+
   // Before anything project-controlled can be imported.
   scrubHandoffSecrets();
 
@@ -2272,7 +2292,10 @@ async function handoff(input) {
     // resolves the package from the PROJECT's node_modules, so that module is
     // project-controlled code and must never be handed the manifest signing
     // key. The cost is that a signed resume-auth cannot be verified in-session.
+    // A bypass grant CAN be: this hook verified it above with its own trusted
+    // twin before the scrub, and passes only the verdict — never the key.
     manifestKey: null,
+    verifiedBypassGrant,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
     // carry. When a marker write SUCCEEDS the sentinel records the session and
     // mutationGateInputFromLoad reconstructs stickiness from registeredSessions.

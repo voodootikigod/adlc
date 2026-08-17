@@ -16,6 +16,22 @@
 // packages/context-handoff/adapter-test/cc-helper-drift.test.mjs; the hook's
 // real decisions run through the package copy, not these.
 //
+// KEEP IN SYNC (3) — `readVerifiedBypassGrant` below (with its inline
+// `canonicalJsonLocal` twin of `@adlc/core`'s `canonicalJson` and its local
+// `BYPASS_GRANT_SCHEMA` / `BYPASS_GRANT_TTL_MS` constants) is a behavioural
+// twin of `@adlc/context-handoff`'s `readBypassGrant` (lib/bypass-grant.mjs).
+// It exists for the same trust-boundary reason as the pair above, sharpened:
+// verifying a bypass grant requires ADLC_MANIFEST_KEY, and the key must NEVER
+// reach the project-resolved package (a hostile repo shipping its own
+// @adlc/context-handoff would gain the manifest trust anchor). So the HOOK
+// verifies the grant here — trusted code, key read pre-scrub — and passes only
+// the verdict (`verifiedBypassGrant`) into `evaluateHandoffPreToolUse`. One
+// deliberate divergence: on an unsafe session id this returns null where the
+// canonical asserts/throws (the hook must never crash on hostile input); the
+// hook only calls it with `resolveSessionId` output, which is safe by
+// construction. Pinned by
+// packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
+//
 // KEEP IN SYNC (2) — `isBareInspectionPwd` / `matchRecoveryCommand` /
 // `formatRecoveryCommand` / `formatNoSessionIdMessage` /
 // `formatUnsafeInstallPathMessage` below are behavioural twins of
@@ -37,8 +53,9 @@
 // `resolveContextHandoffEntry`) can already provide. Pinned by
 // packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
 
-import { basename, extname } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
  * Session identity for deny markers / D2.
@@ -99,8 +116,76 @@ export function isProtectedHandoffPath(rel) {
   return (
     leaf.endsWith('.resume-auth.json') ||
     leaf.endsWith('.model-ok') ||
-    leaf.endsWith('.lock')
+    leaf.endsWith('.lock') ||
+    leaf.endsWith('.bypass-grant.json')
   );
+}
+
+// Twin of `@adlc/context-handoff`'s BYPASS_GRANT_SCHEMA / BYPASS_GRANT_TTL_MS
+// (lib/bypass-grant.mjs, lib/thresholds.mjs) — see "KEEP IN SYNC (3)".
+const BYPASS_GRANT_SCHEMA = 2;
+const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
+
+/** Twin of `@adlc/core`'s `canonicalJson` — see "KEEP IN SYNC (3)". */
+function canonicalJsonLocal(value) {
+  const canon = (v) => {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.keys(v)
+          .sort()
+          .map((key) => [key, canon(v[key])])
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(canon(value));
+}
+
+/**
+ * Twin of `@adlc/context-handoff`'s `readBypassGrant` — see "KEEP IN SYNC (3)".
+ * Reads and verifies `.adlc/handoffs/<sessionId>.bypass-grant.json` entirely
+ * with this file's own trusted code. Returns the canonical read shape
+ * (`verified` reflects the HMAC check under `key`), or null when the grant is
+ * absent, malformed, schema-mismatched, session-mismatched, expired, or the
+ * session id is unsafe.
+ *
+ * @param {string} root repo root
+ * @param {string|null} sessionId
+ * @param {{ key?: string|null, now?: () => number }} [opts]
+ * @returns {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean } | null}
+ */
+export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now() } = {}) {
+  if (!isSafeSessionId(sessionId)) return null;
+  const path = join(root, '.adlc', 'handoffs', `${sessionId}.bypass-grant.json`);
+  let doc;
+  try {
+    if (!existsSync(path)) return null;
+    doc = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  if (doc.schema !== BYPASS_GRANT_SCHEMA) return null;
+  const session_id = doc.session_id;
+  const unbound_reason = doc.unbound_reason ?? null;
+  const written_at = doc.written_at;
+  if (typeof session_id !== 'string' || session_id !== sessionId) return null;
+  if (unbound_reason !== null && typeof unbound_reason !== 'string') return null;
+  if (typeof written_at !== 'string') return null;
+  const writtenMs = Date.parse(written_at);
+  if (!Number.isFinite(writtenMs)) return null;
+  if (now() - writtenMs > BYPASS_GRANT_TTL_MS) return null;
+  let verified = false;
+  if (typeof key === 'string' && key.length > 0 && typeof doc.sig === 'string' && doc.sig.length > 0) {
+    const expected = createHmac('sha256', key)
+      .update(canonicalJsonLocal({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason, written_at }))
+      .digest('hex');
+    const a = Buffer.from(doc.sig, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    verified = a.length === b.length && timingSafeEqual(a, b);
+  }
+  return { session_id, unbound_reason, written_at, verified };
 }
 
 /**

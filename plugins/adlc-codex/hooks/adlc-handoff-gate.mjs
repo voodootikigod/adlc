@@ -19,10 +19,11 @@
 // no usable id, mutations fail closed once the handoff band fires or the deny
 // store is already in play; a clean repo stays editable.
 
-import { existsSync, openSync, fstatSync, readSync, closeSync, realpathSync, statSync, opendirSync, lstatSync } from 'node:fs';
+import { existsSync, openSync, fstatSync, readSync, readFileSync, closeSync, realpathSync, statSync, opendirSync, lstatSync } from 'node:fs';
 import { isAbsolute, relative, resolve, join, basename, extname, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { loadContextHandoff, resolveContextHandoffEntry } from './handoff-resolve.mjs';
 import { countToolCalls } from './adlc-build-gate.mjs';
@@ -362,6 +363,80 @@ export function resolveHandoffSessionIdLocal({ candidates = [], transcriptPath }
     if (isSafeSessionId(c)) return c;
   }
   return null;
+}
+
+// Twin of `@adlc/context-handoff`'s BYPASS_GRANT_SCHEMA / BYPASS_GRANT_TTL_MS
+// (lib/bypass-grant.mjs, lib/thresholds.mjs) — see readVerifiedBypassGrant.
+const BYPASS_GRANT_SCHEMA = 2;
+const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
+
+/** Twin of `@adlc/core`'s `canonicalJson` — see readVerifiedBypassGrant. */
+function canonicalJsonLocal(value) {
+  const canon = (v) => {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.keys(v)
+          .sort()
+          .map((key) => [key, canon(v[key])])
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(canon(value));
+}
+
+/**
+ * Trusted local twin of `@adlc/context-handoff`'s `readBypassGrant`
+ * (lib/bypass-grant.mjs), with the constants and `canonicalJsonLocal` above —
+ * same trust-boundary reason as every other twin in this file, sharpened:
+ * verifying a bypass grant requires ADLC_MANIFEST_KEY, and the key must NEVER
+ * reach the project-resolved package (a hostile repo shipping its own
+ * @adlc/context-handoff would gain the manifest trust anchor). So THIS HOOK
+ * verifies the grant — trusted code, key read from the pre-scrub env snapshot
+ * — and passes only the verdict (`verifiedBypassGrant`) into
+ * `evaluateHandoffPreToolUse`. One deliberate divergence: on an unsafe session
+ * id this returns null where the canonical asserts/throws (the hook must never
+ * crash on hostile input); the hook only calls it with
+ * `resolveHandoffSessionIdLocal` output, which is safe by construction.
+ * Pinned by packages/context-handoff/adapter-test/codex-helper-drift.test.mjs.
+ *
+ * @param {string} root repo root
+ * @param {string|null} sessionId
+ * @param {{ key?: string|null, now?: () => number }} [opts]
+ * @returns {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean } | null}
+ */
+export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now() } = {}) {
+  if (!isSafeSessionId(sessionId)) return null;
+  const path = join(root, '.adlc', 'handoffs', `${sessionId}.bypass-grant.json`);
+  let doc;
+  try {
+    if (!existsSync(path)) return null;
+    doc = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  if (doc.schema !== BYPASS_GRANT_SCHEMA) return null;
+  const session_id = doc.session_id;
+  const unbound_reason = doc.unbound_reason ?? null;
+  const written_at = doc.written_at;
+  if (typeof session_id !== 'string' || session_id !== sessionId) return null;
+  if (unbound_reason !== null && typeof unbound_reason !== 'string') return null;
+  if (typeof written_at !== 'string') return null;
+  const writtenMs = Date.parse(written_at);
+  if (!Number.isFinite(writtenMs)) return null;
+  if (now() - writtenMs > BYPASS_GRANT_TTL_MS) return null;
+  let verified = false;
+  if (typeof key === 'string' && key.length > 0 && typeof doc.sig === 'string' && doc.sig.length > 0) {
+    const expected = createHmac('sha256', key)
+      .update(canonicalJsonLocal({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason, written_at }))
+      .digest('hex');
+    const a = Buffer.from(doc.sig, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    verified = a.length === b.length && timingSafeEqual(a, b);
+  }
+  return { session_id, unbound_reason, written_at, verified };
 }
 
 /**
@@ -1069,6 +1144,25 @@ async function main() {
     }
   }
 
+  // Host-side bypass-grant verification — MUST run here, BEFORE the secret
+  // scrub below and before the project-resolved package is imported: it is
+  // the only point where trusted code holds ADLC_MANIFEST_KEY (via the
+  // pre-import trustedEnvSnapshot) and no project-controlled code has
+  // executed. The key is used to verify the grant
+  // with this file's own trusted twin (readVerifiedBypassGrant) and never
+  // crosses into the project-resolved package — only the three-state verdict
+  // below does.
+  //   undefined = no key in this environment (or no session): the host makes
+  //               no claim, the adapter behaves exactly as before.
+  //   null      = key present, no valid grant: authoritative "no grant".
+  //   object    = key present, grant verified: authorizes one mutation.
+  let verifiedBypassGrant;
+  const manifestKeyPreScrub = trustedEnvSnapshot.ADLC_MANIFEST_KEY;
+  if (typeof manifestKeyPreScrub === 'string' && manifestKeyPreScrub.length > 0 && sessionId) {
+    const grant = readVerifiedBypassGrant(process.cwd(), sessionId, { key: manifestKeyPreScrub });
+    verifiedBypassGrant = grant && grant.verified === true ? grant : null;
+  }
+
   // Before anything project-controlled can be imported.
   scrubSecrets();
 
@@ -1114,7 +1208,11 @@ async function main() {
     // stays what it already was — continue in a fresh session, or repair from a
     // terminal. In-process adapters (OpenCode, Pi) resolve the package through
     // their OWN declared dependency and do pass the key.
+    // A bypass grant CAN be verified in-session: this hook verified it above
+    // with its own trusted twin before the scrub, and passes only the
+    // verdict — never the key.
     manifestKey: null,
+    verifiedBypassGrant,
     // A hook is a fresh process per call, so there is no in-memory D1 fact to
     // carry. When a marker write SUCCEEDS the sentinel records the session and
     // mutationGateInputFromLoad reconstructs stickiness from registeredSessions.

@@ -9,6 +9,14 @@
  * resume-auth. A grant older than BYPASS_GRANT_TTL_MS is also treated as
  * absent, a defense-in-depth ceiling for the case consumption itself fails
  * (see thresholds.mjs's BYPASS_GRANT_TTL_MS comment for the full rationale).
+ *
+ * Hook hosts (Claude Code, Codex) resolve this package from the PROJECT's
+ * node_modules and therefore never pass the manifest key into it. They verify
+ * a grant with their own trusted twin of `readBypassGrant` (pre-secret-scrub,
+ * before this package is even imported) and hand the adapter only the verdict
+ * via `evaluateHandoffPreToolUse`'s `verifiedBypassGrant` option. Those twins
+ * are pinned against this file by cc-helper-drift.test.mjs /
+ * codex-helper-drift.test.mjs — keep them in sync when editing here.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -18,10 +26,18 @@ import { bypassGrantPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
 import { BYPASS_GRANT_TTL_MS } from './thresholds.mjs';
 
-export const BYPASS_GRANT_SCHEMA = 1;
+export const BYPASS_GRANT_SCHEMA = 2;
 
-function payloadBytes({ session_id, unbound_reason }) {
-  return canonicalJson({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason });
+/**
+ * `written_at` is INSIDE the signed payload (schema 2). Schema 1 signed only
+ * {schema, session_id, unbound_reason}, leaving the one field the TTL check
+ * reads editable by anyone with filesystem write access — a validly-signed
+ * grant could be kept alive forever by nudging its unsigned timestamp
+ * forward. Signing it makes the TTL tamper-evident; a schema-1 document can
+ * no longer verify (its sig covers a different payload) and reads as absent.
+ */
+function payloadBytes({ session_id, unbound_reason, written_at }) {
+  return canonicalJson({ schema: BYPASS_GRANT_SCHEMA, session_id, unbound_reason, written_at });
 }
 
 /**
@@ -55,11 +71,11 @@ export function buildBypassGrantDoc({ sessionId, unboundReason = null, key, now 
   const fields = {
     session_id: sessionId,
     unbound_reason: typeof unboundReason === 'string' && unboundReason.trim().length > 0 ? unboundReason : null,
+    written_at: now(),
   };
   return {
     schema: BYPASS_GRANT_SCHEMA,
     ...fields,
-    written_at: now(),
     sig: signBypassGrant(key, fields),
   };
 }
@@ -73,6 +89,9 @@ export function readBypassGrant(root, sessionId, { key = null, fs, now = () => D
   const got = readJsonFile(bypassGrantPath(root, sessionId), fs ? { fs } : {});
   if (!got.ok) return null;
   const doc = got.value;
+  // A schema other than the current one can never verify (the sig covers the
+  // schema number), so reject it outright — a schema-1 residual reads as absent.
+  if (doc.schema !== BYPASS_GRANT_SCHEMA) return null;
   const session_id = doc.session_id;
   const unbound_reason = doc.unbound_reason ?? null;
   const written_at = doc.written_at;

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   isSafeSessionId,
@@ -27,7 +27,14 @@ import {
   formatRecoveryCommand as canonicalFormatRecoveryCommand,
   formatNoSessionIdMessage as canonicalFormatNoSessionIdMessage,
   formatUnsafeInstallPathMessage as canonicalFormatUnsafeInstallPathMessage,
+  readBypassGrant as canonicalReadBypassGrant,
+  writeBypassGrant,
+  bypassGrantPath,
+  BYPASS_GRANT_SCHEMA,
 } from '@adlc/context-handoff';
+import { canonicalJson } from '@adlc/core';
+import { createHmac } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CC_HANDOFF_GATE = join(
@@ -41,6 +48,7 @@ const CC_HANDOFF_GATE = join(
 const {
   resolveSessionId: ccResolveSessionId,
   isProtectedHandoffPath: ccIsProtectedHandoffPath,
+  readVerifiedBypassGrant: ccReadVerifiedBypassGrant,
   isBareInspectionPwd: ccIsBareInspectionPwd,
   matchRecoveryCommand: ccMatchRecoveryCommand,
   isSafeSessionId: ccIsSafeSessionId,
@@ -82,6 +90,8 @@ const PATH_CASES = [
   '.adlc/handoffs/sess-a.resume-auth.json',
   '.adlc/handoffs/sess-a.model-ok',
   '.adlc/handoffs/sess-a.lock',
+  '.adlc/handoffs/sess-a.bypass-grant.json',
+  './.adlc/handoffs/x/../sess-a.bypass-grant.json',
   '.adlc/handoffs/final.md',
   '.adlc/handoffs-other/denies/x.json',
   '.adlc\\handoffs\\denies\\sess-a.json',
@@ -204,4 +214,119 @@ test('the case tables actually exercise both verdicts', () => {
   const paths = PATH_CASES.map((p) => ccIsProtectedHandoffPath(p));
   assert.ok(paths.some(Boolean), 'no case is protected');
   assert.ok(paths.some((v) => !v), 'no case is unprotected');
+});
+
+// ---------------------------------------------------------------------------
+// readVerifiedBypassGrant — the hook's trusted grant-verification twin
+// ("KEEP IN SYNC (3)" in handoff-gate.mjs). The hook verifies the grant
+// itself, pre-secret-scrub, so ADLC_MANIFEST_KEY never reaches the
+// project-resolved package; this pin keeps that twin honest against the
+// canonical readBypassGrant across every verdict-relevant fixture shape.
+
+const GRANT_KEY = 'k'.repeat(64);
+const WRONG_KEY = 'w'.repeat(64);
+
+/** Build one fixture repo per case; returns [name, mutate(root), readOpts]. */
+const GRANT_CASES = [
+  ['valid grant, right key', (root) => writeBypassGrant(root, 'sess-a', {}, { key: GRANT_KEY }), { key: GRANT_KEY }],
+  ['valid grant, wrong key', (root) => writeBypassGrant(root, 'sess-a', {}, { key: WRONG_KEY }), { key: GRANT_KEY }],
+  ['valid grant, no key', (root) => writeBypassGrant(root, 'sess-a', {}, { key: GRANT_KEY }), {}],
+  ['valid grant with unbound_reason', (root) => writeBypassGrant(root, 'sess-a', { unboundReason: 'no ticket' }, { key: GRANT_KEY }), { key: GRANT_KEY }],
+  ['missing file', () => {}, { key: GRANT_KEY }],
+  [
+    'session_id inside the file names another session',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const fields = { session_id: 'sess-b', unbound_reason: null, written_at: new Date().toISOString() };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: BYPASS_GRANT_SCHEMA, ...fields })).digest('hex');
+      writeFileSync(bypassGrantPath(root, 'sess-a'), JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, ...fields, sig }));
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    'validly-signed but past TTL',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const fields = { session_id: 'sess-a', unbound_reason: null, written_at: new Date(Date.now() - 60 * 60 * 1000).toISOString() };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: BYPASS_GRANT_SCHEMA, ...fields })).digest('hex');
+      writeFileSync(bypassGrantPath(root, 'sess-a'), JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, ...fields, sig }));
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    'tampered written_at (sig no longer covers it)',
+    (root) => {
+      writeBypassGrant(root, 'sess-a', {}, { key: GRANT_KEY });
+      const p = bypassGrantPath(root, 'sess-a');
+      const doc = JSON.parse(readFileSync(p, 'utf8'));
+      doc.written_at = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      writeFileSync(p, JSON.stringify(doc));
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    'legacy schema-1 document',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const fields = { session_id: 'sess-a', unbound_reason: null };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: 1, ...fields })).digest('hex');
+      writeFileSync(bypassGrantPath(root, 'sess-a'), JSON.stringify({ schema: 1, ...fields, written_at: new Date().toISOString(), sig }));
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    'corrupt JSON',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      writeFileSync(bypassGrantPath(root, 'sess-a'), '{not json');
+    },
+    { key: GRANT_KEY },
+  ],
+];
+
+test('the CC readVerifiedBypassGrant agrees with the canonical readBypassGrant', () => {
+  for (const [name, mutate, readOpts] of GRANT_CASES) {
+    const root = mkdtempSync(join(tmpdir(), 'cc-grant-drift-'));
+    try {
+      mkdirSync(join(root, '.adlc'), { recursive: true });
+      mutate(root);
+      const canonical = canonicalReadBypassGrant(root, 'sess-a', readOpts);
+      const twin = ccReadVerifiedBypassGrant(root, 'sess-a', readOpts);
+      assert.deepEqual(twin, canonical, `drift on ${name}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('the CC grant twin returns null (never throws) on an unsafe session id', () => {
+  // Deliberate, documented divergence: the canonical asserts on an unsafe id
+  // (bypassGrantPath -> assertSafeSessionId); the hook twin must never crash
+  // on hostile input, so it reads as absent instead.
+  const root = mkdtempSync(join(tmpdir(), 'cc-grant-unsafe-'));
+  try {
+    for (const bad of ['../escape', 'has/slash', '', null, undefined]) {
+      assert.equal(ccReadVerifiedBypassGrant(root, bad, { key: GRANT_KEY }), null, `must be null for ${JSON.stringify(bad)}`);
+    }
+    assert.throws(() => canonicalReadBypassGrant(root, '../escape', { key: GRANT_KEY }), /session/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the grant drift cases straddle the verdict boundary', () => {
+  // Same guard as the tables above: a twin returning a constant must fail.
+  const verdicts = GRANT_CASES.map(([, mutate, readOpts]) => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-grant-verdicts-'));
+    try {
+      mkdirSync(join(root, '.adlc'), { recursive: true });
+      mutate(root);
+      return ccReadVerifiedBypassGrant(root, 'sess-a', readOpts);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  assert.ok(verdicts.some((v) => v && v.verified === true), 'no case verifies');
+  assert.ok(verdicts.some((v) => v && v.verified === false), 'no case reads-but-fails-verification');
+  assert.ok(verdicts.some((v) => v === null), 'no case reads as absent');
 });

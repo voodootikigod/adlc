@@ -85,7 +85,8 @@ export function isProtectedHandoffPath(rel) {
   return (
     leaf.endsWith('.resume-auth.json') ||
     leaf.endsWith('.model-ok') ||
-    leaf.endsWith('.lock')
+    leaf.endsWith('.lock') ||
+    leaf.endsWith('.bypass-grant.json')
   );
 }
 
@@ -297,6 +298,23 @@ export function denyStoreHot(loaded) {
  *        a correctly signed resume could never clear a deny through an adapter.
  *        Adapters pass their own `ADLC_MANIFEST_KEY`; absent, the gate still
  *        fails closed, it just cannot be re-opened in-session.
+ * @param {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean }|null} [opts.verifiedBypassGrant]
+ *        host-verified bypass grant, three-state by design:
+ *        - `undefined` (omitted): this caller makes no claim — the adapter
+ *          reads and verifies the grant file itself with `manifestKey`, as
+ *          in-process adapters (OpenCode, Pi) do today.
+ *        - `null`: the HOST attempted verification with its own trusted code
+ *          and key and found no valid grant. Authoritative — the adapter does
+ *          NOT re-read the file.
+ *        - object: the HOST verified this grant. The adapter still requires
+ *          `verified === true` and `session_id === sessionId` before it
+ *          authorizes anything, and consumes (deletes) the grant one-shot
+ *          exactly as if it had verified it itself.
+ *        This exists for hook hosts (Claude Code, Codex) that resolve this
+ *        package from the PROJECT's node_modules: they must never hand
+ *        `manifestKey` to project-controlled code, so they verify the grant
+ *        in their own trusted hook (pre-secret-scrub) and pass only the
+ *        verdict across the trust boundary — never the key.
  * @param {boolean} [opts.denyEverWritten] caller-threaded D1 fact: this session
  *        has already had a deny marker written OR attempted. `processStickyDeny`
  *        is a per-call local, so without this a marker write that FAILED denies
@@ -327,6 +345,7 @@ export function evaluateHandoffPreToolUse({
   bashCommand = '',
   host = 'unknown',
   manifestKey = null,
+  verifiedBypassGrant = undefined,
   denyEverWritten = false,
   scanTruncated = false,
 }) {
@@ -415,11 +434,23 @@ export function evaluateHandoffPreToolUse({
     // Without a key `readBypassGrant` reports verified:false for every
     // document, same reasoning as resumeAuth above — a signed grant only
     // ever authorizes when the adapter supplies the key it was signed with.
-    const bypassGrant = readBypassGrant(
-      root,
-      sessionId,
-      typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
-    );
+    // A caller that passes `verifiedBypassGrant` (host hooks — see the JSDoc)
+    // pre-empts the read entirely: the host verdict is authoritative, and the
+    // session-binding check below still applies to whatever it handed over.
+    const bypassGrant =
+      verifiedBypassGrant !== undefined
+        ? verifiedBypassGrant !== null &&
+          typeof verifiedBypassGrant === 'object' &&
+          verifiedBypassGrant.session_id === sessionId &&
+          (verifiedBypassGrant.unbound_reason === null ||
+            typeof verifiedBypassGrant.unbound_reason === 'string')
+          ? verifiedBypassGrant
+          : null
+        : readBypassGrant(
+            root,
+            sessionId,
+            typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
+          );
     const bypassActive = bypassGrant != null && bypassGrant.verified === true;
     const bypassForSession = bypassActive
       ? bypassGrant.unbound_reason
