@@ -248,14 +248,10 @@ describe('p1 gate spec-approval requirement', () => {
     assert.ok(result.errors.some((e) => e.includes('sources')));
   });
 
-  // Codex cross-model review (adversarial-review, feat/p1-interrogation
-  // round 8): rounds:0/questions:0/sources:[null] all satisfied the old
-  // type-only checks (Number.isInteger(0) is true, [null] has length 1),
-  // letting a hand-crafted approval claim ZERO interrogation activity and
-  // a null source name while still passing P1. This does not solve
-  // approver identity (see the spec's "Open question" section, out of
-  // scope), but it closes a cheap, deterministic, degenerate-value gap
-  // the reviewer demonstrated concretely.
+  // rounds:0/questions:0/sources:[null] all satisfy pure type checks
+  // (Number.isInteger(0) is true, [null] has length 1) — these tests pin
+  // down that a spec-approval entry claiming zero interrogation activity,
+  // or a null source name, is rejected.
   it('rejects zero rounds (a degenerate value proving no interrogation activity)', () => {
     const dir = tmpAdlc();
     const { specPath, hash } = specFixture(dir);
