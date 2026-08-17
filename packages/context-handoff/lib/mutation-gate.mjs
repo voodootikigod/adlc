@@ -101,7 +101,27 @@ export function authorized({
   if (grant.active) {
     // Bypass is for current_session_id only — never a free-floating grant.
     if (!currentSessionId || grant.sessionId !== currentSessionId) return false;
-    if (unbound) return grant.allowUnbound === true;
+    if (unbound) {
+      // A same-session BOUND grant also authorizes the denier's OWN unbound
+      // record (context-rot-threshold-calibration spec §1.3, Round-17
+      // review). The ordinary band-triggered producer
+      // (adapter.mjs's evaluateHandoffPreToolUse -> ensureDenyMarker) always
+      // creates content_hash: null, so its own marker is unbound by
+      // construction — and --unbound-reason's free-text value is
+      // deliberately outside the Recovery Exception's VALUE_GRAMMAR (spec
+      // §1.3's own bullet), so an operator can never reach an
+      // allowUnbound:true grant through the one Bash invocation the
+      // exception makes reachable under band pressure. Without this, a
+      // bound grant could never clear the EXACT marker shape the gate
+      // itself produces for the ordinary lockout case — the mechanism this
+      // whole section exists to guarantee would be structurally unusable
+      // for its primary case. Still requires record.session_id ===
+      // currentSessionId (implied by the grant.sessionId check above,
+      // spelled out here for clarity): a FOREIGN session's unbound record —
+      // a stranger's marker — still needs allowUnbound explicitly; this
+      // only ever unlocks a session's own marker, never someone else's.
+      return grant.allowUnbound === true || record.session_id === currentSessionId;
+    }
     return true;
   }
 

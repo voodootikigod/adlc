@@ -36,10 +36,10 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { unlinkSync, lstatSync } from 'node:fs';
+import { unlinkSync, openSync, fstatSync, closeSync, readFileSync, constants } from 'node:fs';
 import { canonicalJson } from '@adlc/core';
 import { bypassGrantPath } from './paths.mjs';
-import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
+import { writeJsonAtomic } from './atomic-json.mjs';
 import { BYPASS_GRANT_TTL_MS, MAX_BYPASS_GRANT_BYTES } from './thresholds.mjs';
 
 export const BYPASS_GRANT_SCHEMA = 2;
@@ -101,22 +101,42 @@ export function buildBypassGrantDoc({ sessionId, unboundReason = null, key, now 
  * past BYPASS_GRANT_TTL_MS since written_at ⇒ treated as absent (null).
  * @returns {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean } | null}
  */
-export function readBypassGrant(root, sessionId, { key = null, fs, now = () => Date.now(), lstat = lstatSync } = {}) {
+export function readBypassGrant(
+  root,
+  sessionId,
+  { key = null, now = () => Date.now(), open = openSync, fstat = fstatSync, close = closeSync, readFile = readFileSync } = {},
+) {
   const path = bypassGrantPath(root, sessionId);
-  // lstat (never follows a symlink) before reading: a symlink at this exact
-  // path, or any non-regular node (FIFO, device), is rejected outright — a
-  // regular grant file is always written directly by writeJsonAtomic, never
-  // as a link. Also caps read size — see MAX_BYPASS_GRANT_BYTES's comment.
-  let stat;
+  // Round-17 review: a separate lstat-then-readFileSync(path) had a TOCTOU —
+  // a concurrent writer could swap the checked regular file for a FIFO or
+  // oversized file between the two path-based operations. Opening ONCE
+  // (O_NOFOLLOW so a symlink at this exact path throws ELOOP rather than
+  // being followed; O_NONBLOCK so a FIFO/device swapped in can't hang this
+  // OPEN either) and doing every subsequent check/read against that SAME fd
+  // closes the window entirely — nothing after the open can be swapped out
+  // from under it.
+  let fd;
   try {
-    stat = lstat(path);
+    fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return null; // missing, permission denied, or a symlink (ELOOP) — all read as absent
+  }
+  let doc;
+  try {
+    const stat = fstat(fd);
+    if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
+    const raw = readFile(fd, 'utf8');
+    doc = JSON.parse(raw);
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
   } catch {
     return null;
+  } finally {
+    try {
+      close(fd);
+    } catch {
+      // best-effort
+    }
   }
-  if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
-  const got = readJsonFile(path, fs ? { fs } : {});
-  if (!got.ok) return null;
-  const doc = got.value;
   // A schema other than the current one can never verify (the sig covers the
   // schema number), so reject it outright — a schema-1 residual reads as absent.
   if (doc.schema !== BYPASS_GRANT_SCHEMA) return null;

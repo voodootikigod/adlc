@@ -42,7 +42,7 @@ function withTempRepo(fn) {
   }
 }
 
-test('bypass bound cannot authorize null-ticket; unbound with reason can', () => {
+test('bypass bound authorizes its own session\'s null-ticket record, never a foreign one; unbound with reason authorizes any', () => {
   withTempRepo((cwd) => {
     const bound = run(
       ['bypass', '--session', 'sess-b', '--write', '--json'],
@@ -60,14 +60,32 @@ test('bypass bound cannot authorize null-ticket; unbound with reason can', () =>
       content_hash: null,
       status: 'open',
     };
+    // Round-17 review: a bound grant DOES authorize the SAME session's own
+    // unbound record — the real band-triggered producer (adapter.mjs's
+    // ensureDenyMarker) always creates content_hash: null, so its marker is
+    // unbound by construction, and --unbound-reason is unreachable through
+    // the Recovery Exception (free text outside VALUE_GRAMMAR, spec §1.3).
+    // Without this, a bound grant — the only kind reachable at all — could
+    // never clear the exact marker shape the gate itself produces.
     assert.equal(
       authorized({
         record: unboundRecord,
         bypassForSession: boundPayload.grant,
         currentSessionId: 'sess-b',
       }),
+      true,
+      'a bound grant must authorize its OWN session\'s unbound record',
+    );
+    // But same-session scoping still holds: a bound grant must never reach
+    // across sessions to authorize a STRANGER's unbound record.
+    assert.equal(
+      authorized({
+        record: { ...unboundRecord, session_id: 'sess-foreign' },
+        bypassForSession: boundPayload.grant,
+        currentSessionId: 'sess-b',
+      }),
       false,
-      'bound grant must not authorize unbound record',
+      'a bound grant must not authorize a DIFFERENT session\'s unbound record',
     );
 
     const unbound = run(

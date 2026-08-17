@@ -456,9 +456,17 @@ authorization.
   const normalized = normalizeBypassGrant(grant, sessionId);
   if (!normalized.active) opError('bypass grant inactive (internal)');
 
-  // Demonstrate bound vs unbound against a synthetic unbound record for operators.
+  // Demonstrate bound vs unbound against a synthetic FOREIGN unbound record
+  // for operators. Round-17 review: authorized() now authorizes a bound
+  // grant against its OWN session's unbound record unconditionally (the
+  // real band-triggered producer always creates one — see mutation-gate.mjs's
+  // authorized() comment) — sampling this session's own id here would report
+  // allowsUnbound: true for every active grant, bound or not, telling the
+  // operator nothing. A synthetic session id distinct from `sessionId`
+  // preserves what this field actually exists to show: whether the grant
+  // reaches BEYOND its own session (only an unbound-reason override does).
   const sampleUnbound = {
-    session_id: sessionId,
+    session_id: `${sessionId}-foreign-sample`,
     ticket_id: null,
     content_hash: null,
     status: 'open',

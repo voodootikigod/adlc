@@ -55,7 +55,7 @@
 // packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
 
 import { basename, extname, join } from 'node:path';
-import { readFileSync, realpathSync, lstatSync } from 'node:fs';
+import { readFileSync, realpathSync, openSync, fstatSync, closeSync, constants } from 'node:fs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
@@ -144,22 +144,33 @@ const MAX_BYPASS_GRANT_BYTES = 4096;
 export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now() } = {}) {
   if (!isSafeSessionId(sessionId)) return null;
   const path = join(root, '.adlc', 'handoffs', `${sessionId}.bypass-grant.json`);
-  // lstat (never follows a symlink) before reading — see MAX_BYPASS_GRANT_BYTES
-  // twin comment in @adlc/context-handoff's thresholds.mjs for the full
-  // rationale: rejects a symlink or non-regular node at this path outright,
-  // and caps the read size before it ever reaches readFileSync.
-  let stat;
+  // Round-17 review: a separate lstat-then-readFileSync(path) had a TOCTOU —
+  // a concurrent writer could swap the checked regular file for a FIFO or
+  // oversized file between the two path-based operations. Opening ONCE
+  // (O_NOFOLLOW so a symlink at this exact path throws ELOOP rather than
+  // being followed; O_NONBLOCK so a FIFO/device swapped in can't hang this
+  // OPEN either) and doing every subsequent check/read against that SAME fd
+  // closes the window entirely. See @adlc/context-handoff's readBypassGrant
+  // (bypass-grant.mjs) for the canonical twin this mirrors.
+  let fd;
   try {
-    stat = lstatSync(path);
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
-  if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
   let doc;
   try {
-    doc = JSON.parse(readFileSync(path, 'utf8'));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
+    doc = JSON.parse(readFileSync(fd, 'utf8'));
   } catch {
     return null;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // best-effort
+    }
   }
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
   if (doc.schema !== BYPASS_GRANT_SCHEMA) return null;

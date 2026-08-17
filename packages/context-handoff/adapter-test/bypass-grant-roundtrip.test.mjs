@@ -30,6 +30,7 @@ import {
   bypassGrantPath,
   BYPASS_GRANT_SCHEMA,
   MAX_BYPASS_GRANT_BYTES,
+  HANDOFF_DEPTH,
 } from '@adlc/context-handoff';
 
 const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
@@ -333,6 +334,56 @@ test('writeBypassGrant accepts a document right at the size boundary', () => {
     assert.equal(result.ok, true, result.error);
     const written = readFileSync(bypassGrantPath(root, 'sess-normal'), 'utf8');
     assert.ok(Buffer.byteLength(written, 'utf8') <= MAX_BYPASS_GRANT_BYTES);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-17 review: the REAL producer path. adapter.mjs's own band-triggered
+// ensureDenyMarker ALWAYS passes contentHash: null, so the marker it creates
+// is unbound by construction (isBoundField(null) is false). The Recovery
+// Exception can only ever produce a BOUND grant (--unbound-reason's free
+// text is deliberately outside VALUE_GRAMMAR, spec §1.3) — so before this
+// fix, a bound grant could clear D2 (denier_session) but never D3
+// (authorized() against an unbound record), leaving the mutation denied and
+// the one-shot grant spent for nothing. selfDeny()'s hand-seeded fixture
+// above (content_hash: 'abc', bound) never exercised this — it tested a
+// marker shape the real gate never actually produces.
+
+test('a bound grant authorizes the SAME session\'s own unbound marker — the exact shape the real band-triggered producer creates', () => {
+  withRepo((root) => {
+    // Trigger the REAL producer, not a hand-seeded fixture: crossing
+    // HANDOFF_DEPTH makes handoffActive true, which calls ensureDenyMarker
+    // with contentHash: null exactly as adapter.mjs's own gate does.
+    const first = evaluateHandoffPreToolUse({ root, sessionId: 'sess-unbound-real', observed: { depth: HANDOFF_DEPTH }, host: 'test', manifestKey: KEY });
+    assert.equal(first.deny, true);
+    assert.equal(first.ensuredMarker, true, 'the real producer must have created the marker for this assertion to be meaningful');
+
+    writeBypassGrant(root, 'sess-unbound-real', {}, { key: KEY }); // bound — no unboundReason, matching the only grant the Recovery Exception can ever produce
+    const authorized = evaluateHandoffPreToolUse({ root, sessionId: 'sess-unbound-real', observed: { depth: 1 }, host: 'test', manifestKey: KEY });
+    assert.equal(authorized.deny, false, `a bound grant must clear the session's own unbound marker: ${authorized.reasons.join()}`);
+    assert.equal(existsSync(bypassGrantPath(root, 'sess-unbound-real')), false, 'still one-shot');
+  });
+});
+
+test('a bound grant does NOT authorize a DIFFERENT session\'s unbound marker — same-session scoping holds', () => {
+  withRepo((root) => {
+    // A foreign, unbound (content_hash: null) open deny — a stranger's
+    // marker, not this session's own.
+    writeDenyRecord(root, {
+      session_id: 'sess-foreign-unbound',
+      ticket_id: null,
+      content_hash: null,
+      status: 'open',
+      since: new Date().toISOString(),
+      host: 'test',
+      schema: 1,
+    });
+    selfDeny(root, 'sess-consumer-bound');
+    writeBypassGrant(root, 'sess-consumer-bound', {}, { key: KEY });
+    const r = evaluateHandoffPreToolUse({ root, sessionId: 'sess-consumer-bound', observed: { depth: 1 }, host: 'test', manifestKey: KEY });
+    // Own bound marker clears; the foreign unbound one must still deny.
+    assert.equal(r.deny, true, 'a bound grant must never reach across sessions to authorize a stranger\'s unbound marker');
+    assert.ok(r.reasons.some((x) => x.includes('D3:unauthorized_open:sess-foreign-unbound')), r.reasons.join());
   });
 });
 
