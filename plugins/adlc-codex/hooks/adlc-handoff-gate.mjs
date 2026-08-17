@@ -586,6 +586,13 @@ export function boundedTailRead(path, { maxBytes, deadlineMs }) {
   if (result.signal === 'SIGKILL' || result.error?.code === 'ETIMEDOUT') {
     return { size: 0, text: '', truncated: true };
   }
+  // Trust the worker's own exit code as the authoritative signal, not just
+  // its self-reported `ok` header field — the exit code is set by the SAME
+  // fail()/success call sites the header comes from, so this is redundant
+  // with a correct header, but it means a corrupted or lying header (a
+  // build defect, not an adversary — the worker is this repo's own trusted
+  // code) can never be misread as success while exit status disagrees.
+  if (result.status !== 0) return null;
   if (!Buffer.isBuffer(result.stdout)) return null;
   const newlineIdx = result.stdout.indexOf(0x0a);
   if (newlineIdx === -1) return null;

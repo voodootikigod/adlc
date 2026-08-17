@@ -13,12 +13,11 @@
 // itself out-of-process also keeps boundedTailRead's own call signature and
 // every existing caller/test fully synchronous; no async refactor needed.
 //
-// Protocol (stdout only; nothing else must be written there):
-//   line 1: JSON `{ ok: boolean, size?: number, postSize?: number, readSoFar?: number }`
-//   line 2+: the raw read bytes (exactly readSoFar of them), no encoding.
-// Exit code is not part of the protocol — the parent gets Buffer stdout
-// either way and parses the header; a spawn/argv error prints nothing and
-// exits nonzero, which the parent treats as `ok: false`.
+// Protocol: exit code is authoritative. Exit 0 means stdout carries the
+// success frame (JSON header line `{ ok: true, size, postSize, readSoFar }`
+// followed by the raw read bytes, exactly readSoFar of them, no encoding);
+// any nonzero exit means failure and stdout carries nothing meaningful — the
+// parent never inspects it in that case.
 
 import { openSync, fstatSync, readSync, closeSync } from 'node:fs';
 
@@ -29,8 +28,11 @@ const maxBytes = Number(maxBytesArg);
 // after, and the OS reclaims every open fd on process exit regardless — an
 // explicit close in this specific path has no observable effect, only a
 // call site that KNOWS it holds an open fd (below) closes it itself.
+// No stdout body on failure: the parent trusts the exit code as the
+// authoritative failure signal (see boundedTailRead's own comment), so
+// there is nothing for a header to say that isn't already said by dying
+// with a nonzero status.
 function fail() {
-  process.stdout.write(`${JSON.stringify({ ok: false })}\n`);
   process.exit(1);
 }
 
