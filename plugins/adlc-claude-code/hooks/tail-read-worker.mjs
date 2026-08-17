@@ -27,14 +27,11 @@ import { openSync, fstatSync, readSync, closeSync } from 'node:fs';
 const [, , path, maxBytesArg] = process.argv;
 const maxBytes = Number(maxBytesArg);
 
-function fail(fd) {
-  if (typeof fd === 'number') {
-    try {
-      closeSync(fd);
-    } catch {
-      // best-effort
-    }
-  }
+// No fd-close-before-exit here: this worker calls process.exit() right
+// after, and the OS reclaims every open fd on process exit regardless — an
+// explicit close in this specific path has no observable effect, only a
+// call site that KNOWS it holds an open fd (below) closes it itself.
+function fail() {
   process.stdout.write(`${JSON.stringify({ ok: false })}\n`);
   process.exit(1);
 }
@@ -71,7 +68,12 @@ try {
     readSoFar += got;
   }
 } catch {
-  fail(fd);
+  try {
+    closeSync(fd);
+  } catch {
+    // best-effort — fail() is about to process.exit() regardless
+  }
+  fail();
 }
 
 let postSize = size;
