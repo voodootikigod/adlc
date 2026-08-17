@@ -580,6 +580,49 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// Codex cross-model review (adversarial-review, feat/p1-interrogation
+// round 5): rounds/questions were derived from priorSources.length — the
+// COUNT OF DISTINCT GATE NAMES with evidence (max 3: spec-lint, premortem,
+// parallax), not an actual count of interrogation rounds or questions asked.
+// spec-lint is a deterministic linter that asks a human zero questions; two
+// unrelated sources being present does not mean "2 rounds" occurred. This
+// test records BOTH spec-lint and premortem evidence (priorSources.length
+// === 2) and asserts the recorded rounds/questions are NOT 2 — the field
+// must never scale with unrelated source cardinality.
+test('AC4: recorded rounds/questions do not scale with unrelated source-gate cardinality', async () => {
+  const root = makeRepo({ current: 'T1' });
+  try {
+    const { pi } = await boot(root);
+    mkdirSync(join(root, '.adlc', 'specs'), { recursive: true });
+    const specRel = '.adlc/specs/feature.md';
+    writeFileSync(join(root, specRel), '# Spec\n\n## Acceptance Criteria\n- foo: `test -f feature.md`\n');
+
+    const specLintResult = spawnSync(process.execPath, [SPEC_LINT_BIN, specRel, '--record', '--ticket', 'T1', '--dir', '.adlc'], {
+      cwd: root, encoding: 'utf8',
+    });
+    assert.equal(specLintResult.status, 0, `spec-lint --record must pass: ${specLintResult.stdout}${specLintResult.stderr}`);
+
+    const premortemResult = spawnSync(process.execPath, [
+      PREMORTEM_BIN, specRel, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1',
+    ], { cwd: root, encoding: 'utf8', input: 'No failure modes found.\n' });
+    assert.equal(premortemResult.status, 0, `premortem --record-verdict must pass: ${premortemResult.stdout}${premortemResult.stderr}`);
+
+    const ctx = fakeCtx(root, { confirm: () => true });
+    await pi.commands['adlc-approve-spec'].handler(specRel, ctx);
+    assert.ok(ctx.notices.some((n) => n.level === 'info' && /recorded spec approval/.test(n.msg)), JSON.stringify(ctx.notices));
+
+    // Two distinct evidence gates (spec-lint, premortem) are present for T1.
+    // The recorded rounds/questions must NOT equal that count — that would
+    // conflate "how many kinds of evidence exist" with "how many rounds of
+    // interrogation happened" (spec-lint alone asks zero human questions).
+    const lines = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n');
+    const approval = JSON.parse(lines.at(-1));
+    assert.equal(approval.gate, 'spec-approval');
+    assert.notEqual(approval.data.rounds, 2, 'rounds must not equal the count of distinct evidence gates');
+    assert.notEqual(approval.data.questions, 2, 'questions must not equal the count of distinct evidence gates');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('AC4: /adlc-approve-spec with no active ticket errors without a dialog (p1 requires a ticket-bound approval)', async () => {
   const root = makeRepo({ current: null });
   try {

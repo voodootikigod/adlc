@@ -72,9 +72,12 @@ escape hatch. `/adlc:adlc-spec` runs the loop;
 (`adlc-runner run p1` requires and validates the `spec-approval` record). The tools:
 - `adlc spec-lint SPEC.MD` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
-  (or `--prompt-only`) to also catch vacuous methods.
+  (or `--prompt-only`) to also catch vacuous methods. Once it
+  passes, record the evidence Gate 1 needs:
+  `adlc spec-lint SPEC.MD --record --ticket ID`.
 - `adlc premortem SPEC.MD [--prompt-only]` — stress-test the approved spec for
-  failure modes before implementation.
+  failure modes before implementation. Recording the verdict for Gate 1
+  requires `--prompt-only --record-verdict FILE-OR-DASH --ticket ID`.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
   `--questions-json` emits the divergences as structured

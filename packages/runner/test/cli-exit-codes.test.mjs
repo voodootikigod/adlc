@@ -75,3 +75,23 @@ test('CLI: a genuine operational error (unknown phase) still exits 1', () => {
   const r = spawnSync(process.execPath, [BIN, 'run', 'p9', '--dir', dir], { encoding: 'utf8' });
   assert.equal(r.status, 1);
 });
+
+// Codex cross-model review, round 5: --help's "Phases:" line omitted p0 (this
+// PR added the p0 gate) and "Ticket required:" omitted p0/p1 (this PR made
+// both ticket-required) — hand-typed strings drifted from the actual
+// PHASE_REQUIREMENTS/requiresTicket source of truth. Asserting against every
+// phase individually (not a hard-coded expected string) means a future phase
+// addition/removal fails this test loudly instead of silently drifting again.
+test('CLI: --help lists every phase and every ticket-required phase, matching the runner source of truth', () => {
+  const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  for (const phase of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) {
+    assert.match(r.stdout, new RegExp(`Phases:.*\\b${phase}\\b`), `--help must list ${phase}`);
+  }
+  for (const phase of ['p0', 'p1', 'p3', 'p4', 'p5', 'p6']) {
+    assert.match(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must list ${phase} as ticket-required`);
+  }
+  for (const phase of ['p2', 'p7']) {
+    assert.doesNotMatch(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must NOT list ${phase} as ticket-required`);
+  }
+});

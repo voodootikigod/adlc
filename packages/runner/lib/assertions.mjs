@@ -27,7 +27,7 @@ function matchesTicket(entry, ticket) {
   return ticket === undefined || entry.ticket === ticket;
 }
 
-function requiresTicket(phase) {
+export function requiresTicket(phase) {
   return phase === 'p0' || phase === 'p1' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
 }
 
@@ -548,6 +548,10 @@ function p4IntegrityErrors(entries, ticket, revision, cwd) {
 
 export function requirementsForPhase(phase) {
   return PHASE_REQUIREMENTS[phase] ?? null;
+}
+
+export function allPhases() {
+  return Object.keys(PHASE_REQUIREMENTS);
 }
 
 export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = process.cwd() } = {}) {

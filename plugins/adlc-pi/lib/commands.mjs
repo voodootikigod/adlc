@@ -359,11 +359,19 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         // Chain-valid manifest entry naming the spec + its sha256 (spec AC4),
         // plus the interrogation-summary fields the p1 assertion requires
         // (packages/runner/lib/assertions.mjs specApprovalIntegrityErrors).
-        // rounds/questions are a LOWER BOUND derived from the count of
-        // matching evidence entries — the actual AskUserQuestion-equivalent
+        // rounds/questions used to be derived from priorSources.length — the
+        // COUNT OF DISTINCT GATE NAMES with evidence — which conflates "how
+        // many kinds of evidence exist" with "how many rounds of
+        // interrogation happened" (spec-lint alone asks zero human
+        // questions, so priorSources.length === 1 there would falsely claim
+        // one round occurred; codex cross-model review, feat/p1-interrogation
+        // round 5: "Pi invents interrogation rounds and question counts from
+        // unrelated gate names"). The actual AskUserQuestion-equivalent
         // round/question count happens client-side during /adlc-spec and is
-        // not recoverable from the manifest, so this deliberately never
-        // claims more precision than the evidence proves.
+        // not recoverable from the manifest, so this records the minimal
+        // claim the evidence actually supports — "at least one round of
+        // recorded interrogation evidence exists" — rather than inventing a
+        // number tied to unrelated source cardinality.
         record({
           gate: 'spec-approval',
           ticket: ticketId,
@@ -373,8 +381,8 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
             verdict: 'approved',
             approver: userInfo().username,
             spec_hash: hash,
-            rounds: priorSources.length,
-            questions: priorSources.length,
+            rounds: 1,
+            questions: 1,
             sources: priorSources,
             unresolved: 0,
             approved_assumptions: [],
