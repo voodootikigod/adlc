@@ -25,10 +25,13 @@
     "plugins/adlc-claude-code/hooks/adlc-hook-run.mjs",
     "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
     "plugins/adlc-claude-code/hooks/handoff-gate.mjs",
+    "plugins/adlc-claude-code/hooks/tail-read-worker.mjs",
     "plugins/adlc-claude-code/hooks/test/**",
+    "plugins/adlc-claude-code/hooks/test/bounded-handoff-read.test.mjs",
     "plugins/adlc-codex/hooks/adlc-build-gate.mjs",
     "plugins/adlc-codex/hooks/adlc-handoff-gate.mjs",
     "plugins/adlc-codex/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-codex/hooks/tail-read-worker.mjs",
     "plugins/adlc-codex/hooks/test/**",
     "plugins/adlc-copilot/hooks/adlc-build-gate.mjs",
     "plugins/adlc-copilot/hooks/test/**"

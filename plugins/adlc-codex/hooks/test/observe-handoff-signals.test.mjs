@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { observeHandoffSignals, boundedTailRead } from '../adlc-handoff-gate.mjs';
 
 const MAX_ACTIVE_CONTEXT_BYTES = 8 * 1024 * 1024;
@@ -85,48 +86,48 @@ test('boundedTailRead: exceeding maxBytes truncates and reads only the tail wind
   });
 });
 
-test('boundedTailRead: a deadline exceeded mid-read genuinely stops before covering the window (real chunked loop, fake clock)', () => {
-  // 10 chunks' worth of data at chunkBytes:64; a fake clock reports the
-  // deadline as already blown on the SECOND check, so the real loop inside
-  // boundedTailRead must stop after exactly one 64-byte chunk — proving the
-  // deadline check runs BETWEEN chunks of a genuinely in-progress read, not
-  // just once up front or once at the end.
-  const text = 'A'.repeat(640);
-  withTranscript(text, (transcriptPath) => {
-    // Call 1: startMs. Call 2: the deadline check BEFORE the first chunk
-    // (still within budget, so the first 64-byte chunk is read). Call 3: the
-    // deadline check before the second chunk (now over budget) — stop.
-    let calls = 0;
-    const now = () => {
-      calls += 1;
-      if (calls <= 2) return 0;
-      return MAX_SCAN_WALL_MS + 1;
-    };
-    const result = boundedTailRead(transcriptPath, {
-      maxBytes: MAX_ACTIVE_CONTEXT_BYTES, // well within budget — byte cap is NOT why this truncates
-      deadlineMs: MAX_SCAN_WALL_MS,
-      now,
-      chunkBytes: 64,
-    });
-    assert.equal(result.truncated, true);
-    assert.equal(result.text.length, 64, 'exactly one chunk should have been read before the deadline stopped it');
-    assert.ok(result.text.length < text.length, 'a deadline-interrupted read must not see the whole file');
-  });
-});
-
-test('boundedTailRead: a deadline that is never exceeded reads the whole window across many chunks', () => {
+test('boundedTailRead: a deadline that is never exceeded reads the whole window', () => {
   const text = 'B'.repeat(640);
   withTranscript(text, (transcriptPath) => {
     const result = boundedTailRead(transcriptPath, {
       maxBytes: MAX_ACTIVE_CONTEXT_BYTES,
       deadlineMs: MAX_SCAN_WALL_MS,
-      now: () => 0, // clock never advances — deadline can never trip
-      chunkBytes: 64,
     });
     assert.equal(result.truncated, false);
     assert.equal(result.text.length, text.length);
   });
 });
+
+// Round-16 review: a genuinely BLOCKING read (a FIFO with no writer — the
+// exact class of stall named in the finding: "a stalled network mount, a
+// FIFO with no writer, a hung device file") must not hang the hook past its
+// deadline. openSync on a read-mode FIFO blocks the CALLING PROCESS until a
+// writer opens it — this is real, OS-level blocking I/O, not a simulation —
+// so this test proves boundedTailRead's subprocess + spawnSync timeout can
+// actually preempt it, which no fake-clock unit test inside a single process
+// ever could (the old in-process implementation had no way to interrupt this
+// at all; it would have hung for the lifetime of the test run).
+test(
+  'boundedTailRead: a FIFO with no writer (genuine OS-level block) is preempted by the real timeout, not hung indefinitely',
+  { skip: process.platform === 'win32' ? 'mkfifo is POSIX-only, matching this exception\'s own disclosed platform scope' : false },
+  () => {
+    const dir = mkdtempSync(join(tmpdir(), 'observe-handoff-fifo-'));
+    const fifoPath = join(dir, 'blocking.jsonl');
+    try {
+      execFileSync('mkfifo', [fifoPath]);
+      const startedAt = Date.now();
+      const result = boundedTailRead(fifoPath, { maxBytes: 1000, deadlineMs: 500 });
+      const elapsedMs = Date.now() - startedAt;
+      assert.deepEqual(result, { size: 0, text: '', truncated: true });
+      // Generous ceiling (not a tight timing assertion — CI machines vary):
+      // proves this returned promptly rather than hanging for the test
+      // runner's own much longer default timeout.
+      assert.ok(elapsedMs < 5000, `expected preemption well under 5s, took ${elapsedMs}ms`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test('boundedTailRead: an unopenable path returns null rather than throwing', () => {
   const result = boundedTailRead('/definitely/does/not/exist.jsonl', { maxBytes: 100, deadlineMs: MAX_SCAN_WALL_MS });

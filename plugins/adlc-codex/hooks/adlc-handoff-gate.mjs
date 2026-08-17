@@ -19,9 +19,9 @@
 // no usable id, mutations fail closed once the handoff band fires or the deny
 // store is already in play; a clean repo stays editable.
 
-import { existsSync, openSync, fstatSync, readSync, readFileSync, closeSync, realpathSync, statSync, opendirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync, opendirSync, lstatSync } from 'node:fs';
 import { isAbsolute, relative, resolve, join, basename, extname, dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
@@ -555,63 +555,71 @@ export function toRepoRelative(path, root = process.cwd()) {
  * @param {{ maxBytes: number, deadlineMs: number, now?: Function, chunkBytes?: number }} opts
  * @returns {{ size: number, text: string, truncated: boolean }|null} null when the file cannot be opened
  */
-export function boundedTailRead(path, { maxBytes, deadlineMs, now = Date.now, chunkBytes = 256 * 1024 }) {
-  const startMs = now();
-  let fd;
+const TAIL_READ_WORKER_PATH = join(dirname(fileURLToPath(import.meta.url)), 'tail-read-worker.mjs');
+
+/**
+ * Round-16 review (T-01M03J291182MXD1KEKM2PRKTS): the deadline check here
+ * used to run only BETWEEN synchronous readSync calls inside THIS process —
+ * it could never preempt a single openSync/readSync that itself blocks (a
+ * stalled network mount, a FIFO with no writer, a hung device file at
+ * transcript_path), leaving MAX_SCAN_WALL_MS an unenforceable ceiling
+ * against exactly the failure mode it exists to bound. The actual read now
+ * runs in a SEPARATE PROCESS (tail-read-worker.mjs) via `spawnSync(...,
+ * { timeout })` — the OS can forcibly kill that process if it does not
+ * finish in time, which nothing in-process can offer against a blocking
+ * syscall. This keeps boundedTailRead itself, and every existing caller,
+ * fully synchronous — no async refactor of the hook's call chain.
+ */
+export function boundedTailRead(path, { maxBytes, deadlineMs }) {
+  const result = spawnSync(process.execPath, [TAIL_READ_WORKER_PATH, path, String(maxBytes)], {
+    timeout: deadlineMs,
+    killSignal: 'SIGKILL',
+    maxBuffer: maxBytes + 4096,
+  });
+  // A killed-on-timeout child never gets to report whether the path was even
+  // openable. Safest interpretation, matching this function's own invariant
+  // ("returns the depth actually accumulated — a FINITE lower bound, never
+  // +Infinity"): treat it as a short read that recovered zero bytes, NOT as
+  // the "couldn't open at all" null case below (observeHandoffSignals maps
+  // null to NaN depth, a different and less restrictive failure path than
+  // truncated:true's incomplete-scan restriction).
+  if (result.signal === 'SIGKILL' || result.error?.code === 'ETIMEDOUT') {
+    return { size: 0, text: '', truncated: true };
+  }
+  if (!Buffer.isBuffer(result.stdout)) return null;
+  const newlineIdx = result.stdout.indexOf(0x0a);
+  if (newlineIdx === -1) return null;
+  let header;
   try {
-    fd = openSync(path, 'r');
+    header = JSON.parse(result.stdout.subarray(0, newlineIdx).toString('utf8'));
   } catch {
     return null;
   }
-  try {
-    const size = fstatSync(fd).size;
-    const length = Math.min(size, maxBytes);
-    const truncatedByBytes = length < size;
-    const windowStart = size - length;
-    const buf = Buffer.alloc(length);
-    let readSoFar = 0;
-    let deadlineHit = false;
-    while (readSoFar < length) {
-      if (now() - startMs > deadlineMs) {
-        deadlineHit = true;
-        break;
-      }
-      const want = Math.min(chunkBytes, length - readSoFar);
-      let got;
-      try {
-        got = readSync(fd, buf, readSoFar, want, windowStart + readSoFar);
-      } catch {
-        break;
-      }
-      if (got <= 0) break;
-      readSoFar += got;
-    }
-    // A short/failed readSync (I/O error, unexpected EOF, or a concurrent
-    // shrink) can leave readSoFar < length WITHOUT either truncatedByBytes
-    // or deadlineHit being set — that partial buffer is just as incomplete
-    // as a byte-cap or deadline truncation and must be reported as such,
-    // never silently treated as an exact, complete depth.
-    const shortRead = readSoFar < length;
-    // A concurrent GROWTH or SHRINK while this read was in progress means
-    // the byte range read no longer corresponds to a stable snapshot of the
-    // file — re-check size after the read completes (not just before) and
-    // treat any change as incomplete too.
-    let postSize = size;
-    try {
-      postSize = fstatSync(fd).size;
-    } catch {
-      /* if the post-read stat itself fails, fall through — the pre-read
-         size/read result already determined below still applies */
-    }
-    const grewOrShrank = postSize !== size;
-    return {
-      size,
-      text: buf.subarray(0, readSoFar).toString('utf8'),
-      truncated: truncatedByBytes || deadlineHit || shortRead || grewOrShrank,
-    };
-  } finally {
-    closeSync(fd);
+  if (!header || header.ok !== true) return null;
+  const { size, postSize, readSoFar } = header;
+  if (
+    !Number.isFinite(size) ||
+    !Number.isFinite(postSize) ||
+    !Number.isFinite(readSoFar) ||
+    size < 0 ||
+    readSoFar < 0
+  ) {
+    return null;
   }
+  const bytes = result.stdout.subarray(newlineIdx + 1);
+  if (bytes.length !== readSoFar) return null; // truncated/garbled transport — do not trust a mismatched frame
+  const length = Math.min(size, maxBytes);
+  const truncatedByBytes = length < size;
+  // Same three incompleteness signals as before, now sourced from the
+  // worker's report instead of computed in-process — see their original
+  // comments (git history) for the full rationale on each.
+  const shortRead = readSoFar < length;
+  const grewOrShrank = postSize !== size;
+  return {
+    size,
+    text: bytes.toString('utf8'),
+    truncated: truncatedByBytes || shortRead || grewOrShrank,
+  };
 }
 
 // countToolCalls comes from adlc-build-gate.mjs — the canonical Codex
