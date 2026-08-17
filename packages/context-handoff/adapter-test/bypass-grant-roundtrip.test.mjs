@@ -26,6 +26,7 @@ import {
   evaluateHandoffPreToolUse,
   writeDenyRecord,
   writeBypassGrant,
+  removeBypassGrant,
   bypassGrantPath,
   BYPASS_GRANT_SCHEMA,
 } from '@adlc/context-handoff';
@@ -260,5 +261,63 @@ test('end to end: the REAL handoff.mjs bypass --write CLI (not a re-implementati
 
     const second = evaluateHandoffPreToolUse({ root, sessionId: 'sess-cli', observed: { depth: 1 }, host: 'test', manifestKey: KEY });
     assert.equal(second.deny, true, 'the CLI-issued grant must be one-shot, same as the direct-API grant');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-13 review: claim-first atomicity. A verified grant must NOT be spent
+// on a call that was going to be denied anyway for an unrelated reason (the
+// grant stays on disk for a later retry), and under concurrent evaluations
+// exactly one caller may consume a given grant.
+
+test('a verified grant is NOT consumed when an incomplete-scan lower-bound reason already denies', () => {
+  withRepo((root) => {
+    selfDeny(root, 'sess-scan');
+    writeBypassGrant(root, 'sess-scan', {}, { key: KEY });
+    // scanTruncated + a depth below HANDOFF_DEPTH denies independent of D2/D3
+    // (see evaluateHandoffPreToolUse's incomplete_scan_lower_bound check),
+    // and this reason is computed BEFORE the bypass grant is considered.
+    const r = evaluateHandoffPreToolUse({
+      root, sessionId: 'sess-scan', observed: { depth: 1 }, host: 'test', manifestKey: KEY,
+      scanTruncated: true,
+    });
+    assert.equal(r.deny, true);
+    assert.ok(r.reasons.includes('incomplete_scan_lower_bound'), r.reasons.join());
+    assert.equal(
+      existsSync(bypassGrantPath(root, 'sess-scan')),
+      true,
+      'the grant must NOT be spent on a mutation that was denied for an unrelated reason',
+    );
+
+    // Once the transient condition clears, the SAME grant (never consumed
+    // above) still works — no need to re-run `bypass --write`.
+    const retry = evaluateHandoffPreToolUse({ root, sessionId: 'sess-scan', observed: { depth: 1 }, host: 'test', manifestKey: KEY });
+    assert.equal(retry.deny, false, `the unspent grant must still authorize once the scan completes: ${retry.reasons.join()}`);
+    assert.equal(existsSync(bypassGrantPath(root, 'sess-scan')), false, 'now it is consumed');
+  });
+});
+
+test('removeBypassGrant is the atomic one-shot claim: exactly one of two concurrent callers wins', () => {
+  withRepo((root) => {
+    writeBypassGrant(root, 'sess-race', {}, { key: KEY });
+    // Simulates two PreToolUse evaluations racing on the same grant file —
+    // both would have read/verified it before either deleted it under the
+    // pre-Round-13 read-verify-then-defer-delete design. removeBypassGrant
+    // is now the single atomic primitive both sides call directly.
+    const first = removeBypassGrant(root, 'sess-race');
+    const second = removeBypassGrant(root, 'sess-race');
+    assert.equal(first, true, 'the first caller must win the claim');
+    assert.equal(second, false, 'the second caller must lose it (ENOENT), never double-claim');
+  });
+});
+
+test('a grant claimed by evaluateHandoffPreToolUse cannot also be claimed by a racing removeBypassGrant call', () => {
+  withRepo((root) => {
+    selfDeny(root, 'sess-race2');
+    writeBypassGrant(root, 'sess-race2', {}, { key: KEY });
+    const r = evaluateHandoffPreToolUse({ root, sessionId: 'sess-race2', observed: { depth: 1 }, host: 'test', manifestKey: KEY });
+    assert.equal(r.deny, false);
+    // The grant is already gone — a second, independently-racing claim finds nothing.
+    assert.equal(removeBypassGrant(root, 'sess-race2'), false);
   });
 });

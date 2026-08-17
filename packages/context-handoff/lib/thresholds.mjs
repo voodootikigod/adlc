@@ -49,6 +49,19 @@ export const MAX_SCAN_WALL_MS = 500;
  */
 export const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Round-13 review: every bypass-grant reader (canonical + both host trusted
+ * twins) called readFileSync/JSON.parse on the grant path with no size or
+ * file-type check — a large regular file wastes memory on every hook
+ * invocation, and a FIFO/blocking device reached at that path would stall a
+ * synchronous hook read before any gate logic runs. A real grant document is
+ * always tiny (a session id, an ISO timestamp, a 64-hex-char signature); this
+ * is a generous ceiling, not a target. Readers use `lstatSync` (never follows
+ * a symlink) and require `isFile()`, so a symlink at the grant path is
+ * rejected outright, not merely size-capped.
+ */
+export const MAX_BYPASS_GRANT_BYTES = 4096;
+
 export const HANDOFF_COOLDOWN_TOOLS = 15;
 /**
  * Suppress advisory nags when remaining-to-hard is BELOW this fraction

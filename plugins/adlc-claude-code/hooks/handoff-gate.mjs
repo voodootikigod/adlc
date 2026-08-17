@@ -55,7 +55,7 @@
 // packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
 
 import { basename, extname, join } from 'node:path';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
@@ -126,6 +126,7 @@ export function isProtectedHandoffPath(rel) {
 // (lib/bypass-grant.mjs, lib/thresholds.mjs) — see "KEEP IN SYNC (3)".
 const BYPASS_GRANT_SCHEMA = 2;
 const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
+const MAX_BYPASS_GRANT_BYTES = 4096;
 
 /**
  * Twin of `@adlc/context-handoff`'s `readBypassGrant` — see "KEEP IN SYNC (3)".
@@ -143,9 +144,19 @@ const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
 export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now() } = {}) {
   if (!isSafeSessionId(sessionId)) return null;
   const path = join(root, '.adlc', 'handoffs', `${sessionId}.bypass-grant.json`);
+  // lstat (never follows a symlink) before reading — see MAX_BYPASS_GRANT_BYTES
+  // twin comment in @adlc/context-handoff's thresholds.mjs for the full
+  // rationale: rejects a symlink or non-regular node at this path outright,
+  // and caps the read size before it ever reaches readFileSync.
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
   let doc;
   try {
-    if (!existsSync(path)) return null;
     doc = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return null;

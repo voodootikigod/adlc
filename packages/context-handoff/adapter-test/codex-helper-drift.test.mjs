@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -255,6 +255,34 @@ const GRANT_CASES = [
     (root) => {
       mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
       writeFileSync(bypassGrantPath(root, 'sess-a'), '[1,2]');
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    // Round-13 review: a valid, correctly-signed grant that exceeds
+    // MAX_BYPASS_GRANT_BYTES — padding lives inside unbound_reason so the
+    // document otherwise parses and would verify if size weren't checked.
+    'validly-signed but exceeds MAX_BYPASS_GRANT_BYTES',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const fields = { session_id: 'sess-a', unbound_reason: 'x'.repeat(5000), written_at: new Date().toISOString() };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: BYPASS_GRANT_SCHEMA, ...fields })).digest('hex');
+      writeFileSync(bypassGrantPath(root, 'sess-a'), JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, ...fields, sig }));
+    },
+    { key: GRANT_KEY },
+  ],
+  [
+    // Round-13 review: a symlink at the grant path pointing at an otherwise
+    // validly-signed grant file elsewhere. lstat (never follows) must reject
+    // it outright, not read through to the valid target.
+    'grant path is a symlink to a valid grant elsewhere',
+    (root) => {
+      mkdirSync(join(root, '.adlc', 'handoffs'), { recursive: true });
+      const real = join(root, 'real-grant.json');
+      const fields = { session_id: 'sess-a', unbound_reason: null, written_at: new Date().toISOString() };
+      const sig = createHmac('sha256', GRANT_KEY).update(canonicalJson({ schema: BYPASS_GRANT_SCHEMA, ...fields })).digest('hex');
+      writeFileSync(real, JSON.stringify({ schema: BYPASS_GRANT_SCHEMA, ...fields, sig }));
+      symlinkSync(real, bypassGrantPath(root, 'sess-a'));
     },
     { key: GRANT_KEY },
   ],

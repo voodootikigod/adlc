@@ -451,7 +451,26 @@ export function evaluateHandoffPreToolUse({
             sessionId,
             typeof manifestKey === 'string' && manifestKey.length > 0 ? { key: manifestKey } : {},
           );
-    const bypassActive = bypassGrant != null && bypassGrant.verified === true;
+    const bypassVerified = bypassGrant != null && bypassGrant.verified === true;
+    // Round-13 review (T-01M03J291182MXD1KEKM2PRKTS): claim-first atomicity.
+    // Phase 0 has no lock (spec §1.3), so `unlinkSync` IS the one-shot
+    // primitive — POSIX guarantees exactly one caller's unlink on a given
+    // path succeeds; every other concurrent caller (or a caller that arrives
+    // after) gets ENOENT. Attempting the claim HERE, before the grant is used
+    // for anything, closes the read-verify-then-defer-delete race a prior
+    // round found: two PreToolUse evaluations racing on the SAME grant file
+    // could previously both read it as active before either deleted it.
+    //
+    // Gated on `reasons.length === 0`: every reason already computed above
+    // this point (incomplete-scan lower bound, protected-path) denies
+    // regardless of bypass, so claiming here would spend the one-shot grant
+    // on a mutation that was going to be denied anyway — the exact "consumed
+    // despite the final decision" gap the same round found. A reason pushed
+    // LATER (the bash-shell protected-path check below) is a narrower,
+    // disclosed residual: an active grant for a Bash call that ALSO touches a
+    // protected path is already a suspicious combination, not the ordinary
+    // recovery flow this mechanism exists for.
+    const bypassActive = bypassVerified && reasons.length === 0 && removeBypassGrant(root, sessionId) === true;
     const bypassForSession = bypassActive
       ? bypassGrant.unbound_reason
         ? { sessionId, unboundReason: bypassGrant.unbound_reason }
@@ -468,14 +487,6 @@ export function evaluateHandoffPreToolUse({
     if (gate.deny) {
       mutationDenied = true;
       for (const r of gate.reasons) reasons.push(r);
-    } else if (bypassActive) {
-      // One-shot consumption (spec §1.3 residual, T-01M03J291182MXD1KEKM2PRKTS
-      // Round-11): this grant just authorized an allowed mutation — delete it
-      // so the NEXT tool call finds no grant and falls back to ordinary deny
-      // evaluation. Best-effort by construction, same as removeResumeAuth: a
-      // failed delete leaves a residual grant bounded by BYPASS_GRANT_TTL_MS,
-      // not a permanent bypass.
-      removeBypassGrant(root, sessionId);
     }
 
     // Diagnostic only, and only once the call is already denied: an operator who

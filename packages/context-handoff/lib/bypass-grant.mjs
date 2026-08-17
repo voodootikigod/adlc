@@ -20,11 +20,11 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { existsSync, unlinkSync } from 'node:fs';
+import { unlinkSync, lstatSync } from 'node:fs';
 import { canonicalJson } from '@adlc/core';
 import { bypassGrantPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic } from './atomic-json.mjs';
-import { BYPASS_GRANT_TTL_MS } from './thresholds.mjs';
+import { BYPASS_GRANT_TTL_MS, MAX_BYPASS_GRANT_BYTES } from './thresholds.mjs';
 
 export const BYPASS_GRANT_SCHEMA = 2;
 
@@ -85,8 +85,20 @@ export function buildBypassGrantDoc({ sessionId, unboundReason = null, key, now 
  * past BYPASS_GRANT_TTL_MS since written_at ⇒ treated as absent (null).
  * @returns {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean } | null}
  */
-export function readBypassGrant(root, sessionId, { key = null, fs, now = () => Date.now() } = {}) {
-  const got = readJsonFile(bypassGrantPath(root, sessionId), fs ? { fs } : {});
+export function readBypassGrant(root, sessionId, { key = null, fs, now = () => Date.now(), lstat = lstatSync } = {}) {
+  const path = bypassGrantPath(root, sessionId);
+  // lstat (never follows a symlink) before reading: a symlink at this exact
+  // path, or any non-regular node (FIFO, device), is rejected outright — a
+  // regular grant file is always written directly by writeJsonAtomic, never
+  // as a link. Also caps read size — see MAX_BYPASS_GRANT_BYTES's comment.
+  let stat;
+  try {
+    stat = lstat(path);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile() || stat.size > MAX_BYPASS_GRANT_BYTES) return null;
+  const got = readJsonFile(path, fs ? { fs } : {});
   if (!got.ok) return null;
   const doc = got.value;
   // A schema other than the current one can never verify (the sig covers the
@@ -120,15 +132,21 @@ export function writeBypassGrant(root, sessionId, { unboundReason = null } = {},
 }
 
 /**
- * Best-effort removal of a bypass grant — the ONE-SHOT consumption step: the
- * adapter calls this immediately after a grant authorizes a mutation, so the
- * next tool call finds no grant and falls back to ordinary deny evaluation.
- * @returns {boolean} true when the cache is gone afterwards
+ * Atomic claim of a bypass grant — the ONE-SHOT consumption primitive under
+ * concurrent hook processes (Phase 0 has no lock — spec §1.3). `unlinkSync`
+ * on a single filesystem gives exactly one caller a successful removal; every
+ * other caller racing the same path — or arriving after — gets ENOENT. The
+ * adapter calls this to DECIDE whether THIS evaluation gets to use the
+ * grant, not merely to tidy up after a decision already made: only a `true`
+ * return means this call actually removed the file, i.e. won the claim.
+ * Deliberately no `existsSync` pre-check — that would reintroduce the exact
+ * TOCTOU window this function exists to close.
+ * @returns {boolean} true only when THIS call performed the removal
  */
-export function removeBypassGrant(root, sessionId, { fs = { existsSync, unlinkSync } } = {}) {
+export function removeBypassGrant(root, sessionId, { fs = { unlinkSync } } = {}) {
   const path = bypassGrantPath(root, sessionId);
   try {
-    if (fs.existsSync(path)) fs.unlinkSync(path);
+    fs.unlinkSync(path);
     return true;
   } catch {
     return false;
