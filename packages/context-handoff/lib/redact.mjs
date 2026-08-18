@@ -51,6 +51,31 @@ export const REDACTION_PATTERNS = [
 const ASSIGNMENT =
   /\b(api[-_]?key|secret|passwd|password|token|access[-_]?key|client[-_]?secret)\b(\s*[:=]\s*)("[^"]{8,}"|'[^']{8,}'|\S{8,})/gi;
 
+/**
+ * Punctuation a value wears in real text but is not part of the value: quotes,
+ * brackets, and the comma or colon that follows it in JSON or prose.
+ *
+ * Splitting it off before classification is load-bearing, not tidiness. A
+ * capture quotes its own `content_hash` in JSON, and with the quotes attached
+ * the token is no longer pure hex — so it misses the hex exemption AND scores
+ * HIGHER entropy than the bare value (4.07 vs 4.00 for a uniform digest,
+ * because the quotes add symbols). The hash the successor verifies against
+ * would be redacted out of the capture, and only for some digests, which is
+ * worse than always.
+ *
+ * `+/=` stay in the core: they are base64 alphabet, not punctuation.
+ */
+const LEADING_PUNCTUATION = /^["'`([{<,;:]+/;
+const TRAILING_PUNCTUATION = /["'`)\]}>,;:.!?]+$/;
+
+/** @returns {{ lead: string, core: string, trail: string }} */
+export function splitPunctuation(token) {
+  const lead = token.match(LEADING_PUNCTUATION)?.[0] ?? '';
+  const rest = token.slice(lead.length);
+  const trail = rest.match(TRAILING_PUNCTUATION)?.[0] ?? '';
+  return { lead, core: rest.slice(0, rest.length - trail.length), trail };
+}
+
 /** Shannon entropy in bits/char — high for random secrets, low for prose. */
 function tokenEntropy(text) {
   const freq = new Map();
@@ -102,9 +127,12 @@ export function redactSecrets(value) {
   }
 
   text = text.replace(ASSIGNMENT, (whole, key, separator, secret) => {
-    // Already redacted by an earlier rule (`token: [adlc: redacted JWT]`) —
-    // leave it rather than nesting a marker inside a marker.
-    if (secret.startsWith('[adlc:')) return whole;
+    // Already redacted by an earlier rule (`api_key: "[adlc: redacted JWT]"`) —
+    // leave it rather than nesting a marker inside a marker and losing the
+    // specific category the first rule identified. Quotes only, not the general
+    // punctuation strip: a marker OPENS with `[`, so stripping brackets here
+    // would eat the very character being looked for.
+    if (secret.replace(/^["'`]+/, '').startsWith('[adlc:')) return whole;
     redactions.push('credential');
     return `${key}${separator}${redactionMarker('credential')}`;
   });
@@ -114,9 +142,11 @@ export function redactSecrets(value) {
   text = text
     .split(/(\s+)/)
     .map((token) => {
-      if (!looksLikeRandomSecret(token)) return token;
+      const { lead, core, trail } = splitPunctuation(token);
+      if (!looksLikeRandomSecret(core)) return token;
       redactions.push('high-entropy token');
-      return redactionMarker('high-entropy token');
+      // Keep the punctuation: the surrounding JSON or prose still has to parse.
+      return `${lead}${redactionMarker('high-entropy token')}${trail}`;
     })
     .join('');
 

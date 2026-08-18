@@ -588,13 +588,16 @@ active ticket that disagrees with the deny's bind.
   // pre-command snapshot unconditionally would delete the record that just beat
   // us. The resume-auth is authorizeSuccessor's to own; this only removes what
   // THIS run minted, so a refused collision cannot delete another run's grant.
-  const undoFiles = (ownedAuth = false) => {
-    if (ownedAuth) removeResumeAuth(root, successorId);
-    return [...rollbackCheckpoint(root, denySessionId, checkpoint), rollbackCapture()];
-  };
+  // The resume-auth is `authorizeSuccessor`'s to undo — it holds the bytes it
+  // created, so its removal is byte-checked the same way these are, and a
+  // caller that also unlinked would be doing it blind.
+  const undoFiles = () => [
+    ...rollbackCheckpoint(root, denySessionId, checkpoint),
+    rollbackCapture(),
+  ];
   /** Exit reporting both the failure and anything the undo could not reclaim. */
-  const undoAndExit = (result, ownedAuth = false) => {
-    const conflicts = conflictReport(undoFiles(ownedAuth));
+  const undoAndExit = (result) => {
+    const conflicts = conflictReport([...undoFiles(), result?.authRollback].filter(Boolean));
     exitFrom({
       ...result,
       message: conflicts ? `${result.error || result.message} — ${conflicts}` : result.error || result.message,
@@ -635,7 +638,7 @@ active ticket that disagrees with the deny's bind.
     // capture behind, and nothing half-authorized — except where another writer
     // has since taken ownership of an artifact, which the undo reports instead
     // of overwriting.
-    undoAndExit(authorized, authorized.ownedAuth === true);
+    undoAndExit(authorized);
   }
 
   finish({

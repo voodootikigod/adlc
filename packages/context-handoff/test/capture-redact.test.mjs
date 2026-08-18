@@ -71,6 +71,54 @@ test('an inline credential assignment keeps its key and loses its value', () => 
   assert.equal(redactSecrets('password policy discussion').text, 'password policy discussion');
 });
 
+test('a hash keeps its meaning through quotes, JSON and punctuation', () => {
+  // The failure this guards: punctuation is not part of the value, but leaving
+  // it attached both breaks the pure-hex exemption AND raises the token's
+  // entropy — a uniform digest scores 4.00 bare and 4.07 quoted, so the quoted
+  // form crosses the threshold. The capture would lose the content_hash the
+  // successor verifies against, and only for SOME digests, which is worse.
+  const uniform = '0123456789abcdef'.repeat(4);
+  for (const wrapped of [`"${uniform}"`, `"${uniform}",`, `(${uniform})`, `${uniform}.`, `[${uniform}]`]) {
+    const got = redactSecrets(`hash ${wrapped} end`);
+    assert.ok(got.text.includes(uniform), `${wrapped.slice(0, 3)}… must survive intact`);
+    assert.deepEqual(got.redactions, []);
+  }
+
+  const json = JSON.stringify({ content_hash: uniform, session_id: 'denier-1' }, null, 2);
+  const round = redactSecrets(json);
+  assert.equal(round.text, json, 'a JSON capture field must round-trip byte for byte');
+  assert.equal(JSON.parse(round.text).content_hash, uniform);
+});
+
+test('quoting does not hide a real secret either', () => {
+  // The other direction of the same fix: stripping punctuation must not become
+  // a way to smuggle a credential past the classifier.
+  const secret = 'Xk7Qm2ZpLr9TvB4nWsE6yH1jCdF8gAiU';
+  for (const wrapped of [`"${secret}"`, `'${secret}',`, `("${secret}")`, `${secret};`]) {
+    const got = redactSecrets(`value ${wrapped}`);
+    assert.ok(!got.text.includes(secret), `${wrapped} must still be redacted`);
+    assert.ok(got.text.includes(redactionMarker('high-entropy token')));
+  }
+  // …and the punctuation is preserved so the surrounding syntax still parses.
+  const quoted = redactSecrets(`{"k": "${secret}"}`).text;
+  assert.ok(quoted.startsWith('{"k": "['), `punctuation kept: ${quoted}`);
+  assert.ok(quoted.endsWith(']"}'), `punctuation kept: ${quoted}`);
+});
+
+test('a marker from a specific rule is not re-redacted into a generic one', () => {
+  // The assignment pass captures the value WITH its quote, so a check that
+  // looked for a leading `[adlc:` missed the marker an earlier rule had already
+  // written — replacing a named category with the generic one.
+  const first = redactSecrets('api_key: "ghp_abcdefghij0123456789ABCDEFGHIJ0123"');
+  assert.ok(first.text.includes(redactionMarker('GitHub token')), first.text);
+
+  const second = redactSecrets(first.text);
+  assert.equal(second.text, first.text, 'a second pass must change nothing');
+  assert.ok(second.text.includes('GitHub token'), 'the specific category survives');
+  assert.ok(!second.text.includes('redacted credential'), 'and is not downgraded');
+  assert.deepEqual(second.redactions, []);
+});
+
 test('unlabelled high-entropy tokens go, git shas and hashes stay', () => {
   const sha = 'a'.repeat(40);
   const contentHash = '0123456789abcdef'.repeat(4); // 64-char hex, a content_hash

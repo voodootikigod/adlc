@@ -17,7 +17,9 @@
 
 import { consumeDenyRecord } from './deny-lifecycle.mjs';
 import { markerUnchanged, writeDenyRecord } from './deny-persist.mjs';
-import { removeResumeAuth, writeResumeAuth } from './resume-auth.mjs';
+import { writeResumeAuth } from './resume-auth.mjs';
+import { resumeAuthPath } from './paths.mjs';
+import { currentBytes, restoreIfOurs } from './rollback.mjs';
 
 /**
  * @param {object} opts
@@ -71,7 +73,22 @@ export function authorizeSuccessor({
     }
     return { ok: false, error: `failed to write resume-auth: ${authWrote.error}`, ownedAuth: false };
   }
-  const rollback = () => removeResumeAuth(root, successorId);
+  // What this run created. The undo below compares against it rather than
+  // unlinking blind: if a third party replaced the file in the failure window,
+  // deleting it would destroy an authorization this run never issued — the same
+  // discipline the marker and final rollbacks follow.
+  const authPath = resumeAuthPath(root, successorId);
+  const authBytes = currentBytes(authPath);
+  let authRollback = null;
+  const rollback = () => {
+    authRollback = restoreIfOurs({
+      path: authPath,
+      wroteBytes: authBytes,
+      priorBytes: null,
+      label: 'resume-auth',
+    });
+    return authRollback;
+  };
 
   // Authorize with the document that was actually signed and read back, not
   // with a hand-built verified:true. Read back through the filesystem, so the
@@ -89,13 +106,14 @@ export function authorizeSuccessor({
       ok: false,
       error: 'resume-auth did not read back as the document this run created',
       ownedAuth: true,
+      authRollback,
     };
   }
 
   const consumed = consumeDenyRecord(expected, successorId, { resumeAuth });
   if (!consumed.ok) {
     rollback();
-    return { ok: false, error: consumed.error, exitCode: consumed.exitCode, ownedAuth: true };
+    return { ok: false, error: consumed.error, exitCode: consumed.exitCode, ownedAuth: true, authRollback };
   }
 
   let evidence;
@@ -103,19 +121,19 @@ export function authorizeSuccessor({
     evidence = recordEvidence();
   } catch (err) {
     rollback();
-    return { ok: false, error: `failed to record evidence: ${err.message}`, ownedAuth: true };
+    return { ok: false, error: `failed to record evidence: ${err.message}`, ownedAuth: true, authRollback };
   }
 
   const stillOurs = markerUnchanged(root, denySessionId, expected);
   if (!stillOurs.ok) {
     rollback();
-    return { ok: false, error: stillOurs.error, exitCode: stillOurs.exitCode, ownedAuth: true };
+    return { ok: false, error: stillOurs.error, exitCode: stillOurs.exitCode, ownedAuth: true, authRollback };
   }
 
   const persisted = writeDenyRecord(root, consumed.record);
   if (!persisted.ok) {
     rollback();
-    return { ok: false, error: `failed to persist consumed deny: ${persisted.error}`, ownedAuth: true };
+    return { ok: false, error: `failed to persist consumed deny: ${persisted.error}`, ownedAuth: true, authRollback };
   }
 
   return { ok: true, record: persisted.record, resumeAuth, evidence, ownedAuth: true };

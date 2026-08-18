@@ -94,6 +94,18 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     host: planned.host,
   });
   if (!written.ok) return { ok: false, error: `failed to write final: ${written.error}` };
+  // What THIS run left at the final path. Every internal failure below undoes
+  // that write, and each undo has to prove the bytes are still ours: the branch
+  // that fires BECAUSE a concurrent writer was detected must not then overwrite
+  // that writer's final on the way out.
+  const wroteFinalBytes = currentBytes(finalPath(root, sessionId));
+  const undoFinal = () =>
+    restoreIfOurs({
+      path: finalPath(root, sessionId),
+      wroteBytes: wroteFinalBytes,
+      priorBytes: priorFinalBytes,
+      label: 'final',
+    });
 
   const deny = ensureDenyMarker(root, {
     sessionId,
@@ -102,14 +114,14 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     host: planned.host,
   });
   if (!deny.ok) {
-    restoreFinal(root, sessionId, priorFinal);
+    undoFinal();
     return { ok: false, error: `failed to ensure deny marker: ${deny.reason}` };
   }
 
   // Rebind whatever ensure left in place, so final and marker agree.
   const marker = readDenyMarker(root, sessionId);
   if (!marker.ok) {
-    restoreFinal(root, sessionId, priorFinal);
+    undoFinal();
     return { ok: false, error: `deny marker unreadable after ensure: ${marker.reason}` };
   }
   const stale =
@@ -122,13 +134,13 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
       // Compare-and-swap: the claim was taken before the final was written.
       const unchanged = markerUnchanged(root, sessionId, expected);
       if (!unchanged.ok) {
-        restoreFinal(root, sessionId, priorFinal);
+        undoFinal();
         return { ok: false, error: unchanged.error, exitCode: unchanged.exitCode };
       }
     }
     const rebound = rebindOpenDeny(root, sessionId, marker.record, planned);
     if (!rebound.ok) {
-      restoreFinal(root, sessionId, priorFinal);
+      undoFinal();
       return { ok: false, error: `failed to rebind deny marker: ${rebound.error}` };
     }
     priorRecord = marker.record;
@@ -144,7 +156,9 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     sessionId,
     priorFinalBytes,
     priorRecordBytes,
-    wroteFinalBytes: currentBytes(finalPath(root, sessionId)),
+    // The rebind does not touch the final, so what we wrote above is still
+    // there — no second read.
+    wroteFinalBytes,
     wroteRecordBytes: currentBytes(denyPath(root, sessionId)),
   };
 }
