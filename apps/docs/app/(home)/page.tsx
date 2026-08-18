@@ -106,13 +106,13 @@ export default function HomePage() {
           label="Statement"
           title={
             <Statement>
-              The SDLC defends against human failure.{' '}
+              The SDLC defends against human failure.<br />
               <span style={{ color: 'var(--rec-ink-2)' }}>Your agents fail differently.</span>
             </Statement>
           }
           lede={
             <>
-              Models fail <b style={{ color: 'var(--rec-ink)' }}>confidently, quickly, and at scale</b> — a
+              Models fail <b style={{ color: 'var(--rec-ink)' }}>confidently, quickly, and at scale</b>. A
               process built for forgetting and fatigue is not adequate for hallucination and reward hacking.
               ADLC gives every phase an explicit exit contract: deterministic gates leave machine-checkable
               evidence, and two human gates record attestation.
@@ -140,8 +140,8 @@ export default function HomePage() {
             <code className="rec-mono" style={{ color: 'var(--rec-ink)' }}>
               adlc init
             </code>{' '}
-            in your repository. Cursor and OpenCode need one manual step, which the installer prints —{' '}
-            <RecordLink href="/integrations">see what gets installed</RecordLink>. Windows is not supported.
+            in your repository. Cursor and OpenCode need one manual step, which the installer prints. {' '}
+            <RecordLink href="/integrations">See what gets installed</RecordLink>. Windows is not supported.
             {/* The installer mutates the machine, not just the repo: `npm install -g`
                 plus native plugins per detected harness. Reverting the repo removes
                 neither, so the back-out names both steps rather than implying a
@@ -239,7 +239,7 @@ export default function HomePage() {
               </h2>
               <p className="mt-4 max-w-[72ch] text-[16px] leading-[1.55]" style={{ color: '#9093a0' }}>
                 Two of these are refusals. They are here because a record that only attaches its passes is
-                not evidence, it is marketing — and because a gate that never refuses is not a gate. The
+                not evidence, it is marketing. A gate that never refuses is not a gate at all. The
                 commands and the exit codes are real; the verdict line under each is the record's own
                 one-line summary of the result, not a verbatim transcript of what the tool prints.
               </p>
@@ -257,7 +257,7 @@ export default function HomePage() {
                     </figcaption>
                     <Capture
                       title={`adlc ${gate.name}`}
-                      status={gate.state === 'pass' ? 'EXIT 0 — PASS' : 'EXIT 2 — REFUSED'}
+                      status={gate.state === 'pass' ? 'EXIT 0 - PASS' : 'EXIT 2 - REFUSED'}
                       fail={gate.state !== 'pass'}
                     >
                       <ExhibitOutput output={gate.output} />
@@ -283,7 +283,7 @@ export default function HomePage() {
           n="6"
           label="Applies to"
           title={<ClauseTitle>Native to the agent you already run.</ClauseTitle>}
-          lede="Seven harnesses get a native integration. Everything else installs the skills catalog, which is skills only — no hooks, MCP, agents, or rail enforcement."
+          lede="Seven harnesses get a native integration. Everything else installs the skills catalog, which is skills only - no hooks, MCP, agents, or rail enforcement."
         >
           <div className="mt-7 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" style={{ borderTop: '1px solid var(--rec-rule-strong)' }}>
             {INTEGRATIONS.map((integration) => (
@@ -399,7 +399,7 @@ export default function HomePage() {
       </section>
 
       <div className="mx-auto max-w-[1180px] px-6 py-8 text-[12.5px] md:px-8" style={{ color: 'var(--rec-ink-3)' }}>
-        ADLC gates this repository in its own CI — rails-guard on frozen paths, cross-model attestation on
+        ADLC gates this repository in its own CI handlers. Rails-guard on frozen paths, cross-model attestation on
         trust-root changes, and a mutation gate that refuses to report a kill rate when the baseline is red.{' '}
         <RecordLink href={`${SERIES_BASE}/series/adlc`}>The original essay series ↗</RecordLink>
         {/* The record framing is authored: the gate output is real, the record

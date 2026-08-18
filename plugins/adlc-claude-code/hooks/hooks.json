@@ -1,124 +1,110 @@
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs rails",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs buildgate",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs handoff",
-            "timeout": 15
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|Shell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs handoff",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs preflight",
-            "timeout": 60
-          },
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs flail",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs manifest",
-            "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs review",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs rails",
+              "timeout": 15
+            },
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs buildgate",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs preflight",
+              "timeout": 60
+            },
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "PreCompact": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "PostCompact": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "SubagentStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "SubagentStop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
+              "timeout": 15
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs flail",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs manifest",
+              "timeout": 30
+            },
+            {
+              "type": "command",
+              "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs review",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    }
   }
-}
+  HOOKSEOF

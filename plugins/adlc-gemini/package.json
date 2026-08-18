@@ -1,7 +1,7 @@
 {
   "name": "@adlc/gemini",
   "type": "module",
-  "version": "1.10.0",
+  "version": "999.999.999",
   "description": "ADLC native integration for Google Gemini (antigravity/jetski)",
   "license": "MIT",
   "author": "Chris Williams (@voodootikigod)",
