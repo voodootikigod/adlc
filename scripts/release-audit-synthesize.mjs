@@ -73,6 +73,15 @@ export const PROBE_SEVERITY = {
   versionDrift: 'SHOULD-FIX',
 };
 
+/**
+ * Whether a finding's three-part blocker test is fully asserted. Shared, because
+ * dedup and demotion must agree on what counts as a supported severity claim — if
+ * they disagree, one of them silently undoes the other.
+ */
+export function blockerTestAsserted(t) {
+  return Boolean(t && t.user_hits_it === true && t.needs_another_release === true && t.worse_than_status_quo === true);
+}
+
 export function parseArgs(argv) {
   const out = { input: null, reports: null, suite: null, json: null };
   for (let i = 0; i < argv.length; i += 1) {
@@ -178,10 +187,24 @@ export function dedupeFindings(findings) {
     const prior = seen.get(key);
     if (!prior) { seen.set(key, { ...f, duplicates: 0 }); continue; }
     prior.duplicates += 1;
-    // Keep the most severe reading of the same defect.
+    // Keep the most severe reading of the same defect — and carry the reasoning
+    // that JUSTIFIES that severity along with it. Raising the bucket while leaving
+    // the lower-severity copy's supporting fields in place made applyDemotions
+    // reject the very claim dedup had just accepted: one agent rating a defect
+    // SHOULD-FIX was enough to demote another agent's fully-asserted BLOCKER for
+    // the same defect. A real release blocker disappeared because two agents
+    // agreed it existed.
     if (BUCKETS.indexOf(f.bucket) < BUCKETS.indexOf(prior.bucket)) {
       prior.bucket = f.bucket;
       prior.originalBucket = f.originalBucket;
+      prior.klass = f.klass;
+      prior.consequence = f.consequence;
+      prior.recommendation = f.recommendation;
+    }
+    // The supporting assertion travels independently of the bucket: two agents can
+    // both say BLOCKER while only one of them filled the test in.
+    if (blockerTestAsserted(f.blockerTest) && !blockerTestAsserted(prior.blockerTest)) {
+      prior.blockerTest = f.blockerTest;
     }
     // Keep the reading whose evidence actually checks out.
     if (prior.grounded !== true && f.grounded === true) {
@@ -214,9 +237,7 @@ export function applyDemotions(findings, { root = ROOT, readFile = readFileSync,
     // BLOCKER that does not carry all three is a severity claim the agent never
     // actually made, so it does not get to block a release.
     if (out.originalBucket === 'BLOCKER' && !out.mechanical) {
-      const t = out.blockerTest;
-      const asserted = t && t.user_hits_it === true && t.needs_another_release === true && t.worse_than_status_quo === true;
-      if (!asserted) out.demotions.push('blocker test not fully asserted');
+      if (!blockerTestAsserted(out.blockerTest)) out.demotions.push('blocker test not fully asserted');
     }
     if (out.bucket === 'BLOCKER' && out.demotions.length > 0) out.bucket = 'SHOULD-FIX';
     return out;

@@ -112,7 +112,7 @@ test('the workflow shards the issue sweep with ids the synthesizer can predict',
   // shared constant. If either spelling drifts, every run reports a missing unit.
   const { expectedSuiteUnits } = await import('../release-audit-synthesize.mjs');
   const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
-  assert.match(code, /input\.issues\.sweepBatches/);
+  assert.match(code, /input\.issues\?\.sweepBatches/);
   assert.match(code, /suite:issues:\$\{idx \+ 1\}/);
   assert.deepEqual(
     expectedSuiteUnits({ issues: { sweepBatches: [[], []] } }).filter((u) => u.startsWith('suite:issues:')),
@@ -135,4 +135,12 @@ test('the refute prompt asks to break the claim, not to confirm it', () => {
   const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
   assert.match(code, /Your job is to REFUTE it/);
   assert.match(code, /Do not refuse to refute/);
+});
+
+test('the workflow reads sweepBatches defensively, like the synthesizer does', () => {
+  // An input document without an `issues` object must not crash the script before
+  // a single unit agent is dispatched — the collector has already run by then.
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  assert.match(code, /input\.issues\?\.sweepBatches/);
+  assert.ok(!/input\.issues\.sweepBatches/.test(code), 'no unguarded input.issues.sweepBatches access may remain');
 });

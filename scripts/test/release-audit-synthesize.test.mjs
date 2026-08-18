@@ -19,6 +19,7 @@ import {
   normalizeFinding,
   groundFinding,
   dedupeFindings,
+  blockerTestAsserted,
   groundAll,
   applyDemotions,
   unitCoverage,
@@ -164,6 +165,39 @@ test('dedupeFindings survivor prefers the copy whose evidence checks out', () =>
 test('dedupeFindings does not let one refuted copy refute the defect', () => {
   const [merged] = dedupeFindings(groundAll([{ ...finding(), refuted: true }, finding()]));
   assert.equal(merged.refuted, false);
+});
+
+test('blockerTestAsserted requires all three booleans to be exactly true', () => {
+  assert.equal(blockerTestAsserted(PASSING_TEST), true);
+  assert.equal(blockerTestAsserted(null), false);
+  assert.equal(blockerTestAsserted({ ...PASSING_TEST, user_hits_it: false }), false);
+  assert.equal(blockerTestAsserted({ ...PASSING_TEST, needs_another_release: 'yes' }), false);
+});
+
+test('dedupeFindings carries the blocker test with an upgraded severity', () => {
+  // Two agents find the SAME defect. One rates it SHOULD-FIX and fills in no
+  // blocker test; the other rates it BLOCKER and asserts all three. Merging must
+  // not let the lower-severity copy strip the justification off the higher one —
+  // that demoted a real release blocker precisely BECAUSE two agents found it.
+  const shouldFix = finding({ bucket: 'SHOULD-FIX', blocker_test: null });
+  const blocker = finding({ bucket: 'BLOCKER' });
+  const [merged] = applyDemotions(dedupeFindings(groundAll([shouldFix, blocker])));
+  assert.equal(merged.bucket, 'BLOCKER');
+  assert.deepEqual(merged.demotions, []);
+});
+
+test('dedupeFindings adopts a blocker test even when the buckets already agree', () => {
+  const bare = finding({ blocker_test: null });
+  const asserted = finding();
+  const [merged] = dedupeFindings(groundAll([bare, asserted]));
+  assert.equal(blockerTestAsserted(merged.blockerTest), true);
+});
+
+test('dedupeFindings does not let a lower-severity copy overwrite a supported claim', () => {
+  const blocker = finding();
+  const shouldFix = finding({ bucket: 'SHOULD-FIX', blocker_test: null });
+  const [merged] = applyDemotions(dedupeFindings(groundAll([blocker, shouldFix])));
+  assert.equal(merged.bucket, 'BLOCKER');
 });
 
 test('dedupeFindings keeps findings in different units apart', () => {

@@ -286,12 +286,13 @@ Return the structured report with unit exactly "suite:supply".`,
 // will skim or report nothing examined; the collector therefore batches them and
 // each batch gets its own agent. The shard ids must match what the synthesizer
 // expects in expectedSuiteUnits(), or coverage fails closed on a phantom unit.
-const SWEEP_SPECS = (input.issues.sweepBatches || [[]]).map((batch, idx) => {
+const SWEEP_BATCHES = input.issues?.sweepBatches || [[]]
+const SWEEP_SPECS = SWEEP_BATCHES.map((batch, idx) => {
   const id = `suite:issues:${idx + 1}`
   return {
     id,
     label: id,
-    prompt: `You are ISSUE SWEEP SHARD ${idx + 1} of ${(input.issues.sweepBatches || [[]]).length} for release ${input.version}.
+    prompt: `You are ISSUE SWEEP SHARD ${idx + 1} of ${SWEEP_BATCHES.length} for release ${input.version}.
 
 These issues either belong to no single artifact, or are labelled P0-critical / P1-high /
 security and therefore get a second read from you even if an artifact agent also saw them.
