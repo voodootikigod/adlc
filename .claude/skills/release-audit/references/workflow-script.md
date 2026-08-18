@@ -253,29 +253,6 @@ ${HONESTY}
 Return the structured report with unit exactly "suite:docs".`,
   },
   {
-    id: 'suite:issues',
-    label: 'suite:issues',
-    prompt: `You are the ISSUE SWEEP for release ${input.version}. You get two sets.
-
-A. UNROUTED issues — no single artifact owns them, so nobody else will look:
-${(input.issues.unmapped || []).map((i) => `- #${i.number} [${(i.labels || []).join(', ')}] ${i.title}\n  ${i.url}  (${i.routedVia})`).join('\n') || '(none)'}
-
-B. ESCALATED issues — P0-critical, P1-high, or security. These get a second read from you
-even though a package agent may also have seen them:
-${(input.issues.escalated || []).map((i) => `- #${i.number} [${(i.labels || []).join(', ')}] ${i.title}\n  ${i.url}  (routed to ${i.routedTo || 'nobody'})`).join('\n') || '(none)'}
-
-For EVERY issue in both sets, read the relevant code and return an issue_verdicts entry:
-still-reproducible / already-fixed-close-it / real-but-not-blocking / cannot-determine.
-Then raise a finding for any issue that is genuinely release-blocking.
-
-Note there is no milestone that names a version, so no existing label tells you what must
-ship before ${input.version}. Judge from the code and the issue, not from the backlog's
-own triage.
-${BLOCKER_TEST}
-${HONESTY}
-Return the structured report with unit exactly "suite:issues".`,
-  },
-  {
     id: 'suite:supply',
     label: 'suite:supply',
     prompt: `You audit SUPPLY CHAIN AND RELEASE MECHANICS for release ${input.version}.
@@ -305,11 +282,44 @@ Return the structured report with unit exactly "suite:supply".`,
   },
 ]
 
+// The issue sweep is SHARDED. One agent asked to read the code behind ~63 issues
+// will skim or report nothing examined; the collector therefore batches them and
+// each batch gets its own agent. The shard ids must match what the synthesizer
+// expects in expectedSuiteUnits(), or coverage fails closed on a phantom unit.
+const SWEEP_SPECS = (input.issues.sweepBatches || [[]]).map((batch, idx) => {
+  const id = `suite:issues:${idx + 1}`
+  return {
+    id,
+    label: id,
+    prompt: `You are ISSUE SWEEP SHARD ${idx + 1} of ${(input.issues.sweepBatches || [[]]).length} for release ${input.version}.
+
+These issues either belong to no single artifact, or are labelled P0-critical / P1-high /
+security and therefore get a second read from you even if an artifact agent also saw them.
+Nobody else is looking at this batch.
+
+${batch.map((i) => `- #${i.number} [${(i.labels || []).join(', ') || 'no labels'}] ${i.title}\n  ${i.url}\n  ${i.routedTo ? `also routed to ${i.routedTo}` : `unrouted (${i.routedVia})`}`).join('\n') || '(this shard is empty — return an empty report)'}
+
+For EVERY issue above, read the relevant code and return an issue_verdicts entry:
+still-reproducible / already-fixed-close-it / real-but-not-blocking / cannot-determine.
+Do not answer from the issue text alone — open the code it describes. An issue that was
+quietly fixed months ago and never closed is a useful finding, and you are the only one
+positioned to notice.
+
+Then raise a finding for any issue that genuinely blocks release ${input.version}.
+
+No milestone in this repo names a version, so no existing label tells you what must ship
+before ${input.version}. Judge from the code and the issue, not from the backlog's triage.
+${BLOCKER_TEST}
+${HONESTY}
+Return the structured report with unit exactly "${id}".`,
+  }
+})
+
 // One work item per shipped artifact, plus the suite agents. A narrowed run
 // (--packages) skips the suite agents, and the synthesizer caps such a run below GO.
 const WORK = [
   ...input.units.map((u) => ({ id: u.id, label: u.id, prompt: unitPrompt(u) })),
-  ...(FILTERED ? [] : SUITE_SPECS),
+  ...(FILTERED ? [] : [...SUITE_SPECS, ...SWEEP_SPECS]),
 ]
 
 log(`auditing ${WORK.length} units for ${input.version} (baseline ${input.since || 'none'})`)

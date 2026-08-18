@@ -41,6 +41,16 @@ export const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', 'dist', '.
 /** Labels that force an issue onto the sweep agent no matter where it routed. */
 export const ESCALATE_LABELS = new Set(['P0-critical', 'P1-high', 'security']);
 
+/**
+ * Issues per sweep agent.
+ *
+ * Measured against the real backlog: 46 unrouted plus 25 escalated is ~63 unique
+ * issues, and one agent asked to read the code behind 63 issues will skim or go
+ * hollow — the precise failure the coverage rules exist to catch. Sharding keeps
+ * each agent's job small enough to actually do.
+ */
+export const SWEEP_BATCH_SIZE = 12;
+
 // ─── argument parsing ────────────────────────────────────────────────────────
 
 /**
@@ -272,6 +282,24 @@ export function routeIssue(issue, units, ticketsByIssue = new Map()) {
 }
 
 /**
+ * The sweep agents' workload: every unrouted issue, plus every escalated one
+ * (which a package agent may also have seen), de-duplicated by number and split
+ * into fixed-size batches. Always at least one batch, so the coverage contract
+ * has something to expect even on an empty backlog.
+ *
+ * @returns {Array<Array<object>>}
+ */
+export function sweepBatches(unmapped, escalated, size = SWEEP_BATCH_SIZE) {
+  const byNumber = new Map();
+  for (const i of [...unmapped, ...escalated]) if (!byNumber.has(i.number)) byNumber.set(i.number, i);
+  const all = [...byNumber.values()].sort((a, b) => a.number - b.number);
+  if (all.length === 0) return [[]];
+  const out = [];
+  for (let i = 0; i < all.length; i += size) out.push(all.slice(i, i + size));
+  return out;
+}
+
+/**
  * Route every open issue, and separately collect the ones the sweep agent must
  * see regardless of routing (P0/P1/security).
  */
@@ -427,6 +455,7 @@ export function assemble({ version, since, units, issues, routed, probeResults, 
       routed: [...routed.byUnit.values()].reduce((n, list) => n + list.length, 0),
       unmapped: routed.unmapped,
       escalated: routed.escalated,
+      sweepBatches: sweepBatches(routed.unmapped, routed.escalated),
       unconsultable: issuesUnconsultable,
     },
     probes: probeResults,

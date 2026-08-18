@@ -43,7 +43,19 @@ export const BUCKETS = ['BLOCKER', 'SHOULD-FIX', 'BACKLOG'];
  * in coverage exactly like a package: a missing suite report is an unaudited
  * surface, not a quiet omission.
  */
-export const SUITE_UNITS = ['suite:drift', 'suite:docs', 'suite:issues', 'suite:supply'];
+export const SUITE_UNITS = ['suite:drift', 'suite:docs', 'suite:supply'];
+
+/**
+ * Every suite-level unit this run must hear from: the three fixed agents plus one
+ * issue-sweep shard per batch the collector produced. The shard count is data, not
+ * a constant, because it tracks the size of the open backlog — and coverage has to
+ * expect exactly the agents that were actually dispatched, or every run fails
+ * closed for a reason nobody can find.
+ */
+export function expectedSuiteUnits(input) {
+  const batches = input?.issues?.sweepBatches ?? [[]];
+  return [...SUITE_UNITS, ...batches.map((_, i) => `suite:issues:${i + 1}`)];
+}
 
 /**
  * Probe problems that block a release outright, versus ones a bump would heal.
@@ -318,7 +330,7 @@ export function synthesize({ input, reports, suite, root = ROOT, readFile = read
   // held to their coverage — and, by the same token, must never read as GO.
   const expectedUnitIds = [
     ...(input.units ?? []).map((u) => u.id),
-    ...(input.filtered ? [] : SUITE_UNITS),
+    ...(input.filtered ? [] : expectedSuiteUnits(input)),
   ];
   const coverage = unitCoverage(reports, expectedUnitIds);
   const hollowUnits = new Set(coverage.hollow);

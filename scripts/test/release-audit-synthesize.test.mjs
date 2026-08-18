@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {
   BUCKETS,
   SUITE_UNITS,
+  expectedSuiteUnits,
   PROBE_SEVERITY,
   parseArgs,
   parseSuiteResult,
@@ -54,8 +55,19 @@ const CLEAN_INPUT = {
 };
 const FULL_REPORTS = [
   { unit: 'pkg:core', files_examined: ['packages/core/lib/glob.mjs'], findings: [], issue_verdicts: [] },
-  ...SUITE_UNITS.map((u) => ({ unit: u, files_examined: ['README.md'], findings: [], issue_verdicts: [] })),
+  ...expectedSuiteUnits(CLEAN_INPUT).map((u) => ({ unit: u, files_examined: ['README.md'], findings: [], issue_verdicts: [] })),
 ];
+
+test('expectedSuiteUnits names the three fixed agents plus one shard per issue batch', () => {
+  assert.deepEqual(expectedSuiteUnits({ issues: { sweepBatches: [[], [], []] } }),
+    [...SUITE_UNITS, 'suite:issues:1', 'suite:issues:2', 'suite:issues:3']);
+});
+
+test('expectedSuiteUnits still expects one sweep shard when there are no issues at all', () => {
+  // Coverage must have something to expect, or a run with an empty backlog would
+  // silently stop checking that the sweep ran.
+  assert.deepEqual(expectedSuiteUnits({}), [...SUITE_UNITS, 'suite:issues:1']);
+});
 
 test('parseArgs reads every path flag', () => {
   const a = parseArgs(['--input', 'i.json', '--reports', 'r.json', '--suite', 's.log', '--json', 'o.json']);
@@ -341,7 +353,7 @@ test('synthesize expects the suite agents, so omitting them is NO-GO', () => {
     suite: { ran: true, green: true, failed: [] },
   });
   assert.equal(r.verdict.verdict, 'NO-GO');
-  for (const u of SUITE_UNITS) assert.ok(r.coverage.missing.includes(u));
+  for (const u of expectedSuiteUnits(CLEAN_INPUT)) assert.ok(r.coverage.missing.includes(u));
 });
 
 test('synthesize does not expect the suite agents on a filtered run', () => {

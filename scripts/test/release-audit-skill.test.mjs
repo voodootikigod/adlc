@@ -92,10 +92,10 @@ test('the finding schema requires all three blocker-test booleans', () => {
 test('the workflow skips the suite agents on a filtered run', () => {
   const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
   assert.match(code, /const FILTERED = input\.filtered === true/);
-  assert.match(code, /FILTERED \? \[\] : SUITE_SPECS/);
+  assert.match(code, /FILTERED \? \[\] : \[\.\.\.SUITE_SPECS, \.\.\.SWEEP_SPECS\]/);
 });
 
-test('the suite agent ids in the workflow match the ones the synthesizer expects', async () => {
+test('the fixed suite agent ids in the workflow match the ones the synthesizer expects', async () => {
   // These two lists are the coverage contract: the synthesizer forces NO-GO for
   // any expected unit that produced no report, so a rename on one side alone
   // would make every run fail closed for a reason nobody could find.
@@ -105,6 +105,24 @@ test('the suite agent ids in the workflow match the ones the synthesizer expects
     assert.ok(code.includes(`id: '${id}'`), `workflow must define the ${id} agent`);
     assert.ok(code.includes(`unit exactly "${id}"`), `workflow must pin ${id}'s reported unit id`);
   }
+});
+
+test('the workflow shards the issue sweep with ids the synthesizer can predict', async () => {
+  // The shard count is data, so the two sides agree by FORMULA rather than by a
+  // shared constant. If either spelling drifts, every run reports a missing unit.
+  const { expectedSuiteUnits } = await import('../release-audit-synthesize.mjs');
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  assert.match(code, /input\.issues\.sweepBatches/);
+  assert.match(code, /suite:issues:\$\{idx \+ 1\}/);
+  assert.deepEqual(
+    expectedSuiteUnits({ issues: { sweepBatches: [[], []] } }).filter((u) => u.startsWith('suite:issues:')),
+    ['suite:issues:1', 'suite:issues:2'],
+  );
+});
+
+test('the sweep prompt tells the shard to open the code, not judge from issue text', () => {
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  assert.match(code, /Do not answer from the issue text alone/);
 });
 
 test('the workflow prompts the plugin units about their hook surface', () => {

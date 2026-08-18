@@ -215,3 +215,22 @@ test('discoverUnits reports real inventory for a known package', () => {
   assert.ok(core.files.every((f) => f.startsWith('packages/core/')));
   assert.ok(core.files.every((f) => !f.includes('node_modules')));
 });
+
+test('sweepBatches merges unrouted and escalated issues without duplicating either', async () => {
+  const { sweepBatches } = await import('../release-audit-collect.mjs');
+  const [batch] = sweepBatches([{ number: 3 }, { number: 1 }], [{ number: 1 }, { number: 7 }]);
+  assert.deepEqual(batch.map((i) => i.number), [1, 3, 7]);
+});
+
+test('sweepBatches splits a large backlog into fixed-size shards', async () => {
+  const { sweepBatches, SWEEP_BATCH_SIZE } = await import('../release-audit-collect.mjs');
+  const many = Array.from({ length: SWEEP_BATCH_SIZE * 2 + 3 }, (_, i) => ({ number: i + 1 }));
+  const batches = sweepBatches(many, []);
+  assert.equal(batches.length, 3);
+  assert.deepEqual(batches.map((b) => b.length), [SWEEP_BATCH_SIZE, SWEEP_BATCH_SIZE, 3]);
+});
+
+test('sweepBatches always yields one batch, so an empty backlog still has a sweep to expect', async () => {
+  const { sweepBatches } = await import('../release-audit-collect.mjs');
+  assert.deepEqual(sweepBatches([], []), [[]]);
+});

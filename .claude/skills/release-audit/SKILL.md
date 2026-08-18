@@ -57,8 +57,15 @@ The agents run for minutes and are read-only, so the test suite is free if it ru
 alongside them. Launch it first, in the background, capturing to a log:
 
 ```bash
-node scripts/run-tests.mjs > /tmp/release-audit-suite.log 2>&1
+env -u ADLC_TICKET node scripts/run-tests.mjs > <scratch>/suite.log 2>&1
 ```
+
+`<scratch>` is the session scratchpad directory, not `/tmp`.
+
+`env -u ADLC_TICKET` is load-bearing: an exported `ADLC_TICKET` reproducibly fails the
+segments that assert no-ticket-selected behaviour, which reads as a real regression and
+would force a spurious NO-GO. `run-tests.mjs` scrubs `ADLC_MANIFEST_KEY` and friends
+itself, but not this one.
 
 A red suite makes the verdict NO-GO no matter what the agents find.
 
@@ -66,7 +73,7 @@ A red suite makes the verdict NO-GO no matter what the agents find.
 
 ```bash
 node scripts/release-audit-collect.mjs [version] [--since <tag>] [--packages a,b,c] [--skip-issues] \
-  > /tmp/release-audit-input.json
+  > <scratch>/input.json
 ```
 
 This discovers every shipped artifact (including `plugins/adlc-claude-code`, which has no
@@ -82,13 +89,14 @@ Read `references/workflow-script.md`, take the `javascript` block **verbatim**, 
 to the **Workflow** tool as `script`, with the Phase A document as `args`:
 
 ```
-Workflow({ script: <the code block>, args: <parsed contents of /tmp/release-audit-input.json> })
+Workflow({ script: <the code block>, args: <parsed contents of <scratch>/input.json> })
 ```
 
 Invoking this skill **is** the opt-in for multi-agent orchestration, and this run
 deliberately exceeds the default workflow size guideline — auditing each artifact
-individually is the point. Write the workflow's returned `{ reports: [...] }` to
-`/tmp/release-audit-reports.json`.
+individually is the point. Pass `args` as a real JSON value, not a JSON-encoded string — a stringified document
+reaches the script as one string and `input.units.map` throws. Write the workflow's
+returned `{ reports: [...] }` to `<scratch>/reports.json`.
 
 A workflow script has no filesystem and no `child_process`; it reads only `args`. That is
 why Phase A exists and why the script needs no editing between runs.
@@ -97,10 +105,10 @@ why Phase A exists and why the script needs no editing between runs.
 
 ```bash
 node scripts/release-audit-synthesize.mjs \
-  --input /tmp/release-audit-input.json \
-  --reports /tmp/release-audit-reports.json \
-  --suite /tmp/release-audit-suite.log \
-  --json <scratchpad>/release-audit-<version>.json
+  --input <scratch>/input.json \
+  --reports <scratch>/reports.json \
+  --suite <scratch>/suite.log \
+  --json <scratch>/release-audit-<version>.json
 ```
 
 Exit `0` = GO or GO-WITH-RISK, `2` = NO-GO, `1` = could not run.
