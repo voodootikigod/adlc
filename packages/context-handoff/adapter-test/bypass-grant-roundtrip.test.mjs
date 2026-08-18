@@ -31,6 +31,7 @@ import {
   BYPASS_GRANT_SCHEMA,
   MAX_BYPASS_GRANT_BYTES,
   HANDOFF_DEPTH,
+  authorized,
 } from '@adlc/context-handoff';
 
 const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
@@ -396,4 +397,85 @@ test('a grant claimed by evaluateHandoffPreToolUse cannot also be claimed by a r
     // The grant is already gone — a second, independently-racing claim finds nothing.
     assert.equal(removeBypassGrant(root, 'sess-race2'), false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Round-19 review: these two tests were originally added to
+// cli-test/cli-bypass.test.mjs in Rounds 14 and 17, but that file matches
+// T156/T157's frozen `packages/context-handoff/cli-test/**/*.test.mjs` rail
+// glob (both tickets still in-flight) — a real rail-edit violation my own
+// ad-hoc rail-coverage check missed (a bug in its glob-to-regex conversion
+// for the `**/*.ext` shape specifically, confirmed by running the real
+// `adlc rails-guard` tool directly). Relocated here, matching this file's
+// own established pattern for exactly this situation.
+
+test('the real bypass CLI\'s own JSON output: a bound grant authorizes its own session\'s null-ticket record, never a foreign one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-bypass-cli-ported-'));
+  try {
+    const stdout = execFileSync(process.execPath, [HANDOFF_CLI, 'bypass', '--session', 'sess-b', '--write', '--json'], {
+      cwd: dir,
+      env: { ...process.env, ADLC_MANIFEST_KEY: KEY },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const boundPayload = JSON.parse(stdout);
+    assert.equal(boundPayload.bound, true);
+    assert.deepEqual(boundPayload.grant, { sessionId: 'sess-b' });
+
+    const unboundRecord = { session_id: 'sess-b', ticket_id: null, content_hash: null, status: 'open' };
+    // Round-17 review: a bound grant DOES authorize the SAME session's own
+    // unbound record — the real band-triggered producer (adapter.mjs's
+    // ensureDenyMarker) always creates content_hash: null, so its marker is
+    // unbound by construction, and --unbound-reason is unreachable through
+    // the Recovery Exception (free text outside VALUE_GRAMMAR, spec §1.3).
+    // Without this, a bound grant — the only kind reachable at all — could
+    // never clear the exact marker shape the gate itself produces.
+    assert.equal(
+      authorized({ record: unboundRecord, bypassForSession: boundPayload.grant, currentSessionId: 'sess-b' }),
+      true,
+      'a bound grant must authorize its OWN session\'s unbound record',
+    );
+    // But same-session scoping still holds: a bound grant must never reach
+    // across sessions to authorize a STRANGER's unbound record.
+    assert.equal(
+      authorized({
+        record: { ...unboundRecord, session_id: 'sess-foreign' },
+        bypassForSession: boundPayload.grant,
+        currentSessionId: 'sess-b',
+      }),
+      false,
+      'a bound grant must not authorize a DIFFERENT session\'s unbound record',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Round-14: a manifest-recording failure rolls back the already-written grant (atomicity)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-bypass-cli-ported-'));
+  try {
+    // The grant write (.adlc/handoffs/<session>.bypass-grant.json) succeeds —
+    // that directory is untouched. Forcing manifest.jsonl to be a DIRECTORY
+    // makes the evidence append throw (EISDIR) without touching the grant
+    // path at all, isolating exactly the failure this test targets.
+    mkdirSync(join(dir, '.adlc', 'manifest.jsonl'), { recursive: true });
+    let status = 0;
+    try {
+      execFileSync(process.execPath, [HANDOFF_CLI, 'bypass', '--session', 'sess-atomic', '--write'], {
+        cwd: dir,
+        env: { ...process.env, ADLC_MANIFEST_KEY: KEY },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      status = e.status ?? 1;
+    }
+    assert.equal(status, 1);
+    assert.equal(
+      existsSync(bypassGrantPath(dir, 'sess-atomic')),
+      false,
+      'a failed audit record must roll back the grant it was supposed to accompany — an operator seeing "failed" must not have a live, unrecorded bypass capability',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
