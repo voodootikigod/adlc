@@ -113,6 +113,10 @@ node scripts/release-audit-synthesize.mjs \
 
 Exit `0` = GO or GO-WITH-RISK, `2` = NO-GO, `1` = could not run.
 
+`--suite` is not optional in practice: omitting it means nothing is known about the tests,
+which is the same state as a suite that did not run, so the verdict is NO-GO. The flag
+cannot be skipped to obtain a cleaner result.
+
 It grounds every finding (the quoted evidence must appear verbatim in the cited file),
 dedupes, applies the demotion rules, folds in the probe results and the suite outcome, and
 computes the verdict. Print its terminal output as-is.
@@ -148,6 +152,11 @@ a human can disagree.
 - A report listing **no files examined** is hollow, not clean, and also forces NO-GO.
 - A suite log with **no summary line** counts as not-run, never as green.
 - A `--packages` run is capped at GO-WITH-RISK — it has nothing to say about what it skipped.
+- An **absent** `--suite` is treated exactly like a suite that did not run: NO-GO.
+- A failed or skipped `gh issue list` is named in the verdict, so an untriaged backlog can
+  never read as "no blocking issues". Same for a fetch that hit its 500-issue limit.
+- A finding citing a path outside the repository is rejected rather than read — the cited
+  path is model-authored, and grounding must not become an arbitrary-file probe.
 
 ## Verification
 
