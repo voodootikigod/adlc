@@ -120,10 +120,19 @@ export function testTargetFor(file, root = ROOT) {
     const globs = [];
     const testDir = `packages/${m[1]}/test`;
     const cliTestDir = `packages/${m[1]}/cli-test`;
+    const adapterTestDir = `packages/${m[1]}/adapter-test`;
     if (existsSync(join(root, testDir))) globs.push(`${testDir}/*.test.mjs`);
     // CLI contract suites may live outside test/ so they do not match a frozen
     // `test/**/*.test.mjs` rail from an earlier ticket (T154 / context-handoff).
     if (existsSync(join(root, cliTestDir))) globs.push(`${cliTestDir}/*.test.mjs`);
+    // Same reason, same convention: adapter-contract suites (context-handoff's
+    // own adapter-core.test.mjs, recovery-exception.test.mjs, and every
+    // relocation this pattern has accumulated since) also live outside test/
+    // to route around the same frozen rail. Without this, mutation-gate's
+    // auto-derived --test-cmd silently omits coverage that genuinely exists,
+    // reporting a false SURVIVED for every mutant only an adapter-test/ suite
+    // kills.
+    if (existsSync(join(root, adapterTestDir))) globs.push(`${adapterTestDir}/*.test.mjs`);
     return globs.length > 0 ? globs.join(' ') : null;
   }
   if ((m = /^apps\/([^/]+)\//.exec(file))) {

@@ -334,6 +334,23 @@ test('testTargetFor maps a packages/ source to cli-test alone when test/ is abse
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor includes adapter-test when present alongside test/ and cli-test/', () => {
+  const root = fixtureRoot(['packages/foo/test', 'packages/foo/cli-test', 'packages/foo/adapter-test']);
+  try {
+    assert.equal(
+      testTargetFor('packages/foo/lib/x.mjs', root),
+      'packages/foo/test/*.test.mjs packages/foo/cli-test/*.test.mjs packages/foo/adapter-test/*.test.mjs',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor maps a packages/ source to adapter-test alone when test/ and cli-test/ are absent', () => {
+  const root = fixtureRoot(['packages/foo/adapter-test']);
+  try {
+    assert.equal(testTargetFor('packages/foo/lib/x.mjs', root), 'packages/foo/adapter-test/*.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor returns null when the package has no test directory', () => {
   const root = fixtureRoot(['packages/foo/lib']);
   try {

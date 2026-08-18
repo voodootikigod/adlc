@@ -34,7 +34,9 @@
     "plugins/adlc-codex/hooks/tail-read-worker.mjs",
     "plugins/adlc-codex/hooks/test/**",
     "plugins/adlc-copilot/hooks/adlc-build-gate.mjs",
-    "plugins/adlc-copilot/hooks/test/**"
+    "plugins/adlc-copilot/hooks/test/**",
+    "scripts/mutation-gate.mjs",
+    "scripts/test/mutation-gate.test.mjs"
   ],
   "title": "Fix context-rot handoff false-positive lockout (Phase 0 hotfix + Recovery Exception)"
 }
