@@ -124,6 +124,14 @@ test('groundFinding rejects fabricated evidence', () => {
   assert.match(g.reason, /does not appear/);
 });
 
+test('groundFinding refuses to read a path that escapes the repository', () => {
+  // finding.file is model-authored, so it is untrusted input to a file read.
+  // Grounding must never become an arbitrary-file probe.
+  const g = groundFinding(finding({ file: '../../../../../../etc/passwd', evidence: 'root' }));
+  assert.equal(g.grounded, false);
+  assert.match(g.reason, /outside the repository/);
+});
+
 test('groundFinding rejects a missing file, an absent file and empty evidence', () => {
   assert.match(groundFinding(finding({ file: null })).reason, /no file cited/);
   assert.match(groundFinding(finding({ file: 'scripts/does-not-exist.mjs' })).reason, /does not exist/);
@@ -299,6 +307,43 @@ test('computeVerdict returns NO-GO when a report examined no files', () => {
   });
   assert.equal(v.verdict, 'NO-GO');
   assert.match(v.reasons.join(' '), /examined no files/);
+});
+
+test('computeVerdict refuses to reach GO when no suite result was supplied at all', () => {
+  // Omitting --suite is the cheapest possible way to defeat the gate, so an absent
+  // result is the same epistemic state as a suite that did not run.
+  const v = computeVerdict({
+    findings: [],
+    coverage: { audited: ['pkg:core'], hollow: [], missing: [] },
+    probes: { unconsultable: [] },
+    suite: null,
+  });
+  assert.equal(v.verdict, 'NO-GO');
+  assert.match(v.reasons.join(' '), /no test suite result was supplied/);
+});
+
+test('computeVerdict names an untriaged backlog rather than reading it as "no issues"', () => {
+  const v = computeVerdict({
+    findings: [],
+    coverage: { audited: ['pkg:core'], hollow: [], missing: [] },
+    probes: { unconsultable: [] },
+    suite: { ran: true, green: true, failed: [] },
+    issues: { unconsultable: 'gh issue list failed: not authenticated' },
+  });
+  assert.equal(v.verdict, 'GO-WITH-RISK');
+  assert.match(v.reasons.join(' '), /GitHub issues were not triaged/);
+});
+
+test('computeVerdict reports a truncated issue fetch', () => {
+  const v = computeVerdict({
+    findings: [],
+    coverage: { audited: ['pkg:core'], hollow: [], missing: [] },
+    probes: { unconsultable: [] },
+    suite: { ran: true, green: true, failed: [] },
+    issues: { truncated: 500 },
+  });
+  assert.equal(v.verdict, 'GO-WITH-RISK');
+  assert.match(v.reasons.join(' '), /hit its fetch limit/);
 });
 
 test('computeVerdict returns NO-GO when the suite result was never captured', () => {

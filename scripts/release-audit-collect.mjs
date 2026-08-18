@@ -354,11 +354,21 @@ export function churnFor(dir, since, { run = execFileSync } = {}) {
   return { since, commits: subjects.length, subjects: subjects.slice(0, 25), filesChanged: files.length, files: files.slice(0, 50) };
 }
 
-/** Open GitHub issues, or an explicit unconsultable record when `gh` cannot answer. */
+/** How many open issues a single fetch will ask for. */
+export const ISSUE_FETCH_LIMIT = 500;
+
+/**
+ * Open GitHub issues, or an explicit unconsultable record when `gh` cannot answer.
+ *
+ * A response of exactly ISSUE_FETCH_LIMIT is reported as `truncated` rather than
+ * accepted: a capped list is indistinguishable from a complete one, and silently
+ * dropping the tail would let the audit report "no blocking issues" about issues
+ * it never saw.
+ */
 export function fetchIssues({ run = execFileSync, skip = false } = {}) {
-  if (skip) return { issues: [], unconsultable: 'skipped via --skip-issues' };
-  const r = tryRun('gh', ['issue', 'list', '--state', 'open', '--limit', '500', '--json', 'number,title,body,labels,url,milestone'], { run });
-  if (!r.ok) return { issues: [], unconsultable: `gh issue list failed: ${r.out.slice(0, 400)}` };
+  if (skip) return { issues: [], unconsultable: 'skipped via --skip-issues', truncated: null };
+  const r = tryRun('gh', ['issue', 'list', '--state', 'open', '--limit', String(ISSUE_FETCH_LIMIT), '--json', 'number,title,body,labels,url,milestone'], { run });
+  if (!r.ok) return { issues: [], unconsultable: `gh issue list failed: ${r.out.slice(0, 400)}`, truncated: null };
   try {
     const parsed = JSON.parse(r.out);
     return {
@@ -373,9 +383,10 @@ export function fetchIssues({ run = execFileSync, skip = false } = {}) {
         milestone: i.milestone?.title ?? null,
       })),
       unconsultable: null,
+      truncated: parsed.length >= ISSUE_FETCH_LIMIT ? ISSUE_FETCH_LIMIT : null,
     };
   } catch (err) {
-    return { issues: [], unconsultable: `gh issue list returned unparseable JSON: ${err.message}` };
+    return { issues: [], unconsultable: `gh issue list returned unparseable JSON: ${err.message}`, truncated: null };
   }
 }
 
@@ -439,7 +450,7 @@ export async function probes(currentVersion, { root = ROOT, run = execFileSync, 
  * Assemble the audit input document. Pure with respect to its injected readers so
  * the whole shape is assertable without a repo.
  */
-export function assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable }) {
+export function assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable, issuesTruncated = null }) {
   return {
     schema: 'release-audit-input/1',
     version,
@@ -457,6 +468,7 @@ export function assemble({ version, since, units, issues, routed, probeResults, 
       escalated: routed.escalated,
       sweepBatches: sweepBatches(routed.unmapped, routed.escalated),
       unconsultable: issuesUnconsultable,
+      truncated: issuesTruncated,
     },
     probes: probeResults,
   };
@@ -478,11 +490,11 @@ export async function collectMain(argv = process.argv.slice(2), deps = {}) {
   }
 
   const churn = new Map(units.map((u) => [u.id, churnFor(u.dir, since, deps)]));
-  const { issues, unconsultable: issuesUnconsultable } = fetchIssues({ ...deps, skip: args.skipIssues });
+  const { issues, unconsultable: issuesUnconsultable, truncated: issuesTruncated } = fetchIssues({ ...deps, skip: args.skipIssues });
   const routed = routeIssues(issues, units, ticketsByIssueNumber({ root }));
   const probeResults = await probes(currentVersion, { root, ...deps });
 
-  const doc = assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable });
+  const doc = assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable, issuesTruncated });
   doc.currentVersion = currentVersion;
   doc.filtered = Boolean(args.packages);
   log(JSON.stringify(doc, null, 2));

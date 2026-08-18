@@ -234,3 +234,37 @@ test('sweepBatches always yields one batch, so an empty backlog still has a swee
   const { sweepBatches } = await import('../release-audit-collect.mjs');
   assert.deepEqual(sweepBatches([], []), [[]]);
 });
+
+test('fetchIssues reports a capped response as truncated instead of accepting it', async () => {
+  const { fetchIssues, ISSUE_FETCH_LIMIT } = await import('../release-audit-collect.mjs');
+  const full = JSON.stringify(Array.from({ length: ISSUE_FETCH_LIMIT }, (_, i) => ({ number: i + 1, title: 't', body: '', labels: [], url: 'u' })));
+  const r = fetchIssues({ run: () => full });
+  assert.equal(r.truncated, ISSUE_FETCH_LIMIT);
+  assert.equal(r.issues.length, ISSUE_FETCH_LIMIT);
+});
+
+test('fetchIssues does not flag a short response as truncated', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
+  const r = fetchIssues({ run: () => JSON.stringify([{ number: 1, title: 't', body: '', labels: [], url: 'u' }]) });
+  assert.equal(r.truncated, null);
+  assert.equal(r.unconsultable, null);
+});
+
+test('fetchIssues records an unconsultable rather than an empty backlog when gh fails', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
+  const r = fetchIssues({ run: () => { throw new Error('gh: not authenticated'); } });
+  assert.deepEqual(r.issues, []);
+  assert.match(r.unconsultable, /gh issue list failed/);
+});
+
+test('fetchIssues records an unconsultable when gh returns unparseable JSON', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
+  const r = fetchIssues({ run: () => 'not json at all' });
+  assert.match(r.unconsultable, /unparseable JSON/);
+});
+
+test('fetchIssues marks a deliberate skip, so the verdict can still name the gap', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
+  const r = fetchIssues({ skip: true });
+  assert.match(r.unconsultable, /--skip-issues/);
+});

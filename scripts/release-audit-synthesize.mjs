@@ -30,7 +30,7 @@
 //                                             [--json <out.json>]
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
 
@@ -136,7 +136,15 @@ export function normalizeFinding(raw, unit) {
 export function groundFinding(finding, { root = ROOT, readFile = readFileSync, exists = existsSync } = {}) {
   if (!finding.file) return { grounded: false, reason: 'no file cited' };
   if (!finding.evidence.trim()) return { grounded: false, reason: 'no evidence quoted' };
-  const abs = join(root, finding.file);
+  // The cited path comes from a model, so it is untrusted input to a file read.
+  // A finding is only ever about a file IN the repository; anything that resolves
+  // outside it is malformed by definition, and reading it would turn a grounding
+  // check into an arbitrary-file probe.
+  const abs = resolve(root, finding.file);
+  const base = resolve(root);
+  if (abs !== base && !abs.startsWith(base + sep)) {
+    return { grounded: false, reason: `cited path resolves outside the repository: ${finding.file}` };
+  }
   if (!exists(abs)) return { grounded: false, reason: `cited file does not exist: ${finding.file}` };
   let source;
   try { source = readFile(abs, 'utf8'); } catch (err) { return { grounded: false, reason: `unreadable: ${err.message}` }; }
@@ -270,12 +278,17 @@ export function probeFindings(probes) {
  *   GO-WITH-RISK no blockers, but open SHOULD-FIX items or a probe that could not run
  *   GO           nothing outstanding and everything was actually checked
  */
-export function computeVerdict({ findings, coverage, probes, suite, partial = false }) {
+export function computeVerdict({ findings, coverage, probes, suite, issues, partial = false }) {
   const reasons = [];
   const blockers = findings.filter((f) => f.bucket === 'BLOCKER');
 
-  if (suite && suite.ran && !suite.green) reasons.push(`test suite is red: ${suite.failed.length} segment(s) failed — ${suite.failed.join(', ')}`);
-  if (suite && !suite.ran) reasons.push('test suite result unavailable — no summary line was captured');
+  // An ABSENT suite result is the same epistemic state as one that did not run:
+  // nothing is known about the tests. Treating null as "fine" would let a caller
+  // obtain a GO simply by omitting --suite, which is the cheapest possible way to
+  // defeat the whole gate.
+  if (!suite) reasons.push('no test suite result was supplied (--suite) — the tests are unverified');
+  else if (suite.ran && !suite.green) reasons.push(`test suite is red: ${suite.failed.length} segment(s) failed — ${suite.failed.join(', ')}`);
+  else if (!suite.ran) reasons.push('test suite result unavailable — no summary line was captured');
   if (blockers.length) reasons.push(`${blockers.length} release blocker(s) survived verification`);
   if (coverage.missing.length) reasons.push(`${coverage.missing.length} shipped artifact(s) produced no audit report: ${coverage.missing.join(', ')}`);
   if (coverage.hollow.length) reasons.push(`${coverage.hollow.length} audit report(s) examined no files: ${coverage.hollow.join(', ')}`);
@@ -285,6 +298,12 @@ export function computeVerdict({ findings, coverage, probes, suite, partial = fa
   const unconsultable = probes?.unconsultable ?? [];
   if (shouldFix.length) reasons.push(`${shouldFix.length} should-fix item(s) open`);
   for (const u of unconsultable) reasons.push(`probe could not run: ${u}`);
+  // Issue triage is one of the audit's two inputs, and its failure mode is silent:
+  // when `gh` cannot answer, every list is simply empty and the run looks like a
+  // backlog with nothing in it. Naming it is the difference between "no blocking
+  // issues" and "no issues were read".
+  if (issues?.unconsultable) reasons.push(`GitHub issues were not triaged: ${issues.unconsultable}`);
+  if (issues?.truncated) reasons.push(`the open-issue list hit its fetch limit (${issues.truncated}) — some issues were never routed`);
   // A partial audit has nothing to say about the artifacts it did not read, so it
   // is never allowed to produce the verdict that means "the release is clear".
   if (partial) reasons.push('partial audit (--packages) — the unaudited artifacts and the suite-level agents were not run');
@@ -358,7 +377,7 @@ export function synthesize({ input, reports, suite, root = ROOT, readFile = read
     issueVerdicts: reports.flatMap((r) => (r.issue_verdicts ?? r.issueVerdicts ?? []).map((v) => ({ unit: r.unit, ...v }))),
     findings,
     partial: input.filtered === true,
-    verdict: computeVerdict({ findings, coverage, probes: input.probes, suite, partial: input.filtered === true }),
+    verdict: computeVerdict({ findings, coverage, probes: input.probes, suite, issues: input.issues, partial: input.filtered === true }),
   };
 }
 
