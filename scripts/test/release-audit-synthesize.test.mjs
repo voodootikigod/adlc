@@ -480,3 +480,27 @@ test('renderTerminal names the verdict, the blockers and the demotions', () => {
   assert.match(text, /DEMOTED FROM BLOCKER/);
   assert.match(text, /ungrounded/);
 });
+
+test('every suite-level agent is named in the coverage contract', () => {
+  // Spelled out rather than derived: dropping one of these from SUITE_UNITS would
+  // silently stop requiring that agent to report, and an unaudited surface would
+  // pass as GO. The list IS the contract, so the test states it.
+  assert.deepEqual(expectedSuiteUnits({ issues: { sweepBatches: [[]] } }),
+    ['suite:drift', 'suite:docs', 'suite:supply', 'suite:issues:1']);
+});
+
+test('dropping any single suite agent from a run forces NO-GO', () => {
+  for (const omitted of ['suite:drift', 'suite:docs', 'suite:supply']) {
+    const r = synthesize({
+      input: CLEAN_INPUT,
+      reports: FULL_REPORTS.filter((x) => x.unit !== omitted),
+      suite: { ran: true, green: true, failed: [] },
+    });
+    assert.equal(r.verdict.verdict, 'NO-GO', `${omitted} going missing must block the release`);
+    assert.ok(r.coverage.missing.includes(omitted));
+  }
+});
+
+test('BUCKETS lists exactly the three severities the report renders', () => {
+  assert.deepEqual(BUCKETS, ['BLOCKER', 'SHOULD-FIX', 'BACKLOG']);
+});

@@ -268,3 +268,79 @@ test('fetchIssues marks a deliberate skip, so the verdict can still name the gap
   const r = fetchIssues({ skip: true });
   assert.match(r.unconsultable, /--skip-issues/);
 });
+
+// ─── the inventory filters, exercised against a real directory tree ──────────
+//
+// SOURCE_EXT and SKIP_DIRS are the two lists that decide what an audit agent is
+// shown. Asserting their contents would only restate the source; these build a
+// tree and assert what inventory actually returns, so dropping an extension or a
+// skipped directory changes an observable result.
+
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+import { inventory } from '../release-audit-collect.mjs';
+
+function fixtureTree() {
+  // realpath: on macOS the temp dir is a symlink, and inventory reports paths
+  // relative to `root` — comparing an unresolved root against resolved children
+  // passes locally and fails on Linux CI, or the reverse.
+  const root = realpathSync(mkdtempSync(joinPath(tmpdir(), 'release-audit-inv-')));
+  mkdirSync(joinPath(root, 'unit'), { recursive: true });
+  for (const name of ['a.mjs', 'b.cjs', 'c.js', 'd.ts', 'e.json', 'f.md']) {
+    writeFileSync(joinPath(root, 'unit', name), 'x');
+  }
+  for (const name of ['g.txt', 'h.lock', 'i']) writeFileSync(joinPath(root, 'unit', name), 'x');
+  for (const dir of ['node_modules', '.git', 'coverage', 'dist', '.worktrees']) {
+    mkdirSync(joinPath(root, 'unit', dir), { recursive: true });
+    writeFileSync(joinPath(root, 'unit', dir, 'buried.mjs'), 'x');
+  }
+  return root;
+}
+
+test('inventory returns every source extension an agent is meant to read', () => {
+  const root = fixtureTree();
+  const found = inventory('unit', { root }).map((f) => f.path).sort();
+  assert.deepEqual(found, [
+    'unit/a.mjs', 'unit/b.cjs', 'unit/c.js', 'unit/d.ts', 'unit/e.json', 'unit/f.md',
+  ].sort());
+});
+
+test('inventory excludes files whose extension is not a source type', () => {
+  const root = fixtureTree();
+  const found = inventory('unit', { root }).map((f) => f.path);
+  for (const excluded of ['unit/g.txt', 'unit/h.lock', 'unit/i']) {
+    assert.ok(!found.includes(excluded), `${excluded} must not be shown to an agent`);
+  }
+});
+
+test('inventory never descends into a skipped directory', () => {
+  // A vendored tree would swamp the agent's attention and is not the artifact
+  // under audit, so each skipped directory must stay invisible even though it
+  // contains a file of a source type.
+  const root = fixtureTree();
+  const found = inventory('unit', { root }).map((f) => f.path);
+  for (const dir of ['node_modules', '.git', 'coverage', 'dist', '.worktrees']) {
+    assert.ok(!found.some((f) => f.includes(`/${dir}/`)), `${dir} must be skipped entirely`);
+  }
+});
+
+test('inventory reports each file size, so a unit prompt can state its real weight', () => {
+  const root = fixtureTree();
+  const entry = inventory('unit', { root }).find((f) => f.path === 'unit/a.mjs');
+  assert.equal(entry.bytes, 1);
+});
+
+test('sweepBatches splits at exactly twelve, so a shard stays small enough to audit', async () => {
+  // Pinned with literals rather than the constant: a test written in terms of
+  // SWEEP_BATCH_SIZE moves with the value and would not notice it changing.
+  const { sweepBatches } = await import('../release-audit-collect.mjs');
+  const items = Array.from({ length: 25 }, (_, i) => ({ number: i + 1 }));
+  assert.deepEqual(sweepBatches(items, []).map((b) => b.length), [12, 12, 1]);
+});
+
+test('sweepBatches keeps thirteen issues from becoming one oversized shard', async () => {
+  const { sweepBatches } = await import('../release-audit-collect.mjs');
+  const items = Array.from({ length: 13 }, (_, i) => ({ number: i + 1 }));
+  assert.deepEqual(sweepBatches(items, []).map((b) => b.length), [12, 1]);
+});
