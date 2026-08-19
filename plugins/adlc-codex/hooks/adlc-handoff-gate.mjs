@@ -1202,7 +1202,7 @@ async function main() {
   }
   for (const method of REQUIRED_API) {
     if (typeof api[method] !== 'function') {
-      fail(`@adlc/context-handoff missing export: ${method} — failing closed\n\n${recoveryDiagnostic(sessionId)}`);
+      fail(`@adlc/context-handoff missing export: ${method} — the resolved install is too old for this plugin; upgrade it (npm install -g @adlc/cli@latest) — failing closed\n\n${recoveryDiagnostic(sessionId)}`);
     }
   }
   if (!Number.isFinite(api.MAX_ACTIVE_CONTEXT_BYTES) || !Number.isFinite(api.MAX_SCAN_WALL_MS)) {

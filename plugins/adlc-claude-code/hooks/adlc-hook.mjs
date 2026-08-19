@@ -2258,7 +2258,7 @@ async function handoff(input) {
   for (const method of required) {
     if (typeof api[method] !== 'function') {
       return denyHandoff(
-        `@adlc/context-handoff missing export: ${method} — failing closed\n\n${recoveryDiagnostic(sessionId)}`
+        `@adlc/context-handoff missing export: ${method} — the resolved install is too old for this plugin; upgrade it (npm install -g @adlc/cli@latest) — failing closed\n\n${recoveryDiagnostic(sessionId)}`
       );
     }
   }
