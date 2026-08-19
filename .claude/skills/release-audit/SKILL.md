@@ -92,28 +92,24 @@ as `args`.
 
 ### 3. Fan out (Phase B)
 
-Extract the `javascript` block from `references/workflow-script.md` to a file, then hand the
-**Workflow** tool that path plus the projected args:
+Build a self-contained script and hand the Workflow tool its path:
 
 ```bash
-python3 - <<'EOF' > <scratch>/workflow.mjs
-import re
-s = open('.claude/skills/release-audit/references/workflow-script.md').read()
-print(re.search(r'```javascript\n(.*?)\n```', s, re.S).group(1))
-EOF
+node scripts/release-audit-workflow.mjs --input <scratch>/wargs.json --out <scratch>/workflow.mjs
 ```
 
 ```
-Workflow({ scriptPath: "<scratch>/workflow.mjs", args: <parsed contents of <scratch>/wargs.json> })
+Workflow({ scriptPath: "<scratch>/workflow.mjs" })
 ```
 
-`scriptPath` avoids re-transcribing ~350 lines of script into the tool call on every run.
+No `args` are passed. The builder embeds the collected document as `INPUT_DOC`, so nothing has to be
+transcribed into the tool call — the document reaches the script byte-exact from disk
+rather than through hand-copied JSON. Issue titles are written by anyone who can open an
+issue and are embedded verbatim, so `<`, U+2028 and U+2029 are escaped on the way in.
 
 Invoking this skill **is** the opt-in for multi-agent orchestration, and this run
 deliberately exceeds the default workflow size guideline — auditing each artifact
-individually is the point. Pass `args` as a real JSON value, not a JSON-encoded string — a stringified document
-reaches the script as one string and `input.units.map` throws. Write the workflow's
-returned `{ reports: [...] }` to `<scratch>/reports.json`.
+individually is the point. Write the workflow's returned `{ reports: [...] }` to `<scratch>/reports.json`.
 
 A workflow script has no filesystem and no `child_process`; it reads only `args`. That is
 why Phase A exists and why the script needs no editing between runs.
@@ -179,7 +175,7 @@ a human can disagree.
 
 ```bash
 node scripts/release-audit-collect.mjs --skip-issues | head -20   # emits JSON, exit 0
-node --test scripts/test/release-audit-collect.test.mjs scripts/test/release-audit-synthesize.test.mjs
+node --test scripts/test/release-audit-*.test.mjs
 ```
 
 Both helpers live flat in `scripts/` so `scripts/<name>.mjs → scripts/test/<name>.test.mjs`

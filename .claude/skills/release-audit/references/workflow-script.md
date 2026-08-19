@@ -1,8 +1,12 @@
 # release-audit workflow script
 
-Pass the code block below to the **Workflow** tool as `script`, verbatim, with the
-Phase A collector document as `args`. It is parameterised entirely through `args`,
-so nothing in it needs editing between runs.
+Build a runnable copy with `scripts/release-audit-workflow.mjs`, which prepends the
+collected document as `INPUT_DOC` and emits a self-contained script. Hand that file
+to the **Workflow** tool as `scriptPath`; no `args` are needed.
+
+The script still accepts `args` when one is supplied, so it stays parameterised —
+but embedding is the normal path, because `args` must be transcribed inline into the
+tool call and the collected document is tens of kilobytes.
 
 A workflow script has no filesystem and no `child_process` — it can only read
 `args`. Every mechanical fact it needs is therefore collected by
@@ -19,7 +23,11 @@ export const meta = {
   ],
 }
 
-const input = args
+// `args` when the Workflow tool is given one; otherwise the document the build
+// step embedded above. Embedding is the normal path: `args` must be transcribed
+// inline into the tool call, and the collected document is tens of kilobytes, so
+// hand-copying it is both expensive and a transcription-error risk.
+const input = (typeof args !== 'undefined' && args) || INPUT_DOC
 const FILTERED = input.filtered === true
 
 const FINDING = {
