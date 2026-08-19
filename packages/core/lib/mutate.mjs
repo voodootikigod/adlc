@@ -9,7 +9,7 @@
 const LOOSE_EQ_NULL_RE = /(?<![=!])==(?!=)\s*null\b/;
 const LOOSE_NEQ_NULL_RE = /(?<!!)!=(?!=)\s*null\b/;
 
-// ── Tuning constants are not boundaries (#359) ──────────────────────────────
+// ── Tuning constants are not boundaries (#359, repaired by #372) ────────────
 // off-by-one exists to catch BOUNDARY mistakes — an index, a length, a count.
 // A duration in milliseconds or a size in bytes is a tuning knob, and +1 there is
 // an EQUIVALENT MUTANT: no test can observe 60000 -> 60001 ms on a subprocess
@@ -19,58 +19,164 @@ const LOOSE_NEQ_NULL_RE = /(?<!!)!=(?!=)\s*null\b/;
 // (Found landing #353, where `timeout: 60000` in rails-guard-ci's git() helper
 // survived and there was no honest way to kill it.)
 //
-// Deliberately EXCLUDES counts — maxRetries, attempts, limit, concurrency, max.
-// +1 on a count IS observable: a test can count attempts or returned items. Those
-// are the boundary bugs this operator exists to prosecute, and they stay mutable.
+// #359 spelled the rule as a KEY-NAME ALTERNATION anchored on `\b<key>\s*[:=]`.
+// That shape is wrong twice over and #372 replaces it:
+//   - a LEADING segment kills the `\b` — `GIT_TIMEOUT_MS`, `gitTimeoutMs` never
+//     matched, because `_T`/`tT` is not a word boundary;
+//   - a TRAILING segment kills the separator anchor — `MAX_BUFFER_BYTES`,
+//     `maxBufferBytes` never matched, because `_BYTES` sits where `=` had to be.
+// `*_BYTES` and `*_MS` are the IDIOMATIC spellings — naming the unit is what a
+// reader wants — so the old rule penalized the clearer name. #363 renamed a real
+// `MAX_BUFFER_BYTES` to `MAX_BUFFER` for no reason but to get the gate green.
 //
-// KNOWN LIMIT — the value must be a BARE NUMERIC LITERAL directly after the separator.
-// Two shapes are therefore still mutated, and both can still produce an unkillable
-// mutant (cross-model review round 2 raised these; they are residual, NOT regressions —
-// each behaved identically before this operator learned to mask at all):
+// The rule is now stated over the identifier's SEGMENTS (snake_case and camelCase
+// both split to the same list), with the TRAILING segment deciding first:
+//
+//   1. a trailing DISCRETE-QUANTITY word (retries, limit, count, size, index,
+//      code, …) means the name denotes a COUNT — always mutable, whatever else
+//      the name contains. This is what keeps `timeoutRetries` and `retryLimit`
+//      prosecuted, and it is what returns `chunkSize`/`bufferSize` to
+//      prosecution (#372 defect 2): a chunk size counts ELEMENTS, and a test can
+//      assert the resulting batch length, so +1 there is observable — exactly the
+//      boundary this operator exists to catch. #359 had them masked, which
+//      silently deleted that prosecution.
+//   2. a trailing UNOBSERVABLE-MAGNITUDE UNIT (ms, µs, ns, bytes, MiB, …) means
+//      the name declares a physical magnitude — masked. Sub-second and byte units
+//      only: `RETENTION_DAYS = 7 -> 8` IS observable under an injected clock, so
+//      coarse time units stay mutable. The bar is "no test could ever tell".
+//   3. otherwise, a known TUNING PHRASE anywhere in the segment run (timeout,
+//      ttl, maxBuffer, highWaterMark, …) — masked.
+//
+// Rule 1 running BEFORE rules 2 and 3 is the whole safety property: widening the
+// key match is the direction that DELETES real prosecution, and a count word in
+// the tail is the strongest available signal that the value is countable.
+//
+// KNOWN LIMIT — the value must be a NUMERIC LITERAL EXPRESSION reached from its
+// key by nothing but whitespace and closed `/* … */` comments. Two shapes are
+// therefore still mutated, and both can still produce an unkillable mutant:
 //   - a bare call argument:  setTimeout(fn, 1000)   sleep(30000)
 //   - a COMPUTED value:      timeout: isDev ? 1000 : 60000    timeout = delay || 60000
 // Widening to "mask every number between the key and the next terminator" would fix
 // those and break something worse: in `timeout: cfg.max > arr.length - 1 ? 100 : 200`
 // it swallows `arr.length - 1`, a REAL boundary, silently deleting prosecution of it.
 // Precision beats breadth here — extend only when a concrete survivor demands it.
+// (#372 defect 3 closed the two ASSIGNMENT shapes the old disclosure implied were
+// covered and were not: a QUOTED property key `{ "timeout": 60000 }`, and a value
+// separated from its key by an inline unit comment `{ timeout: /* ms */ 60000 }`.)
 //
 // Floats are a non-issue for a different reason: off-by-one's digit-run pattern rejects
 // a run adjacent to `.`, so `ttl: 0.0` is unmutatable whether masked or not.
 //
-// Extend the key list only for a key whose ±1 is genuinely unobservable — every
+// Extend these lists only for a word whose ±1 is genuinely unobservable — every
 // addition removes real prosecution, so the bar is "no test could ever tell", not
 // "no test currently does".
-const TUNING_KEYS = String.raw`timeout|timeout_?ms|delay|delay_?ms|interval|interval_?ms`
-  + String.raw`|backoff|backoff_?ms|ttl|ttl_?ms|max_?age|keep_?alive(?:_?msecs)?`
-  + String.raw`|max_?buffer|high_?water_?mark|buffer_?size|chunk_?size|max_?bytes`;
 
-// The key, its separator, and its whole NUMERIC VALUE EXPRESSION. The value class
-// spans arithmetic so `512 * 1024 * 1024` is covered end to end — matching only
-// `512` would leave `1024` exposed and reproduce the same unkillable mutant one
-// factor to the right. Letters are excluded from the value class, so a match can
-// never run past this key's value into the next key's name.
+/**
+ * Split an identifier into lowercase segments. snake_case, SCREAMING_SNAKE,
+ * camelCase, PascalCase and acronym runs all reduce to the same list, so the
+ * classification below is stated ONCE instead of once per spelling — the failure
+ * mode #372 defect 1 was made of.
+ *
+ *   MAX_BUFFER_BYTES -> [max, buffer, bytes]
+ *   maxBufferBytes   -> [max, buffer, bytes]
+ *   HTTPTimeoutMs    -> [http, timeout, ms]
+ */
+export function identifierSegments(name) {
+  return String(name)
+    .replace(/[_$\d]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
+}
+
+// Rule 1. A trailing segment naming a COUNTABLE thing. `max`/`min` are
+// deliberately absent: they are modifiers, not units, so `BUFFER_MAX` keeps the
+// magnitude reading its `buffer` segment gives it.
+const DISCRETE_TAIL = new Set([
+  'retries', 'retry', 'tries', 'attempts', 'attempt', 'count', 'counts',
+  'limit', 'limits', 'size', 'sizes', 'length', 'len', 'index', 'idx',
+  'offset', 'code', 'codes', 'id', 'ids', 'version', 'port', 'level',
+  'priority', 'depth', 'concurrency', 'workers', 'slots', 'page', 'pages',
+  'num', 'number', 'numbers', 'items', 'rows', 'lines', 'chars', 'columns',
+]);
+
+// Rule 2. A trailing segment naming a unit in which ±1 cannot be observed.
+// Sub-second time and bytes only — see the note on coarse units above.
+const MAGNITUDE_UNIT_TAIL = new Set([
+  'ms', 'msec', 'msecs', 'milli', 'millis', 'millisecond', 'milliseconds',
+  'us', 'usec', 'usecs', 'micro', 'micros', 'microsecond', 'microseconds',
+  'ns', 'nsec', 'nsecs', 'nano', 'nanos', 'nanosecond', 'nanoseconds',
+  'byte', 'bytes', 'kb', 'mb', 'gb', 'tb', 'kib', 'mib', 'gib', 'tib',
+  'kbytes', 'mbytes', 'gbytes',
+]);
+
+// Rule 3. Known tuning phrases, written as the JOINED segment run they must
+// match (so `max_age`, `maxAge` and `MAXAGE` are one entry, not three).
+const TUNING_PHRASES = new Set([
+  'timeout', 'delay', 'interval', 'backoff', 'ttl',
+  'maxage', 'keepalive', 'maxbuffer', 'highwatermark', 'maxbytes',
+]);
+
+/**
+ * Is this identifier a TUNING knob (mask it) rather than a BOUNDARY (mutate it)?
+ * Exported so the property test can assert the decision is a function of the
+ * identifier's SEGMENTS — i.e. that a new spelling of an already-classified name
+ * needs no new enumerated case.
+ */
+export function isTuningIdentifier(name) {
+  const segs = identifierSegments(name);
+  if (segs.length === 0) return false;
+  const tail = segs[segs.length - 1];
+  if (DISCRETE_TAIL.has(tail)) return false;
+  if (MAGNITUDE_UNIT_TAIL.has(tail)) return true;
+  for (let i = 0; i < segs.length; i++) {
+    let joined = '';
+    for (let j = i; j < segs.length; j++) {
+      joined += segs[j];
+      if (TUNING_PHRASES.has(joined)) return true;
+    }
+  }
+  return false;
+}
+
+// A CLOSED block comment. Masked (length-preserving) before anything else looks
+// at the line, for two independent reasons: it lets a key reach its value across
+// an inline unit comment (`timeout: /* ms */ 60000`, #372 defect 3), and it stops
+// digits INSIDE a comment being picked as the boundary to mutate.
+const BLOCK_COMMENT_RE = /\/\*(?:(?!\*\/)[\s\S])*?\*\//g;
+
+// A key (bare identifier or quoted property name), its separator, and its whole
+// NUMERIC VALUE EXPRESSION. The value class spans arithmetic so `512 * 1024 *
+// 1024` is covered end to end — matching only `512` would leave `1024` exposed
+// and reproduce the same unkillable mutant one factor to the right. Letters are
+// excluded from the value class, so a match can never run past this key's value
+// into the next key's name.
 // The leading `-?` matters: a NEGATIVE duration is a sentinel ("disabled", "wait
 // forever"), so -1 -> -2 takes the same branch and is unkillable for exactly the
 // reason 60001 was. Without the sign the mask misses it and the bug recurs.
-const TUNING_ASSIGNMENT_RE = new RegExp(
-  String.raw`\b(?:${TUNING_KEYS})\s*[:=]\s*(-?\d[\d\s*+\-/_.]*)`,
-  'gi'
-);
+const ASSIGNMENT_RE = /(['"`]?)([A-Za-z_$][\w$]*)\1\s*[:=]\s*(-?\d[\d\s*+\-/_.]*)/g;
 
 // A value of exactly ZERO is never masked. The whole rationale for masking is that
 // ±1 is unobservable, and that holds at MAGNITUDE but fails at zero: across every
-// key in TUNING_KEYS, 0 means disabled / none / immediate, so 0 -> 1 flips a real
+// key here, 0 means disabled / none / immediate, so 0 -> 1 flips a real
 // semantic branch that a test can and should catch. `{ ttl: 0 }` is a discrete
 // boundary wearing a tuning key's name — prosecute it. (Cross-model review finding,
 // HIGH: masking it let a security-relevant sentinel escape the gate entirely.)
 const ZERO_VALUE_RE = /^-?0+$/;
 
-// Blank out tuning assignments, PRESERVING LENGTH so an index into the masked line
-// addresses the same character in the original.
+const blank = (s) => ' '.repeat(s.length);
+
+// Blank out closed block comments and tuning assignments, PRESERVING LENGTH so an
+// index into the masked line addresses the same character in the original.
 function maskTuningAssignments(line) {
-  return line.replace(TUNING_ASSIGNMENT_RE, (match, value) => (
-    ZERO_VALUE_RE.test(value.trim()) ? match : ' '.repeat(match.length)
-  ));
+  const withoutComments = line.replace(BLOCK_COMMENT_RE, blank);
+  return withoutComments.replace(ASSIGNMENT_RE, (match, _quote, key, value) => {
+    if (!isTuningIdentifier(key)) return match;
+    return ZERO_VALUE_RE.test(value.trim()) ? match : blank(match);
+  });
 }
 
 // A simple array literal of 2+ quoted-string / bare-word elements, e.g.
@@ -294,6 +400,22 @@ export const OPERATORS = [
 
 const SKIP_LINE = /^\s*($|\/\/|\/\*|\*|#|import\b|export\s+\{|console\.)/;
 
+// A CLOSED `/* … */` prefix followed by real code (#372 defect 4). SKIP_LINE
+// skips ANY line starting with `/*`, so `/* x */ const limit = 3;` produced zero
+// mutants while `const limit = 3;` produced one — a one-line comment prefix was a
+// working, undocumented suppression of the gate, and mutation-gate's own failure
+// message told authors no such thing existed.
+//
+// The prefix is STRIPPED before the operators run and re-attached to the mutant,
+// rather than the line simply being un-skipped: every operator but off-by-one
+// locates its target with `.replace(first-match)`, so handing them the comment
+// text would let `/* if (a < b) */ const limit = 3;` mutate INSIDE the comment —
+// an unkillable mutant, i.e. the same false gate failure in a new costume.
+//
+// An UNCLOSED opener (`/* start of a block comment`) does not match, so a real
+// multi-line comment is still skipped by SKIP_LINE.
+const CLOSED_COMMENT_PREFIX = /^(\s*(?:\/\*(?:(?!\*\/)[\s\S])*?\*\/\s*)+)(?=\S)/;
+
 /**
  * Generate mutants for a source file.
  * targetLines: optional Set/array of 1-based line numbers to restrict to
@@ -308,13 +430,16 @@ export function generateMutants(content, { targetLines, maxMutants = 50 } = {}) 
     const lineNo = i + 1;
     if (allow && !allow.has(lineNo)) continue;
     const original = lines[i];
-    if (SKIP_LINE.test(original)) continue;
+    const prefix = original.match(CLOSED_COMMENT_PREFIX)?.[1] ?? '';
+    const body = original.slice(prefix.length);
+    if (SKIP_LINE.test(body)) continue;
     for (const op of OPERATORS) {
-      const mutated = op.apply(original);
-      if (mutated !== null && mutated !== original) {
-        mutants.push({ line: lineNo, operator: op.name, original, mutated });
-        if (mutants.length >= maxMutants) break;
-      }
+      const mutatedBody = op.apply(body);
+      if (mutatedBody === null || mutatedBody === body) continue;
+      // `original` stays the WHOLE line, including the stripped prefix, so
+      // applyMutant's identity check still addresses the real file content.
+      mutants.push({ line: lineNo, operator: op.name, original, mutated: prefix + mutatedBody });
+      if (mutants.length >= maxMutants) break;
     }
   }
   return mutants;

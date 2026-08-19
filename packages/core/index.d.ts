@@ -289,6 +289,10 @@ export namespace mutate {
   export function generateMutants(...args: unknown[]): unknown;
   export function applyMutant(...args: unknown[]): unknown;
   export function changedLinesFromDiff(...args: unknown[]): unknown;
+  /** Split an identifier into lowercase segments (snake_case and camelCase alike). */
+  export function identifierSegments(name: string): string[];
+  /** True when the identifier names a TUNING knob (mask it) rather than a BOUNDARY (mutate it). */
+  export function isTuningIdentifier(name: string): boolean;
 }
 
 // lib/shell.mjs — shell-command classification for in-session rail gating

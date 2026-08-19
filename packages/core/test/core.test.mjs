@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { execFileSync } from 'node:child_process';
 import * as corePublic from '../index.mjs';
@@ -13,7 +14,7 @@ import {
   validateTicket, loadTickets, topoSort, computeFloat,
   globMatch, inScope, scopesOverlap,
 } from '../lib/tickets.mjs';
-import { generateMutants, applyMutant, changedLinesFromDiff, OPERATORS } from '../lib/mutate.mjs';
+import { generateMutants, applyMutant, changedLinesFromDiff, OPERATORS, identifierSegments, isTuningIdentifier } from '../lib/mutate.mjs';
 import { resolveRevision as resolveWorktreeRevision } from '../lib/revision.mjs';
 
 const repoRoot = new URL('../../../', import.meta.url).pathname;
@@ -498,6 +499,210 @@ test('off-by-one: floats are unmutatable independent of masking (not a mask carv
 test('off-by-one: a magnitude is still masked after the zero/sign carve-outs', () => {
   assert.equal(offByOne().apply('  const o = { timeout: 60000 };'), null);
   assert.equal(offByOne().apply('  const o = { maxBuffer: 512 * 1024 * 1024 };'), null);
+});
+
+// ── #372: the mask is stated over identifier SEGMENTS, not a key alternation ──
+// #359's `\b<key>\s*[:=]` shape missed both idiomatic spellings — a LEADING
+// segment kills the `\b` (`GIT_TIMEOUT_MS`), a TRAILING one kills the separator
+// anchor (`MAX_BUFFER_BYTES`). Naming the unit is the CLEARER name, so the old
+// rule taxed good naming: #363 renamed a real `MAX_BUFFER_BYTES` to `MAX_BUFFER`
+// for no reason but to get the gate green.
+
+test('off-by-one: masks a tuning constant with a TRAILING unit segment (#372 defect 1)', () => {
+  assert.equal(offByOne().apply('const MAX_BUFFER_BYTES = 512 * 1024 * 1024;'), null);
+  assert.equal(offByOne().apply('const maxBufferBytes = 512 * 1024 * 1024;'), null);
+  assert.equal(offByOne().apply('const MAX_BUFFER_SIZE_BYTES = 65536;'), null);
+});
+
+test('off-by-one: masks a tuning constant with a LEADING segment (#372 defect 1)', () => {
+  assert.equal(offByOne().apply('const GIT_TIMEOUT_MS = 60000;'), null);
+  assert.equal(offByOne().apply('const gitTimeoutMs = 60000;'), null);
+  assert.equal(offByOne().apply('const TTL_MS = 5000;'), null);
+  assert.equal(offByOne().apply('const SPAWN_KEEP_ALIVE_MSECS = 1000;'), null);
+});
+
+test('off-by-one: a COUNT still mutates even when its name contains a tuning key (#372)', () => {
+  // The trailing segment decides. Rule 1 runs BEFORE the tuning-phrase scan
+  // precisely so a widened key match cannot swallow a countable boundary.
+  assert.equal(offByOne().apply('const MAX_RETRIES = 3;'), 'const MAX_RETRIES = 4;');
+  assert.equal(offByOne().apply('const LIMIT = 10;'), 'const LIMIT = 11;');
+  assert.equal(offByOne().apply('const maxRetries = 3;'), 'const maxRetries = 4;');
+  assert.equal(offByOne().apply('const retryLimit = 5;'), 'const retryLimit = 6;');
+  assert.equal(offByOne().apply('const timeoutRetries = 3;'), 'const timeoutRetries = 4;',
+    'contains the tuning key `timeout` but denotes a COUNT — +1 is observable');
+  assert.equal(offByOne().apply('const TIMEOUT_ERROR_CODE = 4;'), 'const TIMEOUT_ERROR_CODE = 5;');
+});
+
+test('off-by-one: a COARSE time unit is NOT masked — a clock can observe ±1 there (#372)', () => {
+  // The bar is "no test could ever tell". An injected clock tells 7 days from 8;
+  // nothing tells 60000 ms from 60001. Masking only sub-second/byte units keeps
+  // the widening on the safe side of that line.
+  assert.equal(offByOne().apply('const RETENTION_DAYS = 7;'), 'const RETENTION_DAYS = 8;');
+  assert.equal(offByOne().apply('const GRACE_HOURS = 24;'), 'const GRACE_HOURS = 25;');
+});
+
+// ── #372 defect 2: chunk/buffer SIZE is a count, and the operator said so ──────
+// mutate.mjs's own comment states counts stay mutable because +1 on a count is
+// observable. #359 nevertheless masked `chunk_?size`/`buffer_?size`, silently
+// deleting prosecution of a real boundary. The proof below is the OBSERVATION,
+// not a source-text pin: the mutated constant changes a batch length.
+
+test('off-by-one: chunkSize and bufferSize mutate again (#372 defect 2)', () => {
+  assert.equal(offByOne().apply('  const opts = { chunkSize: 100 };'), '  const opts = { chunkSize: 101 };');
+  assert.equal(offByOne().apply('  const opts = { bufferSize: 64 };'), '  const opts = { bufferSize: 65 };');
+});
+
+test('off-by-one: the chunkSize mutant is KILLABLE — a batch length changes with it', async () => {
+  // Run the real code both ways. If a test can see this difference, +1 on a
+  // chunk size is a boundary bug the gate must be allowed to plant.
+  const source = [
+    'export function chunk(items) {',
+    '  const chunkSize = 100;',
+    '  const out = [];',
+    '  for (let i = 0; i < items.length; i += chunkSize) out.push(items.slice(i, i + chunkSize));',
+    '  return out;',
+    '}',
+  ].join('\n');
+  const [mutant] = generateMutants(source, { targetLines: [2] }).filter((m) => m.operator === 'off-by-one');
+  assert.ok(mutant, 'expected off-by-one to plant a mutant on the chunkSize line');
+
+  const items = Array.from({ length: 200 }, (_, i) => i);
+  const dir = mkdtempSync(join(tmpdir(), 'mutate-chunk-'));
+  const evaluate = async (src, name) => {
+    const file = join(dir, name);
+    writeFileSync(file, src);
+    const { chunk } = await import(pathToFileURL(file).href);
+    return chunk(items).map((batch) => batch.length);
+  };
+  try {
+    assert.deepEqual(await evaluate(source, 'baseline.mjs'), [100, 100], 'baseline batches the list in two');
+    assert.deepEqual(await evaluate(applyMutant(source, mutant), 'mutant.mjs'), [101, 99],
+      'the mutant changes an OBSERVABLE batch length — masking it removed real prosecution');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── #372 defect 3: two ASSIGNMENT shapes the old disclosure implied were covered ─
+
+test('off-by-one: masks a QUOTED property key (#372 defect 3)', () => {
+  assert.equal(offByOne().apply('  const o = { "timeout": 60000 };'), null);
+  assert.equal(offByOne().apply("  const o = { 'maxBuffer': 512 * 1024 };"), null);
+});
+
+test('off-by-one: masks a value separated from its key by an inline unit comment (#372 defect 3)', () => {
+  assert.equal(offByOne().apply('  const o = { timeout: /* ms */ 60000 };'), null);
+  assert.equal(offByOne().apply('  const o = { "ttl": /* seconds */ 3600 };'), null);
+});
+
+test('off-by-one: a comment cannot hide a real boundary — its digits are not the target', () => {
+  // Masking the comment is length-preserving, so the boundary keeps its index.
+  assert.equal(
+    offByOne().apply('  const o = { /* was 5 */ limit: 3 };'),
+    '  const o = { /* was 5 */ limit: 4 };'
+  );
+});
+
+// ── #372 defect 4: `/* x */ code` was an undocumented suppression of the gate ──
+// SKIP_LINE skipped ANY line starting with `/*`, so a one-line comment prefix
+// silenced every operator on that line — while mutation-gate's failure message
+// told authors "There is NO comment or annotation that suppresses this gate".
+
+test('generateMutants: a CLOSED comment prefix no longer suppresses the line (#372 defect 4)', () => {
+  const mutants = generateMutants('/* x */ const limit = 3;');
+  assert.equal(mutants.length, 1);
+  assert.equal(mutants[0].mutated, '/* x */ const limit = 4;');
+  assert.equal(mutants[0].original, '/* x */ const limit = 3;',
+    'original stays the WHOLE line so applyMutant still addresses the real file content');
+});
+
+test('generateMutants: an UNCLOSED block-comment opener is still skipped', () => {
+  assert.deepEqual(generateMutants('/* start of a block comment'), []);
+  assert.deepEqual(generateMutants('/* opener with code-looking text: const limit = 3;'), []);
+});
+
+test('generateMutants: operators never mutate INSIDE the stripped comment prefix', () => {
+  // Un-skipping the line without stripping the prefix would let invert-comparison
+  // rewrite `a < b` inside the comment — an unkillable mutant, i.e. the same false
+  // gate failure in a new costume.
+  const mutants = generateMutants('/* if (a < b) */ const limit = 3;');
+  assert.deepEqual(mutants.map((m) => [m.operator, m.mutated]),
+    [['off-by-one', '/* if (a < b) */ const limit = 4;']]);
+});
+
+test('applyMutant: still applies a mutant planted on a comment-prefixed line', () => {
+  const source = 'const a = 1;\n/* x */ const limit = 3;\n';
+  const [mutant] = generateMutants(source, { targetLines: [2] });
+  assert.equal(applyMutant(source, mutant), 'const a = 1;\n/* x */ const limit = 4;\n');
+});
+
+// ── #372 criterion 7: the decision is a FUNCTION OF THE SEGMENTS ──────────────
+// Enumerated cases are how #359 shipped a rule that missed two idiomatic
+// spellings: each new spelling needed another case, and the ones nobody thought
+// of stayed broken. This asserts the property instead — every spelling of the
+// same segment list classifies identically — so the next variant needs no case.
+
+test('isTuningIdentifier: every spelling of one segment list classifies identically', () => {
+  const spellings = (segs) => [
+    segs.join('_'),                                                     // snake_case
+    segs.join('_').toUpperCase(),                                       // SCREAMING_SNAKE
+    segs[0] + segs.slice(1).map((s) => s[0].toUpperCase() + s.slice(1)).join(''), // camelCase
+    segs.map((s) => s[0].toUpperCase() + s.slice(1)).join(''),          // PascalCase
+  ];
+  const SEGMENT_LISTS = [
+    ['timeout'], ['ttl'], ['delay'], ['interval'], ['backoff'],
+    ['max', 'age'], ['keep', 'alive'], ['max', 'buffer'], ['high', 'water', 'mark'],
+    ['max', 'bytes'], ['git', 'timeout', 'ms'], ['max', 'buffer', 'bytes'],
+    ['ttl', 'ms'], ['poll', 'interval', 'ms'], ['spawn', 'keep', 'alive', 'msecs'],
+    ['max', 'retries'], ['retry', 'limit'], ['timeout', 'retries'], ['chunk', 'size'],
+    ['buffer', 'size'], ['limit'], ['offset'], ['retention', 'days'],
+    ['timeout', 'error', 'code'], ['start', 'index'],
+  ];
+  for (const segs of SEGMENT_LISTS) {
+    const names = spellings(segs);
+    const decisions = names.map(isTuningIdentifier);
+    assert.equal(new Set(decisions).size, 1,
+      `spellings of [${segs}] disagree: ${JSON.stringify(names.map((n, i) => [n, decisions[i]]))}`);
+    for (const name of names) {
+      assert.deepEqual(identifierSegments(name), segs, `${name} must split to [${segs}]`);
+    }
+  }
+});
+
+test('isTuningIdentifier: a trailing COUNT word outranks any tuning phrase in the name', () => {
+  // The safety property. Widening the key match is the direction that DELETES
+  // prosecution, so a countable tail must win over every phrase that precedes it.
+  for (const tail of ['retries', 'count', 'limit', 'size', 'index', 'code']) {
+    for (const head of ['timeout', 'ttl', 'maxBuffer', 'highWaterMark', 'backoff']) {
+      const name = `${head}_${tail}`;
+      assert.equal(isTuningIdentifier(name), false, `${name} names a count and must stay mutable`);
+    }
+  }
+});
+
+test('isTuningIdentifier: a trailing sub-second/byte UNIT masks whatever precedes it', () => {
+  for (const unit of ['ms', 'msecs', 'us', 'ns', 'bytes', 'kb', 'mib']) {
+    for (const head of ['git_timeout', 'poll', 'max_buffer', 'flush']) {
+      const name = `${head}_${unit}`;
+      assert.equal(isTuningIdentifier(name), true, `${name} declares an unobservable magnitude`);
+    }
+  }
+});
+
+test('off-by-one: a name with NO segments is a boundary, not a tuning knob', () => {
+  // `_` and `$` split to nothing. The empty-segment guard must answer "not
+  // tuning" — answering "tuning" would mask every such assignment, silently
+  // removing prosecution of them. Asserted through the OPERATOR, so the guard is
+  // pinned by the behaviour it decides rather than by its own return value.
+  assert.equal(isTuningIdentifier('_'), false);
+  assert.equal(isTuningIdentifier('$'), false);
+  assert.equal(offByOne().apply('  const _ = 5;'), '  const _ = 6;');
+  assert.equal(offByOne().apply('  const $ = 5;'), '  const $ = 6;');
+});
+
+test('identifierSegments: acronym runs and digits split without losing a segment', () => {
+  assert.deepEqual(identifierSegments('HTTPTimeoutMs'), ['http', 'timeout', 'ms']);
+  assert.deepEqual(identifierSegments('MAX_BUFFER_2_BYTES'), ['max', 'buffer', 'bytes']);
+  assert.deepEqual(identifierSegments('ttl'), ['ttl']);
+  assert.deepEqual(identifierSegments('_'), []);
 });
 
 test('ternary-swap: swaps the recursive/leaf branches of an array-processing ternary (old operators miss it)', () => {

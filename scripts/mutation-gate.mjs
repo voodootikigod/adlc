@@ -376,15 +376,32 @@ export function main() {
     console.error('This is the hollow-test failure mode: a guard can be correct and still be unverified.');
     console.error('Add a test that fails when that line is altered.');
     console.error('');
-    console.error('There is NO comment or annotation that suppresses this gate — do not go looking for');
-    console.error('one, and do not add a test that merely asserts the source text says what it says');
-    console.error('(that is a hollow test bolted on to placate the hollow-test gate). If the mutant is');
-    console.error('genuinely EQUIVALENT — no test could ever observe the difference, e.g. +1 ms on a');
-    console.error('subprocess timeout — then generating it is a mutation-OPERATOR bug: fix the operator');
-    console.error('so it is never produced, and say why at its definition (see #359 for the pattern).');
+    for (const line of SURVIVOR_GUIDANCE) console.error(line);
   }
   process.exit(typeof result.status === 'number' ? result.status : 1);
 }
+
+/**
+ * What an author should do about a surviving mutant.
+ *
+ * This used to assert "There is NO comment or annotation that suppresses this
+ * gate — do not go looking for one." That was FALSE (#372 defect 4): mutate.mjs's
+ * SKIP_LINE skipped any line beginning with `/*`, so a one-line comment prefix
+ * silenced every operator on that line. #372 closed the bypass, and the wording
+ * here is now the claim the code can actually keep — no SUPPORTED suppression —
+ * rather than an absolute that a future skip rule would quietly falsify again.
+ *
+ * Exported so the test can assert the claim, not the prose.
+ */
+export const SURVIVOR_GUIDANCE = Object.freeze([
+  'There is no SUPPORTED way to suppress this gate for one line — no annotation, pragma, or',
+  'comment marker is honoured, and do not add a test that merely asserts the source text says',
+  'what it says (that is a hollow test bolted on to placate the hollow-test gate). If the mutant',
+  'is genuinely EQUIVALENT — no test could ever observe the difference, e.g. one extra millisecond',
+  'on a subprocess timeout — then generating it is a mutation-OPERATOR bug: fix the operator so it',
+  'is never produced, and say why at its definition; the off-by-one tuning-constant mask in',
+  '@adlc/core is the worked example.',
+]);
 
 // Only run main() when executed directly, so the test can import the pure parts.
 if (isMain()) {

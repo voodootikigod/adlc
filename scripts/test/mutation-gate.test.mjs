@@ -17,7 +17,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles } from '../mutation-gate.mjs';
+import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE } from '../mutation-gate.mjs';
+import { generateMutants } from '../../packages/core/lib/mutate.mjs';
 import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
 function fixtureRoot(dirs = [], files = []) {
@@ -677,4 +678,28 @@ test('a nested source with no same-basename test still falls through to the slow
     assert.equal(testTargetFor('scripts/router/no-coverage.mjs', root), null,
       'absent coverage must map to nothing, never to a test that does not cover it');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ── #372 defect 4: the survivor message asserted something the code contradicted ──
+// It read "There is NO comment or annotation that suppresses this gate — do not go
+// looking for one" while mutate.mjs's SKIP_LINE skipped any line beginning with
+// `/*`. The bypass was one grep away and the message told authors to stop looking.
+// These assert the CLAIM against the code, not the prose: whatever the wording, it
+// must not promise an absence the operators do not deliver.
+
+test('the survivor message does not claim an absolute that the operators contradict', () => {
+  const text = SURVIVOR_GUIDANCE.join(' ');
+  assert.ok(!/\bNO comment or annotation that suppresses\b/i.test(text),
+    'the false absolute must not come back');
+  assert.match(text, /no SUPPORTED way to suppress/i,
+    'the accurate claim is that no suppression is HONOURED, not that none could exist');
+});
+
+test('the survivor message is honest: a comment-prefixed line really is prosecuted', () => {
+  // The claim above is only worth making because #372 closed the bypass it named.
+  // If SKIP_LINE ever re-swallows `/* x */ code`, this fails and the message is a
+  // lie again — which is the pairing the old wording lacked.
+  const mutants = generateMutants('/* x */ const limit = 3;');
+  assert.equal(mutants.length, 1, 'a one-line comment prefix must not suppress the gate');
+  assert.equal(mutants[0].mutated, '/* x */ const limit = 4;');
 });

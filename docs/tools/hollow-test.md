@@ -145,6 +145,25 @@ carries the run.
 | `off-by-one` | literal `n` → `n+1` |
 | `logic-swap` | `&&` → `\|\|` |
 
+**`off-by-one` does not mutate a tuning constant.** `+1` on a duration in
+milliseconds or a size in bytes is an *equivalent mutant* — no test can observe
+`60000 -> 60001` ms on a subprocess timeout — so generating it would demand a test
+that cannot exist (#359). The rule reads the constant's **name**, split into
+segments, and `snake_case`/`camelCase` spell the same thing:
+
+| Name | Mutated? | Why |
+|------|----------|-----|
+| `GIT_TIMEOUT_MS`, `maxBufferBytes`, `TTL_MS` | no | trailing sub-second/byte **unit** — an unobservable magnitude |
+| `timeout`, `ttl`, `maxBuffer`, `highWaterMark` | no | a known tuning **phrase** |
+| `MAX_RETRIES`, `retryLimit`, `chunkSize`, `timeoutRetries` | **yes** | trailing **count** word — a countable boundary, whatever else the name says |
+| `RETENTION_DAYS`, `GRACE_HOURS` | **yes** | a coarse time unit *is* observable under an injected clock |
+| `{ ttl: 0 }`, `{ timeout: -1 }` | **yes** | `0`/negative are discrete sentinels, not magnitudes |
+
+A trailing count word always wins over a tuning phrase earlier in the name, so
+widening the phrase list can never silently delete prosecution of a count. Naming
+the unit is what earns the mask — `MAX_BUFFER_SIZE_BYTES` is masked where
+`MAX_BUFFER_SIZE` is not (#372).
+
 ## JSON output schema
 
 ```json
