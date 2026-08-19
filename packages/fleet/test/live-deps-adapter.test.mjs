@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildLiveDeps } from '../lib/live-deps.mjs';
+import { findInner, unwrapAll } from './helpers/worker-calls.mjs';
 
 function fakeGit() {
   return () => (...args) => {
@@ -33,9 +34,11 @@ test('live-deps dispatches via the CONFIGURED adapter (codex), not claude (AC4)'
     io: fakeIo(rec, env),
   });
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
-  const codexCall = rec.find((s) => s.cmd === 'codex');
+  // Since #395 the model plane is sandbox-wrapped, so the harness the fleet chose
+  // is the INNER command, not what reaches spawnWorker.
+  const codexCall = findInner(rec, 'codex');
   assert.ok(codexCall, 'dispatched via the codex worker');
-  assert.ok(!rec.some((s) => s.cmd === 'claude'), 'did NOT dispatch claude');
+  assert.ok(!unwrapAll(rec).some((s) => s.cmd === 'claude'), 'did NOT dispatch claude');
   assert.equal(codexCall.args[0], 'exec');
   assert.match(codexCall.args[1], /T1/, 'the builder prompt (mentioning the ticket) is passed');
   // Model-plane env: ADLC vars + own provider auth retained, unrelated secret stripped.
@@ -54,7 +57,7 @@ test('live-deps default adapter is claude-code (backward compatible) (AC5)', asy
     io: fakeIo(rec, env),
   });
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
-  assert.ok(rec.some((s) => s.cmd === 'claude'), 'defaults to claude-code');
+  assert.ok(unwrapAll(rec).some((s) => s.cmd === 'claude'), 'defaults to claude-code');
 });
 
 test('deps.provision does not throw for ANY registered adapter (A1)', async () => {
@@ -79,7 +82,7 @@ test('config.adapterStdin threads to the pi adapter (useStdin → prompt on stdi
     io: fakeIo(rec, env),
   });
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
-  const piCall = rec.find((s) => s.cmd === 'pi');
+  const piCall = findInner(rec, 'pi');
   assert.ok(piCall, 'dispatched via pi');
   assert.deepEqual(piCall.args, ['--mode', 'rpc'], 'operator-local adapterArgs used');
   assert.ok(piCall.input && piCall.input.length > 0, 'adapterStdin routed the prompt to the pi stdin (A3)');
@@ -113,8 +116,9 @@ test('an engaged registry supersedes --adapter entirely, including a stale one',
     io: fakeIo(rec, env),
   });
   await deps.dispatch({ ticket, worktree: '/wt/T1', strike: 1 });
-  assert.equal(rec[0].cmd, 'opencode', 'the seat adapter runs, not the stale --adapter');
-  assert.ok(rec[0].args.includes('-m') && rec[0].args.includes('zai/glm-5.2'), 'the seat model is forced');
+  const [call] = unwrapAll(rec);
+  assert.equal(call.cmd, 'opencode', 'the seat adapter runs, not the stale --adapter');
+  assert.ok(call.args.includes('-m') && call.args.includes('zai/glm-5.2'), 'the seat model is forced');
 });
 
 test('a ticket with no seat refuses to dispatch rather than falling back to --adapter', async () => {

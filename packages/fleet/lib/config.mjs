@@ -64,6 +64,13 @@ export function resolveRunConfig(config = {}, flags = {}) {
         'value chooses which host secret enters an unsandboxed worker — ignored.'
     );
   }
+  if (config.modelPlaneWritable != null) {
+    warnings.push(
+      'SECURITY: .adlc/config.json set fleet.modelPlaneWritable; the model-plane WRITE boundary is operator-local ' +
+        '(--model-plane-writable) only. That boundary exists to stop candidate-authored gate commands writing ' +
+        'outside their worktree, so letting the candidate tree widen it would be the boundary disabling itself (#395) — ignored.'
+    );
+  }
   return {
     gate: config.gate ?? null,
     init: config.init ?? null,
@@ -102,6 +109,11 @@ export function resolveRunConfig(config = {}, flags = {}) {
     adapterStdin: config.adapterStdin === true,
     adapterCommand: flags.adapterCommand ?? null,
     adapterArgs: flags.adapterArgs ?? null,
+    // Extra paths the MODEL-plane worker may write, beyond the worktree and the
+    // harness's own declared state (#395). OPERATOR-LOCAL only, for the same
+    // reason the sandbox override is: a repo-committed value would let the
+    // candidate tree widen the boundary that exists to contain it.
+    modelPlaneWritable: flags.modelPlaneWritable ?? [],
     // operator-local ONLY:
     operatorOverride: flags.disposableContainer === true,
     repoConfigOverride: repoWantedOverride,

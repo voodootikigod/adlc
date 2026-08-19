@@ -7,9 +7,11 @@
 // credential exfiltration through arbitrary test code.
 //
 // Model plane (the `claude -p` worker): the worker must reach its provider, so it
-// keeps PATH, ADLC_*, and its OWN model auth (subscription/session already lives
-// in its real HOME, or a single injected model key), but unrelated host creds
-// and cloud secrets are still stripped.
+// keeps PATH, its real HOME (subscription/session already lives there), and its
+// OWN model auth (or a single injected model key), but unrelated host creds and
+// cloud secrets are stripped — and, since #395, so is every ambient ADLC_* var.
+// Those name the operator's trust roots (the quartermaster registry, the ticket
+// store, the rails bypass), and the worker runs candidate-authored gate commands.
 
 // Patterns that identify a secret-bearing variable name. Matched
 // case-insensitively against the full var name.
@@ -70,6 +72,29 @@ function isAdlcControl(name) {
 }
 
 /**
+ * The ADLC control vars the MODEL-plane worker may inherit from the ambient
+ * environment (issue #395).
+ *
+ * It is an ALLOW-list, and it is EMPTY. That is the whole point: `ADLC_*` is not a
+ * namespace of harmless knobs, it is where this toolkit keeps operator-local
+ * PATHS and AUTHORITY — `ADLC_QUARTERMASTER_REGISTRY` names the channel registry
+ * that decides which model serves which ticket, `ADLC_TICKET_STORE`/`ADLC_TICKETS`
+ * name the ticket store, `ADLC_RAILS_BYPASS` and `ADLC_BUILD_GATE_BYPASS` are
+ * standing permission to edit a frozen rail, `ADLC_SIGNED_RUNNER_POOL` and
+ * `ADLC_RUNNER_PATH` name trusted binaries. Passing them through told a worker
+ * running candidate-authored gate commands exactly where the operator's trust
+ * roots live.
+ *
+ * The worker needs none of them: dispatch resolves the seat BEFORE the worker
+ * starts and injects what the charter actually requires (`ADLC_TICKET`,
+ * `ADLC_P4_ENFORCEMENT`) through `extra`. Stating the rule as an allow-list rather
+ * than a deny-list is what makes a var added LATER withheld by construction —
+ * a deny-list would have to be remembered on every future addition, and forgetting
+ * is silent.
+ */
+export const MODEL_PLANE_AMBIENT_ADLC_VARS = new Set([]);
+
+/**
  * Env for a REPO-COMMAND-plane command (init/build/test/gate). Keeps only
  * PATH, ADLC_*, explicitly-named passthrough keys, and a synthetic HOME; strips
  * every secret-shaped var. `syntheticHome` is the in-worktree home the sandbox
@@ -107,8 +132,18 @@ export function repoCommandEnv(source = process.env, { passthrough = [], synthet
  * @param source            base environment (defaults to process.env)
  * @param opts.modelAuthKey the one provider key the worker may keep (e.g. 'ANTHROPIC_API_KEY'); optional
  * @param opts.extra        additional {k:v} the orchestrator injects (ADLC_TICKET, ADLC_P4_ENFORCEMENT)
+ * @param opts.ambientAdlcVars  the ADLC_* names inheritable from `source` (default:
+ *   MODEL_PLANE_AMBIENT_ADLC_VARS, which is empty). Injectable for the same reason
+ *   `denyNeverExempt` takes its name set: with the production set empty, "filter by
+ *   the set" and "drop every ADLC_ var" are behaviourally identical, so the property
+ *   that matters — that this is an allow-list and not a hardcoded blanket drop —
+ *   cannot be tested through the production constant.
  */
-export function modelPlaneEnv(source = process.env, { modelAuthKey, extra = {} } = {}) {
+export function modelPlaneEnv(
+  source = process.env,
+  { modelAuthKey, extra = {}, ambientAdlcVars = MODEL_PLANE_AMBIENT_ADLC_VARS } = {}
+) {
+  const ambient = ambientAdlcVars;
   const out = {};
   // Defence in depth: some secrets must never be exemptable, whoever asks.
   // `modelAuthKey` exists to let ONE provider credential through, but the ADLC
@@ -121,6 +156,10 @@ export function modelPlaneEnv(source = process.env, { modelAuthKey, extra = {} }
     if (v === undefined) continue;
     if (k === exemptable) { out[k] = v; continue; }
     if (isSecretName(k)) continue; // strip all other secrets
+    // ADLC_* is NOT inherited (#395) — see MODEL_PLANE_AMBIENT_ADLC_VARS. What the
+    // worker legitimately needs arrives through `extra`, which is applied below and
+    // therefore still wins.
+    if (isAdlcControl(k) && !ambient.has(k)) continue;
     if (k === 'PATH' || k === 'HOME' || isAdlcControl(k) || ALWAYS_KEEP.has(k)) {
       out[k] = v;
     }

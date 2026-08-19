@@ -13,6 +13,12 @@ import { defaultExec, mapResult, modelArgs } from './_shared.mjs';
 export const name = 'gemini';
 export const pool = 'default';
 
+/** 7.3 model-plane filesystem policy (#395) -- session state only; declared settings stay read-only. */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.gemini/tmp', '.gemini/sessions', '.cache/gemini']),
+  files: Object.freeze(['.gemini/oauth_creds.json', '.gemini/google_accounts.json']),
+});
+
 /** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
 export const aliases = Object.freeze(['default', 'agy', 'jetski']);
 

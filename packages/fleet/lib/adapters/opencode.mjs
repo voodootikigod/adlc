@@ -10,6 +10,12 @@ import { UNREPORTED, isCount, jsonLines, normalizeUsage, reported } from './usag
 export const name = 'opencode';
 export const pool = 'default';
 
+/** 7.3 model-plane filesystem policy (#395) -- state and auth only; declared config stays read-only. */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.local/share/opencode', '.local/state/opencode', '.cache/opencode']),
+  files: Object.freeze(['.config/opencode/auth.json']),
+});
+
 /**
  * Run-time aliases this harness resolves for itself (operating-stack §4b rule 6).
  * `opencode run -m` takes a concrete `provider/model` pair — verified against the

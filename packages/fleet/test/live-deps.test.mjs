@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildLiveDeps } from '../lib/live-deps.mjs';
+import { findInner } from './helpers/worker-calls.mjs';
 import { runFleet } from '../lib/run.mjs';
 
 // A permissive fake git: records calls, returns sensible defaults by verb.
@@ -73,12 +74,18 @@ function makeDeps(rec, over = {}) {
 }
 const newRec = () => ({ git: [], adlc: [], spawn: [], logs: [] });
 
-test('dispatch spawns claude -p on the MODEL plane: unsandboxed, provider auth retained (AC1/K2)', async () => {
+test('dispatch spawns claude -p on the MODEL plane: network open, filesystem bounded (AC1/K2, #395)', async () => {
   const rec = newRec();
   const deps = makeDeps(rec);
   const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
-  const claudeCall = rec.spawn.find((s) => s.cmd === 'claude');
-  assert.ok(claudeCall, 'claude was spawned directly (not wrapped in bwrap)');
+  const claudeCall = findInner(rec.spawn, 'claude');
+  assert.ok(claudeCall, 'claude was spawned');
+  // #395 inverted this: the worker used to run UNWRAPPED, which made the
+  // repo-authored gate commands in its allowlist a write path to everything the
+  // operator can write. It is wrapped now — but with egress still open (K2).
+  assert.equal(claudeCall.wrapper.cmd, 'bwrap', 'the worker process itself is contained');
+  assert.ok(!claudeCall.wrapper.args.includes('--unshare-net'),
+    'network egress is PRESERVED on the model plane — a worker that cannot reach its provider cannot work');
   assert.ok(claudeCall.args.includes('-p') && claudeCall.args.includes('acceptEdits'));
   assert.equal(claudeCall.env.ADLC_P4_ENFORCEMENT, '1');
   assert.equal(claudeCall.env.ADLC_TICKET, 'T1');
@@ -93,8 +100,8 @@ test('gate runs build+test THROUGH the sandbox with a scrubbed repo-command env 
   const r = await deps.gate({ ticket, worktree: '/wt/T1', startSha: 'SHA' });
   assert.equal(r.ok, true, r.output);
   // build+test were wrapped in the sandbox (bwrap) — repo-command plane.
-  const wrapped = rec.spawn.filter((s) => s.cmd === 'bwrap');
-  assert.ok(wrapped.length >= 2, 'build and test both ran through the sandbox wrapper');
+  const wrapped = rec.spawn.filter((s) => s.cmd === 'bwrap' && s.args.includes('--unshare-net'));
+  assert.ok(wrapped.length >= 2, 'build and test both ran through the no-network sandbox wrapper');
   const anyCmd = wrapped.find((s) => s.args.join(' ').includes('npm run build'));
   assert.ok(anyCmd, 'the gate build command ran inside the sandbox');
   // env passed to the sandboxed command is scrubbed of secrets.

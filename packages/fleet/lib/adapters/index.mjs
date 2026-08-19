@@ -53,7 +53,15 @@ function capabilitiesOf(mod) {
   // declare a class cannot be bound to a seat that needs it, rather than
   // silently inheriting whatever ambient auth the host happens to carry.
   const transports = { ...(mod.transports ?? {}) };
-  return { aliases, forcesModel, attestsResolvedModel, transports };
+  // §7.3 model-plane filesystem policy (#395). Defaults to DECLARES NOTHING, the
+  // same fail-closed direction: an adapter that forgets to declare where its
+  // harness keeps state gets no write grant outside the worktree, so the omission
+  // shows up as that harness erroring loudly rather than as a silent hole.
+  const homeState = {
+    dirs: [...(mod.homeState?.dirs ?? [])],
+    files: [...(mod.homeState?.files ?? [])],
+  };
+  return { aliases, forcesModel, attestsResolvedModel, transports, homeState };
 }
 
 export function adapterCatalog() {

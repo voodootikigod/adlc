@@ -9,6 +9,17 @@ import { defaultExec, mapResult } from './_shared.mjs';
 export const name = 'cursor';
 export const pool = 'default';
 
+/**
+ * 7.3 model-plane filesystem policy (#395) -- session state only.
+ *
+ * `.cursor/` itself is absent for the same reason `.claude/` is: it holds `rules/`
+ * and an MCP config, which are executable configuration for the operator's next session.
+ */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.local/share/cursor-agent', '.cache/cursor-agent', '.cursor/chats']),
+  files: Object.freeze(['.local/share/cursor-agent/auth.json', '.cursor/cli-config.json']),
+});
+
 /** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
 export const aliases = Object.freeze(['default']);
 

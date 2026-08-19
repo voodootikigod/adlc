@@ -45,34 +45,51 @@ Once engaged, every fail-closed rule applies: a disabled path, an absent file,
 malformed JSON, or any validation failure aborts **before** dispatch. There are
 no default channels.
 
-## Threat model — and its documented limit
+## Threat model
 
 The registry defends against the candidate tree **declaring** its own supply: a
 repo cannot name its reviewer, repoint `frontier` at something cheap, or hint at
 a channel, because there is no repo-side knob and an in-repo registry file is
 ignored with a notice.
 
-It does **not** defend against candidate-authored code **executing** as the
-operator. Fleet's model-plane worker is deliberately not filesystem-sandboxed
-(it must reach its provider to authenticate), and the repo's own `fleet.gate`
-commands are added to that worker's allowlist and run by the builder. A gate
-command is therefore ordinary code running as the operator, and it can write to
-the operator's home directory — including this file.
+Since [#395](https://github.com/voodootikigod/adlc/issues/395) it is also defended
+against candidate-authored code **executing** as the operator, which is the other
+half of the problem and used to be an open one. The repo's own `fleet.gate`
+commands are added to the worker's permission allowlist and the builder charter
+tells the worker to run them, so a gate command is ordinary candidate code — and
+it used to run with the operator's filesystem privileges, able to rewrite this
+file with a schema-valid document that redirected the next run's supply.
 
-Moving the registry outside the repo raises the bar (a *declarative* downgrade
-becomes a *code-execution* one) but does not close it. Two honest consequences:
+Two changes close that path (spec [§7.3](../specs/fleet-orchestration.md)):
 
-- Do not read "operator-local" as "unreachable by the candidate". It means "not
-  selected by the candidate".
-- The exposure is not specific to this file. Any operator-writable state —
-  harness config, credentials, the ADLC toolkit itself — is reachable by the
-  same path, which is why running a fleet over an untrusted repo is already
-  outside the design's assumptions.
+- **The model plane is filesystem-sandboxed.** Network egress stays open — the
+  worker must reach its provider — but its **writes** are bounded to the ticket's
+  worktree plus the specific state directories the configured harness declares.
+  This file is not among them, and neither is `~/.claude/settings.json`, nor any
+  other operator-writable state.
+- **The worker is not told where this file is.** `ADLC_QUARTERMASTER_REGISTRY`,
+  and every other ambient `ADLC_*` variable, is withheld from the model-plane
+  environment. Dispatch resolves the seat before the worker starts, so the worker
+  never needed the path.
 
-Closing it properly means isolating the model plane's filesystem (writes bounded
-to the worktree and a synthetic home, auth material mounted read-only) while
-keeping network egress. That is a change to fleet's containment architecture, not
-to this schema, and is tracked in [#395](https://github.com/voodootikigod/adlc/issues/395).
+### What is still open
+
+- **Reads are not bounded on the model plane.** The worker can read what the
+  operator can read, and it has network egress, so a *read*-and-exfiltrate path
+  remains. Bounding reads means enumerating where each harness keeps auth on each
+  platform — a macOS Keychain item is not even a file — and is deliberately not
+  attempted here. Running a fleet over a repo you do not trust is still outside
+  the design's assumptions.
+- **The write grant is a per-harness allow-list.** It is fail-closed (an
+  unlisted path is denied, so an omission surfaces as a harness erroring, never
+  as a silent hole), but a harness whose layout changes may need
+  `--model-plane-writable <path>` until its adapter declaration catches up.
+- **Resume re-plans from this file.** `runLive` rebinds remaining tickets to the
+  registry as it is at resume time. That is defensible on its own — an operator
+  who fixed a broken registry expects the fix to apply — and with the write path
+  closed it is no longer a hazard. Hardening it further (recording
+  `registryDigest` and requiring acknowledgement on a changed digest) is
+  attestation-schema-v2 work, spec §9 item 4.
 
 ## `transport` selects the credential — with an asymmetric guarantee
 

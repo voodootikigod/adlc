@@ -9,7 +9,8 @@
 
 import { defaultGit } from './worktrees.mjs';
 import * as worktrees from './worktrees.mjs';
-import { Sandbox } from './sandbox.mjs';
+import { Sandbox, NETWORK, READ_POLICY } from './sandbox.mjs';
+import { modelPlaneFilesystem } from './model-plane.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
@@ -192,6 +193,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     }
     return legacyAdapter;
   };
+  // Every harness a ticket could run on, for the model-plane write grant (#395).
+  // A ladder can escalate a later strike onto a different adapter, and the sandbox
+  // is built per dispatch, so granting only the CURRENT rung would work until the
+  // first escalation and then fail there -- the same reason provisioning covers
+  // every rung rather than just the starting one (#401).
+  const ladderAdaptersFor = (ticket, current) => {
+    const entry = entryFor(ticket);
+    const names = entry ? ladderAdapters(entry) : [];
+    const mods = names.map((n) => getAdapter(n));
+    return mods.includes(current) ? mods : [current, ...mods];
+  };
+
   const review = reviewRunner ?? makeReviewRunner({
     reviewBin: config.reviewBin ?? 'adversarial-review',
     provider: config.reviewProvider,
@@ -224,6 +237,49 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     passthrough: config.envPassthrough ?? [],
     syntheticHome: join(worktree, '.fleet-home'),
   });
+
+  // The MODEL-plane sandbox (spec 7.3; issue #395). Same backend and the same
+  // run-wide mode decision as the repo-command plane -- deliberately, because that
+  // is what keeps this from adding a second failure mode: a host with no backend
+  // already refuses to dispatch at preflight, and an operator who passed
+  // --i-am-in-a-disposable-container has already asserted the whole run is
+  // contained. There is no model-plane-only opt-out to reason about.
+  //
+  // What DIFFERS from the repo-command profile is the network axis, and only that:
+  // egress stays open (K2 -- the worker must reach its provider), while writes are
+  // bounded to the worktree plus the harness's own declared state directories.
+  const modelSandboxFor = (worktree, adapters) => {
+    const { writablePaths, missingStateFiles } = modelPlaneFilesystem({
+      adapters,
+      home: io.env.HOME,
+      tmpDir: io.env.TMPDIR,
+      extraWritable: config.modelPlaneWritable ?? [],
+    });
+    if (missingStateFiles.length) {
+      // Named, not swallowed: this is the one shape of the policy that can make a
+      // previously-working run fail, and an opaque harness error is the worst way
+      // for an operator to meet it.
+      console.error(
+        `fleet: model-plane sandbox is not granting ${missingStateFiles.join(', ')} ` +
+        '(declared harness state that does not exist on this host). If the worker fails to ' +
+        'write it, re-run with --model-plane-writable <path>.'
+      );
+    }
+    return new Sandbox({
+      mode: sandboxSpec.mode,
+      backend: sandboxSpec.backend,
+      worktree,
+      // No synthetic HOME: the worker reads its own subscription/session auth from
+      // the real one (K2), and Seatbelt cannot remap a path anyway -- inventing a
+      // synthetic home here would make the two backends enforce different policies
+      // under one name.
+      syntheticHome: null,
+      writablePaths,
+      network: NETWORK.ALLOW,
+      readPolicy: READ_POLICY.HOST,
+      exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
+    });
+  };
 
   return {
     statusDir,
@@ -289,9 +345,15 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         modelAuthKey: seat ? transportCredential(adapter, seat.transport) : config.modelAuthKey,
         extra: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: ticket.id },
       });
+      // 7.3 / #395: the worker's own process is wrapped, so the repo-authored
+      // `fleet.gate` commands its permission allowlist carries -- and the charter
+      // tells it to run -- execute with the operator's WRITES bounded to this
+      // worktree. Every ladder rung contributes its state declaration, because an
+      // escalation can move a later strike onto a different harness.
+      const modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
       const res = await adapter.dispatch({
         worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
-        exec: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
+        exec: (cmd, args, opts) => modelSandbox.run([cmd, ...args], opts),
         // Operator-local binary override (A2) + non-executable data from config.
         command: config.adapterCommand ?? undefined,
         args: config.adapterArgs ?? undefined,

@@ -1,9 +1,28 @@
-// The OS sandbox for the repo-command plane (spec §7.3; adversarial-review
-// F2/M1/K1/N1). Init, build, test, and gate commands — the arbitrary-code
-// surface — run inside it: network denied, filesystem reads AND writes bounded
-// to the worktree (+ synthetic HOME + an explicit read-only runtime allowlist).
-// The `claude -p` worker runs on the SEPARATE model plane and is NOT wrapped
-// here (K2), so it can still reach its provider.
+// The OS sandbox for BOTH planes (spec §7.3; adversarial-review F2/M1/K1/N1,
+// issue #395).
+//
+// Network isolation and filesystem isolation are INDEPENDENT axes, and K2 only
+// ever required the network one to differ between the planes. Each plane is a
+// PROFILE over the same backend:
+//
+//   repo-command  network DENIED,  reads bounded, writes bounded
+//                 (init/build/test/gate — the arbitrary-code surface)
+//   model         network ALLOWED, reads at HOST scope, writes bounded
+//                 (the `claude -p` worker — must reach its provider to work)
+//
+// Before #395 the model plane was not wrapped AT ALL, which made it a write path
+// to everything the operator can write: the quartermaster registry, `~/.claude`
+// settings and hooks, the installed toolkit, other repos' worktrees. That matters
+// because the worker's permission allowlist contains repo-authored `fleet.gate`
+// commands (config.mjs takes `gate` from the CANDIDATE tree) and the builder
+// charter instructs it to run them — so candidate code executed with the
+// operator's filesystem privileges.
+//
+// READS on the model plane stay at host scope, deliberately and as a DOCUMENTED
+// RESIDUAL: the worker must reach whatever its harness keeps auth in, and that set
+// is harness- and platform-specific (a Keychain item is not even a file). Bounding
+// model-plane reads is a separate change; this profile closes the WRITE half,
+// which is the half that makes a candidate's edit outlive its own run.
 //
 // This module is deliberately backend-pluggable and pure where it can be: the
 // mode-resolution policy and the read/write/network predicates are unit-testable
@@ -16,6 +35,20 @@ export const SANDBOX_MODES = Object.freeze({
   SANDBOX: 'sandbox',
   ENV_SCRUB_ONLY: 'env-scrub-only',
 });
+
+/** Network policy — the axis K2 makes the planes differ on. */
+export const NETWORK = Object.freeze({ DENY: 'deny', ALLOW: 'allow' });
+
+/**
+ * Read policy — the axis they do NOT differ on today.
+ *
+ * `bounded` reads only the worktree, the synthetic home, and an explicit
+ * read-only allowlist. `host` reads whatever the invoking user can read.
+ * `host` is the model plane's documented residual (see the module header): it is
+ * NOT a claim of containment, and `canRead` reports it honestly rather than
+ * pretending a boundary exists.
+ */
+export const READ_POLICY = Object.freeze({ BOUNDED: 'bounded', HOST: 'host' });
 
 function defaultHasCmd(cmd) {
   try {
@@ -92,36 +125,81 @@ function isUnder(root, path) {
 }
 
 /**
- * Build the wrapper argv that runs `innerArgv` inside the backend with network
- * denied and reads/writes bounded (adversarial-review K1). Only used for real
- * `sandbox`-mode backends. Kept side-effect-free and testable: it just assembles
- * the argv.
+ * Build the wrapper argv that runs `innerArgv` inside the backend (adversarial-review
+ * K1; per-plane profiles per issue #395). Only used for real `sandbox`-mode
+ * backends. Kept side-effect-free and testable: it just assembles the argv.
+ *
+ * @param opts.network      NETWORK.DENY (repo-command plane) | NETWORK.ALLOW (model plane)
+ * @param opts.readPolicy   READ_POLICY.BOUNDED | READ_POLICY.HOST
+ * @param opts.readOnlyPaths  extra readable roots (BOUNDED only — HOST already reads them)
+ * @param opts.writablePaths  extra WRITABLE roots beyond the worktree/synthetic home.
+ *   On the model plane this is the configured harness's own state directories: a
+ *   harness that cannot write its session state cannot run, and denying by default
+ *   with a NAMED exception list is the only direction where forgetting a path fails
+ *   LOUDLY (the harness errors) instead of silently reopening the hole.
  */
-export function buildSandboxArgv(backend, innerArgv, { worktree, syntheticHome, readOnlyPaths = [] }) {
+export function buildSandboxArgv(backend, innerArgv, {
+  worktree,
+  syntheticHome,
+  readOnlyPaths = [],
+  writablePaths = [],
+  network = NETWORK.DENY,
+  readPolicy = READ_POLICY.BOUNDED,
+} = {}) {
+  const writeRoots = [worktree, syntheticHome, ...writablePaths].filter(Boolean);
   if (backend.name === 'bubblewrap') {
-    const args = ['--unshare-net', '--die-with-parent', '--chdir', worktree];
+    const args = [];
+    if (network === NETWORK.DENY) args.push('--unshare-net');
+    args.push('--die-with-parent', '--chdir', worktree);
+    if (readPolicy === READ_POLICY.HOST) {
+      // Whole filesystem visible but READ-ONLY, then the write roots re-bound over
+      // it. Later binds win in bwrap, so ordering IS the policy here. /dev needs a
+      // device bind (a process that cannot write /dev/null cannot run).
+      args.push('--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc');
+      for (const rw of writeRoots) args.push('--bind', rw, rw);
+      // HOME is deliberately NOT remapped: the worker reads its own
+      // subscription/session auth from the real one (K2), and Seatbelt cannot
+      // remap a path at all — inventing a synthetic home here would make the two
+      // backends enforce different policies under one name.
+      return ['bwrap', ...args, '--', ...innerArgv];
+    }
     // read-write: worktree + synthetic home; read-only: runtime paths only.
-    args.push('--bind', worktree, worktree);
-    if (syntheticHome) args.push('--bind', syntheticHome, syntheticHome);
+    for (const rw of writeRoots) args.push('--bind', rw, rw);
     for (const ro of readOnlyPaths) args.push('--ro-bind', ro, ro);
     args.push('--setenv', 'HOME', syntheticHome ?? worktree);
     return ['bwrap', ...args, '--', ...innerArgv];
   }
   if (backend.name === 'seatbelt') {
-    const profile = seatbeltProfile({ worktree, syntheticHome, readOnlyPaths });
+    const profile = seatbeltProfile({ worktree, syntheticHome, readOnlyPaths, writablePaths, network, readPolicy });
     return ['sandbox-exec', '-p', profile, ...innerArgv];
   }
   throw new Error(`unknown sandbox backend: ${backend.name}`);
 }
 
-function seatbeltProfile({ worktree, syntheticHome, readOnlyPaths = [] }) {
-  const readRoots = [worktree, syntheticHome, ...readOnlyPaths].filter(Boolean);
-  const writeRoots = [worktree, syntheticHome].filter(Boolean);
+// Seatbelt has no bind/remap primitive — a profile can only permit or deny paths
+// in place. That is why HOST read policy is expressed as "allow default, then deny
+// writes, then re-allow the write roots": in SBPL a later rule overrides an earlier
+// one, so this is a deny-by-default WRITE policy layered on an open READ policy.
+function seatbeltProfile({
+  worktree, syntheticHome, readOnlyPaths = [], writablePaths = [],
+  network = NETWORK.DENY, readPolicy = READ_POLICY.BOUNDED,
+}) {
+  const writeRoots = [worktree, syntheticHome, ...writablePaths].filter(Boolean);
   const lit = (p) => `(subpath "${p}")`;
+  if (readPolicy === READ_POLICY.HOST) {
+    return [
+      '(version 1)',
+      '(allow default)',
+      network === NETWORK.DENY ? '(deny network*)' : '(allow network*)',
+      '(deny file-write*)',
+      `(allow file-write* ${writeRoots.map(lit).join(' ')})`,
+    ].join(' ');
+  }
+  const readRoots = [worktree, syntheticHome, ...readOnlyPaths].filter(Boolean);
   return [
     '(version 1)',
     '(deny default)',
-    '(deny network*)',
+    network === NETWORK.DENY ? '(deny network*)' : '(allow network*)',
     `(allow file-read* ${readRoots.map(lit).join(' ')})`,
     `(allow file-write* ${writeRoots.map(lit).join(' ')})`,
     '(allow process-exec)',
@@ -138,23 +216,36 @@ function seatbeltProfile({ worktree, syntheticHome, readOnlyPaths = [] }) {
  * predicates return true and `run` executes directly with the scrubbed env.
  */
 export class Sandbox {
-  constructor({ mode, backend, worktree, syntheticHome, readOnlyPaths = [], exec } = {}) {
+  constructor({
+    mode, backend, worktree, syntheticHome, readOnlyPaths = [], writablePaths = [],
+    network = NETWORK.DENY, readPolicy = READ_POLICY.BOUNDED, exec,
+  } = {}) {
     this.mode = mode;
     this.backend = backend ?? null;
     this.worktree = worktree;
     this.syntheticHome = syntheticHome;
     this.readOnlyPaths = readOnlyPaths;
-    this._exec = exec; // injectable for tests: (argv, {cwd, env}) => result
+    this.writablePaths = writablePaths;
+    this.network = network;
+    this.readPolicy = readPolicy;
+    this._exec = exec; // injectable for tests: (argv, opts) => result
   }
 
   get networkAllowed() {
-    // Only ENV_SCRUB_ONLY relies on external isolation; the OS sandbox denies net.
-    return this.mode !== SANDBOX_MODES.SANDBOX ? true : false;
+    // ENV_SCRUB_ONLY relies on external isolation, so it claims nothing. Under a
+    // real backend the answer is the PROFILE's, not the plane's name: the model
+    // plane allows egress (K2 — the worker must reach its provider), the
+    // repo-command plane denies it.
+    if (this.mode !== SANDBOX_MODES.SANDBOX) return true;
+    return this.network === NETWORK.ALLOW;
   }
 
   /** True if the sandbox permits reading `path` (K1 read isolation). */
   canRead(path) {
     if (this.mode !== SANDBOX_MODES.SANDBOX) return true;
+    // HOST read policy claims no read boundary and says so, rather than reporting
+    // a containment the profile does not enforce (issue #395 residual).
+    if (this.readPolicy === READ_POLICY.HOST) return true;
     const roots = [this.worktree, this.syntheticHome, ...this.readOnlyPaths].filter(Boolean);
     return roots.some((r) => isUnder(r, path));
   }
@@ -162,7 +253,7 @@ export class Sandbox {
   /** True if the sandbox permits writing `path`. */
   canWrite(path) {
     if (this.mode !== SANDBOX_MODES.SANDBOX) return true;
-    const roots = [this.worktree, this.syntheticHome].filter(Boolean);
+    const roots = [this.worktree, this.syntheticHome, ...this.writablePaths].filter(Boolean);
     return roots.some((r) => isUnder(r, path));
   }
 
@@ -173,6 +264,9 @@ export class Sandbox {
       worktree: this.worktree,
       syntheticHome: this.syntheticHome,
       readOnlyPaths: this.readOnlyPaths,
+      writablePaths: this.writablePaths,
+      network: this.network,
+      readPolicy: this.readPolicy,
     });
   }
 
@@ -181,9 +275,13 @@ export class Sandbox {
    * a live (promise-returning) exec does not block the event loop (#164); a
    * synchronous injected exec still works (await of a plain value is a no-op).
    */
-  async run(innerArgv, { env, cwd } = {}) {
+  async run(innerArgv, opts = {}) {
     const exec = this._exec ?? realExec;
-    return await exec(this.wrap(innerArgv), { cwd: cwd ?? this.worktree, env });
+    // Forward the WHOLE option bag, not a hand-picked {env, cwd}: the model plane
+    // passes `timeout` (the per-strike worker deadline) and `input` (the stdin
+    // prompt transport some harnesses use), and silently dropping either turns a
+    // wrapped dispatch into one that never times out or never receives its prompt.
+    return await exec(this.wrap(innerArgv), { ...opts, cwd: opts.cwd ?? this.worktree });
   }
 }
 

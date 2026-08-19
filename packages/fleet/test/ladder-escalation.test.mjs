@@ -7,6 +7,7 @@
 // hand-written escalation array cannot make these pass.
 
 import { test } from 'node:test';
+import { unwrap } from './helpers/worker-calls.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -117,7 +118,10 @@ function fakeIo(rec, extra = {}) {
     adlcAsync: async () => ({ status: 0, stdout: '' }),
     appendLog: () => {},
     spawnWorker: async (cmd, args, opts) => {
-      rec.push({ cmd, args, env: opts?.env });
+      // These tests are about which SEAT ran, not about containment, so they record
+      // the inner argv. Since #395 the model plane is sandbox-wrapped, and the
+      // harness the registry chose is what the wrapper wraps.
+      rec.push(unwrap({ cmd, args, env: opts?.env }));
       return { status: 0, stdout: JSON.stringify({ type: 'result', result: 'TICKET-DONE' }), stderr: '' };
     },
     readFile: () => undefined,

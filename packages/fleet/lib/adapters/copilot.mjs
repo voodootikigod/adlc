@@ -26,6 +26,12 @@ import { defaultExec, mapResult } from './_shared.mjs';
 export const name = 'copilot';
 export const pool = 'default';
 
+/** 7.3 model-plane filesystem policy (#395) -- session state and the token store the CLI refreshes. */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.copilot/history-session-state', '.copilot/logs', '.cache/github-copilot']),
+  files: Object.freeze(['.config/github-copilot/apps.json', '.config/github-copilot/hosts.json']),
+});
+
 /** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
 export const aliases = Object.freeze(['default']);
 

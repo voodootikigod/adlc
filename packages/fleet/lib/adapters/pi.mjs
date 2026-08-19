@@ -14,6 +14,12 @@ import { defaultExec, mapResult } from './_shared.mjs';
 export const name = 'pi';
 export const pool = 'default';
 
+/** 7.3 model-plane filesystem policy (#395) -- session state only; declared config stays read-only. */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.pi/sessions', '.pi/logs', '.local/share/pi', '.cache/pi']),
+  files: Object.freeze(['.pi/auth.json', '.config/pi/auth.json']),
+});
+
 /** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
 export const aliases = Object.freeze(['default']);
 

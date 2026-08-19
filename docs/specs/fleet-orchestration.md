@@ -36,14 +36,18 @@ in §0.
    per-run `fleet/run-<runId>` integration branch, **never directly into base**.
    The fleet opens exactly one PR (or leaves the branch for review) at run end;
    base is never written by the fleet (§9).
-7. **Sandbox required for the repo-command plane** (user decision — closes
-   adversarial-review F2; refined by the K2 two-plane split): the arbitrary-code
-   surface — the init command and every build/test/gate command — runs inside an
-   OS sandbox (network-disabled, reads/writes bounded to the worktree, synthetic
-   HOME). The `claude -p` worker runs on a separate model plane with provider-only
-   egress and its own auth so it can function (§7.3). The fleet **refuses to
+7. **Sandbox required on BOTH planes** (user decision — closes adversarial-review
+   F2; refined by the K2 two-plane split; completed by issue #395): the
+   arbitrary-code surface — the init command and every build/test/gate command —
+   runs inside an OS sandbox (network-disabled, reads/writes bounded to the
+   worktree, synthetic HOME). The `claude -p` worker runs on a separate model
+   plane that keeps network egress and its own auth so it can function, but whose
+   **writes are likewise bounded** to the worktree plus its harness's declared
+   state directories — network and filesystem are independent axes, and K2 only
+   ever required the network one to differ (§7.3). The fleet **refuses to
    dispatch** (fails closed, exit 1) if a sandbox is not detected/available,
-   unless explicitly overridden for a disposable-container environment (§7.3).
+   unless explicitly overridden for a disposable-container environment; that one
+   decision covers both planes (§7.3).
 
 ## 1. Goals / non-goals
 
@@ -142,11 +146,12 @@ derived from config (§7.2). `dispatch` spawns
 `claude -p <prompt> --permission-mode acceptEdits --output-format text` with
 `cwd = worktree`, kills the process group on timeout, and maps spawn failure /
 non-zero exit / timeout into `{exitCode, timedOut}`. Per the two-plane split
-(§7.3, K2), the worker process runs on the **model plane** — provider-only egress
-plus its own auth, so it can reach its backend — while the sandboxed
-**repo-command plane** (init + gate/test commands, orchestrator-run) is what
-contains arbitrary code. The adapter must NOT be wrapped in the no-network
-repo-command sandbox, or dispatch could never authenticate.
+(§7.3, K2), the worker process runs on the **model plane** — network egress plus
+its own auth, so it can reach its backend — while the sandboxed **repo-command
+plane** (init + gate/test commands, orchestrator-run) is what contains the heavy
+arbitrary-code surface. The adapter must NOT be wrapped in the **no-network**
+repo-command sandbox, or dispatch could never authenticate; since #395 it IS
+wrapped in the model-plane profile, which keeps egress open and bounds writes.
 
 ## 5. Charters
 
@@ -322,11 +327,14 @@ run.
     `HOME` set to the **synthetic in-worktree home**; ALL provider keys and cloud
     creds (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `*_TOKEN`, `*_SECRET`) stripped;
     network denied and reads/writes worktree-bounded by the sandbox (§7.3).
-  - *Model plane* (the `claude -p` worker): env carries `PATH`, `ADLC_*`, and
-    **only** the worker's own model auth (its subscription/session, or a single
-    injected model key); unrelated host creds and cloud secrets are still
-    stripped, and egress is provider-only. The worker keeps just enough to reach
-    its model, nothing more.
+  - *Model plane* (the `claude -p` worker): env carries `PATH`, the real `HOME`,
+    and **only** the worker's own model auth (its subscription/session, or a
+    single injected model key); unrelated host creds and cloud secrets are still
+    stripped. Since #395 **no ambient `ADLC_*` variable is inherited** either —
+    those name the operator's trust roots (the quartermaster registry, the ticket
+    store, the rails bypass) and the worker runs candidate-authored gate commands;
+    what the charter needs (`ADLC_TICKET`, `ADLC_P4_ENFORCEMENT`) is injected
+    explicitly. The worker keeps just enough to reach its model, nothing more.
   This bounds credential exfiltration on both planes; full network/read/write
   containment of arbitrary repo-command code comes from the required OS sandbox
   (§7.3).
@@ -362,16 +370,62 @@ separates:
   Bash where the harness supports interposition. This is where arbitrary code runs
   (`npm install` lifecycle scripts, test suites), so **this plane runs inside the
   OS sandbox** below.
-- **Model plane** — the worker process (`claude -p`) itself. It runs with a
-  **narrow, provider-only network egress** (allowlisted to the model endpoint,
-  not open internet) and access to *its own* auth (subscription/session in
+- **Model plane** — the worker process (`claude -p`) itself. It runs with
+  **network egress** (today: open; the narrower provider-endpoint allowlist is
+  still the goal) and access to *its own* auth (subscription/session in
   `~/.claude`, or an injected model key), but **not** to unrelated host
   credentials (`~/.ssh`, `~/.aws`, cloud creds), which are withheld from the
-  worker env and, where the harness supports it, unmounted. The worker's *file*
-  actions stay bounded by acceptEdits + scope/rails (§7.2, §8); its *shell*
-  actions are the allowlisted, limited set — and the heavy arbitrary-code
-  surface it would otherwise reach (tests, installs) is on the sandboxed
-  repo-command plane, run by the orchestrator, not by the worker.
+  worker env. The worker's *file* actions stay bounded by acceptEdits +
+  scope/rails (§7.2, §8) **and, since issue #395, by an OS sandbox of its own**.
+
+**Network isolation and filesystem isolation are independent axes (#395).** K2's
+argument is that a worker which cannot reach its provider cannot function. That
+argument is about the NETWORK, and the original implementation over-applied it:
+the worker was not wrapped at all, which also gave up a filesystem bound it never
+needed to give up. The consequence was concrete rather than theoretical — the
+worker's permission allowlist contains repo-authored `fleet.gate` commands (§7.2
+builds them from the CANDIDATE tree's `.adlc/config.json`) and the builder charter
+instructs the worker to run them, so candidate-authored code executed with the
+operator's filesystem privileges, able to rewrite the operator-local quartermaster
+registry, `~/.claude` settings and hooks, the installed toolkit, or another repo's
+worktree.
+
+Both planes are therefore sandboxed; they differ on ONE axis:
+
+| | repo-command plane | model plane |
+| --- | --- | --- |
+| network | **denied** | **allowed** (K2) |
+| writes | worktree + synthetic HOME | worktree + the harness's declared state dirs |
+| reads | bounded (worktree + read-only runtime allowlist) | host scope — **documented residual** |
+| HOME | synthetic, in-worktree | the operator's real HOME (its own session auth lives there) |
+
+- **The write grant is adapter-owned and fail-closed.** Each `WorkerAdapter`
+  declares `homeState` — the directories and files its harness writes under
+  `HOME` — the same way it declares `aliases` and `transports`. Only leaf STATE
+  directories are declared, never the harness's config directory: `~/.claude/projects`
+  is session scratch, while `~/.claude` holds `settings.json` and `hooks/`, which
+  decide what runs in the operator's NEXT session. An adapter that declares
+  nothing gets nothing outside the worktree, so an unlisted path surfaces as that
+  harness erroring loudly rather than as a hole that reopens silently. The
+  operator-local `--model-plane-writable <path>` widens it; a repo-committed
+  `fleet.modelPlaneWritable` is ignored with a warning (same rule as N1).
+- **The worker is not told where operator-local state lives.** `modelPlaneEnv`
+  passes NO ambient `ADLC_*` variable (`ADLC_QUARTERMASTER_REGISTRY`,
+  `ADLC_TICKET_STORE`, `ADLC_RAILS_BYPASS`, …); what the charter needs is injected
+  explicitly. It is an allow-list, so an `ADLC_*` variable added later is withheld
+  by construction rather than by remembering to add it to a denylist.
+- **Residual: model-plane READS are unbounded**, and egress is open, so
+  read-and-exfiltrate remains possible. Bounding them means enumerating where each
+  harness keeps auth on each platform — a macOS Keychain item is not a file — and
+  is deliberately out of scope. Running a fleet over an untrusted repo remains
+  outside this design's assumptions.
+- **No new fail-closed decision.** The model plane reuses the run-wide sandbox
+  mode below: a host with no backend already refuses to dispatch, and
+  `--i-am-in-a-disposable-container` already asserts the whole run is contained.
+  There is no model-plane-only opt-out to reason about.
+
+The heavy arbitrary-code surface (tests, installs) is still on the repo-command
+plane, run by the orchestrator, not by the worker:
 
 Because an allowlisted test command (and a repo-configured `npm install`)
 executes arbitrary code, **the repo-command plane runs inside an OS sandbox**
@@ -567,13 +621,17 @@ in order:
 
 1. **Worktree isolation** — workers never touch the main checkout; the
    orchestrator alone commits/merges. A destroyed worktree costs one strike.
-2. **OS sandbox on the repo-command plane** (§7.3, K2 split) — the init, build,
-   test, and gate commands (the arbitrary-code surface: test suites, `npm install`
-   lifecycle scripts) run network-denied with filesystem **writes and reads**
-   bounded to the worktree (synthetic HOME, host credential dirs unmounted); the
-   fleet fails closed if no sandbox is available (F2/M1/K1). The `claude -p`
-   worker runs on the separate model plane with provider-only egress and its own
-   auth, so it can function while the arbitrary-code surface stays contained.
+2. **OS sandbox on both planes** (§7.3, K2 split; completed by #395) — the init,
+   build, test, and gate commands (the arbitrary-code surface: test suites,
+   `npm install` lifecycle scripts) run network-denied with filesystem **writes
+   and reads** bounded to the worktree (synthetic HOME, host credential dirs
+   unmounted); the fleet fails closed if no sandbox is available (F2/M1/K1). The
+   `claude -p` worker runs on the separate model plane, which keeps egress and its
+   own auth so it can function, and bounds its **writes** to the worktree plus its
+   harness's declared state directories — closing the path by which a repo-authored
+   `fleet.gate` command, run by the worker on the charter's instruction, could
+   rewrite operator-local state. Model-plane READS stay at host scope: a documented
+   residual, not a claim.
 3. **Permission allowlist** (§7.2) — workers cannot run arbitrary shell, install
    packages, push, or use the network unless explicitly allowlisted per repo.
 4. **Rails + trust root, in-session** — the plugin hook denies structured edits
@@ -719,6 +777,21 @@ Mirrors ticket T42; each criterion is independently verifiable.
   home) is blocked by the sandbox's read isolation (K1) — asserted via the
   stubbed sandbox's read-boundary enforcement; (vi) the two-plane split (K2) is
   enforced — a stub asserts the `claude -p` worker is dispatched on the model
-  plane (provider egress + own auth reachable, NOT wrapped in the no-network
-  repo-command sandbox) while init/gate/test commands ARE routed through the
-  sandbox, so a valid ticket can both authenticate and stay contained.
+  plane (egress + own auth reachable, NOT wrapped in the no-network repo-command
+  sandbox) while init/gate/test commands ARE routed through the sandbox, so a
+  valid ticket can both authenticate and stay contained.
+- AC15 (model-plane containment, §7.3 / issue #395):
+  `node --test packages/fleet/test/model-plane-sandbox.test.mjs` passes — it
+  asserts (i) a repo-controlled command run through the REAL model-plane profile
+  cannot overwrite an operator-local quartermaster registry outside the worktree,
+  with an UNWRAPPED control proving the same write succeeds without the sandbox;
+  (ii) the same for a `$HOME/.claude/settings.json`, while the harness's declared
+  `.claude/projects` state stays writable; (iii) the model-plane env carries no
+  operator-local registry path, and the withholding is an allow-list over a named
+  set, so a sibling variable added later is withheld by construction; (iv) the
+  model-plane profile preserves network egress on BOTH backends (no
+  `--unshare-net`; `(allow network*)`) while the repo-command profile still denies
+  it — verified in `sandbox.test.mjs`; (v) no backend and no override still
+  refuses the whole run, so the model plane introduces no second fail-closed
+  decision and no model-plane-only opt-out. (i)–(ii) require a real backend and
+  report a SKIP with its reason where none is detected, never a silent pass.

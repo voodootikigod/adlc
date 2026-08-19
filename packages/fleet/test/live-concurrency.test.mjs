@@ -53,8 +53,11 @@ test('two non-overlapping tickets dispatch CONCURRENTLY through buildLiveDeps (#
     adlcAsync: async () => ({ status: 0, stdout: '' }),
     // The claude worker blocks (async, non-blocking to the event loop) until we
     // release it; the gate (bwrap) resolves immediately.
-    spawnWorker: async (cmd) => {
-      if (cmd === 'claude') {
+    spawnWorker: async (cmd, args) => {
+      // #395: the model plane is sandbox-wrapped, so the harness is the inner argv.
+      const argv = [cmd, ...(args ?? [])];
+      const inner = cmd === 'bwrap' ? argv.slice(argv.indexOf('--') + 1) : argv;
+      if (inner[0] === 'claude') {
         pendingWorkers += 1;
         maxConcurrentWorkers = Math.max(maxConcurrentWorkers, pendingWorkers);
         await workerGate;

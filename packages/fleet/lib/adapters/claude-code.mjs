@@ -20,6 +20,29 @@ export const name = 'claude-code';
 export const pool = 'default';
 
 /**
+ * 7.3 model-plane filesystem policy (issue #395): where THIS harness writes its
+ * own session state, and nowhere else.
+ *
+ * `.claude/` itself is deliberately ABSENT. It holds `settings.json`,
+ * `settings.local.json`, `hooks/`, `agents/`, `skills/` and `plugins/` -- executable
+ * configuration that decides what runs in the operator's NEXT session. Granting the
+ * parent and carving those back out would make the boundary depend on which of them
+ * happen to exist on this host today; granting only the scratch subdirectories does
+ * not.
+ *
+ * The stored credential is writable because the CLI refreshes its OAuth token in
+ * place -- a read-only credential file turns an expiring session into a mid-run
+ * failure.
+ */
+export const homeState = Object.freeze({
+  dirs: Object.freeze([
+    '.claude/projects', '.claude/todos', '.claude/statsig', '.claude/shell-snapshots',
+    '.claude/file-history', '.claude/logs', '.claude/downloads', '.cache/claude-cli-nodejs',
+  ]),
+  files: Object.freeze(['.claude/.credentials.json', '.claude.json', '.claude.json.backup']),
+});
+
+/**
  * Run-time aliases this harness resolves for itself (operating-stack §4b rule 6).
  *
  * `claude --help` documents `--model` as taking "an alias for the latest model

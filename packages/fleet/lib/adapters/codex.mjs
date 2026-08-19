@@ -11,6 +11,12 @@ import { defaultExec, mapResult, modelArgs } from './_shared.mjs';
 export const name = 'codex';
 export const pool = 'default';
 
+/** 7.3 model-plane filesystem policy (#395) -- session state only; declared config stays read-only. */
+export const homeState = Object.freeze({
+  dirs: Object.freeze(['.codex/sessions', '.codex/log', '.codex/archived_sessions', '.cache/codex']),
+  files: Object.freeze(['.codex/auth.json', '.codex/history.jsonl']),
+});
+
 /**
  * Run-time aliases this harness resolves for itself (operating-stack §4b rule 6).
  * `codex exec -m/--model <MODEL>` takes a concrete model slug — verified against

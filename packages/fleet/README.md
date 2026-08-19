@@ -19,8 +19,12 @@ Design contract: [`docs/specs/fleet-orchestration.md`](../../docs/specs/fleet-or
 - **Sandboxed repo-command plane** — init, build, and test commands run inside an
   OS sandbox (network denied, reads/writes bounded to the worktree, synthetic
   HOME). The fleet fails closed if no sandbox backend is available.
-- **Model plane** — the `claude -p` worker runs with provider-only egress and its
-  own auth so it can function; it is *not* wrapped in the no-network sandbox.
+- **Model plane** — the `claude -p` worker runs with network egress and its own
+  auth so it can function, and is wrapped in a *filesystem* sandbox: its **writes**
+  are bounded to the ticket's worktree plus the state directories its harness
+  declares. Network and filesystem are independent axes; K2 only ever required
+  the network one to differ (#395). Reads are not bounded there — a documented
+  residual, see the security section.
 - **Deterministic pre-merge gates** — build/test, `rails-guard`, a ticket-local
   scope check, and a closed protected-control-file integrity scan (covering the
   `.adlc/tickets.json` trust root).
@@ -86,9 +90,18 @@ The scheduler is harness-blind: it talks to workers through a `WorkerAdapter`
 seam (`lib/adapters/`), so which coding agent builds a ticket is a config choice,
 not a code change. Registered adapters: `claude-code` (default), `codex`, `agy`
 (Google Antigravity), `opencode`, `pi`, `cursor`. Each is a pure I/O shim that
-spawns its harness in headless mode on the **model plane** (provider egress + its
-own auth, never sandboxed — K2). Select one with the **operator-local** `--adapter`
-flag (default `claude-code`).
+spawns its harness in headless mode on the **model plane** (network egress + its
+own auth, filesystem writes bounded — K2 + #395). Select one with the
+**operator-local** `--adapter` flag (default `claude-code`).
+
+Each adapter also declares `homeState` — the directories and files its harness
+writes under `HOME`. That declaration IS the model-plane write grant: an adapter
+that declares nothing gets nothing outside the worktree, so a new harness fails
+loudly rather than inheriting a blanket grant. If a harness needs a path its
+declaration has not caught up with, widen it with the operator-local
+`--model-plane-writable <path>` (repeatable); a `fleet.modelPlaneWritable` in
+repo config is ignored with a warning, since letting the candidate tree widen the
+boundary that contains it would be the boundary disabling itself.
 
 **The harness is operator-local, not repo config (adversarial-review K1/A2):** only
 `claude-code` installs a per-worktree permission allowlist, so a repo-committed
@@ -108,13 +121,38 @@ with a warning**; use `--model` and `--model-auth-key`.
   the model that builds and judges it.
 - `modelAuthKey` is more dangerous still: it names the ONE variable exempted from
   `modelPlaneEnv`'s secret stripping, so a repo value chose which host secret
-  entered a code-capable, unsandboxed worker. A candidate could name
+  entered a code-capable worker. A candidate could name
   `ADLC_MANIFEST_KEY` and read the key that signs cross-model attestations.
   `ADLC_MANIFEST_KEY` is additionally on a hard denylist — no `modelAuthKey`
   unlocks it, not even an operator's.
 
 Only `adapterStdin` (a prompt-transport shape, not a supply or credential choice)
 is still read from repo config.
+
+### What the model-plane sandbox does and does not close (#395)
+
+The worker's permission allowlist contains repo-authored `fleet.gate` commands
+(they come from the candidate tree's `.adlc/config.json`) and the builder charter
+tells the worker to run them. That makes a gate command ordinary candidate code
+running on the model plane.
+
+**Closed:** it cannot write outside the ticket worktree. Not the operator-local
+quartermaster registry, not `~/.claude/settings.json` or `~/.claude/hooks/`, not
+the installed toolkit, not another repo's worktree. It is also no longer *told*
+where any of those are — every ambient `ADLC_*` variable is withheld from the
+model-plane environment, and what the charter needs (`ADLC_TICKET`,
+`ADLC_P4_ENFORCEMENT`) is injected explicitly.
+
+**Not closed:** model-plane **reads** are unbounded, and egress is open, so a
+read-and-exfiltrate path remains. Bounding reads means enumerating where every
+harness keeps auth on every platform — a macOS Keychain item is not a file at all
+— and is not attempted. Running a fleet over a repo you do not trust remains
+outside the design's assumptions.
+
+**No new failure mode when there is no backend.** The model plane reuses the
+run-wide sandbox decision: a host with no `bwrap`/`sandbox-exec` already refuses
+to dispatch at preflight, and `--i-am-in-a-disposable-container` already asserts
+the whole run is contained. There is no model-plane-only opt-out.
 
 Each adapter ships a grounded **default invocation** (`agy --print` is verified
 against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
