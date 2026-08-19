@@ -144,3 +144,29 @@ test('the workflow reads sweepBatches defensively, like the synthesizer does', (
   assert.match(code, /input\.issues\?\.sweepBatches/);
   assert.ok(!/input\.issues\.sweepBatches/.test(code), 'no unguarded input.issues.sweepBatches access may remain');
 });
+
+test('the unit projection provides every unit field the workflow prompts read', async () => {
+  // The projection exists to keep `args` small, and its failure mode is quiet: a
+  // field dropped here is `undefined` inside a template literal, which renders as
+  // the string "undefined" in a prompt rather than throwing. So the contract is
+  // asserted mechanically against what the script actually references.
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  const referenced = new Set([...code.matchAll(/\bu\.([a-zA-Z][a-zA-Z0-9_]*)/g)].map((m) => m[1]));
+  const projected = workflowArgs({
+    units: [{ id: 'x', kind: 'package', dir: 'd', name: 'n', version: '1', published: true,
+      manifest: null, bin: null, filesField: [], dependencies: {}, engines: {}, hasTests: true,
+      fileCount: 1, bytes: 1, churn: {}, issues: [], files: ['f'] }],
+  }).units[0];
+  const missing = [...referenced].filter((f) => !(f in projected));
+  assert.deepEqual(missing, [], `workflowArgs must project: ${missing.join(', ')}`);
+});
+
+test('the top-level projection provides every input field the workflow reads', async () => {
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  const referenced = new Set([...code.matchAll(/\binput\.([a-zA-Z][a-zA-Z0-9_]*)/g)].map((m) => m[1]));
+  const projected = workflowArgs({ version: '1', currentVersion: '1', since: 'v1' });
+  const missing = [...referenced].filter((f) => !(f in projected));
+  assert.deepEqual(missing, [], `workflowArgs must project: ${missing.join(', ')}`);
+});

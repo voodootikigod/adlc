@@ -74,6 +74,7 @@ A red suite makes the verdict NO-GO no matter what the agents find.
 ```bash
 node scripts/release-audit-collect.mjs [version] [--since <tag>] [--packages a,b,c] [--skip-issues] \
   > <scratch>/input.json
+node scripts/release-audit-collect.mjs [same flags] --workflow-args > <scratch>/wargs.json
 ```
 
 This discovers every shipped artifact (including `plugins/adlc-claude-code`, which has no
@@ -83,14 +84,30 @@ mechanical probes by **importing** `release.mjs`'s own checks rather than restat
 
 Defaults: version = next minor from the root `package.json`; baseline = newest `vX.Y.Z` tag.
 
+Two outputs, deliberately: `input.json` is the full document Phase C builds the report from,
+and `wargs.json` is the projection the fan-out consumes. `args` is passed inline in the
+Workflow tool call, so its size is paid on every run — the projection drops the per-unit file
+inventory and everything else no prompt reads, roughly halving it. Never pass `input.json`
+as `args`.
+
 ### 3. Fan out (Phase B)
 
-Read `references/workflow-script.md`, take the `javascript` block **verbatim**, and pass it
-to the **Workflow** tool as `script`, with the Phase A document as `args`:
+Extract the `javascript` block from `references/workflow-script.md` to a file, then hand the
+**Workflow** tool that path plus the projected args:
+
+```bash
+python3 - <<'EOF' > <scratch>/workflow.mjs
+import re
+s = open('.claude/skills/release-audit/references/workflow-script.md').read()
+print(re.search(r'```javascript\n(.*?)\n```', s, re.S).group(1))
+EOF
+```
 
 ```
-Workflow({ script: <the code block>, args: <parsed contents of <scratch>/input.json> })
+Workflow({ scriptPath: "<scratch>/workflow.mjs", args: <parsed contents of <scratch>/wargs.json> })
 ```
+
+`scriptPath` avoids re-transcribing ~350 lines of script into the tool call on every run.
 
 Invoking this skill **is** the opt-in for multi-agent orchestration, and this run
 deliberately exceeds the default workflow size guideline — auditing each artifact

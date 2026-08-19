@@ -61,7 +61,7 @@ export const SWEEP_BATCH_SIZE = 12;
  * @returns {{version: string|null, since: string|null, packages: string[]|null, skipIssues: boolean}}
  */
 export function parseArgs(argv) {
-  const out = { version: null, since: null, packages: null, skipIssues: false };
+  const out = { version: null, since: null, packages: null, skipIssues: false, workflowArgs: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--since') { out.since = argv[i + 1] ?? null; i += 1; continue; }
@@ -73,6 +73,7 @@ export function parseArgs(argv) {
       continue;
     }
     if (a === '--skip-issues') { out.skipIssues = true; continue; }
+    if (a === '--workflow-args') { out.workflowArgs = true; continue; }
     if (a.startsWith('-')) continue;
     if (out.version === null) out.version = a;
   }
@@ -492,6 +493,41 @@ export function assemble({ version, since, units, issues, routed, probeResults, 
   };
 }
 
+/**
+ * The subset of the collected document the workflow script actually reads.
+ *
+ * `args` is passed inline in the Workflow tool call, so its size is a real cost
+ * paid on every run. The full document is richer than the fan-out needs — the
+ * per-unit `files` inventory alone is 47 KB, and no prompt references it (a unit
+ * agent reads the repository itself; it is told the file COUNT and weight so it
+ * knows what it is walking into). Projecting to what the prompts use keeps the
+ * fan-out affordable without thinning the document the report is built from.
+ *
+ * Anything the workflow reads must appear here — a field dropped from this
+ * projection becomes `undefined` inside a prompt, which renders as the literal
+ * string "undefined" rather than failing.
+ */
+export function workflowArgs(doc) {
+  return {
+    version: doc.version,
+    currentVersion: doc.currentVersion,
+    since: doc.since,
+    filtered: doc.filtered === true,
+    units: (doc.units ?? []).map((u) => ({
+      id: u.id, kind: u.kind, dir: u.dir, name: u.name, version: u.version,
+      published: u.published, manifest: u.manifest, bin: u.bin, filesField: u.filesField,
+      dependencies: u.dependencies, engines: u.engines, hasTests: u.hasTests,
+      fileCount: u.fileCount, bytes: u.bytes, churn: u.churn, issues: u.issues,
+    })),
+    issues: { sweepBatches: doc.issues?.sweepBatches ?? [[]] },
+    probes: {
+      versionDrift: doc.probes?.versionDrift ?? [],
+      publishMetadata: doc.probes?.publishMetadata ?? [],
+      hostDiscoveryNearMisses: doc.probes?.hostDiscoveryNearMisses ?? [],
+    },
+  };
+}
+
 export async function collectMain(argv = process.argv.slice(2), deps = {}) {
   const { root = ROOT, readFile = readFileSync, log = console.log } = deps;
   const args = parseArgs(argv);
@@ -515,7 +551,7 @@ export async function collectMain(argv = process.argv.slice(2), deps = {}) {
   const doc = assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable, issuesTruncated });
   doc.currentVersion = currentVersion;
   doc.filtered = Boolean(args.packages);
-  log(JSON.stringify(doc, null, 2));
+  log(JSON.stringify(args.workflowArgs ? workflowArgs(doc) : doc, null, 2));
   return 0;
 }
 

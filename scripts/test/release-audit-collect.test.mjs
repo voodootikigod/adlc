@@ -39,7 +39,7 @@ test('parseArgs reads the four flags and the positional version', () => {
 
 test('parseArgs defaults everything to null/false', () => {
   const a = parseArgs([]);
-  assert.deepEqual(a, { version: null, since: null, packages: null, skipIssues: false });
+  assert.deepEqual(a, { version: null, since: null, packages: null, skipIssues: false, workflowArgs: false });
 });
 
 test('parseArgs treats an empty --packages list as unfiltered, not as "audit nothing"', () => {
@@ -375,4 +375,29 @@ test('routed issues carry no body into the emitted document', async () => {
   ], units);
   assert.equal(byUnit.get('pkg:core')[0].body, undefined);
   assert.equal(unmapped[0].body, undefined);
+});
+
+test('workflowArgs drops the per-unit file inventory the prompts never read', async () => {
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  const doc = { version: '1.11.0', units: [{ id: 'pkg:core', fileCount: 32, bytes: 900, files: ['a', 'b', 'c'] }], issues: {}, probes: {} };
+  const [unit] = workflowArgs(doc).units;
+  assert.equal(unit.files, undefined);
+  assert.equal(unit.fileCount, 32, 'the count survives — an agent is told what it is walking into');
+  assert.equal(unit.bytes, 900);
+});
+
+test('workflowArgs keeps the fan-out inputs and defaults the absent ones', async () => {
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  const a = workflowArgs({ version: '1.11.0', currentVersion: '1.10.0', since: 'v1.10.0' });
+  assert.equal(a.version, '1.11.0');
+  assert.equal(a.currentVersion, '1.10.0');
+  assert.equal(a.filtered, false);
+  assert.deepEqual(a.units, []);
+  assert.deepEqual(a.issues.sweepBatches, [[]], 'the sweep still has one shard to expect');
+  assert.deepEqual(a.probes.versionDrift, []);
+});
+
+test('workflowArgs marks a narrowed run so the synthesizer can cap its verdict', async () => {
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  assert.equal(workflowArgs({ filtered: true }).filtered, true);
 });
