@@ -40,18 +40,10 @@ Usage:
 
 Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked.`;
 
-function runCli() {
-const raw = process.argv.slice(2);
-const sub = raw[0];
-
-if (!sub || sub === '--help' || sub === '-h') {
-  console.log(USAGE);
-  process.exit(0);
-}
-
-const dir = join(process.cwd(), '.adlc');
-
-function parseFlags(args) {
+// Exported so a test can observe that a REPEATABLE flag actually accumulates.
+// `multiple: false` does not error on a repeated flag — it silently keeps the last
+// value — so the only way to see the difference is the parsed result itself.
+export function parseFlags(args) {
   const { values } = parseArgs({
     args,
     options: {
@@ -72,6 +64,17 @@ function parseFlags(args) {
   });
   return values;
 }
+
+function runCli() {
+const raw = process.argv.slice(2);
+const sub = raw[0];
+
+if (!sub || sub === '--help' || sub === '-h') {
+  console.log(USAGE);
+  process.exit(0);
+}
+
+const dir = join(process.cwd(), '.adlc');
 
 if (sub === 'status') {
   const flags = parseFlags(raw.slice(1));

@@ -35,6 +35,9 @@ import { modelPlaneFilesystem, homeStateOf } from '../lib/model-plane.mjs';
 import { modelPlaneEnv } from '../lib/env-scrub.mjs';
 import * as claudeCode from '../lib/adapters/claude-code.mjs';
 import { adapterCatalog, ADAPTERS, getAdapter } from '../lib/adapters/index.mjs';
+import { buildLiveDeps } from '../lib/live-deps.mjs';
+import { parseFlags } from '../bin/fleet.mjs';
+import { dirname } from 'node:path';
 
 const backend = detectBackend();
 
@@ -377,5 +380,158 @@ test('a missing declared state file is reported ONCE per run, not once per dispa
     assert.deepEqual(second.missingStateFiles, first.missingStateFiles,
       'the policy is a pure function of the host — deduping is the caller\'s job, not a hidden latch here');
     assert.ok(first.missingStateFiles.length > 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ── Mutation-gate survivors (#395 round 1) ───────────────────────────────────
+// The gate planted 16 mutants and 11 lived. None was equivalent: each removed a
+// real write grant or a real CLI capability. What they had in common is that the
+// model-plane policy is DATA — declared allow-lists and one flag declaration —
+// and data with no assertion over it is unprosecuted by construction.
+
+test('--model-plane-writable is REPEATABLE, so a second path does not replace the first', () => {
+  // `multiple: true` on the parseArgs option is what makes the flag accumulate.
+  // Flipped to false, `--model-plane-writable a --model-plane-writable b` keeps only
+  // `b` — the operator silently loses a grant they asked for, and the harness fails
+  // on a path they can see in their own command line. Driven through the real bin so
+  // the assertion is about the CLI contract, not about a literal in the source.
+  // Asserted on the PARSED RESULT, not on whether the parser errored: `multiple:
+  // false` does not reject a repeated flag, it silently keeps the last value — so
+  // an error-shaped assertion would pass against the broken behaviour.
+  const flags = parseFlags(['--model-plane-writable', '/op/alpha', '--model-plane-writable', '/op/beta']);
+  assert.deepEqual(flags['model-plane-writable'], ['/op/alpha', '/op/beta'],
+    'both grants must survive — dropping one loses a path the operator can see in their own command line');
+});
+
+test('EVERY rung of an escalation ladder contributes its state dirs to the grant', () => {
+  // A ladder can move a later strike onto a DIFFERENT harness, and the sandbox is
+  // built per dispatch. Granting only the current rung works until the first
+  // escalation and then fails there — the same failure provisioning already avoids
+  // by covering every rung (#401). The ternary that collects them is one swap away
+  // from returning [] whenever a seat exists, which is exactly the ladder case.
+  const root = scratch('mp-ladder-');
+  try {
+    const home = join(root, 'home');
+    // Create the state dirs of a harness that is NOT the dispatching one, so its
+    // presence in the grant can only come from the ladder walk.
+    const opencodeState = join(home, '.local', 'share', 'opencode');
+    mkdirSync(opencodeState, { recursive: true });
+
+    const rec = [];
+    // The real entry shape: a starting `seat` plus `escalation` rungs, which is what
+    // `ladderAdapters` walks.
+    const seats = new Map([['T1', {
+      mode: 'ladder',
+      seat: { adapter: 'claude-code', model: 'haiku', transport: 'subscription' },
+      escalation: [
+        { seat: { adapter: 'opencode', model: 'zai/glm-5.2', transport: 'subscription' } },
+      ],
+    }]]);
+    const deps = buildLiveDeps({
+      repo: '/repo', statusDir: undefined,
+      sandboxSpec: { mode: SANDBOX_MODES.SANDBOX, backend: { name: 'bubblewrap' } },
+      reviewRunner: () => ({ ok: true, findings: [] }),
+      config: { gate: { test: 'true' }, timeoutMinutes: 1 },
+      seats,
+      io: {
+        git: () => () => '', adlc: () => ({ status: 0, stdout: '{}' }), appendLog: () => {},
+        adlcAsync: async () => ({ status: 0, stdout: '' }),
+        spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
+        readFile: () => undefined, exists: () => false, mkdirp: () => {}, writeJson: () => {},
+        ensureGitignore: () => {}, hasGh: () => false,
+        env: { PATH: '/usr/bin', HOME: home },
+      },
+    });
+
+    return deps.dispatch({
+      ticket: { id: 'T1', title: 'T1', scope: ['packages/fleet/**'], body: 'do', edges: [] },
+      worktree: join(root, 'wt'), startSha: 'SHA', strike: 1, deadEnds: [],
+    }).then(() => {
+      const argv = rec.map((c) => [c.cmd, ...(c.args ?? [])].join(' ')).join('\n');
+      assert.match(argv, new RegExp(`--bind ${opencodeState} ${opencodeState}`),
+        'the LATER rung\'s harness state must be granted at strike 1, or the first escalation fails');
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// The declared allow-lists are a SECURITY CONTRACT, not incidental data: each entry
+// is a path the model plane may write outside the worktree. Pinning them is the same
+// species as pinning a workflow hash — a diff that widens or narrows the boundary has
+// to say so out loud rather than ride along in an unrelated change. Without this,
+// dropping an entry is invisible (the harness silently loses a grant) and ADDING one
+// is invisible too (the boundary silently widens), which is the worse direction.
+const DECLARED_HOME_STATE = {
+  'claude-code': {
+    dirs: ['.claude/projects', '.claude/todos', '.claude/statsig', '.claude/shell-snapshots',
+      '.claude/file-history', '.claude/logs', '.claude/downloads', '.cache/claude-cli-nodejs'],
+    files: ['.claude/.credentials.json', '.claude.json', '.claude.json.backup'],
+  },
+  codex: {
+    dirs: ['.codex/sessions', '.codex/log', '.codex/archived_sessions', '.cache/codex'],
+    files: ['.codex/auth.json', '.codex/history.jsonl'],
+  },
+  gemini: {
+    dirs: ['.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
+  },
+  agy: {
+    dirs: ['.antigravity', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
+  },
+  jetski: {
+    dirs: ['.jetski', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
+  },
+  opencode: {
+    dirs: ['.local/share/opencode', '.local/state/opencode', '.cache/opencode'],
+    files: ['.config/opencode/auth.json'],
+  },
+  pi: {
+    dirs: ['.pi/sessions', '.pi/logs', '.local/share/pi', '.cache/pi'],
+    files: ['.pi/auth.json', '.config/pi/auth.json'],
+  },
+  cursor: {
+    dirs: ['.local/share/cursor-agent', '.cache/cursor-agent', '.cursor/chats'],
+    files: ['.local/share/cursor-agent/auth.json', '.cursor/cli-config.json'],
+  },
+  copilot: {
+    dirs: ['.copilot/history-session-state', '.copilot/logs', '.cache/github-copilot'],
+    files: ['.config/github-copilot/apps.json', '.config/github-copilot/hosts.json'],
+  },
+};
+
+test('the declared write boundary is pinned per adapter, in both directions', () => {
+  assert.deepEqual(Object.keys(DECLARED_HOME_STATE).sort(), [...ADAPTERS].sort(),
+    'a NEW adapter must declare its boundary here too, or it ships unpinned');
+  for (const name of ADAPTERS) {
+    const state = homeStateOf(getAdapter(name));
+    assert.deepEqual(state, DECLARED_HOME_STATE[name],
+      `${name}'s model-plane write grant changed — widening or narrowing it is a security-boundary change`);
+  }
+});
+
+test('every declared grant is actually honoured when the path exists', () => {
+  // The pin above says WHAT is declared; this says the declaration is load-bearing.
+  // Together they mean an entry cannot be dropped silently (the pin fails) nor kept
+  // as decoration (this fails).
+  const root = scratch('mp-honour-');
+  try {
+    const home = join(root, 'home');
+    for (const name of ADAPTERS) {
+      const state = homeStateOf(getAdapter(name));
+      for (const d of state.dirs) mkdirSync(join(home, d), { recursive: true });
+      for (const f of state.files) {
+        mkdirSync(dirname(join(home, f)), { recursive: true });
+        writeFileSync(join(home, f), '{}');
+      }
+      const { writablePaths, missingStateFiles } = modelPlaneFilesystem({ adapters: [getAdapter(name)], home });
+      assert.deepEqual(missingStateFiles, [], `${name}: every declared file exists in this fixture`);
+      for (const d of state.dirs) {
+        assert.ok(writablePaths.includes(join(home, d)), `${name}: declared dir ${d} must be granted`);
+      }
+      for (const f of state.files) {
+        assert.ok(writablePaths.includes(join(home, f)), `${name}: declared file ${f} must be granted`);
+      }
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
