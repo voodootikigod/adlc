@@ -32,9 +32,9 @@ adlc spec-lint <spec.md> [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every criterion names a verification method (or no criteria found; warns loudly).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every acceptance criterion names a verification method.</span>
   <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad input, unreadable file, or LLM call failed).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more criteria are wishes (line numbers printed).</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more criteria are wishes (line numbers printed), or the spec states no acceptance criteria at all.</span>
 </div>
 
 ## Example

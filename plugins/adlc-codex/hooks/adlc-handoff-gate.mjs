@@ -1283,7 +1283,7 @@ export function recoveryDiagnostic(sessionId) {
   const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
   const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
   if (!trustedRecoveryCliPath) {
-    return 'Recovery command unavailable: @adlc/context-handoff could not be resolved from this project. Run the operator recovery CLI manually (packages/context-handoff/bin/handoff.mjs bypass|unlock|repair|write|resume), or `pwd` remains usable regardless.';
+    return 'Recovery command unavailable: @adlc/context-handoff could not be resolved from this project, from this plugin, or from a global @adlc/cli install. Install it (npm install -g @adlc/cli) and re-run, then drive the operator recovery CLI with its own bin: handoff bypass|unlock|repair|write|resume. `pwd` remains usable regardless.';
   }
   if (typeof sessionId === 'string' && sessionId.length > 0) {
     let interpreterPath = process.execPath;

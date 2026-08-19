@@ -14,7 +14,7 @@ with a bare number.
 ## The canonical convention
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. The check succeeded (or there was nothing to check; the tool warns loudly rather than fails).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. The check ran and the change met the bar. What a gate does when it finds no material to examine is that gate's own call, not a suite-wide guarantee of 0 — spec-lint, for one, exits 2 on a spec with no acceptance criteria.</span>
   <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. The tool could not run the check: bad input, unreadable file, missing binary, network failure, or a failed LLM call.</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. The check ran and the change did not meet the bar. This is the blocking signal CI acts on.</span>
 </div>

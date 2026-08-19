@@ -758,9 +758,15 @@ test('missing transcript_path file does not invent hard-band deny', () => {
 test('loadContextHandoff rejects non-string projectRoot without throwing', async () => {
   const { loadContextHandoff } = await import('../handoff-resolve.mjs');
   const blind = mkdtempSync(join(tmpdir(), 'adlc-handoff-blind2-'));
+  // The resolver also consults global installs (issue #526), and the machine
+  // running this suite may well have @adlc/cli installed globally — which would
+  // be a legitimate resolution, not the "blind" state under test. Blind that
+  // route explicitly so this keeps asserting what it was written to assert: a
+  // non-string projectRoot degrades to null instead of throwing.
+  const nowhere = { env: {}, execPath: join(blind, 'no-such-prefix', 'bin', 'node') };
   try {
-    assert.equal(await loadContextHandoff({ projectRoot: null, pluginHooksDir: blind }), null);
-    assert.equal(await loadContextHandoff({ projectRoot: 1, pluginHooksDir: blind }), null);
+    assert.equal(await loadContextHandoff({ projectRoot: null, pluginHooksDir: blind, ...nowhere }), null);
+    assert.equal(await loadContextHandoff({ projectRoot: 1, pluginHooksDir: blind, ...nowhere }), null);
   } finally {
     rmSync(blind, { recursive: true, force: true });
   }

@@ -28,9 +28,9 @@ spec-lint <spec.md> [--llm] [--json] [--prompt-only] [--record --ticket <id>]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes — all criteria are verified (or no criteria found; warns loudly). |
+| `0` | Gate passes — every acceptance criterion names a verification method. |
 | `1` | Operational error — file missing, unreadable, or LLM call failed. |
-| `2` | Gate fails — one or more criteria are wishes (line numbers printed). |
+| `2` | Gate fails — one or more criteria are wishes (line numbers printed), or the spec states no acceptance criteria at all. |
 
 ## What counts as a verification method?
 
