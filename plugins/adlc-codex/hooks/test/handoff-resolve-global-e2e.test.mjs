@@ -123,3 +123,18 @@ test('a resolvable but unusable global install still denies — fail-closed is i
     box.cleanup();
   }
 });
+
+test('the recovery diagnostic stops naming a monorepo path when nothing resolves', async () => {
+  const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
+  const message = recoveryDiagnostic('sess-global', { resolveEntry: () => null });
+
+  assert.equal(typeof message, 'string');
+  assert.ok(message.length > 0, 'an operator with no install still needs a way out');
+  assert.match(message, /@adlc\/context-handoff/, 'it must name what could not be resolved');
+  assert.match(message, /npm install -g @adlc\/cli/, 'and how to make it resolvable');
+  assert.doesNotMatch(
+    message,
+    /packages\/context-handoff\//,
+    'a path that exists only in a source checkout of this monorepo is not a recovery route',
+  );
+});

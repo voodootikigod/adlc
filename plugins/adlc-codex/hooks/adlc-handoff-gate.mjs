@@ -1279,8 +1279,12 @@ async function main() {
  * uses for the matcher itself, so the diagnostic and the exception it
  * describes can never disagree about where the CLI lives.
  */
-export function recoveryDiagnostic(sessionId) {
-  const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+export function recoveryDiagnostic(sessionId, { resolveEntry = resolveContextHandoffEntry } = {}) {
+  // `resolveEntry` is injectable for one reason: the unresolved branch below
+  // is unreachable in a test that runs on a machine where @adlc/cli happens
+  // to be installed, and that branch is precisely the message issue #526
+  // found stranding operators.
+  const entry = resolveEntry({ projectRoot: process.cwd() });
   const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
   if (!trustedRecoveryCliPath) {
     return 'Recovery command unavailable: @adlc/context-handoff could not be resolved from this project, from this plugin, or from a global @adlc/cli install. Install it (npm install -g @adlc/cli) and re-run, then drive the operator recovery CLI with its own bin: handoff bypass|unlock|repair|write|resume. `pwd` remains usable regardless.';

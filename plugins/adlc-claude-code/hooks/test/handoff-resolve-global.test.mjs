@@ -182,3 +182,18 @@ test('the default env/execPath still resolve this repo from the real plugin dire
   assert.ok(found, 'the monorepo walk-up must keep working');
   assert.match(found, /context-handoff/);
 });
+
+test('the recovery diagnostic stops naming a monorepo path when nothing resolves', async () => {
+  const { recoveryDiagnostic } = await import('../adlc-hook.mjs');
+  const message = recoveryDiagnostic('sess-global', { resolveEntry: () => null });
+
+  assert.equal(typeof message, 'string');
+  assert.ok(message.length > 0, 'an operator with no install still needs a way out');
+  assert.match(message, /@adlc\/context-handoff/, 'it must name what could not be resolved');
+  assert.match(message, /npm install -g @adlc\/cli/, 'and how to make it resolvable');
+  assert.doesNotMatch(
+    message,
+    /packages\/context-handoff\//,
+    'a path that exists only in a source checkout of this monorepo is not a recovery route',
+  );
+});
