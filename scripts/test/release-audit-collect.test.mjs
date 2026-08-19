@@ -344,3 +344,35 @@ test('sweepBatches keeps thirteen issues from becoming one oversized shard', asy
   const items = Array.from({ length: 13 }, (_, i) => ({ number: i + 1 }));
   assert.deepEqual(sweepBatches(items, []).map((b) => b.length), [12, 1]);
 });
+
+test('stripBody replaces a long issue body with a bounded excerpt', async () => {
+  const { stripBody, ISSUE_EXCERPT } = await import('../release-audit-collect.mjs');
+  const r = stripBody({ number: 1, title: 't', body: 'x'.repeat(5000) });
+  assert.equal(r.body, undefined);
+  assert.equal(r.excerpt.length, ISSUE_EXCERPT + 1, 'excerpt is capped, plus the ellipsis');
+  assert.ok(r.excerpt.endsWith('…'));
+});
+
+test('stripBody keeps a short body whole and adds no ellipsis', async () => {
+  const { stripBody } = await import('../release-audit-collect.mjs');
+  const r = stripBody({ number: 1, title: 't', body: '  short body  ' });
+  assert.equal(r.excerpt, 'short body');
+  assert.ok(!r.excerpt.endsWith('…'));
+});
+
+test('stripBody preserves every routing field the prompts actually use', async () => {
+  const { stripBody } = await import('../release-audit-collect.mjs');
+  const r = stripBody({ number: 7, title: 't', url: 'u', labels: ['security'], routedVia: 'path-mention', routedTo: 'pkg:core', body: 'b' });
+  assert.deepEqual(r, { number: 7, title: 't', url: 'u', labels: ['security'], routedVia: 'path-mention', routedTo: 'pkg:core', excerpt: 'b' });
+});
+
+test('routed issues carry no body into the emitted document', async () => {
+  const { routeIssues } = await import('../release-audit-collect.mjs');
+  const units = [{ id: 'pkg:core', dir: 'packages/core', slug: 'core', name: '@adlc/core', manifest: null }];
+  const { byUnit, unmapped } = routeIssues([
+    { number: 1, title: 'a', body: 'packages/core/lib/x.mjs ' + 'y'.repeat(9000), labels: [] },
+    { number: 2, title: 'b', body: 'z'.repeat(9000), labels: [] },
+  ], units);
+  assert.equal(byUnit.get('pkg:core')[0].body, undefined);
+  assert.equal(unmapped[0].body, undefined);
+});

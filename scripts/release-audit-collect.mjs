@@ -299,6 +299,24 @@ export function sweepBatches(unmapped, escalated, size = SWEEP_BATCH_SIZE) {
   return out;
 }
 
+/** How much of an issue body survives into the emitted document. */
+export const ISSUE_EXCERPT = 200;
+
+/**
+ * Drop issue bodies from an issue record, keeping a short excerpt.
+ *
+ * Bodies are read for ROUTING and then never referenced again — no agent prompt
+ * uses them. Emitting them anyway made them 75% of the collected document (392 KB
+ * of 526 KB), and that document is passed verbatim as the workflow's `args`, so
+ * every byte is paid for on the way in. The agent gets the issue URL and can read
+ * the full text itself if the excerpt is not enough.
+ */
+export function stripBody(issue) {
+  const { body, ...rest } = issue;
+  const text = String(body ?? '').trim();
+  return { ...rest, excerpt: text.length > ISSUE_EXCERPT ? `${text.slice(0, ISSUE_EXCERPT)}…` : text };
+}
+
 /**
  * Route every open issue, and separately collect the ones the sweep agent must
  * see regardless of routing (P0/P1/security).
@@ -309,7 +327,7 @@ export function routeIssues(issues, units, ticketsByIssue = new Map()) {
   const escalated = [];
   for (const issue of issues) {
     const { unit, via } = routeIssue(issue, units, ticketsByIssue);
-    const record = { ...issue, routedVia: via, routedTo: unit };
+    const record = stripBody({ ...issue, routedVia: via, routedTo: unit });
     if (unit) {
       if (!byUnit.has(unit)) byUnit.set(unit, []);
       byUnit.get(unit).push(record);
