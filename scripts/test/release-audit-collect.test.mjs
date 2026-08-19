@@ -401,3 +401,19 @@ test('workflowArgs marks a narrowed run so the synthesizer can cap its verdict',
   const { workflowArgs } = await import('../release-audit-collect.mjs');
   assert.equal(workflowArgs({ filtered: true }).filtered, true);
 });
+
+test('narrowing the run does not change how an ambiguous issue routes', async () => {
+  // The filter selects which artifacts are AUDITED. It must not change what the
+  // router believes, or a narrowed re-run would hand one artifact an issue that a
+  // full run correctly refused to attribute to anybody.
+  const { routeIssue } = await import('../release-audit-collect.mjs');
+  const all = UNITS;
+  const narrowed = UNITS.filter((u) => u.id === 'pkg:hollow-test');
+  const issue = { number: 315, title: 'x', body: 'packages/fleet/lib/live-deps.mjs and packages/hollow-test/lib/y.mjs' };
+
+  const fleetUnit = { id: 'pkg:fleet', dir: 'packages/fleet', slug: 'fleet', name: '@adlc/fleet', manifest: null };
+  assert.equal(routeIssue(issue, [...all, fleetUnit]).via, 'ambiguous-path');
+  // Routed against the narrowed list, the same issue looks unambiguous — which is
+  // precisely why collectMain must route against every discovered unit.
+  assert.equal(routeIssue(issue, narrowed).via, 'path-mention');
+});

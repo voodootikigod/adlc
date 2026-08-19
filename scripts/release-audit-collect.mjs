@@ -543,15 +543,24 @@ export async function collectMain(argv = process.argv.slice(2), deps = {}) {
   const version = args.version ?? nextMinor(currentVersion);
   const since = args.since ?? newestVersionTag(deps);
 
-  let units = discoverUnits({ root });
-  if (args.packages) {
-    const wanted = new Set(args.packages.map((s) => s.replace(/^@adlc\//, '')));
-    units = units.filter((u) => wanted.has(u.slug) || wanted.has(u.name) || wanted.has(u.id));
-  }
+  // Discover EVERY unit, then narrow. Routing must see the whole repository even
+  // when the run does not: `--packages hollow-test` filtered the unit list first,
+  // so an issue naming both packages/fleet and packages/hollow-test found only one
+  // match left standing and routed to it with via=path-mention. The ambiguity that
+  // should have sent it to the sweep agent was erased by the filter, and a narrowed
+  // run presented a shared issue to one artifact as if it solely owned it — the
+  // over-claiming this router is written to refuse.
+  const allUnits = discoverUnits({ root });
+  const units = args.packages
+    ? allUnits.filter((u) => {
+      const wanted = new Set(args.packages.map((n) => n.replace(/^@adlc\//, '')));
+      return wanted.has(u.slug) || wanted.has(u.name) || wanted.has(u.id);
+    })
+    : allUnits;
 
   const churn = new Map(units.map((u) => [u.id, churnFor(u.dir, since, deps)]));
   const { issues, unconsultable: issuesUnconsultable, truncated: issuesTruncated } = fetchIssues({ ...deps, skip: args.skipIssues });
-  const routed = routeIssues(issues, units, ticketsByIssueNumber({ root }));
+  const routed = routeIssues(issues, allUnits, ticketsByIssueNumber({ root }));
   const probeResults = await probes(currentVersion, { root, ...deps });
 
   const doc = assemble({ version, since, units, issues, routed, probeResults, churn, issuesUnconsultable, issuesTruncated });
