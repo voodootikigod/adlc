@@ -162,6 +162,21 @@ test('the unit projection provides every unit field the workflow prompts read', 
   assert.deepEqual(missing, [], `workflowArgs must project: ${missing.join(', ')}`);
 });
 
+test('the projection provides every ISSUE field the workflow prompts render', async () => {
+  // Issue records are the bulk of `args`, so fields are trimmed aggressively — and
+  // a trimmed field that a prompt still renders would print "undefined" beside a
+  // real issue number, which reads as data rather than as a bug.
+  const { workflowArgs } = await import('../release-audit-collect.mjs');
+  const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));
+  const referenced = new Set([...code.matchAll(/\bi\.([a-zA-Z][a-zA-Z0-9_]*)/g)].map((m) => m[1]));
+  const full = { number: 1, title: 't', url: 'u', labels: [], routedVia: 'v', routedTo: null, excerpt: 'e' };
+  const projected = workflowArgs({ units: [{ issues: [full] }], issues: { sweepBatches: [[full]] } });
+  for (const record of [projected.units[0].issues[0], projected.issues.sweepBatches[0][0]]) {
+    const missing = [...referenced].filter((f) => !(f in record));
+    assert.deepEqual(missing, [], `issue projection must keep: ${missing.join(', ')}`);
+  }
+});
+
 test('the top-level projection provides every input field the workflow reads', async () => {
   const { workflowArgs } = await import('../release-audit-collect.mjs');
   const [code] = extractScript(readFileSync(WORKFLOW_MD, 'utf8'));

@@ -508,6 +508,11 @@ export function assemble({ version, since, units, issues, routed, probeResults, 
  * string "undefined" rather than failing.
  */
 export function workflowArgs(doc) {
+  // The prompts print an issue's number, labels, title, url and routing — not its
+  // text. The excerpt exists for the report and for a human reading input.json; an
+  // agent that wants the body runs `gh issue view`. Carrying it into `args` cost
+  // ~35 KB per run for something no prompt renders.
+  const slimIssue = ({ excerpt, ...rest }) => rest;
   return {
     version: doc.version,
     currentVersion: doc.currentVersion,
@@ -517,9 +522,10 @@ export function workflowArgs(doc) {
       id: u.id, kind: u.kind, dir: u.dir, name: u.name, version: u.version,
       published: u.published, manifest: u.manifest, bin: u.bin, filesField: u.filesField,
       dependencies: u.dependencies, engines: u.engines, hasTests: u.hasTests,
-      fileCount: u.fileCount, bytes: u.bytes, churn: u.churn, issues: u.issues,
+      fileCount: u.fileCount, bytes: u.bytes, churn: u.churn,
+      issues: (u.issues ?? []).map(slimIssue),
     })),
-    issues: { sweepBatches: doc.issues?.sweepBatches ?? [[]] },
+    issues: { sweepBatches: (doc.issues?.sweepBatches ?? [[]]).map((b) => b.map(slimIssue)) },
     probes: {
       versionDrift: doc.probes?.versionDrift ?? [],
       publishMetadata: doc.probes?.publishMetadata ?? [],
