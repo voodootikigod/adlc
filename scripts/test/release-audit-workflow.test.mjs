@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseArgs, extractScript, buildScript, workflowMain, WORKFLOW_MD } from '../release-audit-workflow.mjs';
+import { parseArgs, extractScript, buildScript, workflowMain, WORKFLOW_MD, INPUT_MARKER } from '../release-audit-workflow.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -39,37 +39,64 @@ test('extractScript refuses an ambiguous document rather than guessing', () => {
 });
 
 test('buildScript embeds the document and keeps the script intact', () => {
-  const out = buildScript({ version: '1.11.0' }, 'const input = args || INPUT_DOC');
+  const out = buildScript({ version: '1.11.0' }, `export const meta = {}\n${INPUT_MARKER}\nconst input = args || INPUT_DOC`);
   assert.match(out, /const INPUT_DOC = \{"version":"1\.11\.0"\}/);
   assert.match(out, /const input = args \|\| INPUT_DOC/);
   assert.match(out, /do not edit/);
 });
 
+test('buildScript leaves `export const meta` as the first statement', () => {
+  // The Workflow runtime REJECTS a script whose first statement is anything else —
+  // measured, not assumed: prepending the document produced "must be the FIRST
+  // statement in the script" and the fan-out never launched. The document is
+  // therefore injected at a marker that sits after meta.
+  const script = extractScript(readFileSync(join(ROOT, WORKFLOW_MD), 'utf8'));
+  const out = buildScript({ version: '1.11.0' }, script);
+  const firstCode = out.split('\n').find((l) => l.trim() && !l.trim().startsWith('//'));
+  assert.match(firstCode, /^export const meta = \{/);
+});
+
+test('buildScript declares INPUT_DOC before the line that reads it', () => {
+  const script = extractScript(readFileSync(join(ROOT, WORKFLOW_MD), 'utf8'));
+  const out = buildScript({ version: '1.11.0' }, script);
+  assert.ok(out.indexOf('const INPUT_DOC =') < out.indexOf('|| INPUT_DOC'), 'a TDZ error would abort the run');
+});
+
+test('buildScript refuses a template with no marker rather than emitting a broken script', () => {
+  assert.throws(() => buildScript({}, 'export const meta = {}\nconst input = INPUT_DOC'), /missing its/);
+});
+
+test('the committed workflow template carries the injection marker', () => {
+  const script = extractScript(readFileSync(join(ROOT, WORKFLOW_MD), 'utf8'));
+  assert.ok(script.includes(INPUT_MARKER));
+  assert.ok(script.indexOf('export const meta') < script.indexOf(INPUT_MARKER), 'the marker must follow meta');
+});
+
 test('buildScript neutralises a script-closing sequence in issue text', () => {
   // Issue titles are written by anyone who can open an issue and are embedded
   // verbatim. `</script` is legal JSON and hostile in a script context.
-  const out = buildScript({ units: [{ name: '</script><img src=x>' }] }, 'x');
+  const out = buildScript({ units: [{ name: '</script><img src=x>' }] }, INPUT_MARKER);
   assert.ok(!out.includes('</script'), 'the raw sequence must not survive');
   assert.match(out, /\\u003c/);
 });
 
 test('buildScript neutralises the JSON-legal line terminators', () => {
-  const out = buildScript({ t: 'a b c' }, 'x');
+  const out = buildScript({ t: 'a b c' }, INPUT_MARKER);
   assert.ok(!out.includes(' '));
   assert.ok(!out.includes(' '));
 });
 
 test('buildScript output still parses after escaping', () => {
-  const out = buildScript({ t: 'a b', name: '</script>' }, 'const input = INPUT_DOC');
+  const out = buildScript({ t: 'a b', name: '</script>' }, `${INPUT_MARKER}\nconst input = INPUT_DOC`);
   assert.doesNotThrow(compiles(out));
 });
 
 test('an embedded document round-trips back to the original value', () => {
   const doc = { version: '1.11.0', units: [{ id: 'pkg:core', name: '</script> x' }] };
-  const out = buildScript(doc, 'RESULT = INPUT_DOC');
+  const out = buildScript(doc, `${INPUT_MARKER}\nRESULT = INPUT_DOC`);
   const ctx = { RESULT: null };
   vm.createContext(ctx);
-  new vm.Script(out.replace('// Generated', '//')).runInContext(ctx);
+  new vm.Script(out).runInContext(ctx);
   // Compared as JSON, not deepEqual: the value is constructed inside another vm
   // realm, so its prototype differs and a strict deep-equal would fail on realm
   // identity rather than on content.

@@ -23,6 +23,8 @@ export const meta = {
   ],
 }
 
+// <<INPUT_DOC>>
+
 // `args` when the Workflow tool is given one; otherwise the document the build
 // step embedded above. Embedding is the normal path: `args` must be transcribed
 // inline into the tool call, and the collected document is tens of kilobytes, so
