@@ -314,3 +314,68 @@ test('no adapter grants the parent directory that holds its own settings', () =>
     }
   }
 });
+
+// ── Cross-model review findings (agy, #395 round 1) ──────────────────────────
+// All three were runtime-execution hazards: the profile contained the write
+// boundary correctly and would have broken real runs getting there. Each is
+// pinned by the behaviour it broke, not by the shape of the fix.
+
+test('a contained command can still write /dev/null (review finding 2)', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async () => {
+  // The Seatbelt HOST profile denies file-write* as a blanket and re-allows the
+  // write roots. /dev/null is a file, so `cmd 2>/dev/null` — ordinary in build and
+  // gate commands — failed under it. bwrap covers this with --dev-bind; Seatbelt
+  // had to be told. A worker that cannot redirect to /dev/null cannot run.
+  const root = scratch('mp-devnull-');
+  try {
+    const worktree = join(root, 'wt');
+    mkdirSync(worktree, { recursive: true });
+    const res = await runContained({ worktree, script: 'printf hello 2>/dev/null > out.txt; printf bye > /dev/null' });
+    assert.equal(res.status, 0, `writing /dev/null must succeed: ${res.stderr}`);
+    assert.equal(readFileSync(join(worktree, 'out.txt'), 'utf8'), 'hello');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('canWrite agrees with the profile about the device tree (review finding 2)', () => {
+  // A predicate that disagreed with the profile would be the thing tests trust
+  // while the sandbox does something else.
+  const model = new Sandbox({
+    mode: SANDBOX_MODES.SANDBOX, backend: { name: 'seatbelt' }, worktree: '/wt',
+    network: NETWORK.ALLOW, readPolicy: READ_POLICY.HOST,
+  });
+  assert.equal(model.canWrite('/dev/null'), true);
+  assert.equal(model.canWrite('/h/.config/adlc/quartermaster.json'), false,
+    'granting the device tree must not widen anything that persists');
+
+  // The repo-command profile is unchanged: it never granted /dev and still does not.
+  const repo = new Sandbox({ mode: SANDBOX_MODES.SANDBOX, backend: { name: 'seatbelt' }, worktree: '/wt' });
+  assert.equal(repo.canWrite('/dev/null'), false);
+});
+
+test('the temp dir is granted even when TMPDIR is unset (review finding 1)', () => {
+  // TMPDIR is usually UNSET on Linux. Passing it straight through left /tmp with
+  // no write grant while `--ro-bind / /` had already made it read-only — so every
+  // harness that allocates a temp file would fail, on exactly the platform
+  // bubblewrap serves. The deps layer resolves it through os.tmpdir(); this pins
+  // the policy layer's half: a resolved temp dir is always granted.
+  const resolved = realpathSync(tmpdir());
+  const { writablePaths } = modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: resolved });
+  assert.ok(writablePaths.includes(resolved), 'the temp dir must be writable on the model plane');
+});
+
+test('a missing declared state file is reported ONCE per run, not once per dispatch (review finding 3)', () => {
+  // A fleet runs many tickets and retries strikes. Repeating the warning dozens of
+  // times trains the operator to scroll past the one message that explains why
+  // their harness failed. modelPlaneFilesystem reports the full set every call —
+  // the caller is what dedupes — so this asserts the reporting contract the
+  // dedupe depends on: the same missing file is named every time it is asked.
+  const root = scratch('mp-warn-');
+  try {
+    const home = join(root, 'home');
+    mkdirSync(home, { recursive: true });
+    const first = modelPlaneFilesystem({ adapters: [claudeCode], home });
+    const second = modelPlaneFilesystem({ adapters: [claudeCode], home });
+    assert.deepEqual(second.missingStateFiles, first.missingStateFiles,
+      'the policy is a pure function of the host — deduping is the caller\'s job, not a hidden latch here');
+    assert.ok(first.missingStateFiles.length > 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

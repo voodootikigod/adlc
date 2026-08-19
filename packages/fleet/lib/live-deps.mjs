@@ -26,6 +26,7 @@ import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
+import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
@@ -248,19 +249,33 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   // What DIFFERS from the repo-command profile is the network axis, and only that:
   // egress stays open (K2 -- the worker must reach its provider), while writes are
   // bounded to the worktree plus the harness's own declared state directories.
+  // Per-RUN, not per-dispatch (finding 3): scoped to this deps object so a second
+  // run in the same process still warns, and so tests stay independent of each other.
+  const warnedMissingState = new Set();
   const modelSandboxFor = (worktree, adapters) => {
     const { writablePaths, missingStateFiles } = modelPlaneFilesystem({
       adapters,
       home: io.env.HOME,
-      tmpDir: io.env.TMPDIR,
+      // NOT `io.env.TMPDIR` alone: that variable is usually UNSET on Linux, and an
+      // unset temp dir means /tmp gets no write grant while `--ro-bind / /` has
+      // already made it read-only — every harness that allocates a temp file would
+      // then fail on exactly the platform bubblewrap serves. os.tmpdir() honours
+      // TMPDIR when set and falls back to the platform default when it is not.
+      tmpDir: io.env.TMPDIR || tmpdir(),
       extraWritable: config.modelPlaneWritable ?? [],
     });
-    if (missingStateFiles.length) {
+    // Warn ONCE per run, not once per dispatch. A fleet runs many tickets and
+    // retries strikes, so a per-dispatch warning about a state file this host
+    // simply does not have would repeat dozens of times and train the operator to
+    // scroll past the one message that tells them why their harness failed.
+    const unwarned = missingStateFiles.filter((f) => !warnedMissingState.has(f));
+    for (const f of unwarned) warnedMissingState.add(f);
+    if (unwarned.length) {
       // Named, not swallowed: this is the one shape of the policy that can make a
       // previously-working run fail, and an opaque harness error is the worst way
       // for an operator to meet it.
       console.error(
-        `fleet: model-plane sandbox is not granting ${missingStateFiles.join(', ')} ` +
+        `fleet: model-plane sandbox is not granting ${unwarned.join(', ')} ` +
         '(declared harness state that does not exist on this host). If the worker fails to ' +
         'write it, re-run with --model-plane-writable <path>.'
       );

@@ -118,6 +118,11 @@ export function resolveSandboxMode({ backend, operatorOverride = false, repoConf
   };
 }
 
+// Device nodes the model plane may write. /dev is a device tree, not persistent
+// operator state, so granting it does not widen what a candidate's edit can
+// outlive. Named here so `canWrite` and the Seatbelt profile cannot disagree.
+const DEVICE_WRITE_ROOTS = Object.freeze(['/dev']);
+
 function isUnder(root, path) {
   const r = resolve(root);
   const p = resolve(path);
@@ -192,6 +197,12 @@ function seatbeltProfile({
       '(allow default)',
       network === NETWORK.DENY ? '(deny network*)' : '(allow network*)',
       '(deny file-write*)',
+      // Device nodes are not persistent state, and a process that cannot write
+      // /dev/null cannot run: `cmd 2>/dev/null` is ordinary in build and gate
+      // commands, and the blanket denial above would fail it. bwrap covers this
+      // with --dev-bind; Seatbelt needs it stated. Kept as its own rule rather
+      // than folded into writeRoots so the two backends stay legibly equivalent.
+      `(allow file-write* ${DEVICE_WRITE_ROOTS.map(lit).join(' ')})`,
       `(allow file-write* ${writeRoots.map(lit).join(' ')})`,
     ].join(' ');
   }
@@ -254,6 +265,12 @@ export class Sandbox {
   canWrite(path) {
     if (this.mode !== SANDBOX_MODES.SANDBOX) return true;
     const roots = [this.worktree, this.syntheticHome, ...this.writablePaths].filter(Boolean);
+    // HOST read policy also grants the device tree (see DEVICE_WRITE_ROOTS), and
+    // the predicate says so — a predicate that disagreed with the profile would
+    // be the thing tests trust while the sandbox does something else.
+    if (this.readPolicy === READ_POLICY.HOST) {
+      roots.push(...DEVICE_WRITE_ROOTS);
+    }
     return roots.some((r) => isUnder(r, path));
   }
 
