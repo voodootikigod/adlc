@@ -553,9 +553,11 @@ active ticket that disagrees with the deny's bind.
   const capturePath = contentPath(root, denySessionId);
   const priorCaptureBytes = currentBytes(capturePath);
   // Writes and then proves the bytes on disk hash to what everything downstream
-  // will authorize against.
+  // will authorize against. Ownership is carried from the write itself — a
+  // disk sample here could adopt a concurrent replacement as ours and let the
+  // rollback below destroy it.
   const wroteCapture = writeVerifiedCapture(root, denySessionId, body);
-  const wroteCaptureBytes = currentBytes(capturePath);
+  const wroteCaptureBytes = wroteCapture.ok ? wroteCapture.bytes : null;
   const rollbackCapture = () =>
     restoreIfOurs({
       path: capturePath,

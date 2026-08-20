@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { writeJsonAtomic, writeTextAtomic, writeTextExclusive } from '../lib/atomic-json.mjs';
+import { writeCapture } from '../lib/capture.mjs';
 import { writeFinal } from '../lib/final.mjs';
 import { writeDenyRecord } from '../lib/deny-persist.mjs';
 import { writeResumeAuth } from '../lib/resume-auth.mjs';
@@ -92,6 +93,25 @@ test('a write diverted on its way to disk is foreign to the rollback', () => {
   assert.equal(undo.restored, false);
   assert.ok(existsSync(path), 'the replacement survives the rollback');
   assert.equal(readFileSync(path, 'utf8'), 'ours\ntampered\n');
+});
+
+test('the capture writer carries its own bytes the same way', () => {
+  const root = scratch();
+  const divert = {
+    mkdirSync,
+    existsSync,
+    renameSync,
+    unlinkSync,
+    writeFileSync: (p, body, opts) => writeFileSync(p, `${body}foreign\n`, opts),
+  };
+
+  const wrote = writeCapture(root, 'sess-own-3', 'handoff body\n', { fs: divert });
+  assert.ok(wrote.ok);
+  assert.equal(wrote.bytes, 'handoff body\n', 'token is the requested capture, not the disk outcome');
+
+  const undo = restoreIfOurs({ path: wrote.path, wroteBytes: wrote.bytes, priorBytes: null, label: 'capture' });
+  assert.equal(undo.conflict, true);
+  assert.ok(existsSync(wrote.path), 'the diverging capture is preserved');
 });
 
 test('the exclusive create claim carries its own bytes the same way', () => {

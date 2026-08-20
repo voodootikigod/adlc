@@ -75,7 +75,9 @@ export function writeCapture(root, sessionId, body, opts = {}) {
   const { body: stored, truncated } = capCaptureBody(body);
   const wrote = writeTextAtomic(path, stored, opts);
   if (!wrote.ok) return { ok: false, error: wrote.error };
-  return { ok: true, path, body: stored, hash: hashCaptureBody(stored), truncated };
+  // `bytes` is the atomic writer's own token (see atomic-json.mjs) — rollback
+  // ownership must come from here, never from a later disk read.
+  return { ok: true, path, body: stored, bytes: wrote.bytes, hash: hashCaptureBody(stored), truncated };
 }
 
 /**
