@@ -44,6 +44,11 @@
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs context",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs handoffstart",
+            "timeout": 15
           }
         ]
       }
