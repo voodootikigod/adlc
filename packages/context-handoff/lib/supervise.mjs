@@ -220,6 +220,99 @@ async function waitForExit(tracked, { sleep, pollMs }) {
 }
 
 /**
+ * What a supervised session's exit MEANS.
+ *
+ * A wrapper that reports every exit as "the session ended" is a wrapper that
+ * reports `supervise -- nonexistent-command` as a successful supervision. The
+ * three failures below are not variations on success: the harness never
+ * started, the harness ran and failed, or something killed it. Each has to
+ * survive as far as the caller's own exit code, because a supervisor is the
+ * process a script actually waits on.
+ *
+ * @param {{ code: number|null, signal: string|null, error?: unknown }|null} exit
+ * @returns {'child_exited'|'child_failed'|'child_signalled'|'spawn_failed'}
+ */
+export function classifyChildExit(exit) {
+  if (!exit || typeof exit !== 'object') return 'child_exited';
+  if (exit.error) return 'spawn_failed';
+  if (typeof exit.code === 'number' && exit.code !== 0) return 'child_failed';
+  if (exit.code === null && typeof exit.signal === 'string' && exit.signal.length > 0) {
+    return 'child_signalled';
+  }
+  return 'child_exited';
+}
+
+/** Serializable form of an exit — an Error does not survive JSON. */
+function describeExit(exit) {
+  if (!exit || typeof exit !== 'object') return null;
+  return {
+    code: typeof exit.code === 'number' ? exit.code : null,
+    signal: typeof exit.signal === 'string' && exit.signal.length > 0 ? exit.signal : null,
+    error: exit.error ? exit.error.message || String(exit.error) : null,
+  };
+}
+
+/**
+ * Exit codes the `supervise` caller reports.
+ *
+ * The harness's own code is NOT propagated verbatim: 1 and 2 already mean
+ * something about the SUPERVISION (bad invocation, degraded continuation), so a
+ * harness exiting 2 would be indistinguishable from a degrade. The harness's
+ * real code travels in the message and the JSON payload instead, where it
+ * cannot be confused for the supervisor's own verdict.
+ */
+export const SUPERVISE_EXIT_CODES = Object.freeze({
+  ok: 0,
+  operational: 1,
+  degraded: 2,
+  harnessFailed: 3,
+  harnessUnstartable: 4,
+});
+
+/**
+ * @param {string} reason from `superviseLoop`
+ * @returns {number}
+ */
+export function superviseExitCode(reason) {
+  switch (reason) {
+    case 'degraded':
+      return SUPERVISE_EXIT_CODES.degraded;
+    case 'child_failed':
+    case 'child_signalled':
+      return SUPERVISE_EXIT_CODES.harnessFailed;
+    case 'spawn_failed':
+      return SUPERVISE_EXIT_CODES.harnessUnstartable;
+    case 'unsafe_session_id':
+      return SUPERVISE_EXIT_CODES.operational;
+    // A clean exit and an operator interrupt are both the session ending the
+    // way it was asked to.
+    default:
+      return SUPERVISE_EXIT_CODES.ok;
+  }
+}
+
+/** One line an operator can read without consulting the exit-code table. */
+export function describeOutcome({ reason, continuations = 0, childExit = null } = {}) {
+  const tail = `after ${continuations} continuation(s)`;
+  switch (reason) {
+    case 'spawn_failed':
+      return `the harness could not be started (${childExit?.error ?? 'unknown error'})`;
+    case 'child_failed':
+      return `the supervised command exited ${childExit?.code} ${tail}`;
+    case 'child_signalled':
+      return `the supervised command was killed by ${childExit?.signal} ${tail}`;
+    case 'degraded':
+      return `continuation degraded ${tail} — the session is still running and still denied`;
+    case 'interrupted':
+      return `interrupted ${tail}`;
+    case 'unsafe_session_id':
+      return 'the minted session id was not safe to spawn — nothing was started';
+    default:
+      return `the supervised session ended ${tail}`;
+  }
+}
+
+/**
  * Poll for an open deny on this session, or the child's exit — whichever first.
  *
  * The deny store is read BEFORE the exit is checked on each tick: a session that
@@ -339,7 +432,7 @@ export async function superviseLoop({
   const stopped = () => interrupt?.isStopped() === true;
   let sessionId = mintSessionId();
   if (!isPromptSafeId(sessionId)) {
-    return { reason: 'unsafe_session_id', sessions: [], continuations: 0 };
+    return { reason: 'unsafe_session_id', sessions: [], continuations: 0, childExit: null };
   }
   let prompt = null;
   const sessions = [sessionId];
@@ -357,47 +450,58 @@ export async function superviseLoop({
     });
 
     if (watched.reason !== 'deny_open') {
-      // Nothing to continue: either the operator ended the session or they
+      // Nothing to continue: either the session ended or the operator
       // interrupted us. Either way the child owns the terminal until it exits.
-      await waitForExit(tracked, { sleep, pollMs });
-      return { reason: watched.reason, sessions, continuations };
+      const exit = await waitForExit(tracked, { sleep, pollMs });
+      // An interrupt is a handled outcome even though the child dies by signal:
+      // the operator asked for this, so it must not be reported as a harness
+      // failure. Every other exit is classified on what actually happened.
+      const reason = watched.reason === 'interrupted' ? 'interrupted' : classifyChildExit(exit);
+      const childExit = describeExit(exit);
+      // Said out loud, not only returned. The caller may be printing JSON (in
+      // which case it prints no human line at all), and "the harness never
+      // started" is not something an operator should have to parse a payload to
+      // discover.
+      if (reason === 'spawn_failed' || reason === 'child_failed' || reason === 'child_signalled') {
+        log(`adlc handoff supervise: ${describeOutcome({ reason, continuations, childExit })}`);
+      }
+      return { reason, sessions, continuations, childExit };
     }
 
     log(`adlc handoff supervise: session ${sessionId} hit a handoff deny — waiting for it to finish writing.`);
     const path = transcriptPath(sessionId);
-    const quiescence = await waitForQuiescence({
-      path,
-      statTranscript,
-      tracked,
-      sleep,
-      now,
-      pollMs,
-      quiescenceMs,
-    });
-    if (quiescence.reason === 'transcript_absent') {
-      // The narrative is optional — the deterministic brief still hands over
-      // ticket, evidence and git state — but a MISSING transcript is also the
-      // exact signature of contract item 24 going wrong, so it is said out loud
-      // rather than absorbed into a successful continuation.
+    await waitForQuiescence({ path, statTranscript, tracked, sleep, now, pollMs, quiescenceMs });
+    // Whether there is a transcript is a question about the FILE, not about how
+    // the wait ended. A child that dies before writing one releases the
+    // quiescence gate as `child_exited`, and selecting captureFrom from that
+    // reason handed `continue` a path to a file that does not exist — which
+    // degrades the whole continuation (exit 2, deny left open) over a narrative
+    // that was only ever optional. One stat answers it for both endings.
+    const hasTranscript = path !== null && statTranscript(path) !== null;
+    if (!hasTranscript) {
+      // The deterministic brief still hands over ticket, evidence and git state,
+      // so this continues — but a MISSING transcript is also the exact signature
+      // of contract item 24 going wrong, so it is said out loud rather than
+      // absorbed into a successful continuation.
       log(
         `adlc handoff supervise: no transcript at ${path ?? '(unresolvable path)'} — continuing without the ` +
           'model narrative. If this repeats, the child environment is suppressing transcript saving.',
       );
     }
 
-    const captureFrom = quiescence.reason === 'transcript_absent' ? null : path;
+    const captureFrom = hasTranscript ? path : null;
     const continued = await runContinue({ denySession: sessionId, captureFrom });
     if (!continued.ok) {
       log(degradeMessage(sessionId, continued.error || 'the continue command degraded'));
-      await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations };
+      const exit = await waitForExit(tracked, { sleep, pollMs });
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
     }
 
     const payload = parseContinuePayload(continued.payload);
     if (!payload.ok) {
       log(degradeMessage(sessionId, payload.error));
-      await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations };
+      const exit = await waitForExit(tracked, { sleep, pollMs });
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
     }
 
     // Defense at the injection point. The mutation gate re-derives this hash on
@@ -409,8 +513,8 @@ export async function superviseLoop({
     const verified = verifyCapture({ denySession: sessionId, contentHash: payload.contentHash });
     if (!verified.ok) {
       log(degradeMessage(sessionId, `the capture no longer matches its content_hash (${verified.error})`));
-      await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations };
+      const exit = await waitForExit(tracked, { sleep, pollMs });
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
     }
 
     const ended = await terminateChild(tracked, { sleep, now, pollMs, graceMs, kill: (s) => tracked.child.kill(s) });
@@ -429,6 +533,11 @@ export async function superviseLoop({
     prompt = payload.prompt;
     sessions.push(sessionId);
 
-    if (stopped()) return { reason: 'interrupted', sessions, continuations };
+    // Interrupted between the continue and the respawn: the deny is already
+    // consumed for a successor that will not be started here. The banner above
+    // names that successor id, and its resume-auth is on disk, so an operator
+    // can resume it by hand (and the SessionStart hook will hand it the
+    // capture). Starting a fresh interactive session after a Ctrl-C would not.
+    if (stopped()) return { reason: 'interrupted', sessions, continuations, childExit: null };
   }
 }

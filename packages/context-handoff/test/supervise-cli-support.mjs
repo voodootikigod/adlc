@@ -53,21 +53,30 @@ const at = argv.indexOf('--session-id');
 const sessionId = at === -1 ? null : argv[at + 1];
 const prompt = argv.length > 2 ? argv[argv.length - 1] : null;
 
-// Claude Code's own transcript location (live probe 2026-08-13).
-const dir = join(process.env.HOME, '.claude', 'projects', process.cwd().replace(/[/.]/g, '-'));
-mkdirSync(dir, { recursive: true });
-writeFileSync(
-  join(dir, sessionId + '.jsonl'),
-  [
-    JSON.stringify({ type: 'user', message: { role: 'user', content: 'do the work' } }),
-    JSON.stringify({
-      type: 'assistant',
-      requestId: 'req_1',
-      timestamp: new Date().toISOString(),
-      message: { role: 'assistant', content: [{ type: 'text', text: ${JSON.stringify(SUMMARY)} }] },
-    }),
-  ].join('\\n') + '\\n',
-);
+// A harness that fails on startup — the case a wrapper must not report as a
+// successful supervision.
+const failWith = process.env.FAKE_CLAUDE_EXIT_CODE;
+if (failWith) process.exit(Number(failWith));
+
+// Claude Code's own transcript location (live probe 2026-08-13). Skipped
+// entirely when the fixture is standing in for the item-24 failure, where the
+// child runs but its transcript never appears.
+if (process.env.FAKE_CLAUDE_NO_TRANSCRIPT !== '1') {
+  const dir = join(process.env.HOME, '.claude', 'projects', process.cwd().replace(/[/.]/g, '-'));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, sessionId + '.jsonl'),
+    [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'do the work' } }),
+      JSON.stringify({
+        type: 'assistant',
+        requestId: 'req_1',
+        timestamp: new Date().toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: ${JSON.stringify(SUMMARY)} }] },
+      }),
+    ].join('\\n') + '\\n',
+  );
+}
 
 if (prompt !== null) process.exit(0); // the successor: its job here is to be observed
 
@@ -110,11 +119,22 @@ export function readSpawns(log) {
 }
 
 /** Run the real supervisor to completion. */
-export function supervise({ root, home, fake, log, ticket = 'T-SUPERVISE', idleMs = 0, timeout = 90_000 }) {
+export function supervise({
+  root,
+  home,
+  fake,
+  log,
+  ticket = 'T-SUPERVISE',
+  idleMs = 0,
+  timeout = 90_000,
+  command = fake,
+  exitCode = '',
+  noTranscript = false,
+}) {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
-      [BIN, 'supervise', '--dir', '.adlc', '--json', '--', fake],
+      [BIN, 'supervise', '--dir', '.adlc', '--json', '--', command],
       {
         cwd: root,
         encoding: 'utf8',
@@ -126,6 +146,8 @@ export function supervise({ root, home, fake, log, ticket = 'T-SUPERVISE', idleM
           FAKE_CLAUDE_LOG: log,
           FAKE_CLAUDE_TICKET: ticket,
           FAKE_CLAUDE_IDLE_MS: String(idleMs),
+          FAKE_CLAUDE_EXIT_CODE: String(exitCode),
+          FAKE_CLAUDE_NO_TRANSCRIPT: noTranscript ? '1' : '0',
           // The markers contract item 24 says must never reach the child. They
           // are set HERE, on the supervisor, because that is how an operator
           // launching the wrapper from inside a Claude Code session gets them.

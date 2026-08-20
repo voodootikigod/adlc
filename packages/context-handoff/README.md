@@ -151,6 +151,19 @@ copy-pasteable `handoff continue` one-liner. The child is left running and
 nothing is consumed — a degrade is a decision for the operator, and killing
 their session first would take it away from them.
 
+**A failing harness is a failing supervisor.** The wrapper is what a script
+waits on, so it never reports its own success for a session that failed: exit 3
+when the supervised command exits non-zero or is killed, exit 4 when it could
+not be started at all. The harness's own code is carried in the message and the
+JSON payload rather than passed through, because 1 and 2 already mean something
+about the supervision itself. A clean exit and an operator's Ctrl-C are both 0.
+
+**A missing transcript is not a failed continuation.** The narrative is optional
+— the deterministic brief still carries ticket, evidence and git state — so a
+session that dies before its transcript appears is continued without one rather
+than degraded. It is reported loudly all the same, because a missing transcript
+is what the item-24 environment scrub failing looks like from the outside.
+
 **The capture is re-verified at the injection point.** The mutation gate already
 re-derives the hash on every evaluation, but that defends mutation; the bootstrap
 prompt is read by a model before it touches a tool, so the supervisor calls

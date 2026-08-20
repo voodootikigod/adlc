@@ -23,7 +23,7 @@ import { unlockSession } from '../lib/lock.mjs';
 import { restoreFinal, rollbackCheckpoint, writeCheckpoint } from '../lib/checkpoint.mjs';
 import { conflictReport, currentBytes, restoreIfOurs } from '../lib/rollback.mjs';
 import { authorizeSuccessor } from '../lib/consume.mjs';
-import { superviseLoop } from '../lib/supervise.mjs';
+import { describeOutcome, superviseExitCode, superviseLoop } from '../lib/supervise.mjs';
 import { createSuperviseDeps, splitPassthrough } from '../lib/supervise-runtime.mjs';
 import { capCaptureBody, hashCaptureBody, writeVerifiedCapture } from '../lib/capture.mjs';
 import { buildBootstrapPrompt, composeBrief } from '../lib/brief.mjs';
@@ -682,6 +682,10 @@ Exit codes:
   1  operational error (no command after \`--\`, missing key, bad --dir)
   2  continuation degraded — the session is still running and still denied,
      and the operator one-liner to continue it by hand has been printed
+  3  the supervised command failed — it exited non-zero or was killed. Its own
+     code is reported in the message rather than passed through, so it can
+     never be mistaken for one of this command's own verdicts above
+  4  the supervised command could not be started at all
 `;
 
 async function runSupervise(argv) {
@@ -728,6 +732,10 @@ async function runSupervise(argv) {
     interrupt.dispose();
   }
 
+  // The harness's own failure is the supervisor's failure to report: a wrapper
+  // that exits 0 because it wrapped something successfully, while the thing it
+  // wrapped never started, is a wrapper a script cannot trust.
+  const code = superviseExitCode(outcome.reason);
   finish({
     json,
     payload: {
@@ -737,9 +745,11 @@ async function runSupervise(argv) {
       reason: outcome.reason,
       sessions: outcome.sessions,
       continuations: outcome.continuations,
+      childExit: outcome.childExit ?? null,
+      exitCode: code,
     },
-    human: `handoff supervise: ${outcome.reason} after ${outcome.continuations} continuation(s) (sessions: ${outcome.sessions.join(' → ')})`,
-    code: outcome.reason === 'degraded' ? 2 : 0,
+    human: `handoff supervise: ${describeOutcome(outcome)} (sessions: ${outcome.sessions.join(' → ') || 'none'})`,
+    code,
   });
 }
 

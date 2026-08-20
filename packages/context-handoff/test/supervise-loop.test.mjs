@@ -16,6 +16,10 @@ import {
   degradeMessage,
   superviseChildEnv,
   transcriptPathFor,
+  classifyChildExit,
+  superviseExitCode,
+  describeOutcome,
+  SUPERVISE_EXIT_CODES,
   CHILD_SESSION_ENV_MARKERS,
 } from '../lib/supervise.mjs';
 import {
@@ -32,6 +36,7 @@ const PROMPT = 'Continuation of session sess-denier under ticket T-1. Read the h
 /** A spawned child the test drives by hand. */
 function fakeChild() {
   let settle;
+  let reject;
   const child = {
     signals: [],
     kill(signal) {
@@ -40,8 +45,13 @@ function fakeChild() {
     end(code = 0, signal = null) {
       settle({ code, signal });
     },
-    exited: new Promise((resolve) => {
+    /** A child that never started — the spawner's own failure. */
+    fail(error) {
+      reject(error);
+    },
+    exited: new Promise((resolve, rej) => {
       settle = resolve;
+      reject = rej;
     }),
   };
   return child;
@@ -372,6 +382,91 @@ test('a missing transcript continues without a narrative and says so', async () 
   );
 });
 
+test('a harness that fails is reported as a failure, not as a supervised session', async () => {
+  for (const [label, ending, expected] of [
+    ['non-zero exit', (child) => child.end(3), 'child_failed'],
+    ['killed by a signal', (child) => child.end(null, 'SIGSEGV'), 'child_signalled'],
+    ['never started', (child) => child.fail(new Error('spawn ENOENT')), 'spawn_failed'],
+    ['clean exit', (child) => child.end(0), 'child_exited'],
+  ]) {
+    const h = harness({ onSpawn: ({ child }) => setImmediate(() => ending(child)) });
+    const result = await superviseLoop(h.deps);
+    assert.equal(result.reason, expected, `${label} must classify as ${expected}`);
+    assert.equal(h.continueCalls.length, 0);
+  }
+});
+
+test('the failure a caller cannot see in a payload is also said out loud', async () => {
+  const h = harness({ onSpawn: ({ child }) => setImmediate(() => child.fail(new Error('spawn ENOENT'))) });
+  const result = await superviseLoop(h.deps);
+  assert.equal(result.childExit.error, 'spawn ENOENT');
+  assert.ok(
+    h.logs.some((line) => line.includes('could not be started') && line.includes('ENOENT')),
+    'a JSON-mode caller prints no human line — the loop must report this itself',
+  );
+});
+
+test('an interrupt is not a harness failure even though the child dies by signal', async () => {
+  const stopped = { value: false };
+  const h = harness({
+    onSpawn: ({ child }) =>
+      setImmediate(() => {
+        stopped.value = true;
+        setImmediate(() => child.end(null, 'SIGINT'));
+      }),
+  });
+  h.deps.interrupt = { isStopped: () => stopped.value };
+
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.reason, 'interrupted', 'the operator asked for this');
+  assert.equal(superviseExitCode(result.reason), 0);
+  assert.ok(
+    !h.logs.some((line) => line.includes('killed by')),
+    'an interrupt must not be reported as the harness failing',
+  );
+});
+
+test('a child that dies before writing a transcript still continues on the brief', async () => {
+  // The bug this pins: quiescence ends as `child_exited` rather than
+  // `transcript_absent`, and selecting captureFrom from that reason handed
+  // `continue` a path to a file that never existed — degrading the whole
+  // continuation over an optional narrative.
+  const h = harness({
+    denies: { [DENIER]: 0 },
+    transcriptMtime: () => null,
+    onSpawn: ({ sessionId, child }) => {
+      if (sessionId === DENIER) child.end(0);
+      if (sessionId === SUCCESSOR) setImmediate(() => child.end(0));
+    },
+  });
+
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.continuations, 1, 'the deny must still be continued');
+  assert.equal(h.continueCalls[0].captureFrom, null, 'a path to a nonexistent file degrades continue');
+  assert.ok(h.logs.some((line) => line.includes('no transcript')));
+});
+
+test('a child that dies WITH a transcript still hands it over', async () => {
+  // The control for the pair above: the fix must select on the file, not on
+  // how the wait ended — a supervisor that always passed null would lose every
+  // narrative and still pass the test above.
+  const h = harness({
+    denies: { [DENIER]: 0 },
+    transcriptMtime: () => 4_000,
+    onSpawn: ({ sessionId, child }) => {
+      if (sessionId === DENIER) child.end(0);
+      if (sessionId === SUCCESSOR) setImmediate(() => child.end(0));
+    },
+  });
+
+  await superviseLoop(h.deps);
+
+  assert.equal(h.continueCalls[0].captureFrom, `/transcripts/${DENIER}.jsonl`);
+  assert.ok(!h.logs.some((line) => line.includes('no transcript')));
+});
+
 test('an unsafe minted session id refuses to spawn anything', async () => {
   const h = harness({ sessions: ['not a uuid\nwith a newline'] });
   const result = await superviseLoop(h.deps);
@@ -444,6 +539,43 @@ test('degradeMessage degrades to a readable instruction when the id cannot be qu
   const unsafe = degradeMessage('sess-1\nrm -rf /', 'deny is unbound');
   assert.doesNotMatch(unsafe, /rm -rf/);
   assert.match(unsafe, /\.adlc\/handoffs\/denies/);
+});
+
+test('classifyChildExit separates the three failures from a clean exit', () => {
+  assert.equal(classifyChildExit({ code: 0, signal: null }), 'child_exited');
+  assert.equal(classifyChildExit({ code: 1, signal: null }), 'child_failed');
+  assert.equal(classifyChildExit({ code: 127, signal: null }), 'child_failed');
+  assert.equal(classifyChildExit({ code: null, signal: 'SIGKILL' }), 'child_signalled');
+  assert.equal(classifyChildExit({ code: null, signal: null, error: new Error('ENOENT') }), 'spawn_failed');
+  // An error wins over a code: a spawner that reports both never ran anything.
+  assert.equal(classifyChildExit({ code: 0, signal: null, error: new Error('x') }), 'spawn_failed');
+  assert.equal(classifyChildExit(null), 'child_exited');
+  assert.equal(classifyChildExit({ code: null, signal: '' }), 'child_exited');
+});
+
+test('every failure reason maps to a distinct non-zero exit code', () => {
+  assert.equal(superviseExitCode('child_exited'), SUPERVISE_EXIT_CODES.ok);
+  assert.equal(superviseExitCode('interrupted'), SUPERVISE_EXIT_CODES.ok);
+  assert.equal(superviseExitCode('degraded'), SUPERVISE_EXIT_CODES.degraded);
+  assert.equal(superviseExitCode('child_failed'), SUPERVISE_EXIT_CODES.harnessFailed);
+  assert.equal(superviseExitCode('child_signalled'), SUPERVISE_EXIT_CODES.harnessFailed);
+  assert.equal(superviseExitCode('unsafe_session_id'), SUPERVISE_EXIT_CODES.operational);
+  // "could not start" is not the same fact as "ran and failed" — an operator
+  // debugging a typo'd command needs to tell them apart.
+  assert.equal(superviseExitCode('spawn_failed'), SUPERVISE_EXIT_CODES.harnessUnstartable);
+  assert.notEqual(SUPERVISE_EXIT_CODES.harnessUnstartable, SUPERVISE_EXIT_CODES.harnessFailed);
+  const codes = Object.values(SUPERVISE_EXIT_CODES);
+  assert.equal(new Set(codes).size, codes.length, 'two outcomes sharing a code are one outcome');
+});
+
+test('describeOutcome names the harness code without pretending it is ours', () => {
+  assert.match(describeOutcome({ reason: 'child_failed', childExit: { code: 7 } }), /exited 7/);
+  assert.match(describeOutcome({ reason: 'child_signalled', childExit: { signal: 'SIGKILL' } }), /SIGKILL/);
+  assert.match(describeOutcome({ reason: 'spawn_failed', childExit: { error: 'ENOENT' } }), /ENOENT/);
+  assert.match(describeOutcome({ reason: 'spawn_failed' }), /could not be started/);
+  assert.match(describeOutcome({ reason: 'degraded', continuations: 2 }), /still denied/);
+  assert.match(describeOutcome({ reason: 'child_exited', continuations: 1 }), /session ended/);
+  assert.match(describeOutcome({ reason: 'unsafe_session_id' }), /nothing was started/);
 });
 
 test('parseContinuePayload accepts the real envelope and rejects what it should', () => {
