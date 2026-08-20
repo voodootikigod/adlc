@@ -21,6 +21,9 @@ const CASES = [
   // table that only ever tests 1-9 cannot tell that from [1-9A-Z].
   ['AWS access key id', 'AKIA0IOSFODNN7EXAMPL', 'AKIA0 alone is not a key'],
   ['AWS temporary access key id', 'ASIAIOSFODNN7EXAMPLE', 'ASIA region notes'],
+  // Zero-digit twin, same reason as the AKIA0 case above: a body whose only
+  // digit is 7 cannot tell [0-9A-Z] from [1-9A-Z].
+  ['AWS temporary access key id', 'ASIA0IOSFODNN7EXAMPL', 'ASIA0 alone is not a key'],
   ['GitHub token', 'ghp_abcdefghij0123456789ABCDEFGHIJ0123', 'ghp_short'],
   ['GitHub fine-grained token', 'github_pat_11ABCDE0123456789abcdefghij', 'github_pat_x'],
   ['GitLab token', 'glpat-abcdefghij0123456789', 'glpat-tiny'],
