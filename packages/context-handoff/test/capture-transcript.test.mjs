@@ -21,6 +21,15 @@ const assistant = (requestId, ...texts) =>
   });
 const user = (text) => line({ type: 'user', message: { role: 'user', content: text } });
 
+test('parseTranscript pins the emptiness boundary on both sides', () => {
+  // Empty input is NOTHING — zero entries, zero skipped. A guard slipped to
+  // `length === 1` would instead swallow a one-byte transcript silently, and a
+  // guard slipped past empty would count the empty string as one skipped line.
+  assert.deepEqual(parseTranscript(''), { entries: [], skipped: 0 });
+  assert.deepEqual(parseTranscript('x'), { entries: [], skipped: 1 });
+  assert.deepEqual(parseTranscript(null), { entries: [], skipped: 0 });
+});
+
 test('the final assistant message is the trailing run sharing one requestId', () => {
   const jsonl = [
     user('go'),

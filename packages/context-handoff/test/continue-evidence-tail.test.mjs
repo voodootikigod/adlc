@@ -59,6 +59,24 @@ test('an empty ledger directory yields no tail rather than throwing', () => {
   });
 });
 
+test('a forest of exactly one segment is a forest, not a fallback to the root', () => {
+  withLedger((adlcDir) => {
+    // The boundary the multi-segment fixtures cannot see: with ONE segment,
+    // a `length > 1` slip silently reads the (poisoned) root instead.
+    writeFileSync(
+      join(adlcDir, 'manifest.jsonl'),
+      `${JSON.stringify({ seq: 1, gate: 'POISONED-ROOT', ts: 'x', ticket: 'T0' })}\n`,
+      'utf8',
+    );
+    writeChain(join(adlcDir, 'manifest.d', 'only-01AAAAAAAAAAAAAAAAAAAAAAAA.jsonl'), 1, 2, 'only');
+
+    assert.match(newestManifestChain(adlcDir), /only-01AAAAAAAAAAAAAAAAAAAAAAAA\.jsonl$/);
+    for (const line of evidenceTail(adlcDir)) {
+      assert.ok(!line.includes('POISONED'), `the root was read past a lone segment: ${line}`);
+    }
+  });
+});
+
 test('the newest segment is read and older chains are never opened', () => {
   withLedger((adlcDir) => {
     // A root ledger whose content would be catastrophic to quote, and an older
