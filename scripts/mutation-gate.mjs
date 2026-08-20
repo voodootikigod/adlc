@@ -292,6 +292,33 @@ export function classify(changed, requestedMax, root = ROOT) {
   };
 }
 
+/**
+ * Mutants to ask hollow-test for, given a classification (#531).
+ *
+ * ONE per changed file is not enough. A file's allocation can be spent on a
+ * mutant that does not parse — `null-return` on `return {` opening a multi-line
+ * object literal is the reliable case — and hollow-test correctly discards that
+ * as INVALID rather than counting it as a kill. With a single draw the file then
+ * gets NO prosecution at all, while the run reports zero survivors and fails on
+ * coverage instead. Seen on #395/PR #530: `Total: 16  Killed: 15  Survived: 0
+ * Invalid: 1`, where the one invalid draw was that file's whole budget.
+ *
+ * Two per file means a single unparseable draw still leaves a real one. It does
+ * not make the INVALID path unreachable — that safety net stays, and stays
+ * tested in @adlc/hollow-test — it just stops a wide diff from hitting it by
+ * budget starvation rather than by a genuinely unmutatable file.
+ *
+ * The SLOW path keeps its deliberate cap: it re-runs the whole ~9.5-minute suite
+ * per mutant, so widening there trades a bounded CI job for an unbounded one.
+ */
+export const MUTANTS_PER_CHANGED_FILE = 2;
+
+export function mutantBudget(decision) {
+  const files = decision.files ?? [];
+  if (decision.kind === 'slow') return decision.max;
+  return Math.max(decision.max, files.length * MUTANTS_PER_CHANGED_FILE);
+}
+
 function isMain() {
   return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 }
@@ -357,10 +384,10 @@ export function main() {
     bin,
     '--base', base,
     '--test-cmd', decision.testCmd,
-    // At least one mutant per changed file, so the tail of a wide diff is not
-    // left unprosecuted by budget distribution. hollow-test warns when a file
-    // gets no budget; this keeps that warning from being the normal case.
-    '--max', String(Math.max(decision.max, (decision.files ?? []).length)),
+    // Enough mutants that every changed file gets more than one draw — see
+    // mutantBudget: a single draw can be spent on an unparseable mutant, which
+    // leaves that file unprosecuted while the run still reports zero survivors.
+    '--max', String(mutantBudget(decision)),
     '--timeout-ms', decision.kind === 'fast' ? '180000' : '600000',
     // Mirror the wrapper's own source declaration into the tool, so the two
     // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).

@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE } from '../mutation-gate.mjs';
+import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE, mutantBudget, MUTANTS_PER_CHANGED_FILE } from '../mutation-gate.mjs';
 import { generateMutants } from '../../packages/core/lib/mutate.mjs';
 import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
@@ -702,4 +702,42 @@ test('the survivor message is honest: a comment-prefixed line really is prosecut
   const mutants = generateMutants('/* x */ const limit = 3;');
   assert.equal(mutants.length, 1, 'a one-line comment prefix must not suppress the gate');
   assert.equal(mutants[0].mutated, '/* x */ const limit = 4;');
+});
+
+// ── #531: one mutant per changed file starves a file of prosecution ──────────
+// A file's single allocated mutant can be one that does not parse (`null-return`
+// on `return {`). hollow-test discards it as INVALID rather than counting a kill,
+// so the file gets NO prosecution while the run reports zero survivors and fails
+// on coverage. Observed on #395/PR #530.
+
+test('the fast path budgets MORE than one mutant per changed file', () => {
+  const decision = { kind: 'fast', max: 12, files: Array.from({ length: 16 }, (_, i) => `src/f${i}.mjs`) };
+  assert.equal(mutantBudget(decision), 32);
+  assert.ok(mutantBudget(decision) > decision.files.length,
+    'one-per-file is the starvation case this exists to prevent');
+});
+
+test('the fast path never budgets BELOW the requested max', () => {
+  // A narrow diff must not lose budget just because it touches few files.
+  const decision = { kind: 'fast', max: 12, files: ['src/one.mjs'] };
+  assert.equal(mutantBudget(decision), 12);
+});
+
+test('the SLOW path keeps its deliberate cap — widening it would unbound CI', () => {
+  // The slow fallback re-runs the whole suite per mutant; classify() already
+  // caps it at 3 for that reason, and the budget rule must not undo that.
+  const decision = { kind: 'slow', max: 3, files: Array.from({ length: 16 }, (_, i) => `src/f${i}.mjs`) };
+  assert.equal(mutantBudget(decision), 3);
+});
+
+test('a decision with no file list is handled without inventing budget', () => {
+  assert.equal(mutantBudget({ kind: 'fast', max: 12 }), 12);
+  assert.equal(mutantBudget({ kind: 'fast', max: 12, files: [] }), 12);
+});
+
+test('MUTANTS_PER_CHANGED_FILE is the knob, and it is greater than one', () => {
+  // Stated as a constant so the reason (survive one invalid draw) lives with the
+  // number, and so lowering it back to 1 is a visible edit rather than a silent
+  // arithmetic change.
+  assert.ok(MUTANTS_PER_CHANGED_FILE > 1);
 });
