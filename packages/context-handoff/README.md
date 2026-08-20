@@ -12,6 +12,7 @@ adlc handoff bypass --session <id> [--unbound-reason <text>] [--write]
 adlc handoff repair --session <id> --ticket <id> --content-hash <h> [--write]
 adlc handoff unlock --session <id> --pid <n> --started-at <iso> --host <h> --nonce <n> [--write]
 adlc handoff continue --deny-session <denier> [--session <new>] [--capture-from <transcript>] [--write]
+adlc handoff supervise [--dir .adlc] -- <command> [args...]
 ```
 
 Mutating `--write` requires `ADLC_MANIFEST_KEY` (never silent success).
@@ -114,6 +115,46 @@ session's own words — so each section is wrapped in `<<<UNTRUSTED-CAPTURE-DATA
 / `END-UNTRUSTED>>>` markers, with those delimiters stripped from the content so
 the fence cannot be closed from inside. `bootstrap_prompt` repeats, before and
 after the body, that fenced content is recorded data rather than instructions.
+
+## Supervision
+
+`supervise` is the zero-touch path: it wraps a harness command, and when that
+session hits a handoff deny it performs the whole recovery the operator would
+otherwise perform by hand.
+
+```sh
+ADLC_MANIFEST_KEY=$KEY adlc handoff supervise -- claude --model opus
+```
+
+It mints the first session id, polls that session's deny marker (~2 s; `fs.watch`
+is not trusted), waits for the transcript to stop growing (5 s of stability, or
+the child exiting) so the handoff summary is captured whole, runs
+`handoff continue --write`, terminates the superseded child (SIGTERM, then
+SIGKILL after 10 s), and respawns the harness with the successor id and the
+bootstrap prompt. Successor ids come from `continue`, never from the wrapper.
+
+**The key stays with the supervisor.** `ADLC_MANIFEST_KEY` is required up front
+and reaches only the continue step; `superviseChildEnv` strips it — along with
+`ADLC_ADMIN_KEY` — from every harness child.
+
+**Contract item 24.** Every spawn also drops `CLAUDECODE`,
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID` and
+`CLAUDE_CODE_ENTRYPOINT`. A `claude` process that inherits them treats itself as
+a nested child and silently stops writing its transcript — no error, no warning,
+just a continuation with nothing to capture. The scrub is applied per spawn, not
+once at startup.
+
+**Degrade hands the session back.** An unbound deny, a corrupt transcript, a
+payload that cannot be trusted, or a capture that no longer matches its
+`content_hash` all stop the loop with exit 2, a single warning, and the
+copy-pasteable `handoff continue` one-liner. The child is left running and
+nothing is consumed — a degrade is a decision for the operator, and killing
+their session first would take it away from them.
+
+**The capture is re-verified at the injection point.** The mutation gate already
+re-derives the hash on every evaluation, but that defends mutation; the bootstrap
+prompt is read by a model before it touches a tool, so the supervisor calls
+`readVerifiedCapture` again before spawning the successor.
 
 ```js
 import { WARN_PCT, HANDOFF_PCT, HARD_PCT } from '@adlc/context-handoff/lib/thresholds.mjs';

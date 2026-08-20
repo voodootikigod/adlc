@@ -3,7 +3,7 @@
  * handoff — operator/host CLI for context-rot handoff (slice 2).
  * Dispatched as `adlc handoff <subcommand>`.
  *
- * Subcommands: write | resume | bypass | repair | unlock | continue
+ * Subcommands: write | resume | bypass | repair | unlock | continue | supervise
  * Mutating `--write` requires ADLC_MANIFEST_KEY (never silent success).
  */
 
@@ -23,6 +23,8 @@ import { unlockSession } from '../lib/lock.mjs';
 import { restoreFinal, rollbackCheckpoint, writeCheckpoint } from '../lib/checkpoint.mjs';
 import { conflictReport, currentBytes, restoreIfOurs } from '../lib/rollback.mjs';
 import { authorizeSuccessor } from '../lib/consume.mjs';
+import { superviseLoop } from '../lib/supervise.mjs';
+import { createSuperviseDeps, splitPassthrough } from '../lib/supervise-runtime.mjs';
 import { capCaptureBody, hashCaptureBody, writeVerifiedCapture } from '../lib/capture.mjs';
 import { buildBootstrapPrompt, composeBrief } from '../lib/brief.mjs';
 import {
@@ -57,6 +59,7 @@ Subcommands:
   repair    Privileged host bind: update open deny ticket_id+content_hash
   unlock    Reclaim a session lock (dead PID + same host + full field match)
   continue  Capture the denied session, bind it, and consume for one successor
+  supervise Run a harness under a wrapper that continues it on every deny
 
 Common options:
   --dir <path>     ledger directory (default: .adlc). Its final path segment
@@ -660,6 +663,86 @@ active ticket that disagrees with the deny's bind.
   });
 }
 
+const SUPERVISE_USAGE = `handoff supervise [--dir .adlc] -- <command> [args...]
+
+Run a harness session under a supervisor that performs the whole handoff
+recovery for the operator: it mints the session id, watches for that session's
+deny marker, waits for the session to finish writing, runs \`handoff continue\`,
+and respawns the harness as the successor with the bootstrap prompt.
+
+  adlc handoff supervise -- claude
+  adlc handoff supervise --dir .adlc -- claude --model opus
+
+ADLC_MANIFEST_KEY is required and is used ONLY for the continue step. It is
+stripped from the harness child's environment, along with the Claude Code
+child-session markers that silently disable transcript saving (spec item 24).
+
+Exit codes:
+  0  the supervised session ended (or you interrupted it)
+  1  operational error (no command after \`--\`, missing key, bad --dir)
+  2  continuation degraded — the session is still running and still denied,
+     and the operator one-liner to continue it by hand has been printed
+`;
+
+async function runSupervise(argv) {
+  // Help is answered before the passthrough split: `supervise --help` has no
+  // `--`, and refusing it for that reason would make the help unreachable
+  // exactly when somebody needs to be told about the separator.
+  const separatorAt = argv.indexOf('--');
+  const ownArgs = separatorAt === -1 ? argv : argv.slice(0, separatorAt);
+  if (ownArgs.includes('--help') || ownArgs.includes('-h')) {
+    console.log(SUPERVISE_USAGE);
+    process.exit(0);
+  }
+
+  const split = splitPassthrough(argv);
+  if (!split.ok) opError(split.error);
+
+  const { values } = parseArgs({
+    args: split.flags,
+    options: {
+      dir: { type: 'string' },
+      json: { type: 'boolean', default: false },
+      help: { type: 'boolean', default: false },
+    },
+  });
+  const { root, adlcDir, json } = commonOrExit(values);
+
+  // Fail before the harness starts, not after the first deny: a wrapper that
+  // discovers the missing key an hour in has wasted the session it was
+  // supervising, and the deny it cannot clear is sticky.
+  requireKeyOrExit();
+
+  const { deps, interrupt } = createSuperviseDeps({
+    root,
+    adlcDir,
+    command: split.command,
+    args: split.args,
+    env: process.env,
+  });
+
+  let outcome;
+  try {
+    outcome = await superviseLoop(deps);
+  } finally {
+    interrupt.dispose();
+  }
+
+  finish({
+    json,
+    payload: {
+      tool: 'handoff',
+      command: 'supervise',
+      dryRun: false,
+      reason: outcome.reason,
+      sessions: outcome.sessions,
+      continuations: outcome.continuations,
+    },
+    human: `handoff supervise: ${outcome.reason} after ${outcome.continuations} continuation(s) (sessions: ${outcome.sessions.join(' → ')})`,
+    code: outcome.reason === 'degraded' ? 2 : 0,
+  });
+}
+
 function runBypass(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -997,11 +1080,18 @@ switch (command) {
   case 'continue':
     runContinue(rest);
     break;
+  case 'supervise':
+    // Awaited: the loop is long-lived, and an unawaited rejection here would
+    // exit 0 while the supervised session was still running.
+    await runSupervise(rest);
+    break;
   case '--help':
   case '-h':
   case 'help':
     helpAndExit();
     break;
   default:
-    opError(`unknown subcommand "${command}" (expected write|resume|bypass|repair|unlock|continue)`);
+    opError(
+      `unknown subcommand "${command}" (expected write|resume|bypass|repair|unlock|continue|supervise)`,
+    );
 }
