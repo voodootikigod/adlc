@@ -68,7 +68,7 @@ export function resolveRunConfig(config = {}, flags = {}) {
     warnings.push(
       'SECURITY: .adlc/config.json set fleet.modelPlaneWritable; the model-plane WRITE boundary is operator-local ' +
         '(--model-plane-writable) only. That boundary exists to stop candidate-authored gate commands writing ' +
-        'outside their worktree, so letting the candidate tree widen it would be the boundary disabling itself (#395) — ignored.'
+        'outside their worktree, so letting the candidate tree widen it would be the boundary disabling itself — ignored.'
     );
   }
   return {
