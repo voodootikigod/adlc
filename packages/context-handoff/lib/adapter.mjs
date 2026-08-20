@@ -41,6 +41,26 @@ export const HANDOFF_MUTATING_SUBCOMMANDS = new Set([
 ]);
 
 /**
+ * Appended to every handoff deny message an agent sees.
+ *
+ * The deny tells a session it may no longer mutate; on its own it does not tell
+ * the session to leave anything behind, so the transcript ends on whatever the
+ * agent happened to be doing. `continue` extracts the trailing assistant
+ * message as the capture's narrative — which means the value of every
+ * continuation depends on that last message being a handoff summary rather than
+ * an aborted tool call. This is the one place the agent is asked for it, and it
+ * is asked at exactly the moment it has nothing else it is allowed to do.
+ *
+ * Harness adapters append this to their own deny text; the Claude Code hook
+ * keeps a trusted local copy for the same reason it keeps the recovery
+ * diagnostic local (a project-resolved package must not be able to remove the
+ * instruction), pinned by adapter-test/cc-helper-drift.test.mjs.
+ */
+export const CAPTURE_INSTRUCTION =
+  'Context handoff active: write your handoff summary (state, done, remaining, next steps, dead ends) ' +
+  'as your final message, then stop.';
+
+/**
  * Session identity for deny markers / D2, from whatever the harness offers.
  *
  * Candidates are tried in order; the first one `isSafeSessionId` accepts wins.

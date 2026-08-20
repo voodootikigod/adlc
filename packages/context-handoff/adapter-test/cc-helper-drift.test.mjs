@@ -31,6 +31,7 @@ import {
   writeBypassGrant,
   bypassGrantPath,
   BYPASS_GRANT_SCHEMA,
+  CAPTURE_INSTRUCTION as canonicalCaptureInstruction,
 } from '@adlc/context-handoff';
 import { canonicalJson } from '@adlc/core';
 import { createHmac } from 'node:crypto';
@@ -48,6 +49,7 @@ const CC_HANDOFF_GATE = join(
 const {
   resolveSessionId: ccResolveSessionId,
   isProtectedHandoffPath: ccIsProtectedHandoffPath,
+  CAPTURE_INSTRUCTION: ccCaptureInstruction,
   readVerifiedBypassGrant: ccReadVerifiedBypassGrant,
   isBareInspectionPwd: ccIsBareInspectionPwd,
   matchRecoveryCommand: ccMatchRecoveryCommand,
@@ -87,6 +89,16 @@ const PATH_CASES = [
   '.adlc/handoffs/denies/sess-a.json',
   './.adlc/handoffs/denies/sess-a.json',
   '.adlc/handoffs/x/../denies/sess-a.json',
+  // Capture bodies. The fixed list above predates `.adlc/handoffs/content/**`,
+  // so the CC copy went on returning false for every one of these while the
+  // canonical returned true and this test still passed — the exact drift it
+  // exists to catch, invisible because no case named the directory.
+  '.adlc/handoffs/content',
+  '.adlc/handoffs/content/sess-a.md',
+  './.adlc/handoffs/content/sess-a.md',
+  '.adlc/handoffs/x/../content/sess-a.md',
+  '.adlc\\handoffs\\content\\sess-a.md',
+  '.adlc/handoffs/content-other/sess-a.md',
   '.adlc/handoffs/sess-a.resume-auth.json',
   '.adlc/handoffs/sess-a.model-ok',
   '.adlc/handoffs/sess-a.lock',
@@ -118,6 +130,24 @@ test('the CC path guard agrees with isProtectedHandoffPath', () => {
     );
   }
 });
+
+test('the path drift cases straddle the verdict boundary', () => {
+  // Same guard as the grant table below: two twins that both returned a
+  // constant would agree on every case above and prove nothing.
+  const verdicts = PATH_CASES.map((p) => canonicalIsProtectedHandoffPath(p));
+  assert.ok(verdicts.includes(true), 'no case is protected');
+  assert.ok(verdicts.includes(false), 'no case is unprotected');
+  assert.equal(canonicalIsProtectedHandoffPath('.adlc/handoffs/content/sess-a.md'), true);
+  assert.equal(canonicalIsProtectedHandoffPath('.adlc/handoffs/content-other/sess-a.md'), false);
+});
+
+test('the CC deny message carries the canonical capture instruction', () => {
+  // The hook keeps its own copy so a project-resolved package cannot delete the
+  // one sentence that makes a denied session's final message worth capturing.
+  assert.equal(ccCaptureInstruction, canonicalCaptureInstruction);
+  assert.match(ccCaptureInstruction, /handoff summary/);
+});
+
 
 test('the CC bare-pwd exception agrees with isBareInspectionPwd', () => {
   for (const cmd of ['pwd', 'pwd -L', ' pwd', 'pwd ', 'pwd; ls', '', null, undefined]) {

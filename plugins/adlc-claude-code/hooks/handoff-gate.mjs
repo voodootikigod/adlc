@@ -33,6 +33,13 @@
 // construction. Pinned by
 // packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
 //
+// KEEP IN SYNC (4) — `CAPTURE_INSTRUCTION` below is a twin of the
+// package constant of the same name (lib/adapter.mjs), local for the same
+// trust reason as the diagnostics in (2): it is the only instruction that
+// makes a session's final message worth capturing, so a stale or hostile
+// project-resolved package must not be able to drop it from the deny text.
+// Pinned by packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
+//
 // KEEP IN SYNC (2) — `isBareInspectionPwd` / `matchRecoveryCommand` /
 // `formatRecoveryCommand` / `formatNoSessionIdMessage` /
 // `formatUnsafeInstallPathMessage` below are behavioural twins of
@@ -112,6 +119,9 @@ export function isProtectedHandoffPath(rel) {
     .join('/');
   if (norm === '.adlc/.deny-store' || norm === '.adlc/handoffs/.deny-store') return true;
   if (norm === '.adlc/handoffs/denies' || norm.startsWith('.adlc/handoffs/denies/')) return true;
+  // Capture bodies: a session that can rewrite its own capture rewrites the
+  // content its successor's authorization is bound to.
+  if (norm === '.adlc/handoffs/content' || norm.startsWith('.adlc/handoffs/content/')) return true;
   if (!norm.startsWith('.adlc/handoffs/')) return false;
   const leaf = basename(norm);
   return (
@@ -121,6 +131,19 @@ export function isProtectedHandoffPath(rel) {
     leaf.endsWith('.bypass-grant.json')
   );
 }
+
+/**
+ * Twin of `@adlc/context-handoff`'s `CAPTURE_INSTRUCTION`
+ * (lib/adapter.mjs) — see that constant for why the instruction exists.
+ *
+ * Local for the same reason as the recovery diagnostic below: this sentence is
+ * what makes a continuation worth anything, and a project-resolved package must
+ * not be able to delete it from the deny message by shipping a stale or hostile
+ * copy. Pinned by packages/context-handoff/adapter-test/cc-helper-drift.test.mjs.
+ */
+export const CAPTURE_INSTRUCTION =
+  'Context handoff active: write your handoff summary (state, done, remaining, next steps, dead ends) ' +
+  'as your final message, then stop.';
 
 // Twin of `@adlc/context-handoff`'s BYPASS_GRANT_SCHEMA / BYPASS_GRANT_TTL_MS
 // (lib/bypass-grant.mjs, lib/thresholds.mjs) — see "KEEP IN SYNC (3)".
