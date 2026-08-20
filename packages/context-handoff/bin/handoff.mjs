@@ -746,6 +746,9 @@ async function runSupervise(argv) {
       sessions: outcome.sessions,
       continuations: outcome.continuations,
       childExit: outcome.childExit ?? null,
+      // Intermediates that crashed on the way to a handoff. Supervision still
+      // succeeded — this is here so a --json consumer can see it happened.
+      abnormalExits: outcome.abnormalExits ?? [],
       exitCode: code,
     },
     human: `handoff supervise: ${describeOutcome(outcome)} (sessions: ${outcome.sessions.join(' → ') || 'none'})`,

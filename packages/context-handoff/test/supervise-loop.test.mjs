@@ -19,6 +19,8 @@ import {
   classifyChildExit,
   superviseExitCode,
   describeOutcome,
+  terminateChild,
+  abnormalSelfExit,
   SUPERVISE_EXIT_CODES,
   CHILD_SESSION_ENV_MARKERS,
 } from '../lib/supervise.mjs';
@@ -301,6 +303,126 @@ test('a child that ignores SIGTERM is escalated to SIGKILL after the grace', asy
     h.logs.some((line) => line.includes('SIGKILL') && line.includes(String(SUPERVISE_TERMINATE_GRACE_MS))),
     'the escalation is reported to the operator',
   );
+});
+
+/**
+ * A denied child that ends on its own terms, with the successor completing
+ * normally afterwards. `ending` decides how the denied one goes.
+ */
+function crashedIntermediate(ending) {
+  return harness({
+    denies: { [DENIER]: 0 },
+    onSpawn: ({ sessionId, child }) => {
+      if (sessionId === DENIER) ending(child);
+      if (sessionId === SUCCESSOR) setImmediate(() => child.end(0));
+    },
+  });
+}
+
+test('an intermediate that crashed after its deny is reported but does not fail the run', async () => {
+  const h = crashedIntermediate((child) => child.end(7));
+  const result = await superviseLoop(h.deps);
+
+  // Supervision SUCCEEDED: the deny said this session was being replaced, and
+  // its successor finished cleanly. That is the whole point of the loop.
+  assert.equal(result.reason, 'child_exited');
+  assert.equal(superviseExitCode(result.reason), 0);
+  assert.equal(result.continuations, 1);
+
+  // …and the crash is still visible.
+  assert.deepEqual(result.abnormalExits, [{ sessionId: DENIER, code: 7, signal: null }]);
+  const warnings = h.logs.filter((line) => line.includes('exited abnormally'));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], new RegExp(`session ${DENIER} wrote a handoff deny then exited abnormally`));
+  assert.match(warnings[0], /code 7/);
+  assert.match(warnings[0], /continuing to its successor anyway/);
+});
+
+test('a crash signal after the deny is reported the same way', async () => {
+  const h = crashedIntermediate((child) => child.end(null, 'SIGSEGV'));
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.reason, 'child_exited', 'still a successful supervision');
+  assert.deepEqual(result.abnormalExits, [{ sessionId: DENIER, code: null, signal: 'SIGSEGV' }]);
+  assert.ok(h.logs.some((line) => line.includes('signal SIGSEGV')));
+});
+
+test('the ordinary handoff — we terminate a live child — says nothing about abnormal exits', async () => {
+  // The control. Without it, a warning that fired unconditionally would pass
+  // both tests above while making every normal handoff look like a crash.
+  const h = crashedIntermediate((child) => {
+    const realKill = child.kill.bind(child);
+    child.kill = (signal) => {
+      realKill(signal);
+      if (signal === 'SIGTERM') child.end(null, 'SIGTERM');
+    };
+  });
+
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.continuations, 1);
+  assert.deepEqual(h.children[0].signals, ['SIGTERM'], 'the supervisor is what ended it');
+  assert.deepEqual(result.abnormalExits, [], 'a child WE killed never counts as a crash');
+  assert.equal(
+    h.logs.filter((line) => line.includes('exited abnormally')).length,
+    0,
+    'the normal path must stay quiet',
+  );
+});
+
+test('a clean self-exit after the deny is orderly, not abnormal', async () => {
+  const h = crashedIntermediate((child) => child.end(0));
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.continuations, 1);
+  assert.deepEqual(result.abnormalExits, []);
+  assert.equal(h.logs.filter((line) => line.includes('exited abnormally')).length, 0);
+  assert.deepEqual(h.children[0].signals, [], 'nothing to signal — it had already gone');
+});
+
+test('terminateChild reports whether it signalled at all', async () => {
+  // The distinction the warning rests on. Both endings previously reported
+  // `terminated: true, escalated: false` and were indistinguishable.
+  const clock = { t: 0 };
+  const deps = {
+    sleep: async (ms) => {
+      clock.t += ms;
+      await new Promise((r) => setImmediate(r));
+    },
+    now: () => clock.t,
+    pollMs: SUPERVISE_DENY_POLL_MS,
+    graceMs: SUPERVISE_TERMINATE_GRACE_MS,
+  };
+
+  const alreadyGone = { hasExited: () => true, exit: () => ({ code: 0, signal: null }) };
+  assert.deepEqual(await terminateChild(alreadyGone, { ...deps, kill: () => assert.fail('must not signal a dead child') }), {
+    terminated: true,
+    escalated: false,
+    signalled: false,
+  });
+
+  let exited = false;
+  const live = { hasExited: () => exited, exit: () => ({ code: null, signal: 'SIGTERM' }) };
+  const ended = await terminateChild(live, {
+    ...deps,
+    kill: (signal) => {
+      if (signal === 'SIGTERM') exited = true;
+    },
+  });
+  assert.deepEqual(ended, { terminated: true, escalated: false, signalled: true });
+});
+
+test('abnormalSelfExit counts crashes, not orderly endings or our own signals', () => {
+  assert.equal(abnormalSelfExit({ code: 7, signal: null }), true);
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGSEGV' }), true);
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGINT' }), true);
+  assert.equal(abnormalSelfExit({ code: 0, signal: null }), false, 'a clean ending is not a crash');
+  // The supervisor's own signals: reaching this predicate at all means we did
+  // NOT send them, but they are still how an orderly stop looks.
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGTERM' }), false);
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGKILL' }), false);
+  assert.equal(abnormalSelfExit({ code: null, signal: null }), false);
+  assert.equal(abnormalSelfExit(null), false);
 });
 
 test('a session that ends with no deny simply ends the loop', async () => {

@@ -165,6 +165,14 @@ not be started at all. The harness's own code is carried in the message and the
 JSON payload rather than passed through, because 1 and 2 already mean something
 about the supervision itself. A clean exit and an operator's Ctrl-C are both 0.
 
+**A crashed intermediate is reported, not failed.** A session that writes its
+deny and then dies on its own — non-zero, or a signal the supervisor never sends
+— still hands off: the deny already said it was being replaced, and the
+supervisor terminates it on the ordinary path anyway, so failing the run would
+fail every successful handoff. It is named on stderr and carried in the JSON as
+`abnormalExits`, because a handoff written by a session that crashed came from
+different circumstances than one that stopped when asked.
+
 **A missing transcript is not a failed continuation.** The narrative is optional
 — the deterministic brief still carries ticket, evidence and git state — so a
 session that dies before its transcript appears is continued without one rather

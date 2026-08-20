@@ -96,6 +96,13 @@ test('supervise drives deny → continue → respawn with no operator action', a
     assert.deepEqual(payload.sessions, [denier, successor]);
     assert.equal(payload.reason, 'child_exited');
 
+    // The control for the crashed-intermediate warning: here the denied child
+    // stayed alive and the SUPERVISOR ended it, which is the ordinary handoff
+    // and must stay quiet. A warning that fired unconditionally would make
+    // every successful handoff look like a crash.
+    assert.deepEqual(payload.abnormalExits, [], 'a child the supervisor killed is not a crash');
+    assert.doesNotMatch(run.stderr, /exited abnormally/);
+
     // The help promises a code for this outcome. An operator scripting around
     // `supervise` reads that table once and never re-checks it, so it is
     // compared against what the command ACTUALLY returned above rather than

@@ -79,6 +79,35 @@ test('a clean exit with no deny is still a success', async () => {
   }
 });
 
+test('a session that crashes after writing its deny is handed off, and the crash is reported', async () => {
+  // The deny already said this session was being replaced; the supervisor
+  // terminates it on the ordinary path anyway. So a crash here is not a failed
+  // supervision — but an operator still needs to know the handoff came from a
+  // session that died rather than one that stopped when asked.
+  const fx = fixture();
+  try {
+    const run = await supervise({ ...fx, denyThenExit: 7 });
+
+    assert.equal(run.code, 0, `a handed-off crash must not fail the run: ${run.stderr}`);
+    const payload = JSON.parse(run.stdout);
+    assert.equal(payload.reason, 'child_exited');
+    assert.equal(payload.continuations, 1, 'the successor still took over');
+
+    const [denier, successor] = payload.sessions;
+    assert.deepEqual(payload.abnormalExits, [{ sessionId: denier, code: 7, signal: null }]);
+    assert.match(run.stderr, new RegExp(`session ${denier} wrote a handoff deny then exited abnormally`));
+    assert.match(run.stderr, /code 7/);
+
+    // And the continuation itself really happened.
+    const deny = readJson(denyPathFor(fx.root, denier));
+    assert.equal(deny.status, 'consumed');
+    assert.equal(deny.consumed_by, successor);
+    assert.equal(readSpawns(fx.log).length, 2);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 test('a deny with no transcript still continues on the deterministic brief', async () => {
   // The child arms its deny and exits before any transcript exists — the exact
   // shape of the contract item 24 failure. The narrative is optional; the

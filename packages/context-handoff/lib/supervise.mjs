@@ -381,18 +381,46 @@ export async function waitForQuiescence({
  * patience: a child that ignores both signals is reported rather than waited on
  * forever, because the operator is staring at a wrapper that appears hung.
  *
- * @returns {Promise<{ terminated: boolean, escalated: boolean }>}
+ * `signalled` says whether this function sent anything at all. Without it the
+ * two endings are indistinguishable — "already gone when we arrived" and "we
+ * killed it" both report terminated — and the caller cannot tell an ordinary
+ * handoff from a child that crashed on its own on the way to one.
+ *
+ * @returns {Promise<{ terminated: boolean, escalated: boolean, signalled: boolean }>}
  */
 export async function terminateChild(tracked, { sleep, now, pollMs, graceMs, kill }) {
-  if (tracked.hasExited()) return { terminated: true, escalated: false };
+  if (tracked.hasExited()) return { terminated: true, escalated: false, signalled: false };
   kill('SIGTERM');
   const deadline = now() + graceMs;
   while (!tracked.hasExited() && now() < deadline) await sleep(pollMs);
-  if (tracked.hasExited()) return { terminated: true, escalated: false };
+  if (tracked.hasExited()) return { terminated: true, escalated: false, signalled: true };
   kill('SIGKILL');
   const hardDeadline = now() + graceMs;
   while (!tracked.hasExited() && now() < hardDeadline) await sleep(pollMs);
-  return { terminated: tracked.hasExited(), escalated: true };
+  return { terminated: tracked.hasExited(), escalated: true, signalled: true };
+}
+
+/** Signals the supervisor itself sends — never evidence of a crash. */
+const TERMINATION_SIGNALS = new Set(['SIGTERM', 'SIGKILL']);
+
+/**
+ * Did a child that exited WITHOUT being signalled by us die badly?
+ *
+ * Only meaningful for a child the supervisor did not terminate. A non-zero code
+ * or a signal the supervisor never sends is a crash; exit 0 is a session that
+ * simply ended after writing its handoff, which is orderly.
+ *
+ * This is not a failure of the SUPERVISION — the deny already said this session
+ * was being replaced, and the successor completing is what success means here.
+ * It is something an operator should be told, which is a different thing.
+ *
+ * @param {{ code: number|null, signal: string|null }|null} exit
+ * @returns {boolean}
+ */
+export function abnormalSelfExit(exit) {
+  if (!exit || typeof exit !== 'object') return false;
+  if (typeof exit.code === 'number' && exit.code !== 0) return true;
+  return typeof exit.signal === 'string' && exit.signal.length > 0 && !TERMINATION_SIGNALS.has(exit.signal);
 }
 
 /**
@@ -432,10 +460,14 @@ export async function superviseLoop({
   const stopped = () => interrupt?.isStopped() === true;
   let sessionId = mintSessionId();
   if (!isPromptSafeId(sessionId)) {
-    return { reason: 'unsafe_session_id', sessions: [], continuations: 0, childExit: null };
+    return { reason: 'unsafe_session_id', sessions: [], continuations: 0, childExit: null, abnormalExits: [] };
   }
   let prompt = null;
   const sessions = [sessionId];
+  // Intermediates that died on their own on the way to a handoff. Carried into
+  // the outcome so a --json consumer can see a session crashed even though the
+  // supervision itself succeeded.
+  const abnormalExits = [];
   let continuations = 0;
 
   for (;;) {
@@ -465,7 +497,7 @@ export async function superviseLoop({
       if (reason === 'spawn_failed' || reason === 'child_failed' || reason === 'child_signalled') {
         log(`adlc handoff supervise: ${describeOutcome({ reason, continuations, childExit })}`);
       }
-      return { reason, sessions, continuations, childExit };
+      return { reason, sessions, continuations, childExit, abnormalExits };
     }
 
     log(`adlc handoff supervise: session ${sessionId} hit a handoff deny — waiting for it to finish writing.`);
@@ -494,14 +526,14 @@ export async function superviseLoop({
     if (!continued.ok) {
       log(degradeMessage(sessionId, continued.error || 'the continue command degraded'));
       const exit = await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
 
     const payload = parseContinuePayload(continued.payload);
     if (!payload.ok) {
       log(degradeMessage(sessionId, payload.error));
       const exit = await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
 
     // Defense at the injection point. The mutation gate re-derives this hash on
@@ -514,7 +546,7 @@ export async function superviseLoop({
     if (!verified.ok) {
       log(degradeMessage(sessionId, `the capture no longer matches its content_hash (${verified.error})`));
       const exit = await waitForExit(tracked, { sleep, pollMs });
-      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit) };
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
 
     const ended = await terminateChild(tracked, { sleep, now, pollMs, graceMs, kill: (s) => tracked.child.kill(s) });
@@ -522,6 +554,25 @@ export async function superviseLoop({
       log(
         `adlc handoff supervise: session ${sessionId} did not exit on SIGTERM within ${graceMs} ms — sent SIGKILL.`,
       );
+    }
+
+    // A child that died on its own on the way to being replaced. This does NOT
+    // fail the run: the deny already said this session was being handed off, and
+    // the supervisor terminates it on the ordinary path anyway, so treating a
+    // dead intermediate as a failure would fail every successful handoff. But it
+    // is worth saying — a session that CRASHED wrote its handoff under different
+    // circumstances than one that stopped when asked, and only the exit tells an
+    // operator which they are looking at.
+    if (!ended.signalled) {
+      const selfExit = describeExit(tracked.exit());
+      if (abnormalSelfExit(selfExit)) {
+        abnormalExits.push({ sessionId, code: selfExit.code, signal: selfExit.signal });
+        const how = selfExit.signal ? `signal ${selfExit.signal}` : `code ${selfExit.code}`;
+        log(
+          `adlc handoff supervise: session ${sessionId} wrote a handoff deny then exited abnormally ` +
+            `(${how}) on its own; continuing to its successor anyway.`,
+        );
+      }
     }
 
     continuations += 1;
@@ -538,6 +589,6 @@ export async function superviseLoop({
     // names that successor id, and its resume-auth is on disk, so an operator
     // can resume it by hand (and the SessionStart hook will hand it the
     // capture). Starting a fresh interactive session after a Ctrl-C would not.
-    if (stopped()) return { reason: 'interrupted', sessions, continuations, childExit: null };
+    if (stopped()) return { reason: 'interrupted', sessions, continuations, childExit: null, abnormalExits };
   }
 }

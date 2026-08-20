@@ -92,6 +92,12 @@ if (!armed.ok) {
   process.exit(3);
 }
 
+// A session that crashes AFTER writing its handoff deny — it has already
+// signalled that it is being replaced, so the supervisor continues to its
+// successor, but the operator should still hear about it.
+const denyThenExit = process.env.FAKE_CLAUDE_DENY_THEN_EXIT;
+if (denyThenExit) process.exit(Number(denyThenExit));
+
 // Idle like a TUI waiting for input. SIGTERM's default action ends us, which is
 // what the supervisor is counting on.
 const idleMs = Number(process.env.FAKE_CLAUDE_IDLE_MS || 0);
@@ -129,6 +135,7 @@ export function supervise({
   timeout = 90_000,
   command = fake,
   exitCode = '',
+  denyThenExit = '',
   noTranscript = false,
 }) {
   return new Promise((resolve) => {
@@ -147,6 +154,7 @@ export function supervise({
           FAKE_CLAUDE_TICKET: ticket,
           FAKE_CLAUDE_IDLE_MS: String(idleMs),
           FAKE_CLAUDE_EXIT_CODE: String(exitCode),
+          FAKE_CLAUDE_DENY_THEN_EXIT: String(denyThenExit),
           FAKE_CLAUDE_NO_TRANSCRIPT: noTranscript ? '1' : '0',
           // The markers contract item 24 says must never reach the child. They
           // are set HERE, on the supervisor, because that is how an operator
