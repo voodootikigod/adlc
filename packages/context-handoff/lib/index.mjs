@@ -20,3 +20,4 @@ export * from './checkpoint.mjs';
 export * from './consume.mjs';
 export * from './redact.mjs';
 export * from './rollback.mjs';
+export * from './supervise.mjs';

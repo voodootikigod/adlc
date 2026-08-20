@@ -62,6 +62,34 @@ export const BYPASS_GRANT_TTL_MS = 10 * 60 * 1000;
  */
 export const MAX_BYPASS_GRANT_BYTES = 4096;
 
+/**
+ * Supervisor timings (lib/supervise.mjs). Declared here for the same reason as
+ * every band edge above: a wrapper that polls on its own copied literal stops
+ * agreeing with the loop it supervises the day one of these moves.
+ *
+ * The deny marker is written by a hook in a separate process, so the supervisor
+ * learns about a deny by polling for the file. `fs.watch` is deliberately not
+ * used: it is unreliable across platforms and network filesystems, and a missed
+ * event here means the wrapper never continues at all. Two seconds is well
+ * inside a human's tolerance for "it noticed" while costing one `existsSync`
+ * per tick.
+ */
+export const SUPERVISE_DENY_POLL_MS = 2_000;
+/**
+ * How long a transcript must stop growing before the denied session counts as
+ * quiescent. The deny lands on the model's tool call, but the message that
+ * matters — the handoff summary it is instructed to write — is still being
+ * streamed after that. Capturing at the deny would take the transcript mid-turn
+ * and hand the successor a truncated narrative.
+ */
+export const SUPERVISE_QUIESCENCE_MS = 5_000;
+/**
+ * Grace between SIGTERM and SIGKILL for a superseded child. Long enough for a
+ * harness to flush its transcript and restore the terminal, short enough that a
+ * wedged child cannot hold the loop open.
+ */
+export const SUPERVISE_TERMINATE_GRACE_MS = 10_000;
+
 export const HANDOFF_COOLDOWN_TOOLS = 15;
 /**
  * Suppress advisory nags when remaining-to-hard is BELOW this fraction

@@ -51,7 +51,9 @@
     "./lib/consume.mjs": "./lib/consume.mjs",
     "./lib/redact.mjs": "./lib/redact.mjs",
     "./lib/rollback.mjs": "./lib/rollback.mjs",
-    "./lib/continue-inputs.mjs": "./lib/continue-inputs.mjs"
+    "./lib/continue-inputs.mjs": "./lib/continue-inputs.mjs",
+    "./lib/supervise.mjs": "./lib/supervise.mjs",
+    "./lib/supervise-runtime.mjs": "./lib/supervise-runtime.mjs"
   },
   "dependencies": {
     "@adlc/core": "1.10.0",
