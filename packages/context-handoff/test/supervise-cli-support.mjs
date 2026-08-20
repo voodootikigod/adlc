@@ -1,0 +1,149 @@
+// Shared fixture for the `handoff supervise` end-to-end tests. Same shape as
+// continue-cli-support.mjs: drive the real bin as a subprocess, never a
+// stand-in.
+//
+// The fake `claude` is what makes the loop runnable without an API key. It
+// records its argv and environment, writes a minimal transcript JSONL exactly
+// where Claude Code writes one, arms a real deny marker through the package's
+// own keyless `ensureDenyMarker` (the same call an enforcing hook makes), and
+// then idles. Everything else is real — the real supervisor, the real
+// `handoff continue`, a real manifest key, real files on disk.
+//
+// LIVE CHECK (not run in CI). To drive the same loop against the real Claude
+// Code binary, in a repo you do not mind mutating:
+//
+//   ADLC_MANIFEST_KEY=$KEY adlc handoff supervise -- claude
+//
+// then push the session past the handoff band (spec §Tiers) and watch it
+// respawn. That check needs a live model and a paid API call per turn, so it is
+// documented here rather than executed: nothing in these tests requires it, and
+// none of them reads ADLC_CC_LIVE.
+
+import { execFile } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+export const BIN = join(HERE, '..', 'bin', 'handoff.mjs');
+const DENY_MARKER_LIB = join(HERE, '..', 'lib', 'deny-marker.mjs');
+export const TEST_KEY = 'd'.repeat(64);
+
+/** The final assistant message the capture is supposed to carry forward. */
+export const SUMMARY = 'Handoff summary: rails are frozen, the rollback path still needs a test.';
+
+/**
+ * A stand-in for `claude`.
+ *
+ * First invocation (no positional prompt): write the transcript, arm a deny for
+ * its own `--session-id`, then idle until signalled. Second invocation (the
+ * successor, which the supervisor gives a bootstrap prompt): record and exit,
+ * which is what ends the loop.
+ */
+const FAKE_CLAUDE = `#!/usr/bin/env node
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ensureDenyMarker } from ${JSON.stringify(DENY_MARKER_LIB)};
+
+const argv = process.argv.slice(2);
+appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ argv, env: process.env }) + '\\n');
+
+const at = argv.indexOf('--session-id');
+const sessionId = at === -1 ? null : argv[at + 1];
+const prompt = argv.length > 2 ? argv[argv.length - 1] : null;
+
+// Claude Code's own transcript location (live probe 2026-08-13).
+const dir = join(process.env.HOME, '.claude', 'projects', process.cwd().replace(/[/.]/g, '-'));
+mkdirSync(dir, { recursive: true });
+writeFileSync(
+  join(dir, sessionId + '.jsonl'),
+  [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'do the work' } }),
+    JSON.stringify({
+      type: 'assistant',
+      requestId: 'req_1',
+      timestamp: new Date().toISOString(),
+      message: { role: 'assistant', content: [{ type: 'text', text: ${JSON.stringify(SUMMARY)} }] },
+    }),
+  ].join('\\n') + '\\n',
+);
+
+if (prompt !== null) process.exit(0); // the successor: its job here is to be observed
+
+// The deny an enforcing hook would arm — keyless, exactly as the hook does it.
+const armed = ensureDenyMarker(process.cwd(), {
+  sessionId,
+  ticketId: process.env.FAKE_CLAUDE_TICKET || null,
+  contentHash: null,
+  host: 'fake-claude',
+});
+if (!armed.ok) {
+  process.stderr.write('fake claude could not arm a deny: ' + armed.reason + '\\n');
+  process.exit(3);
+}
+
+// Idle like a TUI waiting for input. SIGTERM's default action ends us, which is
+// what the supervisor is counting on.
+const idleMs = Number(process.env.FAKE_CLAUDE_IDLE_MS || 0);
+if (idleMs > 0) setTimeout(() => process.exit(0), idleMs);
+else setInterval(() => {}, 1000);
+`;
+
+export function fixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-supervise-')));
+  const home = join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const fake = join(root, 'fake-claude.mjs');
+  writeFileSync(fake, FAKE_CLAUDE, 'utf8');
+  chmodSync(fake, 0o755);
+  const log = join(root, 'spawns.jsonl');
+  writeFileSync(log, '', 'utf8');
+  return { root, home, fake, log };
+}
+
+export function readSpawns(log) {
+  return readFileSync(log, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+/** Run the real supervisor to completion. */
+export function supervise({ root, home, fake, log, ticket = 'T-SUPERVISE', idleMs = 0, timeout = 90_000 }) {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [BIN, 'supervise', '--dir', '.adlc', '--json', '--', fake],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        timeout,
+        env: {
+          ...process.env,
+          HOME: home,
+          ADLC_MANIFEST_KEY: TEST_KEY,
+          FAKE_CLAUDE_LOG: log,
+          FAKE_CLAUDE_TICKET: ticket,
+          FAKE_CLAUDE_IDLE_MS: String(idleMs),
+          // The markers contract item 24 says must never reach the child. They
+          // are set HERE, on the supervisor, because that is how an operator
+          // launching the wrapper from inside a Claude Code session gets them.
+          CLAUDECODE: '1',
+          CLAUDE_CODE_CHILD_SESSION: '1',
+          CLAUDE_CODE_SESSION_ID: 'parent-session',
+          CLAUDE_CODE_ENTRYPOINT: 'cli',
+        },
+      },
+      (error, stdout, stderr) => {
+        resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout, stderr });
+      },
+    );
+  });
+}
+
+export const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+export const denyPathFor = (root, session) =>
+  join(root, '.adlc', 'handoffs', 'denies', `${session}.json`);
+export const contentPathFor = (root, session) =>
+  join(root, '.adlc', 'handoffs', 'content', `${session}.md`);
