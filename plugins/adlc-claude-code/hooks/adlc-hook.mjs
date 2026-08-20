@@ -2416,7 +2416,23 @@ async function handoffStart(input) {
       ? input.hook_event_name
       : 'SessionStart';
 
-  // (a) — a host already authorized THIS session.
+  // (a) — a resume-auth document names THIS session.
+  //
+  // TRUST BOUNDARY (ruled 2026-08-20). This branch is ADVISORY CONTEXT
+  // SURFACING, not an authorization decision, and it must never present itself
+  // as one. The hook scrubs ADLC_MANIFEST_KEY before it imports anything (see
+  // `scrubHandoffSecrets`), so it structurally CANNOT verify the resume-auth's
+  // HMAC — that seam is deliberately closed, and re-opening it to make this
+  // check "real" would hand the manifest trust anchor to project-resolved code.
+  //
+  // What still holds without a key: `readVerifiedCapture` re-derives the
+  // capture's sha256 from disk, so altered or missing content is refused here
+  // exactly as it is in the mutation gate, and `buildBootstrapPrompt` fences the
+  // body so a previous session's words cannot read as instructions. What does
+  // NOT hold: that this session is an authorized continuation. Enforcement of
+  // that lives where a key exists — the supervised wrapper, the mutation gate's
+  // own capture-hash re-derivation on every mutation, and CI. The message below
+  // says so rather than asserting a continuation this code cannot establish.
   const auth =
     sessionId && typeof api.readResumeAuth === 'function' ? api.readResumeAuth(root, sessionId) : null;
   if (auth && typeof api.readVerifiedCapture === 'function') {
@@ -2441,7 +2457,11 @@ async function handoffStart(input) {
     if (!built?.ok) return;
     emit({
       hookSpecificOutput: { hookEventName: eventName, additionalContext: built.prompt },
-      systemMessage: `ADLC context-handoff: this session continues ${auth.deny_session_id} under ticket ${auth.ticket_id}.`,
+      systemMessage:
+        `ADLC context-handoff: surfacing an UNVERIFIED handoff capture from session ${auth.deny_session_id} ` +
+        `(ticket ${auth.ticket_id}) as context. This hook is keyless by design and cannot verify the ` +
+        'resume-auth signature, so nothing here establishes that this session may continue that work — ' +
+        'that is decided by `adlc handoff supervise` or a host holding the manifest key.',
     });
     return;
   }

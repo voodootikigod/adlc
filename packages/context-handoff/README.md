@@ -81,6 +81,13 @@ fail closed with no body. Supervisors and session-start injectors must go
 through it rather than reading the file — a signature proves the hash was
 authorized, never that the file still matches it.
 
+A **keyless** injector (a harness hook, which scrubs the manifest key before it
+imports anything) gets the content bind from this function and nothing more: it
+cannot verify the resume-auth's HMAC, so it must surface a capture as advisory
+context and say so, never as proof that the reading session is an authorized
+continuation. Authorization is decided where a key exists — the supervisor, and
+the mutation gate that re-derives the same hash on every mutation.
+
 ```js
 import { readVerifiedCapture } from '@adlc/context-handoff/lib/capture.mjs';
 

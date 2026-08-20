@@ -84,7 +84,7 @@ function runHook(root, payload, env = {}) {
   return out.trim().length === 0 ? null : JSON.parse(out);
 }
 
-test('a session holding a resume-auth is handed the capture it was authorized against', () => {
+test('a session named by a resume-auth is handed the capture as context', () => {
   const root = repo();
   try {
     const payload = continueFor(root);
@@ -109,6 +109,49 @@ test('a session holding a resume-auth is handed the capture it was authorized ag
       readFileSync(join(root, '.adlc', 'handoffs', 'denies', `${DENIER}.json`), 'utf8'),
     );
     assert.equal(deny.status, 'consumed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the notice does not claim an authorization this keyless hook cannot verify', () => {
+  // The hook scrubs the manifest key before importing anything, so it cannot
+  // check the resume-auth's HMAC. It may surface the capture; it may not tell
+  // the model it is a verified continuation. See the trust-boundary comment at
+  // branch (a) of handoffStart.
+  const root = repo();
+  try {
+    continueFor(root);
+    const msg = runHook(root, { session_id: SUCCESSOR }).systemMessage;
+
+    assert.match(msg, /UNVERIFIED/, 'the trust status has to be stated, not implied');
+    assert.match(msg, /keyless by design/);
+    assert.match(msg, /cannot verify the resume-auth signature/);
+    assert.match(msg, /adlc handoff supervise/, 'the authoritative path must be named');
+
+    // The overstatement this replaced. A hook that says this is telling the
+    // model an authorization decision was made, when none was.
+    assert.doesNotMatch(msg, /this session continues/i);
+    assert.doesNotMatch(msg, /\bverified continuation\b/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a resume-auth pointing at a hash the capture does not have injects nothing', () => {
+  // The mismatch from the OTHER side: the capture is untouched and the
+  // (unverifiable) auth document names a different hash. Keyless or not, the
+  // content bind is re-derived from disk, so this fails closed exactly as a
+  // tampered capture does.
+  const root = repo();
+  try {
+    continueFor(root);
+    const authPath = join(root, '.adlc', 'handoffs', `${SUCCESSOR}.resume-auth.json`);
+    const doc = JSON.parse(readFileSync(authPath, 'utf8'));
+    assert.match(doc.content_hash, /^[0-9a-f]{64}$/, 'the fixture must really carry a hash');
+    writeFileSync(authPath, JSON.stringify({ ...doc, content_hash: 'b'.repeat(64) }, null, 2));
+
+    assert.equal(runHook(root, { session_id: SUCCESSOR }), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
