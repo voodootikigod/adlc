@@ -10,7 +10,15 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { denyPathFor, fixture, readJson, readSpawns, supervise } from './supervise-cli-support.mjs';
+import {
+  denyPathFor,
+  documentedCodeFor,
+  fixture,
+  helpText,
+  readJson,
+  readSpawns,
+  supervise,
+} from './supervise-cli-support.mjs';
 
 test('an unbound deny degrades: nothing consumed, child left alone, operator told what to run', async (t) => {
   t.diagnostic('this test waits on the real quiescence + poll intervals (~15s)');
@@ -20,6 +28,9 @@ test('an unbound deny degrades: nothing consumed, child left alone, operator tol
   try {
     const run = await supervise({ ...fx, ticket: '', idleMs: 12_000 });
     assert.equal(run.code, 2, `expected the degrade exit code, got ${run.code}: ${run.stderr}`);
+    // Compared against what the help PROMISES, not against a second copy of the
+    // number: a degrade is the outcome an operator most needs to script around.
+    assert.equal(documentedCodeFor(helpText(fx.root), 'continuation degraded'), run.code);
 
     const spawns = readSpawns(fx.log);
     assert.equal(spawns.length, 1, 'a degrade must not respawn anything');

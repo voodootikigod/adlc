@@ -674,8 +674,8 @@ and respawns the harness as the successor with the bootstrap prompt.
   adlc handoff supervise --dir .adlc -- claude --model opus
 
 ADLC_MANIFEST_KEY is required and is used ONLY for the continue step. It is
-stripped from the harness child's environment, along with the Claude Code
-child-session markers that silently disable transcript saving (spec item 24).
+stripped from the harness child's environment, along with the CLAUDECODE and
+CLAUDE_CODE_* child-session markers that silently disable transcript saving.
 
 Exit codes:
   0  the supervised session ended (or you interrupted it)

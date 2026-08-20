@@ -42,7 +42,10 @@ const TIMEOUTS_MS = {
   rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
   buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
   handoff: 10_000,    // hooks.json timeout minus buffer — enforcing: deny on timeout
-  handoffstart: 10_000, // hooks.json: 15 s — SessionStart continuation notice, advisory
+  // SessionStart continuation notice: advisory, so a timeout exits 0. Same
+  // budget as the enforcing modes, minus the same buffer — the value is stated
+  // once here rather than restated from hooks.json, which is free to drift.
+  handoffstart: 10_000,
 };
 
 /**

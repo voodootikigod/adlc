@@ -19,7 +19,9 @@ import {
   TEST_KEY,
   contentPathFor,
   denyPathFor,
+  documentedCodeFor,
   fixture,
+  helpText,
   readJson,
   readSpawns,
   supervise,
@@ -93,6 +95,28 @@ test('supervise drives deny → continue → respawn with no operator action', a
     assert.equal(payload.continuations, 1);
     assert.deepEqual(payload.sessions, [denier, successor]);
     assert.equal(payload.reason, 'child_exited');
+
+    // The help promises a code for this outcome. An operator scripting around
+    // `supervise` reads that table once and never re-checks it, so it is
+    // compared against what the command ACTUALLY returned above rather than
+    // against a number repeated here.
+    assert.equal(documentedCodeFor(helpText(fx.root), 'the supervised session ended'), run.code);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('the advertised synopsis is the calling convention the command enforces', () => {
+  const fx = fixture();
+  try {
+    const help = helpText(fx.root);
+    const synopsis = help.split('\n')[0];
+    // The separator is the whole reason this command has a synopsis worth
+    // printing: without it a wrapper flag and the harness's own flags are
+    // indistinguishable. A synopsis that stopped naming `-- <command>` would
+    // hand operators a form the command rejects.
+    assert.equal(synopsis, 'handoff supervise [--dir .adlc] -- <command> [args...]');
+    assert.ok(synopsis.includes('-- <command>'));
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }
@@ -101,6 +125,9 @@ test('supervise drives deny → continue → respawn with no operator action', a
 test('supervise refuses to start without the separator or the key', async () => {
   const fx = fixture();
   try {
+    const help = helpText(fx.root);
+    const documented = documentedCodeFor(help, 'operational error');
+
     const noSeparator = await new Promise((resolve) => {
       execFile(
         process.execPath,
@@ -110,6 +137,7 @@ test('supervise refuses to start without the separator or the key', async () => 
       );
     });
     assert.equal(noSeparator.code, 1);
+    assert.equal(noSeparator.code, documented, 'the help documents a different code than this returns');
     assert.match(noSeparator.stderr + noSeparator.stdout, /after `--`/);
 
     // The key is demanded UP FRONT: discovering it after an hour-long session
@@ -125,6 +153,7 @@ test('supervise refuses to start without the separator or the key', async () => 
       );
     });
     assert.equal(noKey.code, 1);
+    assert.equal(noKey.code, documented);
     assert.match(noKey.stderr + noKey.stdout, /ADLC_MANIFEST_KEY/);
     assert.deepEqual(readSpawns(fx.log), [], 'no harness process may start without the key');
   } finally {

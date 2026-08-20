@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { newestOpenDeny } from '../adlc-hook.mjs';
+import { dispatch, ENFORCING_MODES } from '../adlc-hook-run.mjs';
 import { CAPTURE_INSTRUCTION } from '../handoff-gate.mjs';
 import { SUPERVISOR_ENV_MARKER, superviseChildEnv } from '@adlc/context-handoff';
 
@@ -265,6 +266,29 @@ test('the SessionStart continuation path reads no key and consumes nothing', () 
   // handoff mode, which reads the key (pre-scrub, for the bypass grant).
   const enforcing = source.slice(source.indexOf('async function handoff(input)'), start);
   assert.equal(/process\.env\s*[.[]\s*['"]?ADLC_MANIFEST_KEY/.test(enforcing), true);
+});
+
+test('the runner gives handoffstart a real timeout and lets it fail OPEN', () => {
+  const calls = [];
+  const spawn = (bin, args, opts) => {
+    calls.push({ args, opts });
+    return { error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) };
+  };
+  const code = dispatch(['node', 'runner', 'handoffstart'], {
+    spawn,
+    exists: () => true,
+    hookScript: '/hooks/adlc-hook.mjs',
+    stderr: () => {},
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['/hooks/adlc-hook.mjs', 'handoffstart']);
+  assert.ok(calls[0].opts.timeout > 0, 'a mode with no timeout entry would silently take the 25s default');
+  assert.equal(calls[0].opts.timeout, 10_000);
+  // Advisory: a timed-out SessionStart notice must not read as a deny. The
+  // enforcing modes take the opposite branch — see wrapper-timeout-deny.test.mjs.
+  assert.equal(code, 0);
+  assert.equal(ENFORCING_MODES.has('handoffstart'), false);
 });
 
 test('the hook watches for the marker name the supervisor actually sets', () => {

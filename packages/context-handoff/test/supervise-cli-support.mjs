@@ -19,7 +19,7 @@
 // documented here rather than executed: nothing in these tests requires it, and
 // none of them reads ADLC_CC_LIVE.
 
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -140,6 +140,44 @@ export function supervise({ root, home, fake, log, ticket = 'T-SUPERVISE', idleM
       },
     );
   });
+}
+
+/** `handoff supervise --help`, as an operator sees it. */
+export function helpText(cwd) {
+  return execFileSync(process.execPath, [BIN, 'supervise', '--help'], {
+    cwd,
+    encoding: 'utf8',
+    env: process.env,
+  });
+}
+
+/**
+ * The `Exit codes:` table the help promises, as [code, description] pairs.
+ *
+ * Parsed rather than hardcoded so the tests can compare what the command
+ * DOCUMENTS against what it actually returns. A help text that quietly stops
+ * matching the behaviour is a worse failure than a missing one: an operator
+ * scripting around `supervise` reads this table and never re-checks it.
+ */
+export function documentedExitCodes(help) {
+  const block = String(help).split('Exit codes:')[1] ?? '';
+  const codes = [];
+  for (const line of block.split('\n')) {
+    const m = /^ {2}(\d+) {2}(\S.*)$/.exec(line);
+    if (m) codes.push([Number(m[1]), m[2].trim()]);
+  }
+  return codes;
+}
+
+/** The code the help documents for the outcome whose description contains `needle`. */
+export function documentedCodeFor(help, needle) {
+  const found = documentedExitCodes(help).filter(([, text]) => text.includes(needle));
+  if (found.length !== 1) {
+    throw new Error(
+      `expected exactly one documented exit code mentioning ${JSON.stringify(needle)}, found ${found.length}`,
+    );
+  }
+  return found[0][0];
 }
 
 export const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
