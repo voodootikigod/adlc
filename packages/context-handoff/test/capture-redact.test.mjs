@@ -40,7 +40,9 @@ test('every credential shape in the table is removed and named', () => {
   for (const [kind, secret] of CASES) {
     const got = redactSecrets(`before ${secret} after`);
     assert.ok(got.redactions.length > 0, `${kind} must be redacted`);
-    assert.ok(got.text.includes('[adlc: redacted'), `${kind} must leave a marker`);
+    // The CATEGORY marker, not just any marker: a broken pattern whose value
+    // falls through to the high-entropy net would otherwise stay invisible.
+    assert.ok(got.text.includes(redactionMarker(kind)), `${kind} must leave its own named marker`);
     assert.ok(got.text.startsWith('before '), `${kind}: surrounding prose survives`);
     assert.ok(got.text.endsWith(' after'), `${kind}: surrounding prose survives`);
     // The point of the exercise: no line of the value survives anywhere.
