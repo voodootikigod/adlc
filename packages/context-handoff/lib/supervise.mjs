@@ -127,12 +127,37 @@ export function formatContinueCommand(denySessionId) {
   return `ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${denySessionId} --write`;
 }
 
-/** What the supervisor prints when it hands a deny back to the operator. */
-export function degradeMessage(denySessionId, reason) {
+/**
+ * What the supervisor prints when it hands a deny back to the operator.
+ *
+ * The middle line is a claim about the child, so it is made from the child's
+ * actual state rather than from the fact that we are degrading. This message is
+ * printed BEFORE the wrapper waits for the session to end, and a session can
+ * have died on its own well before the continuation was attempted — telling an
+ * operator to go back to a session that is already gone sends them looking for
+ * a window that closed.
+ *
+ * @param {string} denySessionId
+ * @param {string} reason
+ * @param {{ code: number|null, signal: string|null }|null} [childExit]
+ *        null when the child is still running; its exit otherwise.
+ */
+export function degradeMessage(denySessionId, reason, childExit = null) {
   const command = formatContinueCommand(denySessionId);
+  let state;
+  if (!childExit) {
+    state = 'The session is still running and still denied for mutations; nothing was consumed.';
+  } else if (abnormalSelfExit(childExit)) {
+    const how = childExit.signal ? `signal ${childExit.signal}` : `code ${childExit.code}`;
+    state =
+      `The session has already exited abnormally (${how}); nothing was consumed and its deny is ` +
+      'still open.';
+  } else {
+    state = 'The session has already ended; nothing was consumed and its deny is still open.';
+  }
   return [
     `adlc handoff supervise: automatic continuation is not possible (${reason}).`,
-    'The session is still running and still denied for mutations; nothing was consumed.',
+    state,
     command
       ? `Continue it yourself with:\n  ${command}`
       : 'The denied session id cannot be printed as a safe shell command — read it from .adlc/handoffs/denies/ and run `adlc handoff continue --deny-session <id> --write`.',
@@ -472,6 +497,11 @@ export async function superviseLoop({
 
   for (;;) {
     const tracked = trackChild(spawn({ sessionId, prompt }));
+    // The degrade message makes a claim about this child, so it is built from
+    // the child's state at the moment of printing — not from the fact that a
+    // degrade happened. It is printed before we wait for the session to end.
+    const degradeNow = (why) =>
+      log(degradeMessage(sessionId, why, tracked.hasExited() ? describeExit(tracked.exit()) : null));
     const watched = await watchForDeny({
       sessionId,
       readOpenDeny,
@@ -524,14 +554,14 @@ export async function superviseLoop({
     const captureFrom = hasTranscript ? path : null;
     const continued = await runContinue({ denySession: sessionId, captureFrom });
     if (!continued.ok) {
-      log(degradeMessage(sessionId, continued.error || 'the continue command degraded'));
+      degradeNow(continued.error || 'the continue command degraded');
       const exit = await waitForExit(tracked, { sleep, pollMs });
       return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
 
     const payload = parseContinuePayload(continued.payload);
     if (!payload.ok) {
-      log(degradeMessage(sessionId, payload.error));
+      degradeNow(payload.error);
       const exit = await waitForExit(tracked, { sleep, pollMs });
       return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
@@ -544,7 +574,7 @@ export async function superviseLoop({
     // later says about the edits it makes.
     const verified = verifyCapture({ denySession: sessionId, contentHash: payload.contentHash });
     if (!verified.ok) {
-      log(degradeMessage(sessionId, `the capture no longer matches its content_hash (${verified.error})`));
+      degradeNow(`the capture no longer matches its content_hash (${verified.error})`);
       const exit = await waitForExit(tracked, { sleep, pollMs });
       return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }

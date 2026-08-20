@@ -663,6 +663,69 @@ test('degradeMessage degrades to a readable instruction when the id cannot be qu
   assert.match(unsafe, /\.adlc\/handoffs\/denies/);
 });
 
+test('degradeMessage describes the session it is actually talking about', () => {
+  // The middle line is a claim about the child. Sending an operator back to a
+  // session that already closed is the same false-statement-about-a-dead-child
+  // problem the continuation path's warning exists for.
+  const running = degradeMessage('sess-1', 'deny is unbound', null);
+  assert.match(running, /still running and still denied/);
+  assert.doesNotMatch(running, /already/);
+
+  const ended = degradeMessage('sess-1', 'deny is unbound', { code: 0, signal: null });
+  assert.match(ended, /already ended/);
+  assert.doesNotMatch(ended, /still running/, 'a finished session must not be described as running');
+  assert.match(ended, /deny is still open/, 'the deny outlives the session — that is the point');
+
+  const crashed = degradeMessage('sess-1', 'deny is unbound', { code: 7, signal: null });
+  assert.match(crashed, /already exited abnormally \(code 7\)/);
+  assert.doesNotMatch(crashed, /still running/);
+
+  const killed = degradeMessage('sess-1', 'deny is unbound', { code: null, signal: 'SIGSEGV' });
+  assert.match(killed, /already exited abnormally \(signal SIGSEGV\)/);
+
+  // Every variant still hands over the recovery command — that is unconditional.
+  for (const message of [running, ended, crashed, killed]) {
+    assert.match(message, /--deny-session sess-1 --write/);
+  }
+});
+
+test('a degrade names the state the child is actually in', async () => {
+  // Alive at the moment of the degrade: the child idles, and the loop's
+  // degrade fires while it is still running.
+  const alive = harness({
+    denies: { [DENIER]: 0 },
+    continueResult: () => ({ ok: false, error: 'deny is unbound' }),
+    onSpawn: ({ child, clock }) => {
+      // Ends well after the degrade — the quiescence gate alone takes 5s.
+      const timer = setInterval(() => {
+        if (clock.t > SUPERVISE_QUIESCENCE_MS * 4) {
+          clearInterval(timer);
+          child.end(0);
+        }
+      }, 1);
+      timer.unref?.();
+    },
+  });
+  const aliveResult = await superviseLoop(alive.deps);
+  assert.equal(aliveResult.reason, 'degraded');
+  assert.ok(
+    alive.logs.some((line) => line.includes('still running and still denied')),
+    'a live session must be described as live',
+  );
+
+  // Already crashed by the time we degrade.
+  const dead = harness({
+    denies: { [DENIER]: 0 },
+    continueResult: () => ({ ok: false, error: 'deny is unbound' }),
+    onSpawn: ({ child }) => child.end(9),
+  });
+  const deadResult = await superviseLoop(dead.deps);
+  assert.equal(deadResult.reason, 'degraded');
+  const warning = dead.logs.find((line) => line.includes('automatic continuation is not possible'));
+  assert.match(warning, /already exited abnormally \(code 9\)/);
+  assert.doesNotMatch(warning, /still running/);
+});
+
 test('classifyChildExit separates the three failures from a clean exit', () => {
   assert.equal(classifyChildExit({ code: 0, signal: null }), 'child_exited');
   assert.equal(classifyChildExit({ code: 1, signal: null }), 'child_failed');

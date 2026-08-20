@@ -50,6 +50,12 @@ test('an unbound deny degrades: nothing consumed, child left alone, operator tol
       .filter((line) => line.includes('automatic continuation is not possible'));
     assert.equal(warnings.length, 1, `expected exactly one warning, got ${warnings.length}`);
     assert.match(run.stderr, new RegExp(`handoff continue --deny-session ${denier} --write`));
+
+    // This child is still alive when the degrade prints (it idles past the
+    // quiescence gate), so the message must say so — the live half of the
+    // conditioned claim, whose dead half is covered in supervise-loop.test.mjs.
+    assert.match(run.stderr, /still running and still denied/);
+    assert.doesNotMatch(run.stderr, /already ended|already exited/);
     // The child was never signalled: it idled out on its own schedule.
     assert.ok(readFileSync(fx.log, 'utf8').length > 0);
   } finally {
