@@ -29,7 +29,7 @@ function withTempDir(fn) {
 test('writeTextExclusive creates once and refuses thereafter', () => {
   withTempDir((dir) => {
     const path = join(dir, 'nested', 'claim.txt');
-    assert.deepEqual(writeTextExclusive(path, 'first\n'), { ok: true });
+    assert.deepEqual(writeTextExclusive(path, 'first\n'), { ok: true, bytes: 'first\n' });
     const second = writeTextExclusive(path, 'second\n');
     assert.equal(second.ok, false);
     assert.equal(second.exists, true);

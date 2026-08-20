@@ -84,5 +84,5 @@ export function writeFinal(root, fields, opts = {}) {
   const path = finalPath(root, fields.sessionId);
   const wrote = writeJsonAtomic(path, final, opts);
   if (!wrote.ok) return { ok: false, error: wrote.error };
-  return { ok: true, final, path };
+  return { ok: true, final, path, bytes: wrote.bytes };
 }

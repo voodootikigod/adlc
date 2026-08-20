@@ -134,6 +134,7 @@ export function writeResumeAuth(root, consumerSessionId, fields, { key, exclusiv
     ok: true,
     path,
     doc,
+    bytes: wrote.bytes,
     created: exclusive,
     resumeAuth: readResumeAuth(root, consumerSessionId, { key, fs }),
   };

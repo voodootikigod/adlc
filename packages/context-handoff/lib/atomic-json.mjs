@@ -45,7 +45,10 @@ export function writeTextAtomic(
     fs.mkdirSync(dirname(path), { recursive: true });
     fs.writeFileSync(tmp, text, 'utf8');
     fs.renameSync(tmp, path);
-    return { ok: true };
+    // The bytes are the WRITE's own, not a later disk read: an ownership token
+    // sampled from the path after the fact can adopt a concurrent writer's
+    // replacement as "ours" and let a rollback delete it.
+    return { ok: true, bytes: text };
   } catch (err) {
     tryUnlinkTmp(tmp, fs);
     return { ok: false, error: err?.code || err?.message || 'write_failed' };
@@ -78,7 +81,7 @@ export function writeTextExclusive(
   try {
     fs.mkdirSync(dirname(path), { recursive: true });
     fs.writeFileSync(path, text, { encoding: 'utf8', flag: 'wx' });
-    return { ok: true };
+    return { ok: true, bytes: text };
   } catch (err) {
     const code = err?.code || err?.message || 'write_failed';
     return { ok: false, error: code, exists: code === 'EEXIST' };

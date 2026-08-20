@@ -94,11 +94,13 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     host: planned.host,
   });
   if (!written.ok) return { ok: false, error: `failed to write final: ${written.error}` };
-  // What THIS run left at the final path. Every internal failure below undoes
-  // that write, and each undo has to prove the bytes are still ours: the branch
-  // that fires BECAUSE a concurrent writer was detected must not then overwrite
-  // that writer's final on the way out.
-  const wroteFinalBytes = currentBytes(finalPath(root, sessionId));
+  // What THIS run left at the final path — carried from the write itself, not
+  // sampled from disk afterwards: a replacement landing in a post-write sample
+  // window would be adopted as "ours" and a later undo would destroy it. Every
+  // internal failure below undoes the write, and each undo has to prove the
+  // bytes are still ours: the branch that fires BECAUSE a concurrent writer was
+  // detected must not then overwrite that writer's final on the way out.
+  const wroteFinalBytes = written.bytes;
   const undoFinal = () =>
     restoreIfOurs({
       path: finalPath(root, sessionId),
@@ -129,6 +131,7 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     marker.record.content_hash !== planned.content_hash ||
     (marker.record.content_kind ?? null) !== (planned.content_kind ?? null);
   let priorRecord = null;
+  let wroteRecordBytes = null;
   if (stale) {
     if (expected) {
       // Compare-and-swap: the claim was taken before the final was written.
@@ -144,6 +147,8 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
       return { ok: false, error: `failed to rebind deny marker: ${rebound.error}` };
     }
     priorRecord = marker.record;
+    // Ownership carried from the rebind's own write, same as the final above.
+    wroteRecordBytes = rebound.bytes ?? null;
   }
 
   return {
@@ -159,7 +164,7 @@ export function writeCheckpoint(root, sessionId, planned, { expected = null } = 
     // The rebind does not touch the final, so what we wrote above is still
     // there — no second read.
     wroteFinalBytes,
-    wroteRecordBytes: currentBytes(denyPath(root, sessionId)),
+    wroteRecordBytes,
   };
 }
 

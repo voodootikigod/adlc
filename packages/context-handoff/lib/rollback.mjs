@@ -10,6 +10,15 @@
  * A skipped restore is reported, never swallowed. The operator needs to know
  * which artifacts are back and which now belong to someone else, because that
  * pair is the difference between "nothing happened" and "half of it stands".
+ *
+ * Scope of the guarantee: the compare and the mutation below are two syscalls,
+ * not one atomic operation. Writers that follow the protocol are serialized by
+ * the session locks, and `wroteBytes` is carried from each write call itself
+ * (never sampled from disk afterwards), so within the protocol the guard is
+ * exact. A writer that bypasses BOTH the locks and the hook protections can
+ * still land between the compare and the mutation; POSIX offers no
+ * conditional-unlink to close that, so the residual window is accepted and
+ * kept as narrow as two adjacent syscalls.
  */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';

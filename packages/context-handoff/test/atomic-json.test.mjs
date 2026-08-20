@@ -27,7 +27,10 @@ function withTempDir(fn) {
 test('JSON artifacts are two-space indented and newline terminated', () => {
   withTempDir((dir) => {
     const path = join(dir, 'nested', 'record.json');
-    assert.deepEqual(writeJsonAtomic(path, { session_id: 's', ticket_id: null }), { ok: true });
+    assert.deepEqual(writeJsonAtomic(path, { session_id: 's', ticket_id: null }), {
+      ok: true,
+      bytes: '{\n  "session_id": "s",\n  "ticket_id": null\n}\n',
+    });
     assert.equal(
       readFileSync(path, 'utf8'),
       '{\n  "session_id": "s",\n  "ticket_id": null\n}\n',
@@ -56,7 +59,10 @@ test('the write leaves no temp sibling behind', () => {
 test('text is written verbatim — no trailing newline is invented', () => {
   withTempDir((dir) => {
     const path = join(dir, 'capture.md');
-    assert.deepEqual(writeTextAtomic(path, '## Ticket\n\nbody'), { ok: true });
+    assert.deepEqual(writeTextAtomic(path, '## Ticket\n\nbody'), {
+      ok: true,
+      bytes: '## Ticket\n\nbody',
+    });
     // Captures are hashed, so a newline this writer adds would move content_hash
     // away from the body its caller hashed.
     assert.equal(readFileSync(path, 'utf8'), '## Ticket\n\nbody');

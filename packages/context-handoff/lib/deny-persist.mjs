@@ -33,7 +33,7 @@ export function writeDenyRecord(root, record, opts = {}) {
   const path = denyPath(root, record.session_id);
   const wrote = writeJsonAtomic(path, normalized, opts);
   if (!wrote.ok) return { ok: false, error: wrote.error };
-  return { ok: true, path, record: normalized };
+  return { ok: true, path, record: normalized, bytes: wrote.bytes };
 }
 
 /**
