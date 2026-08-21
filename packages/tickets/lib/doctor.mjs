@@ -79,6 +79,12 @@ function walkChainForStoreHash(lines, key, chainLabel) {
   let boundStoreHash = null;
   let prevLine = null;
   let prevSeq = 0;
+  // Per THIS chain: has a genuinely valid signature been seen yet? Before the
+  // first one we are inside the contiguous legacy prefix; after it, signing is
+  // mandatory. Same variable, same meaning, as gate-manifest's verify.mjs and
+  // as chainIsIntact in this package's own manifest-segments.mjs.
+  let seenSignedEntry = false;
+  let refusedUnsignedCheckpoint = false;
   for (let i = 0; i < lines.length; i++) {
     let entry;
     try { entry = JSON.parse(lines[i]); } catch {
@@ -88,17 +94,45 @@ function walkChainForStoreHash(lines, key, chainLabel) {
     if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) {
       return { ok: false, code: 'MANIFEST_CHAIN_INVALID', reason: `${chainLabel} hash chain breaks at line ${i + 1}; integrity check FAILED` };
     }
-    // With a key configured EVERY entry must carry a valid signature. The backward
-    // hash chain alone leaves the FINAL entry unprotected — nothing links forward
-    // from it — so its data.storeHash could be edited in place undetected.
-    if (key !== null && !entrySigValid(key, entry)) {
-      return { ok: false, code: 'MANIFEST_SIGNATURE_INVALID', reason: `${chainLabel} entry at line ${i + 1} is unsigned or its signature does not verify; integrity check FAILED` };
+    // Signature policy, when a key is configured. Two independent conditions —
+    // the same split gate-manifest's verify.mjs documents at length:
+    //
+    //   PRESENT-but-invalid — rejected at ANY position, including inside the
+    //     legacy prefix. A sig that does not verify means the bytes changed after
+    //     signing (or a foreign key signed it). That is tampering, never legacy.
+    //   MISSING — tolerated ONLY while this chain has not yet produced a valid
+    //     signature. A ledger that predates signing genuinely has such a prefix
+    //     (this repo's own root manifest has 95 such entries before 2026-07-27),
+    //     and failing it made a shipped diagnostic permanently red on honest
+    //     history. Once one entry has verified, a later missing sig is rejected
+    //     exactly as before: an attacker holding the tail of a signed chain
+    //     cannot regress it to unsigned by appending plain entries.
+    let entrySigned = false;
+    if (key !== null) {
+      const hasSig = typeof entry?.sig === 'string' && entry.sig.length > 0;
+      if (hasSig) {
+        if (!entrySigValid(key, entry)) {
+          return { ok: false, code: 'MANIFEST_SIGNATURE_INVALID', reason: `${chainLabel} entry at line ${i + 1} has a signature that does not verify; integrity check FAILED` };
+        }
+        seenSignedEntry = true;
+        entrySigned = true;
+      } else if (seenSignedEntry) {
+        return { ok: false, code: 'MANIFEST_SIGNATURE_INVALID', reason: `${chainLabel} entry at line ${i + 1} is unsigned but this chain's signed era has already begun; integrity check FAILED` };
+      }
     }
-    if (entry?.data && typeof entry.data.storeHash === 'string') boundStoreHash = entry.data.storeHash;
+    // Tolerating the prefix must not launder an unverifiable entry into a trusted
+    // checkpoint. `storeHashBindingCheck` reports `authenticated: key !== null`,
+    // so with a key set only a VERIFIED entry may supply the bound hash — else
+    // this fix would trade a false RED for a false GREEN. (The same per-entry
+    // filter manifest-segments.mjs applies, for the same laundering reason.)
+    if (entry?.data && typeof entry.data.storeHash === 'string') {
+      if (key === null || entrySigned) boundStoreHash = entry.data.storeHash;
+      else refusedUnsignedCheckpoint = true;
+    }
     prevLine = lines[i];
     prevSeq = entry.seq;
   }
-  return { ok: true, boundStoreHash };
+  return { ok: true, boundStoreHash, refusedUnsignedCheckpoint };
 }
 
 function storeHashBindingCheck(root, snapshot, key) {
@@ -109,6 +143,9 @@ function storeHashBindingCheck(root, snapshot, key) {
 
   const manifestPath = join(root, '.adlc/manifest.jsonl');
   let boundStoreHash = null;
+  // A checkpoint was recorded but predates signing, so it could not be adopted.
+  // Reporting that as "nothing recorded yet" would misdescribe the ledger.
+  let refusedUnsignedCheckpoint = false;
 
   // Verify the manifest is a well-formed, unbroken hash chain BEFORE trusting any
   // storeHash it records. Otherwise a forged or tampered ledger could assert an
@@ -125,6 +162,7 @@ function storeHashBindingCheck(root, snapshot, key) {
     const rootResult = walkChainForStoreHash(lines, key, 'manifest ledger');
     if (!rootResult.ok) return { ...check, ok: false, code: rootResult.code, reason: rootResult.reason };
     if (rootResult.boundStoreHash !== null) boundStoreHash = rootResult.boundStoreHash;
+    if (rootResult.refusedUnsignedCheckpoint) refusedUnsignedCheckpoint = true;
   }
 
   // T-MANIFEST-FOREST: once segmented, THIS branch's evidence-required
@@ -179,13 +217,22 @@ function storeHashBindingCheck(root, snapshot, key) {
       const segResult = walkChainForStoreHash(segLines, key, `segment ${resolved.name}`);
       if (!segResult.ok) return { ...check, ok: false, code: segResult.code, reason: segResult.reason };
       if (segResult.boundStoreHash !== null) boundStoreHash = segResult.boundStoreHash;
+      if (segResult.refusedUnsignedCheckpoint) refusedUnsignedCheckpoint = true;
     }
     // resolved === null means this branch genuinely has no committed segment
     // (yet, or ever) — root's own boundStoreHash (if any) still stands as the
     // latest known checkpoint for this checkout.
   }
 
-  if (!boundStoreHash) return { ...check, bound: false, reason: 'no evidence-required transaction recorded yet' };
+  if (!boundStoreHash) {
+    return {
+      ...check,
+      bound: false,
+      reason: refusedUnsignedCheckpoint
+        ? 'the only recorded checkpoint(s) are unsigned (they predate signing), so none can be authenticated with the configured key; no binding is claimed'
+        : 'no evidence-required transaction recorded yet',
+    };
+  }
 
   check.bound = true;
   check.storeHash = snapshot.hash;
