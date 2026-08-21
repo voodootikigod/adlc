@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,10 @@ export function run(args, { cwd, env = {}, expectOk = true } = {}) {
 }
 
 export function withTempRepo(fn) {
-  const dir = mkdtempSync(join(tmpdir(), 'handoff-continue-'));
+  // realpathSync so `dir` is canonical — the form the subprocess's own
+  // process.cwd() reports. On macOS tmpdir() is /var, a symlink to /private/var,
+  // so a raw mkdtemp path never equals the paths the CLI prints back.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-continue-')));
   try {
     return fn(dir);
   } finally {
