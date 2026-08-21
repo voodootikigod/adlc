@@ -74,6 +74,10 @@ test('a clean exit with no deny is still a success', async () => {
     assert.equal(payload.reason, 'child_exited');
     assert.equal(payload.childExit.code, 0);
     assert.equal(run.code, documentedCodeFor(helpText(fx.root), 'the supervised session ended'));
+    // Its siblings check this and this one did not: without it, a supervisor
+    // that spawned NOTHING and returned "the session ended" would pass — which
+    // is the same class of false success the two tests above exist to catch.
+    assert.equal(readSpawns(fx.log).length, 1, 'the harness really did run');
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

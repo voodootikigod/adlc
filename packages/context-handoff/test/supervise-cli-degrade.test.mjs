@@ -56,6 +56,19 @@ test('an unbound deny degrades: nothing consumed, child left alone, operator tol
     // conditioned claim, whose dead half is covered in supervise-loop.test.mjs.
     assert.match(run.stderr, /still running and still denied/);
     assert.doesNotMatch(run.stderr, /already ended|already exited/);
+
+    // "A degrade never kills the operator's session" — asserted here against
+    // the child's REAL exit rather than against a stub's signal log. This child
+    // was alive throughout, so it must have ended on its own terms: a
+    // supervisor that terminated it would show {code:null, signal:'SIGTERM'}.
+    const payload = JSON.parse(run.stdout);
+    assert.deepEqual(
+      payload.childExit,
+      { code: 0, signal: null, error: null },
+      'the degraded session must exit on its own, never by a signal from the supervisor',
+    );
+    assert.equal(payload.reason, 'degraded');
+    assert.deepEqual(payload.abnormalExits, [], 'a clean self-exit is not a crash');
     // The child was never signalled: it idled out on its own schedule.
     assert.ok(readFileSync(fx.log, 'utf8').length > 0);
   } finally {

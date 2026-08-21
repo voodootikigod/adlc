@@ -300,6 +300,12 @@ export const SUPERVISE_EXIT_CODES = Object.freeze({
  */
 export function superviseExitCode(reason) {
   switch (reason) {
+    // A clean exit and an operator interrupt are both the session ending the
+    // way it was asked to. Named explicitly rather than left to the default —
+    // see why below.
+    case 'child_exited':
+    case 'interrupted':
+      return SUPERVISE_EXIT_CODES.ok;
     case 'degraded':
       return SUPERVISE_EXIT_CODES.degraded;
     case 'child_failed':
@@ -309,10 +315,13 @@ export function superviseExitCode(reason) {
       return SUPERVISE_EXIT_CODES.harnessUnstartable;
     case 'unsafe_session_id':
       return SUPERVISE_EXIT_CODES.operational;
-    // A clean exit and an operator interrupt are both the session ending the
-    // way it was asked to.
     default:
-      return SUPERVISE_EXIT_CODES.ok;
+      // Fail CLOSED. This used to return 0, which meant any outcome added to
+      // the loop and not mapped here would be reported as a successful
+      // supervision by default — the exact failure this command's exit codes
+      // exist to prevent, reintroduced by omission. An unmapped reason is a
+      // bug, and a bug is an error.
+      return SUPERVISE_EXIT_CODES.operational;
   }
 }
 

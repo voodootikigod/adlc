@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import {
   BIN,
   SUMMARY,
-  TEST_KEY,
+  superviseEnv,
   contentPathFor,
   denyPathFor,
   documentedCodeFor,
@@ -139,7 +139,7 @@ test('supervise refuses to start without the separator or the key', async () => 
       execFile(
         process.execPath,
         [BIN, 'supervise', 'claude'],
-        { cwd: fx.root, encoding: 'utf8', env: { ...process.env, ADLC_MANIFEST_KEY: TEST_KEY } },
+        { cwd: fx.root, encoding: 'utf8', env: superviseEnv(fx) },
         (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }),
       );
     });
@@ -150,7 +150,12 @@ test('supervise refuses to start without the separator or the key', async () => 
     // The key is demanded UP FRONT: discovering it after an hour-long session
     // hit its deny would waste the very session being supervised.
     const noKey = await new Promise((resolve) => {
-      const env = { ...process.env };
+      // A full, HOME-safe supervised environment MINUS the key: the fake
+      // harness can therefore record itself if it ever runs, which is what
+      // makes the "nothing ever ran" assertion below mean anything. An env
+      // without FAKE_CLAUDE_LOG leaves the log empty either way, and one
+      // without HOME points the fake at the real ~/.claude.
+      const env = superviseEnv(fx);
       delete env.ADLC_MANIFEST_KEY;
       execFile(
         process.execPath,

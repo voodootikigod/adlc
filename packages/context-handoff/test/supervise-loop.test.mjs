@@ -8,6 +8,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** Read for the structural pin below — both sides of it come from this file. */
+const SUPERVISE_SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'supervise.mjs');
 
 import {
   superviseLoop,
@@ -198,14 +204,34 @@ test('continue waits for the transcript to go quiet before capturing', async () 
   );
 });
 
+/**
+ * A child that is still ALIVE when the degrade fires, and only ends afterwards.
+ *
+ * This matters more than it looks. A fixture that pre-ends the child makes
+ * every `signals: []` assertion vacuous: terminateChild short-circuits on
+ * `hasExited()` and never calls kill, so a supervisor that DID kill on the
+ * degrade path would pass anyway. Keeping the child alive is what makes those
+ * assertions discriminate.
+ */
+function aliveThroughDegrade() {
+  return ({ child, clock }) => {
+    const timer = setInterval(() => {
+      // The quiescence gate alone runs 5s of fake clock before any degrade.
+      if (clock.t > SUPERVISE_QUIESCENCE_MS * 4) {
+        clearInterval(timer);
+        child.end(0);
+      }
+    }, 1);
+    timer.unref?.();
+  };
+}
+
 test('a degraded continue leaves the child running and warns exactly once', async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     continueResult: () => ({ ok: false, error: 'deny is unbound' }),
-    onSpawn: ({ child }) => {
-      // The operator's session lives on for a while, then ends on its own.
-      setImmediate(() => setImmediate(() => child.end(0)));
-    },
+    // ALIVE through the degrade — see aliveThroughDegrade().
+    onSpawn: aliveThroughDegrade(),
   });
 
   const result = await superviseLoop(h.deps);
@@ -225,7 +251,7 @@ test('a capture that no longer matches its hash is never injected', async () => 
   const h = harness({
     denies: { [DENIER]: 0 },
     verifyCapture: () => ({ ok: false, error: 'content_hash mismatch' }),
-    onSpawn: ({ child }) => setImmediate(() => setImmediate(() => child.end(0))),
+    onSpawn: aliveThroughDegrade(),
   });
 
   const result = await superviseLoop(h.deps);
@@ -271,7 +297,7 @@ test('a payload the loop cannot trust degrades instead of spawning', async () =>
     const h = harness({
       denies: { [DENIER]: 0 },
       continueResult: () => ({ ok: true, payload }),
-      onSpawn: ({ child }) => setImmediate(() => setImmediate(() => child.end(0))),
+      onSpawn: aliveThroughDegrade(),
     });
     const result = await superviseLoop(h.deps);
     assert.equal(result.reason, 'degraded', `${label} must degrade`);
@@ -514,6 +540,45 @@ test('an interrupt stops the watch and waits for the child rather than continuin
   assert.equal(result.reason, 'interrupted');
   assert.equal(h.continueCalls.length, 0);
   assert.equal(h.spawns.length, 1);
+});
+
+test('an interrupt AFTER a continue stops before the respawn, leaving a resumable successor', async () => {
+  // The other interrupt path: the existing tests interrupt before any deny, so
+  // the branch that fires once a continuation has already been authorized was
+  // never driven. The deny is consumed by then, and the successor exists on
+  // disk — the loop must not start a fresh interactive session after a Ctrl-C,
+  // and must not report the run as an ordinary end.
+  const stopped = { value: false };
+  const h = harness({
+    denies: { [DENIER]: 0 },
+    onSpawn: ({ sessionId, child }) => {
+      if (sessionId === DENIER) {
+        const realKill = child.kill.bind(child);
+        child.kill = (signal) => {
+          realKill(signal);
+          // Ctrl-C lands while the supervisor is terminating the denied child,
+          // i.e. after runContinue already consumed the deny.
+          stopped.value = true;
+          child.end(0, signal);
+        };
+      }
+    },
+  });
+  h.deps.interrupt = { isStopped: () => stopped.value };
+
+  const result = await superviseLoop(h.deps);
+
+  assert.equal(result.reason, 'interrupted');
+  assert.equal(superviseExitCode(result.reason), 0, 'an interrupt is a handled outcome');
+  assert.equal(result.continuations, 1, 'the continuation DID happen — it was consumed');
+  assert.equal(h.continueCalls.length, 1);
+  // The successor is named in the outcome so an operator can resume it by hand.
+  assert.deepEqual(result.sessions, [DENIER, SUCCESSOR]);
+  assert.equal(h.spawns.length, 1, 'no fresh interactive session after Ctrl-C');
+  assert.ok(
+    h.logs.some((line) => line.includes(`continuing ${DENIER} as ${SUCCESSOR}`)),
+    'the successor id must be printed, since it is now the only way to resume',
+  );
 });
 
 test('a missing transcript continues without a narrative and says so', async () => {
@@ -785,6 +850,44 @@ test('classifyChildExit separates the three failures from a clean exit', () => {
   assert.equal(classifyChildExit({ code: null, signal: '' }), 'child_exited');
 });
 
+test('every reason the loop can return is mapped explicitly, and an unmapped one fails closed', () => {
+  // A structural pin, both sides read from the source. superviseExitCode used
+  // to fall through to 0, so a reason added to the loop and forgotten here
+  // would have been reported as a successful supervision — the failure these
+  // exit codes exist to prevent, reintroduced by omission.
+  const source = readFileSync(SUPERVISE_SRC, 'utf8');
+
+  // Reasons the loop returns as literals, plus the ones it returns indirectly
+  // through classifyChildExit's own literal returns.
+  const loopBody = source.slice(source.indexOf('export async function superviseLoop'));
+  const classifyBody = source.slice(
+    source.indexOf('export function classifyChildExit'),
+    source.indexOf('/** Serializable form of an exit'),
+  );
+  const returned = new Set([
+    ...[...loopBody.matchAll(/reason: '([a-z_]+)'/g)].map((m) => m[1]),
+    ...[...classifyBody.matchAll(/return '([a-z_]+)'/g)].map((m) => m[1]),
+  ]);
+
+  const switchBody = source.slice(
+    source.indexOf('export function superviseExitCode'),
+    source.indexOf('/** One line an operator can read'),
+  );
+  const handled = new Set([...switchBody.matchAll(/case '([a-z_]+)'/g)].map((m) => m[1]));
+
+  assert.ok(returned.size >= 7, `expected the loop's reasons to be discoverable, found ${returned.size}`);
+  assert.deepEqual(
+    [...returned].sort(),
+    [...handled].sort(),
+    'every reason the loop can produce must have its own case — no reason may reach the default',
+  );
+
+  // And the default is not a silent success.
+  assert.equal(superviseExitCode('a_reason_nobody_mapped'), SUPERVISE_EXIT_CODES.operational);
+  assert.notEqual(superviseExitCode('a_reason_nobody_mapped'), SUPERVISE_EXIT_CODES.ok);
+  assert.equal(superviseExitCode(undefined), SUPERVISE_EXIT_CODES.operational);
+});
+
 test('every failure reason maps to a distinct non-zero exit code', () => {
   assert.equal(superviseExitCode('child_exited'), SUPERVISE_EXIT_CODES.ok);
   assert.equal(superviseExitCode('interrupted'), SUPERVISE_EXIT_CODES.ok);
@@ -808,6 +911,11 @@ test('describeOutcome names the harness code without pretending it is ours', () 
   assert.match(describeOutcome({ reason: 'degraded', continuations: 2 }), /still denied/);
   assert.match(describeOutcome({ reason: 'child_exited', continuations: 1 }), /session ended/);
   assert.match(describeOutcome({ reason: 'unsafe_session_id' }), /nothing was started/);
+  // Unasserted, this case could be deleted and a Ctrl-C would silently report
+  // as "the supervised session ended" — a different thing from what happened.
+  assert.match(describeOutcome({ reason: 'interrupted', continuations: 2 }), /^interrupted/);
+  assert.match(describeOutcome({ reason: 'interrupted', continuations: 2 }), /2 continuation/);
+  assert.doesNotMatch(describeOutcome({ reason: 'interrupted' }), /session ended/);
 });
 
 test('parseContinuePayload accepts the real envelope and rejects what it should', () => {

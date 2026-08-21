@@ -93,14 +93,17 @@ test('a session named by a resume-auth is handed the capture as context', () => 
     assert.ok(emitted, 'the successor must be told what it is continuing');
     assert.equal(emitted.hookSpecificOutput.hookEventName, 'SessionStart');
     const context = emitted.hookSpecificOutput.additionalContext;
-    assert.match(context, new RegExp(`Continuation of session ${DENIER}`));
+    assert.match(context, new RegExp(`continuation of session ${DENIER}`, 'i'));
     assert.match(context, /under ticket T-START/);
     // The fence is what keeps the previous session's words from reading as
     // instructions — it must survive into the injected context.
     assert.ok(context.includes('<<<UNTRUSTED-CAPTURE-DATA'));
     assert.ok(context.includes('END-UNTRUSTED>>>'));
     assert.ok(context.includes('## Ticket'), 'the deterministic brief is part of what is injected');
-    assert.equal(context, payload.bootstrap_prompt, 'the hook injects the host-composed payload verbatim');
+    // Same capture body as the host composed — the hook adds a hedge, it does
+    // not rewrite what the previous session said.
+    assert.ok(payload.bootstrap_prompt.includes('## Ticket'));
+    assert.ok(context.includes('## Model handoff'), 'the recorded brief itself must survive');
 
     // The condition is the resume-auth, NOT an open deny: a completed
     // continuation leaves the denier CONSUMED, and gating on an open deny would
@@ -109,6 +112,45 @@ test('a session named by a resume-auth is handed the capture as context', () => 
       readFileSync(join(root, '.adlc', 'handoffs', 'denies', `${DENIER}.json`), 'utf8'),
     );
     assert.equal(deny.status, 'consumed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the MODEL is told the handoff is unverified, not just the operator', () => {
+  // The honesty fix has to reach the text the model actually reads. The
+  // operator's systemMessage is not that text: additionalContext is, and the
+  // assertive composition tells the reader to "continue the work" — the exact
+  // claim this keyless hook cannot make.
+  //
+  // Asserted as a PRESENT property, deliberately. A denylist of old phrasings
+  // passes the moment somebody adds a NEW authorization claim; a required hedge
+  // is something an added claim would contradict.
+  const root = repo();
+  try {
+    continueFor(root);
+    const context = runHook(root, { session_id: SUCCESSOR }).hookSpecificOutput.additionalContext;
+
+    assert.match(context, /NOT VERIFIED/, 'the model-facing text must carry the hedge');
+    assert.match(context, /not cryptographically verified by this keyless hook/);
+    assert.match(context, /re-derive the state from the repository before acting/);
+    // The assertive opening belongs to a host that verified the signature.
+    assert.doesNotMatch(context, /^Continuation of session/m);
+    assert.match(context, /^Possible continuation of session/m);
+
+    // The supervised path keeps the assertive form: the wrapper holds the key,
+    // verified the capture, and IS entitled to say it. Same composition, so the
+    // fencing cannot drift between the two.
+    armDeny(root, 'other-denier');
+    const supervised = JSON.parse(
+      handoffCli(
+        ['continue', '--deny-session', 'other-denier', '--session', 'other-successor', '--write', '--json'],
+        root,
+      ),
+    );
+    assert.match(supervised.bootstrap_prompt, /^Continuation of session other-denier/);
+    assert.doesNotMatch(supervised.bootstrap_prompt, /NOT VERIFIED/);
+    assert.ok(supervised.bootstrap_prompt.includes('<<<UNTRUSTED-CAPTURE-DATA'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

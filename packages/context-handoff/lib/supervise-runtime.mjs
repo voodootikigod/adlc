@@ -89,12 +89,20 @@ export function nodeSpawner({ command, args = [], cwd, env, spawnFn = nodeSpawn,
     });
     const handle = {
       pid: child.pid,
+      // The return is the POINT, not a detail: `terminateChild` treats an
+      // explicit false as "already gone" and reports `signalled: false`, which
+      // is what tells the loop an exit was somebody else's doing. Node returns
+      // true for a live child and false for a reaped one (verified against a
+      // real child process in supervise-runtime.test.mjs), so discarding it
+      // made that guard permanently unreachable in production while a stub
+      // returning false kept its unit test green.
       kill: (signal) => {
         try {
-          child.kill(signal);
+          return child.kill(signal);
         } catch {
-          // A child that is already gone cannot be signalled; the loop's own
-          // exit tracking is what decides whether termination succeeded.
+          // A child that cannot be signalled at all is already gone — the same
+          // fact node reports as false, so it is reported the same way.
+          return false;
         }
       },
       exited: new Promise((resolve) => {

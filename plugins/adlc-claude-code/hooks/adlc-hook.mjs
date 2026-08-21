@@ -2453,6 +2453,12 @@ async function handoffStart(input) {
       denySessionId: auth.deny_session_id,
       ticketId: auth.ticket_id,
       body: capture.body,
+      // The MODEL-facing half of the same honesty the systemMessage carries.
+      // The assertive composition tells the reader "this is the continuation,
+      // continue the work" — true when a host with the key composed it, and a
+      // claim this hook cannot make. Passing the hedge is what keeps the two
+      // audiences (operator and model) being told the same thing.
+      verified: false,
     });
     if (!built?.ok) return;
     emit({

@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { terminateChild } from '../lib/supervise.mjs';
 import {
   splitPassthrough,
   childArgv,
@@ -33,8 +34,14 @@ function fakeProcess() {
       handlers[event] = fn;
       return this;
     },
+    // Models node's REAL contract: true when the signal was delivered, false
+    // for a reaped child. A stub that returned undefined here is what let a
+    // `kill(...) === false` guard pass its unit test while being unreachable
+    // in production.
+    killReturns: true,
     kill(signal) {
       this.killed.push(signal);
+      return this.killReturns;
     },
     fire(event, ...args) {
       handlers[event]?.(...args);
@@ -113,7 +120,7 @@ test('a spawned handle settles on exit, on error, and swallows a kill that canno
   const proc = fakeProcess();
   const spawn = nodeSpawner({ command: 'claude', cwd: '/repo', env: {}, spawnFn: () => proc });
   const handle = spawn({ sessionId: 'sess-1', prompt: null });
-  handle.kill('SIGTERM');
+  assert.equal(handle.kill('SIGTERM'), true, 'a delivered signal must report as delivered');
   assert.deepEqual(proc.killed, ['SIGTERM']);
   proc.fire('exit', 0, null);
   assert.deepEqual(await handle.exited, { code: 0, signal: null });
@@ -124,11 +131,56 @@ test('a spawned handle settles on exit, on error, and swallows a kill that canno
   };
   const spawn2 = nodeSpawner({ command: 'claude', cwd: '/repo', env: {}, spawnFn: () => broken });
   const handle2 = spawn2({ sessionId: 'sess-2', prompt: null });
-  handle2.kill('SIGTERM'); // must not throw — a dead child is the outcome we wanted
+  assert.equal(
+    handle2.kill('SIGTERM'),
+    false,
+    'a kill that throws must report the same "already gone" fact node reports as false',
+  );
   broken.fire('error', new Error('spawn ENOENT'));
   const settled = await handle2.exited;
   assert.equal(settled.code, null);
   assert.match(settled.error.message, /ENOENT/, 'a command that never started must settle, not hang the loop');
+});
+
+test('handle.kill forwards a REAL child process\'s answer, so the already-gone guard is reachable', async () => {
+  // The production proof. Everything above this runs against a stub, and a stub
+  // is exactly what hid this: the wrapper discarded child.kill()'s return, so
+  // it always yielded undefined, and terminateChild's `=== false` guard could
+  // never fire outside a test. Node's own contract — true for a live child,
+  // false for a reaped one — is what the guard is written against, so it is
+  // verified here against node rather than assumed.
+  const spawn = nodeSpawner({
+    command: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1000)'],
+    cwd: process.cwd(),
+    env: process.env,
+  });
+
+  const live = spawn({ sessionId: 'sess-live', prompt: null });
+  assert.equal(live.kill('SIGTERM'), true, 'a live child accepts the signal');
+  const liveExit = await live.exited;
+  assert.equal(liveExit.signal, 'SIGTERM');
+
+  // Same handle, now that the child has been reaped.
+  assert.equal(
+    live.kill('SIGTERM'),
+    false,
+    'a reaped child reports false — this is the value terminateChild keys "already gone" on',
+  );
+
+  // And that value really does drive the guard: terminateChild must report
+  // signalled:false for a child whose kill says it is already gone.
+  const ended = await terminateChild(
+    { hasExited: () => false, exit: () => null },
+    {
+      sleep: async () => {},
+      now: () => 0,
+      pollMs: 1,
+      graceMs: 1,
+      kill: (signal) => live.kill(signal),
+    },
+  );
+  assert.equal(ended.signalled, false, 'the real return must reach the guard, not just a stub value');
 });
 
 test('the spawner hands each child to the interrupt so Ctrl-C reaches the live one', () => {

@@ -124,6 +124,37 @@ export function readSpawns(log) {
     .map((line) => JSON.parse(line));
 }
 
+/**
+ * The environment a supervised run gets.
+ *
+ * Exported so a test that drives the CLI directly (rather than through
+ * `supervise` below) cannot forget HOME or FAKE_CLAUDE_LOG. Forgetting HOME
+ * points the fake harness at the REAL `~/.claude`; forgetting the log makes
+ * every `readSpawns` assertion vacuously empty, because the fake cannot record
+ * anything and a "nothing ever ran" check then passes whether or not it did.
+ */
+export function superviseEnv({ home, log }, overrides = {}) {
+  return {
+    ...process.env,
+    HOME: home,
+    ADLC_MANIFEST_KEY: TEST_KEY,
+    FAKE_CLAUDE_LOG: log,
+    FAKE_CLAUDE_TICKET: 'T-SUPERVISE',
+    FAKE_CLAUDE_IDLE_MS: '0',
+    FAKE_CLAUDE_EXIT_CODE: '',
+    FAKE_CLAUDE_DENY_THEN_EXIT: '',
+    FAKE_CLAUDE_NO_TRANSCRIPT: '0',
+    // The markers contract item 24 says must never reach the child. They are
+    // set HERE, on the supervisor, because that is how an operator launching
+    // the wrapper from inside a Claude Code session gets them.
+    CLAUDECODE: '1',
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_SESSION_ID: 'parent-session',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    ...overrides,
+  };
+}
+
 /** Run the real supervisor to completion. */
 export function supervise({
   root,
@@ -146,24 +177,16 @@ export function supervise({
         cwd: root,
         encoding: 'utf8',
         timeout,
-        env: {
-          ...process.env,
-          HOME: home,
-          ADLC_MANIFEST_KEY: TEST_KEY,
-          FAKE_CLAUDE_LOG: log,
-          FAKE_CLAUDE_TICKET: ticket,
-          FAKE_CLAUDE_IDLE_MS: String(idleMs),
-          FAKE_CLAUDE_EXIT_CODE: String(exitCode),
-          FAKE_CLAUDE_DENY_THEN_EXIT: String(denyThenExit),
-          FAKE_CLAUDE_NO_TRANSCRIPT: noTranscript ? '1' : '0',
-          // The markers contract item 24 says must never reach the child. They
-          // are set HERE, on the supervisor, because that is how an operator
-          // launching the wrapper from inside a Claude Code session gets them.
-          CLAUDECODE: '1',
-          CLAUDE_CODE_CHILD_SESSION: '1',
-          CLAUDE_CODE_SESSION_ID: 'parent-session',
-          CLAUDE_CODE_ENTRYPOINT: 'cli',
-        },
+        env: superviseEnv(
+          { home, log },
+          {
+            FAKE_CLAUDE_TICKET: ticket,
+            FAKE_CLAUDE_IDLE_MS: String(idleMs),
+            FAKE_CLAUDE_EXIT_CODE: String(exitCode),
+            FAKE_CLAUDE_DENY_THEN_EXIT: String(denyThenExit),
+            FAKE_CLAUDE_NO_TRANSCRIPT: noTranscript ? '1' : '0',
+          },
+        ),
       },
       (error, stdout, stderr) => {
         resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout, stderr });
