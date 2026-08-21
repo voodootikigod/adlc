@@ -139,7 +139,10 @@ test('supervise refuses to start without the separator or the key', async () => 
       execFile(
         process.execPath,
         [BIN, 'supervise', 'claude'],
-        { cwd: fx.root, encoding: 'utf8', env: superviseEnv(fx) },
+        // Bounded: if the key check ever stops running UP FRONT, the harness
+        // starts and idles, and an unbounded execFile would hang here instead
+        // of reporting the regression.
+        { cwd: fx.root, encoding: 'utf8', timeout: 30_000, env: superviseEnv(fx) },
         (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }),
       );
     });
@@ -160,7 +163,7 @@ test('supervise refuses to start without the separator or the key', async () => 
       execFile(
         process.execPath,
         [BIN, 'supervise', '--', fx.fake],
-        { cwd: fx.root, encoding: 'utf8', env },
+        { cwd: fx.root, encoding: 'utf8', timeout: 30_000, env },
         (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }),
       );
     });
