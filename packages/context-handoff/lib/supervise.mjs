@@ -406,16 +406,28 @@ export async function waitForQuiescence({
  * patience: a child that ignores both signals is reported rather than waited on
  * forever, because the operator is staring at a wrapper that appears hung.
  *
- * `signalled` says whether this function sent anything at all. Without it the
- * two endings are indistinguishable — "already gone when we arrived" and "we
- * killed it" both report terminated — and the caller cannot tell an ordinary
- * handoff from a child that crashed on its own on the way to one.
+ * `signalled` says whether this function actually delivered a signal to a LIVE
+ * child. Without it the endings are indistinguishable — "already gone when we
+ * arrived" and "we killed it" both report terminated — and the caller cannot
+ * tell an ordinary handoff from a child that died on its own on the way to one.
+ *
+ * Delivery, not attempt: `kill` returns false when the process was already gone,
+ * so an external kill that lands between the liveness check and our SIGTERM is
+ * caught here rather than mis-reported as ours. What remains after this — and it
+ * is genuinely irreducible — is a child that took our SIGTERM while alive and
+ * then died: whether our signal or a simultaneous external one finished it is
+ * unknowable, and attributing to ourselves a death we sent a valid signal for is
+ * the safer error than crying crash on every fast handoff.
  *
  * @returns {Promise<{ terminated: boolean, escalated: boolean, signalled: boolean }>}
  */
 export async function terminateChild(tracked, { sleep, now, pollMs, graceMs, kill }) {
   if (tracked.hasExited()) return { terminated: true, escalated: false, signalled: false };
-  kill('SIGTERM');
+  // Only an explicit false is "already gone": a stub that returns undefined is
+  // treated as a delivery, so the existing callers keep their behaviour.
+  if (kill('SIGTERM') === false) {
+    return { terminated: tracked.hasExited(), escalated: false, signalled: false };
+  }
   const deadline = now() + graceMs;
   while (!tracked.hasExited() && now() < deadline) await sleep(pollMs);
   if (tracked.hasExited()) return { terminated: true, escalated: false, signalled: true };
@@ -602,12 +614,12 @@ export async function superviseLoop({
     // is worth saying — a session that CRASHED wrote its handoff under different
     // circumstances than one that stopped when asked, and only the exit tells an
     // operator which they are looking at.
-    // `signalled` is what establishes abnormalSelfExit's precondition. One
-    // disclosed residual: if the child dies of something else in the window
-    // between terminateChild's liveness check and its SIGTERM landing, this
-    // reports signalled and stays quiet. Nothing can distinguish those two
-    // deaths after the fact, and claiming a crash we may have caused ourselves
-    // is the worse error.
+    // `signalled` is what establishes abnormalSelfExit's precondition, and it
+    // now means DELIVERED-to-a-live-child: an external kill before our SIGTERM
+    // lands makes kill() return false, so terminateChild reports signalled
+    // false and the death is surfaced below. The only residual is a child that
+    // took a live SIGTERM and then died — our signal or a simultaneous external
+    // one, indistinguishable after the fact, and reported as ours by design.
     if (!ended.signalled) {
       const selfExit = describeExit(tracked.exit());
       if (abnormalSelfExit(selfExit)) {

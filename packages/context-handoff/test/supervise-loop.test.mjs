@@ -410,6 +410,23 @@ test('terminateChild reports whether it signalled at all', async () => {
     },
   });
   assert.deepEqual(ended, { terminated: true, escalated: false, signalled: true });
+
+  // The race the round-3 fix disclosed and this one closes: ALIVE at the check,
+  // then killed externally so our SIGTERM lands on a corpse and kill() returns
+  // false. We did not cause it, so signalled must be false — not "we sent
+  // SIGTERM, therefore ours". `gone` flips only when the external kill lands, so
+  // the guard sees a live child and the post-delivery read sees the corpse.
+  let gone = false;
+  const raced = { hasExited: () => gone, exit: () => ({ code: null, signal: 'SIGKILL' }) };
+  const racedEnded = await terminateChild(raced, {
+    ...deps,
+    kill: (signal) => {
+      if (signal !== 'SIGTERM') assert.fail('a corpse takes no SIGKILL');
+      gone = true; // the external kill that beat us
+      return false; // …so our signal was never delivered
+    },
+  });
+  assert.deepEqual(racedEnded, { terminated: true, escalated: false, signalled: false });
 });
 
 test('abnormalSelfExit counts any death the supervisor did not cause', () => {
