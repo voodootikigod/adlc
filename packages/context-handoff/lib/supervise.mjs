@@ -425,19 +425,28 @@ export async function terminateChild(tracked, { sleep, now, pollMs, graceMs, kil
   return { terminated: tracked.hasExited(), escalated: true, signalled: true };
 }
 
-/** Signals the supervisor itself sends — never evidence of a crash. */
-const TERMINATION_SIGNALS = new Set(['SIGTERM', 'SIGKILL']);
-
 /**
- * Did a child that exited WITHOUT being signalled by us die badly?
+ * Did a child that the supervisor did NOT signal die badly?
  *
- * Only meaningful for a child the supervisor did not terminate. A non-zero code
- * or a signal the supervisor never sends is a crash; exit 0 is a session that
- * simply ended after writing its handoff, which is orderly.
+ * PRECONDITION, and the whole reason this reads the way it does: every caller
+ * has already established that the supervisor sent this child nothing — the
+ * continuation path by checking `ended.signalled`, the degrade paths because
+ * they all run before `terminateChild` and a degrade never kills the child.
  *
- * This is not a failure of the SUPERVISION — the deny already said this session
- * was being replaced, and the successor completing is what success means here.
- * It is something an operator should be told, which is a different thing.
+ * Given that, ANY signal is abnormal. An earlier version exempted SIGTERM and
+ * SIGKILL by name, on the reasoning that those are what the supervisor sends —
+ * but that conflates "this is the signal WE send" with "we sent it", and the
+ * precondition already settles the second question. A child killed by the
+ * operator, the OOM killer, or a racing supervisor dies by exactly those two
+ * signals, and those are the deaths an operator most needs to hear about; the
+ * exemption silently dropped them.
+ *
+ * A non-zero code is abnormal for the same reason. Exit 0 is a session that
+ * ended after writing its handoff, which is orderly.
+ *
+ * This is never a failure of the SUPERVISION — the deny already said the
+ * session was being replaced, and the successor completing is what success
+ * means here. It is something an operator should be told, which is different.
  *
  * @param {{ code: number|null, signal: string|null }|null} exit
  * @returns {boolean}
@@ -445,7 +454,7 @@ const TERMINATION_SIGNALS = new Set(['SIGTERM', 'SIGKILL']);
 export function abnormalSelfExit(exit) {
   if (!exit || typeof exit !== 'object') return false;
   if (typeof exit.code === 'number' && exit.code !== 0) return true;
-  return typeof exit.signal === 'string' && exit.signal.length > 0 && !TERMINATION_SIGNALS.has(exit.signal);
+  return typeof exit.signal === 'string' && exit.signal.length > 0;
 }
 
 /**
@@ -593,6 +602,12 @@ export async function superviseLoop({
     // is worth saying — a session that CRASHED wrote its handoff under different
     // circumstances than one that stopped when asked, and only the exit tells an
     // operator which they are looking at.
+    // `signalled` is what establishes abnormalSelfExit's precondition. One
+    // disclosed residual: if the child dies of something else in the window
+    // between terminateChild's liveness check and its SIGTERM landing, this
+    // reports signalled and stays quiet. Nothing can distinguish those two
+    // deaths after the fact, and claiming a crash we may have caused ourselves
+    // is the worse error.
     if (!ended.signalled) {
       const selfExit = describeExit(tracked.exit());
       if (abnormalSelfExit(selfExit)) {

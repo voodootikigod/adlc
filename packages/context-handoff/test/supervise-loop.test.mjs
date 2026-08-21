@@ -412,17 +412,42 @@ test('terminateChild reports whether it signalled at all', async () => {
   assert.deepEqual(ended, { terminated: true, escalated: false, signalled: true });
 });
 
-test('abnormalSelfExit counts crashes, not orderly endings or our own signals', () => {
+test('abnormalSelfExit counts any death the supervisor did not cause', () => {
   assert.equal(abnormalSelfExit({ code: 7, signal: null }), true);
   assert.equal(abnormalSelfExit({ code: null, signal: 'SIGSEGV' }), true);
   assert.equal(abnormalSelfExit({ code: null, signal: 'SIGINT' }), true);
+  // SIGTERM and SIGKILL are what the SUPERVISOR sends — but every caller has
+  // already established it sent nothing, so reaching this predicate with one of
+  // them means somebody ELSE killed the child: the operator, the OOM killer, a
+  // racing supervisor. Exempting them by name hid exactly those deaths.
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGTERM' }), true);
+  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGKILL' }), true);
   assert.equal(abnormalSelfExit({ code: 0, signal: null }), false, 'a clean ending is not a crash');
-  // The supervisor's own signals: reaching this predicate at all means we did
-  // NOT send them, but they are still how an orderly stop looks.
-  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGTERM' }), false);
-  assert.equal(abnormalSelfExit({ code: null, signal: 'SIGKILL' }), false);
   assert.equal(abnormalSelfExit({ code: null, signal: null }), false);
   assert.equal(abnormalSelfExit(null), false);
+});
+
+test('an intermediate killed from OUTSIDE is reported, not read as an orderly stop', async () => {
+  // The case the signal-name exemption used to swallow: the supervisor never
+  // signalled this child, so the SIGTERM that killed it came from somewhere
+  // else — and that is precisely what an operator needs to hear.
+  for (const signal of ['SIGTERM', 'SIGKILL']) {
+    const h = crashedIntermediate((child) => child.end(null, signal));
+    const result = await superviseLoop(h.deps);
+
+    assert.equal(result.reason, 'child_exited', 'still a successful supervision');
+    assert.equal(result.continuations, 1);
+    assert.deepEqual(
+      result.abnormalExits,
+      [{ sessionId: DENIER, code: null, signal }],
+      `an external ${signal} must be recorded`,
+    );
+    assert.ok(
+      h.logs.some((line) => line.includes('exited abnormally') && line.includes(`signal ${signal}`)),
+      `an external ${signal} must be reported`,
+    );
+    assert.deepEqual(h.children[0].signals, [], 'the supervisor sent nothing — that is the precondition');
+  }
 });
 
 test('a session that ends with no deny simply ends the loop', async () => {
@@ -682,6 +707,11 @@ test('degradeMessage describes the session it is actually talking about', () => 
 
   const killed = degradeMessage('sess-1', 'deny is unbound', { code: null, signal: 'SIGSEGV' });
   assert.match(killed, /already exited abnormally \(signal SIGSEGV\)/);
+
+  // A degrade never kills the child — every degrade site runs before
+  // terminateChild — so a SIGTERM here came from outside and is abnormal too.
+  const external = degradeMessage('sess-1', 'deny is unbound', { code: null, signal: 'SIGTERM' });
+  assert.match(external, /already exited abnormally \(signal SIGTERM\)/);
 
   // Every variant still hands over the recovery command — that is unconditional.
   for (const message of [running, ended, crashed, killed]) {
