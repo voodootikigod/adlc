@@ -317,7 +317,9 @@ function writeChainedManifest(root, key, specs) {
       files: {},
       prev,
     };
-    if (spec.forgeSig) entry.sig = 'a'.repeat(64);
+    if (spec.noData) delete entry.data;
+    if (spec.rawSig !== undefined) entry.sig = spec.rawSig;
+    else if (spec.forgeSig) entry.sig = 'a'.repeat(64);
     else if (spec.sign !== false) entry.sig = signManifestEntry(key, entry);
     const line = JSON.stringify(entry);
     prev = createHash('sha256').update(line).digest('hex');
@@ -410,6 +412,74 @@ test('doctor storehash-manifest-bind: an UNSIGNED entry may not supply the bound
     assert.notEqual(check.authenticated, true, 'and authentication is never claimed over it');
     assert.notEqual(check.boundStoreHash, live, 'the unsigned storeHash is not adopted');
     assert.match(check.reason ?? '', /sign/i, 'and the reason names why it could not bind');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: a one-character signature is tampering, not a legacy entry', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // A `sig` of ANY non-zero length is a present signature and must verify.
+    // Treating a short one as "absent" would let a forger opt back into the
+    // legacy-prefix tolerance simply by truncating the field.
+    writeChainedManifest(root, 'test-signing-key', [
+      { rawSig: 'a' },
+      { sign: true, storeHash: store.load().hash },
+    ]);
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.equal(check.ok, false, 'a present-but-unverifiable sig is rejected however short');
+    assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: the failure reason names the OFFENDING line, 1-indexed', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // An operator jumps straight to this line number; an off-by-one sends them
+    // to an innocent entry. Two shapes, so both message paths are pinned.
+    writeChainedManifest(root, 'test-signing-key', [
+      { sign: true },
+      { sign: true },
+      { forgeSig: true },
+    ]);
+    const tampered = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.equal(tampered.code, 'MANIFEST_SIGNATURE_INVALID');
+    assert.match(tampered.reason, /line 3\b/, `bad-signature reason names line 3: ${tampered.reason}`);
+
+    writeChainedManifest(root, 'test-signing-key', [
+      { sign: true },
+      { sign: false },
+    ]);
+    const regressed = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.equal(regressed.code, 'MANIFEST_SIGNATURE_INVALID');
+    assert.match(regressed.reason, /line 2\b/, `unsigned-after-signed reason names line 2: ${regressed.reason}`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: an entry carrying no `data` field at all is walked, not thrown on', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    const live = store.load().hash;
+    // Not every gate records data. Reading storeHash off a missing `data` must
+    // not crash the diagnostic — a doctor that throws reports nothing at all.
+    writeChainedManifest(root, 'test-signing-key', [
+      { sign: true, noData: true },
+      { sign: true, storeHash: live },
+    ]);
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.equal(check.ok, true, 'a data-less entry is skipped, not fatal');
+    assert.equal(check.boundStoreHash, live, 'and the later checkpoint still binds');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('doctor storehash-manifest-bind: with no checkpoint recorded at all, the reason does not blame signing', () => {
+  const { root, store } = storeWithEvidence();
+  try {
+    // Distinct from the all-unsigned case: here nothing was ever recorded, so
+    // the operator must not be told signatures were the obstacle.
+    writeChainedManifest(root, 'test-signing-key', [{ sign: true }]);
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.notEqual(check.bound, true, 'nothing to bind to');
+    assert.equal(check.reason, 'no evidence-required transaction recorded yet');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
