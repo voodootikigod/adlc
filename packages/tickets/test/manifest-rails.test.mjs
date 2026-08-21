@@ -184,6 +184,32 @@ test('a rail verdict does not depend on whether a nested checkout is present', (
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// MAX_DEPTH is a real bound, and the depth counter that feeds it must advance by
+// exactly one level per level. A counter that overshoots still finds shallow
+// manifests, so the existing cases cannot see it — it silently stops descending
+// early and quietly under-reports, which is the same failure shape as the
+// worktree bug above: a manifest that exists is reported as absent.
+test('the walk descends exactly one level per directory, up to MAX_DEPTH', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-depth-')));
+  try {
+    const nest = (...segments) => {
+      mkdirSync(join(root, ...segments), { recursive: true });
+      writeFileSync(join(root, ...segments, 'package.json'), '{}\n');
+      return segments.join('/') + '/package.json';
+    };
+    const deep5 = nest('a', 'b', 'c', 'd', 'e');
+    const atLimit = nest('l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8');
+    const past = nest('m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9');
+
+    const found = discoverManifests(root);
+    // reachable only if the counter advances by one: a step of two prices this
+    // directory at depth 10 and abandons it before reading the manifest.
+    assert.ok(found.includes(deep5), `a five-deep manifest is found: ${deep5}`);
+    assert.ok(found.includes(atLimit), 'a manifest at MAX_DEPTH is found');
+    assert.ok(!found.includes(past), 'a manifest past MAX_DEPTH is not walked');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('the manifest basename set is exactly the three host manifests', () => {
   assert.deepEqual([...MANIFEST_BASENAMES].sort(), ['marketplace.json', 'package.json', 'plugin.json']);
 });
