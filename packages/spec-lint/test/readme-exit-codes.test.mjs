@@ -14,7 +14,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, statSync, existsSync, realpathSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -79,6 +79,12 @@ function docFiles(root) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (skipDirs.has(entry.name)) continue;
+        // A nested git checkout is another branch's tree, not ours. `skipDirs`
+        // names `.worktrees`, but this repo keeps worktrees under
+        // `.claude/worktrees/` (.git/info/exclude), so the scan used to read a
+        // dead branch's docs and fail on them. A linked worktree has a `.git`
+        // file; a submodule or nested clone has a `.git` directory.
+        if (existsSync(join(full, '.git'))) continue;
         walk(full);
         continue;
       }
@@ -126,6 +132,27 @@ describe('spec-lint documented exit codes match the binary (issue #525)', () => 
       /\b(no|zero|none|without|absent)\b/i,
       'the `2` row must state that a spec with no criteria also fails',
     );
+  });
+
+  // The repo-wide scan above must see only THIS checkout's docs. Worktrees here
+  // live under `.claude/worktrees/`, which the skip list does not name, so the
+  // walk used to read another branch's stale docs and fail on them — red on any
+  // operator's machine, green in CI, with nothing wrong in the shipped docs.
+  it('the doc scan does not descend into a nested git checkout', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'spec-lint-walk-')));
+    try {
+      writeFileSync(join(root, 'ours.md'), '# ours\n');
+
+      const worktree = join(root, '.claude', 'worktrees', 'stale');
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
+      // exactly the stale claim this suite exists to catch — but on a dead branch
+      writeFileSync(join(worktree, 'stale.md'), '| `0` | no criteria found; passes |\n');
+
+      const scanned = docFiles(root).map((f) => f.slice(root.length + 1));
+      assert.ok(scanned.includes('ours.md'), 'our own docs are still scanned');
+      assert.deepEqual(scanned.filter((f) => f.startsWith('.claude')), [], 'nested checkout not scanned');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('no documentation file in the repo still claims exit 0 when there is nothing to check', () => {

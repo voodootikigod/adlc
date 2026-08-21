@@ -11,7 +11,7 @@
 // semantics cannot drift; manifest-rails.test.mjs still cross-checks it against
 // core's globMatch on a shared corpus.
 
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 // Generated verbatim from packages/core/lib/glob.mjs — see that file. Imported
 // rather than re-implemented so this cannot drift from the matcher the rails
@@ -23,6 +23,24 @@ export const MANIFEST_BASENAMES = Object.freeze(['package.json', 'plugin.json', 
 // Directories a manifest a release rewrites never lives in, and which are large
 // or noisy. Skipping them keeps the walk fast and its results honest.
 const SKIP_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', 'coverage', '.next']);
+
+/**
+ * A directory that is itself a git checkout holds another commit's files, not
+ * ours, and no release of THIS repo rewrites a manifest inside it.
+ *
+ * Detecting the checkout beats naming the directory. `SKIP_DIRS` guesses where
+ * worktrees live, and the guess is wrong here: this repo keeps them under
+ * `.claude/worktrees/`, so the walk used to return 95 phantom paths out of 146 —
+ * enough to flip `coversManifest('.claude/**', …)` from false to true and make
+ * `#assertNoManifestRails` reject a rail on one machine and accept it on another.
+ * Any other layout (`.wt/`, `worktrees/`, a tool-specific directory) reopened the
+ * same hole. A linked worktree has a `.git` FILE; a submodule or nested clone has
+ * a `.git` DIRECTORY. `existsSync` accepts both and needs no git binary, so this
+ * still works in the non-git trees this function promises to support.
+ */
+function isNestedCheckout(dir) {
+  return existsSync(join(dir, '.git'));
+}
 const MAX_DEPTH = 8; // release manifests sit shallow; deeper is not a release target
 
 /**
@@ -53,7 +71,9 @@ export function discoverManifests(root = process.cwd()) {
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (SKIP_DIRS.has(entry.name)) continue;
-        walk(join(dir, entry.name), depth + 1);
+        const child = join(dir, entry.name);
+        if (isNestedCheckout(child)) continue;
+        walk(child, depth + 1);
       } else if (entry.isFile() && MANIFEST_BASENAMES.includes(entry.name)) {
         found.push(relative(root, join(dir, entry.name)).split(sep).join('/'));
       }

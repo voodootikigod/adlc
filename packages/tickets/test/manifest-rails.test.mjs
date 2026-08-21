@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -121,6 +121,66 @@ test('discoverManifests walks a tree, finds manifests, excludes node_modules', (
 
     assert.equal(coversManifest('packages/build-gate/**', found), true);
     assert.equal(coversManifest('packages/build-gate/lib/**', found), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// A nested git checkout is not this checkout's content. This repo keeps its
+// worktrees under `.claude/worktrees/`, not the `.worktrees` the SKIP_DIRS set
+// names, so the walk used to descend into stale branches and return their
+// manifests as if they were ours — 95 of 146 paths in a working checkout.
+// Detect the checkout itself rather than guessing directory names: a linked
+// worktree has a `.git` FILE, a submodule or nested clone a `.git` DIRECTORY.
+test('discoverManifests skips nested git checkouts, whatever they are named', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-nested-')));
+  try {
+    // this checkout's own content
+    writeFileSync(join(root, 'package.json'), '{}\n');
+    mkdirSync(join(root, 'packages', 'real'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'real', 'package.json'), '{}\n');
+
+    // a linked worktree: `.git` is a FILE, and the directory name is not in SKIP_DIRS
+    const worktree = join(root, '.claude', 'worktrees', 'stale');
+    mkdirSync(join(worktree, 'packages', 'real'), { recursive: true });
+    writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
+    writeFileSync(join(worktree, 'package.json'), '{}\n');
+    writeFileSync(join(worktree, 'packages', 'real', 'package.json'), '{}\n');
+
+    // a submodule / nested clone: `.git` is a DIRECTORY
+    const submodule = join(root, 'vendor', 'dep');
+    mkdirSync(join(submodule, '.git'), { recursive: true });
+    writeFileSync(join(submodule, 'package.json'), '{}\n');
+
+    const found = discoverManifests(root);
+    assert.ok(found.includes('package.json'), 'our root manifest present');
+    assert.ok(found.includes('packages/real/package.json'), 'our package manifest present');
+    assert.deepEqual(found.filter((p) => p.startsWith('.claude/')), [], 'no worktree manifest');
+    assert.deepEqual(found.filter((p) => p.startsWith('vendor/')), [], 'no submodule manifest');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// The bug that made this matter: `#assertNoManifestRails` rejects a rail that
+// covers any discovered manifest, so a phantom path turns ticket creation into
+// a RAIL_COVERS_MANIFEST failure that depends on the operator's disk rather than
+// on the commit. Same tree, same rail, must reach the same verdict.
+test('a rail verdict does not depend on whether a nested checkout is present', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-verdict-')));
+  try {
+    writeFileSync(join(root, 'package.json'), '{}\n');
+    mkdirSync(join(root, '.claude'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'settings.json'), '{}\n'); // not a manifest basename
+
+    const before = discoverManifests(root);
+    const verdictBefore = coversManifest('.claude/**', before);
+
+    const worktree = join(root, '.claude', 'worktrees', 'stale');
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere\n');
+    writeFileSync(join(worktree, 'package.json'), '{}\n');
+
+    const after = discoverManifests(root);
+    assert.deepEqual([...after].sort(), [...before].sort(), 'the walk is unchanged by a worktree');
+    assert.equal(coversManifest('.claude/**', after), verdictBefore, 'the rail verdict is unchanged');
+    assert.equal(verdictBefore, false, 'and `.claude/**` covers no real manifest here');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
