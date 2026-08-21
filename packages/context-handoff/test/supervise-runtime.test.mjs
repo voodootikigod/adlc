@@ -24,6 +24,18 @@ import {
 } from '../lib/supervise-runtime.mjs';
 import { CHILD_SESSION_ENV_MARKERS } from '../lib/supervise.mjs';
 
+/**
+ * Every async test here drives the loop, whose waits (for a deny, for
+ * quiescence, for the child to exit) are deliberately unbounded — that is
+ * correct for a wrapper attached to somebody's session, and wrong for a test.
+ * Without a bound, a regression that removes a loop-exit guard SPINS instead of
+ * failing, and `node --test` has no default timeout: CI would stall to the job
+ * limit with no test named. This converts that class of regression into a named
+ * failure. Generous on purpose — the fake clock makes these run in
+ * milliseconds, so anything near this bound is a hang, not slow work.
+ */
+const LOOP_TEST = { timeout: 30_000 };
+
 /** Minimal stand-in for a ChildProcess: `once` handlers plus a kill recorder. */
 function fakeProcess() {
   const handlers = {};
@@ -116,7 +128,7 @@ test('nodeSpawner scrubs the child environment on EVERY spawn', () => {
   assert.deepEqual(calls[1].args, ['--session-id', 'sess-2', '--model', 'opus', 'continue']);
 });
 
-test('a spawned handle settles on exit, on error, and swallows a kill that cannot land', async () => {
+test('a spawned handle settles on exit, on error, and swallows a kill that cannot land', LOOP_TEST, async () => {
   const proc = fakeProcess();
   const spawn = nodeSpawner({ command: 'claude', cwd: '/repo', env: {}, spawnFn: () => proc });
   const handle = spawn({ sessionId: 'sess-1', prompt: null });
@@ -142,7 +154,7 @@ test('a spawned handle settles on exit, on error, and swallows a kill that canno
   assert.match(settled.error.message, /ENOENT/, 'a command that never started must settle, not hang the loop');
 });
 
-test('handle.kill forwards a REAL child process\'s answer, so the already-gone guard is reachable', async () => {
+test('handle.kill forwards a REAL child process\'s answer, so the already-gone guard is reachable', LOOP_TEST, async () => {
   // The production proof. Everything above this runs against a stub, and a stub
   // is exactly what hid this: the wrapper discarded child.kill()'s return, so
   // it always yielded undefined, and terminateChild's `=== false` guard could
@@ -222,7 +234,7 @@ test('createInterrupt registers and removes its handler', () => {
   assert.equal(interrupt.isStopped(), true);
 });
 
-test('cliContinueRunner builds the mutating invocation and passes the key through', async () => {
+test('cliContinueRunner builds the mutating invocation and passes the key through', LOOP_TEST, async () => {
   const calls = [];
   const run = async (bin, args, opts) => {
     calls.push({ bin, args, opts });
@@ -257,7 +269,7 @@ test('cliContinueRunner builds the mutating invocation and passes the key throug
   assert.equal(calls[1].args.includes('--capture-from'), false, 'no transcript, no flag');
 });
 
-test('cliContinueRunner turns every failure into a degrade the operator can read', async () => {
+test('cliContinueRunner turns every failure into a degrade the operator can read', LOOP_TEST, async () => {
   const degraded = await cliContinueRunner({
     cwd: '/repo',
     dir: '.adlc',
@@ -287,7 +299,7 @@ test('cliContinueRunner turns every failure into a degrade the operator can read
   assert.match(garbage.error, /JSON payload/);
 });
 
-test('runNodeScript reports a non-zero exit rather than throwing', async () => {
+test('runNodeScript reports a non-zero exit rather than throwing', LOOP_TEST, async () => {
   const ok = await runNodeScript('-e', ['process.stdout.write("hi")'], {
     cwd: process.cwd(),
     env: process.env,

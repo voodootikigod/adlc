@@ -36,6 +36,18 @@ import {
   SUPERVISE_TERMINATE_GRACE_MS,
 } from '../lib/thresholds.mjs';
 
+/**
+ * Every async test here drives the loop, whose waits (for a deny, for
+ * quiescence, for the child to exit) are deliberately unbounded — that is
+ * correct for a wrapper attached to somebody's session, and wrong for a test.
+ * Without a bound, a regression that removes a loop-exit guard SPINS instead of
+ * failing, and `node --test` has no default timeout: CI would stall to the job
+ * limit with no test named. This converts that class of regression into a named
+ * failure. Generous on purpose — the fake clock makes these run in
+ * milliseconds, so anything near this bound is a hang, not slow work.
+ */
+const LOOP_TEST = { timeout: 30_000 };
+
 const DENIER = 'sess-denier';
 const SUCCESSOR = 'sess-successor';
 const HASH = 'a'.repeat(64);
@@ -133,7 +145,7 @@ function harness({
   return { deps, spawns, children, logs, continueCalls, clock };
 }
 
-test('a deny is continued: capture handed over, child terminated, successor respawned with the prompt', async () => {
+test('a deny is continued: capture handed over, child terminated, successor respawned with the prompt', LOOP_TEST, async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     onSpawn: ({ sessionId, child }) => {
@@ -176,7 +188,7 @@ test('a deny is continued: capture handed over, child terminated, successor resp
   assert.deepEqual(h.children[1].signals, [], 'the successor is never signalled');
 });
 
-test('continue waits for the transcript to go quiet before capturing', async () => {
+test('continue waits for the transcript to go quiet before capturing', LOOP_TEST, async () => {
   // The transcript keeps growing for three polls, then stops. Capturing during
   // that window would take the handoff summary mid-sentence.
   const stopsAt = SUPERVISE_DENY_POLL_MS * 3;
@@ -226,7 +238,7 @@ function aliveThroughDegrade() {
   };
 }
 
-test('a degraded continue leaves the child running and warns exactly once', async () => {
+test('a degraded continue leaves the child running and warns exactly once', LOOP_TEST, async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     continueResult: () => ({ ok: false, error: 'deny is unbound' }),
@@ -247,7 +259,7 @@ test('a degraded continue leaves the child running and warns exactly once', asyn
   assert.match(warnings[0], /deny is unbound/);
 });
 
-test('a capture that no longer matches its hash is never injected', async () => {
+test('a capture that no longer matches its hash is never injected', LOOP_TEST, async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     verifyCapture: () => ({ ok: false, error: 'content_hash mismatch' }),
@@ -262,7 +274,7 @@ test('a capture that no longer matches its hash is never injected', async () => 
   assert.ok(h.logs.some((line) => line.includes('content_hash mismatch')));
 });
 
-test('the capture is verified against the hash the continue payload actually bound', async () => {
+test('the capture is verified against the hash the continue payload actually bound', LOOP_TEST, async () => {
   const seen = [];
   const h = harness({
     denies: { [DENIER]: 0 },
@@ -287,7 +299,7 @@ test('the capture is verified against the hash the continue payload actually bou
   assert.deepEqual(seen, [{ denySession: DENIER, contentHash: HASH }]);
 });
 
-test('a payload the loop cannot trust degrades instead of spawning', async () => {
+test('a payload the loop cannot trust degrades instead of spawning', LOOP_TEST, async () => {
   for (const [label, payload] of [
     ['dry run', { dryRun: true, successor_session_id: SUCCESSOR, ticket_id: 'T-1', content_hash: HASH, content_path: 'p', bootstrap_prompt: PROMPT }],
     ['unsafe successor id', { dryRun: false, successor_session_id: 'evil id\nrm -rf /', ticket_id: 'T-1', content_hash: HASH, content_path: 'p', bootstrap_prompt: PROMPT }],
@@ -306,7 +318,7 @@ test('a payload the loop cannot trust degrades instead of spawning', async () =>
   }
 });
 
-test('a child that ignores SIGTERM is escalated to SIGKILL after the grace', async () => {
+test('a child that ignores SIGTERM is escalated to SIGKILL after the grace', LOOP_TEST, async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     onSpawn: ({ sessionId, child }) => {
@@ -345,7 +357,7 @@ function crashedIntermediate(ending) {
   });
 }
 
-test('an intermediate that crashed after its deny is reported but does not fail the run', async () => {
+test('an intermediate that crashed after its deny is reported but does not fail the run', LOOP_TEST, async () => {
   const h = crashedIntermediate((child) => child.end(7));
   const result = await superviseLoop(h.deps);
 
@@ -364,7 +376,7 @@ test('an intermediate that crashed after its deny is reported but does not fail 
   assert.match(warnings[0], /continuing to its successor anyway/);
 });
 
-test('a crash signal after the deny is reported the same way', async () => {
+test('a crash signal after the deny is reported the same way', LOOP_TEST, async () => {
   const h = crashedIntermediate((child) => child.end(null, 'SIGSEGV'));
   const result = await superviseLoop(h.deps);
 
@@ -373,7 +385,7 @@ test('a crash signal after the deny is reported the same way', async () => {
   assert.ok(h.logs.some((line) => line.includes('signal SIGSEGV')));
 });
 
-test('the ordinary handoff — we terminate a live child — says nothing about abnormal exits', async () => {
+test('the ordinary handoff — we terminate a live child — says nothing about abnormal exits', LOOP_TEST, async () => {
   // The control. Without it, a warning that fired unconditionally would pass
   // both tests above while making every normal handoff look like a crash.
   const h = crashedIntermediate((child) => {
@@ -396,7 +408,7 @@ test('the ordinary handoff — we terminate a live child — says nothing about 
   );
 });
 
-test('a clean self-exit after the deny is orderly, not abnormal', async () => {
+test('a clean self-exit after the deny is orderly, not abnormal', LOOP_TEST, async () => {
   const h = crashedIntermediate((child) => child.end(0));
   const result = await superviseLoop(h.deps);
 
@@ -406,7 +418,7 @@ test('a clean self-exit after the deny is orderly, not abnormal', async () => {
   assert.deepEqual(h.children[0].signals, [], 'nothing to signal — it had already gone');
 });
 
-test('terminateChild reports whether it signalled at all', async () => {
+test('terminateChild reports whether it signalled at all', LOOP_TEST, async () => {
   // The distinction the warning rests on. Both endings previously reported
   // `terminated: true, escalated: false` and were indistinguishable.
   const clock = { t: 0 };
@@ -470,7 +482,7 @@ test('abnormalSelfExit counts any death the supervisor did not cause', () => {
   assert.equal(abnormalSelfExit(null), false);
 });
 
-test('an intermediate killed from OUTSIDE is reported, not read as an orderly stop', async () => {
+test('an intermediate killed from OUTSIDE is reported, not read as an orderly stop', LOOP_TEST, async () => {
   // The case the signal-name exemption used to swallow: the supervisor never
   // signalled this child, so the SIGTERM that killed it came from somewhere
   // else — and that is precisely what an operator needs to hear.
@@ -493,7 +505,7 @@ test('an intermediate killed from OUTSIDE is reported, not read as an orderly st
   }
 });
 
-test('a session that ends with no deny simply ends the loop', async () => {
+test('a session that ends with no deny simply ends the loop', LOOP_TEST, async () => {
   const h = harness({ onSpawn: ({ child }) => setImmediate(() => child.end(0)) });
   const result = await superviseLoop(h.deps);
   assert.equal(result.reason, 'child_exited');
@@ -502,7 +514,7 @@ test('a session that ends with no deny simply ends the loop', async () => {
   assert.equal(h.spawns.length, 1);
 });
 
-test('a deny written just before the session dies is still continued', async () => {
+test('a deny written just before the session dies is still continued', LOOP_TEST, async () => {
   // Exit is checked AFTER the deny store on every tick. A session that writes
   // its marker and then exits must not be read as "nothing to do".
   const h = harness({
@@ -520,7 +532,7 @@ test('a deny written just before the session dies is still continued', async () 
   assert.deepEqual(h.children[0].signals, [], 'an already-dead child needs no signal');
 });
 
-test('an interrupt stops the watch and waits for the child rather than continuing it', async () => {
+test('an interrupt stops the watch and waits for the child rather than continuing it', LOOP_TEST, async () => {
   const stopped = { value: false };
   const h = harness({
     denies: { [DENIER]: 4 * SUPERVISE_DENY_POLL_MS },
@@ -542,7 +554,7 @@ test('an interrupt stops the watch and waits for the child rather than continuin
   assert.equal(h.spawns.length, 1);
 });
 
-test('an interrupt AFTER a continue stops before the respawn, leaving a resumable successor', async () => {
+test('an interrupt AFTER a continue stops before the respawn, leaving a resumable successor', LOOP_TEST, async () => {
   // The other interrupt path: the existing tests interrupt before any deny, so
   // the branch that fires once a continuation has already been authorized was
   // never driven. The deny is consumed by then, and the successor exists on
@@ -581,7 +593,7 @@ test('an interrupt AFTER a continue stops before the respawn, leaving a resumabl
   );
 });
 
-test('a missing transcript continues without a narrative and says so', async () => {
+test('a missing transcript continues without a narrative and says so', LOOP_TEST, async () => {
   const h = harness({
     denies: { [DENIER]: 0 },
     transcriptMtime: () => null,
@@ -611,7 +623,7 @@ test('a missing transcript continues without a narrative and says so', async () 
   );
 });
 
-test('a harness that fails is reported as a failure, not as a supervised session', async () => {
+test('a harness that fails is reported as a failure, not as a supervised session', LOOP_TEST, async () => {
   for (const [label, ending, expected] of [
     ['non-zero exit', (child) => child.end(3), 'child_failed'],
     ['killed by a signal', (child) => child.end(null, 'SIGSEGV'), 'child_signalled'],
@@ -625,7 +637,7 @@ test('a harness that fails is reported as a failure, not as a supervised session
   }
 });
 
-test('the failure a caller cannot see in a payload is also said out loud', async () => {
+test('the failure a caller cannot see in a payload is also said out loud', LOOP_TEST, async () => {
   const h = harness({ onSpawn: ({ child }) => setImmediate(() => child.fail(new Error('spawn ENOENT'))) });
   const result = await superviseLoop(h.deps);
   assert.equal(result.childExit.error, 'spawn ENOENT');
@@ -635,7 +647,7 @@ test('the failure a caller cannot see in a payload is also said out loud', async
   );
 });
 
-test('an interrupt is not a harness failure even though the child dies by signal', async () => {
+test('an interrupt is not a harness failure even though the child dies by signal', LOOP_TEST, async () => {
   const stopped = { value: false };
   const h = harness({
     onSpawn: ({ child }) =>
@@ -656,7 +668,7 @@ test('an interrupt is not a harness failure even though the child dies by signal
   );
 });
 
-test('a child that dies before writing a transcript still continues on the brief', async () => {
+test('a child that dies before writing a transcript still continues on the brief', LOOP_TEST, async () => {
   // The bug this pins: quiescence ends as `child_exited` rather than
   // `transcript_absent`, and selecting captureFrom from that reason handed
   // `continue` a path to a file that never existed — degrading the whole
@@ -677,7 +689,7 @@ test('a child that dies before writing a transcript still continues on the brief
   assert.ok(h.logs.some((line) => line.includes('no transcript')));
 });
 
-test('a child that dies WITH a transcript still hands it over', async () => {
+test('a child that dies WITH a transcript still hands it over', LOOP_TEST, async () => {
   // The control for the pair above: the fix must select on the file, not on
   // how the wait ended — a supervisor that always passed null would lose every
   // narrative and still pass the test above.
@@ -696,7 +708,7 @@ test('a child that dies WITH a transcript still hands it over', async () => {
   assert.ok(!h.logs.some((line) => line.includes('no transcript')));
 });
 
-test('an unsafe minted session id refuses to spawn anything', async () => {
+test('an unsafe minted session id refuses to spawn anything', LOOP_TEST, async () => {
   const h = harness({ sessions: ['not a uuid\nwith a newline'] });
   const result = await superviseLoop(h.deps);
   assert.equal(result.reason, 'unsafe_session_id');
@@ -801,7 +813,7 @@ test('degradeMessage describes the session it is actually talking about', () => 
   }
 });
 
-test('a degrade names the state the child is actually in', async () => {
+test('a degrade names the state the child is actually in', LOOP_TEST, async () => {
   // Alive at the moment of the degrade: the child idles, and the loop's
   // degrade fires while it is still running.
   const alive = harness({

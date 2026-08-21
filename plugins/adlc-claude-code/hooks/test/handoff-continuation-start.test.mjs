@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { newestOpenDeny } from '../adlc-hook.mjs';
 import { dispatch, ENFORCING_MODES } from '../adlc-hook-run.mjs';
 import { CAPTURE_INSTRUCTION } from '../handoff-gate.mjs';
-import { SUPERVISOR_ENV_MARKER, superviseChildEnv } from '@adlc/context-handoff';
+import { SUPERVISOR_ENV_MARKER, buildBootstrapPrompt, superviseChildEnv } from '@adlc/context-handoff';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-hook.mjs');
@@ -100,10 +100,24 @@ test('a session named by a resume-auth is handed the capture as context', () => 
     assert.ok(context.includes('<<<UNTRUSTED-CAPTURE-DATA'));
     assert.ok(context.includes('END-UNTRUSTED>>>'));
     assert.ok(context.includes('## Ticket'), 'the deterministic brief is part of what is injected');
-    // Same capture body as the host composed — the hook adds a hedge, it does
-    // not rewrite what the previous session said.
+
+    // EXACT, not substrings. The hook adds a hedge, so it can no longer be
+    // compared to the supervised payload verbatim — but "contains ## Model
+    // handoff" would also pass for a hook that injected a DIFFERENT body. The
+    // expected text is recomposed here from the capture on disk, so anything
+    // other than that capture, in the keyless form, fails.
+    const captureBody = readFileSync(join(root, '.adlc', 'handoffs', 'content', `${DENIER}.md`), 'utf8');
+    const expected = buildBootstrapPrompt({
+      denySessionId: DENIER,
+      ticketId: 'T-START',
+      body: captureBody,
+      verified: false,
+    });
+    assert.equal(expected.ok, true);
+    assert.equal(context, expected.prompt, 'the injected context must be exactly the keyless composition of THIS capture');
+    // …and the supervised payload is the same capture in the assertive form.
     assert.ok(payload.bootstrap_prompt.includes('## Ticket'));
-    assert.ok(context.includes('## Model handoff'), 'the recorded brief itself must survive');
+    assert.notEqual(context, payload.bootstrap_prompt, 'the keyless form is hedged, the supervised one is not');
 
     // The condition is the resume-auth, NOT an open deny: a completed
     // continuation leaves the denier CONSUMED, and gating on an open deny would
