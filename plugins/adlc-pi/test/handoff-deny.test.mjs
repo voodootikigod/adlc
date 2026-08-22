@@ -77,6 +77,13 @@ function makeRepo({ current = 'T1' } = {}) {
  * @param {string} dir
  * @returns {string} dir
  */
+function makeCheckout(dir) {
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  // A bare `mkdir .git` is what an AGENT can produce; a real checkout has HEAD.
+  writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  return dir;
+}
+
 function installAdlc(dir) {
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [TICKET] }));
@@ -1254,7 +1261,7 @@ test('a .git boundary picks which store applies — it does not release enforcem
   const root = makeRepo();
   try {
     const nested = join(root, 'vendor', 'other-project');
-    mkdirSync(join(nested, '.git'), { recursive: true });
+    makeCheckout(nested);
     const adlcRoots = createAdlcRootState();
     const ask = (r) =>
       checkHandoff({
@@ -1284,7 +1291,7 @@ test('an unarmed outer repo leaves a vendored checkout its own store', () => {
   const root = makeRepo();
   try {
     const nested = join(root, 'vendor', 'other-project');
-    mkdirSync(join(nested, '.git'), { recursive: true });
+    makeCheckout(nested);
     installAdlc(nested);
 
     assert.equal(resolveAdlcRoot(nested), realpathSync(nested), 'its own store, not the outer one');
@@ -1293,7 +1300,7 @@ test('an unarmed outer repo leaves a vendored checkout its own store', () => {
     // And a nested checkout with NO store of its own is simply not an ADLC repo
     // when nothing above it has been armed.
     const bare = join(root, 'vendor', 'plain');
-    mkdirSync(join(bare, '.git'), { recursive: true });
+    makeCheckout(bare);
     assert.equal(resolveAdlcRoot(bare), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1372,7 +1379,7 @@ test('a different checkout moved to a remembered path is not the remembered repo
   const replacement = join(parent, 'other-project');
   try {
     installAdlc(path);
-    mkdirSync(join(replacement, '.git'), { recursive: true });
+    makeCheckout(replacement);
 
     const adlcRoots = createAdlcRootState();
     const ask = () =>
@@ -1677,7 +1684,7 @@ test('a nested .adlc cannot outrank the repo it sits in', () => {
   // own, because the walk stops at its .git (asserted separately below).
   const root = makeRepo();
   try {
-    mkdirSync(join(root, '.git'), { recursive: true });
+    makeCheckout(root);
     const sub = join(root, 'src');
     mkdirSync(sub, { recursive: true });
 
@@ -1720,7 +1727,7 @@ test('a .adlc above the checkout cannot capture it either', () => {
   try {
     installAdlc(outer);
     const checkout = join(outer, 'project');
-    mkdirSync(join(checkout, '.git'), { recursive: true });
+    makeCheckout(checkout);
 
     assert.equal(resolveAdlcRoot(checkout), null, 'the checkout did not opt in');
     assert.equal(
@@ -1866,6 +1873,69 @@ test('an external ticket store arms the gate with no local .adlc', () => {
     assert.equal(evaluatedRoot, realpathSync(root), 'the repo, not an ancestor');
     assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
     assert.notEqual(resolveAdlcRoot(root, store), '/');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(storeHome, { recursive: true, force: true });
+  }
+});
+
+test('a bare mkdir .git is not a checkout, even on the first gated call', () => {
+  // The remembered-root rule only helps once something has been remembered. A
+  // session whose FIRST gated call happens below a freshly created `.git` had
+  // no memory to fall back on, so an empty directory was a one-command opt-out
+  // of the enclosing repo's deny. A real checkout has HEAD.
+  const root = makeRepo();
+  try {
+    makeCheckout(root);
+    const sub = join(root, 'src');
+    mkdirSync(join(sub, '.git'), { recursive: true }); // the agent's version: no HEAD
+
+    // Fresh memory: nothing has been armed yet, exactly as on a first call.
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: sub,
+      adlcRoots: createAdlcRootState(),
+    });
+    assert.equal(verdict.decision, 'deny', 'an empty .git does not release the enclosing repo');
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root));
+
+    // Give it a HEAD and it reads as a genuine vendored checkout again.
+    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    assert.equal(resolveAdlcRoot(sub), null, 'a real checkout keeps its own identity');
+
+    // A `.git` FILE is the worktree/submodule spelling and also counts.
+    const linked = join(root, 'linked');
+    mkdirSync(linked, { recursive: true });
+    writeFileSync(join(linked, '.git'), 'gitdir: ../.git/worktrees/linked\n');
+    assert.equal(resolveAdlcRoot(linked), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an external store gives one root per checkout, not one per directory', () => {
+  // Falling back to the cwd meant each subdirectory became its own handoff
+  // root, so deny markers scattered per-directory and an open deny stopped
+  // being repo-wide — the durable, cross-session property the whole deny-set
+  // rests on.
+  const root = makeCheckout(makeBareDir());
+  const storeHome = makeBareDir();
+  try {
+    const store = join(storeHome, 'tickets.json');
+    writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
+    const deep = join(root, 'packages', 'a', 'src');
+    mkdirSync(deep, { recursive: true });
+
+    assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
+    assert.equal(resolveAdlcRoot(deep, store), realpathSync(root), 'the checkout, not the cwd');
+    assert.equal(
+      resolveAdlcRoot(join(root, 'packages'), store),
+      realpathSync(root),
+      'and the same root from every depth',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(storeHome, { recursive: true, force: true });

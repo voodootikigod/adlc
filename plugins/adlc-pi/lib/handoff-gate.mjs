@@ -19,7 +19,7 @@
 // session, so it survives only as a fallback that still fails closed.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { relative, isAbsolute, resolve, join, dirname } from 'node:path';
 
@@ -259,6 +259,7 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
   const perDirectoryOverride = storeOverride && !isAbsolute(storeOverride) ? storeOverride : null;
 
   let outermost = null;
+  let checkoutRoot = null;
   let insideCheckout = true;
   let dir = start;
   for (;;) {
@@ -271,18 +272,50 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
     if (remembered || localStore) outermost = dir;
     // The boundary applies from the NEXT ancestor up, so a checkout root that
     // holds the store still counts as one.
-    if (insideCheckout && existsSync(join(dir, '.git'))) insideCheckout = false;
+    if (insideCheckout && looksLikeCheckout(dir)) {
+      checkoutRoot = dir;
+      insideCheckout = false;
+    }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
   if (outermost !== null) return outermost;
 
-  // An external absolute store: ADLC is in force, and the only sensible root is
-  // the directory pi is actually working in. Letting the walk answer this
-  // resolved every ancestor as a match and marched enforcement up to `/`, where
-  // it would have written durable deny state into the filesystem root.
-  return ticketStoreExists(start, storeOverride) ? start : null;
+  // An external absolute store: ADLC is in force, but the store says nothing
+  // about WHERE, so structure answers it — the checkout root, falling back to
+  // the working directory when there is no checkout. Letting the walk answer it
+  // instead matched every ancestor and marched enforcement to `/`, where
+  // durable deny state would have landed; answering it with the cwd alone split
+  // one checkout into a separate deny store per subdirectory, so an open deny
+  // stopped being repo-wide.
+  if (!ticketStoreExists(start, storeOverride)) return null;
+  return checkoutRoot ?? start;
+}
+
+/**
+ * Does this directory hold something that could actually be a git checkout?
+ *
+ * `.git` existing is not enough, because `mkdir .git` is a thing an agent can
+ * do — and before this check that was a one-command opt-out of an enclosing
+ * repo's deny on the very first gated call, before any root was remembered. A
+ * real checkout has `.git/HEAD`, or a `.git` FILE holding a `gitdir:` pointer
+ * (worktrees and submodules). Neither is proof against a determined forgery,
+ * but a forgery elaborate enough to pass is also indistinguishable from the
+ * vendored checkout this boundary exists to respect.
+ *
+ * @param {string} dir
+ * @returns {boolean}
+ */
+function looksLikeCheckout(dir) {
+  const gitPath = join(dir, '.git');
+  try {
+    const stats = lstatSync(gitPath);
+    if (stats.isFile()) return true;
+    return stats.isDirectory() && existsSync(join(gitPath, 'HEAD'));
+  } catch {
+    return false;
+  }
 }
 
 
