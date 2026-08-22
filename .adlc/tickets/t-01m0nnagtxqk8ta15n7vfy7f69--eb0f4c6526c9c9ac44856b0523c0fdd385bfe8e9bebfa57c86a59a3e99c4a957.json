@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\n1.11.0 arc follow-up (u5 item g, exotic config): with an ABSOLUTE external ticket store, no directory has a local store, so the enclosing-ADLC-repo tiebreaker cannot fire and a forged nested .git can capture root SELECTION (enforcement still applies; the selected root is wrong). Low severity — requires the external-store layout plus an in-checkout forgery — but it is the remaining hole in the boundary logic the arc hardened.\n\n## What to change\n\nWhen the store is external-absolute, derive the root candidate set from the session-start-armed roots / the configured mapping rather than the .git boundary walk alone; a mid-session-created .git must not outrank an armed root (extend the session_start-outranks-forgery rule to this configuration).\n\n## Acceptance criteria\n\n1. External-absolute store + forged nested .git: the resolved root is the armed root, not the forgery. verify: `node --test plugins/adlc-pi/test/*.test.mjs plugins/adlc-opencode/test/*.test.mjs` exits 0 with the regression present.\n2. Normal local-store resolution unchanged (existing boundary suites stay green). verify: same command plus `node --test packages/context-handoff/test/*.test.mjs` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0NNAGTXQK8TA15N7VFY7F69",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-pi/**",
+    "plugins/adlc-opencode/**",
+    "packages/context-handoff/**"
+  ],
+  "title": "context-handoff root resolution: an absolute external store must not let a forged nested .git become the resolved root"
+}

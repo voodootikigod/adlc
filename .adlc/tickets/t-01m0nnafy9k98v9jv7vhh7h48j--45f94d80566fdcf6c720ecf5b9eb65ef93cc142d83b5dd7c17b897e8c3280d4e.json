@@ -1,0 +1,15 @@
+{
+  "body": "## Context\n\n1.11.0 arc follow-up, CONFIRMED by measurement on both call shapes (u5, #545): evaluateHandoffPreToolUse claims a verified bypass grant while the reason list is still empty, and bash's protected-path reasons are appended after — so a STRUCTURED protected-path refusal does not consume the grant, but a SHELL one does: `bash rm .adlc/...` is refused AND spends the operator's one-shot grant. pi ships a deny-text warning about the asymmetry with a test pinning both halves so the warning breaks loudly when this is fixed.\n\n## What to change\n\nReorder in adapter.mjs: assemble the COMPLETE reason set (including shell protected-path scans) before the grant-claim decision; a call that will be refused for any reason must not consume the grant. Update pi's asymmetry-warning test (it is designed to fail on this fix) and the deny text it pins.\n\n## Acceptance criteria\n\n1. Shell protected-path refusal leaves a verified grant unconsumed; the next legitimate mutation can still use it. verify: `node --test packages/context-handoff/test/*.test.mjs` exits 0 with the ordering test present (both call shapes asserted).\n2. pi's warning text + pinning test updated in the same PR. verify: `node --test plugins/adlc-pi/test/*.test.mjs` exits 0.\n3. Adapter drift suites green across harness copies. verify: `node --test packages/context-handoff/adapter-test/*.test.mjs` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0NNAFY9K98V9JV7VHH7H48J",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/lib/adapter.mjs",
+    "packages/context-handoff/test/**",
+    "packages/context-handoff/adapter-test/**",
+    "plugins/adlc-pi/test/**"
+  ],
+  "title": "context-handoff adapter: complete the reason list before claiming a bypass grant — shell protected-path refusals must not spend the grant"
+}

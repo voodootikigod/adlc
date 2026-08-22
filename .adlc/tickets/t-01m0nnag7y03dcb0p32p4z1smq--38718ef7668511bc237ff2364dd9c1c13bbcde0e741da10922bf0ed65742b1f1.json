@@ -1,0 +1,12 @@
+{
+  "body": "## Context\n\n1.11.0 arc follow-up (u5, pre-existing, A/B'd byte-identical before/after #545): the deny-store layer resolves and writes through a symlinked .adlc, so deny/marker state can land outside the checkout that armed it. All eight adapters share the layer. #545 already hardened the OPERATOR-facing recipe (prints resolved absolute paths; rm -rf of the parent dirs removes a link rather than following it) — this ticket is the WRITE side.\n\n## What to change\n\nAt the deny-store write boundary: resolve the store root and refuse (or write to the resolved-and-verified location with the containment predicate re-checked there) when .adlc is a symlink pointing outside the checkout; document the intended semantics for the LEGITIMATE symlinked-external-store layout (it is supported — the fix must distinguish configured external stores from an agent-repointed .adlc).\n\n## Acceptance criteria\n\n1. An agent-repointed .adlc symlink no longer receives deny-store writes outside the checkout (measured, not asserted-by-comment). verify: `node --test packages/context-handoff/test/*.test.mjs` exits 0 with the symlink write test present.\n2. The configured external-store layout keeps working (negative test). verify: same suite.\n3. Adapter suites green. verify: `node --test packages/context-handoff/adapter-test/*.test.mjs plugins/adlc-opencode/test/*.test.mjs plugins/adlc-pi/test/*.test.mjs` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0NNAG7Y03DCB0P32P4Z1SMQ",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/**"
+  ],
+  "title": "context-handoff deny-store layer: do not write through a symlinked .adlc"
+}
