@@ -330,6 +330,36 @@ test('a directory contaminated by the OLD bug does not activate enforcement afte
   }
 });
 
+test('an external ticket-store override is enforced even with no local .adlc', () => {
+  // ADLC_TICKET_STORE may point at an absolute store outside the worktree, and
+  // resolveRailsInForce accepts that as initialized. If containment also
+  // demanded a local .adlc, the rail guard would enforce while the deny-set
+  // stood down — a session past the band editing freely, no marker written.
+  const dir = plainDir();
+  const store = plainDir();
+  try {
+    const ticketsPath = join(store, 'tickets.json');
+    writeFileSync(ticketsPath, JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }));
+    assert.equal(existsSync(join(dir, '.adlc')), false, 'fixture must have no local .adlc');
+    let evaluated = 0;
+    const evaluate = () => {
+      evaluated += 1;
+      return { deny: false, reasons: [] };
+    };
+    checkHandoff({
+      tool: 'edit',
+      sessionID: 's1',
+      root: dir,
+      env: { ADLC_TICKET_STORE: ticketsPath },
+      evaluate,
+    });
+    assert.equal(evaluated, 1, 'an externally-configured ADLC repo must still reach the gate');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(store, { recursive: true, force: true });
+  }
+});
+
 test('an initialized repo is still enforced — the guard is not just "no .adlc"', () => {
   // Guards against the contamination fix over-correcting into a no-op.
   const dir = repo();

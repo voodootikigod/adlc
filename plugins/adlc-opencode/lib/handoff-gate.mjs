@@ -12,8 +12,7 @@
 // exposes no transcript file, so depth is the only signal available, and the
 // OR-join ignores the kinds that are missing rather than reading them as zero.
 
-import { existsSync } from 'node:fs';
-import { join, relative, isAbsolute, resolve } from 'node:path';
+import { relative, isAbsolute, resolve } from 'node:path';
 
 import {
   evaluateHandoffPreToolUse,
@@ -356,7 +355,14 @@ export function checkHandoff({
   // buying an allow.
   if (typeof root === 'string' && root !== '') {
     const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
-    if (!existsSync(join(root, '.adlc')) || !ticketStoreExists(root, storeOverride)) {
+    // The ticket store ALONE, with no additional `.adlc` clause. Requiring both
+    // re-split the definition it was meant to unify: ADLC_TICKET_STORE may point
+    // at an absolute external store, and resolveRailsInForce accepts that with
+    // no local .adlc — so ANDing the directory left the rail guard enforcing
+    // while the deny-set silently stood down. Contamination still cannot
+    // self-authorize, because a directory holding only the old bug's
+    // .deny-store and markers has no ticket store either way.
+    if (!ticketStoreExists(root, storeOverride)) {
       return { decision: 'allow' };
     }
   }
