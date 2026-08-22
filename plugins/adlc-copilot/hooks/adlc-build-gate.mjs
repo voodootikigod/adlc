@@ -148,11 +148,20 @@ export const DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
  */
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 
+/**
+ * KEEP IN SYNC with packages/build-gate/lib/depth-signal.mjs's countToolCalls().
+ * The `function_call`/`custom_tool_call` alternation is the Codex rollout shape
+ * (`response_item` records), adjudicated against real ~/.codex/sessions
+ * rollouts; the closing quote is what keeps the `_output` result half of each
+ * pair from doubling the count. Full rationale — including which event_msg
+ * mirrors are deliberately excluded — lives on the canonical copy.
+ */
 export function countToolCalls(text) {
   if (!text) return 0;
-  const toolUseBlocks = text.match(/"type"\s*:\s*"tool_use"/g) ?? [];
+  const toolCallRecords =
+    text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call)"/g) ?? [];
   const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
-  return toolUseBlocks.length + proseToolLines.length;
+  return toolCallRecords.length + proseToolLines.length;
 }
 
 export function computeDepthSignal({ text, bytes } = {}) {

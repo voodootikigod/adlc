@@ -43,6 +43,14 @@ import {
 import { computeRiskTier as coreComputeRiskTier, deriveRiskSignals as coreDeriveRiskSignals } from '../../../../packages/build-gate/lib/risk.mjs';
 import { countToolCalls as coreCountToolCalls, computeDepthSignal as coreComputeDepthSignal, isDegraded as coreIsDegraded } from '../../../../packages/build-gate/lib/depth-signal.mjs';
 import { globMatch as coreGlobMatch } from '../../../../packages/core/lib/tickets.mjs';
+import {
+  buildCodexRollout,
+  functionCall,
+  functionCallOutput,
+  customToolCall,
+  customToolCallOutput,
+  patchApplyEnd,
+} from '../../../../packages/build-gate/test/fixtures/codex-rollout.mjs';
 
 // A naive "replace ** then replace *" globMatch implementation does NOT
 // correctly handle a leading `**/` (fails to match a root-level path) --
@@ -89,7 +97,37 @@ const TEXT_FIXTURES = [
   Array.from({ length: 45 }, () => '"type": "tool_use"').join('\n'),
   Array.from({ length: 10 }, (_, i) => `Writing file-${i}.mjs`).join('\n'),
   'Editing a.mjs\nCreated b.mjs\n"type":"tool_use"\n',
+  // Codex rollout shape (T-01M05BWTEYKHEK3JJX71NXXJ4H). Every fixture above is
+  // Anthropic-shaped, which is exactly how a counter blind to Codex shipped:
+  // hook == core stayed pinned while both counted 0 on every real Codex
+  // session. These keep the pin honest on the shape that actually ships.
+  functionCall(1),
+  customToolCall(2),
+  // The call/output pair and the event_msg mirror — each must add nothing.
+  `${functionCall(3)}\n${functionCallOutput(3)}`,
+  `${customToolCall(4)}\n${patchApplyEnd(4)}\n${customToolCallOutput(4)}`,
+  // A deep sanitized rollout, past the hard depth band.
+  buildCodexRollout({ functionCalls: 31, customToolCalls: 12, messages: 7 }).text,
+  // An escaped rollout embedded in a tool output must not inflate the count.
+  buildCodexRollout({ functionCalls: 3, withNestedTranscript: true }).text,
+  // Anthropic and Codex shapes mixed in one transcript.
+  `${functionCall(5)}\n"type":"tool_use"\n${customToolCall(6)}\nWriting src/a.mjs`,
 ];
+
+test('drift: the hook counter reads a sanitized real-shape Codex rollout at its exact known count', () => {
+  const { text, expectedToolCalls } = buildCodexRollout({
+    functionCalls: 31,
+    customToolCalls: 12,
+    messages: 7,
+  });
+  assert.equal(expectedToolCalls, 43);
+  assert.equal(hookCountToolCalls(text), 43, 'this transcript counted 0 before the Codex shapes were recognized');
+  assert.equal(hookCountToolCalls(text), coreCountToolCalls(text));
+  // Only the CALL half of each pair, and none of the event_msg mirrors.
+  const pairsAndMirrors = `${functionCall(1)}\n${functionCallOutput(1)}\n${customToolCall(2)}\n${patchApplyEnd(2)}\n${customToolCallOutput(2)}`;
+  assert.equal(hookCountToolCalls(pairsAndMirrors), 2);
+  assert.equal(hookCountToolCalls(pairsAndMirrors), coreCountToolCalls(pairsAndMirrors));
+});
 
 test('drift: depth-signal computation is identical to packages/build-gate/lib/depth-signal.mjs', () => {
   for (const text of TEXT_FIXTURES) {

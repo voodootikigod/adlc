@@ -26,9 +26,15 @@ external-system effect, identity mutation, or scope/rails touching the
 manifest or ticket-store trust root, or category `contract`/`architecture`) —
 a normal-risk ticket is never gated. For a high-risk ticket, the hook reads
 the session transcript (`transcript_path` on the hook payload) and denies the
-next mutating tool call once the session looks context-degraded (more than 40
-tool calls in a bounded window, or a transcript past 256 KiB). It does not
-gate a fresh or shallow session, even a high-risk one.
+next mutating tool call once the session looks context-degraded. Depth is the
+primary signal: 40 or more tool calls in a bounded window (inclusive — 40
+itself trips it). A tool call is a Codex rollout `response_item` tagged
+`function_call` or `custom_tool_call`; the result half of each pair and the
+`event_msg` mirrors (`patch_apply_end`, `exec_command_end`) are not counted
+again. The transcript byte count is a secondary ceiling at 8 MiB — a routine
+fresh session with several plugins and skills loaded already runs to hundreds
+of kilobytes, so the byte signal only catches sessions the depth count somehow
+missed. It does not gate a fresh or shallow session, even a high-risk one.
 
 If you hit this gate: resume in a fresh session (or an isolated subagent)
 rather than continuing in a degraded one — that is the fix, not the bypass.

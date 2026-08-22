@@ -19,6 +19,18 @@ import {
   DEFAULT_DEPTH_THRESHOLD,
   DEFAULT_BYTES_THRESHOLD,
 } from '../lib/depth-signal.mjs';
+import {
+  buildCodexRollout,
+  functionCall,
+  functionCallOutput,
+  customToolCall,
+  customToolCallOutput,
+  patchApplyEnd,
+  execCommandEnd,
+  mcpToolCallEnd,
+  assistantMessage,
+  designDocShapeLine,
+} from './fixtures/codex-rollout.mjs';
 
 test('countToolCalls: plain prose has zero tool calls', () => {
   assert.equal(countToolCalls('just some words\nmore words\n'), 0);
@@ -36,6 +48,102 @@ test('countToolCalls: counts JSONL tool_use blocks', () => {
 test('countToolCalls: is a plain occurrence count, not deduped', () => {
   const text = Array.from({ length: 5 }, () => '"type":"tool_use"').join('\n');
   assert.equal(countToolCalls(text), 5);
+});
+
+// --- Codex rollout shape (T-01M05BWTEYKHEK3JJX71NXXJ4H) --------------------
+//
+// The counter recognized only Anthropic `tool_use` blocks, so EVERY Codex
+// session read as depth 0 and both the handoff deny and the build gate's
+// depth check were inert on Codex. Structure below adjudicated against 8 real
+// on-disk rollouts (codex-cli 0.118.0 - 0.142.5); see
+// ./fixtures/codex-rollout.mjs for what is and is not counted, and why.
+
+test('countToolCalls: counts a Codex function_call response_item', () => {
+  assert.equal(countToolCalls(functionCall(1)), 1);
+});
+
+test('countToolCalls: counts a Codex custom_tool_call response_item', () => {
+  assert.equal(countToolCalls(customToolCall(1)), 1);
+});
+
+test('countToolCalls: a call/output PAIR counts once — the output half is not a second call', () => {
+  // `function_call_output` contains `function_call` as a prefix; only the
+  // closing quote in the pattern keeps it from matching. If that quote is ever
+  // dropped, every Codex call doubles and shallow sessions lock out.
+  assert.equal(countToolCalls(`${functionCall(1)}\n${functionCallOutput(1)}`), 1);
+  assert.equal(countToolCalls(`${customToolCall(1)}\n${customToolCallOutput(1)}`), 1);
+  assert.equal(countToolCalls(functionCallOutput(1)), 0, 'an output on its own is not a call');
+  assert.equal(countToolCalls(customToolCallOutput(1)), 0, 'an output on its own is not a call');
+});
+
+test('countToolCalls: event_msg mirrors of a call are not counted a second time', () => {
+  // patch_apply_end / exec_command_end / mcp_tool_call_end are event_msg
+  // echoes of a call a response_item already recorded. On the real rollouts
+  // patch_apply_end tracked custom_tool_call 1:1; counting both doubles depth.
+  assert.equal(countToolCalls(patchApplyEnd(1)), 0);
+  assert.equal(countToolCalls(execCommandEnd(1)), 0);
+  assert.equal(countToolCalls(mcpToolCallEnd(1)), 0);
+  assert.equal(
+    countToolCalls(`${customToolCall(1)}\n${patchApplyEnd(1)}\n${customToolCallOutput(1)}`),
+    1,
+    'one apply_patch is depth 1, not 2 or 3',
+  );
+});
+
+test('countToolCalls: a plain Codex assistant message is not a tool call', () => {
+  assert.equal(countToolCalls(assistantMessage(1)), 0);
+});
+
+test('countToolCalls: an escaped rollout embedded in a tool output does not inflate the count', () => {
+  // A Codex session that reads a rollout file (or this repo's source) carries
+  // \"type\":\"function_call\" inside a JSON string. The backslash before the
+  // quote means the pattern cannot match — which is why the regex count
+  // equalled the JSON-parsed count exactly on all 8 real rollouts.
+  const { text, expectedToolCalls } = buildCodexRollout({ functionCalls: 3, withNestedTranscript: true });
+  assert.equal(countToolCalls(text), expectedToolCalls);
+});
+
+test('countToolCalls: a sanitized real-shape rollout returns the exact known count', () => {
+  const { text, expectedToolCalls } = buildCodexRollout({
+    functionCalls: 31,
+    customToolCalls: 12,
+    messages: 7,
+  });
+  assert.equal(expectedToolCalls, 43);
+  assert.equal(countToolCalls(text), 43);
+  // The exact bug: this same transcript counted 0 before the fix.
+  assert.ok(countToolCalls(text) >= HARD_DEPTH, 'a 43-call session must reach the hard band');
+});
+
+test('countToolCalls: the codex-context-v1.md role/tool_calls shape is deliberately not counted', () => {
+  // Adjudication found ZERO records carrying a `tool_calls` array across all 8
+  // real rollouts — that documented shape was never captured from a real
+  // session. Counting it would be guessing, so the counter stays silent.
+  assert.equal(countToolCalls(designDocShapeLine(1)), 0);
+});
+
+test('countToolCalls: Codex and Anthropic shapes sum in one mixed transcript', () => {
+  const text = [
+    JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'Edit' }] }),
+    functionCall(1),
+    customToolCall(2),
+    'Writing src/a.mjs',
+  ].join('\n');
+  assert.equal(countToolCalls(text), 4);
+});
+
+test('countToolCalls: whitespace around the JSON colon is tolerated in the Codex shape', () => {
+  assert.equal(countToolCalls('"type" : "function_call"'), 1);
+  assert.equal(countToolCalls('"type"  :  "custom_tool_call"'), 1);
+});
+
+test('computeDepthSignal: a Codex rollout crosses the hard depth band it used to sleep through', () => {
+  const shallow = buildCodexRollout({ functionCalls: HARD_DEPTH - 1 });
+  const deep = buildCodexRollout({ functionCalls: HARD_DEPTH });
+  assert.equal(computeDepthSignal({ text: shallow.text }).depth, HARD_DEPTH - 1);
+  assert.equal(computeDepthSignal({ text: deep.text }).depth, HARD_DEPTH);
+  assert.equal(isDegraded({ depth: computeDepthSignal({ text: shallow.text }).depth, sessionBytes: 0 }), false);
+  assert.equal(isDegraded({ depth: computeDepthSignal({ text: deep.text }).depth, sessionBytes: 0 }), true);
 });
 
 test('computeDepthSignal: reports bytes and toolCallCount from raw text', () => {

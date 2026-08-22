@@ -14,6 +14,15 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HARD_DEPTH } from '@adlc/context-handoff';
+import {
+  buildCodexRollout,
+  functionCall,
+  functionCallOutput,
+  customToolCall,
+  customToolCallOutput,
+  patchApplyEnd,
+} from '../../../../packages/build-gate/test/fixtures/codex-rollout.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
@@ -67,6 +76,30 @@ test('the handoff hook counts tool calls with the canonical counter', async () =
   assert.equal(countToolCalls(prose), 3, 'the prose tool-log form must count');
   const blocks = JSON.stringify({ content: [{ type: 'tool_use' }] });
   assert.equal(countToolCalls(`${blocks}\n${prose}`), 4);
+});
+
+test('the handoff hook counts the Codex rollout shape it actually runs against', async () => {
+  // This hook only ever sees Codex transcripts, and every fixture above is
+  // Anthropic-shaped — so the counter could read 0 on every real session while
+  // this file stayed green. That is exactly what shipped
+  // (T-01M05BWTEYKHEK3JJX71NXXJ4H). Structure adjudicated against real
+  // ~/.codex/sessions rollouts; see the fixture module for what is excluded.
+  const { countToolCalls } = await import(join(HOOKS_DIR, 'adlc-build-gate.mjs'));
+  const { text, expectedToolCalls } = buildCodexRollout({
+    functionCalls: 31,
+    customToolCalls: 12,
+    messages: 7,
+  });
+  assert.equal(expectedToolCalls, 43);
+  assert.equal(countToolCalls(text), 43, 'a 43-call Codex rollout must not read as depth 0');
+  assert.ok(countToolCalls(text) >= HARD_DEPTH, 'and must reach the hard depth band');
+
+  // The call/output pair counts once; the event_msg mirror adds nothing.
+  assert.equal(countToolCalls(`${functionCall(1)}\n${functionCallOutput(1)}`), 1);
+  assert.equal(
+    countToolCalls(`${customToolCall(2)}\n${patchApplyEnd(2)}\n${customToolCallOutput(2)}`),
+    1,
+  );
 });
 
 test('the resolver loads the package from a project root', async () => {

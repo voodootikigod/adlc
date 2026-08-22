@@ -11,6 +11,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { observeHandoffSignals, boundedTailRead } from '../adlc-handoff-gate.mjs';
+import { evaluateBands, WARN_DEPTH, HANDOFF_DEPTH, HARD_DEPTH } from '@adlc/context-handoff';
+import { buildCodexRollout } from '../../../../packages/build-gate/test/fixtures/codex-rollout.mjs';
 
 const MAX_ACTIVE_CONTEXT_BYTES = 8 * 1024 * 1024;
 const MAX_SCAN_WALL_MS = 500;
@@ -64,6 +66,68 @@ test('a missing/invalid scan-budget parameter fails closed to NaN depth, not tru
     );
     assert.ok(Number.isNaN(result.observed.depth));
     assert.equal(result.truncated, false);
+  });
+});
+
+// --- the Codex rollout shape this gate actually runs against ---------------
+//
+// observeHandoffSignals populates ONLY `observed.depth` — bytes and pct are
+// left absent, so depth is the single live signal feeding evaluateBands here.
+// Every fixture above is Anthropic-shaped `tool_use`, so the counter could
+// return 0 on every real Codex session with this file fully green; that
+// projection blindness is how the enforcing handoff deny shipped inert
+// (T-01M05BWTEYKHEK3JJX71NXXJ4H). The fixtures below are sanitized rollouts
+// whose structure was adjudicated against real ~/.codex/sessions captures.
+
+test('a sanitized real-shape Codex rollout is observed at its exact tool-call depth', () => {
+  const { text, expectedToolCalls } = buildCodexRollout({
+    functionCalls: 31,
+    customToolCalls: 12,
+    messages: 7,
+  });
+  assert.equal(expectedToolCalls, 43);
+  withTranscript(text, (transcriptPath) => {
+    const result = observeHandoffSignals(
+      { transcript_path: transcriptPath },
+      { maxActiveContextBytes: MAX_ACTIVE_CONTEXT_BYTES, maxScanWallMs: MAX_SCAN_WALL_MS },
+    );
+    assert.equal(result.truncated, false);
+    assert.equal(result.observed.depth, 43, 'this rollout was observed at depth 0 before the fix');
+  });
+});
+
+test('a Codex rollout crosses each depth band as its tool-call count grows', () => {
+  const cases = [
+    { calls: WARN_DEPTH - 1, warn: false, handoff: false, hard: false },
+    { calls: WARN_DEPTH, warn: true, handoff: false, hard: false },
+    { calls: HANDOFF_DEPTH, warn: true, handoff: true, hard: false },
+    { calls: HARD_DEPTH, warn: true, handoff: true, hard: true },
+  ];
+  for (const { calls, warn, handoff, hard } of cases) {
+    const { text } = buildCodexRollout({ functionCalls: calls });
+    withTranscript(text, (transcriptPath) => {
+      const { observed } = observeHandoffSignals(
+        { transcript_path: transcriptPath },
+        { maxActiveContextBytes: MAX_ACTIVE_CONTEXT_BYTES, maxScanWallMs: MAX_SCAN_WALL_MS },
+      );
+      assert.equal(observed.depth, calls, `depth for ${calls} Codex calls`);
+      assert.deepEqual(evaluateBands(observed), { warn, handoff, hard }, `bands at ${calls} Codex calls`);
+    });
+  }
+});
+
+test('call/output pairs and event_msg mirrors do not inflate the observed Codex depth', () => {
+  // 12 apply_patch calls write 36 records (call + patch_apply_end + output).
+  // Counting the mirror or the output half would read 24 or 36 and could hard-
+  // lock a session that is nowhere near the band.
+  const { text } = buildCodexRollout({ customToolCalls: 12 });
+  withTranscript(text, (transcriptPath) => {
+    const { observed } = observeHandoffSignals(
+      { transcript_path: transcriptPath },
+      { maxActiveContextBytes: MAX_ACTIVE_CONTEXT_BYTES, maxScanWallMs: MAX_SCAN_WALL_MS },
+    );
+    assert.equal(observed.depth, 12);
+    assert.equal(evaluateBands(observed).warn, false, 'twelve patches must not reach the warn band');
   });
 });
 
