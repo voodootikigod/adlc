@@ -98,9 +98,13 @@ The deny message names the recovery command for the denied session, by absolute 
 <node> <…>/@adlc/context-handoff/bin/handoff.mjs bypass --session <session-id> --write
 ```
 
-That verb — and `write`, `resume`, `continue`, `supervise`, `repair` — requires
-`ADLC_MANIFEST_KEY`. If you do not have the key, delete the deny state by hand from a host
-shell (the agent's own shell is inside the deny-set):
+That grant is **one-shot**: it authorizes the next mutation — including one denied by
+another session's record — and is consumed by it, so the call after that is denied again.
+`adlc handoff resume` / `continue` are the durable handoff flows. All of these, plus
+`write`, `supervise` and `repair`, require `ADLC_MANIFEST_KEY`.
+
+If you do not have the key, delete the deny state by hand from a host shell (the agent's
+own shell is inside the deny-set) — this is also the only durable clear:
 
 ```bash
 rm .adlc/handoffs/denies/<session-id>.json .adlc/.deny-store

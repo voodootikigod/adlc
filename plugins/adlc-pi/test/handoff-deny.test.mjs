@@ -14,6 +14,7 @@ import {
   realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 import {
@@ -34,6 +35,7 @@ import {
   editTargetOf,
   formatRecoveryCommand,
   handoffRecoveryDiagnostic,
+  resolveRecoveryCliPath,
   observeHandoffSignals,
   resolvePiSessionId,
 } from '../lib/handoff-gate.mjs';
@@ -740,4 +742,50 @@ test('the diagnostic still names the keyless path when the CLI cannot be resolve
   });
   assert.match(diagnostic, /could not be resolved/);
   assert.match(diagnostic, /\.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
+});
+
+test('the printed grant is described as one-shot because it measurably is', async () => {
+  // Executes the command the deny text prints, against a FOREIGN open deny, and
+  // watches what it actually buys: the next mutation, and only that one. The
+  // wording ("authorizes the NEXT mutation only") is pinned to this behaviour
+  // rather than to the CLI's help text.
+  const key = 'k'.repeat(64);
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'denier-oneshot');
+    const denied = () =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'src/a.mjs' },
+        sessionId: 'sess-B',
+        root,
+        manifestKey: key,
+      }).decision;
+
+    assert.equal(denied(), 'deny', 'a fresh session is denied by the foreign record');
+
+    const cli = resolveRecoveryCliPath();
+    assert.notEqual(cli, null, 'the recovery CLI must resolve from this checkout');
+    const grant = spawnSync(
+      process.execPath,
+      [cli, 'bypass', '--session', 'sess-B', '--dir', join(root, '.adlc'), '--write'],
+      { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
+    );
+    assert.equal(grant.status, 0, `bypass failed: ${grant.stderr}`);
+
+    assert.equal(denied(), 'allow', 'the grant authorizes the next mutation');
+    assert.equal(denied(), 'deny', 'and is consumed by it — the session is not unblocked');
+
+    const text = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-B',
+      root,
+      manifestKey: key,
+    }).reason;
+    assert.match(text, /NEXT mutation only/);
+    assert.doesNotMatch(text, /TTY/, 'no TTY is required — bypass ran here with none');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

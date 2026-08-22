@@ -307,8 +307,9 @@ export function formatKeylessRecovery() {
   return (
     'No ADLC_MANIFEST_KEY is configured, so that command — and every other mutating handoff verb ' +
     '(write/resume/continue/supervise/bypass/repair) — exits before it runs. `adlc handoff unlock` needs no ' +
-    'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery, from a ' +
-    "host shell outside the agent: delete this repo's open deny markers under `.adlc/handoffs/denies/` AND " +
+    'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery — and ' +
+    "the only durable clear — from a host shell outside the agent: delete this repo's open deny markers " +
+    'under `.adlc/handoffs/denies/` AND ' +
     'the `.adlc/.deny-store` sentinel beside them. Deleting a marker on its own is not enough — the sentinel ' +
     'makes an emptied store fail closed, and any marker left behind keeps denying every session in the repo.'
   );
@@ -367,9 +368,23 @@ export function handoffRecoveryDiagnostic({
       isRecoverySessionId(sessionId) &&
       quotePathForDisplay(interpreterPath) !== null &&
       quotePathForDisplay(scriptPath) !== null;
-    parts.push(runnable ? `Host-side recovery (needs ADLC_MANIFEST_KEY and a TTY): ${command}` : command);
+    // "One-shot" and "next mutation only" are measured, not copied from the
+    // CLI's help: a bound grant does clear a FOREIGN open deny, and it is
+    // consumed by the mutation it authorizes — the one after that is denied
+    // again. Calling this "recovery" without saying so would replace one
+    // misleading instruction with another.
+    parts.push(
+      runnable
+        ? `One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only): ${command}`
+        : command,
+    );
   }
-  if (!hasManifestKey) parts.push(formatKeylessRecovery());
+  parts.push(
+    hasManifestKey
+      ? 'That grant is consumed by the mutation it authorizes, so it unblocks one call rather than the ' +
+          'session. `adlc handoff resume` / `continue` are the durable handoff flows.'
+      : formatKeylessRecovery(),
+  );
   return parts.join('\n\n');
 }
 

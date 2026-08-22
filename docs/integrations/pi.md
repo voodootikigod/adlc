@@ -116,13 +116,18 @@ directory that never installed ADLC, at any fill percent. Without that guard the
 denied mutations in whatever directory the agent happened to open, created `.adlc` state
 there, and (the deny store being durable) followed that directory into every later session.
 
-**Recovery.** The deny message carries the session id, the recovery command by absolute
-path (`… bin/handoff.mjs bypass --session <id> --write`), and — when no
-`ADLC_MANIFEST_KEY` is configured, which every mutating verb but one requires — the keyless
-path: delete the open markers under `.adlc/handoffs/denies/` **and** the `.adlc/.deny-store`
-sentinel beside them, from a host shell. The sentinel makes an emptied `denies/` directory
-read as tampered-with, so removing a marker alone changes nothing. `adlc handoff unlock` is
-the one keyless mutating verb, but it reclaims a session *lock* rather than a deny.
+**Recovery.** The deny message carries the session id and the recovery command by absolute
+path (`… bin/handoff.mjs bypass --session <id> --write`). That grant is one-shot: measured
+against a foreign open record it authorizes the next mutation and is consumed by it, so the
+message says exactly that rather than presenting it as a clear. `resume` / `continue` are
+the durable keyed flows.
+
+When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
+the message instead names the keyless path, which is also the only durable clear: delete the
+open markers under `.adlc/handoffs/denies/` **and** the `.adlc/.deny-store` sentinel beside
+them, from a host shell. The sentinel makes an emptied `denies/` directory read as
+tampered-with, so removing a marker alone changes nothing. `adlc handoff unlock` is the one
+keyless mutating verb, but it reclaims a session *lock* rather than a deny.
 
 ---
 
