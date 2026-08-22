@@ -16,6 +16,7 @@ import {
   createStickyDenyState,
   handoffAppliesTo,
   isShellTool,
+  recoveryTail,
   shellCommandOf,
   toRepoRelative,
 } from '../lib/handoff-gate.mjs';
@@ -28,6 +29,23 @@ function repo() {
     JSON.stringify({ tickets: [{ id: 'T1', title: 'fixture', rails: [] }] }),
   );
   return dir;
+}
+
+/** A directory that never opted into ADLC — no .adlc/, nothing to enforce. */
+function plainDir() {
+  return mkdtempSync(join(tmpdir(), 'oc-plain-'));
+}
+
+/** Pin an active ticket for the duration of one test, ambient env or not. */
+function withActiveTicket(id, fn) {
+  const prior = process.env.ADLC_TICKET;
+  process.env.ADLC_TICKET = id;
+  try {
+    return fn();
+  } finally {
+    if (prior === undefined) delete process.env.ADLC_TICKET;
+    else process.env.ADLC_TICKET = prior;
+  }
 }
 
 /** Seed an open deny record owned by another session. */
@@ -82,15 +100,120 @@ test('edit targets are made repo-relative', () => {
 });
 
 test('a blank sessionID reaches the gate as null, not as an id', () => {
-  const seen = [];
-  const evaluate = (o) => {
-    seen.push(o.sessionId);
-    return { deny: false, reasons: [] };
-  };
-  for (const sessionID of [undefined, '', null]) {
-    checkHandoff({ tool: 'edit', args: {}, sessionID, root: '/tmp', evaluate });
+  const dir = repo();
+  try {
+    const seen = [];
+    const evaluate = (o) => {
+      seen.push(o.sessionId);
+      return { deny: false, reasons: [] };
+    };
+    for (const sessionID of [undefined, '', null]) {
+      checkHandoff({ tool: 'edit', args: {}, sessionID, root: dir, evaluate });
+    }
+    assert.deepEqual(seen, [null, null, null]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  assert.deepEqual(seen, [null, null, null]);
+});
+
+test('outside an ADLC repo the gate never evaluates and never denies', () => {
+  const dir = plainDir();
+  try {
+    let evaluated = 0;
+    const evaluate = () => {
+      evaluated += 1;
+      return { deny: true, reasons: ['D1:should_never_be_reached'] };
+    };
+    for (const tool of ['edit', 'bash', 'write', 'custom_writer']) {
+      assert.deepEqual(
+        checkHandoff({ tool, args: { filePath: 'src/app.mjs' }, sessionID: 's1', root: dir, evaluate }),
+        { decision: 'allow' },
+      );
+    }
+    assert.equal(evaluated, 0, 'the deny-set has no jurisdiction over a repo that never opted in');
+    assert.equal(existsSync(join(dir, '.adlc')), false, 'the gate must not create the store it looks for');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an unusable root is a broken caller, not containment — it must not buy an allow', () => {
+  const evaluate = () => ({ deny: true, reasons: ['D3:unauthorized_open:someone'] });
+  for (const root of [undefined, '', null, 42]) {
+    assert.equal(
+      checkHandoff({ tool: 'edit', sessionID: 's1', root, evaluate }).decision,
+      'deny',
+      `a root of ${JSON.stringify(root)} proves nothing about whether this is an ADLC repo`,
+    );
+  }
+});
+
+test('the containment guard uses the caller root, not the process cwd', () => {
+  // Re-deriving cwd would make an agent that cd-ed out of the repo look
+  // un-enforced — and one that cd-ed INTO an unrelated ADLC checkout look
+  // enforced against the wrong store.
+  const inside = repo();
+  const outside = plainDir();
+  const priorCwd = process.cwd();
+  try {
+    process.chdir(outside);
+    let evaluated = 0;
+    const evaluate = () => {
+      evaluated += 1;
+      return { deny: false, reasons: [] };
+    };
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: inside, evaluate });
+    assert.equal(evaluated, 1, 'an ADLC root is still enforced from an unrelated cwd');
+
+    process.chdir(inside);
+    assert.deepEqual(
+      checkHandoff({ tool: 'edit', sessionID: 's1', root: outside, evaluate }),
+      { decision: 'allow' },
+    );
+    assert.equal(evaluated, 1, 'a non-ADLC root is still inert from an ADLC cwd');
+  } finally {
+    process.chdir(priorCwd);
+    rmSync(inside, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('the active ticket is threaded to the gate, and resolved only when it is needed', () => {
+  const dir = repo();
+  try {
+    const seen = [];
+    let resolutions = 0;
+    const evaluate = (o) => {
+      seen.push(o.ticketId);
+      return { deny: false, reasons: [] };
+    };
+    const ticketId = () => {
+      resolutions += 1;
+      return 'T-ACTIVE';
+    };
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, ticketId, evaluate });
+    checkHandoff({ tool: 'read', sessionID: 's1', root: dir, ticketId, evaluate });
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, ticketId: 'T-LITERAL', evaluate });
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, ticketId: '', evaluate });
+    assert.deepEqual(seen, ['T-ACTIVE', 'T-LITERAL', null], 'a blank id must reach the gate as null');
+    assert.equal(resolutions, 1, 'the read-only hot path must not pay for a ticket-store read');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the recovery tail names the session and the host command, and never quotes an unsafe id', () => {
+  const tail = recoveryTail('ses_abc-1');
+  assert.match(tail, /ses_abc-1/);
+  assert.match(tail, /adlc handoff repair --session ses_abc-1/);
+  assert.match(tail, /adlc handoff resume/);
+  for (const unsafe of ['s1; rm -rf /', 'a b', 's1\n', '', null, undefined, 42]) {
+    assert.match(
+      recoveryTail(unsafe),
+      /No safe session id/,
+      `must not build a command from ${JSON.stringify(unsafe)}`,
+    );
+  }
 });
 
 // ---- the real hook ---------------------------------------------------------
@@ -346,35 +469,45 @@ test('permission.ask leaves read-only kinds alone', async () => {
 });
 
 test('the manifest key is threaded so a signed resume-auth can be verified', () => {
-  const seen = [];
-  const evaluate = (o) => {
-    seen.push(o.manifestKey);
-    return { deny: false, reasons: [], denyEverWritten: false };
-  };
-  checkHandoff({
-    tool: 'edit',
-    sessionID: 's1',
-    root: '/tmp',
-    env: { ADLC_MANIFEST_KEY: 'k'.repeat(64) },
-    evaluate,
-  });
-  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', env: {}, evaluate });
-  assert.deepEqual(seen, ['k'.repeat(64), null]);
+  const dir = repo();
+  try {
+    const seen = [];
+    const evaluate = (o) => {
+      seen.push(o.manifestKey);
+      return { deny: false, reasons: [], denyEverWritten: false };
+    };
+    checkHandoff({
+      tool: 'edit',
+      sessionID: 's1',
+      root: dir,
+      env: { ADLC_MANIFEST_KEY: 'k'.repeat(64) },
+      evaluate,
+    });
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, env: {}, evaluate });
+    assert.deepEqual(seen, ['k'.repeat(64), null]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a failed marker write stays sticky for the session across calls', () => {
-  const sticky = createStickyDenyState();
-  const calls = [];
-  // First call reports the D1 fact; the second must receive it back.
-  const evaluate = (o) => {
-    calls.push(o.denyEverWritten);
-    return { deny: false, reasons: [], denyEverWritten: true };
-  };
-  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', sticky, evaluate });
-  checkHandoff({ tool: 'edit', sessionID: 's1', root: '/tmp', sticky, evaluate });
-  // …and must not leak to a different session.
-  checkHandoff({ tool: 'edit', sessionID: 's2', root: '/tmp', sticky, evaluate });
-  assert.deepEqual(calls, [false, true, false]);
+  const dir = repo();
+  try {
+    const sticky = createStickyDenyState();
+    const calls = [];
+    // First call reports the D1 fact; the second must receive it back.
+    const evaluate = (o) => {
+      calls.push(o.denyEverWritten);
+      return { deny: false, reasons: [], denyEverWritten: true };
+    };
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, sticky, evaluate });
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, sticky, evaluate });
+    // …and must not leak to a different session.
+    checkHandoff({ tool: 'edit', sessionID: 's2', root: dir, sticky, evaluate });
+    assert.deepEqual(calls, [false, true, false]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the plugin declares the package it enforces with', () => {
@@ -422,6 +555,88 @@ test('a custom tool naming an ordinary target is still allowed', async () => {
         { args },
       );
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a directory that never opted into ADLC is inert for a whole long session', async () => {
+  // The release blocker: in an empty directory the depth band denied tool call
+  // 30 and everything after it — bricking edits AND the shell repo-wide — and
+  // created .adlc/.deny-store + .adlc/handoffs/denies/<session>.json in a repo
+  // that never asked for any of it.
+  const dir = plainDir();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    const calls = [
+      { tool: 'edit', args: { filePath: 'src/app.mjs' } },
+      { tool: 'bash', args: { command: 'ls -la' } },
+      { tool: 'write', args: { filePath: 'README.md' } },
+      { tool: 'custom_writer', args: { target: 'src/other.mjs' } },
+      { tool: 'read', args: { filePath: 'src/app.mjs' } },
+    ];
+    for (let i = 0; i < 45; i += 1) {
+      const { tool, args } = calls[i % calls.length];
+      await hooks['tool.execute.before']({ tool, sessionID: 'plain-sess', callID: `c${i}` }, { args });
+    }
+    const permission = {};
+    await hooks['permission.ask']({ type: 'edit', sessionID: 'plain-sess' }, permission);
+    assert.equal(permission.status, undefined, 'permission.ask must be inert outside an ADLC repo too');
+    assert.equal(
+      existsSync(join(dir, '.adlc')),
+      false,
+      'the gate must not create .adlc/ in a repo that never opted into ADLC',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the deny marker is bound to the active ticket, so host repair/resume can act on it', async () => {
+  // ticket_id:null is a marker `adlc handoff resume` refuses outright
+  // ("ticket_id is null — cannot resume (use host repair)").
+  const dir = repo();
+  try {
+    await withActiveTicket('T1', async () => {
+      writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+      const hooks = await adlcRailsGuard({ worktree: dir });
+      await pumpDepth(hooks, 'bound-sess', HANDOFF_DEPTH);
+      await assert.rejects(
+        () =>
+          hooks['tool.execute.before'](
+            { tool: 'edit', sessionID: 'bound-sess', callID: 'c' },
+            { args: { filePath: 'src/ok.mjs' } },
+          ),
+        /ADLC context-handoff/,
+      );
+      const marker = JSON.parse(
+        readFileSync(join(dir, '.adlc', 'handoffs', 'denies', 'bound-sess.json'), 'utf8'),
+      );
+      assert.equal(marker.ticket_id, 'T1');
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the deny message carries the session id and the host-side recovery command', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-tail');
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'tail-sess', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        assert.match(err.message, /tail-sess/, 'the operator must be told WHICH session to recover');
+        assert.match(err.message, /adlc handoff repair --session tail-sess/);
+        assert.match(err.message, /adlc handoff resume/);
+        return true;
+      },
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

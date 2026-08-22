@@ -15,7 +15,7 @@
 // deny proof (scripts/opencode-live-deny.mjs) regression-tests it against a real
 // opencode binary.
 
-import { checkToolCall, resolveRailsInForce, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
+import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState } from './lib/handoff-gate.mjs';
@@ -115,6 +115,26 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   // after the band cools, instead of denying exactly one tool call.
   const handoffSticky = createStickyDenyState();
 
+  // The ticket a deny marker is bound to. Resolved from the canonical
+  // active-ticket pointer rather than from resolveRailsInForce: that ladder is
+  // gated on ADLC_P4_ENFORCEMENT, while the deny-set is evaluated whether or
+  // not rails are in force — binding to it would leave the marker unbound
+  // (ticket_id:null, which `adlc handoff repair`/`resume` refuses) in exactly
+  // the sessions that need recovery most. Same source the sibling enforcing
+  // adapters use: codex `activeTicketIdOrNull`, claude-code
+  // `resolveActiveTicketIdForBuildGate`.
+  //
+  // Passed to checkHandoff as a thunk so only gated calls inside an ADLC repo
+  // pay for the read.
+  const activeTicketIdOrNull = () => {
+    try {
+      const active = resolveActiveTicketId(root, env);
+      return !active.conflict && active.id ? active.id : null;
+    } catch {
+      return null; // an unbound marker beats a gate that throws
+    }
+  };
+
   const deny = async (message) => {
     if (advisoryOnly) {
       // Explicit operator downgrade: surface loudly without claiming to block.
@@ -190,6 +210,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
         tracker,
         root,
         env,
+        ticketId: activeTicketIdOrNull,
         sticky: handoffSticky,
       });
       if (handoff.decision === 'deny') {
@@ -263,6 +284,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
           tracker,
           root,
           env,
+          ticketId: activeTicketIdOrNull,
           sticky: handoffSticky,
         });
         if (handoff.decision === 'deny') {

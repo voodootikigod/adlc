@@ -12,7 +12,8 @@
 // exposes no transcript file, so depth is the only signal available, and the
 // OR-join ignores the kinds that are missing rather than reading them as zero.
 
-import { relative, isAbsolute, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, relative, isAbsolute, resolve } from 'node:path';
 
 import {
   evaluateHandoffPreToolUse,
@@ -89,6 +90,46 @@ export function toRepoRelative(path, root) {
 }
 
 /**
+ * The value grammar a session id must satisfy before it can be interpolated
+ * into the copy-pasteable recovery command below. Same conservative set as the
+ * codex hook's twin (RECOVERY_VALUE_RE): no whitespace, no quotes, no shell
+ * metacharacters, so a host-supplied id can never smuggle a second command into
+ * a string an operator is being invited to paste into a shell.
+ */
+const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
+
+/**
+ * The recovery tail every deny message carries: which session is denied, and
+ * the literal host-side commands that clear it. A deny with neither is what the
+ * release audit found — an agent told to "resume via host" with no session id
+ * and no command, from inside a shell that is itself denied.
+ *
+ * Built ENTIRELY from local code, deliberately: this is the codex hook's
+ * round-5 reasoning (formatRecoveryCommand, adlc-handoff-gate.mjs) applied
+ * here. The deny message is precisely what an operator reads when the handoff
+ * machinery is misbehaving, so the diagnostic must not be rendered by the
+ * machinery it is describing.
+ *
+ * @param {unknown} sessionId
+ * @returns {string}
+ */
+export function recoveryTail(sessionId) {
+  if (typeof sessionId !== 'string' || !RECOVERY_VALUE_RE.test(sessionId)) {
+    return (
+      'No safe session id could be resolved for this session, so no session-specific recovery command ' +
+      'can be printed. End this session and start a new one — the host mints a fresh session id, ' +
+      'unaffected by this resolution failure. Read-only tools remain usable in the interim.'
+    );
+  }
+  return (
+    `Denied session id: ${sessionId}. Recover from a HOST shell (the agent shell is inside the ` +
+    `deny-set): \`adlc handoff repair --session ${sessionId} --ticket <id> --content-hash <hash> ` +
+    `--write\` binds the open deny, then \`adlc handoff resume --session <new-session> ` +
+    `--deny-session ${sessionId} --write\` from the successor session.`
+  );
+}
+
+/**
  * Per-session D1 memory. `processStickyDeny` is a per-call local inside the
  * gate, so a marker write that FAILED would deny one call and then fail open
  * once the band cooled. OpenCode runs in-process, so it can actually hold the
@@ -121,6 +162,10 @@ export function createStickyDenyState() {
  * @param {string} opts.root
  * @param {object} [opts.env] supplies ADLC_MANIFEST_KEY so a signed resume-auth
  *        can be VERIFIED — without it `authorized()` can never accept one
+ * @param {string|null|(() => string|null)} [opts.ticketId] the ticket the deny
+ *        marker is bound to. May be a thunk: resolving it reads the ticket
+ *        pointer, and the read-only hot path must not pay for a marker it will
+ *        never write.
  * @param {ReturnType<typeof createStickyDenyState>} [opts.sticky]
  * @param {(o: object) => { deny: boolean, reasons: string[] }} [opts.evaluate]
  *        injection seam for tests; defaults to the package implementation
@@ -133,9 +178,27 @@ export function checkHandoff({
   tracker,
   root,
   env = process.env,
+  ticketId = null,
   sticky,
   evaluate = evaluateHandoffPreToolUse,
 }) {
+  // Containment, before anything else can evaluate or write: the deny-set has
+  // no jurisdiction over a directory that never opted into ADLC. Without this
+  // the depth band denied tool call 30 and every call after it in an ordinary
+  // repo, and CREATED .adlc/.deny-store plus .adlc/handoffs/denies/<id>.json
+  // there. Same guard both sibling enforcing adapters apply
+  // (plugins/adlc-codex/hooks/adlc-handoff-gate.mjs, plugins/adlc-claude-code/
+  // hooks/adlc-hook.mjs).
+  //
+  // Checked against the caller's `root` — the value every other path in this
+  // gate resolves against — never a re-derived cwd, or the guard and the writes
+  // it is guarding could disagree about which repo is in play. A root that is
+  // not a usable string is NOT containment: it means the caller is broken, and
+  // that falls through to the evaluation path (which fails closed) rather than
+  // buying an allow.
+  if (typeof root === 'string' && root !== '' && !existsSync(join(root, '.adlc'))) {
+    return { decision: 'allow' };
+  }
   if (!handoffAppliesTo(tool)) return { decision: 'allow' };
 
   const shell = isShellTool(tool);
@@ -150,10 +213,18 @@ export function checkHandoff({
   const sessionId = typeof sessionID === 'string' && sessionID !== '' ? sessionID : null;
   const manifestKey = env?.ADLC_MANIFEST_KEY;
 
+  // Resolved here, past both guards, so the thunk form costs nothing on the
+  // calls that never reach the gate. An unbound marker (ticket_id:null) is one
+  // `adlc handoff repair`/`resume` refuses — the deny is written but the
+  // operator has no way to clear it.
+  const resolvedTicketId = typeof ticketId === 'function' ? ticketId() : ticketId;
+
   const result = evaluate({
     root,
     sessionId,
     observed,
+    ticketId:
+      typeof resolvedTicketId === 'string' && resolvedTicketId !== '' ? resolvedTicketId : null,
     editRelPaths: shell ? [] : handoffTargetsOf(args).map((p) => toRepoRelative(p, root)),
     isBash: shell,
     bashCommand: shell ? shellCommandOf(args) : '',
@@ -170,7 +241,7 @@ export function checkHandoff({
     reason:
       `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
       '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      'cannot clear the deny-set.',
+      `cannot clear the deny-set.\n\n${recoveryTail(sessionId)}`,
   };
 }
 
