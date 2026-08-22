@@ -64,8 +64,46 @@ function parseExitCodeTable(markdown) {
   return rows;
 }
 
+/**
+ * Tracked `.md`/`.mdx` paths under `root`, or `null` when git cannot answer for
+ * this tree — no git binary, or `root` is not the top of a work tree (a
+ * published tarball, a consumer's `node_modules` copy). `null` and empty are
+ * different answers on purpose: an empty list would make the repo-wide scan
+ * below pass vacuously, so a git that fails says nothing and the caller walks.
+ * @returns {string[] | null}
+ */
+function trackedDocFiles(root) {
+  const git = (args) => execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let top;
+  try {
+    top = git(['rev-parse', '--show-toplevel']).trim();
+    // A subdirectory of some other repo (a TMPDIR inside a checkout, say) is
+    // not this tree; only the work-tree root gets the tracked-file answer.
+    if (!top || realpathSync(top) !== realpathSync(root)) return null;
+    return git(['ls-files', '-z', '--', '*.md', '*.mdx'])
+      .split('\0')
+      .filter(Boolean)
+      .map((rel) => join(root, rel))
+      // an index entry whose file is deleted in the work tree is not readable
+      .filter((file) => existsSync(file));
+  } catch {
+    return null;
+  }
+}
+
 /** Files that document behaviour; excludes vendored trees and history. */
 function docFiles(root) {
+  // Only tracked files ship, and only shipped docs can be wrong. An operator's
+  // untracked scratch at the repo root — an audit report quoting the very claim
+  // it reports — used to redden this suite with every shipped doc correct.
+  const tracked = trackedDocFiles(root);
+  if (tracked) return tracked;
+
   const skipDirs = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.next', 'coverage']);
   const out = [];
   const walk = (dir) => {
@@ -101,6 +139,24 @@ function docFiles(root) {
 // zero-criteria case (an audit note, a `2` row) is not a claim that it passes.
 const NOTHING_TO_CHECK = /no criteria found|nothing to check/i;
 const CLAIMS_PASS = /(^|[^\w`])0([^\w`]|$)|\bpasse?s\b/i;
+
+/**
+ * `file:line` for every line in `files` that makes the stale claim.
+ * @param {string[]} files absolute paths
+ * @param {string} root prefix stripped from the reported paths
+ */
+function staleClaimOffenders(files, root) {
+  const offenders = [];
+  for (const file of files) {
+    const lines = readFileSync(file, 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      if (NOTHING_TO_CHECK.test(line) && CLAIMS_PASS.test(line)) {
+        offenders.push(`${file.slice(root.length + 1)}:${i + 1}`);
+      }
+    });
+  }
+  return offenders;
+}
 
 describe('spec-lint documented exit codes match the binary (issue #525)', () => {
   it('the binary exits 2 on a spec with no acceptance criteria', () => {
@@ -155,19 +211,44 @@ describe('spec-lint documented exit codes match the binary (issue #525)', () => 
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  // Only tracked docs ship. An operator's untracked scratch at the repo root —
+  // a release-audit report that QUOTES this claim while reporting it — is not a
+  // doc making the claim, but the heuristic cannot tell quoting from claiming.
+  // Scanning it turned every audit run into a red suite with every shipped doc
+  // correct. Tracking the same file must still catch it: the gate stays live.
+  it('the doc scan reads tracked docs only', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'spec-lint-tracked-')));
+    const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+    try {
+      git('init', '-q');
+
+      writeFileSync(join(root, 'shipped.md'), '# shipped\n');
+      git('add', 'shipped.md');
+      // exactly the stale claim this suite exists to catch, quoted by a report
+      writeFileSync(join(root, 'audit-report.md'), '| `0` | no criteria found; passes |\n');
+
+      const untracked = docFiles(root).map((f) => f.slice(root.length + 1));
+      assert.deepEqual(untracked, ['shipped.md'], 'an untracked doc is not scanned');
+      assert.deepEqual(
+        staleClaimOffenders(docFiles(root), root),
+        [],
+        'an untracked report quoting the claim does not redden the scan',
+      );
+
+      git('add', 'audit-report.md');
+      assert.deepEqual(
+        staleClaimOffenders(docFiles(root), root),
+        ['audit-report.md:1'],
+        'once tracked, the same doc is caught — the gate did not go inert',
+      );
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('no documentation file in the repo still claims exit 0 when there is nothing to check', () => {
     if (!existsSync(join(REPO_ROOT, 'docs')) || !statSync(join(REPO_ROOT, 'docs')).isDirectory()) {
       return; // published tarball, not a source checkout — nothing repo-wide to scan
     }
-    const offenders = [];
-    for (const file of docFiles(REPO_ROOT)) {
-      const lines = readFileSync(file, 'utf8').split('\n');
-      lines.forEach((line, i) => {
-        if (NOTHING_TO_CHECK.test(line) && CLAIMS_PASS.test(line)) {
-          offenders.push(`${file.slice(REPO_ROOT.length + 1)}:${i + 1}`);
-        }
-      });
-    }
+    const offenders = staleClaimOffenders(docFiles(REPO_ROOT), REPO_ROOT);
     assert.deepEqual(offenders, [], `stale zero-criteria pass claims remain:\n${offenders.join('\n')}`);
   });
 });
