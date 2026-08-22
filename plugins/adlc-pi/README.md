@@ -89,8 +89,11 @@ reloading the extension is an off switch. The memory is keyed by canonical root,
 arms a repo that did not opt in, and reaching the same checkout by a symlink or an
 un-normalized path does not forget the opt-in.
 
-The gate reads the root pi gives it and does not walk up, so — like every other pi gate — it
-is inert when the session's cwd is a subdirectory of the opted-in repo rather than its root.
+The question is whether your cwd is *inside* an ADLC repo, not whether it *is* one: the gate
+walks up from the directory pi gives it to find the nearest ancestor holding `.adlc`, and
+enforces against that repo. A session started in `<repo>/src` is therefore covered by the
+same deny store as one started at the root. The walk stops at a `.git` boundary, so a
+checkout vendored inside an ADLC repo stays its own project.
 
 Two things about the deny are deliberate and worth knowing before you meet one:
 
@@ -121,16 +124,22 @@ handoff flows. All of these, plus `write`, `supervise` and `repair`, require
 `ADLC_MANIFEST_KEY`.
 
 If you do not have the key, delete the deny state by hand from a host shell (the agent's
-own shell is inside the deny-set) — this is also the only durable clear:
+own shell is inside the deny-set) — this is also the only durable clear. Run it from the
+repo root, and remove **every** open marker plus **both** sentinel locations:
 
 ```bash
-rm .adlc/handoffs/denies/<session-id>.json .adlc/.deny-store
+rm -f .adlc/handoffs/denies/*.json .adlc/.deny-store .adlc/handoffs/.deny-store
 ```
 
-Both paths matter. The `.deny-store` sentinel is what makes an emptied `denies/` directory
-read as tampered-with, so removing a marker on its own leaves the repo just as locked — and
-any marker left behind keeps denying. `adlc handoff unlock` needs no key, but it reclaims a
-session *lock* rather than a deny, so it will not clear this.
+Do not delete just your own session's marker. A single open marker denies every session in
+the repo, so clearing one while another remains leaves you exactly as locked — and the
+denying session is usually not the one you are sitting in. Both sentinels matter too: a
+sentinel makes an emptied `denies/` directory read as tampered-with, and the legacy
+`.adlc/handoffs/.deny-store` re-creates the canonical one on the next read, so a recipe
+that omits it never terminates.
+
+`adlc handoff unlock` needs no key, but it reclaims a session *lock* rather than a deny, so
+it will not clear this.
 
 ## Docs
 

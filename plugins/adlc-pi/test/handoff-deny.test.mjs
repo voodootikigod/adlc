@@ -17,7 +17,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 import {
   ensureDenyMarker,
@@ -39,6 +42,7 @@ import {
   formatRecoveryCommand,
   handoffRecoveryDiagnostic,
   foreignDenierOf,
+  resolveAdlcRoot,
   observeHandoffSignals,
   resolvePiSessionId,
 } from '../lib/handoff-gate.mjs';
@@ -1176,26 +1180,118 @@ test('the keyless recipe names the legacy sentinel, so it terminates', () => {
   }
 });
 
-test('the gate reads the root it is given and does not walk up', () => {
-  // Pins current, deliberate behaviour rather than asserting it is ideal: every
-  // pi gate keys off the cwd pi hands it, and codex's hook uses the same flat
-  // check. A future ancestor-walk would change containment semantics, and this
-  // is where that shows up.
+test('a session started in a subdirectory is still inside the repo', () => {
+  // Containment asks whether this path is INSIDE an ADLC repo, not whether it
+  // is one. pi hands the gate its cwd, which is routinely a subdirectory, and
+  // an exact-match check let a session in <repo>/src walk past an open
+  // repo-wide deny — and, before that, wrote band markers into a stray
+  // <repo>/src/.adlc that no operator would think to clear.
   const root = makeRepo();
   try {
-    const sub = join(root, 'src', 'nested');
+    const sub = join(root, 'src', 'deep');
     mkdirSync(sub, { recursive: true });
-    const ask = (r) =>
+
+    // Session A trips the band at the repo root and leaves an open marker.
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+
+    const fromSub = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-B',
+      usage: { percent: 5 },
+      root: sub,
+    });
+    assert.equal(fromSub.decision, 'deny', 'the open deny reaches a session started in a subdirectory');
+    assert.match(fromSub.reason, /D3:unauthorized_open:sess-A/);
+    assert.equal(
+      existsSync(join(sub, '.adlc')),
+      false,
+      'and no stray .adlc is created beside the subdirectory',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the walk stops at a nested checkout — it is its own project', () => {
+  // A repo vendored inside an ADLC repo must not be captured by it, or the
+  // blocker this branch fixes comes back for anyone whose scratch checkout
+  // happens to live under one.
+  const root = makeRepo();
+  try {
+    const nested = join(root, 'vendor', 'other-project');
+    mkdirSync(join(nested, '.git'), { recursive: true });
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: nested,
+    });
+    assert.equal(verdict.decision, 'allow', 'a nested checkout is not the outer ADLC repo');
+    assert.equal(existsSync(join(nested, '.adlc')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveAdlcRoot finds the repo, the nested boundary, or nothing', () => {
+  const root = makeRepo();
+  try {
+    const sub = join(root, 'a', 'b', 'c');
+    mkdirSync(sub, { recursive: true });
+    assert.equal(resolveAdlcRoot(root), realpathSync(root));
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'walks up to the ADLC root');
+
+    const bare = makeBareDir();
+    assert.equal(resolveAdlcRoot(bare), null, 'a directory outside any ADLC repo');
+    for (const bogus of ['', null, undefined, 0, {}]) {
+      assert.equal(resolveAdlcRoot(bogus), null, `resolveAdlcRoot(${String(bogus)})`);
+    }
+    rmSync(bare, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the README's keyless command clears a repo with several markers and a legacy sentinel", () => {
+  // Runs the documented recipe VERBATIM against the worst realistic state —
+  // two open markers owned by other sessions, plus the pre-migration sentinel.
+  // The earlier singular form ("rm .../<session-id>.json .adlc/.deny-store")
+  // left both of those behind and the operator permanently locked out.
+  const root = makeRepo();
+  try {
+    for (const sessionId of ['sess-A', 'sess-B']) {
       checkHandoff({
         toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: r,
-        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
-      }).decision;
-    assert.equal(ask(root), 'deny', 'the repo root is enforced');
-    assert.equal(ask(sub), 'allow', 'a subdirectory is not — the guard is flat, by design');
+        input: { path: 'src/a.mjs' },
+        sessionId,
+        usage: { percent: HANDOFF_PCT },
+        root,
+      });
+    }
+    writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
+
+    const ask = () =>
+      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-C', root })
+        .decision;
+    assert.equal(ask(), 'deny', 'a third session is denied by the others');
+
+    // The exact command the README prints, run from the repo root.
+    const command = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8')
+      .split('\n')
+      .find((line) => line.startsWith('rm -f .adlc/handoffs/denies/'));
+    assert.ok(command, 'the README must still document a concrete keyless command');
+    const run = spawnSync(command, { shell: true, cwd: root, encoding: 'utf8' });
+    assert.equal(run.status, 0, `documented command failed: ${run.stderr}`);
+
+    assert.equal(ask(), 'allow', 'the documented recipe must actually clear the repo');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

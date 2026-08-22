@@ -116,6 +116,14 @@ directory that never installed ADLC, at any fill percent. Without that guard the
 denied mutations in whatever directory the agent happened to open, created `.adlc` state
 there, and (the deny store being durable) followed that directory into every later session.
 
+The test is whether the cwd is *inside* an ADLC repo, not whether it *is* one. The gate
+resolves the nearest ancestor holding `.adlc` and uses that root for containment, the deny
+store, protected-path checks and the printed recovery command alike — one answer, so a
+session in `<repo>/src` cannot read a different store than the one denying it. An
+exact-match check let exactly that happen, and wrote band markers into a stray
+`<repo>/src/.adlc` no operator would think to clear. The walk stops at a `.git` boundary so
+a checkout vendored inside an ADLC repo remains its own project.
+
 Containment must not become an off switch, so the opt-in is **monotonic** per process: a
 root seen with `.adlc` stays enforced even if the directory is later removed. A custom tool
 whose target the extractor cannot see is not rail-checked while the store is cold, so a
@@ -134,10 +142,13 @@ it, and the message says so rather than presenting it as a clear. `resume` / `co
 the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
-the message instead names the keyless path, which is also the only durable clear: delete the
-open markers under `.adlc/handoffs/denies/` **and** the `.adlc/.deny-store` sentinel beside
-them, from a host shell. The sentinel makes an emptied `denies/` directory read as
-tampered-with, so removing a marker alone changes nothing. `adlc handoff unlock` is the one
+the message instead names the keyless path, which is also the only durable clear: from a host
+shell, delete **every** open marker under `.adlc/handoffs/denies/` and **both** sentinels,
+`.adlc/.deny-store` and the legacy `.adlc/handoffs/.deny-store`. Clearing one marker while
+another remains leaves the repo just as locked, since any open marker denies every session;
+a sentinel makes an emptied `denies/` directory read as tampered-with; and the legacy
+sentinel re-creates the canonical one on the next read, so a recipe that omits it never
+terminates. `adlc handoff unlock` is the one
 keyless mutating verb, but it reclaims a session *lock* rather than a deny.
 
 ---

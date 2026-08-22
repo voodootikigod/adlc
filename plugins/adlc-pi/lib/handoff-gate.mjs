@@ -190,13 +190,35 @@ export function observeHandoffSignals(usage) {
 }
 
 /**
- * Did this repo opt in to ADLC? `.adlc/` is the marker every adapter reads, and
- * the gate treats its absence as "not my repo".
+ * The nearest ancestor of `root` (inclusive) that installed ADLC, canonicalized
+ * — or null when this path is not inside an ADLC repo at all.
+ *
+ * Containment asks whether a path is INSIDE an ADLC repo, not whether it IS
+ * one. pi hands the gate its cwd, which is routinely a subdirectory, so an
+ * exact-match check let a session started in `<repo>/src` walk past an open
+ * repo-wide deny, and wrote band markers into a stray `<repo>/src/.adlc` no
+ * operator would think to clear. Resolving the real root instead fixes the
+ * containment question and the deny-store lookup with one answer.
+ *
+ * The walk stops at a `.git` boundary: a checkout vendored inside an ADLC repo
+ * is its own project, and capturing it would bring back the blocker this guard
+ * exists to fix for anyone whose scratch repo lives under one.
+ *
  * @param {unknown} root
- * @returns {boolean}
+ * @returns {string|null}
  */
-function isAdlcRoot(root) {
-  return typeof root === 'string' && root !== '' && existsSync(join(root, '.adlc'));
+export function resolveAdlcRoot(root) {
+  if (typeof root !== 'string' || root === '') return null;
+  let current = trustedRealpath(resolve(root));
+  for (;;) {
+    if (existsSync(join(current, '.adlc'))) return current;
+    // `.adlc` wins over `.git` at the same level, so an ADLC repo (which has
+    // both) is found rather than treated as its own boundary.
+    if (existsSync(join(current, '.git'))) return null;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 /**
@@ -229,6 +251,26 @@ export function createAdlcRootState() {
     has(root) {
       const k = key(root);
       return k !== null && seen.has(k);
+    },
+    /**
+     * The remembered ADLC root this path sits under, or null.
+     *
+     * Walks ancestors the same way `resolveAdlcRoot` does, so a session in a
+     * subdirectory of a repo whose `.adlc` was since deleted still resolves to
+     * the root that opted in — an exact-key lookup would forget it and hand
+     * back the off switch the memory exists to remove.
+     * @param {unknown} root
+     * @returns {string|null}
+     */
+    resolve(root) {
+      let current = key(root);
+      if (current === null) return null;
+      for (;;) {
+        if (seen.has(current)) return current;
+        const parent = dirname(current);
+        if (parent === current) return null;
+        current = parent;
+      }
     },
     /** @param {unknown} root */
     record(root) {
@@ -562,23 +604,32 @@ export function checkHandoff({
   //
   // Monotonic: opting in is remembered for the process, so deleting `.adlc`
   // mid-session cannot turn enforcement back off (see createAdlcRootState).
-  if (isAdlcRoot(root)) {
-    if (adlcRoots) adlcRoots.record(root);
-  } else if (!(adlcRoots && adlcRoots.has(root))) {
-    return { decision: 'allow' };
+  //
+  // Everything below uses `repoRoot`, never the raw `root` pi supplied: the
+  // deny store, the protected-path checks and the printed recovery command all
+  // have to name the same repo, or a session in a subdirectory reads a
+  // different store than the one denying it.
+  const resolved = resolveAdlcRoot(root);
+  let repoRoot = resolved;
+  if (resolved !== null) {
+    if (adlcRoots) adlcRoots.record(resolved);
+  } else {
+    const remembered = adlcRoots ? adlcRoots.resolve(root) : null;
+    if (remembered === null) return { decision: 'allow' };
+    repoRoot = remembered;
   }
 
   const shell = isShellTool(toolName);
-  const targets = shell ? [] : editTargetsOf(input, root);
+  const targets = shell ? [] : editTargetsOf(input, repoRoot);
   const safeSessionId = isSafeSessionId(sessionId) ? sessionId : null;
   const key = typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null;
 
   const result = evaluate({
-    root,
+    root: repoRoot,
     sessionId: safeSessionId,
     observed: observeHandoffSignals(usage),
     ticketId,
-    editRelPaths: targets.map((p) => toRepoRelative(p, root)),
+    editRelPaths: targets.map((p) => toRepoRelative(p, repoRoot)),
     isBash: shell,
     bashCommand: shell && typeof input?.command === 'string' ? input.command : '',
     host: 'pi',
@@ -600,7 +651,7 @@ export function checkHandoff({
       'clears it, and the agent shell cannot.\n\n' +
       handoffRecoveryDiagnostic({
         sessionId: safeSessionId,
-        root,
+        root: repoRoot,
         reasons: result.reasons,
         hasManifestKey: key !== null,
       }),
