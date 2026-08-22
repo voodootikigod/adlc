@@ -40,7 +40,7 @@ import { extractToolPaths, READONLY_TOOLS } from './rails-checker.mjs';
  * to inspect what is wrong. Same lesson as `editTargetsOf`: one list per
  * plugin, not two, and a union so neither side can silently drop a name.
  */
-const HANDOFF_READ_ONLY_TOOLS = [...new Set([...READONLY_TOOLS, 'glob', 'list'])];
+const NON_MUTATING_TOOLS = [...new Set([...READONLY_TOOLS, 'glob', 'list'])];
 
 /** pi tool names that mutate through a structured target. */
 const STRUCTURED_MUTATORS = new Set(['write', 'edit']);
@@ -153,7 +153,7 @@ export function isShellTool(toolName) {
  * @param {string[]} [readOnlyTools] tool names known never to mutate
  * @returns {boolean}
  */
-export function handoffAppliesTo(toolName, readOnlyTools = HANDOFF_READ_ONLY_TOOLS) {
+export function handoffAppliesTo(toolName, readOnlyTools = NON_MUTATING_TOOLS) {
   const name = String(toolName ?? '').toLowerCase();
   if (name === '') return false;
   return !readOnlyTools.includes(name);
