@@ -162,13 +162,14 @@ it. `resume` / `continue` are
 the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
-the message instead names the keyless path, which is also the only durable clear: from a host
-shell, delete **every** open marker under `.adlc/handoffs/denies/` and **both** sentinels,
-`.adlc/.deny-store` and the legacy `.adlc/handoffs/.deny-store`. Clearing one marker while
-another remains leaves the repo just as locked, since any open marker denies every session;
-a sentinel makes an emptied `denies/` directory read as tampered-with; and the legacy
-sentinel re-creates the canonical one on the next read, so a recipe that omits it never
-terminates. `adlc handoff unlock` is the one
+the message instead names the keyless path, which is also the only durable clear:
+`rm -rf .adlc/handoffs .adlc/.deny-store` from a host shell at the repo root. The whole tree,
+and no glob — clearing one marker while another remains leaves the repo just as locked, since
+any open marker denies every session; a sentinel makes an emptied `denies/` read as
+tampered-with; the legacy `.adlc/handoffs/.deny-store` re-creates the canonical one on the
+next read, so a recipe that omits it never terminates; and a glob inside `denies/` expands
+through a symlink, so an agent that repoints that directory has the operator delete files
+outside the repo. `adlc handoff unlock` is the one
 keyless mutating verb, but it reclaims a session *lock* rather than a deny.
 
 ---

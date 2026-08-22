@@ -144,15 +144,17 @@ own shell is inside the deny-set) — this is also the only durable clear. Run i
 repo root, and remove **every** open marker plus **both** sentinel locations:
 
 ```bash
-rm -f .adlc/handoffs/denies/*.json .adlc/.deny-store .adlc/handoffs/.deny-store
+rm -rf .adlc/handoffs .adlc/.deny-store
 ```
 
-Do not delete just your own session's marker. A single open marker denies every session in
-the repo, so clearing one while another remains leaves you exactly as locked — and the
-denying session is usually not the one you are sitting in. Both sentinels matter too: a
-sentinel makes an emptied `denies/` directory read as tampered-with, and the legacy
-`.adlc/handoffs/.deny-store` re-creates the canonical one on the next read, so a recipe
-that omits it never terminates.
+Take the whole tree, and do not glob. A single open marker denies every session in the repo,
+so picking off your own leaves you exactly as locked — and the denying session is usually not
+the one you are sitting in. A sentinel makes an emptied `denies/` directory read as
+tampered-with, and the legacy `.adlc/handoffs/.deny-store` re-creates the canonical one on
+the next read, so a recipe that misses it never terminates. And
+`rm .adlc/handoffs/denies/*.json` expands *through* a symlink: if `denies` has been pointed
+somewhere else, the glob deletes files outside your repo, where `rm -rf` on the directory
+removes the link itself.
 
 `adlc handoff unlock` needs no key, but it reclaims a session *lock* rather than a deny, so
 it will not clear this.

@@ -701,8 +701,7 @@ test('with no manifest key the deny text names the keyless path', async () => {
     const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
     assert.equal(verdict.block, true);
     assert.match(verdict.reason, /ADLC_MANIFEST_KEY/);
-    assert.match(verdict.reason, /\.adlc\/handoffs\/denies\//, 'names the marker directory');
-    assert.match(verdict.reason, /\.adlc\/\.deny-store/, 'names the sentinel');
+    assert.match(verdict.reason, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'one safe command');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -773,7 +772,7 @@ test('the diagnostic still names the keyless path when the CLI cannot be resolve
     cliPath: null,
   });
   assert.match(diagnostic, /could not be resolved/);
-  assert.match(diagnostic, /\.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
+  assert.match(diagnostic, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
   // The global install route is @adlc/cli, whose bin is `adlc`; context-handoff's
   // own `handoff` bin is a transitive dependency's and is not on PATH after it.
   assert.match(diagnostic, /`adlc handoff bypass\|repair\|resume`/, 'names the bin that exists');
@@ -910,12 +909,12 @@ test('the operator-facing deny text is pinned phrase by phrase', () => {
     );
     // Measured: removing the marker without the sentinel still denies.
     assert.ok(
-      keyless.includes('.adlc/handoffs/denies/') && keyless.includes('.adlc/.deny-store'),
-      'both removal paths, or the recipe does not work',
+      keyless.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
+      'the whole tree and the sentinel, in one command that cannot follow a symlink',
     );
     assert.ok(
-      keyless.includes('Deleting a marker on its own is not enough'),
-      'the half-recipe is the one an operator would otherwise try first',
+      keyless.includes('Do not pick off one marker or glob inside'),
+      'the half-recipe and the glob are both what an operator would otherwise try',
     );
     // The exact reason token, not a wildcard: an empty one is rejected by the
     // CLI, and a changed one changes what lands in the audit record.
@@ -1190,14 +1189,12 @@ test('the keyless recipe names the legacy sentinel, so it terminates', () => {
       sessionId: 'sess-B',
       root,
     }).reason;
-    assert.ok(text.includes('.adlc/handoffs/.deny-store'), 'the legacy sentinel must be named');
+    assert.ok(text.includes('rm -rf .adlc/handoffs .adlc/.deny-store'), 'the whole tree, in one command');
+    assert.doesNotMatch(text, /denies\/\*/, 'never a glob: it expands through a symlink');
 
     // Follow the printed recipe literally, then confirm it actually cleared.
-    for (const f of readdirSync(join(root, '.adlc', 'handoffs', 'denies'))) {
-      if (f.endsWith('.json')) rmSync(join(root, '.adlc', 'handoffs', 'denies', f));
-    }
+    rmSync(join(root, '.adlc', 'handoffs'), { recursive: true, force: true });
     rmSync(join(root, '.adlc', '.deny-store'), { force: true });
-    rmSync(join(root, '.adlc', 'handoffs', '.deny-store'), { force: true });
     assert.equal(
       checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root }).decision,
       'allow',
@@ -1352,7 +1349,7 @@ test("the README's keyless command clears a repo with several markers and a lega
     // The exact command the README prints, run from the repo root.
     const command = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8')
       .split('\n')
-      .find((line) => line.startsWith('rm -f .adlc/handoffs/denies/'));
+      .find((line) => line.startsWith('rm -rf .adlc/handoffs'));
     assert.ok(command, 'the README must still document a concrete keyless command');
     const run = spawnSync(command, { shell: true, cwd: root, encoding: 'utf8' });
     assert.equal(run.status, 0, `documented command failed: ${run.stderr}`);
@@ -1495,7 +1492,7 @@ test('a store-integrity deny does not advertise a grant that cannot clear it', (
     );
     assert.match(verdict.reason, /--unbound-reason/, 'and offer it');
     assert.ok(
-      verdict.reason.includes('.adlc/handoffs/.deny-store'),
+      verdict.reason.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
       'and must point at the store repair that does',
     );
   } finally {
@@ -1583,7 +1580,7 @@ test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', ()
   assert.match(diagnostic, /unbound because the deny reports the store itself/, 'and says why');
   assert.doesNotMatch(diagnostic, /belongs to another session/, 'not the foreign-record reason');
   assert.match(diagnostic, /Only the unbound form above lifts it/);
-  assert.match(diagnostic, /\.adlc\/handoffs\/\.deny-store/, 'and names the durable repair');
+  assert.match(diagnostic, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'and names the durable repair');
 
   // A normal deny still gets its command.
   assert.match(
@@ -2019,4 +2016,32 @@ test('session_start itself arms the memory, through the real extension', async (
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the keyless recipe never globs, because a glob leaves the repo', () => {
+  // Measured: with `denies` repointed at another directory,
+  // `rm .adlc/handoffs/denies/*.json` deletes the files it finds THERE. The
+  // printed recipe must stay a directory removal, which takes the symlink
+  // rather than following it.
+  const text = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: '/srv/repo',
+    reasons: ['D3:unauthorized_open:sess-b'],
+    hasManifestKey: false,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  assert.match(text, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/);
+  assert.doesNotMatch(text, /\*/, 'no wildcard anywhere in the recovery text');
+
+  // And the same command is what the README documents.
+  const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8');
+  assert.ok(
+    readme.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
+    'README and runtime text must not drift apart',
+  );
+  const commandBlock = readme.slice(readme.indexOf('```bash', readme.indexOf('If you do not have the key')));
+  assert.ok(
+    !commandBlock.slice(0, commandBlock.indexOf('```', 7)).includes('*'),
+    'the documented COMMAND must not glob (the prose may still explain why)',
+  );
 });

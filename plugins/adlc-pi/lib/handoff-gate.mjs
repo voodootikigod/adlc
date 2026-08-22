@@ -647,13 +647,18 @@ export function formatNoSessionIdMessage() {
  * that does not — and it reclaims a session LOCK, not a deny, so naming it as
  * the keyless recovery would send the operator in a circle.
  *
- * Every path, not just the marker: a `.deny-store` sentinel is what makes an
- * emptied `denies/` directory read as tampered-with and keep denying, so
- * deleting a marker alone leaves the repo exactly as locked. BOTH sentinel
- * locations are named — a repo carrying the pre-migration
- * `.adlc/handoffs/.deny-store` re-creates the canonical one from it on the next
- * read, so a recipe naming only the canonical path never terminates (measured:
- * D0:deny_store_unavailable, forever).
+ * The whole `handoffs/` tree plus the canonical sentinel, and NO glob. Three
+ * things forced that shape:
+ *  - a marker alone is not enough — a `.deny-store` sentinel makes an emptied
+ *    `denies/` read as tampered-with and keep denying;
+ *  - the pre-migration `.adlc/handoffs/.deny-store` re-creates the canonical
+ *    sentinel on the next read, so a recipe that misses it never terminates
+ *    (measured: D0:deny_store_unavailable, forever) — removing `handoffs/`
+ *    takes it along;
+ *  - `rm .adlc/handoffs/denies/*.json` EXPANDS THROUGH A SYMLINK. An agent that
+ *    points `denies` somewhere else has the operator delete files outside the
+ *    repo when they run the recovery (measured). `rm -rf` on the directory
+ *    removes a symlink itself rather than following it.
  * @returns {string}
  */
 export function formatKeylessRecovery() {
@@ -661,11 +666,10 @@ export function formatKeylessRecovery() {
     'No ADLC_MANIFEST_KEY is configured, so that command — and every other mutating handoff verb ' +
     '(write/resume/continue/supervise/bypass/repair) — exits before it runs. `adlc handoff unlock` needs no ' +
     'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery — and ' +
-    "the only durable clear — from a host shell outside the agent: delete this repo's open deny markers " +
-    'under `.adlc/handoffs/denies/` AND both sentinels, `.adlc/.deny-store` and the legacy ' +
-    '`.adlc/handoffs/.deny-store` if it exists. Deleting a marker on its own is not enough — a sentinel ' +
-    'makes an emptied store fail closed (and the legacy one re-creates the other), and any marker left ' +
-    'behind keeps denying every session in the repo.'
+    'the only durable clear — from a host shell outside the agent, run at the repo root: ' +
+    '`rm -rf .adlc/handoffs .adlc/.deny-store`. That clears every open marker and both sentinels at once. ' +
+    'Do not pick off one marker or glob inside `denies/`: any marker left behind keeps denying every ' +
+    'session, a sentinel makes an emptied store fail closed, and a glob follows a symlink out of the repo.'
   );
 }
 
@@ -776,9 +780,8 @@ export function handoffRecoveryDiagnostic({
     parts.push(
       'This deny reports the deny STORE itself, not this session\'s standing: a marker is unreadable, or the ' +
         'store looks emptied. Only the unbound form above lifts it — a bound grant does not — and that grant ' +
-        'is still one-shot, so it buys a call, not a repaired store. The durable fix is to clear the state: ' +
-        'delete every open marker under `.adlc/handoffs/denies/` and both sentinels, `.adlc/.deny-store` and ' +
-        'the legacy `.adlc/handoffs/.deny-store`.',
+        'is still one-shot, so it buys a call, not a repaired store. The durable fix is to clear the state, ' +
+        'from a host shell at the repo root: `rm -rf .adlc/handoffs .adlc/.deny-store`.',
     );
   }
   if (hasManifestKey) {
