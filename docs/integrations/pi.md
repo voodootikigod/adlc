@@ -137,8 +137,11 @@ operator's own cwd, writes the grant there and exits 0 regardless). When the den
 another session the command carries `--unbound-reason`: a band-generated marker is unbound —
 `ticket_id` and `content_hash` are both null — and a bound grant only authorizes an unbound
 record of its own session, so against a foreign one it is consumed and the caller stays
-denied. The grant is one-shot either way: it authorizes the next mutation and is consumed by
-it, and the message says so rather than presenting it as a clear. `resume` / `continue` are
+denied. The grant is one-shot either way, and it is spent by the next *gated tool call* rather than the
+next mutation — pi gates every tool but a read, so a `bash pwd` consumes it. The message says so
+rather than presenting it as a clear. A store-integrity deny (`D0:deny_store_unavailable` and
+friends) gets no grant offered at all: measured, neither grant form clears one, so the message
+points at the store repair instead. `resume` / `continue` are
 the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —

@@ -279,6 +279,15 @@ export function createAdlcRootState() {
    *
    * Unknown identity on either side keeps enforcing. A platform without stable
    * inodes, or a path that cannot be stat'd, must not become the soft spot.
+   *
+   * ACCEPTED LIMIT: replacing a checkout's CONTENTS in place keeps the
+   * directory's identity, so it still reads as the repo that opted in. That is
+   * not an oversight to fix later — from the filesystem alone, "same repo with
+   * `.adlc` deleted" and "different project written over it" are the same
+   * observation, and any identity strong enough to separate them (`.git`, a
+   * marker file) can be deleted by the same agent the memory exists to stop.
+   * Erring toward enforcing is the safe half of an undecidable question, and it
+   * expires with the process.
    */
   const sameCheckout = (dir) => {
     if (!seen.has(dir)) return false;
@@ -400,6 +409,26 @@ function trustedRealpath(path) {
 
 /** Single-token reason recorded against an operator's unbound grant. */
 const UNBOUND_REASON = 'pi-handoff-operator-recovery';
+
+/**
+ * Deny reasons that describe the STORE rather than a session's standing.
+ *
+ * No bypass grant clears one — measured: against `D0:deny_store_unavailable`
+ * both the bound and the unbound form exit 0, are consumed, and leave the
+ * session denied. Printing a grant as "recovery" there is the same false
+ * instruction this gate was rewritten to stop giving, so the diagnostic says
+ * plainly that the store has to be repaired instead.
+ */
+const STORE_INTEGRITY_REASONS = new Set([
+  'D0:deny_store_unavailable',
+  'D0:invalid_deny_records',
+  'D3:invalid_record',
+]);
+
+/** @param {string[]|undefined} reasons */
+export function hasStoreIntegrityFault(reasons) {
+  return (reasons ?? []).some((reason) => STORE_INTEGRITY_REASONS.has(String(reason)));
+}
 
 /** The `--unbound-reason` clause a foreign open record needs, or nothing. */
 function unboundClause(unbound) {
@@ -568,6 +597,7 @@ export function handoffRecoveryDiagnostic({
   cliPath = resolveRecoveryCliPath(),
 }) {
   const parts = [];
+  const storeFault = hasStoreIntegrityFault(reasons);
   if (cliPath === null) {
     parts.push(
       'Host-side recovery: @adlc/context-handoff could not be resolved from this install, so its recovery ' +
@@ -590,20 +620,31 @@ export function handoffRecoveryDiagnostic({
       quotePathForDisplay(interpreterPath) !== null &&
       quotePathForDisplay(scriptPath) !== null &&
       quotePathForDisplay(adlcDir) !== null;
-    // "One-shot" and "next mutation only" are measured, not copied from the
-    // CLI's help: the grant is consumed by the mutation it authorizes, and the
-    // one after that is denied again. Calling this "recovery" without saying so
-    // would replace one misleading instruction with another.
+    // Every clause here is measured, not copied from the CLI's help. The grant
+    // is consumed by the next GATED CALL — pi gates every tool but a read, so a
+    // `bash pwd` spends it without mutating anything — and the call after that
+    // is denied again.
     const label = unbound
-      ? 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only, and is ' +
-        'unbound because the deny belongs to another session — the reason is recorded)'
-      : 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only)';
+      ? 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT gated tool call only, ' +
+        'and is unbound because the deny belongs to another session — the reason is recorded)'
+      : 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT gated tool call only)';
     parts.push(runnable ? `${label}: ${command}` : command);
+  }
+  // A store-integrity fault is not a standing the grant above can lift, so the
+  // grant must not be left looking like the answer.
+  if (storeFault) {
+    parts.push(
+      'This deny reports the deny STORE itself, not this session\'s standing, and no bypass grant clears ' +
+        'one — bound or unbound, it is consumed and the deny remains. Repair the store instead, from a host ' +
+        'shell: delete every open marker under `.adlc/handoffs/denies/` and both sentinels, ' +
+        '`.adlc/.deny-store` and the legacy `.adlc/handoffs/.deny-store`.',
+    );
   }
   parts.push(
     hasManifestKey
-      ? 'That grant is consumed by the mutation it authorizes, so it unblocks one call rather than the ' +
-          'session. `adlc handoff resume` / `continue` are the durable handoff flows.'
+      ? 'That grant is consumed by the next gated tool call — every tool but a read, whether or not it ' +
+          'mutates, so a `bash pwd` spends it — and unblocks one call rather than the session. ' +
+          '`adlc handoff resume` / `continue` are the durable handoff flows.'
       : formatKeylessRecovery(),
   );
   return parts.join('\n\n');

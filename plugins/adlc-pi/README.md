@@ -118,8 +118,9 @@ band-generated marker is unbound (`ticket_id` and `content_hash` are both null),
 bound grant only authorizes an unbound record belonging to its own session — so against a
 foreign record a bound grant is consumed and you stay denied.
 
-Either way the grant is **one-shot**: it authorizes the next mutation and is consumed by it,
-so the call after that is denied again. `adlc handoff resume` / `continue` are the durable
+Either way the grant is **one-shot**, and it is spent by the next *gated tool call* rather than
+the next mutation — pi gates every tool but a read, so even a `bash pwd` consumes it. The call
+after that is denied again. `adlc handoff resume` / `continue` are the durable
 handoff flows. All of these, plus `write`, `supervise` and `repair`, require
 `ADLC_MANIFEST_KEY`.
 

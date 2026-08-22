@@ -43,6 +43,8 @@ import {
   formatRecoveryCommand,
   handoffRecoveryDiagnostic,
   foreignDenierOf,
+  hasStoreIntegrityFault,
+  resolveRecoveryCliPath,
   resolveAdlcRoot,
   observeHandoffSignals,
   resolvePiSessionId,
@@ -873,8 +875,8 @@ test('the operator-facing deny text is pinned phrase by phrase', () => {
     );
     // Measured: the grant is consumed by the mutation it authorizes.
     assert.ok(
-      keyless.includes('authorizes the NEXT mutation only'),
-      'must not present a one-shot grant as a clear',
+      keyless.includes('authorizes the NEXT gated tool call only'),
+      'must not present a one-shot grant as a clear, nor overstate what spends it',
     );
     // Measured: unlock is keyless but reclaims a lock, not a deny.
     assert.ok(
@@ -1061,7 +1063,7 @@ test('the self-deny label is pinned too — it is the path most operators hit', 
     assert.equal(own.decision, 'deny');
     assert.match(own.reason, /D2:denier_session/, 'this is the self-deny path');
     assert.ok(
-      own.reason.includes('authorizes the NEXT mutation only'),
+      own.reason.includes('authorizes the NEXT gated tool call only'),
       'the one-shot claim must survive on the bound branch',
     );
     assert.doesNotMatch(own.reason, /--unbound-reason/, 'a session clearing its own record stays bound');
@@ -1376,4 +1378,88 @@ test('deleting only .adlc still keeps the SAME checkout enforced', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a non-mutating gated call spends the grant, and the text says so', () => {
+  // "authorizes the NEXT mutation" was wrong: pi gates every tool but a read,
+  // and the shared adapter consumes a verified grant on any gated call whose
+  // other reasons are clear. A `bash pwd` therefore spends it without touching
+  // anything, and an operator told otherwise loses their one shot to a
+  // diagnostic command.
+  const key = 'k'.repeat(64);
+  const root = makeRepo();
+  try {
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    const ask = (toolName, input) =>
+      checkHandoff({ toolName, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
+
+    assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny');
+    const cli = resolveRecoveryCliPath();
+    const grant = spawnSync(
+      process.execPath,
+      [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
+        '--dir', join(root, '.adlc'), '--write'],
+      { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
+    );
+    assert.equal(grant.status, 0, grant.stderr);
+
+    assert.equal(ask('bash', { command: 'pwd' }), 'allow', 'a read-only shell call is still gated');
+    assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny', 'and it spent the grant');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a store-integrity deny does not advertise a grant that cannot clear it', () => {
+  // Measured: against D0:deny_store_unavailable BOTH grant forms exit 0, are
+  // consumed, and leave the session denied. Printing one as the recovery is
+  // the same false instruction this gate exists to stop giving.
+  const root = makeRepo();
+  try {
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    // Emptied denies/ while the sentinel remains == the store is unavailable.
+    rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
+
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      root,
+      manifestKey: 'k'.repeat(64),
+    });
+    assert.equal(verdict.decision, 'deny');
+    assert.ok(hasStoreIntegrityFault(verdict.reasons), `expected a store fault: ${verdict.reasons}`);
+    assert.ok(
+      verdict.reason.includes('no bypass grant clears'),
+      'the text must say the grant cannot lift this',
+    );
+    assert.ok(
+      verdict.reason.includes('.adlc/handoffs/.deny-store'),
+      'and must point at the store repair that does',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('hasStoreIntegrityFault names store faults and nothing else', () => {
+  for (const reason of ['D0:deny_store_unavailable', 'D0:invalid_deny_records', 'D3:invalid_record']) {
+    assert.equal(hasStoreIntegrityFault([reason]), true, reason);
+  }
+  for (const reason of ['D3:unauthorized_open:sess-A', 'D2:denier_session', 'D1:process_sticky']) {
+    assert.equal(hasStoreIntegrityFault([reason]), false, reason);
+  }
+  assert.equal(hasStoreIntegrityFault(undefined), false);
 });
