@@ -48,7 +48,7 @@ export const CODEX_INTEGRATION = {
     'codex plugin add adlc-codex@adlc',
     'adlc init --root /absolute/path/to/project',
   ],
-  note: 'Install @adlc/cli 1.4.2 or newer from npm, then install the native plugin from the Codex Git marketplace. Keep the CLI and plugin updated together, and start a new Codex thread after installation or upgrade.',
+  note: 'Install @adlc/cli 1.11.0 or newer from npm — the context-rot handoff gate fails closed below it and denies every mutating tool call. Then install the native plugin from the Codex Git marketplace. Keep the CLI and plugin updated together, and start a new Codex thread after installation or upgrade.',
   pluginDir: 'plugins/adlc-codex',
   hero: {
     kicker: 'Codex integration',

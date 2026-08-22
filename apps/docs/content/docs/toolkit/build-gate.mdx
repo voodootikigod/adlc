@@ -35,10 +35,14 @@ adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <p
 | `--session-bytes <n>` | — | Precomputed transcript byte-size signal. |
 | `--transcript <path>` | — | Derive depth / session-bytes from this transcript file. |
 | `--depth-threshold <n>` | `40` | Tool-call count at or past which a session is degraded (inclusive; `HARD_DEPTH`). |
-| `--bytes-threshold <n>` | `262144` | Transcript bytes (256 KiB) at or past which a session is degraded (inclusive; `HARD_BYTES`). |
+| `--bytes-threshold <n>` | `8388608` | Transcript bytes (8 MiB) at or past which a session is degraded (inclusive). |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
 | `--reason <text>` | — | Free-text reason recorded with an override. |
 | `--json` | off | Machine-readable JSON result. |
+
+The library export `DEFAULT_BYTES_THRESHOLD` remains `HARD_BYTES` (256 KiB) by
+design, so the two numbers are not expected to agree: the flag default above is
+the recalibrated operating threshold.
 
 Supplying no signal defaults to "not degraded", since a gate given no signal
 cannot deny. Set `ADLC_BUILD_GATE_BYPASS=1` to override a deny; the override is honored

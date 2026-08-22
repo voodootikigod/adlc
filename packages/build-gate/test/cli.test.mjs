@@ -10,7 +10,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'build-gate.mjs');
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const BIN = join(PKG_ROOT, 'bin', 'build-gate.mjs');
+const README = join(PKG_ROOT, 'README.md');
+const SITE_PAGE = join(PKG_ROOT, '..', '..', 'apps', 'docs', 'content', 'docs', 'toolkit', 'build-gate.mdx');
 
 function run(args, { cwd, env = {} } = {}) {
   try {
@@ -140,6 +143,64 @@ test('the --bytes-threshold DEFAULT (no flag passed) is the recalibrated 8 MiB, 
 test('--help documents the recalibrated 8 MiB default, not the frozen library default', () => {
   const r = run(['--help']);
   assert.match(r.stdout, /--bytes-threshold <n>\s+default 8388608/);
+});
+
+/**
+ * Pull the Default cell out of a `| flag | default | description |` row in a
+ * markdown flag table. Scans the whole document instead of anchoring on a
+ * heading, because the package README and the docs-site page keep the same
+ * table under different headings. Asserting a single match is what makes a
+ * row rename or a duplicated table a failure rather than a silent skip.
+ */
+function flagDefaultCell(markdown, flag) {
+  const rows = markdown
+    .split('\n')
+    .map((line) => line.split('|').map((cell) => cell.trim().replace(/`/g, '')))
+    .filter((cells) => cells.length >= 4 && cells[1].startsWith(flag));
+  assert.equal(rows.length, 1, `expected exactly one \`${flag}\` flag-table row, found ${rows.length}`);
+  return rows[0][2];
+}
+
+test('the documented --bytes-threshold default is the number the binary actually prints', () => {
+  // The README is what npmjs.com renders for an installing operator, and it
+  // carried the frozen library default (262144) long after the CLI's own flag
+  // default was recalibrated to 8 MiB — documenting a gate 32x more sensitive
+  // than the shipped one, in the silent-green direction. Both sides are read
+  // at runtime and compared, rather than the README being pinned to a literal
+  // here, so drift fails whichever side moves.
+  const help = run(['--help']);
+  assert.equal(help.code, 0);
+  const printed = help.stdout.match(/--bytes-threshold <n>\s+default (\d+)/);
+  assert.ok(printed, '--help must print a numeric --bytes-threshold default');
+  const shipped = printed[1];
+
+  // The default cell must LEAD with the number; trailing prose ("8388608
+  // (8 MiB)") is free to be reworded without failing this test.
+  const readmeCell = flagDefaultCell(readFileSync(README, 'utf8'), '--bytes-threshold');
+  assert.equal(
+    readmeCell.match(/\d+/)?.[0],
+    shipped,
+    `README --bytes-threshold row says "${readmeCell}"; --help says ${shipped}`,
+  );
+
+  // Without the note, the next reader "corrects" the README back to the
+  // library export's 256 KiB. Pinned on the two code identifiers, which
+  // survive rewording.
+  const readme = readFileSync(README, 'utf8');
+  assert.match(readme, /DEFAULT_BYTES_THRESHOLD/);
+  assert.match(readme, /HARD_BYTES/);
+
+  // The docs site renders a hand-authored copy of the same table (it is not
+  // generated from this README), so it drifts independently. Absent from a
+  // published tarball, present in a source checkout.
+  if (existsSync(SITE_PAGE)) {
+    const siteCell = flagDefaultCell(readFileSync(SITE_PAGE, 'utf8'), '--bytes-threshold');
+    assert.equal(
+      siteCell.match(/\d+/)?.[0],
+      shipped,
+      `docs-site --bytes-threshold row says "${siteCell}"; --help says ${shipped}`,
+    );
+  }
 });
 
 test('no --depth/--session-bytes supplied at all → defaults to not-degraded (allow)', () => {

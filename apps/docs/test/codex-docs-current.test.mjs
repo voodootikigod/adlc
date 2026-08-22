@@ -41,7 +41,15 @@ test('Codex guides carry current install, update, and legacy recovery commands',
     'codex plugin marketplace upgrade adlc',
     'codex plugin remove adlc@plugins-cli',
   ]) assert.match(combinedDocs, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(combinedDocs, /@adlc\/cli`\s+1\.4\.2 or newer/);
+  // The documented floor is the handoff gate's, not the MCP transport's: below
+  // 1.11.0 the gate fails closed and denies every mutating tool call, so a doc
+  // naming the old 1.4.2 MCP floor as THE floor strands whoever follows it.
+  // Asserted per-document — matching the concatenation let one of the two go
+  // stale while the other kept the assertion green.
+  for (const [name, doc] of [['codex.mdx', fumadocs], ['docs/integrations/codex.md', groundTruth]]) {
+    assert.match(doc, /@adlc\/cli`\s+1\.11\.0 or newer/, `${name} must document the 1.11.0 handoff-gate floor`);
+  }
+  assert.match(integrationFor('codex').note, /1\.11\.0 or newer/);
 });
 
 test('Codex marketing page exposes the native surfaces instead of the generic install-only page', () => {

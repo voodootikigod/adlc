@@ -13,9 +13,13 @@ evidence under `.adlc/` remains the source of truth.
 ## Install
 
 ADLC releases the CLI and Codex plugin package in lockstep. Use `@adlc/cli`
-1.4.2 or newer so the `adlc mcp-server` entrypoint is available. Codex installs
-the native plugin through its Git marketplace; installing `@adlc/codex` with npm
-alone does not register the plugin with Codex.
+1.11.0 or newer: the context-rot handoff gate hard-requires
+`@adlc/context-handoff` exports that first ship in 1.11.0 and fails closed below
+it, denying every structured edit and mutating shell command. (1.4.2 or newer is
+what makes the `adlc mcp-server` entrypoint available; the handoff gate is the
+binding constraint.) Codex installs the native plugin through its Git
+marketplace; installing `@adlc/codex` with npm alone does not register the
+plugin with Codex.
 
 ```sh
 npm install -g @adlc/cli@latest

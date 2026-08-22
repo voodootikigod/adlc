@@ -31,11 +31,15 @@ build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>]
 | `--session-bytes <n>` | — | Precomputed transcript byte-size signal |
 | `--transcript <path>` | — | Derive depth/session-bytes from this transcript file |
 | `--depth-threshold <n>` | 40 | Tool-call count past which a session is "degraded" |
-| `--bytes-threshold <n>` | 262144 (256 KiB) | Transcript bytes past which a session is "degraded" |
+| `--bytes-threshold <n>` | 8388608 (8 MiB) | Transcript bytes past which a session is "degraded" |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file |
 | `--reason <text>` | — | Free-text reason recorded with an override |
 | `--json` | off | Emit machine-readable JSON result |
 | `--help` | — | Print this help and exit 0 |
+
+The library export `DEFAULT_BYTES_THRESHOLD` (`lib/depth-signal.mjs`) remains
+`HARD_BYTES` (256 KiB) by design, so the two numbers are not expected to agree:
+this binary's flag default is the recalibrated operating threshold.
 
 A CLI process can't observe its own caller's context state — the caller (a
 hook, CI wrapper, or any harness) must supply the signal via `--depth`/

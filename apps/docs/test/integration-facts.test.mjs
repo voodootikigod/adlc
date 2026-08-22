@@ -237,7 +237,9 @@ test('Codex marketing facts describe the native marketplace surface', () => {
     ['P5-P6', '$adlc-prosecute'],
     ['P7', '$adlc-distill'],
   ]);
-  assert.match(codex?.note ?? '', /1\.4\.2 or newer/);
+  // The binding floor is the handoff gate's, not the MCP transport's: below
+  // 1.11.0 the gate fails closed and denies every mutating tool call.
+  assert.match(codex?.note ?? '', /1\.11\.0 or newer/);
   assert.doesNotMatch(codex?.note ?? '', /checkout|unreleased/i);
   assert.equal(codex?.surfacesSection.kicker, 'Native surfaces');
   assert.equal(codex?.phaseSection.kicker, 'Phase routing');
