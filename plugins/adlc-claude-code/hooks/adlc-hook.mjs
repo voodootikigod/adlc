@@ -1455,16 +1455,16 @@ const BUILD_GATE_SCAN_BYTES = 8 * 1024 * 1024;
  * packages/build-gate/lib/depth-signal.mjs's countToolCalls(). A plain
  * occurrence count over a (possibly windowed) transcript chunk.
  *
- * The `function_call`/`custom_tool_call` alternation is the Codex rollout shape
- * (`response_item` records), adjudicated against real ~/.codex/sessions
- * rollouts; the closing quote is what keeps the `_output` result half of each
- * pair from doubling the count. Full rationale — including which event_msg
- * mirrors are deliberately excluded — lives on the canonical copy.
+ * The five `*_call` tags are the COMPLETE set of Codex rollout `response_item`
+ * call records, enumerated across every rollout on disk; the closing quote is
+ * what keeps the `_output` result half of each pair from doubling the count.
+ * Full rationale — including which event_msg mirrors are deliberately
+ * excluded — lives on the canonical copy.
  */
 function countToolCallsForBuildGate(text) {
   if (!text) return 0;
   const toolCallRecords =
-    text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call)"/g) ?? [];
+    text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call|web_search_call|tool_search_call|image_generation_call)"/g) ?? [];
   const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
   return toolCallRecords.length + proseToolLines.length;
 }

@@ -28,6 +28,12 @@ import {
   patchApplyEnd,
   execCommandEnd,
   mcpToolCallEnd,
+  webSearchCall,
+  webSearchEnd,
+  toolSearchCall,
+  toolSearchOutput,
+  imageGenerationCall,
+  imageGenerationEnd,
   assistantMessage,
   designDocShapeLine,
 } from './fixtures/codex-rollout.mjs';
@@ -77,17 +83,58 @@ test('countToolCalls: a call/output PAIR counts once — the output half is not 
 });
 
 test('countToolCalls: event_msg mirrors of a call are not counted a second time', () => {
-  // patch_apply_end / exec_command_end / mcp_tool_call_end are event_msg
-  // echoes of a call a response_item already recorded. On the real rollouts
-  // patch_apply_end tracked custom_tool_call 1:1; counting both doubles depth.
+  // patch_apply_end / exec_command_end / mcp_tool_call_end / web_search_end /
+  // image_generation_end are event_msg echoes of a call a response_item already
+  // recorded. On the real rollouts patch_apply_end tracked custom_tool_call
+  // 1:1; counting both doubles depth.
   assert.equal(countToolCalls(patchApplyEnd(1)), 0);
   assert.equal(countToolCalls(execCommandEnd(1)), 0);
   assert.equal(countToolCalls(mcpToolCallEnd(1)), 0);
+  assert.equal(countToolCalls(webSearchEnd(1)), 0);
+  assert.equal(countToolCalls(imageGenerationEnd(1)), 0);
   assert.equal(
     countToolCalls(`${customToolCall(1)}\n${patchApplyEnd(1)}\n${customToolCallOutput(1)}`),
     1,
     'one apply_patch is depth 1, not 2 or 3',
   );
+});
+
+test('countToolCalls: every enumerated response_item call type counts, and only once', () => {
+  // A scan of all 407 rollouts on disk enumerated exactly five response_item
+  // call tags. Missing any one of them is not merely imprecise: a session can
+  // sit at 39 recognized calls plus one unrecognized call and slip under the
+  // inclusive 40 threshold, which is a degraded session cleared to mutate.
+  for (const [call, twin] of [
+    [functionCall, functionCallOutput],
+    [customToolCall, customToolCallOutput],
+    [webSearchCall, webSearchEnd],
+    [toolSearchCall, toolSearchOutput],
+    [imageGenerationCall, imageGenerationEnd],
+  ]) {
+    assert.equal(countToolCalls(call(1)), 1, `${call.name} must count`);
+    assert.equal(countToolCalls(twin(1)), 0, `${twin.name} must not count`);
+    assert.equal(countToolCalls(`${call(1)}\n${twin(1)}`), 1, `${call.name} + twin is one call`);
+  }
+});
+
+test('countToolCalls: 39 shell calls plus one rarer call reaches the hard band, not 39', () => {
+  // The exact bypass a cross-model review found in the first cut of this fix,
+  // which recognized only function_call and custom_tool_call: 39 counted calls
+  // plus one web search read as 39, one short of the inclusive threshold, so a
+  // high-risk mutation proceeded in a session that was actually at 40.
+  for (const rarer of ['webSearchCalls', 'toolSearchCalls', 'imageGenerationCalls']) {
+    const { text, expectedToolCalls } = buildCodexRollout({
+      functionCalls: HARD_DEPTH - 1,
+      [rarer]: 1,
+    });
+    assert.equal(expectedToolCalls, HARD_DEPTH);
+    assert.equal(countToolCalls(text), HARD_DEPTH, `39 shell calls + one ${rarer} is ${HARD_DEPTH}`);
+    assert.equal(
+      isDegraded({ depth: countToolCalls(text), sessionBytes: 0 }),
+      true,
+      `a session at the hard band via one ${rarer} must be degraded`,
+    );
+  }
 });
 
 test('countToolCalls: a plain Codex assistant message is not a tool call', () => {

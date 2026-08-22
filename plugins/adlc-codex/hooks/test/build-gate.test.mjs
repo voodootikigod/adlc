@@ -50,6 +50,12 @@ import {
   customToolCall,
   customToolCallOutput,
   patchApplyEnd,
+  webSearchCall,
+  webSearchEnd,
+  toolSearchCall,
+  toolSearchOutput,
+  imageGenerationCall,
+  imageGenerationEnd,
 } from '../../../../packages/build-gate/test/fixtures/codex-rollout.mjs';
 
 // A naive "replace ** then replace *" globMatch implementation does NOT
@@ -112,6 +118,12 @@ const TEXT_FIXTURES = [
   buildCodexRollout({ functionCalls: 3, withNestedTranscript: true }).text,
   // Anthropic and Codex shapes mixed in one transcript.
   `${functionCall(5)}\n"type":"tool_use"\n${customToolCall(6)}\nWriting src/a.mjs`,
+  // The three rarer response_item call types, each beside its twin.
+  `${webSearchCall(7)}\n${webSearchEnd(7)}`,
+  `${toolSearchCall(8)}\n${toolSearchOutput(8)}`,
+  `${imageGenerationCall(9)}\n${imageGenerationEnd(9)}`,
+  // 39 shell calls plus one web search — the boundary that must reach 40.
+  buildCodexRollout({ functionCalls: 39, webSearchCalls: 1 }).text,
 ];
 
 test('drift: the hook counter reads a sanitized real-shape Codex rollout at its exact known count', () => {
@@ -127,6 +139,23 @@ test('drift: the hook counter reads a sanitized real-shape Codex rollout at its 
   const pairsAndMirrors = `${functionCall(1)}\n${functionCallOutput(1)}\n${customToolCall(2)}\n${patchApplyEnd(2)}\n${customToolCallOutput(2)}`;
   assert.equal(hookCountToolCalls(pairsAndMirrors), 2);
   assert.equal(hookCountToolCalls(pairsAndMirrors), coreCountToolCalls(pairsAndMirrors));
+
+  // All five enumerated response_item call types count in the hook copy too —
+  // recognizing only the two common ones lets 39 calls plus one rarer call sit
+  // one short of the inclusive hard threshold and mutate anyway.
+  const boundary = buildCodexRollout({ functionCalls: 39, webSearchCalls: 1 });
+  assert.equal(boundary.expectedToolCalls, 40);
+  assert.equal(hookCountToolCalls(boundary.text), 40);
+  assert.equal(hookCountToolCalls(boundary.text), coreCountToolCalls(boundary.text));
+  for (const [call, twin] of [
+    [webSearchCall, webSearchEnd],
+    [toolSearchCall, toolSearchOutput],
+    [imageGenerationCall, imageGenerationEnd],
+  ]) {
+    assert.equal(hookCountToolCalls(call(1)), 1);
+    assert.equal(hookCountToolCalls(twin(1)), 0);
+    assert.equal(hookCountToolCalls(call(1)), coreCountToolCalls(call(1)));
+  }
 });
 
 test('drift: depth-signal computation is identical to packages/build-gate/lib/depth-signal.mjs', () => {

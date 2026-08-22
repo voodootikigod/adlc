@@ -1,32 +1,33 @@
 // codex-rollout.mjs — a SANITIZED Codex rollout fixture builder.
 //
-// Structure adjudicated (T-01M05BWTEYKHEK3JJX71NXXJ4H) against 8 real on-disk
-// rollouts under ~/.codex/sessions spanning codex-cli 0.118.0 - 0.142.5. Only
-// the STRUCTURE is reproduced here — key names, record nesting and type tags.
-// Every value is synthetic; no captured session text is committed.
+// Structure adjudicated (T-01M05BWTEYKHEK3JJX71NXXJ4H) against every rollout on
+// disk — 407 files under ~/.codex/sessions spanning codex-cli 0.118.0 - 0.149.0.
+// Only the STRUCTURE is reproduced here — key names, record nesting and type
+// tags. Every value is synthetic; no captured session text is committed.
 //
 // The adjudicated shape: a rollout is JSONL, one record per line, each record
 // `{ timestamp, type, payload }`. The model's tool CALLS are `type:
-// "response_item"` records whose `payload.type` is `function_call` (shell, MCP,
-// most tools) or `custom_tool_call` (apply_patch and other custom tools).
+// "response_item"` records. That scan enumerated the COMPLETE set of
+// response_item call tags, and all five are counted: `function_call` (shell,
+// MCP, most tools), `custom_tool_call` (apply_patch and other custom tools),
+// `web_search_call`, `tool_search_call`, `image_generation_call`.
 //
 // NOT counted, and this file exists partly to pin that:
-//   - `function_call_output` / `custom_tool_call_output` — the RESULT half of
-//     each call/output pair. Counting them doubles every call.
-//   - `patch_apply_end` / `exec_command_end` / `mcp_tool_call_end` — `event_msg`
-//     MIRRORS of a call that a `response_item` already recorded. On the real
-//     rollouts patch_apply_end tracked custom_tool_call 1:1 (e.g. 22/22, 14/14)
-//     or just under it when an apply failed; counting both roughly doubles
-//     patch depth.
-// Over-counting either way would re-introduce the false-lockout class of bug
-// that T-01M03J291182MXD1KEKM2PRKTS just fixed, so the counter stays
-// deliberately conservative.
+//   - `function_call_output` / `custom_tool_call_output` / `tool_search_output`
+//     — the RESULT half of a call/output pair. Counting them doubles the call.
+//   - `patch_apply_end` / `exec_command_end` / `mcp_tool_call_end` /
+//     `web_search_end` / `image_generation_end` — `event_msg` MIRRORS of a call
+//     that a `response_item` already recorded. On the real rollouts
+//     patch_apply_end tracked custom_tool_call 1:1 (e.g. 22/22, 14/14) or just
+//     under it when an apply failed; counting both roughly doubles patch depth.
 //
-// Also deliberately NOT counted: `web_search_call` / `tool_search_call` /
-// `image_generation_call`. These ARE genuine `response_item` calls, but they
-// were <1% of calls on every real rollout measured, and each additional
-// alternation is another chance to catch a mirror by mistake. Under-counting a
-// handful of web searches cannot flip a depth verdict; over-counting can.
+// Both directions are failure modes. Over-counting re-introduces the
+// false-lockout class of bug that T-01M03J291182MXD1KEKM2PRKTS just fixed;
+// under-counting lets a session sit one call under an inclusive threshold and
+// mutate anyway (the cross-model review's catch on the first cut of this fix,
+// which excluded the three rarer call types). Matching exactly the enumerated
+// call tags — and nothing that echoes them — is what avoids both, so every call
+// fixture below ships alongside its twin.
 
 const ISO = '2026-01-01T00:00:00.000Z';
 
@@ -80,6 +81,30 @@ export const execCommandEnd = (n) =>
 export const mcpToolCallEnd = (n) =>
   line('event_msg', { type: 'mcp_tool_call_end', call_id: `call_${n}`, status: 'completed' });
 
+/** A `web_search_call` response_item — a genuine call, counted. */
+export const webSearchCall = (n) =>
+  line('response_item', { type: 'web_search_call', id: `ws_${n}`, status: 'completed' });
+
+/** The event_msg MIRROR of a web search. Must not add to the count. */
+export const webSearchEnd = (n) =>
+  line('event_msg', { type: 'web_search_end', call_id: `call_${n}`, status: 'completed' });
+
+/** A `tool_search_call` response_item — a genuine call, counted. */
+export const toolSearchCall = (n) =>
+  line('response_item', { type: 'tool_search_call', id: `ts_${n}`, status: 'completed' });
+
+/** The RESULT half of a tool search. Must not add to the count. */
+export const toolSearchOutput = (n) =>
+  line('response_item', { type: 'tool_search_output', id: `ts_${n}`, output: 'synthetic output' });
+
+/** An `image_generation_call` response_item — a genuine call, counted. */
+export const imageGenerationCall = (n) =>
+  line('response_item', { type: 'image_generation_call', id: `ig_${n}`, status: 'completed' });
+
+/** The event_msg MIRROR of an image generation. Must not add to the count. */
+export const imageGenerationEnd = (n) =>
+  line('event_msg', { type: 'image_generation_end', call_id: `call_${n}`, status: 'completed' });
+
 /** A plain assistant message response_item — carries a role, but no tool call. */
 export const assistantMessage = (n) =>
   line('response_item', {
@@ -110,6 +135,9 @@ export const nestedTranscriptOutput = (n) =>
  * @param {object} opts
  * @param {number} [opts.functionCalls] - `function_call` records (each with its output twin)
  * @param {number} [opts.customToolCalls] - `custom_tool_call` records (each with its output twin AND its patch_apply_end mirror)
+ * @param {number} [opts.webSearchCalls] - `web_search_call` records (each with its web_search_end mirror)
+ * @param {number} [opts.toolSearchCalls] - `tool_search_call` records (each with its output twin)
+ * @param {number} [opts.imageGenerationCalls] - `image_generation_call` records (each with its image_generation_end mirror)
  * @param {number} [opts.messages] - plain assistant messages (no tool call)
  * @param {boolean} [opts.withNestedTranscript] - append an output record embedding an escaped rollout line
  * @returns {{ text: string, expectedToolCalls: number }}
@@ -117,6 +145,9 @@ export const nestedTranscriptOutput = (n) =>
 export function buildCodexRollout({
   functionCalls = 0,
   customToolCalls = 0,
+  webSearchCalls = 0,
+  toolSearchCalls = 0,
+  imageGenerationCalls = 0,
   messages = 0,
   withNestedTranscript = false,
 } = {}) {
@@ -132,6 +163,18 @@ export function buildCodexRollout({
     n += 1;
     lines.push(customToolCall(n), patchApplyEnd(n), customToolCallOutput(n));
   }
+  for (let i = 0; i < webSearchCalls; i += 1) {
+    n += 1;
+    lines.push(webSearchCall(n), webSearchEnd(n));
+  }
+  for (let i = 0; i < toolSearchCalls; i += 1) {
+    n += 1;
+    lines.push(toolSearchCall(n), toolSearchOutput(n));
+  }
+  for (let i = 0; i < imageGenerationCalls; i += 1) {
+    n += 1;
+    lines.push(imageGenerationCall(n), imageGenerationEnd(n));
+  }
   for (let i = 0; i < messages; i += 1) {
     n += 1;
     lines.push(assistantMessage(n));
@@ -142,7 +185,8 @@ export function buildCodexRollout({
   }
   return {
     text: `${lines.join('\n')}\n`,
-    expectedToolCalls: functionCalls + customToolCalls,
+    expectedToolCalls:
+      functionCalls + customToolCalls + webSearchCalls + toolSearchCalls + imageGenerationCalls,
   };
 }
 

@@ -19,12 +19,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `observeHandoffSignals` populates depth and nothing else, that left the
   enforcing-tier context-handoff deny unable to fire on Codex at all, and
   reduced the fitness-to-build gate to its byte ceiling alone. The counter now
-  also matches Codex `response_item` records tagged `function_call` or
-  `custom_tool_call`, adjudicated against eight real on-disk rollouts spanning
-  codex-cli 0.118.0 through 0.142.5. Counting stays conservative: the `_output`
-  result half of each call/output pair is not a second call, and the `event_msg`
-  mirrors (`patch_apply_end`, `exec_command_end`, `mcp_tool_call_end`) are not
-  counted again on top of the `response_item` that already recorded the call.
+  also matches Codex `response_item` call records — `function_call`,
+  `custom_tool_call`, `web_search_call`, `tool_search_call` and
+  `image_generation_call`, which a scan of all 407 rollouts on disk (codex-cli
+  0.118.0 through 0.149.0) established as the complete set. Counting is exact
+  in both directions: the `_output` result half of a call/output pair is not a
+  second call, and the `event_msg` mirrors (`patch_apply_end`,
+  `exec_command_end`, `mcp_tool_call_end`, `web_search_end`,
+  `image_generation_end`) are not counted again on top of the `response_item`
+  that already recorded the call — while omitting any genuine call type would
+  let a session sit one call under the inclusive threshold and mutate anyway.
   The fix is propagated to all three in-plugin copies of the counter
   (`adlc-codex`, `adlc-copilot`, `adlc-claude-code`).
 

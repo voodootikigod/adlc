@@ -32,8 +32,8 @@ export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
 /**
  * Count tool-invocation occurrences in transcript text. Three shapes are
  * recognized: a JSONL `"type":"tool_use"` block (the Claude Code transcript
- * shape); a Codex rollout `response_item` whose `payload.type` is
- * `function_call` or `custom_tool_call` (the Codex shape — see below); and
+ * shape); a Codex rollout `response_item` carrying one of the five call tags
+ * enumerated below (the Codex shape); and
  * legacy prose "Writing <path>" / "Editing <path>" / "Created <path>" tool-log
  * lines (the flail-detector precedent — parse-log.mjs's extractFileTargets /
  * signals.mjs's tool-log line patterns already know these). A plain occurrence
@@ -41,24 +41,29 @@ export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
  * "session is deep" signal we want (mirrors detectEditChurn's un-deduped
  * per-path counting).
  *
- * The Codex alternation was adjudicated against 8 real on-disk rollouts
- * (~/.codex/sessions, codex-cli 0.118.0 - 0.142.5): every one is JSONL of
- * `{timestamp,type,payload}` records, and the model's tool CALLS are
- * `response_item` records tagged `function_call` (shell/MCP/most tools) or
- * `custom_tool_call` (apply_patch). Before this, Codex sessions with over a
- * thousand real tool calls all counted 0.
+ * The Codex alternation was adjudicated against every rollout on disk
+ * (407 files under ~/.codex/sessions, codex-cli 0.118.0 - 0.149.0): each is
+ * JSONL of `{timestamp,type,payload}` records, and the model's tool CALLS are
+ * `response_item` records. That scan enumerated the COMPLETE set of
+ * `response_item` call tags — `function_call` (shell/MCP/most tools),
+ * `custom_tool_call` (apply_patch), `web_search_call`, `tool_search_call`,
+ * `image_generation_call` — and all five are matched. An allowlist rather than
+ * a `\w+_call` wildcard: an unrecognized future tag should under-count
+ * visibly, not match something that turns out to be a mirror. Before this,
+ * Codex sessions with over a thousand real tool calls all counted 0.
  *
- * What is deliberately NOT matched, and why the count stays conservative:
- *   - The closing quote in the pattern is load-bearing. It is what stops
- *     `function_call_output` / `custom_tool_call_output` — the RESULT half of
- *     each pair — from doubling every call.
- *   - `patch_apply_end` / `exec_command_end` / `mcp_tool_call_end` are
- *     `event_msg` MIRRORS of a call a `response_item` already recorded.
- *   - `web_search_call` / `tool_search_call` / `image_generation_call` are
- *     genuine calls but were under 1% of calls on every rollout measured;
- *     under-counting those cannot flip a verdict, over-counting can.
- * Over-counting would re-introduce the false-lockout bug class that the
- * context-rot threshold recalibration just fixed.
+ * What is deliberately NOT matched:
+ *   - The closing quote in the pattern is load-bearing. It is what stops the
+ *     RESULT half of each pair — `function_call_output`,
+ *     `custom_tool_call_output` — from doubling every call.
+ *   - `patch_apply_end` / `exec_command_end` / `mcp_tool_call_end` /
+ *     `web_search_end` / `image_generation_end` are `event_msg` MIRRORS of a
+ *     call a `response_item` already recorded. On the real rollouts
+ *     `patch_apply_end` tracked `custom_tool_call` 1:1.
+ * Over-counting either way would re-introduce the false-lockout bug class that
+ * the context-rot threshold recalibration just fixed; under-counting lets a
+ * degraded session slip under an inclusive threshold. Matching exactly the
+ * enumerated call tags, and nothing that echoes them, is what avoids both.
  *
  * @param {string} text
  * @returns {number}
@@ -66,7 +71,7 @@ export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
 export function countToolCalls(text) {
   if (!text) return 0;
   const toolCallRecords =
-    text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call)"/g) ?? [];
+    text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call|web_search_call|tool_search_call|image_generation_call)"/g) ?? [];
   const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
   return toolCallRecords.length + proseToolLines.length;
 }
