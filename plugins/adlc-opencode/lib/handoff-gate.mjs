@@ -456,6 +456,19 @@ export function checkHandoff({
     // while the deny-set silently stood down. Contamination still cannot
     // self-authorize, because a directory holding only the old bug's
     // .deny-store and markers has no ticket store either way.
+    //
+    // KNOWN RESIDUAL, and a tension rather than an oversight: the latch lives
+    // in plugin memory, so deleting the store and then RELOADING the plugin
+    // yields a fresh latch, no store, and an allow — while open markers still
+    // sit in .adlc/handoffs/denies/. Reading those markers as an init signal
+    // would close it, and would simultaneously REOPEN the contamination trap
+    // above, because a contaminated directory and a legitimately-initialized
+    // repo whose store was deleted are byte-identical on disk: markers, no
+    // store. One signal cannot mean "inert" and "enforce" at once. Closing this
+    // properly needs the ticket store protected from structured mutation (the
+    // protected-path list lives in @adlc/context-handoff, outside this
+    // ticket) — do NOT "fix" it by trusting markers, which silently re-bricks
+    // every repo the containment work exists to free.
     if (ticketStoreExists(root, storeOverride)) {
       initLatch?.arm(root);
     } else if (!initLatch?.armed(root)) {
