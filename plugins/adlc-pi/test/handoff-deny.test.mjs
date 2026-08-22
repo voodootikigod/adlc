@@ -13,6 +13,7 @@ import {
   readdirSync,
   existsSync,
   realpathSync,
+  renameSync,
   symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1307,6 +1308,71 @@ test("the README's keyless command clears a repo with several markers and a lega
     assert.equal(run.status, 0, `documented command failed: ${run.stderr}`);
 
     assert.equal(ask(), 'allow', 'the documented recipe must actually clear the repo');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a different checkout moved to a remembered path is not the remembered repo', () => {
+  // The memory has to tell two things apart that look identical from the path
+  // alone: `.adlc` deleted out from under an opted-in repo (must keep
+  // enforcing — that is the off switch) and the whole checkout replaced by
+  // another project (must NOT enforce, or the blocker comes back as stray
+  // .adlc state in a repo that never opted in). Filesystem identity separates
+  // them.
+  //
+  // The replacement is built elsewhere and renamed into place, so its inode is
+  // allocated while the original still exists and is therefore guaranteed
+  // distinct — a delete-then-recreate could reuse the freed inode and flake.
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-swap-')));
+  const path = join(parent, 'workspace');
+  const replacement = join(parent, 'other-project');
+  try {
+    mkdirSync(join(path, '.adlc'), { recursive: true });
+    mkdirSync(join(replacement, '.git'), { recursive: true });
+
+    const adlcRoots = createAdlcRootState();
+    const ask = () =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root: path,
+        adlcRoots,
+      }).decision;
+
+    assert.equal(ask(), 'deny', 'the opted-in checkout arms the memory');
+
+    // Same path, different checkout.
+    rmSync(path, { recursive: true, force: true });
+    renameSync(replacement, path);
+
+    assert.equal(ask(), 'allow', 'a replacement checkout is not the repo that opted in');
+    assert.equal(existsSync(join(path, '.adlc')), false, 'and gains no ADLC state');
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('deleting only .adlc still keeps the SAME checkout enforced', () => {
+  // The other half of the pair above: identical from the path, opposite
+  // answer, because the directory itself is unchanged.
+  const root = makeRepo();
+  try {
+    const adlcRoots = createAdlcRootState();
+    const ask = () =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root,
+        adlcRoots,
+      }).decision;
+    assert.equal(ask(), 'deny');
+    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+    assert.equal(ask(), 'deny', 'removing .adlc is not a way to be forgotten');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

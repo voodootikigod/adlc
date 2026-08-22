@@ -19,7 +19,7 @@
 // session, so it survives only as a fallback that still fails closed.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { relative, isAbsolute, resolve, join, dirname } from 'node:path';
 
@@ -261,14 +261,38 @@ function walkToAdlcRoot(root, isRoot) {
  * is the un-recoverable lock this whole change exists to remove.
  */
 export function createAdlcRootState() {
-  const seen = new Set();
+  /** canonical root -> filesystem identity observed when it opted in */
+  const seen = new Map();
   const key = (root) =>
     typeof root === 'string' && root !== '' ? trustedRealpath(resolve(root)) : null;
+
+  /**
+   * Is the directory at this remembered path still the checkout that opted in?
+   *
+   * The memory has to separate two states a path alone cannot: `.adlc` deleted
+   * out from under an opted-in repo (keep enforcing — that deletion is the off
+   * switch this memory exists to close) and the whole checkout replaced by
+   * another project at the same path (do NOT enforce, or the blocker returns as
+   * stray ADLC state in a repo that never opted in). The directory's own
+   * identity tells them apart: deleting a child leaves it untouched, replacing
+   * the checkout does not.
+   *
+   * Unknown identity on either side keeps enforcing. A platform without stable
+   * inodes, or a path that cannot be stat'd, must not become the soft spot.
+   */
+  const sameCheckout = (dir) => {
+    if (!seen.has(dir)) return false;
+    const recorded = seen.get(dir);
+    const now = directoryIdentity(dir);
+    if (recorded === null || now === null) return true;
+    return recorded === now;
+  };
+
   return {
     /** @param {unknown} root */
     has(root) {
       const k = key(root);
-      return k !== null && seen.has(k);
+      return k !== null && sameCheckout(k);
     },
     /**
      * The remembered ADLC root this path sits under, or null.
@@ -282,14 +306,29 @@ export function createAdlcRootState() {
      * @returns {string|null}
      */
     resolve(root) {
-      return walkToAdlcRoot(root, (dir) => seen.has(dir));
+      return walkToAdlcRoot(root, sameCheckout);
     },
     /** @param {unknown} root */
     record(root) {
       const k = key(root);
-      if (k !== null) seen.add(k);
+      if (k !== null) seen.set(k, directoryIdentity(k));
     },
   };
+}
+
+/**
+ * A directory's filesystem identity, or null when it cannot be established.
+ * Never throws: this feeds a guard, and a guard that throws is an outage.
+ * @param {string} dir
+ * @returns {string|null}
+ */
+function directoryIdentity(dir) {
+  try {
+    const stats = statSync(dir);
+    return stats.ino ? `${stats.dev}:${stats.ino}` : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
