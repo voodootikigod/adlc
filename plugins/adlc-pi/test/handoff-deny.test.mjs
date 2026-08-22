@@ -1240,18 +1240,21 @@ test('a session started in a subdirectory is still inside the repo', () => {
   }
 });
 
-test('the walk stops at a nested checkout — it is its own project', () => {
-  // A repo vendored inside an ADLC repo must not be captured by it, or the
-  // blocker this branch fixes comes back for anyone whose scratch checkout
-  // happens to live under one.
+test('a .git boundary picks which store applies — it does not release enforcement', () => {
+  // The boundary exists so a genuinely vendored checkout keeps its OWN deny
+  // store. It must not become a way to switch enforcement off, because `.git`
+  // is a directory an agent can create: measured before this, `mkdir src/.git`
+  // under an armed repo turned deny into allow.
+  //
+  // So a remembered root outranks the boundary. The cost is that a vendored
+  // checkout inside a repo this process has already armed answers to the outer
+  // store — over-enforcing, which is the safe side of a distinction the
+  // filesystem cannot make, and correct anyway: the deny is about THIS
+  // session's context rot, not about which project owns the file.
   const root = makeRepo();
   try {
     const nested = join(root, 'vendor', 'other-project');
     mkdirSync(join(nested, '.git'), { recursive: true });
-    // The memory MUST be threaded here, exactly as the extension threads it:
-    // without it this test passes against a boundary check that only exists on
-    // the live lookup, while the remembered-root lookup captures the nested
-    // checkout anyway.
     const adlcRoots = createAdlcRootState();
     const ask = (r) =>
       checkHandoff({
@@ -1264,14 +1267,34 @@ test('the walk stops at a nested checkout — it is its own project', () => {
       }).decision;
 
     assert.equal(ask(root), 'deny', 'the outer repo arms the memory');
-    assert.equal(ask(nested), 'allow', 'a nested checkout is not the outer ADLC repo');
-    assert.equal(existsSync(join(nested, '.adlc')), false);
+    assert.equal(ask(nested), 'deny', 'a hand-made .git under an armed repo is not an escape');
 
-    // And still not, once the outer opt-in is only a memory.
+    // The same holds once the outer opt-in survives only as a memory.
     rmSync(join(root, '.adlc'), { recursive: true, force: true });
-    assert.equal(ask(root), 'deny', 'the outer repo stays remembered');
-    assert.equal(ask(nested), 'allow', 'the boundary holds for the remembered root too');
-    assert.equal(existsSync(join(nested, '.adlc')), false);
+    assert.equal(ask(nested), 'deny', 'and still not, once the opt-in is only remembered');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unarmed outer repo leaves a vendored checkout its own store', () => {
+  // The other side of the same rule: with nothing remembered, the boundary does
+  // its intended job — a nested checkout carrying its own ticket store answers
+  // to that store, not to the enclosing repo's.
+  const root = makeRepo();
+  try {
+    const nested = join(root, 'vendor', 'other-project');
+    mkdirSync(join(nested, '.git'), { recursive: true });
+    installAdlc(nested);
+
+    assert.equal(resolveAdlcRoot(nested), realpathSync(nested), 'its own store, not the outer one');
+    assert.equal(resolveAdlcRoot(join(root, 'src')), realpathSync(root), 'an ordinary subdir is the repo');
+
+    // And a nested checkout with NO store of its own is simply not an ADLC repo
+    // when nothing above it has been armed.
+    const bare = join(root, 'vendor', 'plain');
+    mkdirSync(join(bare, '.git'), { recursive: true });
+    assert.equal(resolveAdlcRoot(bare), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1823,6 +1846,7 @@ test('an external ticket store arms the gate with no local .adlc', () => {
   try {
     const store = join(storeHome, 'tickets.json');
     writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
+    let evaluatedRoot = null;
     const verdict = checkHandoff({
       toolName: 'edit',
       input: { path: 'a.txt' },
@@ -1830,8 +1854,18 @@ test('an external ticket store arms the gate with no local .adlc', () => {
       usage: { percent: HARD_PCT },
       root,
       storeOverride: store,
+      evaluate: (o) => {
+        evaluatedRoot = o.root;
+        return { deny: true, reasons: ['D1:band'] };
+      },
     });
     assert.equal(verdict.decision, 'deny', 'an external store still means ADLC is in force');
+    // And enforcement must land on the WORKING directory. An absolute override
+    // is true of every ancestor equally, so letting it drive the walk marched
+    // the root up to `/` — where durable deny state would have been written.
+    assert.equal(evaluatedRoot, realpathSync(root), 'the repo, not an ancestor');
+    assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
+    assert.notEqual(resolveAdlcRoot(root, store), '/');
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(storeHome, { recursive: true, force: true });

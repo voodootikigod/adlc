@@ -248,51 +248,43 @@ export function observeHandoffSignals(usage) {
  * @param {unknown} root
  * @returns {string|null}
  */
-export function resolveAdlcRoot(root, storeOverride = null) {
-  return walkToAdlcRoot(root, (dir) => ticketStoreExists(dir, storeOverride));
+export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
+  if (typeof root !== 'string' || root === '') return null;
+  const start = trustedRealpath(resolve(root));
+
+  // A RELATIVE override names a store per-directory, so it participates in the
+  // walk. An ABSOLUTE one lives outside the tree and is true of every directory
+  // equally — it says THAT ADLC is in force, never WHERE the repo is, so it is
+  // deliberately excluded here and handled once, below.
+  const perDirectoryOverride = storeOverride && !isAbsolute(storeOverride) ? storeOverride : null;
+
+  let outermost = null;
+  let insideCheckout = true;
+  let dir = start;
+  for (;;) {
+    // A remembered root ignores the checkout boundary. It is the one signal an
+    // agent cannot manufacture mid-session, and it is what stops a hand-made
+    // `<cwd>/.git` from releasing a repo already under enforcement — measured:
+    // before this, `mkdir src/.git` turned deny into allow.
+    const remembered = adlcRoots ? adlcRoots.has(dir) : false;
+    const localStore = insideCheckout && ticketStoreExists(dir, perDirectoryOverride);
+    if (remembered || localStore) outermost = dir;
+    // The boundary applies from the NEXT ancestor up, so a checkout root that
+    // holds the store still counts as one.
+    if (insideCheckout && existsSync(join(dir, '.git'))) insideCheckout = false;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (outermost !== null) return outermost;
+
+  // An external absolute store: ADLC is in force, and the only sensible root is
+  // the directory pi is actually working in. Letting the walk answer this
+  // resolved every ancestor as a match and marched enforcement up to `/`, where
+  // it would have written durable deny state into the filesystem root.
+  return ticketStoreExists(start, storeOverride) ? start : null;
 }
 
-/**
- * The one ancestor walk every root lookup uses: the OUTERMOST match within this
- * checkout, or null.
- *
- * Outermost, not nearest, and that is a security property rather than a
- * preference. One checkout has one ADLC root. Taking the nearest match let an
- * agent below the band `mkdir src/.adlc` and have every later call resolve to
- * that empty store, walking away from the outer repo's open deny — measured,
- * deny became allow. Walking to the outermost `.adlc` inside the checkout
- * closes it: a directory the agent can create underneath can never outrank the
- * repo's own root.
- *
- * The trade is deliberate. A nested ADLC directory with no `.git` of its own no
- * longer keeps a separate deny store; it answers to the enclosing repo. A
- * genuinely independent nested checkout still does keep its own, because the
- * walk stops at its `.git` — which is also what stops a `.adlc` in some parent
- * directory from capturing this repo.
- *
- * Factored rather than written twice: the live lookup and the remembered-root
- * lookup had already drifted once, the remembered one walking past a boundary
- * the live one honoured. One walk, one boundary rule.
- *
- * @param {unknown} root
- * @param {(dir: string) => boolean} isRoot
- * @returns {string|null}
- */
-function walkToAdlcRoot(root, isRoot) {
-  if (typeof root !== 'string' || root === '') return null;
-  let current = trustedRealpath(resolve(root));
-  let outermost = null;
-  for (;;) {
-    if (isRoot(current)) outermost = current;
-    // The checkout boundary: never look above the git root, so a `.adlc` in
-    // some parent directory cannot capture this repo.
-    if (existsSync(join(current, '.git'))) break;
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  return outermost;
-}
 
 /**
  * Per-process memory of the roots that WERE ADLC repos, so containment can
@@ -806,10 +798,7 @@ export function checkHandoff({
   // OUTERMOST match in this checkout — so a remembered root survives its
   // `.adlc` being deleted, and a `.adlc` the agent creates in a subdirectory
   // cannot outrank the repo it is trying to escape.
-  const repoRoot = walkToAdlcRoot(
-    root,
-    (dir) => ticketStoreExists(dir, storeOverride) || (adlcRoots ? adlcRoots.has(dir) : false),
-  );
+  const repoRoot = resolveAdlcRoot(root, storeOverride, adlcRoots);
   if (repoRoot === null) return { decision: 'allow' };
   if (adlcRoots && ticketStoreExists(repoRoot, storeOverride)) adlcRoots.record(repoRoot);
 
