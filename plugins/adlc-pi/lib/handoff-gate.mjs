@@ -413,11 +413,13 @@ const UNBOUND_REASON = 'pi-handoff-operator-recovery';
 /**
  * Deny reasons that describe the STORE rather than a session's standing.
  *
- * No bypass grant clears one — measured: against `D0:deny_store_unavailable`
- * both the bound and the unbound form exit 0, are consumed, and leave the
- * session denied. Printing a grant as "recovery" there is the same false
- * instruction this gate was rewritten to stop giving, so the diagnostic says
- * plainly that the store has to be repaired instead.
+ * These need the UNBOUND grant, exactly like a foreign record: the shared gate
+ * lifts `D0:deny_store_unavailable` and `D3:invalid_record:*` only for an
+ * unbound operator override (mutation-gate.mjs — "legacy `true` bypass
+ * cannot"). Measured against a clean store fault: unbound clears it, bound does
+ * not. An earlier reading here mistook a co-occurring `D1:process_sticky` for
+ * the store fault surviving and concluded no grant worked at all — which would
+ * have pushed operators to delete files when a non-destructive repair existed.
  */
 const STORE_INTEGRITY_CODES = new Set([
   'D0:deny_store_unavailable',
@@ -625,10 +627,6 @@ export function handoffRecoveryDiagnostic({
         'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin: ' +
         '`adlc handoff bypass|repair|resume`, run from the denied repo.',
     );
-  } else if (storeFault) {
-    // Deliberately no command: a runnable grant printed above the "no grant
-    // clears this" prose still invites a keyed operator to spend their one shot
-    // on it.
   } else {
     const interpreterPath = trustedRealpath(process.execPath);
     const scriptPath = trustedRealpath(cliPath);
@@ -636,7 +634,9 @@ export function handoffRecoveryDiagnostic({
     // would follow a symlink to a directory named something else, and the CLI
     // rejects a --dir whose last segment is not `.adlc`.
     const adlcDir = join(trustedRealpath(root), '.adlc');
-    const unbound = foreignDenierOf(reasons, sessionId) !== null;
+    // Unbound is required for a foreign record AND for a store fault; a bound
+    // grant lifts neither.
+    const unbound = foreignDenierOf(reasons, sessionId) !== null || storeFault;
     const command = formatRecoveryCommand({ interpreterPath, scriptPath, adlcDir, sessionId, unbound });
     // Label it as a command only when it IS one — same representability test
     // `formatRecoveryCommand` itself used, so the two can never disagree.
@@ -649,9 +649,10 @@ export function handoffRecoveryDiagnostic({
     // is consumed by the next GATED CALL — pi gates every tool but a read, so a
     // `bash pwd` spends it without mutating anything — and the call after that
     // is denied again.
+    const why = storeFault ? 'the deny reports the store itself' : 'the deny belongs to another session';
     const label = unbound
       ? 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT gated tool call only, ' +
-        'and is unbound because the deny belongs to another session — the reason is recorded)'
+        `and is unbound because ${why} — the reason is recorded)`
       : 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT gated tool call only)';
     parts.push(runnable ? `${label}: ${command}` : command);
   }
@@ -659,10 +660,11 @@ export function handoffRecoveryDiagnostic({
   // grant must not be left looking like the answer.
   if (storeFault) {
     parts.push(
-      'This deny reports the deny STORE itself, not this session\'s standing, and no bypass grant clears ' +
-        'one — bound or unbound, it is consumed and the deny remains. Repair the store instead, from a host ' +
-        'shell: delete every open marker under `.adlc/handoffs/denies/` and both sentinels, ' +
-        '`.adlc/.deny-store` and the legacy `.adlc/handoffs/.deny-store`.',
+      'This deny reports the deny STORE itself, not this session\'s standing: a marker is unreadable, or the ' +
+        'store looks emptied. Only the unbound form above lifts it — a bound grant does not — and that grant ' +
+        'is still one-shot, so it buys a call, not a repaired store. The durable fix is to clear the state: ' +
+        'delete every open marker under `.adlc/handoffs/denies/` and both sentinels, `.adlc/.deny-store` and ' +
+        'the legacy `.adlc/handoffs/.deny-store`.',
     );
   }
   parts.push(

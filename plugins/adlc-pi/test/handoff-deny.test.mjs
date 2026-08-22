@@ -1446,9 +1446,10 @@ test('a store-integrity deny does not advertise a grant that cannot clear it', (
     assert.equal(verdict.decision, 'deny');
     assert.ok(hasStoreIntegrityFault(verdict.reasons), `expected a store fault: ${verdict.reasons}`);
     assert.ok(
-      verdict.reason.includes('no bypass grant clears'),
-      'the text must say the grant cannot lift this',
+      verdict.reason.includes('Only the unbound form above lifts it'),
+      'the text must name the grant form that actually works',
     );
+    assert.match(verdict.reason, /--unbound-reason/, 'and offer it');
     assert.ok(
       verdict.reason.includes('.adlc/handoffs/.deny-store'),
       'and must point at the store repair that does',
@@ -1522,9 +1523,11 @@ test('a suffixed invalid-record reason is still a store fault', () => {
   assert.equal(hasStoreIntegrityFault(['D3:unauthorized_open:sess-A']), false);
 });
 
-test('a store-integrity deny offers no grant command at all', () => {
-  // Printing a runnable grant above the "no grant clears this" prose still
-  // invites a keyed operator to spend their one shot on it.
+test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', () => {
+  // The shared gate lifts D0/D3:invalid_record only for an unbound operator
+  // override — measured: unbound clears a clean store fault, bound does not.
+  // Withholding the command here (an earlier mistake of mine) sent keyed
+  // operators to delete files when a non-destructive repair existed.
   const diagnostic = handoffRecoveryDiagnostic({
     sessionId: 'sess-a',
     root: '/srv/repo',
@@ -1532,9 +1535,11 @@ test('a store-integrity deny offers no grant command at all', () => {
     hasManifestKey: true,
     cliPath: '/opt/adlc/bin/handoff.mjs',
   });
-  assert.doesNotMatch(diagnostic, /bypass --session/, 'no runnable grant for a store fault');
-  assert.match(diagnostic, /no bypass grant clears/);
-  assert.match(diagnostic, /\.adlc\/handoffs\/\.deny-store/, 'points at the repair that works');
+  assert.match(diagnostic, /bypass --session sess-a --unbound-reason/, 'a store fault needs the unbound form');
+  assert.match(diagnostic, /unbound because the deny reports the store itself/, 'and says why');
+  assert.doesNotMatch(diagnostic, /belongs to another session/, 'not the foreign-record reason');
+  assert.match(diagnostic, /Only the unbound form above lifts it/);
+  assert.match(diagnostic, /\.adlc\/handoffs\/\.deny-store/, 'and names the durable repair');
 
   // A normal deny still gets its command.
   assert.match(
@@ -1547,4 +1552,45 @@ test('a store-integrity deny offers no grant command at all', () => {
     }),
     /bypass --session sess-a --unbound-reason/,
   );
+});
+
+test('the command printed for a store fault actually lifts it', () => {
+  // The end-to-end check that would have caught my own false claim: run the
+  // exact string the store-fault message prints and see whether the next call
+  // is allowed. It is — the unbound form lifts D0 where a bound one does not.
+  const key = 'k'.repeat(64);
+  const root = makeRepo();
+  try {
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    // Emptied denies/ with the sentinel still present == store unavailable.
+    rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
+
+    const ask = () =>
+      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root, manifestKey: key });
+    const denied = ask();
+    assert.deepEqual(denied.reasons, ['D0:deny_store_unavailable'], 'a clean store fault, nothing else');
+
+    const command = denied.reason
+      .split('\n')
+      .find((line) => line.includes('bypass --session'))
+      ?.replace(/^[^:]*: /, '');
+    assert.ok(command, `no command printed for a store fault:\n${denied.reason}`);
+
+    const run = spawnSync(command, {
+      shell: true,
+      cwd: realpathSync(tmpdir()),
+      env: { ...process.env, ADLC_MANIFEST_KEY: key },
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
+    assert.equal(ask().decision, 'allow', 'the printed command must lift the store fault');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

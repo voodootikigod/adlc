@@ -139,9 +139,10 @@ another session the command carries `--unbound-reason`: a band-generated marker 
 record of its own session, so against a foreign one it is consumed and the caller stays
 denied. The grant is one-shot either way, and it is spent by the next *gated tool call* rather than the
 next mutation — pi gates every tool but a read, so a `bash pwd` consumes it. The message says so
-rather than presenting it as a clear. A store-integrity deny (`D0:deny_store_unavailable` and
-friends) gets no grant offered at all: measured, neither grant form clears one, so the message
-points at the store repair instead. `resume` / `continue` are
+rather than presenting it as a clear. A store-integrity deny (`D0:deny_store_unavailable`,
+`D3:invalid_record:<label>`) also takes the unbound form: measured, unbound lifts it and bound
+does not, so the message offers the grant that works and names the durable store repair beside
+it. `resume` / `continue` are
 the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
