@@ -452,6 +452,42 @@ test('deleting the ticket store mid-session cannot disarm the deny-set', async (
   }
 });
 
+test('deleting the store on the VERY FIRST call still cannot disarm the deny-set', async () => {
+  // "Delete it before the latch arms" is the obvious move against a lazily
+  // armed latch. It fails because the hook runs BEFORE the tool it gates, so
+  // the store is still present when containment reads it and the latch arms on
+  // the very call requesting the deletion. That ordering is not self-evident
+  // from the code, so it is pinned here.
+  //
+  // The deletion uses a STRUCTURED tool deliberately. Probed: `rm
+  // .adlc/tickets.json` is already refused as path_protected_shell:.adlc, but
+  // structured writes/deletes naming .adlc/tickets.json (path, target and
+  // filePath shapes alike) are all ALLOWED — the structured route is the one
+  // that can actually remove the containment signal.
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await hooks['tool.execute.before'](
+      { tool: 'custom_deleter', sessionID: 'evader-0', callID: 'c0' },
+      { args: { path: '.adlc/tickets.json' } },
+    );
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    assert.equal(existsSync(join(dir, '.adlc', 'tickets.json')), false, 'store really is gone');
+    await pumpDepth(hooks, 'evader-0', HANDOFF_DEPTH);
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'evader-0', callID: 'c1' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      /ADLC context-handoff/,
+      'the latch armed on the deleting call itself',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the latch only ever arms on a real store, so a contaminated dir stays inert', () => {
   const dir = plainDir();
   try {
