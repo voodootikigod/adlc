@@ -1463,3 +1463,84 @@ test('hasStoreIntegrityFault names store faults and nothing else', () => {
   }
   assert.equal(hasStoreIntegrityFault(undefined), false);
 });
+
+test('a relative custom-tool target is reported against the session cwd', () => {
+  // Containment resolves the REPO root, but a tool's relative path is relative
+  // to the SESSION's cwd. Conflating the two misreports which file was touched
+  // — `a.txt` from <repo>/src is `src/a.txt`, not `a.txt`. No bypass rides on
+  // it (every spelling of a protected path denies either way, asserted below),
+  // but the deny-set is told the wrong filename.
+  const root = makeRepo();
+  try {
+    const sub = join(root, 'src');
+    mkdirSync(sub, { recursive: true });
+
+    const seen = [];
+    checkHandoff({
+      toolName: 'some_custom_tool',
+      input: { target: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: 5 },
+      root: sub,
+      evaluate: (o) => {
+        seen.push(...o.editRelPaths);
+        return { deny: false, reasons: [] };
+      },
+    });
+    assert.deepEqual(seen, ['src/a.txt'], 'relative to the session, expressed against the repo');
+
+    // And the protected store is denied however it is spelled from there.
+    for (const target of [join('..', '.adlc', '.deny-store'), join(root, '.adlc', '.deny-store')]) {
+      const verdict = checkHandoff({
+        toolName: 'some_custom_tool',
+        input: { target },
+        sessionId: 'sess-1',
+        usage: { percent: 5 },
+        root: sub,
+      });
+      assert.equal(verdict.decision, 'deny', `must deny ${target}`);
+      assert.match(verdict.reason, /path_protected/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a suffixed invalid-record reason is still a store fault', () => {
+  // The shared gate emits `D3:invalid_record:<label>`, never the bare code —
+  // an exact-string classifier silently missed every real one, exactly as
+  // `D3:unauthorized_open:<id>` would have.
+  assert.equal(hasStoreIntegrityFault(['D3:invalid_record:sess-A.json']), true);
+  assert.equal(hasStoreIntegrityFault(['D3:invalid_record:?']), true);
+  assert.equal(hasStoreIntegrityFault(['D3:invalid_record']), true);
+  // And the neighbouring D3 must not be swept in with it: an unauthorized open
+  // record IS clearable by an unbound grant, so it must keep offering one.
+  assert.equal(hasStoreIntegrityFault(['D3:unauthorized_open:sess-A']), false);
+});
+
+test('a store-integrity deny offers no grant command at all', () => {
+  // Printing a runnable grant above the "no grant clears this" prose still
+  // invites a keyed operator to spend their one shot on it.
+  const diagnostic = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: '/srv/repo',
+    reasons: ['D0:deny_store_unavailable'],
+    hasManifestKey: true,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  assert.doesNotMatch(diagnostic, /bypass --session/, 'no runnable grant for a store fault');
+  assert.match(diagnostic, /no bypass grant clears/);
+  assert.match(diagnostic, /\.adlc\/handoffs\/\.deny-store/, 'points at the repair that works');
+
+  // A normal deny still gets its command.
+  assert.match(
+    handoffRecoveryDiagnostic({
+      sessionId: 'sess-a',
+      root: '/srv/repo',
+      reasons: ['D3:unauthorized_open:sess-b'],
+      hasManifestKey: true,
+      cliPath: '/opt/adlc/bin/handoff.mjs',
+    }),
+    /bypass --session sess-a --unbound-reason/,
+  );
+});

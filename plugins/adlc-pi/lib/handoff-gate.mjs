@@ -419,15 +419,32 @@ const UNBOUND_REASON = 'pi-handoff-operator-recovery';
  * instruction this gate was rewritten to stop giving, so the diagnostic says
  * plainly that the store has to be repaired instead.
  */
-const STORE_INTEGRITY_REASONS = new Set([
+const STORE_INTEGRITY_CODES = new Set([
   'D0:deny_store_unavailable',
   'D0:invalid_deny_records',
   'D3:invalid_record',
 ]);
 
-/** @param {string[]|undefined} reasons */
+/**
+ * Does any reason describe the store rather than a session's standing?
+ *
+ * Matched on the CODE, not the whole string: the shared gate emits
+ * `D3:invalid_record:<label>` and never the bare form, so an exact-string set
+ * missed every real one — the same shape `D3:unauthorized_open:<id>` has. The
+ * neighbouring `D3:unauthorized_open` deliberately does NOT belong here: an
+ * unbound grant does clear one, so it must keep being offered.
+ *
+ * @param {string[]|undefined} reasons
+ * @returns {boolean}
+ */
 export function hasStoreIntegrityFault(reasons) {
-  return (reasons ?? []).some((reason) => STORE_INTEGRITY_REASONS.has(String(reason)));
+  return (reasons ?? []).some((reason) => {
+    const text = String(reason);
+    for (const code of STORE_INTEGRITY_CODES) {
+      if (text === code || text.startsWith(`${code}:`)) return true;
+    }
+    return false;
+  });
 }
 
 /** The `--unbound-reason` clause a foreign open record needs, or nothing. */
@@ -604,6 +621,10 @@ export function handoffRecoveryDiagnostic({
         'CLI cannot be named by path. Install it (npm install -g @adlc/cli), then drive it with its own bin: ' +
         'handoff bypass|repair|resume.',
     );
+  } else if (storeFault) {
+    // Deliberately no command: a runnable grant printed above the "no grant
+    // clears this" prose still invites a keyed operator to spend their one shot
+    // on it.
   } else {
     const interpreterPath = trustedRealpath(process.execPath);
     const scriptPath = trustedRealpath(cliPath);
@@ -712,7 +733,13 @@ export function checkHandoff({
   }
 
   const shell = isShellTool(toolName);
-  const targets = shell ? [] : editTargetsOf(input, repoRoot);
+  // Extraction uses the cwd pi supplied, because a tool's relative path is
+  // relative to the SESSION, not to the repo root the walk found. The
+  // repo-relative form below is then taken against `repoRoot`, so a target in
+  // `<repo>/src` is reported as `src/…` rather than `…`. No bypass rides on
+  // this — every spelling of a protected path is denied either way (measured)
+  // — but conflating the two roots misreports which file was touched.
+  const targets = shell ? [] : editTargetsOf(input, root);
   const safeSessionId = isSafeSessionId(sessionId) ? sessionId : null;
   const key = typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null;
 
@@ -721,7 +748,7 @@ export function checkHandoff({
     sessionId: safeSessionId,
     observed: observeHandoffSignals(usage),
     ticketId,
-    editRelPaths: targets.map((p) => toRepoRelative(p, repoRoot)),
+    editRelPaths: targets.map((p) => toRepoRelative(resolve(root, p), repoRoot)),
     isBash: shell,
     bashCommand: shell && typeof input?.command === 'string' ? input.command : '',
     host: 'pi',
