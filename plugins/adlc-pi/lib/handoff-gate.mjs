@@ -288,18 +288,27 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
   // An enclosing git+store ancestor distinguishes them: the first case has one,
   // the second does not (a home directory is not a checkout). So the boundary
   // is honoured only when nothing above it is a real ADLC repo.
-  const enclosingAdlcRepo = chain.some((link, i) => i > 0 && link.checkout && link.store);
+  // …and the test is per-directory: is there a real ADLC repo STRICTLY above
+  // this one? A boundary is climbed past only while one remains above it, so
+  // the walk stops at the OUTERMOST enclosing ADLC repo rather than sailing
+  // past it. Disabling the boundary outright instead let a stray parent
+  // `.adlc/tickets.json` outrank the repo itself (measured), which is the very
+  // shadowing the boundary exists to prevent.
+  const adlcRepoAbove = chain.map(() => false);
+  for (let i = chain.length - 2; i >= 0; i -= 1) {
+    adlcRepoAbove[i] = adlcRepoAbove[i + 1] || (chain[i + 1].checkout && chain[i + 1].store);
+  }
 
   let outermost = null;
   let checkoutRoot = null;
   let insideCheckout = true;
-  for (const link of chain) {
+  for (const [i, link] of chain.entries()) {
     if (link.remembered || (insideCheckout && link.store)) outermost = link.dir;
     // The boundary applies from the NEXT ancestor up, so a checkout root that
     // holds the store still counts as one.
     if (insideCheckout && link.checkout) {
       checkoutRoot = link.dir;
-      if (!enclosingAdlcRepo) insideCheckout = false;
+      if (!adlcRepoAbove[i]) insideCheckout = false;
     }
   }
   if (outermost !== null) return outermost;
@@ -783,9 +792,12 @@ export function handoffRecoveryDiagnostic({
   } else if (protectedPath) {
     parts.push(
       'This call was refused because it targets an ADLC artifact the deny-set protects, not because of ' +
-        'this session\'s standing. No grant authorizes that — a verified one is not even consumed by it — ' +
-        'so there is no command to run: target something outside `.adlc/` instead. Any handoff deny behind ' +
-        'it is reported separately once this call stops naming a protected path.',
+        'this session\'s standing, and no grant authorizes that — so there is no command to run here: ' +
+        'target something outside `.adlc/` instead. Do NOT retry it through the shell while holding a ' +
+        'grant: a SHELL call naming a protected path is still refused but SPENDS the grant anyway ' +
+        '(measured; a structured tool call does not), so you would lose your one shot to a call that ' +
+        'could never have been authorized. Any handoff deny behind this one is reported separately once ' +
+        'the call stops naming a protected path.',
     );
   } else if (typeof root !== 'string' || root === '') {
     // No repo, no command. `resolve('')` is process.cwd(), so a missing root

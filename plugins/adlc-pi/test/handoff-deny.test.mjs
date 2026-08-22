@@ -1673,6 +1673,11 @@ test('a protected-path deny offers no grant, because none lifts it', () => {
     assert.doesNotMatch(verdict.reason, /bypass --session/, 'no grant is offered');
     assert.match(verdict.reason, /targets an ADLC artifact the deny-set protects/);
     assert.match(verdict.reason, /target something outside/);
+    // Measured asymmetry, and the operator has to be warned about it: a SHELL
+    // call naming a protected path is refused but still spends a grant, while
+    // a structured tool call does not. The shared adapter claims the grant
+    // before its shell scan appends the reasons.
+    assert.match(verdict.reason, /SPENDS the grant anyway/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2238,5 +2243,72 @@ test('a forged checkout inside a real ADLC repo cannot release it, even cold', (
   } finally {
     rmSync(enclosing, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('the walk stops at the outermost enclosing ADLC repo, not above it', () => {
+  // A regression the tiebreaker introduced and this pins: disabling the
+  // boundary whenever ANY ancestor was a real ADLC repo let the walk sail past
+  // the outer repo too, so a stray parent `.adlc/tickets.json` outranked the
+  // repository itself — the exact shadowing the boundary exists to prevent.
+  // The test is per-directory: climb past a boundary only while another real
+  // ADLC repo remains ABOVE it.
+  const stray = makeBareDir();
+  try {
+    installAdlc(stray); // a stray store above everything, e.g. a home directory
+    const outer = makeCheckout(installAdlc(join(stray, 'outer')));
+    const inner = makeCheckout(installAdlc(join(outer, 'inner')));
+
+    assert.equal(resolveAdlcRoot(inner), realpathSync(outer), 'the outer repo, never the stray parent');
+    assert.equal(resolveAdlcRoot(outer), realpathSync(outer), 'and the outer repo answers for itself');
+    assert.notEqual(resolveAdlcRoot(inner), realpathSync(stray));
+  } finally {
+    rmSync(stray, { recursive: true, force: true });
+  }
+});
+
+test('a protected SHELL call spends the grant; a structured one does not', () => {
+  // The measured asymmetry the deny text now warns about. The shared adapter
+  // claims a verified grant while the reason list is still empty, and bash's
+  // protected-path reasons are appended after that — so a shell call naming
+  // `.adlc` is refused AND costs the operator their one shot, where the same
+  // target through a structured tool costs nothing. Pinning it here means the
+  // warning cannot quietly become false if that ordering is ever fixed
+  // upstream (the fix belongs in @adlc/context-handoff, not pi).
+  const key = 'k'.repeat(64);
+  const cli = resolveRecoveryCliPath();
+  for (const [label, toolName, makeInput, expected] of [
+    ['structured', 'some_custom_tool', (r) => ({ target: join(r, '.adlc', '.deny-store') }), 'allow'],
+    ['shell', 'bash', () => ({ command: 'rm .adlc/.deny-store' }), 'deny'],
+  ]) {
+    const root = makeRepo();
+    try {
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'src/a.mjs' },
+        sessionId: 'sess-A',
+        usage: { percent: HANDOFF_PCT },
+        root,
+      });
+      const ask = (tool, input) =>
+        checkHandoff({ toolName: tool, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
+
+      const granted = spawnSync(
+        process.execPath,
+        [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
+          '--dir', join(root, '.adlc'), '--write'],
+        { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
+      );
+      assert.equal(granted.status, 0, granted.stderr);
+
+      assert.equal(ask(toolName, makeInput(root)), 'deny', `${label}: a protected target is refused`);
+      assert.equal(
+        ask('edit', { path: 'src/a.mjs' }),
+        expected,
+        `${label}: grant ${expected === 'allow' ? 'must survive' : 'is spent (documented)'}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
