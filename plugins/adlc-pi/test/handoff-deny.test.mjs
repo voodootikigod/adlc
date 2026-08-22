@@ -1630,39 +1630,73 @@ test('hasProtectedPathFault covers both protected-path spellings', () => {
   assert.equal(hasProtectedPathFault(undefined), false);
 });
 
-test('a nested ADLC root keeps its own store, not an outer one, after its opt-in goes', () => {
-  // Nested ADLC layouts with no .git between them: deleting the inner `.adlc`
-  // must not silently move enforcement to the OUTER store. The monotonic
-  // memory has to win over a live ancestor when it is nearer, or removing the
-  // inner opt-in is a way to change which deny store you answer to.
-  const outer = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-outer-')));
+test('a nested .adlc cannot outrank the repo it sits in', () => {
+  // The escape this closes: an agent below the band creates <repo>/src/.adlc,
+  // and a nearest-match walk would then resolve every later call to that empty
+  // store, stepping around the outer repo's open deny. Measured before the
+  // fix: deny became allow.
+  //
+  // The trade is deliberate — a nested .adlc with no .git of its own no longer
+  // keeps a separate deny store, it answers to the enclosing repo. One
+  // checkout, one ADLC root. An independent nested checkout still keeps its
+  // own, because the walk stops at its .git (asserted separately below).
+  const root = makeRepo();
   try {
-    mkdirSync(join(outer, '.adlc'), { recursive: true });
-    const inner = join(outer, 'packages', 'inner');
-    mkdirSync(join(inner, '.adlc'), { recursive: true });
+    mkdirSync(join(root, '.git'), { recursive: true });
+    const sub = join(root, 'src');
+    mkdirSync(sub, { recursive: true });
 
     const adlcRoots = createAdlcRootState();
-    const seen = [];
-    const ask = (root) =>
+    const ask = (r) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-B',
+        root: r,
+        adlcRoots,
+      }).decision;
+
+    // Session A leaves an open, repo-wide deny.
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+      adlcRoots,
+    });
+    assert.equal(ask(sub), 'deny', 'the subdirectory answers to the repo');
+
+    mkdirSync(join(sub, '.adlc'), { recursive: true });
+    assert.equal(ask(sub), 'deny', 'and a .adlc created underneath does not change that');
+
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the repo root is still the root');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a .adlc above the checkout cannot capture it either', () => {
+  // The same boundary in the other direction: the walk stops at .git, so an
+  // ADLC directory in some parent of the checkout is not this repo's root.
+  const outer = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-above-')));
+  try {
+    mkdirSync(join(outer, '.adlc'), { recursive: true });
+    const checkout = join(outer, 'project');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+
+    assert.equal(resolveAdlcRoot(checkout), null, 'the checkout did not opt in');
+    assert.equal(
       checkHandoff({
         toolName: 'edit',
         input: { path: 'a.txt' },
         sessionId: 'sess-1',
         usage: { percent: HARD_PCT },
-        root,
-        adlcRoots,
-        evaluate: (o) => {
-          seen.push(o.root);
-          return { deny: true, reasons: ['D1:band'] };
-        },
-      }).decision;
-
-    assert.equal(ask(inner), 'deny');
-    assert.equal(seen.at(-1), inner, 'the inner repo answers to its own store');
-
-    rmSync(join(inner, '.adlc'), { recursive: true, force: true });
-    assert.equal(ask(inner), 'deny', 'still enforced');
-    assert.equal(seen.at(-1), inner, 'and still to its OWN store, not the outer one');
+        root: checkout,
+      }).decision,
+      'allow',
+    );
+    assert.equal(existsSync(join(checkout, '.adlc')), false);
   } finally {
     rmSync(outer, { recursive: true, force: true });
   }

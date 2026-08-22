@@ -241,16 +241,26 @@ export function resolveAdlcRoot(root) {
 }
 
 /**
- * The one ancestor walk both root lookups use.
+ * The one ancestor walk every root lookup uses: the OUTERMOST match within this
+ * checkout, or null.
  *
- * Factored deliberately rather than written twice: the live lookup and the
- * remembered-root lookup had drifted, the remembered one walking past a `.git`
- * boundary the live one honoured, so a checkout vendored inside an ADLC repo
- * was captured by it — and its comment claimed the two matched. One walk, one
- * boundary rule, nothing left to disagree about.
+ * Outermost, not nearest, and that is a security property rather than a
+ * preference. One checkout has one ADLC root. Taking the nearest match let an
+ * agent below the band `mkdir src/.adlc` and have every later call resolve to
+ * that empty store, walking away from the outer repo's open deny — measured,
+ * deny became allow. Walking to the outermost `.adlc` inside the checkout
+ * closes it: a directory the agent can create underneath can never outrank the
+ * repo's own root.
  *
- * `isRoot` is checked BEFORE the boundary so an ADLC repo (which has both
- * `.adlc` and `.git`) is found rather than treated as its own boundary.
+ * The trade is deliberate. A nested ADLC directory with no `.git` of its own no
+ * longer keeps a separate deny store; it answers to the enclosing repo. A
+ * genuinely independent nested checkout still does keep its own, because the
+ * walk stops at its `.git` — which is also what stops a `.adlc` in some parent
+ * directory from capturing this repo.
+ *
+ * Factored rather than written twice: the live lookup and the remembered-root
+ * lookup had already drifted once, the remembered one walking past a boundary
+ * the live one honoured. One walk, one boundary rule.
  *
  * @param {unknown} root
  * @param {(dir: string) => boolean} isRoot
@@ -259,13 +269,17 @@ export function resolveAdlcRoot(root) {
 function walkToAdlcRoot(root, isRoot) {
   if (typeof root !== 'string' || root === '') return null;
   let current = trustedRealpath(resolve(root));
+  let outermost = null;
   for (;;) {
-    if (isRoot(current)) return current;
-    if (existsSync(join(current, '.git'))) return null;
+    if (isRoot(current)) outermost = current;
+    // The checkout boundary: never look above the git root, so a `.adlc` in
+    // some parent directory cannot capture this repo.
+    if (existsSync(join(current, '.git'))) break;
     const parent = dirname(current);
-    if (parent === current) return null;
+    if (parent === current) break;
     current = parent;
   }
+  return outermost;
 }
 
 /**
@@ -773,12 +787,10 @@ export function checkHandoff({
   // deny store, the protected-path checks and the printed recovery command all
   // have to name the same repo, or a session in a subdirectory reads a
   // different store than the one denying it.
-  // ONE walk that accepts either a live `.adlc` or a remembered root, so the
-  // NEAREST wins. Resolving live-first and only then falling back would let a
-  // nested ADLC repo lose its own store: delete the inner `.adlc` and the live
-  // walk sails past it to an outer one, quietly moving the session onto a
-  // different deny store. Nearest-wins keeps the inner root answering for
-  // itself.
+  // ONE walk accepting either a live `.adlc` or a remembered root, taking the
+  // OUTERMOST match in this checkout — so a remembered root survives its
+  // `.adlc` being deleted, and a `.adlc` the agent creates in a subdirectory
+  // cannot outrank the repo it is trying to escape.
   const repoRoot = walkToAdlcRoot(
     root,
     (dir) => existsSync(join(dir, '.adlc')) || (adlcRoots ? adlcRoots.has(dir) : false),

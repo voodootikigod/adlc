@@ -117,12 +117,19 @@ denied mutations in whatever directory the agent happened to open, created `.adl
 there, and (the deny store being durable) followed that directory into every later session.
 
 The test is whether the cwd is *inside* an ADLC repo, not whether it *is* one. The gate
-resolves the nearest ancestor holding `.adlc` and uses that root for containment, the deny
-store, protected-path checks and the printed recovery command alike — one answer, so a
+resolves the **outermost** `.adlc` in the checkout and uses that root for containment, the
+deny store, protected-path checks and the printed recovery command alike — one answer, so a
 session in `<repo>/src` cannot read a different store than the one denying it. An
 exact-match check let exactly that happen, and wrote band markers into a stray
-`<repo>/src/.adlc` no operator would think to clear. The walk stops at a `.git` boundary so
-a checkout vendored inside an ADLC repo remains its own project.
+`<repo>/src/.adlc` no operator would think to clear.
+
+Outermost rather than nearest is a security choice: with nearest-match, an agent below the
+band could `mkdir src/.adlc` and have every later call resolve to that empty store, stepping
+around the repo's open deny (measured — deny became allow). The cost is that a nested `.adlc`
+with no `.git` of its own no longer keeps a separate deny store; it answers to the enclosing
+repo. One checkout, one ADLC root. A genuinely independent nested checkout still keeps its
+own, because the walk stops at its `.git` — the same boundary that stops a `.adlc` above the
+checkout from capturing it.
 
 Containment must not become an off switch, so the opt-in is **monotonic** per process: a
 root seen with `.adlc` stays enforced even if the directory is later removed. A custom tool

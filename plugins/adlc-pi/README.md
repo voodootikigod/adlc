@@ -90,10 +90,12 @@ arms a repo that did not opt in, and reaching the same checkout by a symlink or 
 un-normalized path does not forget the opt-in.
 
 The question is whether your cwd is *inside* an ADLC repo, not whether it *is* one: the gate
-walks up from the directory pi gives it to find the nearest ancestor holding `.adlc`, and
-enforces against that repo. A session started in `<repo>/src` is therefore covered by the
-same deny store as one started at the root. The walk stops at a `.git` boundary, so a
-checkout vendored inside an ADLC repo stays its own project.
+walks up from the directory pi gives it and enforces against the **outermost** `.adlc` in
+your checkout. A session started in `<repo>/src` is therefore covered by the same deny store
+as one started at the root, and a `.adlc` created in a subdirectory cannot become a second,
+empty store to step around an open deny. The walk stops at a `.git` boundary in both
+directions: a checkout vendored inside an ADLC repo stays its own project, and a `.adlc`
+above your checkout never captures it.
 
 Two things about the deny are deliberate and worth knowing before you meet one:
 
