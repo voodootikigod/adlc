@@ -229,6 +229,25 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
     tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
     'resume must be the first move: repair rewrites an existing binding',
   );
+  // Shell-safe is NOT enough: the CLI's requireSafeSession also rejects path
+  // separators, '..' and basename mismatches, and a leading '-' is parsed as a
+  // flag. Printing any of those yields a command that cannot run — guidance
+  // shaped like help that prolongs the deny.
+  for (const cliInvalid of ['../session', 'a/b', 'x/..', '-rf', '..']) {
+    assert.match(
+      recoveryTail(cliInvalid, ['D1:depth_band']),
+      /No safe session id/,
+      `the CLI rejects ${JSON.stringify(cliInvalid)}, so it must not be printed`,
+    );
+    // Assert the PROPERTY, not the prose: the rejected id must never appear as
+    // a command argument, however the message chooses to explain itself.
+    const ownerTail = recoveryTail('blocked', [`D3:unauthorized_open:${cliInvalid}`]);
+    assert.doesNotMatch(
+      ownerTail,
+      new RegExp(`--(deny-)?session ${cliInvalid.replace(/[.\\/*+?^${}()|[\]]/g, '\\$&')}`),
+      `an owner of ${JSON.stringify(cliInvalid)} must not be printed as a command argument`,
+    );
+  }
   for (const unsafe of ['s1; rm -rf /', 'a b', 's1\n', '', null, undefined, 42]) {
     assert.match(
       recoveryTail(unsafe),

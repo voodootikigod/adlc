@@ -12,7 +12,7 @@
 // exposes no transcript file, so depth is the only signal available, and the
 // OR-join ignores the kinds that are missing rather than reading them as zero.
 
-import { relative, isAbsolute, resolve } from 'node:path';
+import { basename, relative, isAbsolute, resolve } from 'node:path';
 
 import {
   evaluateHandoffPreToolUse,
@@ -100,6 +100,31 @@ export function toRepoRelative(path, root) {
 const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 
 /**
+ * Whether an id can be printed INTO a recovery command — which takes more than
+ * being shell-safe. Two independent contracts, both mandatory:
+ *
+ * 1. RECOVERY_VALUE_RE, so it cannot smuggle a second command into a string an
+ *    operator is invited to paste.
+ * 2. The CLI's own session-id rules, a trusted-local twin of isSafeSessionId
+ *    (packages/context-handoff/lib/deny-marker.mjs): no `/`, no `\`, no `..`,
+ *    and basename(id) === id. The grammar alone accepts `../session` and `a/b`,
+ *    which `requireSafeSession` REJECTS — so the tail would have printed a
+ *    command that cannot run, prolonging the deny while looking like guidance.
+ *
+ * Also rejects a leading `-`: such a value is parsed as a FLAG, not an
+ * argument, so `--deny-session -rf` breaks the command it appears in.
+ *
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+function isPrintableSessionId(id) {
+  if (typeof id !== 'string' || !RECOVERY_VALUE_RE.test(id)) return false;
+  if (id.startsWith('-')) return false;
+  if (id.includes('/') || id.includes('\\') || id.includes('..')) return false;
+  return basename(id) === id;
+}
+
+/**
  * Paths are quoted, not grammar-checked, so their safe set is wider than a
  * session id's — but a literal apostrophe or a newline still cannot be
  * represented in a single-quoted shell word. Codex's twin, same reasoning.
@@ -181,9 +206,9 @@ export function denyTargetsOf(reasons) {
  */
 export function recoveryTail(sessionId, reasons = [], root = undefined) {
   const { owners, invalid } = denyTargetsOf(reasons);
-  const safeOwners = owners.filter((o) => RECOVERY_VALUE_RE.test(o));
+  const safeOwners = owners.filter((o) => isPrintableSessionId(o));
   const droppedOwners = owners.length - safeOwners.length;
-  const said = typeof sessionId === 'string' && RECOVERY_VALUE_RE.test(sessionId) ? sessionId : null;
+  const said = isPrintableSessionId(sessionId) ? sessionId : null;
 
   // An invalid record is not repairable by id, and an owner we cannot quote is
   // not printable at all. Either way the operator has to open the store.
