@@ -181,10 +181,15 @@ export function recoveryTail(sessionId, reasons = []) {
  * The reverse order — which this tail shipped at first — is destructive: a
  * marker that already carries a ticket and content hash is resumable as-is, and
  * `repair` REWRITES that binding, so prescribing it unconditionally can discard
- * a valid handoff checkpoint before the successor ever consumes it. `resume`
- * fails safe on an unbound marker and says so ("ticket_id is null — cannot
- * resume (use host repair)"), which makes the conditional order both correct
- * states without this diagnostic having to read the record off disk.
+ * a valid handoff checkpoint before the successor ever consumes it.
+ *
+ * The fallback condition names BOTH ways resume declines, because the CLI has
+ * two distinct refusals (bin/handoff.mjs) — "final content_hash is null" and
+ * "ticket_id is null" — and repair is the answer to each. Naming only the
+ * unbound one stranded the ordinary case: every marker this plugin writes
+ * currently carries a null content hash, so the missing-hash refusal is the one
+ * an operator actually hits, and a condition that did not mention it read as
+ * "not my situation".
  *
  * @param {string} target the session that OWNS the marker, already validated
  * @returns {string}
@@ -193,10 +198,10 @@ function recoverySteps(target) {
   return (
     'Recover from a HOST shell (the agent shell is inside the deny-set): ' +
     `\`adlc handoff resume --session <new-session> --deny-session ${target} --write\`. ` +
-    'ONLY if that reports the deny is unbound, bind it first with ' +
-    `\`adlc handoff repair --session ${target} --ticket <id> --content-hash <hash> --write\` and ` +
-    're-run resume — repair rewrites an existing binding, so it must never be the first move against ' +
-    'a marker that already has one.'
+    'If resume declines because the deny is unbound — a null ticket_id OR a null final ' +
+    `content_hash, both of which it names — bind it with \`adlc handoff repair --session ${target} ` +
+    '--ticket <id> --content-hash <hash> --write\` and re-run resume. Repair rewrites an existing ' +
+    'binding, so it must never be the first move against a marker that already has one.'
   );
 }
 

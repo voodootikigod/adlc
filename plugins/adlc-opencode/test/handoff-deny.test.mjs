@@ -37,12 +37,21 @@ function plainDir() {
   return mkdtempSync(join(tmpdir(), 'oc-plain-'));
 }
 
-/** Pin an active ticket for the duration of one test, ambient env or not. */
-function withActiveTicket(id, fn) {
+/**
+ * Pin an active ticket for the duration of one test, ambient env or not.
+ *
+ * `await fn()` inside the try, not `return fn()`: the latter completes the try
+ * block as soon as the callback returns its promise, so the restore runs while
+ * the async body is still suspended. These tests would still pass — the plugin
+ * snapshots process.env synchronously at construction — but only by accident of
+ * that timing, and the helper would be quietly wrong for any callback that
+ * reads the environment after an await.
+ */
+async function withActiveTicket(id, fn) {
   const prior = process.env.ADLC_TICKET;
   process.env.ADLC_TICKET = id;
   try {
-    return fn();
+    return await fn();
   } finally {
     if (prior === undefined) delete process.env.ADLC_TICKET;
     else process.env.ADLC_TICKET = prior;
@@ -247,6 +256,11 @@ test('a foreign deny recovers the OWNING session, not the blocked one', () => {
     tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
     'resume must be the first move: repair rewrites an existing binding',
   );
+  // Every marker this plugin writes carries a null content hash today, so the
+  // missing-hash refusal is the one an operator actually hits. A fallback
+  // condition naming only the unbound ticket_id reads as "not my situation".
+  assert.match(tail, /content_hash/, 'the fallback must name the refusal operators actually see');
+  assert.match(tail, /ticket_id/);
   assert.doesNotMatch(tail, /--session blocked-b /, 'must not address the marker as the blocked session');
   assert.doesNotMatch(tail, /--deny-session blocked-b/);
 });
