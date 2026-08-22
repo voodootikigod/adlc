@@ -565,7 +565,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     return { ok: false, operational: true, phase, errors: [`${phase} requires --ticket`] };
   }
 
-  const { entries, skipped } = readOwnManifestChain(dir, { cwd });
+  const { entries, skipped, identityError } = readOwnManifestChain(dir, { cwd });
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
   const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
@@ -734,6 +734,13 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   );
   const missing = requirements.filter((type) => !present.has(type));
 
+  // `identityError` alongside `skipped`, not folded into it: own-chain appends
+  // the refusal to BOTH channels (see its contract), and a caller with only the
+  // list cannot tell "we cannot establish which evidence is ours" from "this
+  // line would not parse". bin/adlc.mjs read the whole list as the latter and
+  // told every detached-HEAD checkout its ledger was malformed. `ok` is
+  // deliberately unchanged — a non-empty `skipped` already fails the gate
+  // closed, and this is a diagnostics channel, not a second gate.
   return {
     ok: missing.length === 0 && skipped.length === 0,
     operational: false,
@@ -744,5 +751,6 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     present: Array.from(present).sort(),
     missing,
     skipped,
+    identityError,
   };
 }

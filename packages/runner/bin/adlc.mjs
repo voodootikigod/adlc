@@ -85,8 +85,26 @@ if (values.json) {
   // not the "evidence missing entirely" shape below.
   console.error(`adlc ${phase}: evidence rejected:\n  ${result.errors.join('\n  ')}`);
 } else {
+  // `skipped` carries two unlike failures in one channel: the own-chain
+  // IDENTITY refusal ("we cannot establish which evidence is ours", which also
+  // arrives as `identityError`) and manifest lines that would not parse.
+  // Counting them together told every detached-HEAD checkout — the state
+  // actions/checkout leaves a PR build in — that its ledger was malformed,
+  // while the one sentence naming the actual cause sat unread in the channel.
+  // Printed before the missing list because it is why that list is empty.
+  if (result.identityError) console.error(`adlc ${phase}: ${result.identityError}`);
   console.error(`adlc ${phase}: missing evidence: ${result.missing.join(', ') || 'none'}`);
-  if (result.skipped.length > 0) console.error(`malformed manifest lines: ${result.skipped.length}`);
+  const malformed = result.skipped.filter((entry) => entry.error !== result.identityError);
+  if (malformed.length > 0) {
+    console.error(`malformed manifest lines: ${malformed.length}`);
+    for (const entry of malformed) {
+      // A rejected segment FILE is skipped with `line: null` — there is no
+      // position to name, so the locator degrades to the segment rather than
+      // printing an empty one.
+      const at = [entry.segment, entry.line].filter((part) => part !== null && part !== undefined).join(':');
+      console.error(`  ${at}: ${entry.error}`);
+    }
+  }
 }
 
 process.exit(result.ok ? 0 : 2);

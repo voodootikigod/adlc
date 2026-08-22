@@ -1185,6 +1185,37 @@ describe('assertPhase', () => {
 });
 
 describe('adlc cli', () => {
+  // The counterpart to the own-chain identity refusal (own-chain-chronology
+  // test): a line that genuinely will not parse must still be called
+  // malformed, and must name itself — a bare count tells the operator a number
+  // and leaves them to find the line.
+  it('reports a genuinely malformed manifest line as malformed, and names it', () => {
+    const dir = tmpAdlc();
+    const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
+    appendFileSync(join(dir, 'manifest.jsonl'), '{bad\n');
+    const result = spawnSync(process.execPath, [
+      bin, 'run', 'p5', '--dir', dir, '--ticket', 'T1', '--revision', 'fixture-revision',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 2, `expected exit 2, got ${result.status}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /malformed manifest lines: 1/);
+    assert.match(result.stderr, /root:1:/);
+  });
+
+  // The other real skip shape: a segment FILE the store rejects outright
+  // (`{segment, line: null}`). It has no position to name, and naming one
+  // anyway ("segment.jsonl:: reason") sends the reader looking for a line.
+  it('locates a skip that has no line number by segment alone', () => {
+    const dir = tmpAdlc();
+    const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
+    mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+    writeFileSync(join(dir, 'manifest.d', 'not-a-segment.jsonl'), '{"seq":1}\n');
+    const result = spawnSync(process.execPath, [
+      bin, 'run', 'p5', '--dir', dir, '--ticket', 'T1', '--revision', 'fixture-revision',
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 2, `expected exit 2, got ${result.status}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /not-a-segment\.jsonl: bad filename grammar/);
+  });
+
   it('exits 1 when scoped evidence omits ticket', () => {
     const dir = tmpAdlc();
     const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;

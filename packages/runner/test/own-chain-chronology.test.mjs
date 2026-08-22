@@ -15,9 +15,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertPhase } from '../lib/assertions.mjs';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
 import { sha256 } from '@adlc/core';
@@ -30,6 +31,7 @@ const ULID_LAST = 'Z'.repeat(26);
 const OURS = `ours-${ULID_FIRST}.jsonl`;
 const THEIRS_LATER = `theirs-${ULID_LAST}.jsonl`;
 const REVISION = 'fixture-revision';
+const BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'adlc.mjs');
 
 function repo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-runner-own-chain-'));
@@ -255,6 +257,58 @@ describe('a detached checkout refuses rather than validating root-only evidence'
       const result = assertPhase('p5', { dir, ticket: 'T1', revision: REVISION, cwd: root });
       assert.equal(result.ok, false);
       assert.equal(result.skipped.some((s) => /detached HEAD has no branch identity/.test(s.error)), true);
+      // Distinctly, not only inside `skipped`: a caller reading that channel
+      // alone cannot tell an identity refusal from an unparseable line, and
+      // bin/adlc.mjs proved it by rendering the refusal as one.
+      assert.match(result.identityError, /detached HEAD has no branch identity/);
+    } finally { clean(root); }
+  });
+
+  // Driven through the REAL CLI, because the defect was in the rendering, not
+  // the gate: `skipped` carried the refusal, bin/adlc.mjs counted that channel
+  // as "malformed manifest lines: 1", and the operator of a detached CI
+  // checkout was told the ledger was corrupt while the actionable sentence sat
+  // unread in skipped[0].error.
+  it('the CLI prints WHY it refused and does not call the refusal a malformed manifest line', () => {
+    const { root, dir } = repo();
+    try {
+      writeTicketDefinition(dir);
+      const ours = p5Entries(dir);
+      writeRoot(dir, ours);
+      writeSegment(dir, THEIRS_LATER, { branch: OTHER_BRANCH, anchorSeq: ours.length, entries: [{ gate: 'noop' }] });
+      detach(root);
+
+      const r = spawnSync(
+        process.execPath,
+        [BIN, 'run', 'p5', '--dir', dir, '--ticket', 'T1', '--revision', REVISION],
+        { cwd: root, encoding: 'utf8' }
+      );
+      // Diagnostics only: the gate still fails closed on the identity refusal.
+      assert.equal(r.status, 2, `expected exit 2 (gate fails closed), got ${r.status}\n${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, /detached HEAD has no branch identity/);
+      assert.doesNotMatch(r.stderr, /malformed manifest lines/);
+    } finally { clean(root); }
+  });
+
+  // The refusal is appended to `skipped` AND returned as `identityError` (see
+  // own-chain.mjs's contract), so a renderer that prints both channels says the
+  // same sentence twice.
+  it('says the refusal once, not once per channel', () => {
+    const { root, dir } = repo();
+    try {
+      writeTicketDefinition(dir);
+      const ours = p5Entries(dir);
+      writeRoot(dir, ours);
+      writeSegment(dir, THEIRS_LATER, { branch: OTHER_BRANCH, anchorSeq: ours.length, entries: [{ gate: 'noop' }] });
+      detach(root);
+
+      const r = spawnSync(
+        process.execPath,
+        [BIN, 'run', 'p5', '--dir', dir, '--ticket', 'T1', '--revision', REVISION],
+        { cwd: root, encoding: 'utf8' }
+      );
+      const said = r.stderr.split('\n').filter((line) => line.includes('detached HEAD has no branch identity'));
+      assert.equal(said.length, 1, `refusal printed ${said.length} times:\n${r.stderr}`);
     } finally { clean(root); }
   });
 
