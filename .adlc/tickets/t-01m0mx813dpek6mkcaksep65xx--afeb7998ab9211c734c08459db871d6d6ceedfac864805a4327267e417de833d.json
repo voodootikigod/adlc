@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\nFollow-up from the 1.11.0 release-audit pi/OpenCode blockers (containment shipped separately). Today every documented mutating recovery verb calls requireKeyOrExit (bin/handoff.mjs: write :137, resume :260, continue :548, supervise :718, bypass :850, repair :957) — except runUnlock (:1012), whose key posture is unverified. An operator without ADLC_MANIFEST_KEY whose repo carries an open deny has no documented escape beyond manual file deletion. Also, the recovery-exception command matcher (packages/context-handoff/lib/recovery-exception.mjs) — which lets a denied agent's shell at least REACH the recovery CLI under band — is wired only into claude-code and codex; pi and opencode have no matchRecoveryCommand reference at all.\n\n## What to build\n\n1. Verify runUnlock's key posture; make \"unlock\" a deliberately keyless, audited, deny-clearing verb (or build an equivalent), with the security analysis for why keyless unlock does not reopen the D1-D3 bypass surface (unlock clears the deny but does NOT mint resume authority — that stays key-gated).\n2. Port the recovery-exception matcher into pi's tool_call path and opencode's tool.execute.before path so the recovery CLI is reachable under band.\n3. Update every adapter's deny text to name the keyless verb.\n\n## Acceptance criteria\n\n1. A keyless operator can clear an open deny with one documented command and no manifest key, and the act is recorded. verify: `node --test packages/context-handoff/test/*.test.mjs` exits 0 with a keyless-unlock test present.\n2. pi and opencode allow the recovery CLI invocation under band. verify: `node --test plugins/adlc-pi/test/*.test.mjs plugins/adlc-opencode/test/*.test.mjs` exits 0 with recovery-exception tests present.\n3. Resume/consume authority remains key-gated (negative test). verify: existing resume-auth tests stay green in the same runs.",
+  "category": "feature",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M0MX813DPEK6MKCAKSEP65XX",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/**",
+    "plugins/adlc-pi/**",
+    "plugins/adlc-opencode/**"
+  ],
+  "title": "context-handoff: key-free operator recovery — verify/ship keyless unlock, port the recovery exception to pi and opencode"
+}

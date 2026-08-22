@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\nFound while verifying the 1.11.0 release-audit OpenCode blocker: the shared adapter core writes EVERY host's deny marker with contentHash:null (packages/context-handoff/lib/adapter.mjs:474-479 passes contentHash: null into ensureDenyMarker). The audit attributed the unresumable marker to the OpenCode adapter, but ticket_id was the only host-specific part — the null content_hash is universal, and bin/handoff.mjs's resume path refuses a null content_hash (\"final content_hash is null — cannot resume\"). Every band-deny marker minted by the in-band adapter path is therefore resume-refusing by construction, on all hosts, and only host repair can rebind it. Bind the real final/capture content hash (S2 capture store, lib/capture.mjs / lib/final.mjs) at marker-mint time when one exists, so the deny the adapter writes is the deny the recovery CLI can actually consume.\n\n## Acceptance criteria\n\n1. When a capture/final exists for the session, the minted deny marker carries its content hash (non-null). verify: `node --test packages/context-handoff/test/*.test.mjs` exits 0 with a marker-binding test present.\n2. When none exists, the marker stays null-hash and the deny text says host repair is required (honest degrade). verify: same suite pins the degrade wording; exits 0.\n3. Adapter drift tests across the four harness copies stay green. verify: `node --test packages/context-handoff/adapter-test/*.test.mjs` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0MX81C9YHCE2TTP8J3NTY84",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/lib/adapter.mjs",
+    "packages/context-handoff/test/**",
+    "packages/context-handoff/adapter-test/**"
+  ],
+  "title": "context-handoff adapter: ensureDenyMarker hardcodes contentHash:null for every host — bind the real final content hash"
+}

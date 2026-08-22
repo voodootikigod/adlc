@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\nFollow-up from the 1.11.0 release-audit runner blocker. After the diagnostics fix (identityError surfaced), the underlying policy question remains: `adlc run` is documented as \"one stable command for CI\", yet own-chain's identity refusal makes p0-p7 unconditionally exit 2 in the detached-HEAD state every actions/checkout PR build sits in. Options to adjudicate: (a) an explicit `--branch`/env hint (rejected so far: a self-reported identity is what refuse() exists to deny — see lineage.mjs's deliberate env narrowing at :406-410); (b) derive the chain from CI-provided refs (GITHUB_HEAD_REF/GITHUB_REF) treated as host-privileged input; (c) document that forest-mode repos must run `adlc run` on a named branch (checkout with ref); (d) a read-only forest fallback for assertion-only calls. Decide with a premortem; do not implement ahead of the decision.\n\n## Acceptance criteria\n\n1. A written decision (ADR or spec section) exists naming the chosen option and the rejected ones with reasons. verify: `grep -riq 'detached' docs/specs/ docs/adr/ 2>/dev/null` exits 0 after the doc lands.\n2. The decision was premortemed. verify: `adlc premortem <the decision doc> --prompt-only` runs and its findings are addressed in the doc (reviewer confirms; the doc cites the premortem).",
+  "category": "spec",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0MX80HT6JENG84YE72Z7YB3",
+  "rails": [],
+  "scope": [
+    "docs/specs/**",
+    "packages/gate-manifest/**",
+    "packages/runner/**"
+  ],
+  "title": "gate-manifest own-chain: decide the CI-safe chain identity for detached-HEAD checkouts (design ticket)"
+}

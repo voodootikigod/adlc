@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\nFollow-up from the 1.11.0 release-audit OpenCode blocker (containment shipped separately). The calibration spec blesses tracker.depth() as OpenCode's band signal, but the shipped tracker is a monotonic per-session counter that (1) never resets on compaction — markCompacted (lib/build-gate.mjs:34-36) touches a separate Set and leaves depth latched at/above HANDOFF_DEPTH=30 forever — and (2) counts read-only calls (index.mjs:178 records before any read-only filter; test/handoff-deny.test.mjs pumpDepth deliberately pumps with 'read'). A session that compacted back to a small live context is still classified as terminally deep. Fix the signal semantics: epoch/reset depth on compaction, and decide (with the calibration spec, .adlc/specs/context-rot-threshold-calibration.md:451) whether read-only calls belong in the count; amend the pinned tests accordingly.\n\n## Acceptance criteria\n\n1. After markCompacted, the depth the handoff gate sees restarts below WARN_DEPTH. verify: `node --test plugins/adlc-opencode/test/*.test.mjs` exits 0 with a new compaction-epoch test present.\n2. The read-only-counting decision is recorded in the calibration spec's per-adapter table and the code matches it. verify: `grep -q 'OpenCode' .adlc/specs/context-rot-threshold-calibration.md` exits 0 and the cited row states the decided semantics.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0MX80TJZJQ2JNZPMTPAJWYA",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/lib/build-gate.mjs",
+    "plugins/adlc-opencode/index.mjs",
+    "plugins/adlc-opencode/test/**"
+  ],
+  "title": "opencode: depth counter epochs — markCompacted must reset the handoff depth signal, and read-only calls should not count"
+}
