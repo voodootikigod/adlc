@@ -106,9 +106,13 @@ directions: a checkout vendored inside an ADLC repo stays its own project, and a
 your checkout — a stray `~/.adlc/tickets.json`, say — never silently enforces over every
 repo beneath it.
 
-That boundary has to look like a real checkout (`.git/HEAD`, or a `.git` file holding a
-`gitdir:` pointer), and the repo you started in is remembered at session start, so a `.git`
-created mid-session cannot opt the session out of an enforcing repo.
+The boundary is honoured only when nothing above it is a real ADLC repo — a git checkout
+that also holds a ticket store. Inside one, a `.git` in a subdirectory never releases
+enforcement, however convincing it looks, because nothing on disk distinguishes a forged
+checkout from a real one. Above an unrelated project, the boundary still does its job: a
+stray `~/.adlc/tickets.json` cannot enforce over every repo beneath it, since a home
+directory is not a checkout. The cost is that a vendored checkout inside an ADLC repo
+answers to that repo's deny store rather than keeping its own.
 
 Two things about the deny are deliberate and worth knowing before you meet one:
 

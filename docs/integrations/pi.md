@@ -136,9 +136,17 @@ Outermost rather than nearest is a security choice: with nearest-match, an agent
 band could `mkdir src/.adlc` and have every later call resolve to that empty store, stepping
 around the repo's open deny (measured — deny became allow). The cost is that a nested `.adlc`
 with no `.git` of its own no longer keeps a separate deny store; it answers to the enclosing
-repo. One checkout, one ADLC root. A genuinely independent nested checkout still keeps its
-own, because the walk stops at its `.git` — the same boundary that stops a `.adlc` above the
-checkout from capturing it.
+repo. One checkout, one ADLC root.
+
+The `.git` boundary that survives this is honoured only when nothing above it is a real ADLC
+repo — a git checkout that also holds a ticket store. That condition is the tiebreaker
+between two requirements no filesystem test can satisfy at once: a `.git` an agent can create
+must not release an enclosing repo, while a store above an unrelated checkout (a stray
+`~/.adlc/tickets.json`) must not capture it. An enclosing git+store ancestor separates the
+cases, since a home directory is not a checkout. So inside a real ADLC repo the boundary
+never releases enforcement — cold, with no remembered root, however convincing the forgery —
+and the cost is that a vendored checkout there answers to the enclosing store rather than
+keeping its own.
 
 Containment must not become an off switch, so the opt-in is **monotonic** per process: a
 root seen with `.adlc` stays enforced even if the directory is later removed. A custom tool

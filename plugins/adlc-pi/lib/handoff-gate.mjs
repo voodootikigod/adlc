@@ -258,27 +258,49 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
   // deliberately excluded here and handled once, below.
   const perDirectoryOverride = storeOverride && !isAbsolute(storeOverride) ? storeOverride : null;
 
-  let outermost = null;
-  let checkoutRoot = null;
-  let insideCheckout = true;
+  // Walk once, unbounded, recording what each ancestor is. The boundary
+  // decision needs to see the WHOLE chain before it can be made — see below.
+  /** @type {{ dir: string, remembered: boolean, store: boolean, checkout: boolean }[]} */
+  const chain = [];
   let dir = start;
   for (;;) {
-    // A remembered root ignores the checkout boundary. It is the one signal an
-    // agent cannot manufacture mid-session, and it is what stops a hand-made
-    // `<cwd>/.git` from releasing a repo already under enforcement — measured:
-    // before this, `mkdir src/.git` turned deny into allow.
-    const remembered = adlcRoots ? adlcRoots.has(dir) : false;
-    const localStore = insideCheckout && ticketStoreExists(dir, perDirectoryOverride);
-    if (remembered || localStore) outermost = dir;
-    // The boundary applies from the NEXT ancestor up, so a checkout root that
-    // holds the store still counts as one.
-    if (insideCheckout && looksLikeCheckout(dir)) {
-      checkoutRoot = dir;
-      insideCheckout = false;
-    }
+    chain.push({
+      dir,
+      remembered: adlcRoots ? adlcRoots.has(dir) : false,
+      store: ticketStoreExists(dir, perDirectoryOverride),
+      checkout: looksLikeCheckout(dir),
+    });
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
+  }
+
+  // Is some ancestor a real ADLC repo — a git checkout that also holds a ticket
+  // store — containing this path?
+  //
+  // This is the tiebreaker between two requirements that otherwise conflict,
+  // given that no filesystem test can tell a forged checkout from a real one:
+  //  - a `.git` an agent can create must not release an enclosing ADLC repo
+  //    (a bare `mkdir src/.git` + HEAD turned deny into allow, even cold, once
+  //    the process restarted and the session_start memory was gone);
+  //  - a ticket store sitting above an unrelated checkout — a stray
+  //    `~/.adlc/tickets.json` — must not enforce over every repo beneath it.
+  // An enclosing git+store ancestor distinguishes them: the first case has one,
+  // the second does not (a home directory is not a checkout). So the boundary
+  // is honoured only when nothing above it is a real ADLC repo.
+  const enclosingAdlcRepo = chain.some((link, i) => i > 0 && link.checkout && link.store);
+
+  let outermost = null;
+  let checkoutRoot = null;
+  let insideCheckout = true;
+  for (const link of chain) {
+    if (link.remembered || (insideCheckout && link.store)) outermost = link.dir;
+    // The boundary applies from the NEXT ancestor up, so a checkout root that
+    // holds the store still counts as one.
+    if (insideCheckout && link.checkout) {
+      checkoutRoot = link.dir;
+      if (!enclosingAdlcRepo) insideCheckout = false;
+    }
   }
   if (outermost !== null) return outermost;
 
@@ -302,20 +324,13 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
  * real checkout has `.git/HEAD`, or a `.git` FILE holding a `gitdir:` pointer
  * (worktrees and submodules).
  *
- * ACCEPTED LIMIT, and why this check stops here rather than growing: no
- * filesystem test separates a real vendored checkout from one an agent
- * constructed, because an agent that can write files can write whatever git
- * would have written. Escalating the shape check raises the effort and never
- * decides. The boundary is defended instead by something an agent cannot
- * construct from inside a session — the opt-in memory, armed at `session_start`
- * from the session's own cwd (extension.mjs) and outranking any boundary found
- * afterwards. What remains is a forgery planted BEFORE the session, which is
- * also precisely what a legitimate vendored checkout looks like.
- *
- * The boundary is kept rather than dropped because it solves a real problem in
- * the other direction: without it a store anywhere above the checkout — a stray
- * `~/.adlc/tickets.json`, say — would silently enforce over every repo beneath
- * it.
+ * This shape check is a filter, not the defence. No filesystem test separates a
+ * real vendored checkout from one an agent constructed — an agent that can
+ * write files can write whatever git would have written — so escalating it
+ * raises the effort and never decides. What actually decides is `resolveAdlcRoot`,
+ * which honours a boundary only when nothing above it is a real ADLC repo; see
+ * the `enclosingAdlcRepo` comment there for why that resolves the conflict this
+ * check cannot.
  *
  * @param {string} dir
  * @returns {boolean}

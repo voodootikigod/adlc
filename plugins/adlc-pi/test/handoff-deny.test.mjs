@@ -1918,17 +1918,18 @@ test('a bare mkdir .git is not a checkout, even on the first gated call', () => 
     assert.equal(verdict.decision, 'deny', 'an empty .git does not release the enclosing repo');
     assert.equal(resolveAdlcRoot(sub), realpathSync(root));
 
-    // Give it a HEAD and it reads as a genuine vendored checkout again.
+    // And giving it a convincing HEAD does not either, because the enclosing
+    // repo is a real ADLC repo (git + ticket store). That is the tiebreaker: no
+    // filesystem test separates a forged checkout from a real one, so inside a
+    // real ADLC repo the boundary does not release enforcement at all — cold,
+    // with no remembered root to fall back on.
     writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-    assert.equal(resolveAdlcRoot(sub), null, 'a real checkout keeps its own identity');
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'still the enclosing repo');
 
-    // A `.git` FILE is the worktree/submodule spelling and also counts — but
-    // only when it holds what git writes. Accepting any regular file made
-    // `echo x > src/.git` the same escape, one character shorter.
     const linked = join(root, 'linked');
     mkdirSync(linked, { recursive: true });
     writeFileSync(join(linked, '.git'), 'gitdir: ../.git/worktrees/linked\n');
-    assert.equal(resolveAdlcRoot(linked), null);
+    assert.equal(resolveAdlcRoot(linked), realpathSync(root), 'a worktree pointer does not either');
 
     const forged = join(root, 'forged');
     mkdirSync(forged, { recursive: true });
@@ -1984,8 +1985,10 @@ test('the enclosing repo is remembered from session start, before any tool call'
     mkdirSync(join(sub, '.git'), { recursive: true });
     writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
 
-    // Without arming, the forgery wins — that is the window being closed.
-    assert.equal(resolveAdlcRoot(sub), null, 'the forgery reads as its own checkout');
+    // The forgery does not win even unarmed: inside a real ADLC repo (git +
+    // ticket store) the boundary never releases enforcement. Arming at
+    // session_start is the second, independent guarantee this test pins.
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the enclosing repo still answers');
 
     // session_start resolves from the SESSION's root and records it, so the
     // same call from the subdirectory is outranked by the remembered repo.
@@ -2022,8 +2025,10 @@ test('session_start itself arms the memory, through the real extension', async (
     writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
     writeFileSync(join(sub, 'a.txt'), 'x\n');
 
-    // Standing alone, the forgery reads as its own checkout.
-    assert.equal(resolveAdlcRoot(sub), null);
+    // The forgery no longer stands alone even cold — inside a real ADLC repo
+    // the boundary never releases enforcement. session_start arming is the
+    // belt to that braces, and is what this test pins.
+    assert.equal(resolveAdlcRoot(sub), realpathSync(root));
 
     // A session opens in the repo — session_start must record it.
     await boot(root, { percent: 5, sessionId: 'sess-A' });
@@ -2189,5 +2194,48 @@ test('a symlinked .adlc shows its real target in the removal command', () => {
     assert.ok(text.includes(`--dir ${join(repo, '.adlc')} `), 'the CLI argument stays .adlc-suffixed');
   } finally {
     rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('a forged checkout inside a real ADLC repo cannot release it, even cold', () => {
+  // The tiebreaker between two requirements that otherwise conflict, given
+  // that no filesystem test separates a forged checkout from a real one:
+  //   - a `.git` an agent can create must not release an enclosing ADLC repo;
+  //   - a store above an unrelated checkout (a stray ~/.adlc/tickets.json)
+  //     must not enforce over every repo beneath it.
+  // An enclosing git+store ancestor tells them apart — a home directory is not
+  // a checkout. Both halves are asserted here so neither can be traded away.
+  const enclosing = makeCheckout(makeRepo()); // a real project: git AND a store
+  const home = makeBareDir();
+  try {
+    const forged = join(enclosing, 'src');
+    mkdirSync(forged, { recursive: true });
+    makeCheckout(forged);
+
+    // Cold — no memory at all, the case session_start arming cannot help with.
+    assert.equal(resolveAdlcRoot(forged), realpathSync(enclosing), 'no escape from a real ADLC repo');
+    assert.equal(
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root: forged,
+        adlcRoots: createAdlcRootState(),
+      }).decision,
+      'deny',
+    );
+
+    // The other half: a ticket store above a directory that is NOT a checkout
+    // must not swallow an unrelated repo beneath it.
+    installAdlc(home);
+    const unrelated = join(home, 'someones-project');
+    mkdirSync(unrelated, { recursive: true });
+    makeCheckout(unrelated);
+    assert.equal(resolveAdlcRoot(unrelated), null, 'a stray store above must not capture a checkout');
+    assert.equal(existsSync(join(unrelated, '.adlc')), false);
+  } finally {
+    rmSync(enclosing, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
