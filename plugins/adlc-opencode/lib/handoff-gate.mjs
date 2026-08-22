@@ -99,10 +99,31 @@ export function toRepoRelative(path, root) {
 const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 
 /**
- * The recovery tail every deny message carries: which session is denied, and
- * the literal host-side commands that clear it. A deny with neither is what the
- * release audit found — an agent told to "resume via host" with no session id
- * and no command, from inside a shell that is itself denied.
+ * The session that OWNS the open deny, which is not always the session being
+ * denied. A D3 deny means someone else's marker is open — `mutation-gate.mjs`
+ * reports it as `D3:unauthorized_open:<owner>` — and every recovery command
+ * addresses the marker, so it must name the owner. Pointing `repair` at the
+ * blocked session instead finds no marker and refuses.
+ *
+ * @param {string[]} reasons
+ * @returns {string|null}
+ */
+export function denyOwnerOf(reasons) {
+  const prefix = 'D3:unauthorized_open:';
+  for (const reason of Array.isArray(reasons) ? reasons : []) {
+    if (typeof reason === 'string' && reason.startsWith(prefix)) {
+      return reason.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
+/**
+ * The recovery tail every deny message carries: which session is denied, who
+ * owns the deny, and the literal host-side commands that clear it. A deny with
+ * none of that is what the release audit found — an agent told to "resume via
+ * host" with no session id and no command, from inside a shell that is itself
+ * denied.
  *
  * Built ENTIRELY from local code, deliberately: this is the codex hook's
  * round-5 reasoning (formatRecoveryCommand, adlc-handoff-gate.mjs) applied
@@ -110,22 +131,52 @@ const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
  * machinery is misbehaving, so the diagnostic must not be rendered by the
  * machinery it is describing.
  *
- * @param {unknown} sessionId
+ * The owner is held to the same value grammar as the session id, and for a
+ * stronger reason: the session id comes from the host, but the owner is read
+ * off a deny record on disk, so it is the less trusted of the two.
+ *
+ * @param {unknown} sessionId the session being denied
+ * @param {string[]} [reasons] the gate's reason codes, source of the D3 owner
  * @returns {string}
  */
-export function recoveryTail(sessionId) {
+export function recoveryTail(sessionId, reasons = []) {
+  const owner = denyOwnerOf(reasons);
+  // A foreign deny whose owner cannot be safely quoted: name the marker
+  // directory instead of emitting a command built from an id we do not trust.
+  if (owner !== null && !RECOVERY_VALUE_RE.test(owner)) {
+    return (
+      'The open deny belongs to another session whose id cannot be printed as a safe, copy-pasteable ' +
+      'shell command. Read the owning id from .adlc/handoffs/denies/ on the host and run `adlc handoff ' +
+      'repair` against it. Read-only tools remain usable in the interim.'
+    );
+  }
   if (typeof sessionId !== 'string' || !RECOVERY_VALUE_RE.test(sessionId)) {
+    // With no usable session id there is still a recoverable marker whenever
+    // the deny is foreign, so the owner's command is worth printing alone.
+    if (owner !== null) {
+      return (
+        `The open deny belongs to session ${owner}; this session has no safe id of its own. Recover from ` +
+        `a HOST shell: \`adlc handoff repair --session ${owner} --ticket <id> --content-hash <hash> ` +
+        `--write\`, then \`adlc handoff resume --session <new-session> --deny-session ${owner} --write\`.`
+      );
+    }
     return (
       'No safe session id could be resolved for this session, so no session-specific recovery command ' +
       'can be printed. End this session and start a new one — the host mints a fresh session id, ' +
       'unaffected by this resolution failure. Read-only tools remain usable in the interim.'
     );
   }
+  // Self-deny (the depth band wrote this session's own marker) vs foreign deny.
+  const target = owner ?? sessionId;
+  const whose =
+    target === sessionId
+      ? `Denied session id: ${sessionId}.`
+      : `Denied session id: ${sessionId}; the open deny belongs to session ${target}.`;
   return (
-    `Denied session id: ${sessionId}. Recover from a HOST shell (the agent shell is inside the ` +
-    `deny-set): \`adlc handoff repair --session ${sessionId} --ticket <id> --content-hash <hash> ` +
-    `--write\` binds the open deny, then \`adlc handoff resume --session <new-session> ` +
-    `--deny-session ${sessionId} --write\` from the successor session.`
+    `${whose} Recover from a HOST shell (the agent shell is inside the deny-set): ` +
+    `\`adlc handoff repair --session ${target} --ticket <id> --content-hash <hash> --write\` binds the ` +
+    `open deny, then \`adlc handoff resume --session <new-session> --deny-session ${target} --write\` ` +
+    'from the successor session.'
   );
 }
 
@@ -241,7 +292,7 @@ export function checkHandoff({
     reason:
       `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
       '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      `cannot clear the deny-set.\n\n${recoveryTail(sessionId)}`,
+      `cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons)}`,
   };
 }
 

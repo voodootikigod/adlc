@@ -14,6 +14,7 @@ import { adlcRailsGuard } from '../index.mjs';
 import {
   checkHandoff,
   createStickyDenyState,
+  denyOwnerOf,
   handoffAppliesTo,
   isShellTool,
   recoveryTail,
@@ -202,11 +203,11 @@ test('the active ticket is threaded to the gate, and resolved only when it is ne
   }
 });
 
-test('the recovery tail names the session and the host command, and never quotes an unsafe id', () => {
+test('a self-deny recovery tail targets this session, exact command text', () => {
   // Asserted as the EXACT command text, placeholders included: what the operator
   // pastes into a host shell is the contract here, so `--ticket <id>` degrading
   // into `--ticket >=id>` is a real defect, not cosmetic drift.
-  const tail = recoveryTail('ses_abc-1');
+  const tail = recoveryTail('ses_abc-1', ['D1:depth_band']);
   assert.match(
     tail,
     /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash> --write`/,
@@ -222,6 +223,42 @@ test('the recovery tail names the session and the host command, and never quotes
       `must not build a command from ${JSON.stringify(unsafe)}`,
     );
   }
+});
+
+test('a foreign deny recovers the OWNING session, not the blocked one', () => {
+  // The common successor-session path: B is blocked because A's marker is open.
+  // Every recovery command addresses the MARKER, so naming B sends the operator
+  // to `repair --session B`, which finds no marker and refuses.
+  const tail = recoveryTail('blocked-b', ['D3:unauthorized_open:owner-a']);
+  assert.match(tail, /blocked-b/, 'the blocked session is still worth naming');
+  assert.match(
+    tail,
+    /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash> --write`/,
+  );
+  assert.match(
+    tail,
+    /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/,
+  );
+  assert.doesNotMatch(tail, /--session blocked-b /, 'must not address the marker as the blocked session');
+  assert.doesNotMatch(tail, /--deny-session blocked-b/);
+});
+
+test('the deny owner is parsed only from the D3 reason, and is held to the value grammar', () => {
+  assert.equal(denyOwnerOf(['D3:unauthorized_open:owner-a']), 'owner-a');
+  assert.equal(denyOwnerOf(['D1:depth_band', 'D3:unauthorized_open:o2']), 'o2');
+  for (const none of [[], ['D1:depth_band'], ['D2:denier_session'], null, undefined, 'D3:x']) {
+    assert.equal(denyOwnerOf(none), null, `must not invent an owner from ${JSON.stringify(none)}`);
+  }
+  // The owner is read off a deny record on DISK — less trusted than the host's
+  // own session id — so an unquotable one degrades instead of being pasted.
+  const tail = recoveryTail('blocked-b', ['D3:unauthorized_open:evil; rm -rf /']);
+  assert.match(tail, /cannot be printed as a safe, copy-pasteable shell command/);
+  assert.doesNotMatch(tail, /rm -rf/);
+});
+
+test('a foreign deny still prints the owner command when this session has no safe id', () => {
+  const tail = recoveryTail(undefined, ['D3:unauthorized_open:owner-a']);
+  assert.match(tail, /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash> --write`/);
 });
 
 // ---- the real hook ---------------------------------------------------------
@@ -655,7 +692,11 @@ test('a conflicting active-ticket signal binds the marker to nothing, never to a
   }
 });
 
-test('the deny message carries the session id and the host-side recovery command', async () => {
+test('the deny message carries the session id and a recovery command against the deny OWNER', async () => {
+  // This setup is a D3 foreign deny: denier-tail owns the open marker and
+  // tail-sess is merely blocked by it. The command must address denier-tail —
+  // an earlier version of this test asserted the tail-sess command and so
+  // pinned the bug it was supposed to catch.
   const dir = repo();
   try {
     seedForeignDeny(dir, 'denier-tail');
@@ -667,9 +708,32 @@ test('the deny message carries the session id and the host-side recovery command
           { args: { filePath: 'src/ok.mjs' } },
         ),
       (err) => {
-        assert.match(err.message, /tail-sess/, 'the operator must be told WHICH session to recover');
-        assert.match(err.message, /adlc handoff repair --session tail-sess/);
-        assert.match(err.message, /adlc handoff resume/);
+        assert.match(err.message, /tail-sess/, 'the operator must be told which session is blocked');
+        assert.match(err.message, /adlc handoff repair --session denier-tail/);
+        assert.match(err.message, /adlc handoff resume --session <new-session> --deny-session denier-tail/);
+        assert.doesNotMatch(err.message, /--session tail-sess /);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a depth-band self-deny recovers this session, through the real hook', async () => {
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await pumpDepth(hooks, 'self-sess', HANDOFF_DEPTH);
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'self-sess', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        assert.match(err.message, /adlc handoff repair --session self-sess/);
+        assert.match(err.message, /--deny-session self-sess/);
         return true;
       },
     );
