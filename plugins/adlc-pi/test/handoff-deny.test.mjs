@@ -2,7 +2,7 @@
 // Drives the REAL extension's tool_call handler through the same fake pi
 // harness extension.test.mjs uses, never a re-implementation of it.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
@@ -32,6 +32,8 @@ import {
   isShellTool,
   isStructuredMutator,
   editTargetOf,
+  formatRecoveryCommand,
+  handoffRecoveryDiagnostic,
   observeHandoffSignals,
   resolvePiSessionId,
 } from '../lib/handoff-gate.mjs';
@@ -53,6 +55,27 @@ function makeRepo({ current = 'T1' } = {}) {
   }
   return root;
 }
+
+/**
+ * A directory that never installed ADLC — no `.adlc/`, nothing else either.
+ * The gate is contained to ADLC repos, so this is the shape that must stay
+ * inert at every fill percent.
+ */
+function makeBareDir() {
+  return realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-bare-')));
+}
+
+/**
+ * A root for the pure-plumbing tests that inject `evaluate`: containment runs
+ * before evaluation, so those tests need a root that is actually an ADLC repo
+ * or their injected evaluator is never reached.
+ */
+const PLUMBING_ROOT = (() => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-plumbing-')));
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  return root;
+})();
+after(() => rmSync(PLUMBING_ROOT, { recursive: true, force: true }));
 
 function fakePi() {
   const handlers = {};
@@ -162,7 +185,7 @@ test('the pct signal is what the bands actually see', () => {
     input: { path: 'src/a.mjs' },
     sessionId: 'sess-a',
     usage: { percent: HANDOFF_PCT },
-    root: '/tmp',
+    root: PLUMBING_ROOT,
     evaluate,
   });
   assert.deepEqual(seen, [{ pct: HANDOFF_PCT }]);
@@ -175,7 +198,7 @@ test('an unsafe session id reaches the gate as null, not as a filename', () => {
     return { deny: false, reasons: [] };
   };
   for (const sessionId of [null, '', '../escape', 'has/slash']) {
-    checkHandoff({ toolName: 'edit', sessionId, root: '/tmp', evaluate });
+    checkHandoff({ toolName: 'edit', sessionId, root: PLUMBING_ROOT, evaluate });
   }
   assert.deepEqual(seen, [null, null, null, null]);
 });
@@ -429,9 +452,9 @@ test('the manifest key is threaded so a signed resume-auth can be verified', () 
     seen.push(o.manifestKey);
     return { deny: false, reasons: [], denyEverWritten: false };
   };
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', manifestKey: 'k'.repeat(64), evaluate });
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', manifestKey: '', evaluate });
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: PLUMBING_ROOT, manifestKey: 'k'.repeat(64), evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: PLUMBING_ROOT, manifestKey: '', evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: PLUMBING_ROOT, evaluate });
   assert.deepEqual(seen, ['k'.repeat(64), null, null]);
 });
 
@@ -442,9 +465,9 @@ test('a failed marker write stays sticky for the session across calls', () => {
     calls.push(o.denyEverWritten);
     return { deny: false, reasons: [], denyEverWritten: true };
   };
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', sticky, evaluate });
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: '/tmp', sticky, evaluate });
-  checkHandoff({ toolName: 'edit', sessionId: 'sess-b', root: '/tmp', sticky, evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: PLUMBING_ROOT, sticky, evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-a', root: PLUMBING_ROOT, sticky, evaluate });
+  checkHandoff({ toolName: 'edit', sessionId: 'sess-b', root: PLUMBING_ROOT, sticky, evaluate });
   assert.deepEqual(calls, [false, true, false]);
 });
 
@@ -526,4 +549,195 @@ test('a custom tool naming a protected directory is denied', async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---- containment: the gate only runs where ADLC was installed --------------
+
+test('a directory that never installed ADLC is inert at every fill percent', async () => {
+  // The release blocker this closes: the band alone denied write/edit/bash in
+  // any directory the agent happened to open, wrote .adlc state into it, and —
+  // the deny store being durable — followed that directory into every later
+  // session. Installing ADLC is the opt-in.
+  for (const percent of [WARN_PCT, HANDOFF_PCT, HARD_PCT, 95, 100]) {
+    const root = makeBareDir();
+    try {
+      const { pi, ctx } = await boot(root, { percent });
+      for (const [tool, input] of [
+        ['edit', { path: join(root, 'a.txt') }],
+        ['write', { path: join(root, 'a.txt') }],
+        ['bash', { command: 'rm -rf a.txt' }],
+        ['some_custom_tool', { target: join(root, 'a.txt') }],
+      ]) {
+        const verdict = await call(pi, ctx, tool, input);
+        assert.notEqual(verdict?.block, true, `${tool} must be allowed at ${percent}%`);
+      }
+      assert.equal(
+        existsSync(join(root, '.adlc')),
+        false,
+        `the gate must not create .adlc state at ${percent}% in a repo that never opted in`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('containment short-circuits before the band is ever evaluated', () => {
+  const root = makeBareDir();
+  try {
+    let evaluated = false;
+    const evaluate = () => {
+      evaluated = true;
+      return { deny: true, reasons: ['D1:band'] };
+    };
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-a',
+      usage: { percent: HARD_PCT },
+      root,
+      evaluate,
+    });
+    assert.deepEqual(verdict, { decision: 'allow' });
+    assert.equal(evaluated, false, 'evaluation must not run outside an ADLC repo');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('installing ADLC is what arms the gate', () => {
+  // The same directory, the same fill: the only difference is `.adlc/`.
+  const root = makeBareDir();
+  try {
+    const args = {
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-a',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    };
+    assert.equal(checkHandoff(args).decision, 'allow');
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    assert.equal(checkHandoff(args).decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---- deny text: honest, and keyless where no key is configured -------------
+
+test('the deny text drops the false fresh-session claim', async () => {
+  // The deny is recorded in the repo and reaches a NEW session (proved by the
+  // foreign-denier tests above), so "continue in a fresh session" was advice
+  // that could not work.
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'denier-text');
+    const { pi, ctx } = await boot(root, { percent: 5 });
+    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict.block, true);
+    assert.doesNotMatch(verdict.reason, /fresh session/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the deny text carries a session-bound recovery command', async () => {
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'denier-cmd');
+    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
+    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict.block, true);
+    assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
+    assert.match(verdict.reason, /bypass --session my-session --write/, 'copy-pasteable');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('with no manifest key the deny text names the keyless path', async () => {
+  // Every mutating verb but one is key-gated, and the exception (`unlock`)
+  // reclaims a session LOCK, not a deny — so with no key the only recovery is
+  // removing the deny state by hand.
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'denier-keyless');
+    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
+    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict.block, true);
+    assert.match(verdict.reason, /ADLC_MANIFEST_KEY/);
+    assert.match(verdict.reason, /\.adlc\/handoffs\/denies\//, 'names the marker directory');
+    assert.match(verdict.reason, /\.adlc\/\.deny-store/, 'names the sentinel');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the keyless block is omitted once a manifest key is configured', () => {
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'denier-keyed');
+    const keyed = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'my-session',
+      root,
+      manifestKey: 'k'.repeat(64),
+    });
+    assert.equal(keyed.decision, 'deny');
+    assert.match(keyed.reason, /bypass --session my-session --write/);
+    assert.doesNotMatch(keyed.reason, /\.deny-store/, 'a keyed operator has the CLI path');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the recovery command degrades rather than emitting a broken one', () => {
+  const safe = formatRecoveryCommand({
+    interpreterPath: '/usr/bin/node',
+    scriptPath: '/opt/adlc/bin/handoff.mjs',
+    sessionId: 'sess-a',
+  });
+  assert.equal(safe, '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --write');
+
+  // A path needing quoting is quoted; one that cannot be quoted at all degrades
+  // to prose rather than a command that would break out of its own quoting.
+  assert.match(
+    formatRecoveryCommand({
+      interpreterPath: '/usr/bin/node',
+      scriptPath: '/opt/my adlc/bin/handoff.mjs',
+      sessionId: 'sess-a',
+    }),
+    /'\/opt\/my adlc\/bin\/handoff\.mjs'/,
+  );
+  const unquotable = formatRecoveryCommand({
+    interpreterPath: '/usr/bin/node',
+    scriptPath: "/opt/it's/handoff.mjs",
+    sessionId: 'sess-a',
+  });
+  assert.doesNotMatch(unquotable, /^\/usr\/bin\/node /);
+  assert.match(unquotable, /cannot be printed as a safe/);
+
+  // No usable session id means no --session command exists for any grammar.
+  for (const sessionId of [null, '', '../escape', 'has space']) {
+    assert.doesNotMatch(
+      formatRecoveryCommand({
+        interpreterPath: '/usr/bin/node',
+        scriptPath: '/opt/adlc/bin/handoff.mjs',
+        sessionId,
+      }),
+      /bypass --session/,
+    );
+  }
+});
+
+test('the diagnostic still names the keyless path when the CLI cannot be resolved', () => {
+  const diagnostic = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    hasManifestKey: false,
+    cliPath: null,
+  });
+  assert.match(diagnostic, /could not be resolved/);
+  assert.match(diagnostic, /\.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
 });

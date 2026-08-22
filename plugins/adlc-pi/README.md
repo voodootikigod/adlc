@@ -48,6 +48,9 @@ than in a version range.
 - **Build-gate + flail backstops** — a degraded (context-rot) session on a high-risk
   ticket is denied its build until an audited override is recorded; repeated errors, scope
   churn, and oversized logs surface as advisories.
+- **Context-rot handoff gate** — a session whose context window has filled past the
+  handoff band loses its mutating tools until an operator hands the work off. See
+  [The handoff gate](#the-handoff-gate).
 - **Ticket doctrine injection** — the active ticket's scope, rails, and spec are appended
   to the system prompt each turn (the body fenced as untrusted).
 - **Native tools** — `adlc_prosecute` runs the deterministic P5 review loop in-session;
@@ -61,10 +64,52 @@ than in a version range.
 
 Enforcement is opt-in by activating a ticket — set `ADLC_TICKET` or write
 `.adlc/current-ticket.json` (tickets file overridable via `ADLC_TICKETS`). With no active
-ticket the extension is inert. Once a ticket resolves, the extension **fails closed**: an
-unreadable/unparseable tickets file or an unknown ticket id blocks all tool calls until
-fixed. The commit-time backstop is the harness-agnostic CI gate `scripts/rails-guard-ci.mjs`
-— make it a required check.
+ticket the extension is inert — with one deliberate exception, the handoff gate below.
+Once a ticket resolves, the extension **fails closed**: an unreadable/unparseable tickets
+file or an unknown ticket id blocks all tool calls until fixed. The commit-time backstop is
+the harness-agnostic CI gate `scripts/rails-guard-ci.mjs` — make it a required check.
+
+## The handoff gate
+
+pi reports a live context-fill percentage (`ctx.getContextUsage().percent`), and the
+handoff gate watches it against three bands: **50%** warns, **60%** is the handoff band,
+and **80%** is hard-degraded. Past the handoff band the session loses `write`, `edit`,
+`bash`, and any third-party tool that can mutate; reads (`read`, `grep`, `glob`, `list`,
+`ls`) stay open. A session that trips the band has a deny record written under
+`.adlc/handoffs/denies/`, and an open record denies **every** session in the repo until an
+operator clears it.
+
+**Installing ADLC in the repo is the opt-in.** The gate returns allow, and writes nothing,
+in any directory with no `.adlc/` — a repo that never adopted ADLC is never denied and
+never acquires ADLC state, at any fill percent.
+
+Two things about the deny are deliberate and worth knowing before you meet one:
+
+- **It is not ticket-scoped.** An open deny is a fact about session trust, so it holds even
+  with no active ticket, unlike every other gate here.
+- **It is not session-scoped either.** The record lives in the repo, so starting a fresh
+  session walks straight back into it. Only an operator clears it.
+
+### Recovery
+
+The deny message names the recovery command for the denied session, by absolute path:
+
+```bash
+<node> <…>/@adlc/context-handoff/bin/handoff.mjs bypass --session <session-id> --write
+```
+
+That verb — and `write`, `resume`, `continue`, `supervise`, `repair` — requires
+`ADLC_MANIFEST_KEY`. If you do not have the key, delete the deny state by hand from a host
+shell (the agent's own shell is inside the deny-set):
+
+```bash
+rm .adlc/handoffs/denies/<session-id>.json .adlc/.deny-store
+```
+
+Both paths matter. The `.deny-store` sentinel is what makes an emptied `denies/` directory
+read as tampered-with, so removing a marker on its own leaves the repo just as locked — and
+any marker left behind keeps denying. `adlc handoff unlock` needs no key, but it reclaims a
+session *lock* rather than a deny, so it will not clear this.
 
 ## Docs
 

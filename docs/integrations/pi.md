@@ -19,6 +19,7 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | Live deny proof in CI (`scripts/pi-live-deny.mjs`, scripted stub provider, real `pi --mode rpc`) | **Shipped** — required-job step on the Node 22 leg |
 | Build-gate + flail backstops (§Phase 2) | **Shipped** — degraded high-risk builds denied w/o audited override; flail advisories |
 | Evidence rail + custom-tool coverage (§Phase 2) | **Shipped** — `.adlc/`/`.omo/` stay writable; non-core file-write tools are rail-checked |
+| Context-rot handoff deny on live context fill (§3.5) | **Shipped** — pi's real `getContextUsage().percent` drives the bands; contained to repos that installed ADLC |
 | Command suite + scaffolder + footer widget (§Phase 3) | **Shipped** — `/ticket`, `/adlc-ticket`, `/adlc-init`, `/adlc-approve-spec`, `/adlc-accept`, `/adlc-rollback`, prompt templates, ticket/verdict widget |
 | Native `adlc_prosecute` tool: deterministic P5 loop (§4) | **Shipped** — in-session fan-out → verify → loop-until-dry over write-disabled children; live proof `scripts/pi-live-prosecute.mjs` (required, Node 22 leg) |
 | `TICKET-DONE` completion listener → prosecution nudge (§4) | **Shipped** |
@@ -91,6 +92,37 @@ The active ticket is displayed directly in the Pi footer bar using:
 ctx.ui.setStatus("adlc-ticket", `🎟️ Ticket: ${activeTicketId}`);
 ```
 This gives the human constant visibility into the active enforcement context.
+
+### 3.5 Context-Rot Handoff Deny (F3)
+
+pi is the first adapter with a **real** context-fill signal rather than a transcript-size
+proxy: `ctx.getContextUsage().percent` is a live 0–100 reading of the window. The handoff
+gate feeds it to the shared bands in `@adlc/context-handoff` — **50%** warns, **60%** is the
+handoff band, **80%** is hard-degraded. Past the handoff band the session loses `write`,
+`edit`, `bash`, and any third-party tool that can mutate; reads stay open, so the session
+can still explain itself while it is handed off.
+
+Because pi is an *enforcing* tier, this is a deny and not an advisory. Two scoping choices
+follow from what a deny actually means:
+
+- **Not ticket-scoped.** An open deny record is a fact about session trust, so it holds with
+  no active ticket — the one gate here that survives the no-ticket early return.
+- **Not session-scoped.** The record is written to `.adlc/handoffs/denies/` and read back
+  from disk, so it reaches later sessions in the repo too, and an open record denies every
+  session, not only the one that tripped the band.
+
+**Containment.** `.adlc/` is the opt-in. The gate returns allow — writing nothing — in a
+directory that never installed ADLC, at any fill percent. Without that guard the band alone
+denied mutations in whatever directory the agent happened to open, created `.adlc` state
+there, and (the deny store being durable) followed that directory into every later session.
+
+**Recovery.** The deny message carries the session id, the recovery command by absolute
+path (`… bin/handoff.mjs bypass --session <id> --write`), and — when no
+`ADLC_MANIFEST_KEY` is configured, which every mutating verb but one requires — the keyless
+path: delete the open markers under `.adlc/handoffs/denies/` **and** the `.adlc/.deny-store`
+sentinel beside them, from a host shell. The sentinel makes an emptied `denies/` directory
+read as tampered-with, so removing a marker alone changes nothing. `adlc handoff unlock` is
+the one keyless mutating verb, but it reclaims a session *lock* rather than a deny.
 
 ---
 

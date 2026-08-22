@@ -19,7 +19,9 @@
 // session, so it survives only as a fallback that still fails closed.
 
 import { randomUUID } from 'node:crypto';
-import { relative, isAbsolute, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { relative, isAbsolute, resolve, join, dirname } from 'node:path';
 
 import {
   evaluateHandoffPreToolUse,
@@ -188,6 +190,190 @@ export function observeHandoffSignals(usage) {
 }
 
 /**
+ * Did this repo opt in to ADLC? `.adlc/` is the marker every adapter reads, and
+ * the gate treats its absence as "not my repo".
+ * @param {unknown} root
+ * @returns {boolean}
+ */
+function isAdlcRoot(root) {
+  return typeof root === 'string' && root !== '' && existsSync(join(root, '.adlc'));
+}
+
+// ---- recovery diagnostic ---------------------------------------------------
+//
+// Trusted LOCAL twins of `@adlc/context-handoff`'s recovery formatters, kept
+// here for the same reason codex's hook keeps its own (adlc-handoff-gate.mjs's
+// `recoveryDiagnostic`): the deny message is what an operator is left holding,
+// and a message assembled out of package exports can fail in precisely the
+// broken-install case it exists to report. Nothing below imports the package.
+
+/** Path-token grammar `matchRecoveryCommand` accepts unquoted. */
+const RECOVERY_PATH_UNQUOTED_RE = /^[A-Za-z0-9_./=-]+$/;
+/** Flag-value grammar `matchRecoveryCommand` accepts, session ids included. */
+const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
+
+/**
+ * Can this session id appear as a `--session` value in a printed command?
+ *
+ * Both gates, not just the matcher's: `RECOVERY_VALUE_RE` admits `.` and `/`,
+ * so the grammar alone would happily print `--session ../escape` — a traversal
+ * id the deny store would refuse and no operator should be handed. Anything the
+ * store will not name a marker file after has no recovery command either.
+ */
+function isRecoverySessionId(sessionId) {
+  return typeof sessionId === 'string' && RECOVERY_VALUE_RE.test(sessionId) && isSafeSessionId(sessionId);
+}
+
+/**
+ * Quote a path the way the matcher requires, or null when it cannot be
+ * represented at all — a literal apostrophe would terminate the quote early and
+ * hand anyone who copy-pastes the diagnostic a second shell command.
+ * @param {string} p
+ * @returns {string|null}
+ */
+function quotePathForDisplay(p) {
+  if (typeof p !== 'string' || p.includes("'") || /[\r\n]/.test(p)) return null;
+  return RECOVERY_PATH_UNQUOTED_RE.test(p) ? p : `'${p}'`;
+}
+
+/** realpath where possible; a diagnostic must never be what throws. */
+function trustedRealpath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Prose for an install path no shell command can safely carry. The raw paths
+ * are safe here precisely because this string is never meant to be executed.
+ * @param {{ interpreterPath: string, scriptPath: string, sessionId: string }} opts
+ * @returns {string}
+ */
+export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
+  return (
+    'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
+    'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
+    `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
+    `subcommand "bypass --session ${sessionId} --write".`
+  );
+}
+
+/**
+ * The copy-pasteable host-side recovery command, or prose when one cannot be
+ * built. Degrades rather than ever emitting a broken or injectable command.
+ * @param {{ interpreterPath: string, scriptPath: string, sessionId: unknown }} opts
+ * @returns {string}
+ */
+export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }) {
+  if (!isRecoverySessionId(sessionId)) return formatNoSessionIdMessage();
+  const interpreterDisplay = quotePathForDisplay(interpreterPath);
+  const scriptDisplay = quotePathForDisplay(scriptPath);
+  if (interpreterDisplay === null || scriptDisplay === null) {
+    return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
+  }
+  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+}
+
+/**
+ * Deliberately NOT the package's wording, which tells the operator to start a
+ * fresh session. That is true of a band-only degrade and false of an open deny:
+ * the record lives in the repo and reaches the next session too.
+ * @returns {string}
+ */
+export function formatNoSessionIdMessage() {
+  return (
+    'No session id resolved here, so no session-bound recovery command can be printed. An open deny is ' +
+    'recorded in the repo and reaches a new session as well, so starting one does not clear it.'
+  );
+}
+
+/**
+ * What an operator with no `ADLC_MANIFEST_KEY` can actually do.
+ *
+ * Verified against the CLI rather than inferred: write, resume, continue,
+ * supervise, bypass and repair all call `requireKeyOrExit`
+ * (packages/context-handoff/bin/handoff.mjs). `unlock` is the one mutating verb
+ * that does not — and it reclaims a session LOCK, not a deny, so naming it as
+ * the keyless recovery would send the operator in a circle.
+ *
+ * Both paths, not just the marker: the `.deny-store` sentinel is what makes an
+ * emptied `denies/` directory read as tampered-with and keep denying, so
+ * deleting a marker alone leaves the repo exactly as locked.
+ * @returns {string}
+ */
+export function formatKeylessRecovery() {
+  return (
+    'No ADLC_MANIFEST_KEY is configured, so that command — and every other mutating handoff verb ' +
+    '(write/resume/continue/supervise/bypass/repair) — exits before it runs. `adlc handoff unlock` needs no ' +
+    'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery, from a ' +
+    "host shell outside the agent: delete this repo's open deny markers under `.adlc/handoffs/denies/` AND " +
+    'the `.adlc/.deny-store` sentinel beside them. Deleting a marker on its own is not enough — the sentinel ' +
+    'makes an emptied store fail closed, and any marker left behind keeps denying every session in the repo.'
+  );
+}
+
+/**
+ * `@adlc/context-handoff`'s own `bin/handoff.mjs`, by absolute path.
+ *
+ * A pure module-resolution lookup, never an `import()` of the package, so the
+ * diagnostic can name the CLI even where loading the package would fail.
+ * Returns null instead of throwing.
+ * @param {{ req?: { resolve: (spec: string) => string } }} [opts]
+ * @returns {string|null}
+ */
+export function resolveRecoveryCliPath({ req = createRequire(import.meta.url) } = {}) {
+  try {
+    return join(dirname(dirname(req.resolve('@adlc/context-handoff'))), 'bin', 'handoff.mjs');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The recovery tail every pi handoff deny carries: the command an operator can
+ * actually run, named by absolute path, plus the keyless path when there is no
+ * key to run it with.
+ *
+ * `hasManifestKey` is a boolean, not the key: the deny text is rendered into
+ * the session UI, and a diagnostic has no business holding the secret.
+ *
+ * @param {object} opts
+ * @param {unknown} opts.sessionId
+ * @param {boolean} [opts.hasManifestKey]
+ * @param {string|null} [opts.cliPath]
+ * @returns {string}
+ */
+export function handoffRecoveryDiagnostic({
+  sessionId,
+  hasManifestKey = false,
+  cliPath = resolveRecoveryCliPath(),
+}) {
+  const parts = [];
+  if (cliPath === null) {
+    parts.push(
+      'Host-side recovery: @adlc/context-handoff could not be resolved from this install, so its recovery ' +
+        'CLI cannot be named by path. Install it (npm install -g @adlc/cli), then drive it with its own bin: ' +
+        'handoff bypass|repair|resume.',
+    );
+  } else {
+    const interpreterPath = trustedRealpath(process.execPath);
+    const scriptPath = trustedRealpath(cliPath);
+    const command = formatRecoveryCommand({ interpreterPath, scriptPath, sessionId });
+    // Label it as a command only when it IS one — same representability test
+    // `formatRecoveryCommand` itself used, so the two can never disagree.
+    const runnable =
+      isRecoverySessionId(sessionId) &&
+      quotePathForDisplay(interpreterPath) !== null &&
+      quotePathForDisplay(scriptPath) !== null;
+    parts.push(runnable ? `Host-side recovery (needs ADLC_MANIFEST_KEY and a TTY): ${command}` : command);
+  }
+  if (!hasManifestKey) parts.push(formatKeylessRecovery());
+  return parts.join('\n\n');
+}
+
+/**
  * Evaluate the handoff deny-set for one pi tool call.
  *
  * @param {object} opts
@@ -219,9 +405,19 @@ export function checkHandoff({
 }) {
   if (!handoffAppliesTo(toolName)) return { decision: 'allow' };
 
+  // Containment. ADLC enforcement belongs to repos that installed ADLC: without
+  // this, the band alone denied write/edit/bash in ANY directory the agent
+  // happened to open, wrote `.adlc` state into it, and — the deny store being
+  // durable — followed that directory into every later session, with no
+  // key-free way out. `.adlc/` is the opt-in. Same guard codex's hook opens
+  // with, resolved against the SAME root the rest of this gate uses so a
+  // contained repo and an enforced one can never be decided from two places.
+  if (!isAdlcRoot(root)) return { decision: 'allow' };
+
   const shell = isShellTool(toolName);
   const targets = shell ? [] : editTargetsOf(input, root);
   const safeSessionId = isSafeSessionId(sessionId) ? sessionId : null;
+  const key = typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null;
 
   const result = evaluate({
     root,
@@ -232,7 +428,7 @@ export function checkHandoff({
     isBash: shell,
     bashCommand: shell && typeof input?.command === 'string' ? input.command : '',
     host: 'pi',
-    manifestKey: typeof manifestKey === 'string' && manifestKey !== '' ? manifestKey : null,
+    manifestKey: key,
     denyEverWritten: sticky ? sticky.has(safeSessionId) : false,
   });
   if (sticky) sticky.record(safeSessionId, result.denyEverWritten);
@@ -241,9 +437,13 @@ export function checkHandoff({
   return {
     decision: 'deny',
     reasons: result.reasons,
+    // No "continue in a fresh session": the deny record lives in the repo, so a
+    // new session walks straight back into it. Saying otherwise sent operators
+    // round a loop that could not terminate.
     reason:
-      `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
-      '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      'cannot clear the deny-set.',
+      `context-rot handoff deny (${result.reasons.join(', ')}). The deny is recorded in the repo and ` +
+      'scoped to session trust rather than to a ticket: it holds for new sessions here until an operator ' +
+      'clears it, and the agent shell cannot.\n\n' +
+      handoffRecoveryDiagnostic({ sessionId: safeSessionId, hasManifestKey: key !== null }),
   };
 }
