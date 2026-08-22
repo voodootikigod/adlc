@@ -1,0 +1,12 @@
+{
+  "body": "## Context\n\n1.11.0 arc follow-up (u5 items f + d2). pi's ticket and rail resolution keys on the RAW SESSION CWD while the handoff gate now resolves the enclosing repo root (outermost .adlc in the checkout): starting pi in repo/src gets handoff enforcement but no rails. Pre-existing divergence — #545 only ADDED enforcement there — but it is now visible and is the mirror image of the opencode round-5 finding (two subsystems, two definitions of \"the repo\").\n\nAlso from #545's final prosecution, two small pins: Q9 — the extension-level storeOverride wiring (ADLC_TICKET_STORE ?? ADLC_TICKETS at the tool_call site) is masked by session_start arming and unpinned (planting storeOverride:null passes); Q10 — the .git-file boundary check accepts leading whitespace/CRLF/BOM and no-space gitdir:/x, all rejected by real git's read_gitfile_gently; no capability gain (comment-level fix acceptable).\n\n## What to change\n\nResolve tickets/rails from the same repo root the handoff gate resolves (or document + test the intended divergence if one is chosen deliberately); pin Q9 with a test where a cwd NOT armed at session_start relies on the external store per-call; align or document Q10's grammar with a comment naming the divergence from git.\n\n## Acceptance criteria\n\n1. Starting pi in a subdirectory yields the SAME root for rails and handoff (or the divergence is documented + pinned as intended). verify: `node --test plugins/adlc-pi/test/*.test.mjs` exits 0 with the root-unification test present.\n2. Q9 pinned: extension-level storeOverride drives arming for a fresh cwd. verify: same suite.\n3. Q10 addressed (grammar aligned or divergence commented + pinned). verify: same suite; reviewer confirms the comment cites read_gitfile_gently.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0NNAGHDSQAVX1WTCBW81KQT",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-pi/**"
+  ],
+  "title": "pi: unify ticket/rail root resolution with handoff root resolution; pin storeOverride wiring and the gitdir grammar"
+}

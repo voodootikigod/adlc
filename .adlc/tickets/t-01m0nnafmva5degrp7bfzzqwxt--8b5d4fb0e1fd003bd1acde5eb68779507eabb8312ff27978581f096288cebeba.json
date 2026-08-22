@@ -1,0 +1,17 @@
+{
+  "body": "## Context\n\n1.11.0 arc follow-up — the documented HIGH residual shipped (disclosed in PR #540's body, acknowledged in #545's tests). The containment init latch is process-local: an agent that deletes the ticket store via a STRUCTURED tool call and then gets a plugin reload/process restart leaves the repo reading as never-ADLC while open deny markers sit unenforced. Root cause framing (u5, item h): the ticket store is not a protected handoff path — .adlc/.deny-store is protected, .adlc/tickets.json and .adlc/tickets/** are not.\n\nConstraints proven during the arc, all of which the fix must respect:\n1. Do NOT close this by trusting persisted deny markers or a disk-persisted latch as an init signal — a contaminated dir and a store-deleted repo are BYTE-IDENTICAL on disk; that \"fix\" re-bricks the contamination victims (#540 rounds 4-5 proof, warning written at the opencode guard).\n2. Do NOT blanket-deny structured writes to the store — that blocks legitimate ticket authoring through structured tools when ADLC_P4_ENFORCEMENT is off (the reason the plugin-local close was rejected in #540 round 12).\n\n## What to build\n\nGrow isProtectedHandoffPath (and the shell twin isHandoffMutatingShell's protected set where applicable) to cover the ticket store paths, with the deny SCOPED so legitimate authoring survives: protection must bind when a handoff deny-set is open or the band is active for the session (the states the residual exploits), not unconditionally. Design the exact scoping in the spec first (this is the shared adapter surface every host consumes — the same file fenced during the arc). Propagate to the four harness copies via the existing drift-pin suites; add the reload regression: arm, structurally delete the store, simulate process restart (fresh module state), assert the open marker still enforces.\n\n## Acceptance criteria\n\n1. Reload regression green on the shared package and at least opencode + pi adapters. verify: `node --test packages/context-handoff/test/*.test.mjs plugins/adlc-opencode/test/*.test.mjs plugins/adlc-pi/test/*.test.mjs` exits 0 with the reload test present.\n2. Legitimate ticket authoring with P4 enforcement off still works (negative test). verify: same suites pin an allowed authoring write.\n3. Contamination victims stay inert (the arc's regression shapes still green). verify: same command.\n4. pi's warning-about-the-asymmetry test (built to break when the grant-consumption ordering changes) is updated ONLY if this change touches that ordering; otherwise untouched. verify: `node --test plugins/adlc-pi/test/*.test.mjs` exits 0.",
+  "category": "feature",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M0NNAFMVA5DEGRP7BFZZQWXT",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/**",
+    "plugins/adlc-opencode/**",
+    "plugins/adlc-pi/**",
+    "plugins/adlc-codex/hooks/**",
+    "plugins/adlc-claude-code/hooks/**",
+    "plugins/adlc-copilot/hooks/**"
+  ],
+  "title": "context-handoff: protect the ticket store as a handoff path — close the reload-disarm residual on every adapter"
+}
