@@ -2093,3 +2093,49 @@ test('a deny with no resolved root prints no command rather than the wrong one',
     assert.match(text, /No repository root was resolved/);
   }
 });
+
+test('an unreadable filesystem identity keeps enforcing, on either side', () => {
+  // The fail-closed branch of the checkout-identity check had no test at all:
+  // planting `return false` there — turning "cannot tell" into "forget it" —
+  // passed the entire suite. Both halves matter, because both mean the same
+  // thing operationally: identity could not be established, and a memory that
+  // forgets under uncertainty is the off switch it exists to remove.
+  const adlcRoots = createAdlcRootState();
+
+  // `now === null`: recorded while the directory existed, unreadable after.
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-gone-')));
+  const root = join(parent, 'repo');
+  try {
+    installAdlc(root);
+    adlcRoots.record(root);
+    assert.equal(adlcRoots.has(root), true, 'armed while present');
+
+    renameSync(root, join(parent, 'moved-away'));
+    assert.equal(adlcRoots.has(root), true, 'and still armed once it cannot be read');
+
+    // Through the gate: containment must reach evaluation rather than
+    // short-circuiting to allow. The evaluator is stubbed so this is a
+    // statement about containment only.
+    assert.equal(
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: 5 },
+        root,
+        adlcRoots,
+        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+      }).decision,
+      'deny',
+      'a remembered root with no readable identity stays enforced',
+    );
+
+    // `recorded === null`: identity was never establishable — a platform
+    // without stable inodes, or a path that vanished before the stat.
+    const neverThere = join(parent, 'never-existed');
+    adlcRoots.record(neverThere);
+    assert.equal(adlcRoots.has(neverThere), true, 'unknown at record time also fails closed');
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
