@@ -617,9 +617,13 @@ export function handoffRecoveryDiagnostic({
   const storeFault = hasStoreIntegrityFault(reasons);
   if (cliPath === null) {
     parts.push(
+      // `adlc handoff`, not a bare `handoff`: the global install route is
+      // @adlc/cli, whose bin is `adlc`. context-handoff's own `handoff` bin is
+      // a transitive dependency's and is not linked onto PATH by that install,
+      // so naming it would be one more instruction that does not run.
       'Host-side recovery: @adlc/context-handoff could not be resolved from this install, so its recovery ' +
-        'CLI cannot be named by path. Install it (npm install -g @adlc/cli), then drive it with its own bin: ' +
-        'handoff bypass|repair|resume.',
+        'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin: ' +
+        '`adlc handoff bypass|repair|resume`, run from the denied repo.',
     );
   } else if (storeFault) {
     // Deliberately no command: a runnable grant printed above the "no grant

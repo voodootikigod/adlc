@@ -753,6 +753,10 @@ test('the diagnostic still names the keyless path when the CLI cannot be resolve
   });
   assert.match(diagnostic, /could not be resolved/);
   assert.match(diagnostic, /\.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
+  // The global install route is @adlc/cli, whose bin is `adlc`; context-handoff's
+  // own `handoff` bin is a transitive dependency's and is not on PATH after it.
+  assert.match(diagnostic, /`adlc handoff bypass\|repair\|resume`/, 'names the bin that exists');
+  assert.doesNotMatch(diagnostic, /bin: handoff /, 'not the unlinked transitive bin');
 });
 
 test('a foreign deny gets an unbound grant, this session\'s own gets a bound one', () => {
