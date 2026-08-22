@@ -1991,3 +1991,32 @@ test('the enclosing repo is remembered from session start, before any tool call'
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('session_start itself arms the memory, through the real extension', async () => {
+  // The previous test arms by hand, which proves the RULE but not the WIRING —
+  // a mutation that never records at session_start survived it. This drives
+  // the real handler: one session opens in the repo, a later one opens in a
+  // subdirectory carrying a convincing forged checkout, and the process-wide
+  // memory has to outrank it.
+  const root = makeRepo();
+  try {
+    makeCheckout(root);
+    const sub = join(root, 'src');
+    mkdirSync(join(sub, '.git'), { recursive: true });
+    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(sub, 'a.txt'), 'x\n');
+
+    // Standing alone, the forgery reads as its own checkout.
+    assert.equal(resolveAdlcRoot(sub), null);
+
+    // A session opens in the repo — session_start must record it.
+    await boot(root, { percent: 5, sessionId: 'sess-A' });
+
+    // A later session opens inside the forged directory.
+    const second = await boot(sub, { percent: HARD_PCT, sessionId: 'sess-B' });
+    const verdict = await call(second.pi, second.ctx, 'edit', { path: join(sub, 'a.txt') });
+    assert.equal(verdict?.block, true, 'the repo armed at session start outranks the forgery');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
