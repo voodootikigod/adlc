@@ -34,6 +34,7 @@ import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from '.
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
 import {
   checkHandoff,
+  resolveAdlcRoot,
   resolvePiSessionId,
   sharedAdlcRootState,
   createStickyDenyState,
@@ -280,6 +281,16 @@ export function createExtension({ env = process.env } = {}) {
       // when the host offers none, so D2 still has a stable process identity.
       handoffSessionId = resolvePiSessionId(_event, ctx, { mint: () => handoffSessionId ?? '' });
       reload(ctx.cwd);
+      // Arm the opt-in memory HERE, before any tool call, so the enclosing
+      // repo is remembered from the first gated call onward. The checkout
+      // boundary is a filesystem shape an agent can construct; the memory is
+      // not, and arming it at session start is what leaves no window where a
+      // freshly forged `<cwd>/.git` is the only signal in play.
+      const armedRoot = resolveAdlcRoot(
+        activeCwd,
+        env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
+      );
+      if (armedRoot !== null) handoffAdlcRoots.record(armedRoot);
       fitness.reset();
       flail.reset();
       unvettedSeen.clear();

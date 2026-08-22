@@ -300,9 +300,22 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
  * do — and before this check that was a one-command opt-out of an enclosing
  * repo's deny on the very first gated call, before any root was remembered. A
  * real checkout has `.git/HEAD`, or a `.git` FILE holding a `gitdir:` pointer
- * (worktrees and submodules). Neither is proof against a determined forgery,
- * but a forgery elaborate enough to pass is also indistinguishable from the
- * vendored checkout this boundary exists to respect.
+ * (worktrees and submodules).
+ *
+ * ACCEPTED LIMIT, and why this check stops here rather than growing: no
+ * filesystem test separates a real vendored checkout from one an agent
+ * constructed, because an agent that can write files can write whatever git
+ * would have written. Escalating the shape check raises the effort and never
+ * decides. The boundary is defended instead by something an agent cannot
+ * construct from inside a session — the opt-in memory, armed at `session_start`
+ * from the session's own cwd (extension.mjs) and outranking any boundary found
+ * afterwards. What remains is a forgery planted BEFORE the session, which is
+ * also precisely what a legitimate vendored checkout looks like.
+ *
+ * The boundary is kept rather than dropped because it solves a real problem in
+ * the other direction: without it a store anywhere above the checkout — a stray
+ * `~/.adlc/tickets.json`, say — would silently enforce over every repo beneath
+ * it.
  *
  * @param {string} dir
  * @returns {boolean}

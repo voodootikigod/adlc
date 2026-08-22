@@ -1954,3 +1954,40 @@ test('an external store gives one root per checkout, not one per directory', () 
     rmSync(storeHome, { recursive: true, force: true });
   }
 });
+
+test('the enclosing repo is remembered from session start, before any tool call', () => {
+  // The residual escape after the boundary was hardened: a `.git` forged
+  // BEFORE the session leaves no remembered root to outrank it on the first
+  // gated call. Arming at session_start closes that window — the memory is the
+  // one signal an agent cannot construct from inside the session.
+  const root = makeRepo();
+  try {
+    makeCheckout(root);
+    const sub = join(root, 'src');
+    // A convincing forgery, planted before the session ever starts.
+    mkdirSync(join(sub, '.git'), { recursive: true });
+    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+
+    // Without arming, the forgery wins — that is the window being closed.
+    assert.equal(resolveAdlcRoot(sub), null, 'the forgery reads as its own checkout');
+
+    // session_start resolves from the SESSION's root and records it, so the
+    // same call from the subdirectory is outranked by the remembered repo.
+    const adlcRoots = createAdlcRootState();
+    adlcRoots.record(resolveAdlcRoot(root));
+    assert.equal(
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root: sub,
+        adlcRoots,
+      }).decision,
+      'deny',
+      'a repo armed at session start is not released by a forged boundary',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

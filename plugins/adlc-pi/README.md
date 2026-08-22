@@ -102,8 +102,13 @@ walks up from the directory pi gives it and enforces against the **outermost** `
 your checkout. A session started in `<repo>/src` is therefore covered by the same deny store
 as one started at the root, and a `.adlc` created in a subdirectory cannot become a second,
 empty store to step around an open deny. The walk stops at a `.git` boundary in both
-directions: a checkout vendored inside an ADLC repo stays its own project, and a `.adlc`
-above your checkout never captures it.
+directions: a checkout vendored inside an ADLC repo stays its own project, and a store above
+your checkout — a stray `~/.adlc/tickets.json`, say — never silently enforces over every
+repo beneath it.
+
+That boundary has to look like a real checkout (`.git/HEAD`, or a `.git` file holding a
+`gitdir:` pointer), and the repo you started in is remembered at session start, so a `.git`
+created mid-session cannot opt the session out of an enforcing repo.
 
 Two things about the deny are deliberate and worth knowing before you meet one:
 
