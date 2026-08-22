@@ -701,7 +701,7 @@ test('with no manifest key the deny text names the keyless path', async () => {
     const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
     assert.equal(verdict.block, true);
     assert.match(verdict.reason, /ADLC_MANIFEST_KEY/);
-    assert.match(verdict.reason, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'one safe command');
+    assert.match(verdict.reason, /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/, 'one safe command, absolute');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -772,7 +772,7 @@ test('the diagnostic still names the keyless path when the CLI cannot be resolve
     cliPath: null,
   });
   assert.match(diagnostic, /could not be resolved/);
-  assert.match(diagnostic, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
+  assert.match(diagnostic, /resolve `\.adlc` first/, 'the keyless path needs no CLI at all');
   // The global install route is @adlc/cli, whose bin is `adlc`; context-handoff's
   // own `handoff` bin is a transitive dependency's and is not on PATH after it.
   assert.match(diagnostic, /`adlc handoff bypass\|repair\|resume`/, 'names the bin that exists');
@@ -908,9 +908,10 @@ test('the operator-facing deny text is pinned phrase by phrase', () => {
       'must say why the one keyless verb is not the answer',
     );
     // Measured: removing the marker without the sentinel still denies.
-    assert.ok(
-      keyless.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
-      'the whole tree and the sentinel, in one command that cannot follow a symlink',
+    assert.match(
+      keyless,
+      /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/,
+      'the whole tree and the sentinel, by resolved absolute path',
     );
     assert.ok(
       keyless.includes('Do not pick off one marker or glob inside'),
@@ -1189,7 +1190,7 @@ test('the keyless recipe names the legacy sentinel, so it terminates', () => {
       sessionId: 'sess-B',
       root,
     }).reason;
-    assert.ok(text.includes('rm -rf .adlc/handoffs .adlc/.deny-store'), 'the whole tree, in one command');
+    assert.match(text, /rm -rf \S+\/handoffs \S+\/\.deny-store/, 'the whole tree, in one command');
     assert.doesNotMatch(text, /denies\/\*/, 'never a glob: it expands through a symlink');
 
     // Run the command the MESSAGE prints, parsed out of it, in a shell whose
@@ -1351,13 +1352,25 @@ test("the README's keyless command clears a repo with several markers and a lega
         .decision;
     assert.equal(ask(), 'deny', 'a third session is denied by the others');
 
-    // The exact command the README prints, run from the repo root.
-    const command = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8')
-      .split('\n')
-      .find((line) => line.startsWith('rm -rf .adlc/handoffs'));
-    assert.ok(command, 'the README must still document a concrete keyless command');
+    // Run the command the MESSAGE prints — it carries resolved absolute paths,
+    // so it is the authoritative one an operator copies. The README documents
+    // the same shape with a `<repo>` placeholder, asserted separately.
+    const printed = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-C',
+      root,
+    }).reason;
+    const command = /`(rm -rf [^`]+)`/.exec(printed)?.[1];
+    assert.ok(command, `no removal command in the message:\n${printed}`);
     const run = spawnSync(command, { shell: true, cwd: root, encoding: 'utf8' });
-    assert.equal(run.status, 0, `documented command failed: ${run.stderr}`);
+    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
+
+    const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8');
+    assert.ok(
+      readme.includes('rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store'),
+      'the README must document the same two targets',
+    );
 
     assert.equal(ask(), 'allow', 'the documented recipe must actually clear the repo');
   } finally {
@@ -1496,8 +1509,9 @@ test('a store-integrity deny does not advertise a grant that cannot clear it', (
       'the text must name the grant form that actually works',
     );
     assert.match(verdict.reason, /--unbound-reason/, 'and offer it');
-    assert.ok(
-      verdict.reason.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
+    assert.match(
+      verdict.reason,
+      /rm -rf \S+\/handoffs \S+\/\.deny-store/,
       'and must point at the store repair that does',
     );
   } finally {
@@ -1585,7 +1599,7 @@ test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', ()
   assert.match(diagnostic, /unbound because the deny reports the store itself/, 'and says why');
   assert.doesNotMatch(diagnostic, /belongs to another session/, 'not the foreign-record reason');
   assert.match(diagnostic, /Only the unbound form above lifts it/);
-  assert.match(diagnostic, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/, 'and names the durable repair');
+  assert.match(diagnostic, /rm -rf \S+\/handoffs \S+\/\.deny-store/, 'and names the durable repair');
 
   // A normal deny still gets its command.
   assert.match(
@@ -2035,13 +2049,14 @@ test('the keyless recipe never globs, because a glob leaves the repo', () => {
     hasManifestKey: false,
     cliPath: '/opt/adlc/bin/handoff.mjs',
   });
-  assert.match(text, /rm -rf \.adlc\/handoffs \.adlc\/\.deny-store/);
+  assert.match(text, /rm -rf \S+\/handoffs \S+\/\.deny-store/);
   assert.doesNotMatch(text, /\*/, 'no wildcard anywhere in the recovery text');
+  assert.doesNotMatch(text, /rm -rf \.adlc/, 'and never the relative form that follows a symlink');
 
   // And the same command is what the README documents.
   const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8');
   assert.ok(
-    readme.includes('rm -rf .adlc/handoffs .adlc/.deny-store'),
+    readme.includes('rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store'),
     'README and runtime text must not drift apart',
   );
   const commandBlock = readme.slice(readme.indexOf('```bash', readme.indexOf('If you do not have the key')));
@@ -2135,6 +2150,43 @@ test('an unreadable filesystem identity keeps enforcing, on either side', () => 
     const neverThere = join(parent, 'never-existed');
     adlcRoots.record(neverThere);
     assert.equal(adlcRoots.has(neverThere), true, 'unknown at record time also fails closed');
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('a symlinked .adlc shows its real target in the removal command', () => {
+  // An external ticket store reached through `.adlc -> /elsewhere` is a
+  // supported layout, and `rm -rf .adlc/handoffs` follows the link — measured,
+  // it deleted through it. Printing the relative form hid that: the command
+  // looked local and reached outside the checkout. The resolved path makes the
+  // reach visible BEFORE the operator runs it, which is the honest fix; for a
+  // genuine external store deleting there is exactly right, and for a repointed
+  // one the operator can see the path is not their repo.
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-extstore-')));
+  try {
+    const repo = join(parent, 'repo');
+    const store = join(parent, 'external-store');
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(store, { recursive: true });
+    symlinkSync(store, join(repo, '.adlc'));
+
+    const text = handoffRecoveryDiagnostic({
+      sessionId: 'sess-a',
+      root: repo,
+      reasons: ['D3:unauthorized_open:sess-b'],
+      hasManifestKey: false,
+      cliPath: '/opt/adlc/bin/handoff.mjs',
+    });
+    assert.ok(
+      text.includes(`rm -rf ${store}/handoffs ${store}/.deny-store`),
+      `the removal must name the real store:\n${text}`,
+    );
+    assert.doesNotMatch(text, /rm -rf \.adlc/, 'never the relative form that hides the hop');
+
+    // `--dir` keeps the unresolved spelling on purpose: the CLI requires that
+    // argument's last segment to be `.adlc`, which the target is not.
+    assert.ok(text.includes(`--dir ${join(repo, '.adlc')} `), 'the CLI argument stays .adlc-suffixed');
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

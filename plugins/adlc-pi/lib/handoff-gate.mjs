@@ -661,16 +661,43 @@ export function formatNoSessionIdMessage() {
  *    removes a symlink itself rather than following it.
  * @returns {string}
  */
-export function formatKeylessRecovery() {
+export function formatKeylessRecovery(adlcDir = null) {
+  const targets = formatKeylessTargets(adlcDir);
   return (
     'No ADLC_MANIFEST_KEY is configured, so that command — and every other mutating handoff verb ' +
     '(write/resume/continue/supervise/bypass/repair) — exits before it runs. `adlc handoff unlock` needs no ' +
     'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery — and ' +
-    'the only durable clear — from a host shell outside the agent, run at the repo root: ' +
-    '`rm -rf .adlc/handoffs .adlc/.deny-store`. That clears every open marker and both sentinels at once. ' +
-    'Do not pick off one marker or glob inside `denies/`: any marker left behind keeps denying every ' +
-    'session, a sentinel makes an emptied store fail closed, and a glob follows a symlink out of the repo.'
+    `the only durable clear — from a host shell outside the agent: ${targets} That clears every open marker ` +
+    'and both sentinels at once. Do not pick off one marker or glob inside `denies/`: any marker left behind ' +
+    'keeps denying every session, a sentinel makes an emptied store fail closed, and a glob follows a ' +
+    'symlink out of the repo.'
   );
+}
+
+/**
+ * The removal command, naming RESOLVED ABSOLUTE paths.
+ *
+ * Resolved, because `.adlc` may itself be a symlink — an external ticket store
+ * is a supported layout — and `rm -rf .adlc/handoffs` follows it. Printing the
+ * relative form hid that: the operator ran a command that looked local and
+ * deleted through the link (measured). Naming the real target makes the reach
+ * visible before they run it, which is the honest fix — for a genuine external
+ * store, deleting there is exactly right, and for a repointed one the operator
+ * can see the path is not their repo and stop.
+ *
+ * @param {string|null} adlcDir resolved `.adlc` directory
+ * @returns {string}
+ */
+function formatKeylessTargets(adlcDir) {
+  const display = typeof adlcDir === 'string' && adlcDir !== '' ? quotePathForDisplay(adlcDir) : null;
+  if (display === null) {
+    return (
+      'delete the `handoffs` directory and the `.deny-store` file inside this repo\'s `.adlc`, by absolute ' +
+      'path — resolve `.adlc` first, since it may be a symlink to a store outside the checkout and a ' +
+      'relative `rm` would follow it without showing you where.'
+    );
+  }
+  return `\`rm -rf ${display}/handoffs ${display}/.deny-store\` (paths resolved — check they are where you expect).`;
 }
 
 /**
@@ -785,12 +812,18 @@ export function handoffRecoveryDiagnostic({
   }
   // A store-integrity fault is not a standing the grant above can lift, so the
   // grant must not be left looking like the answer.
+  // The `.adlc` a removal command must name is the RESOLVED one: it may be a
+  // symlink to an external store, and `rm -rf .adlc/handoffs` follows it.
+  // (`--dir` above deliberately keeps the unresolved form — the CLI requires
+  // that argument's last segment to be `.adlc`.)
+  const resolvedAdlcDir =
+    typeof root === 'string' && root !== '' ? trustedRealpath(join(trustedRealpath(root), '.adlc')) : null;
   if (storeFault) {
     parts.push(
       'This deny reports the deny STORE itself, not this session\'s standing: a marker is unreadable, or the ' +
         'store looks emptied. Only the unbound form above lifts it — a bound grant does not — and that grant ' +
         'is still one-shot, so it buys a call, not a repaired store. The durable fix is to clear the state, ' +
-        'from a host shell at the repo root: `rm -rf .adlc/handoffs .adlc/.deny-store`.',
+        `from a host shell: ${formatKeylessTargets(resolvedAdlcDir)}`,
     );
   }
   if (hasManifestKey) {
@@ -802,7 +835,7 @@ export function handoffRecoveryDiagnostic({
       );
     }
   } else {
-    parts.push(formatKeylessRecovery());
+    parts.push(formatKeylessRecovery(resolvedAdlcDir));
   }
   return parts.join('\n\n');
 }

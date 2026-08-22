@@ -144,8 +144,13 @@ own shell is inside the deny-set) — this is also the only durable clear. Run i
 repo root, and remove **every** open marker plus **both** sentinel locations:
 
 ```bash
-rm -rf .adlc/handoffs .adlc/.deny-store
+rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store
 ```
+
+The deny message prints this with the paths already resolved — run that version, and
+check the paths are where you expect before you do. `.adlc` may itself be a symlink to a
+store outside the checkout, and a relative `rm -rf .adlc/handoffs` follows it without
+showing you where it went.
 
 Take the whole tree, and do not glob. A single open marker denies every session in the repo,
 so picking off your own leaves you exactly as locked — and the denying session is usually not

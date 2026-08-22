@@ -163,8 +163,9 @@ the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
 the message instead names the keyless path, which is also the only durable clear:
-`rm -rf .adlc/handoffs .adlc/.deny-store` from a host shell at the repo root. The whole tree,
-and no glob — clearing one marker while another remains leaves the repo just as locked, since
+`rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store` from a host shell, printed with the
+paths already resolved because `.adlc` may itself be a symlink to an external store and a
+relative `rm` would follow it silently. The whole tree, and no glob — clearing one marker while another remains leaves the repo just as locked, since
 any open marker denies every session; a sentinel makes an emptied `denies/` read as
 tampered-with; the legacy `.adlc/handoffs/.deny-store` re-creates the canonical one on the
 next read, so a recipe that omits it never terminates; and a glob inside `denies/` expands
