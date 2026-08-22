@@ -1011,3 +1011,27 @@ test('the opt-in memory outlives an extension reload within the process', async 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a missing or empty root arms nothing — it must not resolve to cwd', () => {
+  // `resolve('')` is `process.cwd()`, so a memory that accepted an empty root
+  // would record the CURRENT directory as opted in and arm a repo that never
+  // was. A non-string root must not throw its way out of the gate either.
+  const adlcRoots = createAdlcRootState();
+  for (const bogus of ['', null, undefined, 0, {}]) {
+    assert.doesNotThrow(() => adlcRoots.record(bogus), `record(${String(bogus)})`);
+    assert.equal(adlcRoots.has(bogus), false, `has(${String(bogus)})`);
+  }
+  assert.equal(adlcRoots.has(process.cwd()), false, 'cwd must not have been armed');
+
+  // And the gate itself stays inert rather than throwing on a rootless call.
+  assert.doesNotThrow(() =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: '',
+      adlcRoots,
+    }),
+  );
+});
