@@ -836,3 +836,66 @@ test('the printed command actually clears a real band-generated foreign deny', a
     rmSync(elsewhere, { recursive: true, force: true });
   }
 });
+
+test('the operator-facing deny text is pinned phrase by phrase', () => {
+  // What an operator reads and pastes IS the contract, and prose is the one
+  // part of this module a mutation gate cannot reach — string literals have no
+  // comparison to invert. Every load-bearing claim is asserted verbatim here,
+  // and every one of them is a fact this branch established by execution
+  // rather than by reading the CLI's help.
+  const root = makeRepo();
+  try {
+    seedForeignDeny(root, 'sess-A');
+    const ask = (manifestKey) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'src/a.mjs' },
+        sessionId: 'sess-B',
+        root,
+        manifestKey,
+      }).reason;
+
+    const keyless = ask(null);
+    // The correction this ticket exists for: a new session walks back into the
+    // deny, so the old "continue in a fresh session" was unrunnable advice.
+    assert.doesNotMatch(keyless, /fresh session/i);
+    assert.ok(
+      keyless.includes('it holds for new sessions here until an operator clears it'),
+      'must say the deny outlives the session',
+    );
+    // Measured: the grant is consumed by the mutation it authorizes.
+    assert.ok(
+      keyless.includes('authorizes the NEXT mutation only'),
+      'must not present a one-shot grant as a clear',
+    );
+    // Measured: unlock is keyless but reclaims a lock, not a deny.
+    assert.ok(
+      keyless.includes('`adlc handoff unlock` needs no key but reclaims a session lock, not a deny'),
+      'must say why the one keyless verb is not the answer',
+    );
+    // Measured: removing the marker without the sentinel still denies.
+    assert.ok(
+      keyless.includes('.adlc/handoffs/denies/') && keyless.includes('.adlc/.deny-store'),
+      'both removal paths, or the recipe does not work',
+    );
+    assert.ok(
+      keyless.includes('Deleting a marker on its own is not enough'),
+      'the half-recipe is the one an operator would otherwise try first',
+    );
+    // The exact reason token, not a wildcard: an empty one is rejected by the
+    // CLI, and a changed one changes what lands in the audit record.
+    assert.ok(
+      keyless.includes('--unbound-reason pi-handoff-operator-recovery'),
+      'the grant carries a stable, non-empty operator reason',
+    );
+
+    // A keyed operator gets the durable flows named instead of the file path.
+    const keyed = ask('k'.repeat(64));
+    assert.ok(
+      keyed.includes('`adlc handoff resume` / `continue` are the durable handoff flows'),
+      'a keyed operator needs the durable path, not just the one-shot grant',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
