@@ -242,3 +242,47 @@ test('runRailFreezeGate allows version-only bump on an opted-in root package.jso
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// The exemption must be keyed on the PATH and the RESOLVED union, never on the default
+// set: rail-freeze resolves defaults + additional into one list, diffs against it, then
+// filters through isExemptManifestTrustRoot. Were it default-scoped, moving package.json
+// to --trust-root would wedge every release bump in a repo that opted in — the same wedge
+// class this change exists to clear, just relocated.
+test('a lockstep release bump on an opted-in package.json is exempt, and a scripts edit riding along is not', () => {
+  const pkg = (version, preflight) => JSON.stringify({
+    name: 'root',
+    version,
+    dependencies: { '@adlc/core': `^${version}` },
+    scripts: { preflight },
+  }, null, 2) + '\n';
+  const { root, run, base } = seedGateFixture(pkg('1.0.0', 'echo preflight'));
+  const runGate = () => runRailFreezeGate({
+    cwd: root,
+    base,
+    env: {},
+    additionalTrustRoots: ['package.json'],
+    stdio: 'pipe',
+  });
+  try {
+    // Version field plus the lockstep @adlc/* repin, exactly as scripts/release.mjs writes it.
+    run('checkout', '-q', '-b', 'feat-release');
+    writeFileSync(join(root, 'package.json'), pkg('1.0.1', 'echo preflight'));
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'chore: release 1.0.1');
+    assert.equal(runGate().status, 0, 'a lockstep release bump must stay exempt for an ADDITIONAL trust root');
+
+    // The same bump carrying one extra edit is not a release bump.
+    run('checkout', '-q', 'main');
+    run('checkout', '-q', '-b', 'feat-release-plus-scripts');
+    writeFileSync(join(root, 'package.json'), pkg('1.0.1', 'echo bypassed'));
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'chore: release 1.0.1 with a scripts edit');
+    assert.throws(
+      runGate,
+      (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message),
+      'a scripts edit riding along with a version bump must still deny'
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
