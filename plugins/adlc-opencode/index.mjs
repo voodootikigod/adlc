@@ -126,10 +126,14 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   //
   // Passed to checkHandoff as a thunk so only gated calls inside an ADLC repo
   // pay for the read.
+  //
+  // No separate `conflict` branch: resolveActiveTicketId already returns a null
+  // id alongside `conflict: true`, so a tamper signal reaches the marker as an
+  // unbound ticket without one. Re-checking it here would be logic no test
+  // could ever observe.
   const activeTicketIdOrNull = () => {
     try {
-      const active = resolveActiveTicketId(root, env);
-      return !active.conflict && active.id ? active.id : null;
+      return resolveActiveTicketId(root, env).id ?? null;
     } catch {
       return null; // an unbound marker beats a gate that throws
     }

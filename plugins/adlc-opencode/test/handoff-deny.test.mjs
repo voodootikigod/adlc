@@ -203,10 +203,18 @@ test('the active ticket is threaded to the gate, and resolved only when it is ne
 });
 
 test('the recovery tail names the session and the host command, and never quotes an unsafe id', () => {
+  // Asserted as the EXACT command text, placeholders included: what the operator
+  // pastes into a host shell is the contract here, so `--ticket <id>` degrading
+  // into `--ticket >=id>` is a real defect, not cosmetic drift.
   const tail = recoveryTail('ses_abc-1');
-  assert.match(tail, /ses_abc-1/);
-  assert.match(tail, /adlc handoff repair --session ses_abc-1/);
-  assert.match(tail, /adlc handoff resume/);
+  assert.match(
+    tail,
+    /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash> --write`/,
+  );
+  assert.match(
+    tail,
+    /`adlc handoff resume --session <new-session> --deny-session ses_abc-1 --write`/,
+  );
   for (const unsafe of ['s1; rm -rf /', 'a b', 's1\n', '', null, undefined, 42]) {
     assert.match(
       recoveryTail(unsafe),
@@ -613,6 +621,34 @@ test('the deny marker is bound to the active ticket, so host repair/resume can a
         readFileSync(join(dir, '.adlc', 'handoffs', 'denies', 'bound-sess.json'), 'utf8'),
       );
       assert.equal(marker.ticket_id, 'T1');
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a conflicting active-ticket signal binds the marker to nothing, never to a guess', async () => {
+  // ADLC_TICKET disagreeing with .adlc/current-ticket.json is a tamper signal.
+  // The deny must still be recorded — it just must not claim a ticket, or host
+  // repair would be handed a binding the repo never agreed to.
+  const dir = repo();
+  try {
+    await withActiveTicket('T1', async () => {
+      writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-OTHER' }));
+      const hooks = await adlcRailsGuard({ worktree: dir });
+      await pumpDepth(hooks, 'conflict-sess', HANDOFF_DEPTH);
+      await assert.rejects(
+        () =>
+          hooks['tool.execute.before'](
+            { tool: 'edit', sessionID: 'conflict-sess', callID: 'c' },
+            { args: { filePath: 'src/ok.mjs' } },
+          ),
+        /ADLC context-handoff/,
+      );
+      const marker = JSON.parse(
+        readFileSync(join(dir, '.adlc', 'handoffs', 'denies', 'conflict-sess.json'), 'utf8'),
+      );
+      assert.equal(marker.ticket_id, null);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
