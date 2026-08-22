@@ -260,9 +260,16 @@ export function sharedAdlcRootState() {
 // and a message assembled out of package exports can fail in precisely the
 // broken-install case it exists to report. Nothing below imports the package.
 
-/** Path-token grammar `matchRecoveryCommand` accepts unquoted. */
+// These two mirror `recovery-exception.mjs`'s PATH_UNQUOTED_RE / VALUE_RE
+// exactly; pi-helper-drift.test.mjs pins them to the canonical copies. They are
+// the TOKEN grammar only — `matchRecoveryCommand`'s per-subcommand flag
+// whitelist admits neither `--dir` nor `--unbound-reason`, so the command
+// printed below is deliberately NOT one that matcher would accept. That costs
+// nothing today (pi has no recovery exception; its shell is denied wholesale),
+// and it is why the command is described as host-side throughout.
+/** Path-token grammar accepted unquoted. */
 const RECOVERY_PATH_UNQUOTED_RE = /^[A-Za-z0-9_./=-]+$/;
-/** Flag-value grammar `matchRecoveryCommand` accepts, session ids included. */
+/** Flag-value grammar, session ids included. */
 const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 
 /**
@@ -278,7 +285,7 @@ function isRecoverySessionId(sessionId) {
 }
 
 /**
- * Quote a path the way the matcher requires, or null when it cannot be
+ * Quote a path the way the grammar requires, or null when it cannot be
  * represented at all — a literal apostrophe would terminate the quote early and
  * hand anyone who copy-pastes the diagnostic a second shell command.
  * @param {string} p
@@ -403,9 +410,13 @@ export function formatNoSessionIdMessage() {
  * that does not — and it reclaims a session LOCK, not a deny, so naming it as
  * the keyless recovery would send the operator in a circle.
  *
- * Both paths, not just the marker: the `.deny-store` sentinel is what makes an
+ * Every path, not just the marker: a `.deny-store` sentinel is what makes an
  * emptied `denies/` directory read as tampered-with and keep denying, so
- * deleting a marker alone leaves the repo exactly as locked.
+ * deleting a marker alone leaves the repo exactly as locked. BOTH sentinel
+ * locations are named — a repo carrying the pre-migration
+ * `.adlc/handoffs/.deny-store` re-creates the canonical one from it on the next
+ * read, so a recipe naming only the canonical path never terminates (measured:
+ * D0:deny_store_unavailable, forever).
  * @returns {string}
  */
 export function formatKeylessRecovery() {
@@ -414,9 +425,10 @@ export function formatKeylessRecovery() {
     '(write/resume/continue/supervise/bypass/repair) — exits before it runs. `adlc handoff unlock` needs no ' +
     'key but reclaims a session lock, not a deny, so it does not clear this either. Keyless recovery — and ' +
     "the only durable clear — from a host shell outside the agent: delete this repo's open deny markers " +
-    'under `.adlc/handoffs/denies/` AND ' +
-    'the `.adlc/.deny-store` sentinel beside them. Deleting a marker on its own is not enough — the sentinel ' +
-    'makes an emptied store fail closed, and any marker left behind keeps denying every session in the repo.'
+    'under `.adlc/handoffs/denies/` AND both sentinels, `.adlc/.deny-store` and the legacy ' +
+    '`.adlc/handoffs/.deny-store` if it exists. Deleting a marker on its own is not enough — a sentinel ' +
+    'makes an emptied store fail closed (and the legacy one re-creates the other), and any marker left ' +
+    'behind keeps denying every session in the repo.'
   );
 }
 

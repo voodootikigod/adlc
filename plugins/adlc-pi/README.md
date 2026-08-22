@@ -83,9 +83,14 @@ operator clears it.
 in any directory with no `.adlc/` — a repo that never adopted ADLC is never denied and
 never acquires ADLC state, at any fill percent.
 
-Opting in is **monotonic** within a session: once a root has been seen with `.adlc`, the
-gate keeps enforcing it even if the directory later disappears, so removing `.adlc` is not
-an off switch. The memory is per root, so it never arms a repo that did not opt in.
+Opting in is **monotonic** for the life of the process: once a root has been seen with `.adlc`, the
+gate keeps enforcing it even if the directory later disappears, so neither removing `.adlc` nor
+reloading the extension is an off switch. The memory is keyed by canonical root, so it never
+arms a repo that did not opt in, and reaching the same checkout by a symlink or an
+un-normalized path does not forget the opt-in.
+
+The gate reads the root pi gives it and does not walk up, so — like every other pi gate — it
+is inert when the session's cwd is a subdirectory of the opted-in repo rather than its root.
 
 Two things about the deny are deliberate and worth knowing before you meet one:
 

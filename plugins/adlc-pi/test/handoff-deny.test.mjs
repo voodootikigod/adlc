@@ -10,6 +10,7 @@ import {
   writeFileSync,
   readFileSync,
   rmSync,
+  readdirSync,
   existsSync,
   realpathSync,
   symlinkSync,
@@ -1034,4 +1035,168 @@ test('a missing or empty root arms nothing — it must not resolve to cwd', () =
       adlcRoots,
     }),
   );
+});
+
+test('the self-deny label is pinned too — it is the path most operators hit', () => {
+  // A session whose own window crossed the band is the commonest way to meet
+  // this deny, and it takes the BOUND branch of the label. The phrase-by-phrase
+  // test above asks as a different session, so it only ever sees the unbound
+  // branch; without this, the one-shot honesty could be deleted from the
+  // likeliest message and every test would still pass.
+  const root = makeRepo();
+  try {
+    const own = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+      manifestKey: 'k'.repeat(64),
+    });
+    assert.equal(own.decision, 'deny');
+    assert.match(own.reason, /D2:denier_session/, 'this is the self-deny path');
+    assert.ok(
+      own.reason.includes('authorizes the NEXT mutation only'),
+      'the one-shot claim must survive on the bound branch',
+    );
+    assert.doesNotMatch(own.reason, /--unbound-reason/, 'a session clearing its own record stays bound');
+    assert.doesNotMatch(own.reason, /fresh session/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a deny with no usable session id still refuses the fresh-session lie', () => {
+  // D0:invalid_session_id is a live path — an unresolvable or unsafe id reaches
+  // the gate as null and denies — and it renders formatNoSessionIdMessage,
+  // which no other test reaches. The canonical package's wording for this case
+  // tells the operator to start a new session; that is exactly the claim this
+  // branch deletes, so the local twin must not drift back into it.
+  const root = makeRepo();
+  try {
+    for (const sessionId of [null, '../escape']) {
+      const verdict = checkHandoff({
+        toolName: 'edit',
+        input: { path: 'src/a.mjs' },
+        sessionId,
+        usage: { percent: HANDOFF_PCT },
+        root,
+      });
+      assert.equal(verdict.decision, 'deny', `${sessionId} must fail closed`);
+      assert.match(verdict.reason, /D0:invalid_session_id/);
+      assert.doesNotMatch(verdict.reason, /fresh session/i, 'the deleted lie must not return here');
+      assert.ok(
+        verdict.reason.includes('reaches a new session as well'),
+        'must still say a new session does not clear it',
+      );
+      assert.doesNotMatch(verdict.reason, /bypass --session/, 'no --session command exists without an id');
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('shell metacharacters in a repo path are quoted, never emitted bare', () => {
+  // The printed command is copy-pasted into a shell. A path carrying `;`, `$`,
+  // `&` or a space must come back single-quoted, or the diagnostic hands the
+  // operator a second command. Mirrors the canonical fixture in
+  // packages/context-handoff/adapter-test/recovery-exception.test.mjs.
+  const base = {
+    interpreterPath: '/usr/bin/node',
+    scriptPath: '/opt/adlc/bin/handoff.mjs',
+    sessionId: 'sess-a',
+  };
+  for (const adlcDir of [
+    '/srv/a;rm -rf ~/x/.adlc',
+    '/srv/$(id)/.adlc',
+    '/srv/a&&touch pwned/.adlc',
+    '/srv/my repo/.adlc',
+    '/srv/a|b/.adlc',
+  ]) {
+    const command = formatRecoveryCommand({ ...base, adlcDir });
+    assert.ok(command.includes(`--dir '${adlcDir}'`), `must single-quote ${adlcDir}: ${command}`);
+  }
+  // A path with nothing special stays unquoted, so the quoting is real and not
+  // an unconditional wrap that would prove nothing.
+  assert.ok(formatRecoveryCommand({ ...base, adlcDir: '/srv/plain/.adlc' }).includes('--dir /srv/plain/.adlc '));
+});
+
+test('a diagnostic that cannot be a command is never labelled as one', () => {
+  // The label and the command come from one representability test; if they
+  // disagree, prose gets announced as something to paste.
+  const unquotable = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: "/srv/it's",
+    hasManifestKey: true,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  assert.match(unquotable, /cannot be printed as a safe/);
+  assert.doesNotMatch(unquotable, /One-shot host-side grant.*: /, 'prose must not wear a command label');
+  // And the unsafe-path prose keeps the manual recipe, not just an apology.
+  assert.match(unquotable, /bypass --session sess-a/, 'names the subcommand to run by hand');
+  assert.match(unquotable, /interpreter at .*script at /, 'names both binaries');
+});
+
+test('the keyless recipe names the legacy sentinel, so it terminates', () => {
+  // A repo carrying the pre-migration .adlc/handoffs/.deny-store re-creates the
+  // canonical sentinel from it on the next read, so a recipe naming only
+  // .adlc/.deny-store loops forever on D0:deny_store_unavailable. Measured.
+  const root = makeRepo();
+  try {
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
+
+    const text = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-B',
+      root,
+    }).reason;
+    assert.ok(text.includes('.adlc/handoffs/.deny-store'), 'the legacy sentinel must be named');
+
+    // Follow the printed recipe literally, then confirm it actually cleared.
+    for (const f of readdirSync(join(root, '.adlc', 'handoffs', 'denies'))) {
+      if (f.endsWith('.json')) rmSync(join(root, '.adlc', 'handoffs', 'denies', f));
+    }
+    rmSync(join(root, '.adlc', '.deny-store'), { force: true });
+    rmSync(join(root, '.adlc', 'handoffs', '.deny-store'), { force: true });
+    assert.equal(
+      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root }).decision,
+      'allow',
+      'the recipe as printed must terminate',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the gate reads the root it is given and does not walk up', () => {
+  // Pins current, deliberate behaviour rather than asserting it is ideal: every
+  // pi gate keys off the cwd pi hands it, and codex's hook uses the same flat
+  // check. A future ancestor-walk would change containment semantics, and this
+  // is where that shows up.
+  const root = makeRepo();
+  try {
+    const sub = join(root, 'src', 'nested');
+    mkdirSync(sub, { recursive: true });
+    const ask = (r) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root: r,
+        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+      }).decision;
+    assert.equal(ask(root), 'deny', 'the repo root is enforced');
+    assert.equal(ask(sub), 'allow', 'a subdirectory is not — the guard is flat, by design');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
