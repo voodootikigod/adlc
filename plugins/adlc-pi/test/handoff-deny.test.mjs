@@ -31,6 +31,7 @@ import {
   WARN_PCT,
 } from '@adlc/context-handoff';
 
+import { READONLY_TOOLS } from '../lib/rails-checker.mjs';
 import { createExtension } from '../lib/extension.mjs';
 import {
   checkHandoff,
@@ -1665,4 +1666,68 @@ test('a nested ADLC root keeps its own store, not an outer one, after its opt-in
   } finally {
     rmSync(outer, { recursive: true, force: true });
   }
+});
+
+test('every tool the rail checker calls read-only stays usable under a deny', () => {
+  // Two hand-kept lists had drifted: `find` is a real pi read-only tool the
+  // rail checker classifies as one, and the handoff gate's private list
+  // omitted it — so an open deny confiscated the tool an operator needs to
+  // work out what is wrong, contradicting the documented "reads stay open".
+  for (const tool of READONLY_TOOLS) {
+    assert.equal(handoffAppliesTo(tool), false, `${tool} is read-only per the rail checker`);
+  }
+  for (const tool of ['glob', 'list']) {
+    assert.equal(handoffAppliesTo(tool), false, `${tool} must stay ungated too`);
+  }
+  for (const tool of ['write', 'edit', 'bash', 'some_custom_tool']) {
+    assert.equal(handoffAppliesTo(tool), true, `${tool} must stay gated`);
+  }
+});
+
+test('a deny with no usable session id promises no grant behaviour', () => {
+  // formatRecoveryCommand degrades to prose when no --session command can be
+  // built; appending "that grant is consumed by…" then describes a grant that
+  // was never offered.
+  const diagnostic = handoffRecoveryDiagnostic({
+    sessionId: null,
+    root: '/srv/repo',
+    reasons: ['D3:unauthorized_open:sess-a'],
+    hasManifestKey: true,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  assert.doesNotMatch(diagnostic, /bypass --session/, 'no command can be built');
+  assert.doesNotMatch(diagnostic, /That grant is consumed/, 'so promise nothing about one');
+  assert.match(diagnostic, /reaches a new session as well/);
+
+  // With a usable id the follow-up is present again.
+  assert.match(
+    handoffRecoveryDiagnostic({
+      sessionId: 'sess-b',
+      root: '/srv/repo',
+      reasons: ['D3:unauthorized_open:sess-a'],
+      hasManifestKey: true,
+      cliPath: '/opt/adlc/bin/handoff.mjs',
+    }),
+    /That grant is consumed/,
+  );
+});
+
+test('the unresolved-CLI fallback names the unbound form for a store fault', () => {
+  const storeFault = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: '/srv/repo',
+    reasons: ['D0:deny_store_unavailable'],
+    hasManifestKey: true,
+    cliPath: null,
+  });
+  assert.match(storeFault, /--unbound-reason/, 'a bound grant does not lift a store fault');
+
+  const ordinary = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: '/srv/repo',
+    reasons: ['D2:denier_session'],
+    hasManifestKey: true,
+    cliPath: null,
+  });
+  assert.match(ordinary, /bypass\|repair\|resume/);
 });

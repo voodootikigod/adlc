@@ -28,7 +28,19 @@ import {
   isSafeSessionId,
   resolveHandoffSessionId,
 } from '@adlc/context-handoff';
-import { extractToolPaths } from './rails-checker.mjs';
+import { extractToolPaths, READONLY_TOOLS } from './rails-checker.mjs';
+
+/**
+ * Tools that never mutate, so the deny-set leaves them alone.
+ *
+ * The UNION of the rail checker's canonical `READONLY_TOOLS` and the names only
+ * this gate knew about. Two hand-kept lists had already drifted — `find` is a
+ * real pi read-only tool the rail checker classifies as one, and the gate's
+ * private list omitted it, so an open deny took away the tool an operator needs
+ * to inspect what is wrong. Same lesson as `editTargetsOf`: one list per
+ * plugin, not two, and a union so neither side can silently drop a name.
+ */
+const HANDOFF_READ_ONLY_TOOLS = [...new Set([...READONLY_TOOLS, 'glob', 'list'])];
 
 /** pi tool names that mutate through a structured target. */
 const STRUCTURED_MUTATORS = new Set(['write', 'edit']);
@@ -141,7 +153,7 @@ export function isShellTool(toolName) {
  * @param {string[]} [readOnlyTools] tool names known never to mutate
  * @returns {boolean}
  */
-export function handoffAppliesTo(toolName, readOnlyTools = ['read', 'grep', 'glob', 'list', 'ls']) {
+export function handoffAppliesTo(toolName, readOnlyTools = HANDOFF_READ_ONLY_TOOLS) {
   const name = String(toolName ?? '').toLowerCase();
   if (name === '') return false;
   return !readOnlyTools.includes(name);
@@ -629,6 +641,11 @@ export function handoffRecoveryDiagnostic({
   const parts = [];
   const storeFault = hasStoreIntegrityFault(reasons);
   const protectedPath = hasProtectedPathFault(reasons);
+  // Whether a runnable grant was actually printed. The keyed follow-up below
+  // describes how "that grant" behaves, and saying it when none exists — an
+  // unusable session id, an unquotable path, an unresolved CLI — promises the
+  // operator a recovery that was never offered.
+  let grantOffered = false;
   if (cliPath === null) {
     parts.push(
       // `adlc handoff`, not a bare `handoff`: the global install route is
@@ -636,8 +653,12 @@ export function handoffRecoveryDiagnostic({
       // a transitive dependency's and is not linked onto PATH by that install,
       // so naming it would be one more instruction that does not run.
       'Host-side recovery: @adlc/context-handoff could not be resolved from this install, so its recovery ' +
-        'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin: ' +
-        '`adlc handoff bypass|repair|resume`, run from the denied repo.',
+        'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin, ' +
+        'run from the denied repo: ' +
+        (storeFault
+          ? '`adlc handoff bypass --session <id> --unbound-reason <text> --write` — a bound grant does not ' +
+            'lift a store fault.'
+          : '`adlc handoff bypass|repair|resume`.'),
     );
   } else if (protectedPath) {
     parts.push(
@@ -674,6 +695,7 @@ export function handoffRecoveryDiagnostic({
         `and is unbound because ${why} — the reason is recorded)`
       : 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT gated tool call only)';
     parts.push(runnable ? `${label}: ${command}` : command);
+    grantOffered = runnable;
   }
   // A store-integrity fault is not a standing the grant above can lift, so the
   // grant must not be left looking like the answer.
@@ -686,13 +708,17 @@ export function handoffRecoveryDiagnostic({
         'the legacy `.adlc/handoffs/.deny-store`.',
     );
   }
-  parts.push(
-    hasManifestKey
-      ? 'That grant is consumed by the next gated tool call — every tool but a read, whether or not it ' +
+  if (hasManifestKey) {
+    if (grantOffered) {
+      parts.push(
+        'That grant is consumed by the next gated tool call — every tool but a read, whether or not it ' +
           'mutates, so a `bash pwd` spends it — and unblocks one call rather than the session. ' +
-          '`adlc handoff resume` / `continue` are the durable handoff flows.'
-      : formatKeylessRecovery(),
-  );
+          '`adlc handoff resume` / `continue` are the durable handoff flows.',
+      );
+    }
+  } else {
+    parts.push(formatKeylessRecovery());
+  }
   return parts.join('\n\n');
 }
 
