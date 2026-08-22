@@ -259,8 +259,14 @@ test('a foreign deny recovers the OWNING session, not the blocked one', () => {
   // Every marker this plugin writes carries a null content hash today, so the
   // missing-hash refusal is the one an operator actually hits. A fallback
   // condition naming only the unbound ticket_id reads as "not my situation".
+  // runResume has THREE refusals and repair answers all of them ("refresh final
+  // AND bind"). Enumerating a subset strands whoever hits the missing one, and
+  // an absolute "never repair a bound marker" steered them off the only fix.
   assert.match(tail, /content_hash/, 'the fallback must name the refusal operators actually see');
   assert.match(tail, /ticket_id/);
+  assert.match(tail, /final checkpoint it cannot read/, 'a bound marker with no final is still stuck');
+  assert.match(tail, /only AFTER resume has actually refused/, 'the rule is order, not bind state');
+  assert.doesNotMatch(tail, /never be the first move against a marker that already has one/);
   assert.doesNotMatch(tail, /--session blocked-b /, 'must not address the marker as the blocked session');
   assert.doesNotMatch(tail, /--deny-session blocked-b/);
 });

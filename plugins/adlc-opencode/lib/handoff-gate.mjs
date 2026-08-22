@@ -240,13 +240,17 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
  * `repair` REWRITES that binding, so prescribing it unconditionally can discard
  * a valid handoff checkpoint before the successor ever consumes it.
  *
- * The fallback condition names BOTH ways resume declines, because the CLI has
- * two distinct refusals (bin/handoff.mjs) — "final content_hash is null" and
- * "ticket_id is null" — and repair is the answer to each. Naming only the
- * unbound one stranded the ordinary case: every marker this plugin writes
- * currently carries a null content hash, so the missing-hash refusal is the one
- * an operator actually hits, and a condition that did not mention it read as
- * "not my situation".
+ * The fallback condition names EVERY way resume declines, because the CLI has
+ * three distinct refusals (bin/handoff.mjs runResume) — "final checkpoint
+ * unavailable", "final content_hash is null" and "ticket_id is null" — and
+ * repair answers all three: its own help is "refresh final AND bind", and it
+ * rebuilds the final via buildFinal. Enumerating a subset strands operators
+ * twice over. Naming only the unbound case missed the ordinary one, since every
+ * marker this plugin writes carries a null content hash. Naming only the two
+ * null-field cases then missed the bound-marker-with-missing-final case — and
+ * worse, the old "never repair a bound marker" absolute actively steered them
+ * away from the one command that fixes it. The rule is about ORDER, not about
+ * the marker's bind state: never repair BEFORE resume has refused.
  *
  * `--dir` is pinned to the repo's own .adlc. Without it the CLI resolves the
  * store relative to the pasting shell's cwd, so a command run from anywhere
@@ -269,10 +273,11 @@ function recoverySteps(target, root) {
   return (
     'Recover from a HOST shell (the agent shell is inside the deny-set): ' +
     `\`adlc handoff resume --session <new-session> --deny-session ${target}${dir} --write\`. ` +
-    'If resume declines because the deny is unbound — a null ticket_id OR a null final ' +
-    `content_hash, both of which it names — bind it with \`adlc handoff repair --session ${target} ` +
-    `--ticket <id> --content-hash <hash>${dir} --write\` and re-run resume. Repair rewrites an ` +
-    'existing binding, so it must never be the first move against a marker that already has one.' +
+    'If resume declines for ANY reason it names — an unbound deny (null ticket_id or null final ' +
+    'content_hash) or a final checkpoint it cannot read — repair is the answer to all of them, ' +
+    `because it refreshes the final AND rebinds: \`adlc handoff repair --session ${target} ` +
+    `--ticket <id> --content-hash <hash>${dir} --write\`, then re-run resume. Repair rewrites an ` +
+    'existing binding, so run it only AFTER resume has actually refused, never as the first move.' +
     cdNote
   );
 }
