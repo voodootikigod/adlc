@@ -2312,3 +2312,84 @@ test('a protected SHELL call spends the grant; a structured one does not', () =>
     }
   }
 });
+
+test('deleting the ticket store does not disarm an armed repo, in either layout', () => {
+  // u4's round-8 shape, checked against pi. The containment signal is a FILE an
+  // agent can delete: measured here, structured tool calls naming the ticket
+  // store through every shape pi's extractor admits (path/target/filePath/file)
+  // are ALLOWED — unlike `.adlc/.deny-store`, the store is not a protected
+  // path — so `rm` of it below the band is a real route, and without a latch
+  // the repo would read as never-ADLC and the gate would be off for good.
+  //
+  // The latch is the monotonic memory armed at session_start: deleting a file
+  // inside the root leaves the DIRECTORY's identity untouched, so the root
+  // stays remembered. Both store layouts are covered because
+  // `ticketStoreExists` accepts either.
+  //
+  // Residual, deliberately not closed here: a full PROCESS restart starts a
+  // fresh latch, so a repo whose store was deleted reads as never-ADLC to the
+  // next process. Protecting the ticket store as a handoff path belongs in
+  // @adlc/context-handoff, not in this adapter.
+  for (const [layout, install] of [
+    ['tickets.json', (r) => {
+      mkdirSync(join(r, '.adlc'), { recursive: true });
+      const f = join(r, '.adlc', 'tickets.json');
+      writeFileSync(f, JSON.stringify({ tickets: [TICKET] }));
+      return f;
+    }],
+    ['tickets/.store.json', (r) => {
+      mkdirSync(join(r, '.adlc', 'tickets'), { recursive: true });
+      const f = join(r, '.adlc', 'tickets', '.store.json');
+      writeFileSync(f, JSON.stringify({ tickets: [TICKET] }));
+      return f;
+    }],
+  ]) {
+    const root = makeBareDir();
+    try {
+      const storeFile = install(root);
+      const adlcRoots = createAdlcRootState();
+
+      // Arm exactly as session_start does.
+      const armed = resolveAdlcRoot(root);
+      assert.equal(armed, realpathSync(root), `${layout}: the repo arms`);
+      adlcRoots.record(armed);
+
+      // The deletion route is open — assert it, so this test notices if the
+      // store ever becomes a protected path and the note above goes stale.
+      for (const key of ['path', 'target', 'filePath', 'file']) {
+        assert.equal(
+          checkHandoff({
+            toolName: 'some_custom_tool',
+            input: { [key]: storeFile },
+            sessionId: 'sess-1',
+            usage: { percent: 5 },
+            root,
+            adlcRoots,
+          }).decision,
+          'allow',
+          `${layout}: a structured {${key}} naming the store is not a protected path today`,
+        );
+      }
+
+      rmSync(storeFile, { force: true });
+      assert.equal(resolveAdlcRoot(root), null, `${layout}: structurally it now reads as never-ADLC`);
+
+      // The latch: below the band, a later mutation must still be evaluated.
+      assert.equal(
+        checkHandoff({
+          toolName: 'edit',
+          input: { path: 'a.txt' },
+          sessionId: 'sess-2',
+          usage: { percent: 5 },
+          root,
+          adlcRoots,
+          evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+        }).decision,
+        'deny',
+        `${layout}: deleting the store must not be an off switch`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
