@@ -106,13 +106,18 @@ const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
  * 1. RECOVERY_VALUE_RE, so it cannot smuggle a second command into a string an
  *    operator is invited to paste.
  * 2. The CLI's own session-id rules, a trusted-local twin of isSafeSessionId
- *    (packages/context-handoff/lib/deny-marker.mjs): no `/`, no `\`, no `..`,
- *    and basename(id) === id. The grammar alone accepts `../session` and `a/b`,
+ *    (packages/context-handoff/lib/deny-marker.mjs): no `/`, no `..`, and
+ *    basename(id) === id. The grammar alone accepts `../session` and `a/b`,
  *    which `requireSafeSession` REJECTS — so the tail would have printed a
  *    command that cannot run, prolonging the deny while looking like guidance.
  *
  * Also rejects a leading `-`: such a value is parsed as a FLAG, not an
  * argument, so `--deny-session -rf` breaks the command it appears in.
+ *
+ * The twin omits isSafeSessionId's backslash check on purpose. RECOVERY_VALUE_RE
+ * already excludes `\`, so re-testing it here would be logic no test could ever
+ * observe; the composed predicate still matches the CLI's rules across every id
+ * that gets this far.
  *
  * @param {unknown} id
  * @returns {boolean}
@@ -120,7 +125,7 @@ const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 function isPrintableSessionId(id) {
   if (typeof id !== 'string' || !RECOVERY_VALUE_RE.test(id)) return false;
   if (id.startsWith('-')) return false;
-  if (id.includes('/') || id.includes('\\') || id.includes('..')) return false;
+  if (id.includes('/') || id.includes('..')) return false;
   return basename(id) === id;
 }
 
