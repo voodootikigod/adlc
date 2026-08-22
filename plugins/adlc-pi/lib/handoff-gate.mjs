@@ -208,12 +208,30 @@ export function observeHandoffSignals(usage) {
  * @returns {string|null}
  */
 export function resolveAdlcRoot(root) {
+  return walkToAdlcRoot(root, (dir) => existsSync(join(dir, '.adlc')));
+}
+
+/**
+ * The one ancestor walk both root lookups use.
+ *
+ * Factored deliberately rather than written twice: the live lookup and the
+ * remembered-root lookup had drifted, the remembered one walking past a `.git`
+ * boundary the live one honoured, so a checkout vendored inside an ADLC repo
+ * was captured by it — and its comment claimed the two matched. One walk, one
+ * boundary rule, nothing left to disagree about.
+ *
+ * `isRoot` is checked BEFORE the boundary so an ADLC repo (which has both
+ * `.adlc` and `.git`) is found rather than treated as its own boundary.
+ *
+ * @param {unknown} root
+ * @param {(dir: string) => boolean} isRoot
+ * @returns {string|null}
+ */
+function walkToAdlcRoot(root, isRoot) {
   if (typeof root !== 'string' || root === '') return null;
   let current = trustedRealpath(resolve(root));
   for (;;) {
-    if (existsSync(join(current, '.adlc'))) return current;
-    // `.adlc` wins over `.git` at the same level, so an ADLC repo (which has
-    // both) is found rather than treated as its own boundary.
+    if (isRoot(current)) return current;
     if (existsSync(join(current, '.git'))) return null;
     const parent = dirname(current);
     if (parent === current) return null;
@@ -255,22 +273,16 @@ export function createAdlcRootState() {
     /**
      * The remembered ADLC root this path sits under, or null.
      *
-     * Walks ancestors the same way `resolveAdlcRoot` does, so a session in a
+     * Shares `walkToAdlcRoot` with the live lookup, so a session in a
      * subdirectory of a repo whose `.adlc` was since deleted still resolves to
      * the root that opted in — an exact-key lookup would forget it and hand
-     * back the off switch the memory exists to remove.
+     * back the off switch the memory exists to remove — while a nested checkout
+     * still stops at its own `.git`.
      * @param {unknown} root
      * @returns {string|null}
      */
     resolve(root) {
-      let current = key(root);
-      if (current === null) return null;
-      for (;;) {
-        if (seen.has(current)) return current;
-        const parent = dirname(current);
-        if (parent === current) return null;
-        current = parent;
-      }
+      return walkToAdlcRoot(root, (dir) => seen.has(dir));
     },
     /** @param {unknown} root */
     record(root) {

@@ -1227,14 +1227,29 @@ test('the walk stops at a nested checkout — it is its own project', () => {
   try {
     const nested = join(root, 'vendor', 'other-project');
     mkdirSync(join(nested, '.git'), { recursive: true });
-    const verdict = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-1',
-      usage: { percent: HARD_PCT },
-      root: nested,
-    });
-    assert.equal(verdict.decision, 'allow', 'a nested checkout is not the outer ADLC repo');
+    // The memory MUST be threaded here, exactly as the extension threads it:
+    // without it this test passes against a boundary check that only exists on
+    // the live lookup, while the remembered-root lookup captures the nested
+    // checkout anyway.
+    const adlcRoots = createAdlcRootState();
+    const ask = (r) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root: r,
+        adlcRoots,
+      }).decision;
+
+    assert.equal(ask(root), 'deny', 'the outer repo arms the memory');
+    assert.equal(ask(nested), 'allow', 'a nested checkout is not the outer ADLC repo');
+    assert.equal(existsSync(join(nested, '.adlc')), false);
+
+    // And still not, once the outer opt-in is only a memory.
+    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+    assert.equal(ask(root), 'deny', 'the outer repo stays remembered');
+    assert.equal(ask(nested), 'allow', 'the boundary holds for the remembered root too');
     assert.equal(existsSync(join(nested, '.adlc')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
