@@ -107,9 +107,16 @@ const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
  */
 const RECOVERY_PATH_UNQUOTED_RE = /^[A-Za-z0-9_./=-]+$/;
 
-/** @returns {string|null} null when the path cannot be safely displayed */
+/**
+ * Module-private with one call site, which passes `${root}/.adlc` only after
+ * checking root is a string — so `p` is always a non-empty string here. No
+ * typeof/empty guard: it would be logic no test could ever observe.
+ *
+ * @param {string} p
+ * @returns {string|null} null when the path cannot be safely displayed
+ */
 function quotePathForDisplay(p) {
-  if (typeof p !== 'string' || p === '' || p.includes("'") || /[\r\n]/.test(p)) return null;
+  if (p.includes("'") || /[\r\n]/.test(p)) return null;
   return RECOVERY_PATH_UNQUOTED_RE.test(p) ? p : `'${p}'`;
 }
 
