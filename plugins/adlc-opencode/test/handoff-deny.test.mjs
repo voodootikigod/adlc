@@ -360,6 +360,40 @@ test('an external ticket-store override is enforced even with no local .adlc', (
   }
 });
 
+test('an external-store repo is ARMED end to end: the band denies and writes a marker', async () => {
+  // The unit check above proves the gate is reached; this proves enforcement
+  // actually lands — a deny AND a marker on disk — through the real plugin
+  // factory, in a worktree whose .adlc does not exist until the deny creates it.
+  const dir = plainDir();
+  const store = plainDir();
+  const prior = process.env.ADLC_TICKET_STORE;
+  process.env.ADLC_TICKET_STORE = join(store, 'tickets.json');
+  try {
+    writeFileSync(process.env.ADLC_TICKET_STORE, JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }));
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await pumpDepth(hooks, 'ext-sess', HANDOFF_DEPTH);
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'ext-sess', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      /ADLC context-handoff/,
+      'the deny-set must be armed wherever the rail guard is',
+    );
+    assert.equal(
+      existsSync(join(dir, '.adlc', 'handoffs', 'denies', 'ext-sess.json')),
+      true,
+      'enforcement must record the deny, not just refuse the call',
+    );
+  } finally {
+    if (prior === undefined) delete process.env.ADLC_TICKET_STORE;
+    else process.env.ADLC_TICKET_STORE = prior;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(store, { recursive: true, force: true });
+  }
+});
+
 test('an initialized repo is still enforced — the guard is not just "no .adlc"', () => {
   // Guards against the contamination fix over-correcting into a no-op.
   const dir = repo();
