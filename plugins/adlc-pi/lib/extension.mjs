@@ -32,7 +32,12 @@ import { recordGateEvent } from './evidence.mjs';
 import { parseAddedLines } from '@adlc/rails-guard/lib/suppressions.mjs';
 import { appendToSystemPrompt, buildTicketDoctrine, buildErrorDoctrine } from './doctrine.mjs';
 import { createFitnessTracker, checkBuildGate } from './build-gate.mjs';
-import { checkHandoff, resolvePiSessionId, createStickyDenyState } from './handoff-gate.mjs';
+import {
+  checkHandoff,
+  resolvePiSessionId,
+  createAdlcRootState,
+  createStickyDenyState,
+} from './handoff-gate.mjs';
 import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
@@ -66,6 +71,9 @@ export function createExtension({ env = process.env } = {}) {
     // Per-session D1 memory: a FAILED deny-marker write must stay sticky after
     // the band cools, and only an in-process caller can carry that fact.
     const handoffSticky = createStickyDenyState();
+    // Opting in is remembered per root: removing `.adlc` mid-session must not
+    // turn the handoff gate off for a repo already under it.
+    const handoffAdlcRoots = createAdlcRootState();
     // Most recent gate event, summarized for the live widget (line 3).
     let lastGateEvent = null;
     // TUI-only message renderers, isolated so this module stays loadable under
@@ -347,6 +355,7 @@ export function createExtension({ env = process.env } = {}) {
         root: activeCwd,
         manifestKey,
         sticky: handoffSticky,
+        adlcRoots: handoffAdlcRoots,
       });
       if (handoff.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');

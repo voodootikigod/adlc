@@ -83,6 +83,10 @@ operator clears it.
 in any directory with no `.adlc/` — a repo that never adopted ADLC is never denied and
 never acquires ADLC state, at any fill percent.
 
+Opting in is **monotonic** within a session: once a root has been seen with `.adlc`, the
+gate keeps enforcing it even if the directory later disappears, so removing `.adlc` is not
+an off switch. The memory is per root, so it never arms a repo that did not opt in.
+
 Two things about the deny are deliberate and worth knowing before you meet one:
 
 - **It is not ticket-scoped.** An open deny is a fact about session trust, so it holds even

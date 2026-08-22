@@ -28,6 +28,7 @@ import {
 import { createExtension } from '../lib/extension.mjs';
 import {
   checkHandoff,
+  createAdlcRootState,
   createStickyDenyState,
   handoffAppliesTo,
   isShellTool,
@@ -897,5 +898,61 @@ test('the operator-facing deny text is pinned phrase by phrase', () => {
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('opt-in is monotonic — deleting .adlc cannot disarm an armed repo', async () => {
+  // Containment must not become an off switch. A custom tool whose target the
+  // extractor cannot see is not rail-checked while the store is cold, so an
+  // agent below the band could remove `.adlc` and, with a naive presence
+  // check, walk past every later handoff deny. Before this branch the band
+  // alone denied here; that must stay true for a repo that DID opt in.
+  const root = makeRepo();
+  try {
+    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'sess-1' });
+    assert.equal(
+      (await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
+      undefined,
+      'below the band, an opted-in repo is editable',
+    );
+
+    // The agent removes the opt-in marker, taking the deny store with it.
+    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+
+    ctx.getContextUsage = () => ({ percent: HARD_PCT, tokens: 1 });
+    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict?.block, true, 'a repo that opted in stays enforced for the session');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a repo that never opted in stays inert even after the memory is used', () => {
+  // The monotonic memory must be per-root: remembering repo A must not arm
+  // repo B, or containment is undone by the fix for it.
+  const adlcRoots = createAdlcRootState();
+  const armed = makeRepo();
+  const never = makeBareDir();
+  try {
+    const ask = (root) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root,
+        adlcRoots,
+      }).decision;
+
+    assert.equal(ask(armed), 'deny', 'the opted-in repo arms the memory');
+    assert.equal(ask(never), 'allow', 'a different, never-opted-in repo stays inert');
+    assert.equal(existsSync(join(never, '.adlc')), false, 'and gains no state');
+
+    rmSync(join(armed, '.adlc'), { recursive: true, force: true });
+    assert.equal(ask(armed), 'deny', 'the remembered root stays enforced');
+    assert.equal(ask(never), 'allow', 'the never-opted-in one still does not');
+  } finally {
+    rmSync(armed, { recursive: true, force: true });
+    rmSync(never, { recursive: true, force: true });
   }
 });

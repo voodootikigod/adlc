@@ -199,6 +199,34 @@ function isAdlcRoot(root) {
   return typeof root === 'string' && root !== '' && existsSync(join(root, '.adlc'));
 }
 
+/**
+ * Per-process memory of the roots that WERE ADLC repos, so containment can
+ * never become an off switch.
+ *
+ * A bare presence check reads `.adlc` fresh on every call, which makes removing
+ * it a way to disarm the gate: a custom tool whose target the extractor cannot
+ * see is not rail-checked while the store is cold, so an agent below the band
+ * could delete the directory and walk past every later deny — including one it
+ * had already tripped. Before containment the band alone denied there, and that
+ * must stay true.
+ *
+ * Keyed by root, not global: remembering one repo must not arm another, or the
+ * fix undoes the containment it protects.
+ */
+export function createAdlcRootState() {
+  const seen = new Set();
+  return {
+    /** @param {unknown} root */
+    has(root) {
+      return typeof root === 'string' && seen.has(root);
+    },
+    /** @param {unknown} root */
+    record(root) {
+      if (typeof root === 'string' && root !== '') seen.add(root);
+    },
+  };
+}
+
 // ---- recovery diagnostic ---------------------------------------------------
 //
 // Trusted LOCAL twins of `@adlc/context-handoff`'s recovery formatters, kept
@@ -467,6 +495,9 @@ export function handoffRecoveryDiagnostic({
  * @param {{ has: Function, record: Function }} [opts.sticky] per-session D1
  *        memory: a marker write that FAILED must stay sticky after the band
  *        cools, and only a caller with memory across calls can carry that
+ * @param {{ has: Function, record: Function }} [opts.adlcRoots] per-process
+ *        memory of roots that opted in, so removing `.adlc` cannot disarm the
+ *        gate for a repo that was already under it
  * @param {Function} [opts.evaluate] injection seam for tests
  * @returns {{ decision: 'allow'|'deny', reason?: string, reasons?: string[] }}
  */
@@ -479,6 +510,7 @@ export function checkHandoff({
   root,
   manifestKey = null,
   sticky,
+  adlcRoots,
   evaluate = evaluateHandoffPreToolUse,
 }) {
   if (!handoffAppliesTo(toolName)) return { decision: 'allow' };
@@ -490,7 +522,14 @@ export function checkHandoff({
   // key-free way out. `.adlc/` is the opt-in. Same guard codex's hook opens
   // with, resolved against the SAME root the rest of this gate uses so a
   // contained repo and an enforced one can never be decided from two places.
-  if (!isAdlcRoot(root)) return { decision: 'allow' };
+  //
+  // Monotonic: opting in is remembered for the process, so deleting `.adlc`
+  // mid-session cannot turn enforcement back off (see createAdlcRootState).
+  if (isAdlcRoot(root)) {
+    if (adlcRoots) adlcRoots.record(root);
+  } else if (!(adlcRoots && adlcRoots.has(root))) {
+    return { decision: 'allow' };
+  }
 
   const shell = isShellTool(toolName);
   const targets = shell ? [] : editTargetsOf(input, root);

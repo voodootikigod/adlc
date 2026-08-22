@@ -116,6 +116,13 @@ directory that never installed ADLC, at any fill percent. Without that guard the
 denied mutations in whatever directory the agent happened to open, created `.adlc` state
 there, and (the deny store being durable) followed that directory into every later session.
 
+Containment must not become an off switch, so the opt-in is **monotonic** per process: a
+root seen with `.adlc` stays enforced even if the directory is later removed. A custom tool
+whose target the extractor cannot see is not rail-checked while the store is cold, so a
+plain presence check would have let an agent below the band delete `.adlc` and walk past
+every later deny — including one it had already tripped. The memory is keyed by root, so
+remembering one repo never arms another.
+
 **Recovery.** The deny message carries the session id and the recovery command by absolute
 path, pinned to the denied repo with `--dir` (the CLI otherwise resolves `.adlc` from the
 operator's own cwd, writes the grant there and exits 0 regardless). When the deny belongs to
