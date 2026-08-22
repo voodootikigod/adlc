@@ -14,7 +14,7 @@ import { adlcRailsGuard } from '../index.mjs';
 import {
   checkHandoff,
   createStickyDenyState,
-  denyOwnerOf,
+  denyTargetsOf,
   handoffAppliesTo,
   isShellTool,
   recoveryTail,
@@ -266,16 +266,112 @@ test('a foreign deny recovers the OWNING session, not the blocked one', () => {
 });
 
 test('the deny owner is parsed only from the D3 reason, and is held to the value grammar', () => {
-  assert.equal(denyOwnerOf(['D3:unauthorized_open:owner-a']), 'owner-a');
-  assert.equal(denyOwnerOf(['D1:depth_band', 'D3:unauthorized_open:o2']), 'o2');
+  assert.deepEqual(denyTargetsOf(['D3:unauthorized_open:owner-a']).owners, ['owner-a']);
+  assert.deepEqual(denyTargetsOf(['D1:depth_band', 'D3:unauthorized_open:o2']).owners, ['o2']);
+  // One reason per open record, so several open denies name several owners.
+  // Taking only the first cleared one marker and left the operator denied.
+  assert.deepEqual(
+    denyTargetsOf(['D2:denier_session', 'D3:unauthorized_open:a', 'D3:unauthorized_open:b']).owners,
+    ['a', 'b'],
+  );
+  // An INVALID record's label is a session_id read off a record the gate just
+  // rejected — never a binding to point a repair command at.
+  const bad = denyTargetsOf(['D3:invalid_record:corrupt-1']);
+  assert.deepEqual(bad.owners, [], 'an invalid record must not become a repair target');
+  assert.equal(bad.invalid, true);
   for (const none of [[], ['D1:depth_band'], ['D2:denier_session'], null, undefined, 'D3:x']) {
-    assert.equal(denyOwnerOf(none), null, `must not invent an owner from ${JSON.stringify(none)}`);
+    assert.deepEqual(denyTargetsOf(none).owners, [], `must not invent an owner from ${JSON.stringify(none)}`);
   }
   // The owner is read off a deny record on DISK — less trusted than the host's
   // own session id — so an unquotable one degrades instead of being pasted.
   const tail = recoveryTail('blocked-b', ['D3:unauthorized_open:evil; rm -rf /']);
-  assert.match(tail, /cannot be printed as a safe, copy-pasteable shell command/);
-  assert.doesNotMatch(tail, /rm -rf/);
+  assert.match(tail, /no owner id in the deny store can be rendered as a safe, copy-pasteable shell word/);
+  assert.doesNotMatch(tail, /rm -rf/, 'the unquotable id must never reach the message');
+  // And it must NOT fall back to the blocked session: repair against a session
+  // that owns no marker is the round-1 defect re-entering by another door.
+  assert.doesNotMatch(tail, /--deny-session blocked-b/);
+});
+
+test('a directory contaminated by the OLD bug does not activate enforcement after upgrade', async () => {
+  // The bug this ticket fixes CREATED .adlc/.deny-store and a deny marker in
+  // ordinary directories. If the containment guard keyed on .adlc existing,
+  // those artifacts would vouch for themselves: installing the fix would leave
+  // exactly the repos it exists to free still bricked — and bricked past reach
+  // of the agent shell needed to clean them up.
+  const dir = plainDir();
+  try {
+    mkdirSync(join(dir, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', '.deny-store'), '');
+    writeFileSync(
+      join(dir, '.adlc', 'handoffs', 'denies', 'old-victim.json'),
+      JSON.stringify({
+        session_id: 'old-victim',
+        ticket_id: null,
+        content_hash: null,
+        status: 'open',
+        since: new Date().toISOString(),
+        host: 'opencode',
+        schema: 1,
+      }),
+    );
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    for (let i = 0; i < 40; i += 1) {
+      await hooks['tool.execute.before'](
+        { tool: 'edit', sessionID: 'after-upgrade', callID: `c${i}` },
+        { args: { filePath: 'src/app.mjs' } },
+      );
+    }
+    await hooks['tool.execute.before'](
+      { tool: 'bash', sessionID: 'after-upgrade', callID: 'shell' },
+      { args: { command: 'rm -rf .adlc' } },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an initialized repo is still enforced — the guard is not just "no .adlc"', () => {
+  // Guards against the contamination fix over-correcting into a no-op.
+  const dir = repo();
+  try {
+    let evaluated = 0;
+    const evaluate = () => {
+      evaluated += 1;
+      return { deny: false, reasons: [] };
+    };
+    checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, evaluate });
+    assert.equal(evaluated, 1, 'a repo with a ticket store must still reach the gate');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('every open deny is named, not just the first, and --dir is pinned to the repo', () => {
+  const tail = recoveryTail(
+    'blocked-b',
+    ['D2:denier_session', 'D3:unauthorized_open:owner-a', 'D3:unauthorized_open:owner-c'],
+    '/repo/root',
+  );
+  assert.match(tail, /2 open denies are blocking this repo \(owner-a, owner-c\)/);
+  // Without --dir the CLI resolves the store against the pasting shell's cwd,
+  // exits 0 against some other directory, and leaves this repo denied.
+  assert.match(tail, /--deny-session owner-a --dir \/repo\/root\/\.adlc --write/);
+  assert.match(tail, /--content-hash <hash> --dir \/repo\/root\/\.adlc --write/);
+});
+
+test('a repo path that cannot be a safe shell word drops --dir and says to cd', () => {
+  const tail = recoveryTail('s1', ['D3:unauthorized_open:o1'], "/repo/it's here");
+  assert.doesNotMatch(tail, /--dir [^i]/, 'no --dir FLAG, though the prose may explain its absence');
+  assert.match(tail, /Run them from the repo root/);
+  const spaced = recoveryTail('s1', ['D3:unauthorized_open:o1'], '/repo/my root');
+  assert.match(spaced, /--dir '\/repo\/my root\/\.adlc'/, 'a mere space is quotable, not a degrade');
+});
+
+test('an invalid deny record is never a repair target and sends the operator to the store', () => {
+  const tail = recoveryTail('blocked-b', ['D3:invalid_record:corrupt-1'], '/repo/root');
+  assert.doesNotMatch(tail, /--deny-session corrupt-1/, 'a record the gate rejected is not a binding');
+  assert.match(tail, /judged INVALID/);
+  assert.match(tail, /inspect \.adlc\/handoffs\/denies\//);
 });
 
 test('a foreign deny still prints the owner command when this session has no safe id', () => {

@@ -20,6 +20,8 @@ import {
   isHandoffMutatingShell,
 } from '@adlc/context-handoff';
 
+import { ticketStoreExists } from '@adlc/core';
+
 import { READONLY_TOOLS, SHELL_TOOLS, extractTargets } from '../rails-checker.mjs';
 
 /**
@@ -99,23 +101,53 @@ export function toRepoRelative(path, root) {
 const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 
 /**
- * The session that OWNS the open deny, which is not always the session being
- * denied. A D3 deny means someone else's marker is open — `mutation-gate.mjs`
- * reports it as `D3:unauthorized_open:<owner>` — and every recovery command
- * addresses the marker, so it must name the owner. Pointing `repair` at the
- * blocked session instead finds no marker and refuses.
+ * Paths are quoted, not grammar-checked, so their safe set is wider than a
+ * session id's — but a literal apostrophe or a newline still cannot be
+ * represented in a single-quoted shell word. Codex's twin, same reasoning.
+ */
+const RECOVERY_PATH_UNQUOTED_RE = /^[A-Za-z0-9_./=-]+$/;
+
+/** @returns {string|null} null when the path cannot be safely displayed */
+function quotePathForDisplay(p) {
+  if (typeof p !== 'string' || p === '' || p.includes("'") || /[\r\n]/.test(p)) return null;
+  return RECOVERY_PATH_UNQUOTED_RE.test(p) ? p : `'${p}'`;
+}
+
+/**
+ * Every marker a deny names, and whether the store also holds one that cannot
+ * be addressed by id at all.
+ *
+ * Not "the owner", singular: `mutation-gate.mjs` pushes one
+ * `D3:unauthorized_open:<owner>` PER open record, so a store with several open
+ * denies names several. Taking only the first told the operator to clear one
+ * marker and left them denied by the rest. Verified against the real gate: a
+ * depth-band self-deny reports BOTH `D2:denier_session` and
+ * `D3:unauthorized_open:<self>`, so the session's own marker arrives as an
+ * owner like any other and needs no special case.
+ *
+ * `D3:invalid_record:<label>` is deliberately NOT an owner. That label is the
+ * session_id read off a record the gate just judged INVALID, so it is not a
+ * binding a repair command may be pointed at; it flags a store an operator has
+ * to look at directly.
  *
  * @param {string[]} reasons
- * @returns {string|null}
+ * @returns {{ owners: string[], invalid: boolean }}
  */
-export function denyOwnerOf(reasons) {
-  const prefix = 'D3:unauthorized_open:';
+export function denyTargetsOf(reasons) {
+  const OPEN = 'D3:unauthorized_open:';
+  const INVALID = 'D3:invalid_record:';
+  const owners = [];
+  let invalid = false;
   for (const reason of Array.isArray(reasons) ? reasons : []) {
-    if (typeof reason === 'string' && reason.startsWith(prefix)) {
-      return reason.slice(prefix.length);
+    if (typeof reason !== 'string') continue;
+    if (reason.startsWith(OPEN)) {
+      const owner = reason.slice(OPEN.length);
+      if (!owners.includes(owner)) owners.push(owner);
+    } else if (reason.startsWith(INVALID)) {
+      invalid = true;
     }
   }
-  return null;
+  return { owners, invalid };
 }
 
 /**
@@ -136,27 +168,40 @@ export function denyOwnerOf(reasons) {
  * off a deny record on disk, so it is the less trusted of the two.
  *
  * @param {unknown} sessionId the session being denied
- * @param {string[]} [reasons] the gate's reason codes, source of the D3 owner
+ * @param {string[]} [reasons] the gate's reason codes, source of the D3 owners
+ * @param {string} [root] repo root, pinned into --dir so the command works from
+ *        any cwd the operator happens to paste it into
  * @returns {string}
  */
-export function recoveryTail(sessionId, reasons = []) {
-  const owner = denyOwnerOf(reasons);
-  // A foreign deny whose owner cannot be safely quoted: name the marker
-  // directory instead of emitting a command built from an id we do not trust.
-  if (owner !== null && !RECOVERY_VALUE_RE.test(owner)) {
-    return (
-      'The open deny belongs to another session whose id cannot be printed as a safe, copy-pasteable ' +
-      'shell command. Read the owning id from .adlc/handoffs/denies/ on the host and run `adlc handoff ' +
-      'repair` against it. Read-only tools remain usable in the interim.'
-    );
-  }
-  if (typeof sessionId !== 'string' || !RECOVERY_VALUE_RE.test(sessionId)) {
-    // With no usable session id there is still a recoverable marker whenever
-    // the deny is foreign, so the owner's command is worth printing alone.
-    if (owner !== null) {
+export function recoveryTail(sessionId, reasons = [], root = undefined) {
+  const { owners, invalid } = denyTargetsOf(reasons);
+  const safeOwners = owners.filter((o) => RECOVERY_VALUE_RE.test(o));
+  const droppedOwners = owners.length - safeOwners.length;
+  const said = typeof sessionId === 'string' && RECOVERY_VALUE_RE.test(sessionId) ? sessionId : null;
+
+  // An invalid record is not repairable by id, and an owner we cannot quote is
+  // not printable at all. Either way the operator has to open the store.
+  const storeNote =
+    invalid || droppedOwners > 0
+      ? ` The deny store also holds ${invalid ? 'a record the gate judged INVALID' : 'an owner id that cannot be safely printed'}, which no id-targeted command can clear — inspect .adlc/handoffs/denies/ on the host directly.`
+      : '';
+
+  // Fall back to this session's own id ONLY when the reasons named no owner at
+  // all — then it is the only marker the deny could mean. When owners WERE
+  // named but none survived quoting, falling back would point repair at a
+  // session that owns no marker: the round-1 defect, re-entering through the
+  // unsafe-owner door. Say what cannot be printed instead of guessing.
+  const targets =
+    safeOwners.length > 0 ? safeOwners : owners.length === 0 && said ? [said] : [];
+  if (targets.length === 0) {
+    // This branch already IS the whole explanation, so storeNote would only
+    // repeat it.
+    if (owners.length > 0 || invalid) {
       return (
-        `The open deny belongs to session ${owner}; this session has no safe id of its own. ` +
-        recoverySteps(owner)
+        'The open deny cannot be addressed by a printed command: no owner id in the deny store can be ' +
+        'rendered as a safe, copy-pasteable shell word. Read the owning id from .adlc/handoffs/denies/ ' +
+        'on the host and run `adlc handoff` against it there. Read-only tools remain usable in the ' +
+        'interim.'
       );
     }
     return (
@@ -165,13 +210,19 @@ export function recoveryTail(sessionId, reasons = []) {
       'unaffected by this resolution failure. Read-only tools remain usable in the interim.'
     );
   }
-  // Self-deny (the depth band wrote this session's own marker) vs foreign deny.
-  const target = owner ?? sessionId;
-  const whose =
-    target === sessionId
-      ? `Denied session id: ${sessionId}.`
-      : `Denied session id: ${sessionId}; the open deny belongs to session ${target}.`;
-  return `${whose} ${recoverySteps(target)}`;
+
+  const whose = said === null
+    ? `This session has no safe id of its own; the open deny belongs to session ${targets[0]}.`
+    : targets[0] === said
+      ? `Denied session id: ${said}.`
+      : `Denied session id: ${said}; the open deny belongs to session ${targets[0]}.`;
+  // Every open marker blocks, so clearing one is not recovery. Say so rather
+  // than letting the operator run the sequence once and stay denied.
+  const more =
+    targets.length > 1
+      ? ` ${targets.length} open denies are blocking this repo (${targets.join(', ')}) — repeat the sequence for each.`
+      : '';
+  return `${whose} ${recoverySteps(targets[0], root)}${more}${storeNote}`;
 }
 
 /**
@@ -191,17 +242,32 @@ export function recoveryTail(sessionId, reasons = []) {
  * an operator actually hits, and a condition that did not mention it read as
  * "not my situation".
  *
+ * `--dir` is pinned to the repo's own .adlc. Without it the CLI resolves the
+ * store relative to the pasting shell's cwd, so a command run from anywhere
+ * else operates on — or creates — a different store and exits 0 while the
+ * denied repo stays denied. When the path cannot be rendered as a safe shell
+ * word the flag is dropped and the operator is told to cd instead, which is
+ * wrong-but-visible rather than silently pointed elsewhere.
+ *
  * @param {string} target the session that OWNS the marker, already validated
+ * @param {string} [root] repo root
  * @returns {string}
  */
-function recoverySteps(target) {
+function recoverySteps(target, root) {
+  const dirDisplay = typeof root === 'string' ? quotePathForDisplay(`${root}/.adlc`) : null;
+  const dir = dirDisplay === null ? '' : ` --dir ${dirDisplay}`;
+  const cdNote =
+    typeof root === 'string' && dirDisplay === null
+      ? ' Run them from the repo root — its path cannot be printed as a safe shell word, so --dir is omitted and the CLI would otherwise resolve the store against your cwd.'
+      : '';
   return (
     'Recover from a HOST shell (the agent shell is inside the deny-set): ' +
-    `\`adlc handoff resume --session <new-session> --deny-session ${target} --write\`. ` +
+    `\`adlc handoff resume --session <new-session> --deny-session ${target}${dir} --write\`. ` +
     'If resume declines because the deny is unbound — a null ticket_id OR a null final ' +
     `content_hash, both of which it names — bind it with \`adlc handoff repair --session ${target} ` +
-    '--ticket <id> --content-hash <hash> --write\` and re-run resume. Repair rewrites an existing ' +
-    'binding, so it must never be the first move against a marker that already has one.'
+    `--ticket <id> --content-hash <hash>${dir} --write\` and re-run resume. Repair rewrites an ` +
+    'existing binding, so it must never be the first move against a marker that already has one.' +
+    cdNote
   );
 }
 
@@ -262,9 +328,18 @@ export function checkHandoff({
   // no jurisdiction over a directory that never opted into ADLC. Without this
   // the depth band denied tool call 30 and every call after it in an ordinary
   // repo, and CREATED .adlc/.deny-store plus .adlc/handoffs/denies/<id>.json
-  // there. Same guard both sibling enforcing adapters apply
-  // (plugins/adlc-codex/hooks/adlc-handoff-gate.mjs, plugins/adlc-claude-code/
-  // hooks/adlc-hook.mjs).
+  // there.
+  //
+  // The signal is a ticket store, NOT the bare existence of .adlc — the
+  // sibling adapters' check. That difference is deliberate and is an upgrade
+  // path: a directory contaminated by the very bug above HAS a .adlc, holding
+  // nothing but the deny artifacts the old build wrote there. Keying on the
+  // directory would let those artifacts vouch for themselves, so installing
+  // the fix would leave exactly the bricked repos it exists to free — and
+  // bricked past reach of the agent shell needed to clean them. `ticketStore
+  // Exists` is this plugin's own definition of initialized (rails-checker.mjs
+  // calls its absence "repo not ADLC-initialized"), so the deny-set and the
+  // rail guard now agree on what an ADLC repo is instead of holding two.
   //
   // Checked against the caller's `root` — the value every other path in this
   // gate resolves against — never a re-derived cwd, or the guard and the writes
@@ -272,8 +347,11 @@ export function checkHandoff({
   // not a usable string is NOT containment: it means the caller is broken, and
   // that falls through to the evaluation path (which fails closed) rather than
   // buying an allow.
-  if (typeof root === 'string' && root !== '' && !existsSync(join(root, '.adlc'))) {
-    return { decision: 'allow' };
+  if (typeof root === 'string' && root !== '') {
+    const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+    if (!existsSync(join(root, '.adlc')) || !ticketStoreExists(root, storeOverride)) {
+      return { decision: 'allow' };
+    }
   }
   if (!handoffAppliesTo(tool)) return { decision: 'allow' };
 
@@ -317,7 +395,7 @@ export function checkHandoff({
     reason:
       `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
       '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      `cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons)}`,
+      `cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
   };
 }
 
