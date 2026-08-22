@@ -210,21 +210,46 @@ function isAdlcRoot(root) {
  * had already tripped. Before containment the band alone denied there, and that
  * must stay true.
  *
- * Keyed by root, not global: remembering one repo must not arm another, or the
- * fix undoes the containment it protects.
+ * Keyed by CANONICAL root, not global and not by spelling: remembering one repo
+ * must not arm another (that would undo the containment this protects), and
+ * `/repo`, `/repo/.` and a symlink to the same checkout must not be three
+ * different keys — otherwise reaching the repo by another name forgets the
+ * opt-in.
+ *
+ * Process scope is the right ceiling, not a compromise. Anything more durable
+ * would keep denying a repo whose `.adlc` the user deliberately removed, which
+ * is the un-recoverable lock this whole change exists to remove.
  */
 export function createAdlcRootState() {
   const seen = new Set();
+  const key = (root) =>
+    typeof root === 'string' && root !== '' ? trustedRealpath(resolve(root)) : null;
   return {
     /** @param {unknown} root */
     has(root) {
-      return typeof root === 'string' && seen.has(root);
+      const k = key(root);
+      return k !== null && seen.has(k);
     },
     /** @param {unknown} root */
     record(root) {
-      if (typeof root === 'string' && root !== '') seen.add(root);
+      const k = key(root);
+      if (k !== null) seen.add(k);
     },
   };
+}
+
+/**
+ * The process-wide opt-in memory the extension uses.
+ *
+ * A per-instance Set would let "delete `.adlc`, then reload the extension"
+ * forget the opt-in, so the memory has to outlive any one instance. Tests build
+ * isolated states with `createAdlcRootState()` instead of sharing this one.
+ */
+const processAdlcRoots = createAdlcRootState();
+
+/** @returns {{ has: Function, record: Function }} */
+export function sharedAdlcRootState() {
+  return processAdlcRoots;
 }
 
 // ---- recovery diagnostic ---------------------------------------------------

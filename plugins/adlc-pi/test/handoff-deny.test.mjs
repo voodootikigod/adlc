@@ -12,6 +12,7 @@ import {
   rmSync,
   existsSync,
   realpathSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -954,5 +955,59 @@ test('a repo that never opted in stays inert even after the memory is used', () 
   } finally {
     rmSync(armed, { recursive: true, force: true });
     rmSync(never, { recursive: true, force: true });
+  }
+});
+
+test('the opt-in memory is keyed by canonical path, not by spelling', () => {
+  // Same checkout, three spellings. If the memory keys on the raw string, an
+  // agent that removes `.adlc` and then reaches the repo through a symlink or
+  // an un-normalized cwd walks past the monotonic guard.
+  const adlcRoots = createAdlcRootState();
+  const real = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-canon-')));
+  const linkDir = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-canonlink-')));
+  const link = join(linkDir, 'repo');
+  try {
+    mkdirSync(join(real, '.adlc'), { recursive: true });
+    symlinkSync(real, link);
+    const ask = (root) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root,
+        adlcRoots,
+        // A stub evaluator keeps this about containment only, and stops a real
+        // deny from re-creating `.adlc` and re-arming the root behind the test.
+        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+      }).decision;
+
+    assert.equal(ask(real), 'deny', 'arm through the canonical path');
+    rmSync(join(real, '.adlc'), { recursive: true, force: true });
+
+    assert.equal(ask(real), 'deny', 'canonical path stays enforced');
+    assert.equal(ask(join(real, '.')), 'deny', 'an un-normalized spelling too');
+    assert.equal(ask(link), 'deny', 'and a symlink to the same checkout');
+  } finally {
+    rmSync(real, { recursive: true, force: true });
+    rmSync(linkDir, { recursive: true, force: true });
+  }
+});
+
+test('the opt-in memory outlives an extension reload within the process', async () => {
+  // A fresh extension instance must not be a way to forget that this repo
+  // opted in — otherwise "delete .adlc, then reload" is the bypass.
+  const root = makeRepo();
+  try {
+    const first = await boot(root, { percent: 5, sessionId: 'sess-1' });
+    await call(first.pi, first.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+
+    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+
+    const reloaded = await boot(root, { percent: HARD_PCT, sessionId: 'sess-2' });
+    const verdict = await call(reloaded.pi, reloaded.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+    assert.equal(verdict?.block, true, 'a reload must not forget the opt-in');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
