@@ -35,7 +35,7 @@ import {
   editTargetOf,
   formatRecoveryCommand,
   handoffRecoveryDiagnostic,
-  resolveRecoveryCliPath,
+  foreignDenierOf,
   observeHandoffSignals,
   resolvePiSessionId,
 } from '../lib/handoff-gate.mjs';
@@ -652,7 +652,8 @@ test('the deny text carries a session-bound recovery command', async () => {
     const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
     assert.equal(verdict.block, true);
     assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
-    assert.match(verdict.reason, /bypass --session my-session --write/, 'copy-pasteable');
+    assert.match(verdict.reason, /bypass --session my-session /, 'bound to this session');
+    assert.match(verdict.reason, / --write(\s|$)/, 'copy-pasteable and persisting');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -688,49 +689,49 @@ test('the keyless block is omitted once a manifest key is configured', () => {
       manifestKey: 'k'.repeat(64),
     });
     assert.equal(keyed.decision, 'deny');
-    assert.match(keyed.reason, /bypass --session my-session --write/);
+    assert.match(keyed.reason, /bypass --session my-session /);
     assert.doesNotMatch(keyed.reason, /\.deny-store/, 'a keyed operator has the CLI path');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
+
 test('the recovery command degrades rather than emitting a broken one', () => {
-  const safe = formatRecoveryCommand({
+  const base = {
     interpreterPath: '/usr/bin/node',
     scriptPath: '/opt/adlc/bin/handoff.mjs',
+    adlcDir: '/srv/repo/.adlc',
     sessionId: 'sess-a',
-  });
-  assert.equal(safe, '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --write');
+  };
+  assert.equal(
+    formatRecoveryCommand(base),
+    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc --write',
+  );
+  assert.match(
+    formatRecoveryCommand({ ...base, unbound: true }),
+    /bypass --session sess-a --unbound-reason \S+ --dir /,
+  );
 
   // A path needing quoting is quoted; one that cannot be quoted at all degrades
   // to prose rather than a command that would break out of its own quoting.
   assert.match(
-    formatRecoveryCommand({
-      interpreterPath: '/usr/bin/node',
-      scriptPath: '/opt/my adlc/bin/handoff.mjs',
-      sessionId: 'sess-a',
-    }),
+    formatRecoveryCommand({ ...base, scriptPath: '/opt/my adlc/bin/handoff.mjs' }),
     /'\/opt\/my adlc\/bin\/handoff\.mjs'/,
   );
-  const unquotable = formatRecoveryCommand({
-    interpreterPath: '/usr/bin/node',
-    scriptPath: "/opt/it's/handoff.mjs",
-    sessionId: 'sess-a',
-  });
-  assert.doesNotMatch(unquotable, /^\/usr\/bin\/node /);
-  assert.match(unquotable, /cannot be printed as a safe/);
+  for (const broken of [
+    { scriptPath: "/opt/it's/handoff.mjs" },
+    { adlcDir: "/srv/it's/.adlc" },
+    { interpreterPath: '/usr/bin/no\nde' },
+  ]) {
+    const degraded = formatRecoveryCommand({ ...base, ...broken });
+    assert.doesNotMatch(degraded, /^\/usr\/bin\/node /);
+    assert.match(degraded, /cannot be printed as a safe/);
+  }
 
   // No usable session id means no --session command exists for any grammar.
   for (const sessionId of [null, '', '../escape', 'has space']) {
-    assert.doesNotMatch(
-      formatRecoveryCommand({
-        interpreterPath: '/usr/bin/node',
-        scriptPath: '/opt/adlc/bin/handoff.mjs',
-        sessionId,
-      }),
-      /bypass --session/,
-    );
+    assert.doesNotMatch(formatRecoveryCommand({ ...base, sessionId }), /bypass --session/);
   }
 });
 
@@ -744,48 +745,94 @@ test('the diagnostic still names the keyless path when the CLI cannot be resolve
   assert.match(diagnostic, /\.adlc\/\.deny-store/, 'the keyless path needs no CLI at all');
 });
 
-test('the printed grant is described as one-shot because it measurably is', async () => {
-  // Executes the command the deny text prints, against a FOREIGN open deny, and
-  // watches what it actually buys: the next mutation, and only that one. The
-  // wording ("authorizes the NEXT mutation only") is pinned to this behaviour
-  // rather than to the CLI's help text.
-  const key = 'k'.repeat(64);
+test('a foreign deny gets an unbound grant, this session\'s own gets a bound one', () => {
+  const of = (reasons, sessionId) =>
+    handoffRecoveryDiagnostic({ sessionId, root: '/srv/repo', reasons, hasManifestKey: true });
+
+  assert.match(of(['D3:unauthorized_open:sess-A'], 'sess-B'), /--unbound-reason/);
+  assert.doesNotMatch(of(['D3:unauthorized_open:sess-B', 'D2:denier_session'], 'sess-B'), /--unbound-reason/);
+  assert.equal(foreignDenierOf(['D3:unauthorized_open:sess-A'], 'sess-B'), 'sess-A');
+  assert.equal(foreignDenierOf(['D3:unauthorized_open:sess-B'], 'sess-B'), null);
+  assert.equal(foreignDenierOf(['D2:denier_session'], 'sess-B'), null);
+  assert.equal(foreignDenierOf(undefined, 'sess-B'), null);
+});
+
+test('the command names the denied repo, so cwd cannot redirect it', () => {
   const root = makeRepo();
   try {
-    seedForeignDeny(root, 'denier-oneshot');
-    const denied = () =>
+    seedForeignDeny(root, 'denier-dir');
+    const { reason } = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-B',
+      root,
+      manifestKey: 'k'.repeat(64),
+    });
+    // Without --dir the CLI resolves .adlc from process.cwd(), writes the grant
+    // into whatever directory the operator's shell happens to be in, and exits
+    // 0 — reporting success while the denied repo stays denied.
+    assert.match(reason, new RegExp(`--dir '?${realpathSync(root)}/\\.adlc'?`));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the printed command actually clears a real band-generated foreign deny', async () => {
+  // The end-to-end contract: band-generate a deny the way a real session does,
+  // take the command the deny text shows a DIFFERENT session, run that exact
+  // string in a shell whose cwd is somewhere else entirely, and check what it
+  // bought. A band marker is unbound (ticket_id and content_hash both null), so
+  // a bound grant would be consumed here and leave the session denied.
+  const key = 'k'.repeat(64);
+  const root = makeRepo();
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-elsewhere-')));
+  try {
+    // Session A crosses the handoff band and leaves its own marker behind.
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    const marker = JSON.parse(
+      readFileSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'), 'utf8'),
+    );
+    assert.equal(marker.ticket_id, null, 'a band marker is unbound');
+    assert.equal(marker.content_hash, null, 'a band marker is unbound');
+
+    const askB = () =>
       checkHandoff({
         toolName: 'edit',
         input: { path: 'src/a.mjs' },
         sessionId: 'sess-B',
         root,
         manifestKey: key,
-      }).decision;
+      });
 
-    assert.equal(denied(), 'deny', 'a fresh session is denied by the foreign record');
+    const denied = askB();
+    assert.equal(denied.decision, 'deny');
+    assert.match(denied.reason, /D3:unauthorized_open:sess-A/);
 
-    const cli = resolveRecoveryCliPath();
-    assert.notEqual(cli, null, 'the recovery CLI must resolve from this checkout');
-    const grant = spawnSync(
-      process.execPath,
-      [cli, 'bypass', '--session', 'sess-B', '--dir', join(root, '.adlc'), '--write'],
-      { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
-    );
-    assert.equal(grant.status, 0, `bypass failed: ${grant.stderr}`);
+    // Pull the command out of the message exactly as an operator would.
+    const command = denied.reason
+      .split('\n')
+      .find((line) => line.includes('bypass --session'))
+      ?.replace(/^[^:]*: /, '');
+    assert.ok(command, `no command line in:\n${denied.reason}`);
 
-    assert.equal(denied(), 'allow', 'the grant authorizes the next mutation');
-    assert.equal(denied(), 'deny', 'and is consumed by it — the session is not unblocked');
+    const run = spawnSync(command, {
+      shell: true,
+      cwd: elsewhere,
+      env: { ...process.env, ADLC_MANIFEST_KEY: key },
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
 
-    const text = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-B',
-      root,
-      manifestKey: key,
-    }).reason;
-    assert.match(text, /NEXT mutation only/);
-    assert.doesNotMatch(text, /TTY/, 'no TTY is required — bypass ran here with none');
+    assert.equal(askB().decision, 'allow', 'the printed command must actually unblock the caller');
+    assert.equal(askB().decision, 'deny', 'and be consumed by that one mutation, as the text says');
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(elsewhere, { recursive: true, force: true });
   }
 });

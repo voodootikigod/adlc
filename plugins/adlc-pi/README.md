@@ -92,16 +92,24 @@ Two things about the deny are deliberate and worth knowing before you meet one:
 
 ### Recovery
 
-The deny message names the recovery command for the denied session, by absolute path:
+The deny message names the recovery command for the denied session, by absolute path, and
+pinned to the denied repo with `--dir` — without that the CLI resolves `.adlc` from the
+shell's own directory, writes the grant somewhere else and still exits 0:
 
 ```bash
-<node> <…>/@adlc/context-handoff/bin/handoff.mjs bypass --session <session-id> --write
+<node> <…>/@adlc/context-handoff/bin/handoff.mjs bypass --session <session-id> \
+  [--unbound-reason pi-handoff-operator-recovery] --dir <repo>/.adlc --write
 ```
 
-That grant is **one-shot**: it authorizes the next mutation — including one denied by
-another session's record — and is consumed by it, so the call after that is denied again.
-`adlc handoff resume` / `continue` are the durable handoff flows. All of these, plus
-`write`, `supervise` and `repair`, require `ADLC_MANIFEST_KEY`.
+The `--unbound-reason` clause appears when the deny belongs to **another** session. A
+band-generated marker is unbound (`ticket_id` and `content_hash` are both null), and a
+bound grant only authorizes an unbound record belonging to its own session — so against a
+foreign record a bound grant is consumed and you stay denied.
+
+Either way the grant is **one-shot**: it authorizes the next mutation and is consumed by it,
+so the call after that is denied again. `adlc handoff resume` / `continue` are the durable
+handoff flows. All of these, plus `write`, `supervise` and `repair`, require
+`ADLC_MANIFEST_KEY`.
 
 If you do not have the key, delete the deny state by hand from a host shell (the agent's
 own shell is inside the deny-set) — this is also the only durable clear:

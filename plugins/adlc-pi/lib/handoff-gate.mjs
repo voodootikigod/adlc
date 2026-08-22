@@ -245,35 +245,87 @@ function trustedRealpath(path) {
   }
 }
 
+/** Single-token reason recorded against an operator's unbound grant. */
+const UNBOUND_REASON = 'pi-handoff-operator-recovery';
+
+/** The `--unbound-reason` clause a foreign open record needs, or nothing. */
+function unboundClause(unbound) {
+  return unbound ? ` --unbound-reason ${UNBOUND_REASON}` : '';
+}
+
 /**
- * Prose for an install path no shell command can safely carry. The raw paths
- * are safe here precisely because this string is never meant to be executed.
- * @param {{ interpreterPath: string, scriptPath: string, sessionId: string }} opts
+ * The session named by a `D3:unauthorized_open:<id>` reason when it is NOT this
+ * session.
+ *
+ * This is the difference between a command that works and one that quietly does
+ * not. A band-generated marker is unbound (`ticket_id` and `content_hash` are
+ * both null), and a BOUND grant only authorizes an unbound record belonging to
+ * its own session — so against another session's record it is consumed and the
+ * caller stays denied. Measured, not read: see the cross-session test.
+ *
+ * @param {string[]|undefined} reasons
+ * @param {unknown} sessionId
+ * @returns {string|null}
+ */
+export function foreignDenierOf(reasons, sessionId) {
+  for (const reason of reasons ?? []) {
+    const match = /^D3:unauthorized_open:(.+)$/.exec(String(reason));
+    if (match && match[1] !== sessionId) return match[1];
+  }
+  return null;
+}
+
+/**
+ * Prose for a path no shell command can safely carry. The raw paths are safe
+ * here precisely because this string is never meant to be executed.
+ * @param {{ interpreterPath: string, scriptPath: string, adlcDir: string, sessionId: string, unbound?: boolean }} opts
  * @returns {string}
  */
-export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
+export function formatUnsafeInstallPathMessage({
+  interpreterPath,
+  scriptPath,
+  adlcDir,
+  sessionId,
+  unbound = false,
+}) {
   return (
-    'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
-    'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
-    `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write".`
+    'The recovery command cannot be printed as a safe, copy-pasteable shell command: a resolved path ' +
+    'contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run the ' +
+    `operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
+    `subcommand "bypass --session ${sessionId}${unboundClause(unbound)} --write" against ${adlcDir}.`
   );
 }
 
 /**
  * The copy-pasteable host-side recovery command, or prose when one cannot be
  * built. Degrades rather than ever emitting a broken or injectable command.
- * @param {{ interpreterPath: string, scriptPath: string, sessionId: unknown }} opts
+ *
+ * `--dir` is not optional decoration. The CLI resolves its ledger relative to
+ * `process.cwd()`, so the same command pasted into a shell sitting anywhere
+ * else writes the grant into THAT directory and exits 0 — the denied repo is
+ * untouched and the operator is told it worked.
+ *
+ * @param {{ interpreterPath: string, scriptPath: string, adlcDir: string, sessionId: unknown, unbound?: boolean }} opts
  * @returns {string}
  */
-export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }) {
+export function formatRecoveryCommand({
+  interpreterPath,
+  scriptPath,
+  adlcDir,
+  sessionId,
+  unbound = false,
+}) {
   if (!isRecoverySessionId(sessionId)) return formatNoSessionIdMessage();
-  const interpreterDisplay = quotePathForDisplay(interpreterPath);
-  const scriptDisplay = quotePathForDisplay(scriptPath);
-  if (interpreterDisplay === null || scriptDisplay === null) {
-    return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
+  const [interpreterDisplay, scriptDisplay, dirDisplay] = [interpreterPath, scriptPath, adlcDir].map(
+    quotePathForDisplay,
+  );
+  if (interpreterDisplay === null || scriptDisplay === null || dirDisplay === null) {
+    return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, adlcDir, sessionId, unbound });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  return (
+    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
+    `${unboundClause(unbound)} --dir ${dirDisplay} --write`
+  );
 }
 
 /**
@@ -342,12 +394,18 @@ export function resolveRecoveryCliPath({ req = createRequire(import.meta.url) } 
  *
  * @param {object} opts
  * @param {unknown} opts.sessionId
+ * @param {string} [opts.root] repo root the deny belongs to — the command is
+ *        pinned to it with `--dir`, never left to the operator's cwd
+ * @param {string[]} [opts.reasons] deny reasons, read only to tell a foreign
+ *        open record from this session's own
  * @param {boolean} [opts.hasManifestKey]
  * @param {string|null} [opts.cliPath]
  * @returns {string}
  */
 export function handoffRecoveryDiagnostic({
   sessionId,
+  root = '',
+  reasons = [],
   hasManifestKey = false,
   cliPath = resolveRecoveryCliPath(),
 }) {
@@ -361,23 +419,28 @@ export function handoffRecoveryDiagnostic({
   } else {
     const interpreterPath = trustedRealpath(process.execPath);
     const scriptPath = trustedRealpath(cliPath);
-    const command = formatRecoveryCommand({ interpreterPath, scriptPath, sessionId });
+    // Realpath the ROOT and join afterwards: realpathing `<root>/.adlc` itself
+    // would follow a symlink to a directory named something else, and the CLI
+    // rejects a --dir whose last segment is not `.adlc`.
+    const adlcDir = join(trustedRealpath(root), '.adlc');
+    const unbound = foreignDenierOf(reasons, sessionId) !== null;
+    const command = formatRecoveryCommand({ interpreterPath, scriptPath, adlcDir, sessionId, unbound });
     // Label it as a command only when it IS one — same representability test
     // `formatRecoveryCommand` itself used, so the two can never disagree.
     const runnable =
       isRecoverySessionId(sessionId) &&
       quotePathForDisplay(interpreterPath) !== null &&
-      quotePathForDisplay(scriptPath) !== null;
+      quotePathForDisplay(scriptPath) !== null &&
+      quotePathForDisplay(adlcDir) !== null;
     // "One-shot" and "next mutation only" are measured, not copied from the
-    // CLI's help: a bound grant does clear a FOREIGN open deny, and it is
-    // consumed by the mutation it authorizes — the one after that is denied
-    // again. Calling this "recovery" without saying so would replace one
-    // misleading instruction with another.
-    parts.push(
-      runnable
-        ? `One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only): ${command}`
-        : command,
-    );
+    // CLI's help: the grant is consumed by the mutation it authorizes, and the
+    // one after that is denied again. Calling this "recovery" without saying so
+    // would replace one misleading instruction with another.
+    const label = unbound
+      ? 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only, and is ' +
+        'unbound because the deny belongs to another session — the reason is recorded)'
+      : 'One-shot host-side grant (needs ADLC_MANIFEST_KEY; authorizes the NEXT mutation only)';
+    parts.push(runnable ? `${label}: ${command}` : command);
   }
   parts.push(
     hasManifestKey
@@ -459,6 +522,11 @@ export function checkHandoff({
       `context-rot handoff deny (${result.reasons.join(', ')}). The deny is recorded in the repo and ` +
       'scoped to session trust rather than to a ticket: it holds for new sessions here until an operator ' +
       'clears it, and the agent shell cannot.\n\n' +
-      handoffRecoveryDiagnostic({ sessionId: safeSessionId, hasManifestKey: key !== null }),
+      handoffRecoveryDiagnostic({
+        sessionId: safeSessionId,
+        root,
+        reasons: result.reasons,
+        hasManifestKey: key !== null,
+      }),
   };
 }

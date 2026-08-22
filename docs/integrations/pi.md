@@ -117,9 +117,13 @@ denied mutations in whatever directory the agent happened to open, created `.adl
 there, and (the deny store being durable) followed that directory into every later session.
 
 **Recovery.** The deny message carries the session id and the recovery command by absolute
-path (`… bin/handoff.mjs bypass --session <id> --write`). That grant is one-shot: measured
-against a foreign open record it authorizes the next mutation and is consumed by it, so the
-message says exactly that rather than presenting it as a clear. `resume` / `continue` are
+path, pinned to the denied repo with `--dir` (the CLI otherwise resolves `.adlc` from the
+operator's own cwd, writes the grant there and exits 0 regardless). When the deny belongs to
+another session the command carries `--unbound-reason`: a band-generated marker is unbound —
+`ticket_id` and `content_hash` are both null — and a bound grant only authorizes an unbound
+record of its own session, so against a foreign one it is consumed and the caller stays
+denied. The grant is one-shot either way: it authorizes the next mutation and is consumed by
+it, and the message says so rather than presenting it as a clear. `resume` / `continue` are
 the durable keyed flows.
 
 When no `ADLC_MANIFEST_KEY` is configured — which every mutating verb but one requires —
