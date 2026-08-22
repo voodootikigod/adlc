@@ -79,9 +79,17 @@ and **80%** is hard-degraded. Past the handoff band the session loses `write`, `
 `.adlc/handoffs/denies/`, and an open record denies **every** session in the repo until an
 operator clears it.
 
-**Installing ADLC in the repo is the opt-in.** The gate returns allow, and writes nothing,
-in any directory with no `.adlc/` — a repo that never adopted ADLC is never denied and
-never acquires ADLC state, at any fill percent.
+**Installing ADLC in the repo is the opt-in**, and "installed" means a **ticket store** —
+`.adlc/tickets.json`, `.adlc/tickets/`, or whatever `ADLC_TICKET_STORE`/`ADLC_TICKETS` names.
+That is exactly the predicate the rail guard keys on. The gate returns allow, and writes
+nothing, anywhere there is no store — at any fill percent.
+
+The store, deliberately, rather than the presence of `.adlc/`. A directory holding only
+`.adlc/.deny-store` and deny markers is what the pre-1.11 bug left behind, and testing for
+the directory would let those artifacts vouch for the gate that created them, leaving an
+affected repo bricked by its own fix. Nor is it the store *and* a local `.adlc/`:
+`ADLC_TICKET_STORE` may name a store outside the worktree, which the rail guard honours
+with no local directory.
 
 Opting in is **monotonic** for the life of the process: once a root has been seen with `.adlc`, the
 gate keeps enforcing it even if the directory later disappears, so neither removing `.adlc` nor

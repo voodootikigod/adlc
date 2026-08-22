@@ -28,6 +28,7 @@ import {
   isSafeSessionId,
   resolveHandoffSessionId,
 } from '@adlc/context-handoff';
+import { ticketStoreExists } from '@adlc/core';
 import { extractToolPaths, READONLY_TOOLS } from './rails-checker.mjs';
 
 /**
@@ -219,8 +220,19 @@ export function observeHandoffSignals(usage) {
 }
 
 /**
- * The nearest ancestor of `root` (inclusive) that installed ADLC, canonicalized
- * — or null when this path is not inside an ADLC repo at all.
+ * The root of the ADLC repo this path sits in, canonicalized — or null when it
+ * sits in none.
+ *
+ * "Installed ADLC" means the TICKET STORE exists: the same predicate
+ * `resolveRailsInForce` keys on, and nothing more. Not the mere presence of
+ * `.adlc/`, which is self-defeating here — the bug this branch fixes littered
+ * ordinary directories with `.adlc/.deny-store` and deny markers, so a
+ * bare-directory test lets those artifacts vouch for the gate that created them
+ * and a repo already hit by the bug stays bricked by its own fix. And not the
+ * store AND a local `.adlc` either: `ADLC_TICKET_STORE` may name an absolute
+ * store outside the worktree, which the rail guard accepts with no local
+ * directory, so ANDing one on would leave rails enforcing while the deny-set
+ * silently stood down.
  *
  * Containment asks whether a path is INSIDE an ADLC repo, not whether it IS
  * one. pi hands the gate its cwd, which is routinely a subdirectory, so an
@@ -236,8 +248,8 @@ export function observeHandoffSignals(usage) {
  * @param {unknown} root
  * @returns {string|null}
  */
-export function resolveAdlcRoot(root) {
-  return walkToAdlcRoot(root, (dir) => existsSync(join(dir, '.adlc')));
+export function resolveAdlcRoot(root, storeOverride = null) {
+  return walkToAdlcRoot(root, (dir) => ticketStoreExists(dir, storeOverride));
 }
 
 /**
@@ -753,8 +765,10 @@ export function handoffRecoveryDiagnostic({
  *        memory: a marker write that FAILED must stay sticky after the band
  *        cools, and only a caller with memory across calls can carry that
  * @param {{ has: Function, record: Function }} [opts.adlcRoots] per-process
- *        memory of roots that opted in, so removing `.adlc` cannot disarm the
+ *        memory of roots that opted in, so removing the store cannot disarm the
  *        gate for a repo that was already under it
+ * @param {string|null} [opts.storeOverride] ADLC_TICKET_STORE / ADLC_TICKETS —
+ *        the same override the rail guard resolves the ticket store through
  * @param {Function} [opts.evaluate] injection seam for tests
  * @returns {{ decision: 'allow'|'deny', reason?: string, reasons?: string[] }}
  */
@@ -768,6 +782,7 @@ export function checkHandoff({
   manifestKey = null,
   sticky,
   adlcRoots,
+  storeOverride = null,
   evaluate = evaluateHandoffPreToolUse,
 }) {
   if (!handoffAppliesTo(toolName)) return { decision: 'allow' };
@@ -793,10 +808,10 @@ export function checkHandoff({
   // cannot outrank the repo it is trying to escape.
   const repoRoot = walkToAdlcRoot(
     root,
-    (dir) => existsSync(join(dir, '.adlc')) || (adlcRoots ? adlcRoots.has(dir) : false),
+    (dir) => ticketStoreExists(dir, storeOverride) || (adlcRoots ? adlcRoots.has(dir) : false),
   );
   if (repoRoot === null) return { decision: 'allow' };
-  if (adlcRoots && existsSync(join(repoRoot, '.adlc'))) adlcRoots.record(repoRoot);
+  if (adlcRoots && ticketStoreExists(repoRoot, storeOverride)) adlcRoots.record(repoRoot);
 
   const shell = isShellTool(toolName);
   // Extraction uses the cwd pi supplied, because a tool's relative path is

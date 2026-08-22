@@ -111,8 +111,17 @@ follow from what a deny actually means:
   from disk, so it reaches later sessions in the repo too, and an open record denies every
   session, not only the one that tripped the band.
 
-**Containment.** `.adlc/` is the opt-in. The gate returns allow — writing nothing — in a
-directory that never installed ADLC, at any fill percent. Without that guard the band alone
+**Containment.** A **ticket store** is the opt-in — `.adlc/tickets.json`, `.adlc/tickets/`,
+or whatever `ADLC_TICKET_STORE`/`ADLC_TICKETS` names — which is exactly the predicate
+`resolveRailsInForce` keys on. The gate returns allow, writing nothing, wherever there is no
+store, at any fill percent.
+
+Not the presence of `.adlc/`, and this distinction is what completes the fix rather than
+half-making it: the bug littered ordinary directories with `.adlc/.deny-store` and deny
+markers, so a bare-directory test lets the bug's own artifacts vouch for the gate that
+created them and a repo already hit stays bricked. Nor the store AND a local `.adlc/` —
+an absolute `ADLC_TICKET_STORE` is honoured by the rail guard with no local directory, so
+ANDing one on would leave rails enforcing while the deny-set silently stood down. Without that guard the band alone
 denied mutations in whatever directory the agent happened to open, created `.adlc` state
 there, and (the deny store being durable) followed that directory into every later session.
 

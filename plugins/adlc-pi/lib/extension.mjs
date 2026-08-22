@@ -357,6 +357,7 @@ export function createExtension({ env = process.env } = {}) {
         manifestKey,
         sticky: handoffSticky,
         adlcRoots: handoffAdlcRoots,
+        storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
       });
       if (handoff.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');

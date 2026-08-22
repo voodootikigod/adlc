@@ -71,6 +71,19 @@ function makeRepo({ current = 'T1' } = {}) {
 }
 
 /**
+ * Install ADLC in a directory the way the predicate actually tests for it: a
+ * ticket store, not a bare `.adlc/`. A directory holding only `.adlc/` is what
+ * the pre-fix bug left behind, and it must NOT read as an installed repo.
+ * @param {string} dir
+ * @returns {string} dir
+ */
+function installAdlc(dir) {
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [TICKET] }));
+  return dir;
+}
+
+/**
  * A directory that never installed ADLC — no `.adlc/`, nothing else either.
  * The gate is contained to ADLC repos, so this is the shape that must stay
  * inert at every fill percent.
@@ -84,11 +97,7 @@ function makeBareDir() {
  * before evaluation, so those tests need a root that is actually an ADLC repo
  * or their injected evaluator is never reached.
  */
-const PLUMBING_ROOT = (() => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-plumbing-')));
-  mkdirSync(join(root, '.adlc'), { recursive: true });
-  return root;
-})();
+const PLUMBING_ROOT = installAdlc(realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-plumbing-'))));
 after(() => rmSync(PLUMBING_ROOT, { recursive: true, force: true }));
 
 function fakePi() {
@@ -631,7 +640,10 @@ test('installing ADLC is what arms the gate', () => {
       root,
     };
     assert.equal(checkHandoff(args).decision, 'allow');
+    // A bare `.adlc/` is what the old bug left lying around; it must not arm.
     mkdirSync(join(root, '.adlc'), { recursive: true });
+    assert.equal(checkHandoff(args).decision, 'allow', 'a bare .adlc/ is not an install');
+    installAdlc(root);
     assert.equal(checkHandoff(args).decision, 'deny');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -981,7 +993,7 @@ test('the opt-in memory is keyed by canonical path, not by spelling', () => {
   const linkDir = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-canonlink-')));
   const link = join(linkDir, 'repo');
   try {
-    mkdirSync(join(real, '.adlc'), { recursive: true });
+    installAdlc(real);
     symlinkSync(real, link);
     const ask = (root) =>
       checkHandoff({
@@ -1336,7 +1348,7 @@ test('a different checkout moved to a remembered path is not the remembered repo
   const path = join(parent, 'workspace');
   const replacement = join(parent, 'other-project');
   try {
-    mkdirSync(join(path, '.adlc'), { recursive: true });
+    installAdlc(path);
     mkdirSync(join(replacement, '.git'), { recursive: true });
 
     const adlcRoots = createAdlcRootState();
@@ -1667,8 +1679,10 @@ test('a nested .adlc cannot outrank the repo it sits in', () => {
     });
     assert.equal(ask(sub), 'deny', 'the subdirectory answers to the repo');
 
-    mkdirSync(join(sub, '.adlc'), { recursive: true });
-    assert.equal(ask(sub), 'deny', 'and a .adlc created underneath does not change that');
+    // The strongest form of the escape: the agent plants a complete, valid
+    // ticket store, not just a directory.
+    installAdlc(sub);
+    assert.equal(ask(sub), 'deny', 'and a store planted underneath does not change that');
 
     assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the repo root is still the root');
   } finally {
@@ -1681,7 +1695,7 @@ test('a .adlc above the checkout cannot capture it either', () => {
   // ADLC directory in some parent of the checkout is not this repo's root.
   const outer = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-above-')));
   try {
-    mkdirSync(join(outer, '.adlc'), { recursive: true });
+    installAdlc(outer);
     const checkout = join(outer, 'project');
     mkdirSync(join(checkout, '.git'), { recursive: true });
 
@@ -1764,4 +1778,62 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
     cliPath: null,
   });
   assert.match(ordinary, /bypass\|repair\|resume/);
+});
+
+test('a directory contaminated by the old bug is not an ADLC repo', () => {
+  // The blocker left `.adlc/.deny-store` and markers in ordinary directories.
+  // Gating containment on the mere presence of `.adlc` lets those artifacts
+  // vouch for the gate that created them, so a repo already hit by the bug
+  // stays bricked by the very fix meant to unbrick it. The ticket store — the
+  // plugin's own "ADLC is installed here" test — is what decides.
+  const root = makeBareDir();
+  try {
+    // Exactly what the pre-fix gate left behind: deny state, no ticket store.
+    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(join(root, '.adlc', '.deny-store'), JSON.stringify({ schema: 1, sessions: ['old'] }));
+    writeFileSync(
+      join(root, '.adlc', 'handoffs', 'denies', 'old.json'),
+      JSON.stringify({ session_id: 'old', ticket_id: null, content_hash: null, status: 'open' }),
+    );
+
+    for (const percent of [5, HANDOFF_PCT, HARD_PCT, 95]) {
+      for (const [tool, input] of [
+        ['edit', { path: 'a.txt' }],
+        ['bash', { command: 'npm test' }],
+      ]) {
+        assert.notEqual(
+          checkHandoff({ toolName: tool, input, sessionId: 'sess-1', usage: { percent }, root }).decision,
+          'deny',
+          `${tool} at ${percent}% must not be denied by the old bug's own leftovers`,
+        );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an external ticket store arms the gate with no local .adlc', () => {
+  // The other half, and the fail-open u4 hit: ADLC_TICKET_STORE may be an
+  // absolute path to a store outside the worktree, which the rail guard
+  // accepts with no local `.adlc`. ANDing a local directory onto the predicate
+  // would leave rails enforcing while the deny-set silently stood down.
+  const root = makeBareDir();
+  const storeHome = makeBareDir();
+  try {
+    const store = join(storeHome, 'tickets.json');
+    writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root,
+      storeOverride: store,
+    });
+    assert.equal(verdict.decision, 'deny', 'an external store still means ADLC is in force');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(storeHome, { recursive: true, force: true });
+  }
 });
