@@ -1906,11 +1906,24 @@ test('a bare mkdir .git is not a checkout, even on the first gated call', () => 
     writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
     assert.equal(resolveAdlcRoot(sub), null, 'a real checkout keeps its own identity');
 
-    // A `.git` FILE is the worktree/submodule spelling and also counts.
+    // A `.git` FILE is the worktree/submodule spelling and also counts — but
+    // only when it holds what git writes. Accepting any regular file made
+    // `echo x > src/.git` the same escape, one character shorter.
     const linked = join(root, 'linked');
     mkdirSync(linked, { recursive: true });
     writeFileSync(join(linked, '.git'), 'gitdir: ../.git/worktrees/linked\n');
     assert.equal(resolveAdlcRoot(linked), null);
+
+    const forged = join(root, 'forged');
+    mkdirSync(forged, { recursive: true });
+    for (const content of ['x', '', 'not a gitdir pointer', 'GITDIR: ../elsewhere']) {
+      writeFileSync(join(forged, '.git'), content);
+      assert.equal(
+        resolveAdlcRoot(forged),
+        realpathSync(root),
+        `a .git file containing ${JSON.stringify(content)} is not a checkout`,
+      );
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

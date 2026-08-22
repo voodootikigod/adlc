@@ -19,7 +19,7 @@
 // session, so it survives only as a fallback that still fails closed.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { relative, isAbsolute, resolve, join, dirname } from 'node:path';
 
@@ -311,7 +311,13 @@ function looksLikeCheckout(dir) {
   const gitPath = join(dir, '.git');
   try {
     const stats = lstatSync(gitPath);
-    if (stats.isFile()) return true;
+    if (stats.isFile()) {
+      // Not any file: git writes exactly `gitdir: <path>`. Accepting a regular
+      // file on sight made `echo x > src/.git` the same one-command escape the
+      // HEAD check had just closed for directories.
+      if (stats.size > GITDIR_POINTER_MAX_BYTES) return false;
+      return readFileSync(gitPath, 'utf8').trimStart().startsWith('gitdir:');
+    }
     return stats.isDirectory() && existsSync(join(gitPath, 'HEAD'));
   } catch {
     return false;
@@ -480,6 +486,9 @@ function trustedRealpath(path) {
     return path;
   }
 }
+
+/** A `.git` pointer file is one short line; anything larger is not one. */
+const GITDIR_POINTER_MAX_BYTES = 4096;
 
 /** Single-token reason recorded against an operator's unbound grant. */
 const UNBOUND_REASON = 'pi-handoff-operator-recovery';
