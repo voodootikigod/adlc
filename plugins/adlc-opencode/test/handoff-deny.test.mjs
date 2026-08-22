@@ -210,11 +210,15 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
   const tail = recoveryTail('ses_abc-1', ['D1:depth_band']);
   assert.match(
     tail,
-    /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash> --write`/,
+    /`adlc handoff resume --session <new-session> --deny-session ses_abc-1 --write`/,
   );
   assert.match(
     tail,
-    /`adlc handoff resume --session <new-session> --deny-session ses_abc-1 --write`/,
+    /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash> --write`/,
+  );
+  assert.ok(
+    tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
+    'resume must be the first move: repair rewrites an existing binding',
   );
   for (const unsafe of ['s1; rm -rf /', 'a b', 's1\n', '', null, undefined, 42]) {
     assert.match(
@@ -239,6 +243,10 @@ test('a foreign deny recovers the OWNING session, not the blocked one', () => {
     tail,
     /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/,
   );
+  assert.ok(
+    tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
+    'resume must be the first move: repair rewrites an existing binding',
+  );
   assert.doesNotMatch(tail, /--session blocked-b /, 'must not address the marker as the blocked session');
   assert.doesNotMatch(tail, /--deny-session blocked-b/);
 });
@@ -258,7 +266,9 @@ test('the deny owner is parsed only from the D3 reason, and is held to the value
 
 test('a foreign deny still prints the owner command when this session has no safe id', () => {
   const tail = recoveryTail(undefined, ['D3:unauthorized_open:owner-a']);
+  assert.match(tail, /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/);
   assert.match(tail, /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash> --write`/);
+  assert.ok(tail.indexOf('handoff resume') < tail.indexOf('handoff repair'));
 });
 
 // ---- the real hook ---------------------------------------------------------

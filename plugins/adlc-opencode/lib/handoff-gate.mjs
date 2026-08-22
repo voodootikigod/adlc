@@ -155,9 +155,8 @@ export function recoveryTail(sessionId, reasons = []) {
     // the deny is foreign, so the owner's command is worth printing alone.
     if (owner !== null) {
       return (
-        `The open deny belongs to session ${owner}; this session has no safe id of its own. Recover from ` +
-        `a HOST shell: \`adlc handoff repair --session ${owner} --ticket <id> --content-hash <hash> ` +
-        `--write\`, then \`adlc handoff resume --session <new-session> --deny-session ${owner} --write\`.`
+        `The open deny belongs to session ${owner}; this session has no safe id of its own. ` +
+        recoverySteps(owner)
       );
     }
     return (
@@ -172,11 +171,32 @@ export function recoveryTail(sessionId, reasons = []) {
     target === sessionId
       ? `Denied session id: ${sessionId}.`
       : `Denied session id: ${sessionId}; the open deny belongs to session ${target}.`;
+  return `${whose} ${recoverySteps(target)}`;
+}
+
+/**
+ * The ordered recovery steps for one marker.
+ *
+ * `resume` FIRST, `repair` only as the fallback the CLI itself directs you to.
+ * The reverse order — which this tail shipped at first — is destructive: a
+ * marker that already carries a ticket and content hash is resumable as-is, and
+ * `repair` REWRITES that binding, so prescribing it unconditionally can discard
+ * a valid handoff checkpoint before the successor ever consumes it. `resume`
+ * fails safe on an unbound marker and says so ("ticket_id is null — cannot
+ * resume (use host repair)"), which makes the conditional order both correct
+ * states without this diagnostic having to read the record off disk.
+ *
+ * @param {string} target the session that OWNS the marker, already validated
+ * @returns {string}
+ */
+function recoverySteps(target) {
   return (
-    `${whose} Recover from a HOST shell (the agent shell is inside the deny-set): ` +
-    `\`adlc handoff repair --session ${target} --ticket <id> --content-hash <hash> --write\` binds the ` +
-    `open deny, then \`adlc handoff resume --session <new-session> --deny-session ${target} --write\` ` +
-    'from the successor session.'
+    'Recover from a HOST shell (the agent shell is inside the deny-set): ' +
+    `\`adlc handoff resume --session <new-session> --deny-session ${target} --write\`. ` +
+    'ONLY if that reports the deny is unbound, bind it first with ' +
+    `\`adlc handoff repair --session ${target} --ticket <id> --content-hash <hash> --write\` and ` +
+    're-run resume — repair rewrites an existing binding, so it must never be the first move against ' +
+    'a marker that already has one.'
   );
 }
 
