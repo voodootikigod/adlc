@@ -1628,3 +1628,41 @@ test('hasProtectedPathFault covers both protected-path spellings', () => {
   }
   assert.equal(hasProtectedPathFault(undefined), false);
 });
+
+test('a nested ADLC root keeps its own store, not an outer one, after its opt-in goes', () => {
+  // Nested ADLC layouts with no .git between them: deleting the inner `.adlc`
+  // must not silently move enforcement to the OUTER store. The monotonic
+  // memory has to win over a live ancestor when it is nearer, or removing the
+  // inner opt-in is a way to change which deny store you answer to.
+  const outer = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-outer-')));
+  try {
+    mkdirSync(join(outer, '.adlc'), { recursive: true });
+    const inner = join(outer, 'packages', 'inner');
+    mkdirSync(join(inner, '.adlc'), { recursive: true });
+
+    const adlcRoots = createAdlcRootState();
+    const seen = [];
+    const ask = (root) =>
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-1',
+        usage: { percent: HARD_PCT },
+        root,
+        adlcRoots,
+        evaluate: (o) => {
+          seen.push(o.root);
+          return { deny: true, reasons: ['D1:band'] };
+        },
+      }).decision;
+
+    assert.equal(ask(inner), 'deny');
+    assert.equal(seen.at(-1), inner, 'the inner repo answers to its own store');
+
+    rmSync(join(inner, '.adlc'), { recursive: true, force: true });
+    assert.equal(ask(inner), 'deny', 'still enforced');
+    assert.equal(seen.at(-1), inner, 'and still to its OWN store, not the outer one');
+  } finally {
+    rmSync(outer, { recursive: true, force: true });
+  }
+});

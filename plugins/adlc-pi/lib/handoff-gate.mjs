@@ -315,24 +315,18 @@ export function createAdlcRootState() {
   };
 
   return {
-    /** @param {unknown} root */
+    /**
+     * Is this exact directory a remembered, still-present opt-in?
+     *
+     * `checkHandoff` calls this once per ancestor as the walk's predicate, so
+     * it answers about the directory given, never about its parents — the walk
+     * owns the climbing, and owning it in one place is what keeps the live and
+     * remembered lookups from drifting apart again.
+     * @param {unknown} root
+     */
     has(root) {
       const k = key(root);
       return k !== null && sameCheckout(k);
-    },
-    /**
-     * The remembered ADLC root this path sits under, or null.
-     *
-     * Shares `walkToAdlcRoot` with the live lookup, so a session in a
-     * subdirectory of a repo whose `.adlc` was since deleted still resolves to
-     * the root that opted in — an exact-key lookup would forget it and hand
-     * back the off switch the memory exists to remove — while a nested checkout
-     * still stops at its own `.git`.
-     * @param {unknown} root
-     * @returns {string|null}
-     */
-    resolve(root) {
-      return walkToAdlcRoot(root, sameCheckout);
     },
     /** @param {unknown} root */
     record(root) {
@@ -753,15 +747,18 @@ export function checkHandoff({
   // deny store, the protected-path checks and the printed recovery command all
   // have to name the same repo, or a session in a subdirectory reads a
   // different store than the one denying it.
-  const resolved = resolveAdlcRoot(root);
-  let repoRoot = resolved;
-  if (resolved !== null) {
-    if (adlcRoots) adlcRoots.record(resolved);
-  } else {
-    const remembered = adlcRoots ? adlcRoots.resolve(root) : null;
-    if (remembered === null) return { decision: 'allow' };
-    repoRoot = remembered;
-  }
+  // ONE walk that accepts either a live `.adlc` or a remembered root, so the
+  // NEAREST wins. Resolving live-first and only then falling back would let a
+  // nested ADLC repo lose its own store: delete the inner `.adlc` and the live
+  // walk sails past it to an outer one, quietly moving the session onto a
+  // different deny store. Nearest-wins keeps the inner root answering for
+  // itself.
+  const repoRoot = walkToAdlcRoot(
+    root,
+    (dir) => existsSync(join(dir, '.adlc')) || (adlcRoots ? adlcRoots.has(dir) : false),
+  );
+  if (repoRoot === null) return { decision: 'allow' };
+  if (adlcRoots && existsSync(join(repoRoot, '.adlc'))) adlcRoots.record(repoRoot);
 
   const shell = isShellTool(toolName);
   // Extraction uses the cwd pi supplied, because a tool's relative path is
