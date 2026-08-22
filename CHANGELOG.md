@@ -11,6 +11,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+- **rails-guard:** `package.json` and `.npmrc` are no longer immutable trust
+  roots by default. They were added to `DEFAULT_IMMUTABLE_TRUST_ROOTS` during
+  the 1.11.0 development window (#507) and are removed again before release:
+  the set is not opt-out, so freezing two files that every Node repo edits
+  routinely denied ordinary work — a third-party dependency bump on the root
+  manifest exited 2 with no way for a consuming repo to decline. Trust-root
+  behavior for consumers is therefore unchanged from 1.10.0. A repo that wants
+  either path frozen declares it with `--trust-root`; the ADLC repo does exactly
+  that in `scripts/rails-guard-ci.mjs`, so its own posture is unchanged. The
+  version-only release-bump exemption (ADR 0012) is untouched and still applies
+  wherever `package.json` is a declared trust root.
+
 ### Fixed
 - **build-gate / adlc-codex:** the tool-call depth signal now recognizes the
   real Codex rollout record shape. `countToolCalls` matched only Anthropic

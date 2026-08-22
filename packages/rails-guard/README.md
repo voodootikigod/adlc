@@ -152,6 +152,64 @@ the time of the clean pass — a content-addressed snapshot usable for auditing.
 | `rail-edit` | A changed file matches a frozen rail glob |
 | `suppression` | An added line contains a suppression marker not declared in the ticket |
 
+## Immutable trust roots (CI gate)
+
+The CI backstop `adlc rails-guard-ci` freezes a second set of paths on top of the
+active ticket's rails: the **immutable trust roots** (#140). A trust root is a file
+whose contents decide what the gate *enforces* — the config, the ticket-store
+manifest, CODEOWNERS, the deployed workflow, and the gate's own sources. They are
+frozen unconditionally, because a PR that can edit the enforcer can edit away its
+own enforcement.
+
+The default set lives in `DEFAULT_IMMUTABLE_TRUST_ROOTS`
+(`lib/ci/trust-roots.mjs`) and applies to every repo with no configuration:
+
+```
+.adlc/config.json                  .adlc/admin.pub
+.adlc/tickets/.store.json          .github/workflows/adlc-rails-guard.yml
+CODEOWNERS · .github/CODEOWNERS · docs/CODEOWNERS
+docs/ci/rails-guard.yml            scripts/rails-guard-ci.mjs
+packages/rails-guard/lib/ci/**     packages/rails-guard/bin/rails-guard-ci.mjs
+packages/rails-guard/bin/rails-guard.mjs
+packages/rails-guard/lib/trust-root-authorization.mjs
+```
+
+**`package.json` and `.npmrc` are NOT in the default set.** They were briefly added
+during the 1.11.0 development window and removed again before release: every Node
+repo has them and edits them constantly, so freezing them by default turns an
+ordinary dependency bump into a denied PR that the consuming repo cannot opt out of.
+A repo that *does* want them frozen — the ADLC repo itself does, because its
+documented entry points resolve through `scripts` and npm execution flags — declares
+them with `--trust-root`.
+
+### Extending the set
+
+`--trust-root <path>` (repeatable) adds a repo-specific trust root. It only ever
+**extends** the defaults; nothing on the command line can shrink them. Supplying
+them this way is safe because the caller that passes them is itself a default trust
+root, so a PR cannot drop the arguments without editing a frozen file.
+
+```bash
+adlc rails-guard-ci --base origin/main \
+  --trust-root .github/workflows/ci.yml \
+  --trust-root package.json
+```
+
+### Changing a trust root
+
+A diff that modifies, deletes, or renames a trust root exits 2 unless the #141
+ceremony authorizes it: apply the **`trust-root-change`** label *and* obtain an
+approving review from a non-author CODEOWNER of the changed path. The alternative is
+the protected-base admin path. Authorization lifts only the specific trust-root
+paths the ceremony approved — never a rail a ticket declared.
+
+**Version-only exemption.** A change to a package manifest (`package.json`,
+`plugin.json`, `marketplace.json`) whose only differences are version fields and
+lockstep `@adlc/*` dependency repins is a mechanical release bump, not a trust-root
+change, and passes without the ceremony (ADR 0012). Any other edit — a `scripts`
+change, a third-party dependency bump — is a trust-root change. `.npmrc` is not a
+manifest and has no exemption.
+
 ## Sibling tools
 
 - **flail-detector (C6)**: uses `--record` manifest entries to verify no

@@ -62,6 +62,16 @@ const REPO_TRUST_ROOTS = [
   // touching any of the files above. Its test is what pins the wiring.
   'scripts/preflight.mjs',
   'scripts/test/preflight.test.mjs',
+  // The ROOT package manifest (#501) and project npm configuration. The documented
+  // entry points (`npm run preflight`, `npm test`) resolve through the `scripts`
+  // block and npm execution flags (e.g. script-shell), so altering either routes
+  // through the #141 ceremony. Mechanical version-only release bumps on
+  // package.json stay exempt (ADR 0012). They are declared HERE rather than in the
+  // shared defaults because every Node repo has both files and edits them
+  // routinely, and freezing them for every consumer denies ordinary dependency
+  // work with no opt-out.
+  'package.json',
+  '.npmrc',
 ];
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';

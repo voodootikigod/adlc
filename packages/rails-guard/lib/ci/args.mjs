@@ -21,10 +21,12 @@ Options
                         origin/$BASE_REF when BASE_REF is set (the GitHub Actions
                         shape), else origin/main.
   --trust-root <path>   an ADDITIONAL immutable trust root for this repo, on top of
-                        the built-in defaults. Repeatable. Safe to pass on the command
-                        line because the caller that supplies it is itself a default
-                        trust root, so a PR cannot shrink the list without tripping
-                        the ceremony.
+                        the built-in defaults (DEFAULT_IMMUTABLE_TRUST_ROOTS in
+                        lib/ci/trust-roots.mjs — this flag only EXTENDS that set,
+                        never replaces or shrinks it). Repeatable. Safe to pass on
+                        the command line because the caller that supplies it is
+                        itself a default trust root, so a PR cannot shrink the list
+                        without tripping the ceremony.
   -h, --help            show this help
 
 Exit codes: 0 pass · 1 operational error / unverifiable · 2 rail or trust root violated`;

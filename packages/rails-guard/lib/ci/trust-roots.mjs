@@ -44,13 +44,6 @@ export const DEFAULT_IMMUTABLE_TRUST_ROOTS = Object.freeze([
   '.github/CODEOWNERS',
   'docs/CODEOWNERS',
   'docs/ci/rails-guard.yml',
-  // The ROOT package manifest (#501) and project npm configuration (.npmrc).
-  // The documented entry points (`npm run preflight`, `npm test`) resolve through
-  // its `scripts` block and npm execution flags (e.g. script-shell). A PR cannot
-  // alter scripts or npm configuration without the #141 ceremony; mechanical
-  // version-only release bumps on package.json stay exempt.
-  'package.json',
-  '.npmrc',
   'scripts/rails-guard-ci.mjs',
   // The gate's own sources. `lib/ci/**` is a directory glob, not a file list, so a NEW
   // file added under it is frozen the moment it exists — a list would have to be

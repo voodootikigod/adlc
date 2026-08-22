@@ -44,10 +44,18 @@ test('the default set covers the paths that decide enforcement in any repo', () 
     'CODEOWNERS',
     '.github/CODEOWNERS',
     'docs/CODEOWNERS',
-    'package.json',
-    '.npmrc',
   ]) {
     assert.ok(DEFAULT_IMMUTABLE_TRUST_ROOTS.includes(path), `${path} must be frozen by default`);
+  }
+});
+
+// These two were defaults for part of the 1.11.0 window (#507) and are OPT-IN again.
+// Every Node repo has them and edits them constantly, so freezing them by default turns
+// an ordinary dependency bump into an exit-2 with no way for a consumer to decline.
+// A repo that wants them frozen — this one does — passes them via --trust-root.
+test('the paths every Node repo edits routinely are opt-in, not frozen defaults', () => {
+  for (const path of ['package.json', '.npmrc']) {
+    assert.ok(!DEFAULT_IMMUTABLE_TRUST_ROOTS.includes(path), `${path} must not be a default trust root`);
   }
 });
 
@@ -103,41 +111,89 @@ test('resolving with no arguments still yields the full default set', () => {
   assert.deepEqual(resolveImmutableTrustRoots(), [...DEFAULT_IMMUTABLE_TRUST_ROOTS]);
 });
 
-test('runRailFreezeGate allows version-only bump on root package.json trust root', () => {
+/**
+ * A bootstrapped fixture repo: one in-flight railed ticket, the rail file it freezes,
+ * and a root package.json seeded with `packageJson`. The caller removes `root`.
+ */
+function seedGateFixture(packageJson) {
   const root = mkdtempSync(join(tmpdir(), 'rf-trust-roots-'));
   const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  run('init', '-q', '-b', 'main');
+  run('config', 'user.email', 'test@test.invalid');
+  run('config', 'user.name', 'Test');
+  run('config', 'commit.gpgsign', 'false');
+
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'config.json'), JSON.stringify({
+    schema: 1,
+    securityMode: 'unsigned-fallback',
+    acknowledgedNewRailBypass: true,
+  }, null, 2) + '\n');
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({
+    schema: 1,
+    tickets: [
+      { id: 'T-1', title: 'test', rails: ['src/critical/**'] },
+    ],
+  }, null, 2) + '\n');
+  mkdirSync(join(root, 'src', 'critical'), { recursive: true });
+  writeFileSync(join(root, 'src', 'critical', 'auth.mjs'), 'export const a = 1;\n');
+  writeFileSync(join(root, 'package.json'), packageJson);
+
+  run('add', '-A');
+  run('commit', '-q', '-m', 'base');
+  return { root, run, base: run('rev-parse', 'HEAD').trim() };
+}
+
+// The consumer shape the reversal exists for: a repo that installs the gate and never
+// asks for package.json to be frozen. A third-party devDependency bump is NOT covered by
+// the version-only exemption (that reads version fields and @adlc/* ranges), so if the
+// path were a default trust root this diff would be an unauthorized trust-root change and
+// exit 2 with no opt-out. Passing it via --trust-root — this repo's posture — must still
+// deny the identical diff, otherwise the opt-in buys nothing.
+test('a consumer devDependency bump passes, and the same diff denies once the repo opts in', () => {
+  const pkg = (linterRange) => JSON.stringify({
+    name: 'consumer',
+    version: '1.0.0',
+    devDependencies: { 'some-linter': linterRange },
+  }, null, 2) + '\n';
+  const { root, run, base } = seedGateFixture(pkg('^9.0.0'));
   try {
-    run('init', '-q', '-b', 'main');
-    run('config', 'user.email', 'test@test.invalid');
-    run('config', 'user.name', 'Test');
-    run('config', 'commit.gpgsign', 'false');
+    run('checkout', '-q', '-b', 'feat-devdep-bump');
+    writeFileSync(join(root, 'package.json'), pkg('^9.1.0'));
+    run('add', 'package.json');
+    run('commit', '-q', '-m', 'chore: bump some-linter');
 
-    mkdirSync(join(root, '.adlc'), { recursive: true });
-    writeFileSync(join(root, '.adlc', 'config.json'), JSON.stringify({
-      schema: 1,
-      securityMode: 'unsigned-fallback',
-      acknowledgedNewRailBypass: true,
-    }, null, 2) + '\n');
-    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({
-      schema: 1,
-      tickets: [
-        { id: 'T-1', title: 'test', rails: ['src/critical/**'] },
-      ],
-    }, null, 2) + '\n');
-    mkdirSync(join(root, 'src', 'critical'), { recursive: true });
-    writeFileSync(join(root, 'src', 'critical', 'auth.mjs'), 'export const a = 1;\n');
+    const res = runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' });
+    assert.equal(res.status, 0, 'a consumer that did not opt in must not be denied a devDependency bump');
 
-    const pkgV1 = JSON.stringify({
-      name: 'root',
-      version: '1.0.0',
-      scripts: { preflight: 'echo preflight', test: 'echo test' },
-    }, null, 2) + '\n';
-    writeFileSync(join(root, 'package.json'), pkgV1);
+    assert.throws(
+      () => runRailFreezeGate({ cwd: root, base, env: {}, additionalTrustRoots: ['package.json'], stdio: 'pipe' }),
+      (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message),
+      'the same diff must deny for a repo that declared package.json a trust root'
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
-    run('add', '-A');
-    run('commit', '-q', '-m', 'base');
-    const base = run('rev-parse', 'HEAD').trim();
-
+// package.json reaches the gate through --trust-root (scripts/rails-guard-ci.mjs), so
+// every scenario here supplies it that way; the version-only exemption and the ceremony
+// must both behave exactly as they did while it was a default.
+test('runRailFreezeGate allows version-only bump on an opted-in root package.json trust root', () => {
+  const pkgV1 = JSON.stringify({
+    name: 'root',
+    version: '1.0.0',
+    scripts: { preflight: 'echo preflight', test: 'echo test' },
+  }, null, 2) + '\n';
+  const { root, run, base } = seedGateFixture(pkgV1);
+  const runGate = () => runRailFreezeGate({
+    cwd: root,
+    base,
+    env: {},
+    additionalTrustRoots: ['package.json'],
+    stdio: 'pipe',
+  });
+  try {
     // 1. Version-only bump on package.json -> passes
     run('checkout', '-q', '-b', 'feat-bump');
     const pkgV2 = JSON.stringify({
@@ -148,7 +204,7 @@ test('runRailFreezeGate allows version-only bump on root package.json trust root
     writeFileSync(join(root, 'package.json'), pkgV2);
     run('add', 'package.json');
     run('commit', '-q', '-m', 'chore: bump to 1.0.1');
-    const res = runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' });
+    const res = runGate();
     assert.equal(res.status, 0);
 
     // 2. Modifying scripts in package.json -> throws GateDeny
@@ -163,7 +219,7 @@ test('runRailFreezeGate allows version-only bump on root package.json trust root
     run('add', 'package.json');
     run('commit', '-q', '-m', 'tamper scripts');
     assert.throws(
-      () => runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' }),
+      runGate,
       (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message)
     );
 
@@ -179,7 +235,7 @@ test('runRailFreezeGate allows version-only bump on root package.json trust root
     run('add', '.adlc/config.json');
     run('commit', '-q', '-m', 'modify config');
     assert.throws(
-      () => runRailFreezeGate({ cwd: root, base, env: {}, stdio: 'pipe' }),
+      runGate,
       (err) => err instanceof GateDeny && /ADLC trust root changed/.test(err.message)
     );
   } finally {
