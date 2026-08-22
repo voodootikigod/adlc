@@ -521,6 +521,28 @@ test('an invalid deny record is never a repair target and sends the operator to 
   assert.match(tail, /Inspect \.adlc\/handoffs\/denies\//);
 });
 
+test('a consumed self-deny is called out, because clearing the open denies will not release it', () => {
+  // D2 fires on the session's OWN record even once consumed, but the D3 loop
+  // skips records that are not `open` — so a consumed self-record yields D2
+  // with no self owner, and neither resume nor repair acts on it (repair binds
+  // an OPEN deny). Without saying so, the operator clears every listed owner
+  // and is still denied.
+  const both = recoveryTail('A', ['D2:denier_session', 'D3:unauthorized_open:C'], '/r');
+  assert.match(both, /--deny-session C/, 'the open foreign deny is still actionable');
+  assert.match(both, /consumed but still blocking/);
+  assert.match(both, /FRESH session/);
+
+  // A band self-deny reports D2 AND its own open D3, so the record IS
+  // actionable and the sticky note would be wrong there.
+  const bandSelf = recoveryTail('A', ['D2:denier_session', 'D3:unauthorized_open:A'], '/r');
+  assert.doesNotMatch(bandSelf, /consumed but still blocking/);
+
+  // D2 alone: nothing to target, and the stickiness is the whole story.
+  const alone = recoveryTail('A', ['D2:denier_session'], '/r');
+  assert.doesNotMatch(alone, /--deny-session/);
+  assert.match(alone, /consumed but still blocking/);
+});
+
 test('a foreign deny still prints the owner command when this session has no safe id', () => {
   const tail = recoveryTail(undefined, ['D3:unauthorized_open:owner-a']);
   assert.match(tail, /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/);

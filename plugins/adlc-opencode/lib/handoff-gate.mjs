@@ -211,9 +211,21 @@ export function denyTargetsOf(reasons) {
  */
 export function recoveryTail(sessionId, reasons = [], root = undefined) {
   const { owners, invalid } = denyTargetsOf(reasons);
+  const selfBlocking = Array.isArray(reasons) && reasons.includes('D2:denier_session');
   const safeOwners = owners.filter((o) => isPrintableSessionId(o));
   const droppedOwners = owners.length - safeOwners.length;
   const said = isPrintableSessionId(sessionId) ? sessionId : null;
+  // D2 says this session's OWN record is blocking. The D3 loop skips records
+  // that are not `open`, so a CONSUMED self-record produces D2 with no matching
+  // self owner — and neither resume nor repair acts on a consumed record
+  // (repair binds an OPEN deny). Clearing every listed owner therefore leaves
+  // this session denied, which is by design: the denier stays denied. Say so,
+  // or the operator works through the list and is still stuck.
+  const stickySelf =
+    selfBlocking && (said === null || !owners.includes(said))
+      ? " This session's own deny record is consumed but still blocking, and no resume or repair clears " +
+        'that — it is sticky by design. Continue in a FRESH session once the denies above are cleared.'
+      : '';
 
   // An invalid record is not repairable by id, and an owner we cannot quote is
   // not printable at all. Either way the operator has to open the store.
@@ -258,7 +270,8 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
       'for `adlc handoff resume` or `repair` to act on — repair binds an EXISTING open deny and will ' +
       'not create one. If the call was refused for touching a handoff trust-root artifact, retry ' +
       'without that path. If a deny marker could not be written, fix that on the host (permissions or ' +
-      'disk under .adlc/handoffs/) and start a fresh session. Read-only tools remain usable.'
+      'disk under .adlc/handoffs/) and start a fresh session. Read-only tools remain usable.' +
+      stickySelf
     );
   }
 
@@ -273,7 +286,7 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
     targets.length > 1
       ? ` ${targets.length} open denies are blocking this repo (${targets.join(', ')}) — repeat the sequence for each.`
       : '';
-  return `${whose} ${recoverySteps(targets[0], root)}${more}${storeNote}`;
+  return `${whose} ${recoverySteps(targets[0], root)}${more}${storeNote}${stickySelf}`;
 }
 
 /**
