@@ -104,6 +104,23 @@ export function createStickyDenyState() {
   };
 }
 
+/**
+ * Does any reason describe the CALL rather than the session's standing?
+ *
+ * `path_protected*` means this very call targets an artifact the deny-set
+ * guards. No grant lifts one — measured: with a verified unbound grant in
+ * place, a tool naming `.adlc/.deny-store` is still denied, and the grant is
+ * not even consumed. Offering a grant there spends the operator's one shot on
+ * a deny it cannot touch, which is the false-instruction class this gate was
+ * rewritten to stop producing.
+ *
+ * @param {string[]|undefined} reasons
+ * @returns {boolean}
+ */
+export function hasProtectedPathFault(reasons) {
+  return (reasons ?? []).some((reason) => String(reason).startsWith('path_protected'));
+}
+
 /** @param {unknown} toolName */
 export function isStructuredMutator(toolName) {
   return STRUCTURED_MUTATORS.has(String(toolName ?? '').toLowerCase());
@@ -617,6 +634,7 @@ export function handoffRecoveryDiagnostic({
 }) {
   const parts = [];
   const storeFault = hasStoreIntegrityFault(reasons);
+  const protectedPath = hasProtectedPathFault(reasons);
   if (cliPath === null) {
     parts.push(
       // `adlc handoff`, not a bare `handoff`: the global install route is
@@ -626,6 +644,13 @@ export function handoffRecoveryDiagnostic({
       'Host-side recovery: @adlc/context-handoff could not be resolved from this install, so its recovery ' +
         'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin: ' +
         '`adlc handoff bypass|repair|resume`, run from the denied repo.',
+    );
+  } else if (protectedPath) {
+    parts.push(
+      'This call was refused because it targets an ADLC artifact the deny-set protects, not because of ' +
+        'this session\'s standing. No grant authorizes that — a verified one is not even consumed by it — ' +
+        'so there is no command to run: target something outside `.adlc/` instead. Any handoff deny behind ' +
+        'it is reported separately once this call stops naming a protected path.',
     );
   } else {
     const interpreterPath = trustedRealpath(process.execPath);

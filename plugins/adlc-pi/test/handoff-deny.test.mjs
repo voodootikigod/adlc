@@ -43,6 +43,7 @@ import {
   formatRecoveryCommand,
   handoffRecoveryDiagnostic,
   foreignDenierOf,
+  hasProtectedPathFault,
   hasStoreIntegrityFault,
   resolveRecoveryCliPath,
   resolveAdlcRoot,
@@ -1593,4 +1594,37 @@ test('the command printed for a store fault actually lifts it', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a protected-path deny offers no grant, because none lifts it', () => {
+  // Measured: with a verified unbound grant in place, a tool naming
+  // `.adlc/.deny-store` is still denied and the grant is not consumed. Offering
+  // one spends the operator's single shot on a deny it cannot touch.
+  const root = makeRepo();
+  try {
+    const verdict = checkHandoff({
+      toolName: 'some_custom_tool',
+      input: { target: join(root, '.adlc', '.deny-store') },
+      sessionId: 'sess-B',
+      root,
+      manifestKey: 'k'.repeat(64),
+    });
+    assert.equal(verdict.decision, 'deny');
+    assert.ok(hasProtectedPathFault(verdict.reasons), `expected a protected-path reason: ${verdict.reasons}`);
+    assert.doesNotMatch(verdict.reason, /bypass --session/, 'no grant is offered');
+    assert.match(verdict.reason, /targets an ADLC artifact the deny-set protects/);
+    assert.match(verdict.reason, /target something outside/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('hasProtectedPathFault covers both protected-path spellings', () => {
+  for (const reason of ['path_protected:.adlc/x', 'path_protected_symlink:.adlc/x', 'path_protected_shell:rm']) {
+    assert.equal(hasProtectedPathFault([reason]), true, reason);
+  }
+  for (const reason of ['D3:unauthorized_open:s', 'D0:deny_store_unavailable', 'D1:process_sticky']) {
+    assert.equal(hasProtectedPathFault([reason]), false, reason);
+  }
+  assert.equal(hasProtectedPathFault(undefined), false);
 });
