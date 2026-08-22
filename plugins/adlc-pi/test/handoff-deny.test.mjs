@@ -1192,9 +1192,14 @@ test('the keyless recipe names the legacy sentinel, so it terminates', () => {
     assert.ok(text.includes('rm -rf .adlc/handoffs .adlc/.deny-store'), 'the whole tree, in one command');
     assert.doesNotMatch(text, /denies\/\*/, 'never a glob: it expands through a symlink');
 
-    // Follow the printed recipe literally, then confirm it actually cleared.
-    rmSync(join(root, '.adlc', 'handoffs'), { recursive: true, force: true });
-    rmSync(join(root, '.adlc', '.deny-store'), { force: true });
+    // Run the command the MESSAGE prints, parsed out of it, in a shell whose
+    // cwd is the repo — the same standard the foreign-deny e2e uses. Hardcoding
+    // the paths here would let the printed recipe drift away from the one that
+    // works without any test noticing.
+    const recipe = /`(rm -rf [^`]+)`/.exec(text)?.[1];
+    assert.ok(recipe, `no removal command in the message:\n${text}`);
+    const run = spawnSync(recipe, { shell: true, cwd: root, encoding: 'utf8' });
+    assert.equal(run.status, 0, `printed recipe failed: ${run.stderr}`);
     assert.equal(
       checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root }).decision,
       'allow',
@@ -2044,4 +2049,47 @@ test('the keyless recipe never globs, because a glob leaves the repo', () => {
     !commandBlock.slice(0, commandBlock.indexOf('```', 7)).includes('*'),
     'the documented COMMAND must not glob (the prose may still explain why)',
   );
+});
+
+test('the printed --dir is the real path, not a symlink to it', () => {
+  // `--dir` is pasted into a shell and the CLI insists its last segment is
+  // `.adlc`; a symlinked root that resolves elsewhere would hand the operator a
+  // path the CLI rejects, or worse, the wrong repo's store. Dropping the
+  // realpath survived every other test.
+  const real = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-realdir-')));
+  const linkHome = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-realdir-link-')));
+  const link = join(linkHome, 'repo');
+  try {
+    installAdlc(real);
+    symlinkSync(real, link);
+    const viaLink = handoffRecoveryDiagnostic({
+      sessionId: 'sess-a',
+      root: link,
+      reasons: ['D3:unauthorized_open:sess-b'],
+      hasManifestKey: true,
+      cliPath: '/opt/adlc/bin/handoff.mjs',
+    });
+    assert.ok(viaLink.includes(`--dir ${join(real, '.adlc')} `), `expected the real path: ${viaLink}`);
+    assert.ok(!viaLink.includes(link), 'the symlink must not appear in a pasted command');
+  } finally {
+    rmSync(real, { recursive: true, force: true });
+    rmSync(linkHome, { recursive: true, force: true });
+  }
+});
+
+test('a deny with no resolved root prints no command rather than the wrong one', () => {
+  // `resolve('')` is process.cwd(), so a missing root used to print a --dir
+  // naming whatever directory this process sits in — confidently wrong.
+  for (const root of [null, undefined, '']) {
+    const text = handoffRecoveryDiagnostic({
+      sessionId: 'sess-a',
+      root,
+      reasons: ['D3:unauthorized_open:sess-b'],
+      hasManifestKey: true,
+      cliPath: '/opt/adlc/bin/handoff.mjs',
+    });
+    assert.doesNotMatch(text, /--dir ['/]/, `no --dir PATH for root=${String(root)}`);
+    assert.doesNotMatch(text, /bypass --session/, 'and no command at all');
+    assert.match(text, /No repository root was resolved/);
+  }
 });

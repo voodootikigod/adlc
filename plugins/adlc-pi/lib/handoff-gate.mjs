@@ -700,8 +700,9 @@ export function resolveRecoveryCliPath({ req = createRequire(import.meta.url) } 
  *
  * @param {object} opts
  * @param {unknown} opts.sessionId
- * @param {string} [opts.root] repo root the deny belongs to — the command is
- *        pinned to it with `--dir`, never left to the operator's cwd
+ * @param {string|null} [opts.root] repo root the deny belongs to — the command
+ *        is pinned to it with `--dir`, never left to the operator's cwd, and no
+ *        command is printed at all when it is missing
  * @param {string[]} [opts.reasons] deny reasons, read only to tell a foreign
  *        open record from this session's own
  * @param {boolean} [opts.hasManifestKey]
@@ -710,7 +711,7 @@ export function resolveRecoveryCliPath({ req = createRequire(import.meta.url) } 
  */
 export function handoffRecoveryDiagnostic({
   sessionId,
-  root = '',
+  root = null,
   reasons = [],
   hasManifestKey = false,
   cliPath = resolveRecoveryCliPath(),
@@ -743,6 +744,14 @@ export function handoffRecoveryDiagnostic({
         'this session\'s standing. No grant authorizes that — a verified one is not even consumed by it — ' +
         'so there is no command to run: target something outside `.adlc/` instead. Any handoff deny behind ' +
         'it is reported separately once this call stops naming a protected path.',
+    );
+  } else if (typeof root !== 'string' || root === '') {
+    // No repo, no command. `resolve('')` is process.cwd(), so a missing root
+    // would have printed a --dir naming whatever directory this process happens
+    // to sit in — a confidently wrong path is worse than none.
+    parts.push(
+      'No repository root was resolved for this deny, so no `--dir`-pinned command can be printed. Run the ' +
+        'operator recovery CLI from the denied repo itself.',
     );
   } else {
     const interpreterPath = trustedRealpath(process.execPath);

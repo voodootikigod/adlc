@@ -24,6 +24,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  isSafeSessionId,
   formatRecoveryCommand as canonicalFormatRecoveryCommand,
   formatNoSessionIdMessage as canonicalFormatNoSessionIdMessage,
   formatUnsafeInstallPathMessage as canonicalFormatUnsafeInstallPathMessage,
@@ -41,29 +42,86 @@ const CANONICAL_SOURCE = join(
 
 const { formatRecoveryCommand: piFormatRecoveryCommand } = await import(PI_HANDOFF_GATE);
 
-/** Read a named regex literal out of a module's source, without importing it. */
-async function regexLiteral(file, name) {
-  const { readFileSync } = await import('node:fs');
-  const source = readFileSync(file, 'utf8');
-  const match = new RegExp(`const ${name} = (/[^\\n]*/);`).exec(source);
-  assert.ok(match, `${name} not found in ${file}`);
-  return match[1];
-}
+/**
+ * Every printable ASCII codepoint, one at a time, in a path that is otherwise
+ * entirely inside the safe class — so each character is the ONLY thing that can
+ * force quoting.
+ *
+ * Isolation is the whole point. The fixtures this replaced each carried a
+ * second disqualifying character (a space, parens, a pipe), so widening BOTH
+ * grammars in lockstep to admit `;` and `$` left every test green while the
+ * shipped formatter emitted an unquoted `;`-bearing path into a command an
+ * operator pastes. Verified: that mutation now fails here.
+ */
+const PRINTABLE_ASCII = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i));
 
-test("pi's path grammar is byte-identical to the canonical PATH_UNQUOTED_RE", async () => {
-  // Widening this class is the dangerous drift: a path carrying `;` or `$`
-  // would then be emitted UNQUOTED into a command an operator pastes.
-  assert.equal(
-    await regexLiteral(PI_HANDOFF_GATE, 'RECOVERY_PATH_UNQUOTED_RE'),
-    await regexLiteral(CANONICAL_SOURCE, 'PATH_UNQUOTED_RE'),
-  );
+/** The class the canonical grammar is SUPPOSED to leave unquoted. */
+const EXPECTED_UNQUOTED = /^[A-Za-z0-9_./=-]$/;
+
+const RECOVERY = { interpreterPath: '/usr/bin/node', sessionId: 'sess-a' };
+
+test('pi quotes exactly the characters outside the canonical safe class', () => {
+  for (const ch of PRINTABLE_ASCII) {
+    // An apostrophe cannot be represented in a quoted span at all; both sides
+    // degrade to prose instead, which the dedicated case below pins.
+    if (ch === "'") continue;
+    const dir = `/srv/a${ch}b/.adlc`;
+    const command = piFormatRecoveryCommand({ ...RECOVERY, scriptPath: '/opt/a/handoff.mjs', adlcDir: dir });
+    const quoted = command.includes(`--dir '${dir}' `);
+    const bare = command.includes(`--dir ${dir} `);
+    assert.ok(quoted !== bare, `ambiguous rendering for ${JSON.stringify(ch)}: ${command}`);
+    assert.equal(
+      quoted,
+      !EXPECTED_UNQUOTED.test(ch),
+      `${JSON.stringify(ch)} must be ${EXPECTED_UNQUOTED.test(ch) ? 'bare' : 'quoted'}: ${command}`,
+    );
+  }
 });
 
-test("pi's value grammar is byte-identical to the canonical VALUE_RE", async () => {
-  assert.equal(
-    await regexLiteral(PI_HANDOFF_GATE, 'RECOVERY_VALUE_RE'),
-    await regexLiteral(CANONICAL_SOURCE, 'VALUE_RE'),
-  );
+test('canonical decides the same character-by-character', () => {
+  // Compared as an ABSOLUTE, not as equality between the two: two copies that
+  // drift together are still wrong, and equality alone cannot see that.
+  for (const ch of PRINTABLE_ASCII) {
+    if (ch === "'") continue;
+    const path = `/srv/a${ch}b/handoff.mjs`;
+    const command = canonicalFormatRecoveryCommand({ ...RECOVERY, scriptPath: path });
+    const quoted = command.includes(`'${path}'`);
+    const bare = command.includes(` ${path} `);
+    assert.ok(quoted !== bare, `ambiguous canonical rendering for ${JSON.stringify(ch)}`);
+    assert.equal(quoted, !EXPECTED_UNQUOTED.test(ch), `canonical drifted on ${JSON.stringify(ch)}`);
+  }
+});
+
+test('an isolated shell metacharacter is quoted on both sides', () => {
+  // Named cases for the two the lockstep-widening mutation targeted, each with
+  // nothing else in the path that could force quoting on its behalf.
+  for (const dir of ['/srv/a;b/.adlc', '/srv/$x/.adlc', '/srv/a&b/.adlc', '/srv/a|b/.adlc']) {
+    assert.ok(
+      piFormatRecoveryCommand({ ...RECOVERY, scriptPath: '/opt/a/handoff.mjs', adlcDir: dir })
+        .includes(`--dir '${dir}' `),
+      `pi must quote ${dir}`,
+    );
+    assert.ok(
+      canonicalFormatRecoveryCommand({ ...RECOVERY, scriptPath: dir }).includes(`'${dir}'`),
+      `canonical must quote ${dir}`,
+    );
+  }
+});
+
+test('the session-id grammar is an absolute too, character by character', () => {
+  for (const ch of PRINTABLE_ASCII) {
+    const sessionId = `sess-a${ch}b`;
+    const built = piFormatRecoveryCommand({
+      interpreterPath: '/usr/bin/node',
+      scriptPath: '/opt/a/handoff.mjs',
+      adlcDir: '/srv/repo/.adlc',
+      sessionId,
+    }).includes(`bypass --session ${sessionId} `);
+    // pi is deliberately stricter than the token grammar: it also requires the
+    // id to be one the deny store would name a marker file after.
+    const allowed = /^[A-Za-z0-9_.=:-]$/.test(ch) && isSafeSessionId(sessionId);
+    assert.equal(built, allowed, `session id containing ${JSON.stringify(ch)}`);
+  }
 });
 
 test("pi's quoting agrees with the canonical formatter on every path shape", () => {
