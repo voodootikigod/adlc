@@ -18,7 +18,7 @@
 import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
-import { checkHandoff, createStickyDenyState } from './lib/handoff-gate.mjs';
+import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';
 import { handleFileEdited, createWatcherState } from './lib/watcher.mjs';
 import { buildSystemContext, buildToolRailNotice, buildStatusLine } from './lib/context-inject.mjs';
 import { createFlailTracker, flailMessage } from './lib/flail.mjs';
@@ -114,6 +114,12 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   // Slice 5: per-session D1 memory so a FAILED deny-marker write stays sticky
   // after the band cools, instead of denying exactly one tool call.
   const handoffSticky = createStickyDenyState();
+  // Containment latch: once this root is seen initialized it stays armed for
+  // the life of the plugin. The ticket store is an unprotected file (verified:
+  // it is not a protected handoff path and `rm .adlc/tickets.json` is not a
+  // mutating-shell match), so without this an agent could delete the store
+  // below the band and never be denied.
+  const handoffInit = createInitLatch();
 
   // The ticket a deny marker is bound to. Resolved from the canonical
   // active-ticket pointer rather than from resolveRailsInForce: that ladder is
@@ -216,6 +222,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
         env,
         ticketId: activeTicketIdOrNull,
         sticky: handoffSticky,
+        initLatch: handoffInit,
       });
       if (handoff.decision === 'deny') {
         return denyHandoff(`ADLC context-handoff: blocked ${tool} — ${handoff.reason}`);
@@ -290,6 +297,7 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
           env,
           ticketId: activeTicketIdOrNull,
           sticky: handoffSticky,
+          initLatch: handoffInit,
         });
         if (handoff.decision === 'deny') {
           output.status = 'deny';

@@ -13,6 +13,7 @@ import { ensureDenyMarker, writeDenyRecord, HANDOFF_DEPTH } from '@adlc/context-
 import { adlcRailsGuard } from '../index.mjs';
 import {
   checkHandoff,
+  createInitLatch,
   createStickyDenyState,
   denyTargetsOf,
   handoffAppliesTo,
@@ -216,7 +217,10 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
   // Asserted as the EXACT command text, placeholders included: what the operator
   // pastes into a host shell is the contract here, so `--ticket <id>` degrading
   // into `--ticket >=id>` is a real defect, not cosmetic drift.
-  const tail = recoveryTail('ses_abc-1', ['D1:depth_band']);
+  // The REAL reason shape for a band self-deny, verified against the gate:
+  // D2 plus D3:unauthorized_open:<self>. An invented ['D1:depth_band'] set
+  // would exercise a path the gate never produces.
+  const tail = recoveryTail('ses_abc-1', ['D2:denier_session', 'D3:unauthorized_open:ses_abc-1']);
   assert.match(
     tail,
     /`adlc handoff resume --session <new-session> --deny-session ses_abc-1 --write`/,
@@ -234,10 +238,11 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
   // flag. Printing any of those yields a command that cannot run — guidance
   // shaped like help that prolongs the deny.
   for (const cliInvalid of ['../session', 'a/b', 'x/..', '-rf', '..']) {
-    assert.match(
-      recoveryTail(cliInvalid, ['D1:depth_band']),
-      /No safe session id/,
-      `the CLI rejects ${JSON.stringify(cliInvalid)}, so it must not be printed`,
+    const esc = cliInvalid.replace(/[.\\/*+?^${}()|[\]]/g, '\\$&');
+    assert.doesNotMatch(
+      recoveryTail(cliInvalid, [`D3:unauthorized_open:${cliInvalid}`]),
+      new RegExp(`--(deny-)?session ${esc}`),
+      `the CLI rejects ${JSON.stringify(cliInvalid)}, so it must not be printed as an argument`,
     );
     // Assert the PROPERTY, not the prose: the rejected id must never appear as
     // a command argument, however the message chooses to explain itself.
@@ -249,11 +254,9 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
     );
   }
   for (const unsafe of ['s1; rm -rf /', 'a b', 's1\n', '', null, undefined, 42]) {
-    assert.match(
-      recoveryTail(unsafe),
-      /No safe session id/,
-      `must not build a command from ${JSON.stringify(unsafe)}`,
-    );
+    const t = recoveryTail(unsafe);
+    assert.doesNotMatch(t, /--deny-session/, `must not build a command from ${JSON.stringify(unsafe)}`);
+    assert.doesNotMatch(t, /rm -rf/, 'and must never echo the unsafe id back');
   }
 });
 
@@ -419,6 +422,60 @@ test('an external-store repo is ARMED end to end: the band denies and writes a m
   }
 });
 
+test('deleting the ticket store mid-session cannot disarm the deny-set', async () => {
+  // The containment signal is an unprotected FILE: isProtectedHandoffPath
+  // ('.adlc/tickets.json') is false and `rm .adlc/tickets.json` is not a
+  // mutating-shell match, while the rail guard is inactive without
+  // ADLC_P4_ENFORCEMENT. Without a latch an agent could delete the store below
+  // the band and then edit freely forever, never writing a deny.
+  const dir = repo();
+  try {
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    // Arm the latch with calls made while the repo is genuinely initialized.
+    await hooks['tool.execute.before'](
+      { tool: 'edit', sessionID: 'evader', callID: 'c0' },
+      { args: { filePath: 'src/ok.mjs' } },
+    );
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    await pumpDepth(hooks, 'evader', HANDOFF_DEPTH);
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'evader', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      /ADLC context-handoff/,
+      'removing the containment signal must not buy an exit from the deny-set',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the latch only ever arms on a real store, so a contaminated dir stays inert', () => {
+  const dir = plainDir();
+  try {
+    mkdirSync(join(dir, '.adlc', 'handoffs', 'denies'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', '.deny-store'), '');
+    const latch = createInitLatch();
+    let evaluated = 0;
+    const evaluate = () => {
+      evaluated += 1;
+      return { deny: true, reasons: ['D3:unauthorized_open:x'] };
+    };
+    for (let i = 0; i < 5; i += 1) {
+      assert.deepEqual(
+        checkHandoff({ tool: 'edit', sessionID: 's1', root: dir, initLatch: latch, evaluate }),
+        { decision: 'allow' },
+      );
+    }
+    assert.equal(latch.armed(dir), false, 'a dir that never had a store must never arm');
+    assert.equal(evaluated, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an initialized repo is still enforced — the guard is not just "no .adlc"', () => {
   // Guards against the contamination fix over-correcting into a no-op.
   const dir = repo();
@@ -459,8 +516,9 @@ test('a repo path that cannot be a safe shell word drops --dir and says to cd', 
 test('an invalid deny record is never a repair target and sends the operator to the store', () => {
   const tail = recoveryTail('blocked-b', ['D3:invalid_record:corrupt-1'], '/repo/root');
   assert.doesNotMatch(tail, /--deny-session corrupt-1/, 'a record the gate rejected is not a binding');
+  assert.doesNotMatch(tail, /--deny-session blocked-b/, 'nor is the blocked session a marker owner');
   assert.match(tail, /judged INVALID/);
-  assert.match(tail, /inspect \.adlc\/handoffs\/denies\//);
+  assert.match(tail, /Inspect \.adlc\/handoffs\/denies\//);
 });
 
 test('a foreign deny still prints the owner command when this session has no safe id', () => {

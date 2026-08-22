@@ -227,12 +227,25 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
   // named but none survived quoting, falling back would point repair at a
   // session that owns no marker: the round-1 defect, re-entering through the
   // unsafe-owner door. Say what cannot be printed instead of guessing.
-  const targets =
-    safeOwners.length > 0 ? safeOwners : owners.length === 0 && said ? [said] : [];
+  // NO fallback to this session's own id. A deny only has a marker to address
+  // when the gate named an owner — verified against the real gate, which emits
+  // D3:unauthorized_open:<self> alongside D2 for a band self-deny. Denials that
+  // name no owner (a protected-path refusal, a FAILED marker write, an invalid
+  // session) have no marker at all, and `repair` explicitly refuses to create
+  // one, so printing a session-targeted command sent the operator down a
+  // dead end that looked like instructions.
+  const targets = safeOwners;
   if (targets.length === 0) {
-    // This branch already IS the whole explanation, so storeNote would only
-    // repeat it.
-    if (owners.length > 0 || invalid) {
+    // Each branch below IS the whole explanation, so storeNote would repeat it.
+    if (invalid) {
+      return (
+        'The deny store holds a record the gate judged INVALID, which no id-targeted command can clear: ' +
+        'the label on such a record is read off the record itself, so it is not a binding `adlc handoff ' +
+        'repair` may be pointed at. Inspect .adlc/handoffs/denies/ on the host directly. Read-only tools ' +
+        'remain usable in the interim.'
+      );
+    }
+    if (owners.length > 0) {
       return (
         'The open deny cannot be addressed by a printed command: no owner id in the deny store can be ' +
         'rendered as a safe, copy-pasteable shell word. Read the owning id from .adlc/handoffs/denies/ ' +
@@ -241,9 +254,11 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
       );
     }
     return (
-      'No safe session id could be resolved for this session, so no session-specific recovery command ' +
-      'can be printed. End this session and start a new one — the host mints a fresh session id, ' +
-      'unaffected by this resolution failure. Read-only tools remain usable in the interim.'
+      'No open deny is addressable from here: this refusal names no deny marker, so there is nothing ' +
+      'for `adlc handoff resume` or `repair` to act on — repair binds an EXISTING open deny and will ' +
+      'not create one. If the call was refused for touching a handoff trust-root artifact, retry ' +
+      'without that path. If a deny marker could not be written, fix that on the host (permissions or ' +
+      'disk under .adlc/handoffs/) and start a fresh session. Read-only tools remain usable.'
     );
   }
 
@@ -318,6 +333,36 @@ function recoverySteps(target, root) {
  * once the band cooled. OpenCode runs in-process, so it can actually hold the
  * fact the spec asks callers to thread.
  */
+/**
+ * Per-plugin memory of "this root was initialized", so containment cannot be
+ * switched off from inside the session it contains.
+ *
+ * The containment signal is a FILE, and the ticket store is not a protected
+ * handoff path — verified: isProtectedHandoffPath('.adlc/tickets.json') is
+ * false and isHandoffMutatingShell('rm .adlc/tickets.json') is false. With P4
+ * enforcement unset the rail guard is inactive by design, so nothing stopped an
+ * agent from deleting the store below the band and then editing freely forever,
+ * because every later call read the repo as "never opted into ADLC".
+ *
+ * Latching costs nothing in the cases containment exists for: a directory that
+ * never had a store never arms, so contaminated and non-ADLC repos stay inert.
+ * It only removes the ability to DISARM mid-session, which was never a
+ * legitimate transition.
+ */
+export function createInitLatch() {
+  const armed = new Set();
+  return {
+    /** @param {string} root @returns {boolean} */
+    armed(root) {
+      return armed.has(root);
+    },
+    /** @param {string} root */
+    arm(root) {
+      if (typeof root === 'string' && root !== '') armed.add(root);
+    },
+  };
+}
+
 export function createStickyDenyState() {
   const seen = new Set();
   return {
@@ -363,6 +408,7 @@ export function checkHandoff({
   env = process.env,
   ticketId = null,
   sticky,
+  initLatch,
   evaluate = evaluateHandoffPreToolUse,
 }) {
   // Containment, before anything else can evaluate or write: the deny-set has
@@ -397,7 +443,9 @@ export function checkHandoff({
     // while the deny-set silently stood down. Contamination still cannot
     // self-authorize, because a directory holding only the old bug's
     // .deny-store and markers has no ticket store either way.
-    if (!ticketStoreExists(root, storeOverride)) {
+    if (ticketStoreExists(root, storeOverride)) {
+      initLatch?.arm(root);
+    } else if (!initLatch?.armed(root)) {
       return { decision: 'allow' };
     }
   }
