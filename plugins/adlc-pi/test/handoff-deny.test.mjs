@@ -2012,23 +2012,24 @@ test('the enclosing repo is remembered from session start, before any tool call'
 });
 
 test('session_start itself arms the memory, through the real extension', async () => {
-  // The previous test arms by hand, which proves the RULE but not the WIRING —
-  // a mutation that never records at session_start survived it. This drives
-  // the real handler: one session opens in the repo, a later one opens in a
-  // subdirectory carrying a convincing forged checkout, and the process-wide
-  // memory has to outrank it.
+  // The repo here deliberately has a ticket store but NO `.git`, which is the
+  // shape the enclosing-ADLC-repo tiebreaker cannot help with: with no git+store
+  // ancestor, a forged `<sub>/.git` IS honoured as a boundary, so the memory
+  // armed at session_start is the only thing standing between the agent and an
+  // escape. (Inside a real git+store repo the boundary never releases at all —
+  // covered separately — which is why this test must not use that shape, or it
+  // would pass without the wiring it exists to pin.)
   const root = makeRepo();
   try {
-    makeCheckout(root);
     const sub = join(root, 'src');
     mkdirSync(join(sub, '.git'), { recursive: true });
     writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
     writeFileSync(join(sub, 'a.txt'), 'x\n');
 
-    // The forgery no longer stands alone even cold — inside a real ADLC repo
-    // the boundary never releases enforcement. session_start arming is the
-    // belt to that braces, and is what this test pins.
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root));
+    // Structurally, the forgery DOES win here: no git+store ancestor exists, so
+    // the tiebreaker cannot fire and the boundary is honoured. That is what
+    // makes this the shape where session_start arming is load-bearing.
+    assert.equal(resolveAdlcRoot(sub), null, 'unarmed, the forged boundary is honoured');
 
     // A session opens in the repo — session_start must record it.
     await boot(root, { percent: 5, sessionId: 'sess-A' });
