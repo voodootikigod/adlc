@@ -1,0 +1,13 @@
+{
+  "body": "## Context\n\nGitHub issue #107, widened by the 1.11.0 pre-release review: SEVEN of the 27 shipped bins crash on --help and -h with a raw ERR_PARSE_ARGS_UNKNOWN_OPTION stack trace (exit 1), including through the umbrella dispatcher (`adlc preflight --help`): behavior-diff, consensus-fix, lesson-foundry, model-router, preflight, rejection-mining, skill-rot. All seven crash through the single nodeParseArgs call at packages/core/lib/cli.mjs:22 — parseArgs prints-and-exits only when config.usage is set (:11-19); usage-less configs fall straight through to node:util parseArgs in strict mode, which throws on the undeclared --help. This is the first command a new npm consumer runs.\n\n## What to change\n\nCentral fix in packages/core/lib/cli.mjs ONLY: when argv contains --help or -h and the config carries no usage, synthesize a usage listing from config.options (flag names, types, defaults where present), print it, exit 0 — mirroring the existing usage-configured path. Bins that DO pass usage keep their exact current behavior (do not regress the 20 working bins). Do not edit the seven bins; the point is the one-file fix.\n\n## Acceptance criteria\n\n1. Unit tests in packages/core/test/ cover: usage-less config + --help prints a synthesized listing and exits 0; same for -h; usage-CONFIGURED path byte-identical to before (existing tests stay green); unknown flags OTHER than help still error as today. verify: `node --test packages/core/test/*.test.mjs` exits 0.\n2. All seven named bins print usage and exit 0 on --help, spot-run for real (execFile in a test or a documented run in the PR body): at minimum behavior-diff, preflight, skill-rot. verify: `node packages/preflight/bin/preflight.mjs --help` exits 0 with no stack trace (and siblings likewise).\n3. No shipped bin regresses: the full-suite segments for core and the seven packages stay green. verify: `node --test packages/core/test/*.test.mjs packages/behavior-diff/test/*.test.mjs packages/preflight/test/*.test.mjs` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0QGCCSWV8PXRB032WKG0T9B",
+  "rails": [],
+  "scope": [
+    "packages/core/lib/cli.mjs",
+    "packages/core/test/**"
+  ],
+  "title": "core: --help must print usage for parseArgs configs that pass no 'usage' — 7 shipped bins crash today (#107)"
+}

@@ -1,0 +1,14 @@
+{
+  "body": "## Context\n\nGitHub issue #311, severity UP since filing: after the 1.11.0 arc's completion sweep, 20 of 27 rows under 'Active tickets' in this very repo carry completed:true (74% wrong), including tickets declaring 22 and 11 rails. Root cause verified on main: packages/ticket-prune/lib/run.mjs:89 computes the active set as `results.filter((r) => !r.stale)` with no completed consultation; dispositionFor (lib/detect.mjs:132) DOES check ticket.completed === true, but classifyTicket (:71-102) reads only status, so a completed ticket with no status emits the false active reason at :102. No CI gate consumes the output (report-only), but a rails-state report that lies undercuts the completion-lifecycle invariant this repo enforces everywhere else (rails union, backlog enumerators, tombstones — see the invariant note: every NEW backlog consumer must filter completed).\n\n## What to change\n\nSingle-point fix at the active-set computation in run.mjs:89: thread ticketsById (already built nearby) and exclude tickets with completed === true; keep the rest of the pipeline untouched so every return site inherits the corrected set. If classifyTicket's :102 reason string still claims 'active' for completed tickets in any other path, correct the classification honestly rather than masking at one call site — but keep the diff minimal.\n\n## Acceptance criteria\n\n1. A fixture store containing completed:true tickets (with and without a status field) lists NONE of them under Active tickets, and genuinely active tickets still appear. verify: `node --test packages/ticket-prune/test/*.test.mjs` exits 0 with the new fixture test present.\n2. Live spot-check documented in the PR body: running ticket-prune's report against THIS repo lists only the genuinely active tickets (7 expected at authoring time, none completed). verify: command + output excerpt in the PR body.\n3. Package suite + mutation gate green. verify: `node --test packages/ticket-prune/test/*.test.mjs` exits 0 and `node scripts/mutation-gate.mjs origin/main` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0QGCD32D6C0AC8TVDF5ZC2M",
+  "rails": [],
+  "scope": [
+    "packages/ticket-prune/lib/run.mjs",
+    "packages/ticket-prune/lib/detect.mjs",
+    "packages/ticket-prune/test/**"
+  ],
+  "title": "ticket-prune: 'Active tickets' must exclude completed tickets — the listing is 74% wrong post-sweep (#311)"
+}
