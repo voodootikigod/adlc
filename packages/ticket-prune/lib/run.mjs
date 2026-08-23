@@ -86,9 +86,20 @@ export function runTicketPrune(options = {}) {
   }
 
   const results = classifyTickets(tickets, trackedFiles);
-  const stale = results.filter((r) => r.stale);
-  const active = results.filter((r) => !r.stale);
   const ticketsById = new Map(tickets.map((t) => [t.id, t]));
+  const stale = results.filter((r) => r.stale);
+  // Active = not stale AND not already completed (#311). classifyTicket answers
+  // only "is this shipped?" from `status`/scope existence — it never consults
+  // `completed`, so a completed ticket carrying no status (or a status that is
+  // not done-shaped) comes back stale:false and would be reported as ACTIVE. The
+  // ADLC completion-lifecycle invariant is that `completed: true` is THE
+  // completion marker and every backlog consumer filters on it (rails union,
+  // the backlog enumerators' activeTickets, this tool's own tombstone write);
+  // this was the consumer that did not. Filtering here — the single point every
+  // return site takes `active` from — corrects both backends and both the
+  // dry-run and write paths at once. Completed tickets that ARE stale keep
+  // flowing through `stale`/ceremonyDisposition untouched.
+  const active = results.filter((r) => !r.stale && ticketsById.get(r.id)?.completed !== true);
 
   if ((!write && !ceremony) || stale.length === 0) {
     // Dry-run (or nothing stale): report the needsCeremony drift so it is
