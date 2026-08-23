@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
 import { dispatch } from '../lib/dispatch.mjs';
 import { getTool, isTool } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
@@ -47,13 +48,21 @@ test('dispatching "review" shells out to `npx adversarial-review` with full argu
     return fakeChild({ status: 0 });
   };
 
-  const { code, error } = await dispatch('review', ['--scope', 'working-tree', '--include-files'], { spawnFn });
+  // The npx invocation is now resolved from the running node instead of being the bare
+  // PATH name (issue #233 -- bare `npx` is ENOENT on Windows). Pin the environment so
+  // the expected argv stays a literal; the platform branches themselves are asserted in
+  // npx-resolution.test.mjs.
+  const execPath = '/fixture/usr/local/bin/node';
+  const npxCli = join(execPath, '..', 'node_modules', 'npm', 'bin', 'npx-cli.js');
+  const npxEnv = { platform: 'linux', execPath, isFile: (path) => path === npxCli };
+
+  const { code, error } = await dispatch('review', ['--scope', 'working-tree', '--include-files'], { spawnFn, npxEnv });
 
   assert.equal(error, undefined);
   assert.equal(code, 0);
   assert.equal(calls.length, 1, 'expected exactly one spawn call (no network access)');
-  assert.equal(calls[0].cmd, 'npx');
-  assert.deepEqual(calls[0].args, ['adversarial-review', '--scope', 'working-tree', '--include-files']);
+  assert.equal(calls[0].cmd, execPath);
+  assert.deepEqual(calls[0].args, [npxCli, 'adversarial-review', '--scope', 'working-tree', '--include-files']);
   assert.equal(calls[0].options.stdio, 'inherit');
 });
 
