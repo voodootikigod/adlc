@@ -133,7 +133,17 @@ test('a program with no argv[1] at all falls back to the suite name', () => {
 });
 
 test('a bin whose filename is only an extension still gets a name', () => {
-  const run = runBin('', { options: { json: { type: 'boolean' } } }, ['--help']);
+  // argv[1] is set rather than a file named `.mjs` written and run: Node 18
+  // cannot load such a file at all, and the branch under test is the name
+  // derivation, not the loader. Stripping the extension leaves nothing, and a
+  // listing headed "usage:  [options]" names no command the reader can run.
+  const run = spawnSync(
+    process.execPath,
+    ['-e',
+      `process.argv[1] = '/opt/tools/.mjs';\n` +
+      `import(${JSON.stringify(CORE_INDEX)}).then((m) => m.parseArgs({ args: ['--help'], options: {} }));`],
+    { encoding: 'utf8' }
+  );
 
   assert.equal(run.status, 0);
   assert.match(run.stdout, /^usage: adlc \[options\]\n/);
