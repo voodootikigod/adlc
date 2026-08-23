@@ -329,9 +329,21 @@ const PATH_FIELD = /^(?:path|file|file_?path)$/i;
  * heuristic, and it is not authoritative on its own, because `filePath` is a
  * key plenty of tools hand a directory. An absent `{filePath: 'src/Makefile'}`
  * therefore keeps ancestor detection and can be over-denied under an
- * interior-wildcard rail — deliberate, since this predicate only gates tools
- * that do not write files (the structured mutators take the `singleFile` path),
- * and over-denial there is a visible, explained refusal rather than a miss.
+ * interior-wildcard rail.
+ *
+ * `fileKeyed` is opt-in and, since #498, the rail guard does NOT opt in: the
+ * ungated branch calls this with a stat and nothing else, so an absent path is
+ * over-denied there whatever key named it (see `checkToolCall`). Do not wire the
+ * license back in from that branch — the leaf whose extension it reads is chosen
+ * by the caller the branch exists to distrust, which is how four shapes that
+ * denied through v1.10.0 turned into allows. The option stays because the
+ * question it answers ("did a key assert file-ness") is separate from the policy
+ * a given caller applies to the answer, and `spoofCandidates` still reports the
+ * provenance either way.
+ *
+ * Over-denial is the tolerable direction here regardless: this predicate only
+ * gates tools that do not write files (the structured mutators take the
+ * `singleFile` path), so it is a visible, explained refusal rather than a miss.
  *
  * The extension heuristic is NOT used at all for an ambiguous key, which costs
  * the same over-denial on an absent file named through a bare `target`.
@@ -709,7 +721,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
       return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
     }
     if (force.active) {
-      const { targets, directories, files } = spoofCandidates(args);
+      const { targets, directories } = spoofCandidates(args);
       for (const target of targets) {
         // Same file-vs-directory distinction MUTATING_TOOLS already gets below:
         // ancestor detection asks "would acting on this directory destroy a
@@ -724,14 +736,27 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
         // says the target is a directory, which is the spelling a spoofing call
         // would otherwise use to shed the check.
         //
+        // And the claim has to be BACKED, which on this branch means a stat: no
+        // `fileKeyed`, so an ABSENT path is never inferred a file from its name
+        // here. `namesAFile`'s extension guess reads a caller-chosen leaf, and
+        // handing that the narrowed mode is the caller deciding how hard the
+        // gate looks at their own argument. It cost the deny on
+        // `{filePath: 'src/new.bundle'}` and three sibling shapes under an
+        // interior-`**` rail — shapes that denied in every release through
+        // v1.10.0 — so the license is off here (GitHub #498, ticket
+        // T-01M0QGCCGMH484DBVTC7CJ7168). The over-denial that comes back is the
+        // shipped behavior, it is a visible refusal rather than a miss, and this
+        // predicate only gates tools that do not write files at all. The gated
+        // branch is unaffected: a structured mutator takes the `singleFile` path
+        // and never asks the ancestor question.
+        //
         // Classified on every spelling railHit will match, and conservatively:
         // one spelling that is not a file keeps full ancestor detection. A
         // padded ` src/cache.bundle` misses the stat that would find the real
-        // directory and reads as an absent dotted file, while railHit goes on
-        // to match the trimmed spelling — so classifying the raw form alone
-        // handed the narrowed mode a directory.
+        // directory, while railHit goes on to match the trimmed spelling — so
+        // classifying the raw form alone handed the narrowed mode a directory.
         const claimedFile = !directories.has(target)
-          && matchableSpellings(target).every((spelling) => namesAFile(spelling, root, { fileKeyed: files.has(target) }));
+          && matchableSpellings(target).every((spelling) => namesAFile(spelling, root));
         const hit = railHit(target, force.rails, root, { ancestors: claimedFile ? 'literal' : true });
         if (hit) {
           return { decision: 'deny', reason: `ungated tool "${name}" carries a frozen-rail target — frozen rail "${hit}" (active ticket ${force.ticketId})` };

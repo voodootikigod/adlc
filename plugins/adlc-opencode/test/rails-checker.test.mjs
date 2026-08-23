@@ -840,15 +840,28 @@ test('r: aliased args cannot slip an ungated tool past an active rail', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('r: a concrete non-rail file is not read as a rail ancestor', () => {
-  // Ancestor detection asks "would acting on this DIRECTORY destroy a rail",
-  // which is the wrong question for a file: under an interior-wildcard rail,
-  // src/index.mjs otherwise reads as an ancestor of src/**/test/*.mjs. Mutating
-  // tools already get this distinction; the ungated branch did not.
+test('r: an ABSENT path keeps ancestor detection on the ungated branch, whatever key named it', () => {
+  // AMENDED DELIBERATELY under ticket T-01M0QGCCGMH484DBVTC7CJ7168 (GitHub #498).
+  // This block used to pin ALLOW for the shapes below. A file-specific KEY plus a
+  // dotted leaf licensed namesAFile's extension guess for a path that does not
+  // exist, which selected ancestors:'literal' and stopped an anchored `**` from
+  // absorbing the target's last segment. But on THIS branch "it is a file" is a
+  // claim by the caller the branch exists to distrust, and the guess turned four
+  // shapes that DENIED in every release through v1.10.0 into allows — the only
+  // fail-open regression in the 1.11.0 window. The spec decision restores the
+  // v1.10.0 deny: an absent path gets full ancestor detection here regardless of
+  // key. The over-denial that trades back in is the shipped, field-tolerated
+  // behavior, and a benign ungated tool has no business carrying a file-path arg.
+  //
+  // NOT reverted: a path the filesystem RESOLVES. A stat is evidence rather than
+  // a claim, so an existing file still takes the narrowed mode and still runs —
+  // pinned at the end of this test and against `src/Makefile` further down.
   const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
   try {
-    // File-specific keys license file semantics, so ancestor detection is off
-    // and a non-rail file runs.
+    // The four regression shapes from the ticket's A/B, plus the two the same
+    // license covered: the apply_patch envelope (a regression like the four) and
+    // `targetFile`, which v1.10.0 never collected at all — leaving that one
+    // allowed would just be the same hole under a different spelling.
     for (const args of [
       { targetFile: 'src/index.mjs' },
       { filePath: 'src/index.mjs' },
@@ -860,16 +873,16 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
       { patch: '*** Begin Patch\n*** Update File: src/index.mjs\n*** End Patch\n' },
     ]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
-      assert.equal(r.decision, 'allow', `${JSON.stringify(args)} → ${r.reason}`);
+      assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
-    // A bare `target` is ambiguous, and ambiguity resolves to DIRECTORY so the
-    // ancestor check stays on. That over-denies an absent file named this way —
-    // the deliberate cost of not guessing, recoverable by naming the key. An
-    // EXISTING file is still resolved by stat, so this is only the absent case.
+    // The ambiguous keys deny for the older reason — ambiguity resolves to
+    // DIRECTORY — and keep denying after #498. Pinned separately because the two
+    // sides now agree: a later change that re-licensed the file guess would flip
+    // the block above without touching this one.
     //
-    // `path` sits on the ambiguous side too: it is the key a caller reaches for
-    // when passing a DIRECTORY, so it may not assert file-ness. `targetPath` is
-    // the same word with a target prefix.
+    // `path` sits on the ambiguous side: it is the key a caller reaches for when
+    // passing a DIRECTORY, so it may not assert file-ness. `targetPath` is the
+    // same word with a target prefix.
     for (const args of [{ target: 'src/index.mjs' }, { path: 'src/index.mjs' }, { targetPath: 'src/index.mjs' }, { edits: [{ path: 'src/index.mjs' }] }]) {
       const ambiguous = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(ambiguous.decision, 'deny', `${JSON.stringify(args)} → ${ambiguous.reason}`);
@@ -901,15 +914,59 @@ test('r: a concrete non-rail file is not read as a rail ancestor', () => {
       const padded = checkToolCall({ tool, args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(padded.decision, 'deny', `${tool} ${JSON.stringify(args)} → ${padded.reason}`);
     }
+    // A stat flips every one of them: this is the surviving witness that the
+    // narrowed ('literal') mode is still reachable from the hook at all, and the
+    // over-block requirement 3 exists to prevent is still fixed for a file that
+    // is actually there.
     mkdirSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src', 'index.mjs'), '');
-    const stated = checkToolCall({ tool: 'task', args: { target: 'src/index.mjs' }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
-    assert.equal(stated.decision, 'allow', `an existing file is resolved by stat → ${stated.reason}`);
+    for (const args of [{ target: 'src/index.mjs' }, { filePath: 'src/index.mjs' }, { files: ['src/index.mjs'] }]) {
+      const stated = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+      assert.equal(stated.decision, 'allow', `an existing file is resolved by stat → ${stated.reason}`);
+    }
     // A file the rail actually matches, and a DIRECTORY that holds one, both stay denied.
     for (const args of [{ target: 'src/app/test/a.mjs' }, { target: 'src' }]) {
       const r = checkToolCall({ tool: 'task', args, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('r: #498 — the v1.10.0 deny is restored for an absent dotted path, the target/targetDir denies are kept', () => {
+  // Ticket T-01M0QGCCGMH484DBVTC7CJ7168. Drives the exact A/B recorded on the
+  // issue: rail `src/**/test/*.mjs`, ungated tool, absent target `src/new.bundle`.
+  // Held against the SHAPES rather than the internals so that any future route
+  // to the same allow — a new key spelling, a new envelope, a re-licensed guess —
+  // reddens here even if the mechanism changes.
+  const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['src/**/test/*.mjs'] }] } });
+  try {
+    const env = { ...ON, ADLC_TICKET: 'T1' };
+    // v1.10.0 DENY → main ALLOW. These four are the regression.
+    for (const args of [
+      { filePath: 'src/new.bundle' },
+      { file: 'src/new.bundle' },
+      { files: ['src/new.bundle'] },
+      { edits: [{ filePath: 'src/new.bundle' }] },
+    ]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env });
+      assert.equal(r.decision, 'deny', `v1.10.0 parity: ${JSON.stringify(args)} → ${r.reason}`);
+    }
+    // v1.10.0 ALLOW → main DENY: an in-window IMPROVEMENT this fix must not undo.
+    // `target` is ambiguous and `targetDir` says directory outright; both keep
+    // ancestor detection, and neither was reachable as a spoof candidate at all
+    // before the 1.11.0 work.
+    for (const args of [{ target: 'src/new.bundle' }, { targetDir: 'src/new.bundle' }]) {
+      const r = checkToolCall({ tool: 'task', args, root: dir, env });
+      assert.equal(r.decision, 'deny', `improvement kept: ${JSON.stringify(args)} → ${r.reason}`);
+    }
+    // The GATED branch is untouched: a structured mutator takes the singleFile
+    // path, which never asks the ancestor question, so an absent non-rail file
+    // still writes — and a real rail match still denies there.
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/new.bundle' }, root: dir, env }).decision, 'allow');
+    assert.equal(checkToolCall({ tool: 'write', args: { filePath: 'src/app/test/a.mjs' }, root: dir, env }).decision, 'deny');
+    // …and the ungated branch has not become a blanket deny: a path the rail
+    // cannot reach in any ancestor form still runs.
+    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'other/new.bundle' }, root: dir, env }).decision, 'allow');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1055,7 +1112,13 @@ test('r: a claimed file is still denied when the rail NAMES it past a zero-width
       assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     }
     // The over-block requirement 3 removed stays removed: here only the `**`
-    // relates the rail to the target, so a claimed file still runs.
+    // relates the rail to the target, so a file still runs. Since #498 the claim
+    // has to be backed by a stat on this branch — an ABSENT `src/index.mjs` is
+    // over-denied here, which is the v1.10.0 behavior the ticket restored.
+    const absent = checkToolCall({ tool: 'task', args: { filePath: 'src/index.mjs' }, root: dir, env });
+    assert.equal(absent.decision, 'deny', absent.reason);
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'index.mjs'), '');
     const unrelated = checkToolCall({ tool: 'task', args: { filePath: 'src/index.mjs' }, root: dir, env });
     assert.equal(unrelated.decision, 'allow', unrelated.reason);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -1106,15 +1169,22 @@ test('r: narrowed ancestor matching stays linear on a hostile target path', () =
   }
   const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
   assert.ok(elapsedMs < 2000, `narrowed ancestor walk took ${elapsedMs | 0}ms`);
-  // And the hook really does route a hostile path here: a dotted file-keyed
-  // target is what selects the narrowed mode. Asserted for its DECISION only —
-  // the rest of checkToolCall canonicalizes and symlink-resolves a 100KB path,
-  // which dominates the timing and would make a ceiling here a measurement of
-  // the filesystem rather than of this walk.
+  // And the hook still ANSWERS on that path rather than hanging. Since #498 an
+  // absent path takes the full walk on the ungated branch — a caller can no
+  // longer hand the narrowed walk a 16k-segment target at all, because only a
+  // stat selects it now and a 16k-deep file cannot be created — so the narrowed
+  // walk's bound is asserted directly above and the hook covers the full one.
+  // Asserted for its DECISION only: the rest of checkToolCall canonicalizes and
+  // symlink-resolves a 100KB path, which dominates the timing and would make a
+  // ceiling here a measurement of the filesystem rather than of either walk.
   const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: ['a/**/**/z/**'] }] } });
   try {
     const r = checkToolCall({ tool: 'task', args: { filePath: `${target}/x.mjs` }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
-    assert.equal(r.decision, 'allow', r.reason);
+    assert.equal(r.decision, 'deny', r.reason);
+    // A path the rail cannot reach in ANY ancestor form still runs, so the
+    // hostile-length input is decided rather than blanket-denied.
+    const unrelated = checkToolCall({ tool: 'task', args: { filePath: `b/${target}/x.mjs` }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } });
+    assert.equal(unrelated.decision, 'allow', unrelated.reason);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1198,10 +1268,15 @@ test('r: a rail thousands of globstars deep still yields a decision', () => {
   const dir = repo({ tickets: { tickets: [{ id: 'T1', rails: [deep] }] } });
   try {
     const env = { ...ON, ADLC_TICKET: 'T1' };
-    // A claimed file takes the narrowed walk; an ambiguous key takes the full
-    // one, which stops at the first `**`. Both must answer rather than throw.
-    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'a/b.mjs' }, root: dir, env }).decision, 'allow');
+    // A file the filesystem resolves takes the narrowed walk; anything else
+    // takes the full one, which stops at the first `**`. Both must answer
+    // rather than throw. Since #498 the key alone no longer picks the narrowed
+    // walk for an ABSENT path, so the file is created to reach it.
+    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'a/b.mjs' }, root: dir, env }).decision, 'deny');
     assert.equal(checkToolCall({ tool: 'task', args: { target: 'a/b.mjs' }, root: dir, env }).decision, 'deny');
+    mkdirSync(join(dir, 'a'), { recursive: true });
+    writeFileSync(join(dir, 'a', 'b.mjs'), '');
+    assert.equal(checkToolCall({ tool: 'task', args: { filePath: 'a/b.mjs' }, root: dir, env }).decision, 'allow');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
