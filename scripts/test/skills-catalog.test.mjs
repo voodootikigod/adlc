@@ -168,38 +168,58 @@ function commandContexts(text) {
  *
  * Usage-line convention: `<foo>` is required, `[bar]` is optional.
  */
-function helpTextFor(tool) {
-  // Some tools reject `--help` and print usage on stderr with exit 1 instead
-  // (behavior-diff is one), so BOTH streams are read and a non-zero exit is not
-  // treated as "no help". Falling back to a bare invocation catches the rest.
-  // Tools print usage in several shapes: bare at line start, "usage: <tool> …",
-  // and — when a bare invocation is itself the error — "error: usage: <tool> …".
-  // Anchoring too strictly silently demotes a tool to "undeterminable".
-  const looksLikeUsage = (text) =>
-    new RegExp(`^\\s*((error|usage):\\s*)*(adlc-)?${tool}\\s`, 'im').test(text);
+// Probing a tool by running it BARE is only safe when the tool fails fast on
+// missing required arguments. It is not safe in general: `adlc rejection-mining`
+// with no args actually runs and queries the GitHub API, so a blanket bare probe
+// turned this offline unit test into a network client. Only tools verified to
+// reject-and-exit are probed that way; everything else is --help only, and lands
+// in the explicit undeterminable list if that fails.
+const SAFE_BARE_PROBE = new Set(['consensus-fix', 'behavior-diff']);
 
-  // Probing a tool by running it BARE is only safe when the tool fails fast on
-  // missing required arguments. It is not safe in general: `adlc
-  // rejection-mining` with no args actually runs and queries the GitHub API, so
-  // a blanket bare probe turned this offline unit test into a network client.
-  // Only tools verified to reject-and-exit are probed that way; everything else
-  // is --help only, and lands in the explicit undeterminable list if that fails.
-  const SAFE_BARE_PROBE = new Set(['consensus-fix', 'behavior-diff']);
-  const attempts = SAFE_BARE_PROBE.has(tool)
-    ? [[ADLC_BIN, tool, '--help'], [ADLC_BIN, tool]]
-    : [[ADLC_BIN, tool, '--help']];
-  let fallback = '';
-  for (const argv of attempts) {
-    const run = spawnSync(process.execPath, argv, { encoding: 'utf8', cwd: repoRoot, timeout: 20_000 });
-    const text = `${run.stdout ?? ''}${run.stderr ?? ''}`;
-    if (looksLikeUsage(text)) return text;
-    // Keep the most INFORMATIVE non-usage output, not the longest: a tool that
-    // rejects --help emits a Node stack trace (long, useless) while its bare
-    // invocation emits "--test-cmd is required" (short, exactly what we need).
-    const informative = /is required|requires\s+--/i.test(text);
-    if (informative || fallback === '') fallback = informative ? text : fallback || text;
-  }
-  return fallback;
+const probeCache = new Map();
+
+/**
+ * Both probes for a tool: what it prints for `--help`, and — where safe — what
+ * it prints when invoked bare. BOTH are kept, never just the first one that
+ * looks like usage. Since issue #107 every tool answers --help with at least a
+ * generic flag listing, so a first-usage-wins probe would read `consensus-fix`'s
+ * listing and never reach the "--test-cmd is required" its bare invocation
+ * states. Keeping them apart is what stops a tool that gains a generic --help
+ * from silently shedding coverage here.
+ *
+ * Some tools print usage on stderr with a non-zero exit, so BOTH streams are
+ * read and a non-zero exit is not treated as "no help".
+ */
+function probeTool(tool) {
+  if (probeCache.has(tool)) return probeCache.get(tool);
+  const run = (...args) => {
+    const r = spawnSync(process.execPath, [ADLC_BIN, tool, ...args], {
+      encoding: 'utf8', cwd: repoRoot, timeout: 20_000,
+    });
+    return `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  };
+  const probes = { help: run('--help'), bare: SAFE_BARE_PROBE.has(tool) ? run() : '' };
+  probeCache.set(tool, probes);
+  return probes;
+}
+
+/**
+ * The generic flag listing @adlc/core synthesizes for a tool that declares no
+ * usage of its own (issue #107). It enumerates the flag surface and says
+ * NOTHING about which arguments are required, so it must never be read as a
+ * contract: doing so would silently downgrade every such tool from "we cannot
+ * check this" to a confident "requires nothing".
+ */
+const SYNTHESIZED_LISTING = /^usage: \S+ \[options\]\n\noptions:\n(?: .*\n?)+/m;
+
+/**
+ * What the tool told us about its CONTRACT, bare-invocation output first: when a
+ * bare run is itself the error, its "error: usage: <tool> <verb>" names the real
+ * contract. A synthesized listing contributes nothing and is dropped.
+ */
+function helpTextFor(tool) {
+  const { help, bare } = probeTool(tool);
+  return [bare, SYNTHESIZED_LISTING.test(help) ? '' : help].filter(Boolean).join('\n');
 }
 
 function requiredArgsFor(tool) {
@@ -208,12 +228,12 @@ function requiredArgsFor(tool) {
     .split(/\r?\n/)
     .find((line) => new RegExp(`(^|\\s)(adlc-)?${tool}\\s`).test(line));
   if (!usage) {
-    // Not every tool exposes a usage line — `consensus-fix` rejects --help
-    // outright. But each one still FAILS CLOSED with its own message naming what
-    // it needs ("--test-cmd is required", "capture requires --config <…>"), so
-    // derive from that instead. Using the tool's own error text keeps this
-    // honest as the CLI changes, where a hard-coded table would rot.
-    // Both shapes appear: "--test-cmd is required" and the bare-word
+    // Not every tool states a contract — `consensus-fix` only answers --help
+    // with the synthesized listing. But each one still FAILS CLOSED with its own
+    // message naming what it needs ("--test-cmd is required", "capture requires
+    // --config <…>"), so derive from that instead. Using the tool's own error
+    // text keeps this honest as the CLI changes, where a hard-coded table would
+    // rot. Both shapes appear: "--test-cmd is required" and the bare-word
     // "ticket is required for P6 acceptance evidence".
     const demanded = [
       ...text.matchAll(/(--[a-z][\w-]*)\s+is required/gi),
@@ -324,6 +344,26 @@ test('every catalog skill teaches invocations that satisfy each tool\'s required
     ['lesson-foundry', 'model-router', 'preflight', 'rejection-mining', 'skill-rot'],
     'the set of argument-unchecked tools changed — verify the new tool by hand, then update this list',
   );
+});
+
+test('a tool\'s real contract survives the synthesized --help listing', () => {
+  // Regression guard for issue #107. Once @adlc/core answered --help for every
+  // tool, a probe that stopped at the first usage-looking output read
+  // consensus-fix's generic flag listing, concluded "requires nothing", and
+  // quietly retired the required-argument coverage this file exists to provide
+  // — while every assertion above still passed.
+  // A FLOOR, not a certificate: consensus-fix requires --files as well, but a
+  // bare probe only ever sees the first refusal because the tool exits at it,
+  // and feeding it --test-cmd to uncover the next one means running it for real
+  // — exactly what SAFE_BARE_PROBE exists to prevent. The gap predates issue
+  // #107; what must not happen is the floor silently dropping to zero.
+  assert.deepEqual(requiredArgsFor('consensus-fix'), { positionals: [], flags: ['--test-cmd'] });
+  assert.deepEqual(requiredArgsFor('behavior-diff').positionals, ['verb']);
+
+  // And a synthesized listing is not mistaken for a contract: these tools state
+  // no requirements anywhere, which is UNDETERMINABLE, not "requires nothing".
+  assert.equal(requiredArgsFor('preflight'), null);
+  assert.equal(requiredArgsFor('skill-rot'), null);
 });
 
 test('every catalog skill teaches commands that actually exist', () => {

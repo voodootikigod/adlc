@@ -1,7 +1,34 @@
 // CLI conventions shared by every ADLC tool.
 // Exit codes: 0 = gate passes, 1 = operational error, 2 = gate fails.
 
+import { basename } from 'node:path';
 import { parseArgs as nodeParseArgs } from 'node:util';
+
+function programName() {
+  const entry = process.argv[1];
+  if (!entry) return 'adlc';
+  return basename(entry).replace(/\.[cm]?js$/, '') || 'adlc';
+}
+
+/**
+ * Fallback usage for a config that declares options but no `usage`. Without it
+ * --help reaches node:util parseArgs in strict mode and throws an
+ * ERR_PARSE_ARGS_UNKNOWN_OPTION stack trace at the user (issue #107).
+ */
+function synthesizeUsage(options) {
+  const rows = Object.entries(options ?? {}).map(([name, spec]) => {
+    const short = spec?.short ? `-${spec.short}, ` : '';
+    const value = spec?.type === 'string' ? (spec.multiple ? ' <value...>' : ' <value>') : '';
+    const shown = typeof spec?.default === 'string' ? spec.default : JSON.stringify(spec?.default);
+    const note = spec?.default === undefined ? '' : `(default: ${shown})`;
+    return [`  ${short}--${name}${value}`, note];
+  });
+  rows.push(['  -h, --help', 'show this help']);
+
+  const width = Math.max(...rows.map(([label]) => label.length));
+  const lines = rows.map(([label, note]) => (note ? `${label.padEnd(width + 2)}${note}` : label));
+  return `usage: ${programName()} [options]\n\noptions:\n${lines.join('\n')}`;
+}
 
 export function parseArgs(config) {
   const args = config?.args ?? process.argv.slice(2);
@@ -15,8 +42,10 @@ export function parseArgs(config) {
         } else {
           console.log(config.usage);
         }
-        process.exit(0);
+      } else {
+        console.log(synthesizeUsage(config?.options));
       }
+      process.exit(0);
     }
   }
   return nodeParseArgs({ allowPositionals: true, ...config });

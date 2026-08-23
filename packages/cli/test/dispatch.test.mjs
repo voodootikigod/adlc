@@ -206,3 +206,21 @@ test('packageJsonPath falls back to require.resolve if the local package.json ha
     rmSync(fakePkgDir, { recursive: true, force: true });
   }
 });
+
+test('`adlc <tool> --help` answers for tools that declare no usage of their own (#107)', () => {
+  // These seven crashed with a raw ERR_PARSE_ARGS_UNKNOWN_OPTION stack trace,
+  // through this dispatcher as much as directly — the first command a new npm
+  // consumer runs. @adlc/core now synthesizes a listing for them.
+  for (const tool of [
+    'behavior-diff', 'consensus-fix', 'lesson-foundry', 'model-router',
+    'preflight', 'rejection-mining', 'skill-rot',
+  ]) {
+    const run = runAdlc([tool, '--help']);
+    assert.equal(run.code, 0, `adlc ${tool} --help exited ${run.code}\n${run.stderr}`);
+    assert.doesNotMatch(run.stderr, /ERR_PARSE_ARGS_UNKNOWN_OPTION/);
+    // The listing names the TOOL, not the dispatcher that spawned it: the child
+    // carries its own argv[1], and a listing headed `usage: adlc` would send the
+    // reader back to the wrong command.
+    assert.match(run.stdout, new RegExp(`^usage: ${tool} \\[options\\]\\n`));
+  }
+});
