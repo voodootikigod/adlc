@@ -31,13 +31,12 @@ export class TicketSnapshot {
   get(id: string): Readonly<Ticket> | undefined;
   mutableTickets(): Ticket[];
 }
-/** Read-only. `write` now THROWS READ_ONLY_STORE — writes go through applyLegacyTransaction, which journals and records evidence. */
 /**
- * Read-only. `write` is retained ONLY so a 1.x caller gets a named refusal
- * (READ_ONLY_STORE) instead of `write is not a function`; it always throws.
- * Writes go through applyLegacyTransaction, which journals and records evidence.
+ * `write` is a compatibility adapter over applyLegacyTransaction: the 1.x
+ * one-argument call keeps working, but the write is journaled, verified, and held to
+ * the frozen-trust-root contract (it refuses without a key on a trust root).
  */
-export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(): never }
+export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(tickets: Ticket[], options?: { key?: string | null; allowUnsigned?: boolean; root?: string }): TicketSnapshot }
 export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot }
 export class GitTreeTicketStore { constructor(options: { cwd?: string; revision: string; storePath?: string }); load(): TicketSnapshot }
 export class TicketService {

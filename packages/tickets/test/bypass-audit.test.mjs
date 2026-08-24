@@ -1144,17 +1144,17 @@ test('recovery of a transaction that removed the last rail is still an audited t
 // The store classes are readers. A public `write(tickets)` that validated and
 // replaced the whole store — no rails check, no key, no evidence — is a hole in
 // this contract no matter who calls it, and it was a declared entrypoint.
-test('no ticket store class can be written through directly', () => {
+test('no ticket store class can be written through UNAUDITED', () => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-readonly-'));
   try {
     writeLegacy(root, [ticket('T-RAILED', { rails: ['src/**'] })]);
     const path = join(root, '.adlc/tickets.json');
     const before = readFileSync(path, 'utf8');
-    // It stays callable so a downstream caller gets a named refusal rather than
-    // `write is not a function` — but it refuses, and writes nothing.
+    // `write` stays callable for 1.x compatibility, but it routes through the
+    // audited transaction — so on a trust root with no key it refuses.
     assert.throws(
       () => new LegacyTicketStore(path).write([ticket('T-INJECTED')]),
-      (error) => error.code === 'READ_ONLY_STORE' && /applyLegacyTransaction/.test(error.message),
+      (error) => error.code === 'MANIFEST_KEY_REQUIRED',
     );
     assert.equal(readFileSync(path, 'utf8'), before, 'the store is untouched');
     for (const name of ['save', 'put', 'replace']) {
@@ -1164,6 +1164,37 @@ test('no ticket store class can be written through directly', () => {
     }
     assert.equal(typeof DirectoryTicketStore.prototype.write, 'undefined');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// The 1.x published API. It keeps working — but through the audited path, so a
+// rails-free store behaves exactly as before while a trust root is held to the
+// contract instead of being written unaudited.
+test('LegacyTicketStore.write still works for 1.x callers, and is now audited', () => {
+  const plain = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-legacy-write-'));
+  try {
+    writeLegacy(plain, [ticket('A')]);
+    const store = new LegacyTicketStore(join(plain, '.adlc/tickets.json'));
+    const after = store.write([ticket('A'), ticket('B')]); // the 1.x one-argument call
+    assert.deepEqual(after.tickets.map((t) => t.id).sort(), ['A', 'B']);
+    assert.equal(manifestEntries(plain).length, 0, 'not a trust root: nothing recorded, as before');
+  } finally { rmSync(plain, { recursive: true, force: true }); }
+
+  const railed = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-legacy-write-railed-'));
+  try {
+    writeLegacy(railed, [ticket('T-RAILED', { rails: ['src/**'] })]);
+    const store = new LegacyTicketStore(join(railed, '.adlc/tickets.json'));
+    const before = readFileSync(join(railed, '.adlc/tickets.json'), 'utf8');
+    assert.throws(
+      () => store.write([ticket('T-RAILED', { rails: ['src/**'] }), ticket('B')]),
+      (error) => error.code === 'MANIFEST_KEY_REQUIRED',
+      'a trust root is no longer writable unaudited through this door',
+    );
+    assert.equal(readFileSync(join(railed, '.adlc/tickets.json'), 'utf8'), before);
+
+    store.write([ticket('T-RAILED', { rails: ['src/**'] }), ticket('B')], { key: KEY });
+    const [entry] = manifestEntries(railed);
+    assert.equal(entry.data.bypass, true, 'and with a key it records the override');
+  } finally { rmSync(railed, { recursive: true, force: true }); }
 });
 
 // `export` writes a snapshot wherever it is pointed. Pointed at the store — with a

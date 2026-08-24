@@ -1,23 +1,28 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { applyLegacyTransaction } from '../transaction.mjs';
 import { LEGACY_FILE } from '../constants.mjs';
-import { invalid, operational, policy } from '../errors.mjs';
+import { invalid, operational } from '../errors.mjs';
 import { validateTickets } from '../schema.mjs';
 import { TicketSnapshot } from '../snapshot.mjs';
 
 /**
- * READ-ONLY, like every other store class here.
+ * Reads the 1.x single-file store. It has exactly one writer, `write`, and that
+ * writer is AUDITED — there is no unaudited door on this class.
  *
- * This used to expose a `write(tickets)` that validated and replaced the whole
- * store directly — no rails check, no key, no evidence — while being a declared,
- * public entrypoint. Once any ticket declares a rail the store is a frozen trust
- * root and every write to it is an audited override, so a writer that skips that
- * is a hole in the contract regardless of who calls it. Writes go through
- * applyLegacyTransaction, which journals, verifies, and records.
+ * `write(tickets)` used to validate and replace the whole store directly — no rails
+ * check, no key, no evidence — while being a declared, public entrypoint. Once any
+ * ticket declares a rail the store is a frozen trust root and every write to it is
+ * an audited override, so a writer that skips that is a hole in the contract
+ * regardless of who calls it.
  *
- * `write` survives as a refusal rather than being deleted: it was in the published
- * .d.ts, so a downstream caller that still reaches for it gets a message naming the
- * replacement instead of `write is not a function`. It never writes.
+ * It is kept as a COMPATIBILITY ADAPTER rather than deleted or turned into a
+ * refusal: it was in the published .d.ts, so a 1.x caller keeps working. What
+ * changed is what it does underneath — it now routes through applyLegacyTransaction,
+ * which journals the change, verifies it, and applies the frozen-trust-root
+ * contract. On a store that is not a trust root that is the same observable
+ * behaviour as before; on one that is, it refuses without a key instead of writing
+ * unaudited, which is the whole point.
  */
 export class LegacyTicketStore {
   constructor(path = LEGACY_FILE) {
@@ -28,14 +33,13 @@ export class LegacyTicketStore {
     return existsSync(this.path);
   }
 
-  write() {
-    throw policy(
-      'READ_ONLY_STORE',
-      'LegacyTicketStore.write was removed: it replaced the whole store with no rails check, no signing ' +
-      'key and no manifest evidence, which is an unaudited write to a trust root. Use ' +
-      'applyLegacyTransaction (or TicketService), which journals the change, verifies it, and records ' +
-      'the audit entry.',
-    );
+  /**
+   * `root` defaults to the repository this store lives in — `<root>/.adlc/tickets.json`
+   * — so the 1.x one-argument call keeps working and still resolves the archive and
+   * manifest that decide whether this is a trust root.
+   */
+  write(tickets, { key = null, allowUnsigned = false, root = dirname(dirname(this.path)) } = {}) {
+    return applyLegacyTransaction(this, tickets, { root, operation: 'update', key, allowUnsigned });
   }
 
   load() {

@@ -48,9 +48,17 @@ adlc ticket create --input ticket.json --write --allow-unsigned   # deliberate, 
 ```
 
 The rule holds on every door into the store, not just `adlc ticket`: the legacy
-migration and its recovery, archive/restore, transaction recovery, and `ticket-prune`.
-A repo where no ticket declares a rail — in the active set or the archive — is not a
-trust root: authoring there needs no key and records nothing.
+migration and its recovery, archive/restore, transaction recovery, `ticket-prune`, and
+the published 1.x `LegacyTicketStore.write(tickets)`, which still works but now routes
+through the audited transaction. A repo where no ticket declares a rail — in the
+active set or the archive — is not a trust root: authoring there needs no key and
+records nothing.
+
+`ticket-prune` is the one writer that cannot make the store write and the manifest
+append a single act, so it stages, records, then renames. A failed rename leaves an
+entry naming a store hash that was never reached; the ledger is append-only, so prune
+appends a correction (`action: 'abandoned'`, before and after hash equal) instead of
+leaving the claim standing.
 
 ## Legacy migration
 

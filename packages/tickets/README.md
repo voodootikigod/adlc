@@ -56,8 +56,17 @@ on which door a write came through:
   (mirroring `adlc prosecute record-cross-model`) records one deliberately and warns;
 - the rule holds on **every** door into the store, not just `adlc ticket`: the legacy
   → sharded migration and its recovery, archive/restore, an interrupted transaction's
-  recovery, and `ticket-prune`'s direct `tickets.json` write. A contract enforced on
-  one writer and not the others is not a contract;
+  recovery, `ticket-prune`'s direct `tickets.json` write, and the published 1.x
+  `LegacyTicketStore.write(tickets)`, which still works but now routes through the
+  audited transaction. A contract enforced on one writer and not the others is not a
+  contract;
+- `ticket-prune` is the one writer that cannot make the store write and the manifest
+  append a single act, so it stages, records, then renames. If the rename fails the
+  entry is already appended and names a store hash that was never reached — an
+  append-only ledger cannot retract that, so prune appends a **correction**
+  (`action: 'abandoned'`, before and after hash equal) saying the store did not move.
+  If the correction cannot be written either, the failure says so explicitly rather
+  than leaving the caller to assume the ledger is true;
 - a repo where no ticket declares a rail — in the active set **or the archive** — is
   not a trust root: authoring there needs no key and records nothing. Completing,
   archiving or discarding the last railed ticket does not thaw it, because that

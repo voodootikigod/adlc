@@ -41,7 +41,22 @@ function computeNeedsCeremony(stale, ticketsById) {
  * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
-  const { key: pruneKey = null, allowUnsigned: pruneAllowUnsigned = false } = options;
+  const {
+    key: pruneKey = null,
+    allowUnsigned: pruneAllowUnsigned = false,
+    // Seam, default null. The staged copy and the rename that commits it live in
+    // the same directory, so no permission or file-type trick can let one succeed
+    // and the other fail — and the rename is the ONE failure that leaves an audit
+    // entry naming a store hash that was never reached. Injecting the stager is the
+    // only way to exercise that path, and it hands a caller nothing they do not
+    // already have: they passed the path this writes to. It defaults to NULL rather
+    // than to `stageJsonAtomic` so the production path below stays a direct,
+    // greppable call to the atomic writer — scripts/test/roundtrip-coverage's
+    // writer-boundary guard finds tickets.json writers by scanning for exactly that
+    // call, and a stager reached only through a parameter is the "fully-indirected
+    // writer" its own docs admit it cannot see.
+    stageJson = null,
+  } = options;
   const {
     cwd = process.cwd(),
     ticketsPath = '.adlc/tickets.json',
@@ -311,11 +326,13 @@ export function runTicketPrune(options = {}) {
     // a same-directory rename remains. A failure before the audit leaves nothing
     // behind; a failure of the audit discards the staged copy and refuses with the
     // store untouched; a failure of the rename leaves an entry naming a hash the
-    // store never reached, which is wrong but DETECTABLE — any verifier comparing
-    // the manifest to the store sees it, and nothing unaudited happened.
+    // store never reached — which is wrong, but nothing unaudited happened and the
+    // ledger can say so: a compensating entry is appended below, and if even that
+    // fails the refusal names the uncorrected claim.
     let staged;
     try {
-      staged = stageJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: updatedTickets });
+      const payload = { ...rawUnderLock, tickets: updatedTickets };
+      staged = stageJson ? stageJson(absTicketsPath, payload) : stageJsonAtomic(absTicketsPath, payload);
     } catch (err) {
       return { ok: false, error: `failed to write completions to tickets.json: ${err.message}` };
     }
@@ -359,7 +376,37 @@ export function runTicketPrune(options = {}) {
       staged.commit();
     } catch (err) {
       staged.discard();
-      return { ok: false, error: `failed to write completions to tickets.json: ${err.message}` };
+      // The audit was appended before this rename, so the manifest now names a
+      // transition that did not land. It is append-only and cannot be retracted —
+      // but it CAN be corrected. A compensating record says the store stayed at the
+      // before-hash, so a reader of the ledger alone is told the truth rather than
+      // left with a claim the store contradicts. Best effort: if this second append
+      // also fails, both facts go into the error instead.
+      let compensationError = null;
+      if (auditRequired) {
+        try {
+          recordTicketEvidence(cwd, {
+            key: pruneKey,
+            transactionId: randomUUID(),
+            operation: 'prune',
+            action: 'abandoned',
+            gate: 'ticket-mutation',
+            bypass: true,
+            ticketIds: [...writeIds].sort(),
+            storeHashBefore: storeHash(freshTickets),
+            storeHash: storeHash(freshTickets),
+          });
+        } catch (compErr) { compensationError = compErr.message; }
+      }
+      return {
+        ok: false,
+        error: `failed to write completions to tickets.json: ${err.message}`
+          + (auditRequired
+            ? compensationError
+              ? `; the audit entry for the attempted mutation stands UNCORRECTED because the compensating record also failed (${compensationError}) — the manifest names a store hash that was never reached`
+              : '; a compensating manifest entry records that the mutation did not land'
+            : ''),
+      };
     }
 
     return { ok: true, baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };

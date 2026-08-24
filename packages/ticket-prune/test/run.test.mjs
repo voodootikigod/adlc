@@ -634,6 +634,113 @@ test('a staging failure is reported as a failed sweep, not a silent no-op', () =
   });
 });
 
+function manifestEntries(dir) {
+  const path = join(dir, '.adlc', 'manifest.jsonl');
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+}
+
+/** A stager whose staging succeeds and whose commit blows up — the one failure the
+ * ordering leaves a window for, and one the filesystem cannot produce on demand
+ * (the staged copy and the rename that commits it share a directory). */
+function stagerThatFailsToCommit(onCommit = () => {}) {
+  return () => ({
+    commit: () => { onCommit(); throw new Error('rename exploded'); },
+    discard: () => {},
+  });
+}
+
+// The second half of the split write. By the time the rename runs the entry is
+// already appended, so a failure here leaves the append-only ledger naming a store
+// hash the store never reached. The entry cannot be retracted — so it is
+// CORRECTED: a second entry says the store stayed where it started, and a reader of
+// the ledger alone is told the truth instead of a claim the store contradicts.
+test('a rename failure is corrected in the ledger, not left standing as a false claim', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const ticketsPath = join(dir, '.adlc', 'tickets.json');
+    const before = readFileSync(ticketsPath, 'utf8');
+
+    const result = runTicketPrune({
+      cwd: dir, write: true, key: 'test-manifest-key', stageJson: stagerThatFailsToCommit(),
+    });
+
+    assert.equal(result.ok, false, 'the sweep failed and says so');
+    assert.match(result.error, /rename exploded/);
+    assert.match(result.error, /compensating manifest entry/);
+    assert.equal(readFileSync(ticketsPath, 'utf8'), before, 'and the store really did not move');
+
+    const entries = manifestEntries(dir);
+    assert.equal(entries.length, 2, 'the attempt, then the correction');
+    const [attempt, correction] = entries;
+    assert.equal(attempt.data.action, 'apply');
+    assert.notEqual(attempt.data.storeHashBefore, attempt.data.storeHashAfter,
+      'the attempt claims a transition');
+
+    assert.equal(correction.data.action, 'abandoned', 'the correction is marked as one');
+    assert.equal(correction.data.bypass, true);
+    assert.deepEqual(correction.data.ticketIds, ['RAILLESS'], 'and names the same tickets');
+    assert.equal(correction.data.storeHashBefore, attempt.data.storeHashBefore,
+      'it starts where the attempt started');
+    assert.equal(correction.data.storeHashAfter, correction.data.storeHashBefore,
+      'and says the store did not move — which is what actually happened');
+    assert.ok(correction.sig, 'a correction is signed like any other entry, or it proves nothing');
+  });
+});
+
+// Best effort has to be honest about its own failure. If the correction cannot be
+// appended either, the false claim STANDS in the ledger — and the only place left
+// to say so is the error the caller gets.
+test('when the correction cannot be written either, the refusal says the ledger stands UNCORRECTED', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const ticketsPath = join(dir, '.adlc', 'tickets.json');
+    const before = readFileSync(ticketsPath, 'utf8');
+    const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+
+    const result = runTicketPrune({
+      cwd: dir,
+      write: true,
+      key: 'test-manifest-key',
+      // The rename fails AND the manifest stops being appendable — a directory
+      // where the file goes, the same shape the audit-failure test below uses.
+      stageJson: stagerThatFailsToCommit(() => {
+        rmSync(manifestPath, { force: true });
+        mkdirSync(manifestPath, { recursive: true });
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /rename exploded/, 'the original failure is still reported');
+    assert.match(result.error, /UNCORRECTED/, 'and so is the fact that the ledger is now wrong');
+    assert.equal(readFileSync(ticketsPath, 'utf8'), before);
+  });
+});
+
+// The correction only exists because an entry was written. On a rails-free store
+// nothing was recorded, so there is nothing to correct — and a compensating entry
+// would be the invention of evidence for a mutation that was never audited.
+test('a rename failure on a rails-free store records nothing, because nothing was recorded', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const result = runTicketPrune({ cwd: dir, write: true, stageJson: stagerThatFailsToCommit() });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /failed to write completions/);
+    assert.doesNotMatch(result.error, /compensating|UNCORRECTED/,
+      'no claim about a ledger this sweep never touched');
+    assert.deepEqual(manifestEntries(dir), [], 'and the manifest was never created');
+  });
+});
+
 // The audit and the store write cannot be one atomic act on this path, so the
 // content is staged first and the entry appended before the rename. An audit that
 // cannot be written must therefore leave NOTHING behind — not the mutation, and
