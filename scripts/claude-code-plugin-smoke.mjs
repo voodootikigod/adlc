@@ -659,6 +659,7 @@ for (const name of ['AGENTS.md', 'CLAUDE.md']) {
 // that doesn't match any entry here is scanned by default.
 const EXCLUDED_DOC_PATHS = [
   ['docs/archive/', 'superseded/historical record, not live guidance — see docs/archive/README.md'],
+  ['docs/reviews/', 'completion-verification evidence records; they quote reviewed prose and other harnesses\' bare command syntax verbatim, not live Claude Code guidance'],
   ['docs/specs/', 'P1 spec/acceptance-criteria docs describe issues (including this bug class) as illustrative examples, not live guidance'],
   ['docs/superpowers/', 'internal planning/spec scratch docs for in-flight work, not published guidance'],
   ['docs/marketing/', "marketing-site spec/plan docs; quoted install snippets include other harnesses' bare command syntax (e.g. OpenCode's /adlc-init), not Claude Code guidance"],
