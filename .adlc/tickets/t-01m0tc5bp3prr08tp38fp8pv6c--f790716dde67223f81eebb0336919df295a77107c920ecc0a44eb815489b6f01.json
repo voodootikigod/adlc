@@ -1,0 +1,16 @@
+{
+  "body": "Bump every @adlc publish target from 1.10.0 to 1.11.0 in lockstep, curate the CHANGELOG entry for the release, land it via PR, tag v1.11.0, and shepherd the gated npm publish.\n\nThe bump is mechanical and produced by scripts/release.mjs; no manifest is hand-edited. Because a lockstep bump necessarily touches every packages/** and plugins/** manifest, it lands in TRUST-ROOT tier and requires a signed distinct-provider cross-model attestation. This ticket exists so that attestation binds to a work item that actually describes the release, rather than to an unrelated ticket as the 1.10.0 bump did.\n\nAcceptance criteria:\n\n1. Every non-private publish target under packages/* and plugins/*, the root manifest, both marketplace manifests, and package-lock.json read 1.11.0.\n   Verify: for f in package.json $(find packages plugins -maxdepth 2 -name package.json -not -path '*/node_modules/*'); do node -p \"require('./'+'$f').version\"; done | sort -u  -- must print exactly 1.11.0.\n\n2. packages/core/package.json (the profile's versionSource) reads exactly 1.11.0, so the tag matches the version source.\n   Verify: [ \"$(node -p \"require('./packages/core/package.json').version\")\" = \"1.11.0\" ]\n\n3. The full test suite passes on the exact tree that gets tagged, after the bump and changelog edits.\n   Verify: npm test  -- must exit 0 and report all segments green.\n\n4. CHANGELOG.md carries a [1.11.0] section and [Unreleased] sits above it, so reverse-chronological order holds for the next release.\n   Verify: grep -n '^## \\[' CHANGELOG.md | head -2  -- must show [Unreleased] on the earlier line and [1.11.0] on the later.\n\n5. The releaseNotes extraction for 1.11.0 is non-empty, so the GitHub Release body mirrors the changelog rather than a commit list.\n   Verify: [ -n \"$(awk '/^## \\[1.11.0\\]/{f=1;next} /^## \\[/{f=0} f' CHANGELOG.md)\" ]\n\n6. Every non-private publish target exists on npm at 1.11.0 with dist-tag latest pointing at it.\n   Verify: the release profile's verify block, which enumerates targets from the filesystem and fails closed.",
+  "category": "chore",
+  "duration": 1,
+  "id": "T-01M0TC5BP3PRR08TP38FP8PV6C",
+  "scope": [
+    "packages/**",
+    "plugins/**",
+    "package.json",
+    "package-lock.json",
+    "CHANGELOG.md",
+    ".claude-plugin/**",
+    ".cursor-plugin/**"
+  ],
+  "title": "Cut the 1.11.0 lockstep release of the @adlc suite"
+}
