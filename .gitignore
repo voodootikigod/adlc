@@ -69,3 +69,11 @@ node_modules/
 apps/docs/.impeccable/questions/
 apps/docs/.impeccable/live/
 apps/docs/.impeccable/mocks/mobile.html
+
+# Operator-local release scratch that lives at the repo root (kept on disk,
+# never committed): the /release-audit report and session handoff notes. Both
+# have twice been swept into commits by a `git add -A` running in the main
+# checkout from a worktree agent whose cwd reset; ignoring them makes that
+# impossible.
+/release-blockers.md
+/HANDOFF.md
