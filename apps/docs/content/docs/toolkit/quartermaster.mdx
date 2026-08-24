@@ -28,15 +28,26 @@ the tree is ignored with a notice; a configured path that is relative or inside
 the repo *disables* loading rather than reading it.
 
 <Callout type="warn">
-  **"Operator-local" means "not selected by the candidate", not "unreachable by
-  it."** Fleet's model-plane worker is deliberately not filesystem-sandboxed (it
-  must authenticate with its provider), and the repo's own `fleet.gate` commands
-  run inside that worker. Candidate-authored code therefore executes with the
-  operator's filesystem privileges and could rewrite the registry itself. Moving
-  supply out of the tree turns a *declarative* downgrade into a *code-execution*
-  one; it does not close it. Closing it means isolating the model plane's
-  filesystem while keeping network egress — a change to fleet's containment
-  architecture, tracked in [#395](https://github.com/voodootikigod/adlc/issues/395).
+  **"Operator-local" now means "not selected by the candidate" *and* "not writable
+  by it" — but still not "unreadable by it."** The repo's own `fleet.gate` commands
+  run inside fleet's model-plane worker, so candidate-authored code executes there.
+  Since [#395](https://github.com/voodootikigod/adlc/issues/395) that worker runs
+  inside an OS filesystem sandbox — `bwrap` on Linux, Seatbelt on macOS — with
+  **network egress preserved**, because it must still reach its provider. Its
+  **writes** are bounded to the ticket's worktree, the state directories its
+  harness declares, and the OS temp dir; the registry's default home
+  (`$XDG_CONFIG_HOME/adlc/`) is none of those, and the worker is not even told
+  where the file is (`ADLC_QUARTERMASTER_REGISTRY` is withheld from the model-plane
+  env). What that does *not* cover, stated plainly: **reads** are unbounded and
+  egress is open, so read-and-exfiltrate remains; the bound holds only while the
+  registry sits outside those roots, so a registry parked under the temp dir — or
+  handed to the model plane with `--model-plane-writable` — is writable again; and
+  `--i-am-in-a-disposable-container`, the override for a host with no sandbox
+  backend, switches the OS enforcement off on both planes and rests entirely on the
+  container you asserted. Moving supply
+  out of the tree closed the *declarative* downgrade; the sandbox closed the
+  *code-execution* one. Running a fleet over a repo you do not trust is still
+  outside the design's assumptions.
 </Callout>
 
 The second half is that a registry label proves nothing about what ran. The
@@ -45,13 +56,21 @@ dispatcher forces the registry's model onto the harness command line explicitly
 the model the records claim.
 
 <Callout type="warn">
-  **`transport` does not yet get that treatment.** It constrains validation and is
-  reported in the plan, but dispatch does not use it to select credentials — so
-  `frontier` (`subscription:*`) and `frontier-metered` (`api:*`), being the same
-  adapter and model, execute identically today. Work routed to the metered channel
-  may consume the subscription instead. Treat a declared transport as intent and a
-  validation constraint, not as a guarantee about which credential paid.
-  Tracked in [#396](https://github.com/voodootikigod/adlc/issues/396).
+  **`transport` selects the credential — but the guarantee is asymmetric.** Since
+  [#396](https://github.com/voodootikigod/adlc/issues/396) dispatch derives the
+  worker's credential context from the seat's transport, and each adapter declares
+  which transport *classes* it can serve, so a seat bound to a class its adapter
+  does not declare is rejected at load. **Withholding is provable:** a
+  `subscription:` seat is dispatched with every provider API key removed, so no
+  metered credential reaches it through its environment — a fact about that
+  environment, not a claim about what a harness does with credentials it already
+  stores. **Supplying is not:** an `api:` or `gateway:` seat is
+  handed the adapter's declared credential, but a harness holding its own session
+  may still prefer that — the label says what was offered, never what served the
+  call. So a record carries `transportStatus: "selected"`; `"attested"` — the
+  harness reporting which transport actually paid — is not built yet. Read a
+  `subscription:` label as a guarantee, of the negative kind, and any other label
+  as intent plus a credential grant.
 </Callout>
 
 ## The registry
