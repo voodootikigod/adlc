@@ -1,7 +1,11 @@
 # Releasing the `@adlc` suite
 
-All 23 packages (`@adlc/core` + 22 CLIs) ship under the `@adlc` npm scope on a
-**single lockstep version** — one tag releases the whole suite.
+Every publish target — the `packages/*` workspace (`@adlc/core` plus the phase
+CLIs and the `@adlc/cli` umbrella) and the versioned harness plugins under
+`plugins/*` — ships under the `@adlc` npm scope on a **single lockstep
+version**: one tag releases the whole suite. The set grows as the suite grows,
+so the release tooling enumerates it rather than hard-coding a count; the
+`verify` block in `.claude/release-profile.md` is the authoritative sweep.
 
 ## One-time setup
 
@@ -29,8 +33,9 @@ All 23 packages (`@adlc/core` + 22 CLIs) ship under the `@adlc` npm scope on a
                                               #   (or it must not be scoped to this repo)
      gh secret list --env npm-publish         # environment: MUST list NPM_TOKEN
      ```
-4. **First release** — see *Cutting a release* below. The workflow publishes all
-   23 packages using the environment-scoped `NPM_TOKEN`.
+4. **First release** — see *Cutting a release* below. The workflow publishes every
+   non-private package under `packages/*` and `plugins/*` using the
+   environment-scoped `NPM_TOKEN`.
 5. **Switch to OIDC.** On npmjs.com, configure each package's *Trusted Publisher*
    to this repo + the `Publish @adlc to npm` workflow, **and set the Environment
    field to `npm-publish`.** This binding is mandatory: if the environment field

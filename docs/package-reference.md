@@ -12,13 +12,16 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`docs/tools/cli.md`](./tools/cli.md) |
 | `@adlc/coldstart` | `coldstart` | Checks whether tickets are executable without agent guesswork. | [`docs/tools/coldstart.md`](./tools/coldstart.md) |
 | `@adlc/consensus-fix` | `consensus-fix` | Fans out candidate fixes and recommends, or optionally applies, the consensus winner that passes gates. | [`docs/tools/consensus-fix.md`](./tools/consensus-fix.md) |
+| `@adlc/context-handoff` | `handoff` | Signals context-rot bands, denies at a session terminal (D1–D3), and provides the operator CLI for write/resume/bypass/repair/unlock continuity checkpoints. | [`packages/context-handoff/README.md`](../packages/context-handoff/README.md) |
 | `@adlc/copilot` | none (Copilot plugin) | Native ADLC plugin for the GitHub Copilot CLI (`plugins/adlc-copilot`): skills, `preToolUse` rails/build-gate hooks, allowlisted MCP gate tools, and read-only prosecution agents. Rail decision delegated to `@adlc/core`; the in-session hook **enforces headless** (deny-ask defaults to deny, overrides `--allow-tool`) unless `--allow-all-tools` is used, and CI `rails-guard-ci` is the unbypassable backstop. | [`docs/integrations/copilot.md`](./integrations/copilot.md) |
 | `@adlc/core` | none | Shared LLM, git, CLI, ledger, ticket, and mutation primitives. | [`docs/tools/core.md`](./tools/core.md) |
 | `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, oversized session logs, and token spend past the ticket budget. | [`docs/tools/flail-detector.md`](./tools/flail-detector.md) |
+| `@adlc/fleet` | `adlc-fleet` | Orchestrates parallel ticket execution — dispatches ready tickets to sandboxed workers, then gates, prosecutes, and merges to an integration branch. | [`packages/fleet/README.md`](../packages/fleet/README.md) |
 | `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`docs/tools/gate-fuzzing.md`](./tools/gate-fuzzing.md) |
 | `@adlc/gate-manifest` | `gate-manifest` | Records, verifies, shows, and attests append-only gate evidence. | [`docs/tools/gate-manifest.md`](./tools/gate-manifest.md) |
 | `@adlc/gate-manifest` | `adlc-spend` | Aggregates recorded token usage into per-phase spend, the barbell shape, and the §6 diagnostics. Invoke as `adlc spend`. | [`docs/tools/spend.md`](./tools/spend.md) |
 | `@adlc/hollow-test` | `hollow-test` | Mutates changed code to find tests that pass without testing the intended behavior. | [`docs/tools/hollow-test.md`](./tools/hollow-test.md) |
+| `@adlc/init` | `adlc-init` | Idempotently bootstraps `.adlc/` state and project-scoped harness configuration. Invoke as `adlc init`. | [`docs/tools/init.md`](./tools/init.md) |
 | `@adlc/lesson-foundry` | `lesson-foundry` | Mines repeated findings into deterministic defenses such as lint checks or skills. | [`docs/tools/lesson-foundry.md`](./tools/lesson-foundry.md) |
 | `@adlc/merge-forecast` | `merge-forecast` | Estimates fan-out width, dependency pressure, and merge backpressure. | [`docs/tools/merge-forecast.md`](./tools/merge-forecast.md) |
 | `@adlc/model-ratchet` | `model-ratchet` | Identifies hot files for re-prosecution after model or repository drift. | [`docs/tools/model-ratchet.md`](./tools/model-ratchet.md) |
@@ -27,6 +30,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/preflight` | `preflight` | Checks baseline environment readiness before fan-out. | [`docs/tools/preflight.md`](./tools/preflight.md) |
 | `@adlc/premortem` | `premortem` | Stress-tests an approved spec before implementation. | [`docs/tools/premortem.md`](./tools/premortem.md) |
 | `@adlc/prosecute` | `adlc-prosecute` | Records ticket- and revision-scoped P5 review evidence and asserts distinct reviewer-produced dry lenses. Invoke as `adlc prosecute` in normal workflows. | [`docs/tools/prosecute.md`](./tools/prosecute.md) |
+| `@adlc/quartermaster` | none | Operator-local channel registry and lifecycle-job routing — no LLM calls and no repo-side channel selection. | [`docs/tools/quartermaster.md`](./tools/quartermaster.md) |
 | `@adlc/rails-guard` | `rails-guard` | Enforces frozen rails, declared suppressions, and manifest recording. | [`docs/tools/rails-guard.md`](./tools/rails-guard.md) |
 | `@adlc/rejection-mining` | `rejection-mining` | Mines review rejections into reusable review lenses. | [`docs/tools/rejection-mining.md`](./tools/rejection-mining.md) |
 | `@adlc/review-calibration` | `review-calibration` | Measures reviewer recall by applying mutants and scoring whether review catches them. | [`docs/tools/review-calibration.md`](./tools/review-calibration.md) |
@@ -34,6 +38,8 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/skill-rot` | `skill-rot` | Checks skill files for stale validation metadata and optional freshness stamping. | [`docs/tools/skill-rot.md`](./tools/skill-rot.md) |
 | `@adlc/spec-lint` | `spec-lint` | Gates specs for wishes, unverifiable acceptance criteria, and LLM-only verification. | [`docs/tools/spec-lint.md`](./tools/spec-lint.md) |
 | `@adlc/ticket-prune` | `ticket-prune` | Reports and tombstones (`completed: true` in place) stale, already-shipped tickets in `.adlc/tickets.json`. | [`docs/tools/ticket-prune.md`](./tools/ticket-prune.md) |
+| `@adlc/ticket-sync` | `adlc-ticket-sync` | Two-way sync between ADLC tickets and external trackers (GitHub Issues first). | [`packages/ticket-sync/README.md`](../packages/ticket-sync/README.md) |
+| `@adlc/tickets` | `adlc-tickets` | Immutable, Git-native ticket stores and policy services. Creates, inspects, migrates, archives, and synchronizes tickets; invoke as `adlc ticket`. | [`packages/tickets/README.md`](../packages/tickets/README.md) |
 
 ## Command forms
 
@@ -88,8 +94,10 @@ Execution supervision and rails:
 - `merge-forecast`
 - `rails-guard`
 - `build-gate`
+- `handoff` (`@adlc/context-handoff`)
 - `flail-detector`
 - `consensus-fix`
+- `fleet`
 - `runner`
   - public phase assertions are `adlc run` and `adlc accept`
 
@@ -115,8 +123,28 @@ Shared foundation:
 - `@adlc/core`
 - `@adlc/cli`
 
+External integration:
+
+- `init` (`@adlc/init`)
+- `ticket` (`@adlc/tickets`)
+- `@adlc/ticket-sync` — external-tracker sync; runs as its own
+  `adlc-ticket-sync` binary rather than an `adlc` subcommand
+- `@adlc/quartermaster` — operator-local channel registry consumed as a
+  library; it ships no binary
+
 Harness plugins (native integrations under `plugins/`, not `packages/` — they
 wire the gate toolkit into a specific agentic harness and delegate all rail /
 ticket / prosecution logic to `@adlc/core`):
 
+- `@adlc/codex` — Codex (see [`docs/integrations/codex.md`](./integrations/codex.md))
 - `@adlc/copilot` — GitHub Copilot CLI (see [`docs/integrations/copilot.md`](./integrations/copilot.md))
+- `@adlc/cursor` — Cursor (see [`docs/integrations/cursor.md`](./integrations/cursor.md))
+- `@adlc/gemini` — Google Gemini / antigravity / jetski (see [`docs/integrations/gemini.md`](./integrations/gemini.md))
+- `@adlc/herdr` — herdr terminal multiplexer. Published for discovery only: herdr
+  installs this plugin from the GitHub subdirectory, not from npm.
+- `@adlc/opencode` — OpenCode (see [`docs/integrations/opencode.md`](./integrations/opencode.md))
+- `@adlc/pi` — pi (see [`docs/integrations/pi.md`](./integrations/pi.md))
+
+The Claude Code plugin ships from `plugins/adlc-claude-code` and is installed
+through the marketplace manifest at `.claude-plugin/`, not as an npm package
+(see [`docs/integrations/claude-code.md`](./integrations/claude-code.md)).
