@@ -1,6 +1,6 @@
 {
   "name": "adlc",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Embrace the Agentic Development Lifecycle from inside Claude Code — phase-routing discovery skill plus commands to bootstrap and author ADLC tickets. Wraps the @adlc/cli gate toolkit.",
   "author": {
     "name": "Chris Williams",

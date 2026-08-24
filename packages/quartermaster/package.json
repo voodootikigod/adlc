@@ -1,6 +1,6 @@
 {
   "name": "@adlc/quartermaster",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Operator-local channel registry + lifecycle-job routing (the ADLC quartermaster layer) — no LLM calls, no repo-side channel selection.",
   "type": "module",
   "license": "MIT",

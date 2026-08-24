@@ -11,6 +11,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-24
+
+### Added
+- **context-handoff:** cc supervise wrapper + keyless near-auto fallback (S3, stacked on #532) (#534)
+- **context-handoff:** continuation core — capture, continue, supervised consume (S2) (#532)
+- **release-audit:** add /release-audit — per-artifact production-readiness audit (#524)
+- **rails-guard:** sanction rail-file ADDITION by the declaring ticket's own build PR (#512)
+- **context-handoff:** continuation program S1 — spec amendment + tickets (stacked on #504) (#505)
+- **tickets:** doctor reports orphaned anchors and stale lineage tokens (T-01M01HTKJCNR8D8XTWR0GVC50K) (#516)
+- **gate-manifest:** enforce seq contiguity (+1 from 1) in verifyChain (spec §4.3) (#508)
+- **rails-guard:** rail-freeze root package.json scripts and .npmrc with version-only exemption (#501) (#507)
+- **context-handoff:** enforcing-tier adapters — Codex, OpenCode, Pi (slice 5) (#477)
+
 ### Changed
 - **rails-guard:** `package.json` and `.npmrc` are no longer immutable trust
   roots by default. They were added to `DEFAULT_IMMUTABLE_TRUST_ROOTS` during
@@ -52,6 +65,45 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   with one usable signal set two orders of magnitude above the old one. Depth
   bands are the primary signal again; the 8 MiB byte count is the secondary
   ceiling behind them.
+- **rails-guard:** anchor the ticket-store add-vs-alter comparison to the merge-base (#506 pattern) (#571)
+- **claude-code:** an import-time failure in the wrapper's bin detection denies, never crashes fail-open (#565)
+- **cli:** resolve npx beside the node executable so `adlc review` is reachable on Windows (#233) (#556)
+- **core:** --help prints synthesized usage for parseArgs configs without usage (#107) (#555)
+- **ticket-prune:** exclude completed tickets from the Active listing (#311) (#553)
+- **opencode:** restore the v1.10.0 deny for absent dotted paths on the ungated branch (#498) (#552)
+- **pi:** handoff gate contained to real ADLC repos; a recovery path that actually works (#545)
+- **opencode:** handoff gate fires only in ADLC repos and writes a resumable, diagnosable deny (#540)
+- **runner:** print the own-chain identityError instead of counting it as a malformed manifest line (#546)
+- **spec-lint:** doc-claim scan reads only git-tracked docs (#539)
+- **context-handoff:** canonicalize the continue harness temp root (#532) (#537)
+- **tickets:** doctor tolerates an honest legacy unsigned prefix, binds only to signed entries (#536)
+- **tickets,spec-lint:** skip nested git checkouts when walking the repo (#535)
+- **fleet:** contain the model plane — bound worker writes, withhold operator-local paths (#395) (#530)
+- **mutation:** repair the off-by-one tuning mask — segments, counts, quoted keys, comment bypass (#372) (#529)
+- **plugins:** tell the operator the handoff gate's missing-export deny means upgrade the CLI (#528)
+- spec-lint exit-code docs (#525) and the adlc-codex handoff lockout (#526) (#527)
+- **docs:** Cleanup the home page (#523)
+- **context-handoff:** Phase 0 hotfix for the context-rot false-lockout (T-01M03J291182MXD1KEKM2PRKTS) (#522)
+- **runner:** make 'adlc run p4' satisfiable — flail-check + p4-build (#106) (#393)
+- **gate:** P5 consumers read a causal chain, not forest array position (T-01M01HTKD290FQQB4NDCV60Q24) (#515)
+- **core:** simulate the glob automaton instead of compiling a backtracking regex (T-01KZY8WXD86J1B2JJWARBZC9HD) (#511)
+- **claude-code:** deny (exit 2) on enforcing-hook timeout/kill (seam 6) (#497)
+- **spec-lint:** fail closed on zero acceptance criteria (seam 7) (#494)
+- **prosecute:** anchor trust-root tiering and the change-set identity to the merge-base, not the base tip (#506)
+- **opencode:** the frozen rail set must outrank a caller's claim about a target (T-01KZY120SZP96QKEEXDKZEZJR5) (#502)
+- **opencode:** the ungated-tool spoof defense must see target-keyed arguments (T-01KZW2DQKN5C1BANMMTTMPK8TS) (#490)
+- **prosecute:** record-cross-model fails closed on a ticket id absent from the store (T-01KZW6ENFHCJJX873C5J35835Q) (#495)
+- **release-profile:** verify re-polls propagation before failing, and records the trusted-publisher confirmation (T-01KZGT282PR1YQ7N31JB199B99) (#491)
+
+### Documentation
+- **docs:** the package reference now lists every shipped artifact. Twelve
+  published packages were absent from `docs/package-reference.md` — six under
+  `packages/*` (`context-handoff`, `fleet`, `init`, `quartermaster`,
+  `ticket-sync`, `tickets`) and six of the seven harness plugins — so they
+  were installable but not discoverable from the project's own docs. README's
+  toolkit table gained the same six, the package groups now mirror the
+  umbrella CLI registry, and `docs/RELEASING.md` describes the publish set by
+  rule instead of a stale package count. (#575)
 
 ## [1.10.0] - 2026-08-10
 

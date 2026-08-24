@@ -1,6 +1,6 @@
 {
   "name": "@adlc/tickets",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Immutable, Git-native ticket stores and policy services for ADLC.",
   "type": "module",
   "license": "MIT",

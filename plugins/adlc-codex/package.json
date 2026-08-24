@@ -1,6 +1,6 @@
 {
   "name": "@adlc/codex",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Native ADLC plugin for Codex: skills, hooks, MCP tools, and project agent templates.",
   "type": "module",
   "license": "MIT",
@@ -33,9 +33,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/cli": "1.10.0",
-    "@adlc/context-handoff": "1.10.0",
-    "@adlc/core": "1.10.0"
+    "@adlc/cli": "1.11.0",
+    "@adlc/context-handoff": "1.11.0",
+    "@adlc/core": "1.11.0"
   },
   "engines": {
     "node": ">=18"
