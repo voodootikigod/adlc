@@ -36,8 +36,13 @@ function indexOf(source, needle, where) {
 test('the integration hero leads with install, above the surfaces section', () => {
   const source = read(DETAIL);
   const heroInstall = indexOf(source, '<IntegrationCard integration={integration} />', DETAIL);
+  const heroOpen = indexOf(source, '<MarketingSection headingLevel={1}', DETAIL);
   const surfaces = indexOf(source, 'integration.surfacesSection.kicker', DETAIL);
 
+  assert.ok(
+    heroInstall > heroOpen,
+    'the install card must sit inside the hero section, not above it',
+  );
   assert.ok(
     heroInstall < surfaces,
     'the install card must render in the hero, before the Native surfaces section',
