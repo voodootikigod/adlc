@@ -19,7 +19,7 @@ import { globMatch } from '@adlc/core/tickets';
 import { isManifestFile, isVersionOnlyChange, resolveManifestRevisionPair } from '../version-only.mjs';
 import { classifyTrustRootAuthorization } from '../trust-root-authorization.mjs';
 import { deny, fail } from './errors.mjs';
-import { createGit, parseJson, resolveTrustedBase, trackedAt } from './git.mjs';
+import { createGit, parseJson, resolveMergeBase, resolveTrustedBase, trackedAt } from './git.mjs';
 import { ownersForPaths } from './codeowners.mjs';
 import {
   assertRootTransition,
@@ -114,14 +114,29 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
   // T36 — rails completion lifecycle. A completed ticket's build-time rails auto-expire,
   // so a merged ticket no longer needs a manual admin rail lift.
   //
-  // TRUST ANCHOR: the `completed: true` field on the ticket in the BASE store. This is
-  // forge-resistant WITHOUT trusting the manifest — which this gate CANNOT verify (it
+  // TRUST ANCHOR: the `completed: true` field on the ticket in the BASE TIP store. This
+  // is forge-resistant WITHOUT trusting the manifest — which this gate CANNOT verify (it
   // holds no signing key, and append-only does not stop a two-PR append of a fake
   // completion entry). Instead it reuses the gate's own enforced trust: base ticket
   // contracts cannot change in a PR (below), so only the protected-base admin ceremony
-  // can set `completed`, and it is read from BASE, never HEAD, so a builder cannot
-  // self-unfreeze in their own PR. FAIL CLOSED: only a strict boolean `true` lifts, and
-  // a path frozen by any still-in-flight ticket stays frozen via the union of the rest.
+  // can set `completed`, and it is read from the BASE TIP, never HEAD, so a builder
+  // cannot self-unfreeze in their own PR. FAIL CLOSED: only a strict boolean `true`
+  // lifts, and a path frozen by any still-in-flight ticket stays frozen via the union of
+  // the rest.
+  //
+  // The TIP is deliberate, and it did NOT follow the store comparison down to the
+  // merge-base (T-01M0122YKBY211SPJNFGPCH4TN). Reading completion from the tip is the
+  // forge-resistance design above; reading rails from the tip can only WIDEN the frozen
+  // set for a stale PR, which is the fail-safe direction. The comparison below asks a
+  // different question — what did THIS PR change — and only the merge-base answers it.
+  //
+  // Nor does the merge-base comparison loosen this anchor — but only because the bounded
+  // completion allowance below reads the tip's RAILS too. An earlier draft argued that a
+  // conflict-free merge implies the base never touched the same ticket, so the two bases
+  // must agree. That is FALSE and was measured to be false: git merges a `rails` array
+  // added near the top of a ticket shard with a `completed: true` appended at the bottom
+  // without a conflict, yielding a ticket that carries both. See
+  // isCompletionAnnotationOnly for the guard that closes it.
   const rails = [];
   for (const ticket of baseTickets) {
     if (ticket.completed === true) continue;
@@ -243,10 +258,20 @@ function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets })
     // Name the ACTUAL backend in the denial. A repo on the sharded directory store that
     // is told its ticket "cannot change in .adlc/tickets.json" is being sent to a file it
     // does not have.
+    //
+    // The comparison basis is the MERGE-BASE store, not the base tip — this check asks
+    // what THIS PR did to the store, and only the merge-base answers that (see
+    // ticketsAtMergeBase). Resolved HERE rather than at the top of the gate so a
+    // migration PR, which never reaches this branch, gains no new failure mode.
+    //
+    // The BASE TIP still supplies one input: which tickets declare rails. The bounded
+    // completion allowance needs both anchors to stay bounded — see
+    // isCompletionAnnotationOnly.
     assertBaseTicketContractsPreserved(
-      baseTickets,
+      ticketsAtMergeBase({ git, cwd, trustedBase }),
       headSnapshot.mutableTickets(),
-      headSnapshot.formatVersion === 0 ? '.adlc/tickets.json' : 'the .adlc/tickets/ store'
+      headSnapshot.formatVersion === 0 ? '.adlc/tickets.json' : 'the .adlc/tickets/ store',
+      new Set(baseTickets.filter((ticket) => (ticket.rails?.length ?? 0) > 0).map((ticket) => ticket.id))
     );
     return { verified: false, storeHash: null, archiveHash: null };
   }
@@ -298,22 +323,73 @@ function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets })
  * `completed` field, and head must be EXACTLY base plus `completed: true`. Any other
  * field change, a non-`true` value, or a railed ticket stays denied, so T36's forge
  * resistance is fully intact for anything that could unfreeze a path.
+ *
+ * `railedAtBaseTip` is a FACT the caller must supply, not an option. It defaults to
+ * `true` — the conservative verdict — so a caller that omits it is denied the allowance
+ * rather than silently granted it; an omission must never be the fail-open direction.
  */
-export function isCompletionAnnotationOnly(baseTicket, headTicket) {
+export function isCompletionAnnotationOnly(baseTicket, headTicket, railedAtBaseTip = true) {
   const baseRails = Array.isArray(baseTicket.rails) ? baseTicket.rails : [];
   if (baseRails.length > 0) return false;
+  // RAILLESS AT BOTH ANCHORS, not just at the branch point. Once the comparison is
+  // merge-base-anchored, the merge-base copy alone stops being sufficient: the base can
+  // ADD rails to a ticket after the branch point, and git merges a `rails` array
+  // inserted near the top of a shard with a `completed: true` appended at the bottom
+  // WITHOUT a conflict — measured, not assumed. The merged ticket would then carry rails
+  // AND completion, and T36 reads completion from the tip, expiring a rail no ceremony
+  // ever lifted. A ticket railed at the BASE TIP therefore never qualifies, whatever the
+  // branch point said (codex cross-model review R1). This only ever DENIES more than the
+  // merge-base check alone, and never more than the base-tip check it replaced.
+  if (railedAtBaseTip) return false;
   if (Object.prototype.hasOwnProperty.call(baseTicket, 'completed')) return false;
   if (headTicket.completed !== true) return false;
   const { completed, ...headWithoutCompleted } = headTicket;
   return stable(headWithoutCompleted) === stable(baseTicket);
 }
 
-function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel) {
+/**
+ * The ticket store as it stood at the BRANCH POINT — the only basis on which
+ * "did this PR alter a ticket" is answerable (T-01M0122YKBY211SPJNFGPCH4TN).
+ *
+ * Anchored to the base TIP instead, every store change the base absorbed after the
+ * branch point shows up as a reverse-direction difference: PR #509 batch-marked 42
+ * tickets `completed: true` on main, and PR #493 — nine added shards, no ticket touched —
+ * was then denied for "altering" one of them, because its stale tree carried the
+ * un-annotated copy. A base-side ADD reads as a removal the same way. Only a rebase
+ * cleared it, and every long-lived PR re-hits it after the next store change on base.
+ * This is the #506 defect class one gate over, and it takes #506's fix.
+ *
+ * Merge semantics say the same thing: a ticket the PR leaves at its merge-base content
+ * contributes nothing when the change merges (three-way merge resolves to the base side),
+ * and a ticket added only on the base is kept by the merge, never deleted by it.
+ *
+ * WHAT THIS DOES NOT WEAKEN: the rails union and the T36 `completed` trust anchor still
+ * read the BASE TIP (see runRailFreezeGate), so a PR cannot expire a rail by editing the
+ * store at HEAD no matter what this comparison concludes. This check is the store's own
+ * integrity backstop, not the mechanism that keeps a path frozen.
+ *
+ * STORE ABSENT AT THE MERGE-BASE (a branch that predates the store) → no contracts
+ * existed to preserve, so the comparison is vacuous rather than a mass false removal.
+ * Safe for the same reason: nothing is unfrozen by it. Any OTHER load error is
+ * unverifiable input and fails closed, exactly as the base-tip load does.
+ */
+function ticketsAtMergeBase({ git, cwd, trustedBase }) {
+  const mergeBase = resolveMergeBase(git, trustedBase, 'git merge-base (ticket-store comparison)');
+  try {
+    return new GitTreeTicketStore({ cwd, revision: mergeBase }).load().mutableTickets();
+  } catch (error) {
+    if (error.code === 'STORE_NOT_FOUND') return [];
+    return fail(`cannot load merge-base ticket store: ${error.code ?? 'UNEXPECTED'}: ${error.message}`);
+  }
+}
+
+function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel, railedAtBaseTip = new Set()) {
   const headById = new Map(headTickets.map((ticket) => [ticket.id, ticket]));
   for (const baseTicket of baseTickets) {
     const headTicket = headById.get(baseTicket.id);
     if (!headTicket) deny(`base ticket ${baseTicket.id} cannot be removed from ${storeLabel} in a PR`);
-    if (stable(headTicket) !== stable(baseTicket) && !isCompletionAnnotationOnly(baseTicket, headTicket)) {
+    if (stable(headTicket) !== stable(baseTicket)
+      && !isCompletionAnnotationOnly(baseTicket, headTicket, railedAtBaseTip.has(baseTicket.id))) {
       deny(`base ticket ${baseTicket.id} contract cannot change in ${storeLabel} in a PR`);
     }
   }

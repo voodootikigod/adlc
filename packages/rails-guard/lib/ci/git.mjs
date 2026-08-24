@@ -84,6 +84,44 @@ export function resolveTrustedBase(git, base) {
 }
 
 /**
+ * Resolve the single merge-base of a pinned base sha and HEAD, or fail closed.
+ *
+ * This is the anchor for any comparison that asks "what did THIS change do", as opposed
+ * to "what does the base say" (#506, T-01M00BNADHBEP8N4VPG9J84V8W). Anchored to the base
+ * TIP instead, every advance of the base branch enters the comparison as a
+ * reverse-direction difference on files the change never touched — which is how PR #493
+ * was denied for "altering" a ticket that PR #509 had marked completed on main.
+ *
+ * `--all`, then demand exactly ONE full sha. A criss-cross history has SEVERAL best
+ * common ancestors; bare `git merge-base` silently picks one, and an anchor nobody chose
+ * is one local and CI could disagree about. Ambiguity, disjoint histories and an
+ * unresolvable HEAD all fail CLOSED — never a fall-back to the tip, which is the very
+ * basis being replaced.
+ *
+ * HEAD is pinned to an object id first so the anchor cannot shift between this call and
+ * any later read, the same discipline resolveTrustedBase applies to the base side.
+ */
+export function resolveMergeBase(git, trustedBase, label = 'git merge-base') {
+  const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], `${label} (rev-parse HEAD)`);
+  if (head.status !== 0 || !head.stdout.trim()) {
+    fail(`${label}: HEAD does not resolve to a commit — the merge-base anchor cannot be computed.`);
+  }
+  const headOid = head.stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/i.test(headOid)) fail(`${label}: HEAD did not resolve to an exact object ID`);
+
+  const found = git(['merge-base', '--all', trustedBase, headOid], label);
+  if (found.status !== 0) {
+    fail(`${label}: no common ancestor between the trusted base and HEAD — failing closed.`);
+  }
+  const bases = found.stdout.trim().split('\n').filter(Boolean);
+  if (bases.length !== 1) {
+    fail(`${label}: no single unambiguous merge-base between the trusted base and HEAD (git merge-base --all printed ${bases.length} entries) — failing closed.`);
+  }
+  if (!/^[0-9a-f]{40,64}$/i.test(bases[0])) fail(`${label}: merge-base is not an exact object ID`);
+  return bases[0];
+}
+
+/**
  * Whether `path` is tracked at `ref`, failing closed on an operational git error.
  * Empty output = genuinely absent; non-zero status = git itself failed, which is NOT
  * evidence of absence and must never be read as "nothing there".
