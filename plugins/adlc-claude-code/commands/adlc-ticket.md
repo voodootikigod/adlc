@@ -90,6 +90,43 @@ The canonical service owns locking, full-graph validation, compare-and-swap,
 journaling, recovery, and evidence. If it reports `RECOVERY_REQUIRED`, stop and
 ask the human to choose `adlc ticket store recover --complete` or `--rollback`.
 
+### Writing while rails are frozen
+
+Once **any** ticket in the store declares `rails`, the store is a frozen trust
+root — it is the configuration that decides what the rail guards freeze, so it is
+frozen too. Two things follow, and they are enforced, not advisory:
+
+- The PreToolUse rail hook denies a structured edit to the store outright. That
+  is why §2 says to go through `adlc ticket`, never an Edit/Write.
+- `adlc ticket` itself now treats every `--write` against such a store as a
+  deliberate, **audited** override: it appends one signed `ticket-mutation` entry
+  to the gate-manifest recording the operation, the ticket id, and the store hash
+  either side of the change. A mutation that already carries evidence of its own
+  (rail narrowing, completion, reassignment) keeps that entry and gains the audit
+  fields — one mutation never becomes two entries.
+
+Signing needs `ADLC_MANIFEST_KEY`. Without it the write **refuses before touching
+the store**: an unsigned entry proves nothing about who made the change, and the
+manifest is append-only, so a useless entry would be permanent. If the refusal
+fires, ask the human for the key rather than reaching for the escape hatch — it
+is commonly in the main checkout's gitignored `.env.local`, which a git worktree
+does not have. `--allow-unsigned` records an unsigned entry on purpose and warns
+what that costs; it is for tests of the gate itself, not for getting unblocked.
+
+The same rule holds on every other door into the store — the legacy migration and
+its recovery, archive/restore, recovering an interrupted transaction, and
+`ticket-prune` — so which command an operator reaches for does not change whether
+the change is audited.
+
+A repo where no ticket declares a rail, in the active set **or the archive**, is not
+a trust root: authoring there needs no key and records nothing, so a fresh repo stays
+zero-ceremony. Completing, archiving or discarding the last railed ticket does not
+thaw it (#162) — the removal is itself an audited override, and the manifest keeps
+that record after the ticket is gone, so one authorized archive cannot switch the
+audit off for everything after it. (A repo that removed its last rail *before* this
+change, with no hook override ever recorded, leaves nothing to read and is treated
+as never-railed.)
+
 ### Legacy protocol reference (do not execute)
 
 The following describes the old flat-file algorithm for historical context;
@@ -139,9 +176,11 @@ Run this exact protocol:
 Trust-root note: once any ticket declares `rails`, the plugin's PreToolUse rail
 hook freezes `.adlc/tickets.json` itself (it is the rail trust root, so it can't
 be edited to disable enforcement). If a prior ticket already declares rails, the
-write in step 5 will be denied — run this command with `ADLC_RAILS_BYPASS=1` set,
-which allows the edit and records the change to the gate-manifest. Editing the
-ticket set while rails are frozen is a deliberate, audited action.
+write in step 5 will be denied — `ADLC_RAILS_BYPASS=1` allows the edit and records
+it to the gate-manifest. Editing the ticket set while rails are frozen is a
+deliberate, audited action either way: the supported route above audits the
+mutation in the store service itself, so the audit does not depend on which door
+the write came through. See "Writing while rails are frozen".
 
 Add `.adlc/tickets.lock` to the evidence-ignore set if it is not already covered.
 

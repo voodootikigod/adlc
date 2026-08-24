@@ -19,10 +19,18 @@ const changedFields = (before, after) => [...new Set([...Object.keys(before ?? {
   .filter((key) => comparable(before?.[key]) !== comparable(after?.[key])).sort();
 
 export class TicketService {
-  constructor(store, { root = '.', protectedIds = [], key = null } = {}) {
+  /**
+   * `allowUnsigned` (T-01M0122WMF8EJTB7ERHTEG8HMJ) opts into recording the
+   * frozen-trust-root audit entry UNSIGNED when no key is available. It defaults
+   * to false — off — so the refusal is what a caller gets by omitting it, and
+   * writing an unaudited-in-practice entry stays a deliberate act at the call
+   * site. See bypassAuditPlan in transaction.mjs for the contract.
+   */
+  constructor(store, { root = '.', protectedIds = [], key = null, allowUnsigned = false } = {}) {
     this.store = store;
     this.root = root;
     this.key = key;
+    this.allowUnsigned = allowUnsigned;
     this.protectedIds = new Set(protectedIds);
   }
 
@@ -228,10 +236,10 @@ export class TicketService {
     if (expectedPlanHash !== plan.planHash) throw conflict('STALE_PLAN', 'mutation plan hash does not match its contents');
     if (storeHash(plan._tickets) !== plan.afterHash) throw conflict('STALE_PLAN', 'mutation plan payload does not match its after hash');
     if (this.store instanceof DirectoryTicketStore) {
-      return applyDirectoryTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key });
+      return applyDirectoryTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key, allowUnsigned: this.allowUnsigned });
     }
     if (this.store instanceof LegacyTicketStore) {
-      return applyLegacyTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key });
+      return applyLegacyTransaction(this.store, plan._tickets, { expectedSnapshotHash: plan.expectedSnapshotHash, operation: plan.operation, evidenceRequired: plan.evidenceRequired, ticketId: plan.ticketId, beforeTicketId: plan.beforeTicketId, root: this.root, lock, key: this.key, allowUnsigned: this.allowUnsigned });
     }
     throw policy('READ_ONLY_STORE', 'this ticket store is read-only');
   }

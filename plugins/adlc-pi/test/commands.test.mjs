@@ -493,7 +493,12 @@ test('/adlc-init migrates legacy storage only after explicit approval', async ()
     const pi = fakePi({ exec: async (_cmd, args) => {
       if (args[0] === '--version') return { code: 0, stdout: '1.3.0' };
       if (args.includes('--write')) {
-        const result = migrateLegacyStore(root, { write: true, yes: true, requireClean: false });
+        // The fixture tickets declare rails, so the legacy store is a frozen trust
+        // root and migrating it is an audited override that must be signable
+        // (packages/tickets/test/bypass-audit.test.mjs). This stands in for the
+        // real `adlc ticket store migrate --write`, which reads the key from the
+        // environment; what this test asserts is the approval prompt, not signing.
+        const result = migrateLegacyStore(root, { write: true, yes: true, requireClean: false, key: 'test-manifest-key' });
         return { code: 0, stdout: JSON.stringify(result) };
       }
       return { code: 0, stdout: JSON.stringify(migrationPlan(root)) };

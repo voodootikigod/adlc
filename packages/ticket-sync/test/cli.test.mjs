@@ -9,15 +9,32 @@ import { parseFlags, syncFlow } from '../bin/ticket-sync.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'ticket-sync.mjs');
 
-test('parseFlags: dry-run is the default (write/force/allow-rail-narrowing all false)', () => {
+test('parseFlags: dry-run is the default (write/force/allow-rail-narrowing/allow-unsigned all false)', () => {
   const f = parseFlags([]);
   assert.equal(f.write, false);
   assert.equal(f.force, false);
   assert.equal(f['allow-rail-narrowing'], false);
+  assert.equal(f['allow-unsigned'], false);
   assert.equal(f.json, false);
   assert.equal(parseFlags(['--write']).write, true);
   assert.equal(parseFlags(['--force']).force, true);
   assert.equal(parseFlags(['--allow-rail-narrowing'])['allow-rail-narrowing'], true);
+  assert.equal(parseFlags(['--allow-unsigned'])['allow-unsigned'], true);
+});
+
+// An operator meets the frozen-trust-root contract when a --write refuses, so the
+// usage text has to name the flag that gets them past it and the exit codes they
+// will see. A flag the CLI accepts but never documents may as well not exist.
+test('usage documents every flag the CLI honours, and the exit-code legend', () => {
+  const usage = execFileSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  for (const flag of ['--write', '--force', '--allow-rail-narrowing', '--allow-unsigned', '--json']) {
+    assert.match(usage, new RegExp(flag.replace(/-/g, '\\-')), `usage must name ${flag}`);
+  }
+  // The subcommand list itself, not just the flags: it is the first thing the
+  // usage line promises and the only place the four verbs are enumerated.
+  assert.match(usage, /<pull\|push\|sync\|doctor>/);
+  assert.match(usage, /Exit: 0 ok · 1 operational · 2 blocked\./);
+  assert.match(usage, /ADLC_MANIFEST_KEY/, 'and the key the audited write needs');
 });
 
 test('syncFlow: a clean pull runs push and returns its exit code', async () => {

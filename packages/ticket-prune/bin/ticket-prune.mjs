@@ -27,7 +27,7 @@ import { runTicketPrune } from '../lib/run.mjs';
 import { renderReport, toJson } from '../lib/format.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
-const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--ceremony] [--json]';
+const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--allow-unsigned] [--ceremony] [--json]';
 
 const { values } = parseArgs({
   usage: USAGE,
@@ -37,11 +37,27 @@ const { values } = parseArgs({
     write: { type: 'boolean', default: false },
     ceremony: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
+    // A --write against a frozen trust root must be signable; this records the
+    // audit unsigned on purpose. Same contract as `adlc ticket --allow-unsigned`.
+    'allow-unsigned': { type: 'boolean', default: false },
   },
 });
 
+const pruneKey = resolveKeyFromEnv();
+// Same warning the ticket CLI emits, for the same reason: an unsigned audit entry
+// is permanent and proves nothing about who made the change, so the operator hears
+// about it before the write rather than discovering it in the manifest later.
+if (values['allow-unsigned'] && !pruneKey && values.write) {
+  console.error(
+    'warning: --allow-unsigned with no ADLC_MANIFEST_KEY — if this store is a frozen trust root, the '
+    + 'tombstone will be recorded UNSIGNED. An unsigned audit entry is not evidence, and the manifest is '
+    + 'append-only, so it is permanent.',
+  );
+}
+
 const result = runTicketPrune({
-  key: resolveKeyFromEnv(),
+  key: pruneKey,
+  allowUnsigned: values['allow-unsigned'],
   cwd: process.cwd(),
   ticketsPath: values.tickets,
   baseRef: values['base-ref'],

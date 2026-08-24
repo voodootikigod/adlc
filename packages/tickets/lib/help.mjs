@@ -212,13 +212,36 @@ const AUTHORIZE_NOTE = [
   'authorization.',
 ];
 
+/** Shared by every mutating command: what changes once a rail exists anywhere. */
+const TRUST_ROOT_NOTE = [
+  'FROZEN TRUST ROOT. Once any ticket declares a rail, the ticket store is the',
+  'configuration that decides what the rail guards freeze, so the store itself is',
+  'frozen: every --write against it is a deliberate, AUDITED override that appends',
+  'one signed `ticket-mutation` entry to the gate-manifest (a mutation that already',
+  'records evidence of its own keeps that entry and gains the audit fields — one',
+  'mutation is never two entries).',
+  '',
+  'Signing it needs ADLC_MANIFEST_KEY. Without the key the write REFUSES before it',
+  'touches the store, because an unsigned entry proves nothing about who made the',
+  'change and the manifest is append-only, so it would be permanent. Pass',
+  '--allow-unsigned to record an unsigned entry on purpose.',
+  '',
+  'A store where NO ticket declares a rail — in the active set OR the archive — is',
+  'not a trust root: authoring there needs no key and records nothing. Completing,',
+  'archiving or discarding the last railed ticket does not thaw it: that removal is',
+  'itself an audited override, and the manifest keeps the record even after the',
+  'ticket is gone. Expiring a build\'s rails must not unfreeze the rail config.',
+];
+
 const COMMAND_HELP = {
   create: () => [
-    'adlc ticket create --input <path|-> [--write] [--json]',
+    'adlc ticket create --input <path|-> [--write] [--allow-unsigned] [--json]',
     '',
     'Plan a new ticket. Dry-run by default: the plan, validation, graph effects,',
     'file operations, and resulting hashes print, and nothing is written until',
     '--write. The command never stages or commits.',
+    '',
+    ...TRUST_ROOT_NOTE,
     '',
     ...INPUT_DOCUMENT,
     '',
@@ -227,7 +250,7 @@ const COMMAND_HELP = {
     createExampleJson(),
   ],
   update: () => [
-    'adlc ticket update <id> --input <path|-> --expect <ticketHash> [--authorize] [--force] [--write] [--json]',
+    'adlc ticket update <id> --input <path|-> --expect <ticketHash> [--authorize] [--force] [--write] [--allow-unsigned] [--json]',
     '',
     'Replace a ticket in place. This is a REPLACEMENT, not a merge: any field',
     'absent from the input is dropped, including `completed`, so building an',
@@ -264,6 +287,8 @@ const COMMAND_HELP = {
     'so --write without it fails EXPECT_REQUIRED. Pass --force to replace',
     'whatever is there now. Planning needs no hash — a dry run is unrestricted.',
     '',
+    ...TRUST_ROOT_NOTE,
+    '',
     ...INPUT_DOCUMENT,
   ],
   edit: () => [
@@ -274,16 +299,20 @@ const COMMAND_HELP = {
     '',
     ...AUTHORIZE_NOTE,
     '',
+    ...TRUST_ROOT_NOTE,
+    '',
     ...INPUT_DOCUMENT,
   ],
   discard: () => [
-    'adlc ticket discard <id> [--write] [--json]',
+    'adlc ticket discard <id> [--write] [--allow-unsigned] [--json]',
     '',
     'Remove a ticket that was never built. Dry-run by default. Use archive to',
     'retire a ticket whose history must be kept.',
+    '',
+    ...TRUST_ROOT_NOTE,
   ],
   complete: () => [
-    'adlc ticket complete <id> [--write --authorize] [--json]',
+    'adlc ticket complete <id> [--write --authorize] [--allow-unsigned] [--json]',
     '',
     'Mark a ticket complete. The plan is recorded as a lifecycle change and',
     'carries evidence either way.',
@@ -291,18 +320,24 @@ const COMMAND_HELP = {
     '--authorize records that a human approved the change. It is ENFORCED only',
     'for a protected id, and this CLI configures no protected ids — so by',
     'default `complete <id> --write` applies without it.',
+    '',
+    ...TRUST_ROOT_NOTE,
   ],
   archive: () => [
-    'adlc ticket archive <id> [--write --authorize] [--json]',
+    'adlc ticket archive <id> [--write --authorize] [--allow-unsigned] [--json]',
     '',
     'Move a ticket into .adlc/ticket-archive with evidence. Requires a directory',
     'store. `adlc ticket restore <id>` is the inverse.',
+    '',
+    ...TRUST_ROOT_NOTE,
   ],
   restore: () => [
-    'adlc ticket restore <id> [--write --authorize] [--json]',
+    'adlc ticket restore <id> [--write --authorize] [--allow-unsigned] [--json]',
     '',
     'Move an archived ticket back into the active store. Requires a directory',
     'store.',
+    '',
+    ...TRUST_ROOT_NOTE,
   ],
   list: () => [
     'adlc ticket list [--json]',
@@ -365,6 +400,10 @@ export function renderUsage() {
     '',
     'All mutations are dry-run by default. New override: --ticket-store/ADLC_TICKET_STORE.',
     'Legacy --tickets/ADLC_TICKETS remains available through 1.x.',
+    '',
+    'Once any ticket declares a rail, the store is a frozen trust root: every write',
+    'appends a signed audit entry and needs ADLC_MANIFEST_KEY (or --allow-unsigned).',
+    'See `adlc ticket create --help`.',
   ].join('\n');
 }
 

@@ -9,6 +9,7 @@ import { DirectoryTicketStore } from './stores/directory.mjs';
 import { applyDirectoryTransaction } from './transaction.mjs';
 import { durableMkdir, durableWrite } from './durability.mjs';
 import { validateKeyParam } from './key-contract.mjs';
+import { assertSignableTrustRootWrite } from './trust-root.mjs';
 
 function validateArchivePath(root, path) {
   const expected = resolve(root, ARCHIVE_DIRECTORY);
@@ -25,7 +26,7 @@ function ensureArchive(path) {
   return store;
 }
 
-export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, faultInjector = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'archiving requires explicit authorization');
   validateArchivePath(root, archivePath);
@@ -33,6 +34,12 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
   try {
     const active = activeStore.load();
     if (expectedSnapshotHash && active.hash !== expectedSnapshotHash) throw conflict('STALE_SNAPSHOT', 'active store changed before archive');
+    // Ahead of ensureArchive below, not just ahead of the transaction: the
+    // transaction's own check would refuse a keyless write to a trust root only
+    // AFTER this function had already created .adlc/ticket-archive/.store.json,
+    // leaving a refused operation with a filesystem footprint. "Refusing before
+    // the write" has to mean the whole operation, not just the store.
+    assertSignableTrustRootWrite(active.tickets, { key, allowUnsigned, root });
     const ticket = active.get(id);
     if (!ticket) throw invalid('TICKET_NOT_FOUND', `ticket not found: ${id}`);
     const inbound = active.tickets.filter((item) => item.id !== id && (item.edges ?? []).some((edge) => edge.to === id));
@@ -44,6 +51,7 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
     const remaining = active.mutableTickets().filter((item) => item.id !== id);
     const updated = applyDirectoryTransaction(activeStore, remaining, {
       key,
+      allowUnsigned,
       expectedSnapshotHash: active.hash,
       operation: 'archive',
       evidenceRequired: true,
@@ -65,7 +73,7 @@ export function archiveTicket(activeStore, archivePath, id, { expectedSnapshotHa
   } finally { releaseTicketLock(lock); }
 }
 
-export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHash, root = '.', authorized = false, faultInjector = null, key = null } = {}) {
+export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHash, root = '.', authorized = false, faultInjector = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'restore requires explicit authorization');
   validateArchivePath(root, archivePath);
@@ -86,6 +94,7 @@ export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHa
     if (!metadata || ticketHash(ticket) !== metadata.ticketHash) throw invalid('ARCHIVE_HASH_MISMATCH', `archived ticket ${id} does not match recorded hash`);
     const restored = applyDirectoryTransaction(activeStore, [...active.mutableTickets(), ticket], {
       key,
+      allowUnsigned,
       expectedSnapshotHash: active.hash,
       operation: 'restore',
       evidenceRequired: true,

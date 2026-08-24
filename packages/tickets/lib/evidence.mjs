@@ -71,17 +71,44 @@ function signV2(key, entry) {
 // active. An unsigned/invalid-signed candidate is treated as absent (not a
 // match, not a conflict) — the real write proceeds and appends genuine
 // evidence instead of trusting the forgery or refusing outright.
-function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash, storeHash, archiveHash, transactionId, key = null }) {
+/**
+ * Does an existing entry describe EXACTLY the record this call would write?
+ *
+ * The audit payload is part of the comparison, not just the transaction identity:
+ * an entry carrying the same gate and hashes but LACKING `bypass`/`storeHashBefore`
+ * (an older unaudited record, or one an attacker appended) would otherwise satisfy
+ * the idempotency scan, and the mutation would finalize as though it had been
+ * audited when the manifest holds no audit for it.
+ */
+const AUDIT_FIELDS = ['bypass', 'op', 'ticketId', 'storeHashBefore', 'storeHashAfter', 'ticketIds'];
+
+function auditFieldsMatch(entry, data, acceptLegacyMatch) {
+  // `acceptLegacyMatch` is for ONE caller: a recovery replaying the apply evidence of
+  // a transaction that was interrupted BEFORE this feature existed. Such an entry
+  // carries no audit payload at all and never can — demanding one turns a resumable
+  // recovery into a permanent EVIDENCE_IDEMPOTENCY_CONFLICT with no way out. It is
+  // deliberately narrow: only a candidate carrying NONE of the fields qualifies, so
+  // an entry that disagrees on any of them is still a conflict, and a fresh mutation
+  // is never waved through by an unaudited entry.
+  if (acceptLegacyMatch && AUDIT_FIELDS.every((field) => entry.data?.[field] === undefined)) return true;
+  for (const field of AUDIT_FIELDS) {
+    if (canonicalJson(entry.data?.[field] ?? null) !== canonicalJson(data[field] ?? null)) return false;
+  }
+  return true;
+}
+
+function findMatchingEvidence(entries, { gate, data, operation, action, ticketId, ticketHash, storeHash, archiveHash, transactionId, key = null, acceptLegacyMatch = false }) {
   for (const entry of entries) {
     if (entry?.data?.transactionId === transactionId && entry?.data?.action === action) {
       if (key !== null && !entrySigValid(key, entry)) continue;
-      const matches = entry.gate === `ticket-${operation}`
+      const matches = entry.gate === gate
         && (entry.ticket ?? null) === ticketId
         && entry.data.operation === operation
         && (entry.data.ticketHash ?? null) === ticketHash
         && entry.data.storeHash === storeHash
         && (entry.data.archiveHash ?? null) === archiveHash
-        && entry.data.bindingScope === (ticketId ? 'ticket' : 'store');
+        && entry.data.bindingScope === (ticketId ? 'ticket' : 'store')
+        && auditFieldsMatch(entry, data, acceptLegacyMatch);
       if (!matches) throw conflict('EVIDENCE_IDEMPOTENCY_CONFLICT', `transaction ${transactionId}/${action} already has different evidence`);
       return entry;
     }
@@ -100,7 +127,7 @@ function findMatchingEvidence(entries, { operation, action, ticketId, ticketHash
  * itself (protects the segment's bytes against anything else that might
  * ever write to it directly).
  */
-function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision, key }) {
+function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key, acceptLegacyMatch = false }) {
   return withManifestLock(lineagePath(dir), () => {
     // Adversarial-review finding: a corrupted OTHER segment (crash, manual
     // edit, or a malicious branch) must not let a ticket transaction finalize
@@ -114,7 +141,7 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
     if (!forestChainsIntact(dir, { key })) {
       throw conflict('INVALID_MANIFEST', 'manifest forest is invalid: a segment or root chain is broken, or an entry is unsigned/forged — refusing to append or trust the idempotency scan');
     }
-    const existing = findMatchingEvidence(readForestEntries(dir), { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key });
+    const existing = findMatchingEvidence(readForestEntries(dir), { gate, data, transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key, acceptLegacyMatch });
     if (existing) return existing;
 
     const resolved = resolveOpenSegment(dir, { cwd: dirname(dir), key });
@@ -135,16 +162,6 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
         catch { throw conflict('INVALID_MANIFEST', `segment ${resolved.name} contains malformed JSON`); }
       }
       const prevRawLine = rawLines.at(-1) ?? null;
-      const data = {
-        operation,
-        action,
-        transactionId,
-        revision,
-        ticketHash,
-        storeHash,
-        ...(archiveHash ? { archiveHash } : {}),
-        bindingScope: ticketId ? 'ticket' : 'store',
-      };
       const entry = {
         seq: typeof previous?.seq === 'number' ? previous.seq + 1 : 1,
         // `branch` (T-MANIFEST-FOREST, fourth round): the EXACT git branch
@@ -152,7 +169,7 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
         // identity recoverOpenSegment matches on. Mirrors
         // @adlc/gate-manifest/lib/segment-writer.mjs's identical addition.
         ...(resolved.isNew ? { anchor: resolved.anchor, ...(resolved.branch !== undefined ? { branch: resolved.branch } : {}) } : {}),
-        gate: `ticket-${operation}`,
+        gate,
         ts: new Date().toISOString(),
         ...(ticketId ? { ticket: ticketId } : {}),
         data,
@@ -174,7 +191,20 @@ function recordSegmentedTicketEvidence(dir, { transactionId, operation, action, 
   });
 }
 
-/** Append an idempotent, hash-bound transaction/recovery record to gate-manifest. */
+/**
+ * Append an idempotent, hash-bound transaction/recovery record to gate-manifest.
+ *
+ * `bypass` (T-01M0122WMF8EJTB7ERHTEG8HMJ) marks a mutation of a FROZEN TRUST ROOT
+ * — a store in which some ticket declares a rail, so the store itself is frozen
+ * and changing it is a deliberate override rather than ordinary authoring. It adds
+ * the audit fields the override needs and nothing else: an entry recorded with
+ * `bypass: false` (every pre-existing caller) is byte-identical to what this writer
+ * produced before, so the behavior change is confined to frozen trust roots.
+ *
+ * `gate` defaults to this operation's own gate, which keeps a sensitive mutation's
+ * existing `ticket-<operation>` entry exactly where consumers expect it. The
+ * bypass audit for a mutation that had NO gate of its own passes `ticket-mutation`.
+ */
 export function recordTicketEvidence(root, {
   key,
   transactionId,
@@ -185,11 +215,38 @@ export function recordTicketEvidence(root, {
   storeHash,
   archiveHash = null,
   revision = process.env.ADLC_REVISION ?? null,
+  gate = `ticket-${operation}`,
+  bypass = false,
+  storeHashBefore = null,
+  ticketIds = null,
+  acceptLegacyMatch = false,
 } = {}) {
   // Validate FIRST: the idempotent-retry early return must not bypass the key
   // contract — an invalid key is a caller bug on every path, retries included.
   const signingKey = validateKeyParam(key);
   const dir = join(root, '.adlc');
+  // Built ONCE, here, so the root and segmented writers cannot drift in what they
+  // sign. Key order is the insertion order both paths already produced.
+  const data = {
+    operation,
+    action,
+    transactionId,
+    revision,
+    ticketHash,
+    storeHash,
+    ...(archiveHash ? { archiveHash } : {}),
+    bindingScope: ticketId ? 'ticket' : 'store',
+    ...(bypass ? {
+      op: operation,
+      ticketId,
+      // A write that moves SEVERAL tickets at once (a prune sweep) names them all:
+      // store hashes prove that something changed, not what this entry authorized.
+      ...(ticketIds ? { ticketIds } : {}),
+      storeHashBefore,
+      storeHashAfter: storeHash,
+      bypass: true,
+    } : {}),
+  };
   // spec §7: once segmented, every append routes to the current lineage's
   // segment instead of root (adversarial-review finding: this writer used to
   // be entirely separate from @adlc/gate-manifest's own root-vs-segment
@@ -198,7 +255,7 @@ export function recordTicketEvidence(root, {
   // segmented repo — retroactively invalidating every existing anchor:null
   // segment, spec §4.4).
   if (isSegmentedRepo(dir)) {
-    return recordSegmentedTicketEvidence(dir, { transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, revision, key: signingKey });
+    return recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key: signingKey, acceptLegacyMatch });
   }
   const path = join(root, '.adlc/manifest.jsonl');
   return withManifestLock(path, () => {
@@ -223,13 +280,14 @@ export function recordTicketEvidence(root, {
           // active. An unsigned/invalid candidate here is treated as absent,
           // not a match — the real write proceeds below instead.
           if (signingKey !== null && !entrySigValid(signingKey, entry)) continue;
-          const matches = entry.gate === `ticket-${operation}`
+          const matches = entry.gate === gate
             && (entry.ticket ?? null) === ticketId
             && entry.data.operation === operation
             && (entry.data.ticketHash ?? null) === ticketHash
             && entry.data.storeHash === storeHash
             && (entry.data.archiveHash ?? null) === archiveHash
-            && entry.data.bindingScope === (ticketId ? 'ticket' : 'store');
+            && entry.data.bindingScope === (ticketId ? 'ticket' : 'store')
+            && auditFieldsMatch(entry, data, acceptLegacyMatch);
           if (!matches) throw conflict('EVIDENCE_IDEMPOTENCY_CONFLICT', `transaction ${transactionId}/${action} already has different evidence`);
           return entry;
         }
@@ -254,19 +312,9 @@ export function recordTicketEvidence(root, {
     }
     const previous = lastLine(content);
     const prior = previous ? JSON.parse(previous) : null;
-    const data = {
-      operation,
-      action,
-      transactionId,
-      revision,
-      ticketHash,
-      storeHash,
-      ...(archiveHash ? { archiveHash } : {}),
-      bindingScope: ticketId ? 'ticket' : 'store',
-    };
     const entry = {
       seq: typeof prior?.seq === 'number' ? prior.seq + 1 : 1,
-      gate: `ticket-${operation}`,
+      gate,
       ts: new Date().toISOString(),
       ...(ticketId ? { ticket: ticketId } : {}),
       data,

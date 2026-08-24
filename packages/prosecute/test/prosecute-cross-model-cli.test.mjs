@@ -89,7 +89,14 @@ function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rai
   // baseline commit, so the directory store is committed on main and a feature
   // change tiers (or not) purely on its own merits — not because uncommitted
   // shards under .adlc/tickets/ are themselves a trust-root surface.
-  if (migrateStore) migrateLegacyStore(dir, { write: true, yes: true, requireClean: false });
+  // T1 declares rails in these fixtures, so the legacy store being migrated is a
+  // frozen trust root and the migration is an audited override that must be
+  // signable (packages/tickets/test/bypass-audit.test.mjs). This fixture runs
+  // deliberately keyless — these tests exercise the tier gate, whose whole point
+  // is that it does NOT trust the manifest — so it opts into the unsigned audit
+  // entry rather than introducing a key. That keeps the committed baseline
+  // byte-identical to what these assertions were written against.
+  if (migrateStore) migrateLegacyStore(dir, { write: true, yes: true, requireClean: false, key: null, allowUnsigned: true });
 
   const adlc = join(dir, '.adlc');
   mkdirSync(adlc, { recursive: true });

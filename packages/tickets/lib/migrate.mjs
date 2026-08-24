@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ACTIVE_DIRECTORY, ACTIVE_MANIFEST, ARCHIVE_DIRECTORY, ARCHIVE_MANIFEST, LEGACY_ARCHIVE_FILE, LEGACY_FILE, TRANSACTION_DIRECTORY } from './constants.mjs';
 import { prettyCanonicalJson, sha256, storeHash } from './canonical.mjs';
-import { conflict, operational } from './errors.mjs';
+import { conflict, operational, policy } from './errors.mjs';
 import { ticketFilename } from './filename.mjs';
 import { acquireTicketLock, releaseTicketLock } from './lock.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
@@ -13,6 +13,7 @@ import { recordTicketEvidence } from './evidence.mjs';
 import { validateTickets } from './schema.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
 import { validateKeyParam } from './key-contract.mjs';
+import { assertSignableTrustRootWrite, assertWriteIsSignable, repoDeclaresRails, storeDeclaresRails } from './trust-root.mjs';
 
 // The tracked surface of `.adlc/` after a migration. `!.adlc/manifest.jsonl` is
 // NOT optional: the rails-guard CI migration gate requires hash-bound
@@ -183,7 +184,7 @@ export function migrationPlan(root = '.') {
   return { version: 1, operation: 'migrate', source: LEGACY_FILE, target: ACTIVE_DIRECTORY, ticketCount: before.tickets.length, archivedTicketCount: archived.tickets.length, beforeHash: before.hash, afterHash: before.hash, archiveHash: archived.hash, files: [...before.tickets.map((ticket) => join(ACTIVE_DIRECTORY, ticketFilename(ticket.id))), ...archived.tickets.map((ticket) => join(ARCHIVE_DIRECTORY, ticketFilename(ticket.id)))] };
 }
 
-export function migrateLegacyStore(root = '.', { write = false, yes = false, requireClean = true, faultInjector = null, key = null } = {}) {
+export function migrateLegacyStore(root = '.', { write = false, yes = false, requireClean = true, faultInjector = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   const plan = migrationPlan(root);
   if (!write) return plan;
@@ -208,6 +209,18 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
   const lock = acquireTicketLock(root, { transactionId: id, command: 'ticket:store:migrate' });
   try {
     if (legacy.load().hash !== before.hash) throw conflict('STALE_SNAPSHOT', 'legacy store changed during migration planning');
+    // A migration REWRITES the whole store, so if that store is a frozen trust root
+    // it is the largest trust-root write there is, and it already records evidence —
+    // it just never required that evidence to be signable.
+    //
+    // Asked HERE, under the lock and against `before` — the very snapshot this
+    // migration is about to rewrite. An earlier revision asked it before the lock,
+    // off its own separate read: a writer that added the first rail between that read
+    // and `before` produced a store whose two guarded reads agreed with each other,
+    // so the staleness check saw nothing, and the migration rewrote a now-frozen
+    // store while believing it was not one. Still ahead of any staging below, so a
+    // refusal leaves nothing behind.
+    const migratesTrustRoot = assertSignableTrustRootWrite(before.tickets, { key, allowUnsigned, root });
     if (existsSync(join(root, ACTIVE_DIRECTORY))) throw conflict('AMBIGUOUS_STORE', 'directory store appeared during migration planning');
     if (existsSync(join(root, ARCHIVE_DIRECTORY))) throw conflict('AMBIGUOUS_ARCHIVE', 'archive directory appeared during migration planning');
     const legacyArchive = loadLegacyArchive(root);
@@ -259,7 +272,15 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
     if (legacyArchive.exists) durableRemove(join(root, LEGACY_ARCHIVE_FILE));
     faultInjector?.('legacy-removed', { id });
     ensureMigrationGitignore(root);
-    recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', storeHash: directory.load().hash, archiveHash: legacyArchive.hash });
+    // The audit fields ride on the migration's OWN gate rather than a second
+    // `ticket-mutation` entry: one mutation, one entry, exactly as the ticket-store
+    // transactions do. `migratesTrustRoot` is the same predicate the refusal above
+    // used, so an entry carries `bypass` when and only when a refusal was possible.
+    recordTicketEvidence(root, {
+      key, transactionId: id, operation: 'migrate',
+      storeHash: directory.load().hash, archiveHash: legacyArchive.hash,
+      ...(migratesTrustRoot ? { bypass: true, storeHashBefore: before.hash } : {}),
+    });
     faultInjector?.('gitignore-updated', { id });
     durableRemove(runtime, { recursive: true, force: true });
     return { ...plan, applied: true };
@@ -269,7 +290,7 @@ export function migrateLegacyStore(root = '.', { write = false, yes = false, req
   } finally { releaseTicketLock(lock); }
 }
 
-export function recoverMigration(root, id, { direction, key = null } = {}) {
+export function recoverMigration(root, id, { direction, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   if (!['complete', 'rollback'].includes(direction)) throw conflict('RECOVERY_DIRECTION_REQUIRED', 'choose complete or rollback');
   const { runtime, journal } = loadMigrationJournal(root, id);
@@ -282,6 +303,18 @@ export function recoverMigration(root, id, { direction, key = null } = {}) {
   try {
     const backupSnapshot = new LegacyTicketStore(backup).load();
     if (backupSnapshot.hash !== journal.beforeHash) throw conflict('CORRUPT_BACKUP', 'migration backup does not match its recorded hash');
+    // Where the filesystem ACTUALLY is right now, which is not necessarily the
+    // journal's beforeHash: a crash after the directory rename leaves the repo at
+    // the migrated state, and recording beforeHash on both ends of a rollback
+    // would describe a no-op transition that never happened. Falls back to the
+    // journal's value when neither store loads.
+    let preRecoveryHash = journal.beforeHash;
+    for (const candidate of [
+      () => new DirectoryTicketStore(directoryPath).load().hash,
+      () => new LegacyTicketStore(legacyPath).load().hash,
+    ]) {
+      try { preRecoveryHash = candidate(); break; } catch { /* try the next shape */ }
+    }
     const archivePath = join(root, ARCHIVE_DIRECTORY);
     const legacyArchivePath = join(root, LEGACY_ARCHIVE_FILE);
     const gitignorePath = join(root, '.gitignore');
@@ -293,6 +326,23 @@ export function recoverMigration(root, id, { direction, key = null } = {}) {
     if (gitignoreBackup && sha256(readFileSync(gitignoreBackup)) !== journal.gitignoreBeforeHash) {
       throw conflict('CORRUPT_BACKUP', 'migration .gitignore backup does not match its recorded hash');
     }
+
+    // Both backups are hash-verified above, so they are the trustworthy record of
+    // the pre-migration repo — which is what decides whether this recovery touches
+    // a trust root, in BOTH directions, without believing anything the journal
+    // merely asserts. The archive backup matters on its own: a rollback removes the
+    // directory archive BEFORE restoring the legacy archive, so a crash in that
+    // window leaves a repo where neither the active store nor any visible archive
+    // declares a rail, and a keyless retry would sail through. Refusing here, ahead
+    // of the first mutation, keeps an unsignable recovery from being the way a
+    // trust root changes unaudited. An unreadable backup fails closed.
+    const archiveBackupDeclaresRails = () => {
+      if (!archiveBackup) return false;
+      try { return storeDeclaresRails(loadLegacyArchive(root, archiveBackup).tickets); }
+      catch { return true; }
+    };
+    const recoversTrustRoot = repoDeclaresRails(root, backupSnapshot.tickets) || archiveBackupDeclaresRails();
+    if (recoversTrustRoot) assertWriteIsSignable({ key, allowUnsigned });
 
     if (direction === 'complete') {
       // Validate every source and destination before the first mutation. Recovery
@@ -326,9 +376,19 @@ export function recoverMigration(root, id, { direction, key = null } = {}) {
       const directory = new DirectoryTicketStore(directoryPath).load();
       // Recovery must establish the same canonical apply binding as the uninterrupted
       // path. recordTicketEvidence is transaction/action-idempotent, so this is safe
-      // whether the crash happened before or after the original append.
-      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', storeHash: directory.hash, archiveHash: journal.archiveHash });
-      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', action: 'recover-complete', storeHash: directory.hash, archiveHash: journal.archiveHash });
+      // whether the crash happened before or after the original append — but only if
+      // the replay is BYTE-FOR-BYTE what the original run would have written. The
+      // apply entry describes the MIGRATION's transition and so keeps the journal's
+      // beforeHash; using the recovery's own starting hash here would differ from an
+      // already-recorded entry and turn a resumable recovery into a permanent
+      // EVIDENCE_IDEMPOTENCY_CONFLICT. The recover-complete entry, which describes
+      // the RECOVERY's transition, is the one that carries preRecoveryHash.
+      const applyAudit = recoversTrustRoot ? { bypass: true, storeHashBefore: journal.beforeHash } : {};
+      const recoveryAudit = recoversTrustRoot ? { bypass: true, storeHashBefore: preRecoveryHash } : {};
+      // acceptLegacyMatch: a migration interrupted before this feature existed left
+      // an apply entry with no audit payload, and it can never grow one.
+      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', storeHash: directory.hash, archiveHash: journal.archiveHash, ...applyAudit, acceptLegacyMatch: true });
+      recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', action: 'recover-complete', storeHash: directory.hash, archiveHash: journal.archiveHash, ...recoveryAudit });
       durableRemove(runtime, { recursive: true, force: true });
       return new DirectoryTicketStore(directoryPath).load();
     }
@@ -367,19 +427,89 @@ export function recoverMigration(root, id, { direction, key = null } = {}) {
       durableRename(temporaryArchive, legacyArchivePath);
       if (loadLegacyArchive(root).hash !== journal.archiveHash) throw conflict('RECOVERY_VERIFY_FAILED', 'restored legacy archive does not match its recorded hash');
     } else if (existsSync(legacyArchivePath)) durableRemove(legacyArchivePath, { force: true });
-    recordTicketEvidence(root, { key, transactionId: id, operation: 'migrate', action: 'recover-rollback', storeHash: journal.beforeHash, archiveHash: journal.archiveHash });
+    recordTicketEvidence(root, {
+      key, transactionId: id, operation: 'migrate', action: 'recover-rollback',
+      storeHash: journal.beforeHash, archiveHash: journal.archiveHash,
+      ...(recoversTrustRoot ? { bypass: true, storeHashBefore: preRecoveryHash } : {}),
+    });
     durableRemove(runtime, { recursive: true, force: true });
     return new LegacyTicketStore(legacyPath).load();
   } finally { releaseTicketLock(lock); }
 }
 
-export function exportLegacyStore(store, outputPath) {
+/**
+ * `root` is what makes the output-path guard below meaningful; it defaults to cwd
+ * so existing callers keep working.
+ */
+export function exportLegacyStore(store, outputPath, { root = '.' } = {}) {
+  // Export is a REPORTING command: it writes a legacy-shaped snapshot wherever the
+  // caller points it. Pointed at a ticket store, it becomes an unaudited writer to
+  // the trust root — and with a `--ticket-store` source it would overwrite the
+  // canonical store with a DIFFERENT ticket set, rails included, leaving no
+  // evidence. Refused outright rather than gated on a key: overwriting the store
+  // is not something export should do even with one.
+  //
+  // The path checked below is the SAME one written further down, and both the
+  // lexical and symlink-resolved forms are checked — a guard that validates one
+  // path while the write uses another is not a guard, and a symlinked parent
+  // directory would otherwise redirect the rename straight into the store.
+  const target = resolve(root, outputPath);
+  // Resolve through the DEEPEST EXISTING ancestor and re-append the tail that does
+  // not exist yet. Resolving only the immediate parent is not enough: given
+  // `reports/link/new/out.json` where `reports/link` is a symlink into the store,
+  // the immediate parent does not exist, the lexical fallback applies, the guard
+  // sees an innocent path — and the recursive mkdir below then follows the link and
+  // writes inside the canonical store.
+  const symlinkResolved = (path) => {
+    const tail = [basename(path)];
+    let dir = dirname(path);
+    for (;;) {
+      try { return join(realpathSync(dir), ...[...tail].reverse()); }
+      catch {
+        const parent = dirname(dir);
+        if (parent === dir) return path; // nothing along the way exists
+        tail.push(basename(dir));
+        dir = parent;
+      }
+    }
+  };
+  const candidates = [target, symlinkResolved(target)];
+  // The whole of `.adlc` PLUS the store actually being read.
+  //
+  // Naming individual files inside `.adlc` invites the next gap: the first version
+  // of this guard reserved the four canonical store paths and left
+  // `.adlc/manifest.jsonl` and `.adlc/manifest.d/` open, so an export could
+  // overwrite the append-only evidence ledger itself. `.adlc` is the runtime and
+  // evidence area; a snapshot written for inspection has no business anywhere in it.
+  // The source store is listed separately because --ticket-store /
+  // ADLC_TICKET_STORE can point outside `.adlc` entirely.
+  const reserved = [
+    resolve(root, '.adlc'),
+    ...(typeof store?.path === 'string' && store.path ? [resolve(root, store.path)] : []),
+  ].flatMap((absolute) => {
+    let real = absolute;
+    try { real = realpathSync(absolute); } catch { /* may not exist */ }
+    return real === absolute ? [absolute] : [absolute, real];
+  });
+  const insideStore = (dir) => candidates.some((candidate) => {
+    const rel = relative(dir, candidate);
+    return rel === '' || (Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel));
+  });
+  if (reserved.some(insideStore)) {
+    throw policy(
+      'UNSAFE_EXPORT_TARGET',
+      `refusing to export onto ADLC runtime state: ${outputPath}. Export writes a snapshot for ` +
+      'inspection; writing it into .adlc/ or over the source store would replace a ticket set — rails ' +
+      'included — or the append-only evidence ledger, with no record that it happened. Choose a path ' +
+      'outside .adlc/ and outside the store being exported.',
+    );
+  }
   const snapshot = store.load();
-  const temporary = `${outputPath}.tmp.${process.pid}`;
-  durableMkdir(dirname(outputPath));
+  const temporary = `${target}.tmp.${process.pid}`;
+  durableMkdir(dirname(target));
   durableWrite(temporary, prettyCanonicalJson({ tickets: snapshot.mutableTickets() }));
-  durableRename(temporary, outputPath);
-  const exported = new LegacyTicketStore(outputPath).load();
+  durableRename(temporary, target);
+  const exported = new LegacyTicketStore(target).load();
   if (exported.hash !== snapshot.hash) throw conflict('EXPORT_HASH_MISMATCH', 'legacy export changed logical store hash');
   return exported;
 }

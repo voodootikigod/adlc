@@ -35,9 +35,18 @@ function writeTickets(dir, tickets) {
 }
 
 /** Run the REAL ticket-prune bin (subprocess) in `dir`. Returns its exit code. */
+/**
+ * Every fixture here keeps a RAILED ticket in the store so rails are genuinely
+ * active at base, which also makes the store a frozen trust root: `--write` is an
+ * audited override and refuses unless it can be signed
+ * (packages/tickets/test/bypass-audit.test.mjs). The key is what an operator
+ * running this has; what these tests are about is the diff the gate then sees.
+ */
 function runPruneWrite(dir) {
   try {
-    execFileSync(process.execPath, [PRUNE_BIN, '--write'], { cwd: dir, stdio: 'pipe' });
+    execFileSync(process.execPath, [PRUNE_BIN, '--write'], {
+      cwd: dir, stdio: 'pipe', env: { ...process.env, ADLC_MANIFEST_KEY: 'test-manifest-key' },
+    });
     return 0;
   } catch (e) {
     return e.status ?? 1;
@@ -67,6 +76,13 @@ function setupBaseRepo({ baseTickets, seedFiles = [] }) {
   git(dir, ['config', 'user.email', 'a@b.c']);
   git(dir, ['config', 'user.name', 'x']);
   writeTickets(dir, baseTickets);
+  // An EMPTY committed manifest, which is what `adlc init` leaves behind and what
+  // rails-guard-ci itself prescribes ("create it empty during bootstrap"). A prune
+  // of a frozen trust root now appends its audit entry here, and the gate's rule is
+  // that a manifest may be APPENDED to in a PR but not CREATED carrying evidence —
+  // so a fixture with no manifest at base would fail for the bootstrap reason
+  // rather than anything these tests are about.
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '');
   for (const f of seedFiles) {
     mkdirSync(join(dir, dirname(f)), { recursive: true });
     writeFileSync(join(dir, f), 'shipped\n');

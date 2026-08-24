@@ -160,7 +160,12 @@ test('a RAILED ticket completes normally — rails are enforced by rails-guard-c
   // which exempts a completed:true-only annotation. So railed tickets DO auto-complete.
   const { root, git, integrationBranch } = makeRepo({ id: 'T1', title: 'railed', rails: ['test/contract.test.mjs'], scope: ['src/**'] });
   try {
-    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git });
+    // A rail is declared, so the store is a frozen trust root: completion still
+    // succeeds, but it is now an AUDITED override that must be signable — hence
+    // the key (packages/tickets/test/bypass-audit.test.mjs). Fleet already passes
+    // resolveKeyFromEnv() here in production; what changed is that a keyless
+    // environment refuses instead of recording an unsigned entry.
+    const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git, key: 'test-manifest-key' });
     assert.equal(res.completed, true, 'a railed ticket is not silently left open');
     assert.equal(isCompleted(root, 'T1'), true);
   } finally { rmSync(root, { recursive: true, force: true }); }

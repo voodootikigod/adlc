@@ -15,7 +15,7 @@ import { railScopeGuard, describeViolations } from './rails-guard-sync.mjs';
 import { validateTicket } from './validate.mjs';
 import { canonicalHash } from './canonical.mjs';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from './store.mjs';
-import { loadTicketSnapshot } from '@adlc/tickets';
+import { exitCodeFor, loadTicketSnapshot } from '@adlc/tickets';
 
 const BLOCK_KEYS = ['scope', 'rails', 'edges', 'duration', 'category', 'budget'];
 
@@ -101,7 +101,7 @@ export function validityGate(tickets) {
 }
 
 export async function pull({
-  key = null,
+  key = null, allowUnsigned = false,
   dir = '.', provider, runner, gitRemoteUrl,
   write = false, force = false, allowRailNarrowing = false, limit,
   now = new Date().toISOString(),
@@ -176,11 +176,20 @@ export async function pull({
 
   if (!acquireLock(dir)) return { exitCode: 1, errors: ['could not acquire .adlc/tickets.lock — another ticket op is in progress'] };
   try {
-    writeTicketsAtomic(dir, { tickets: gate.tickets }, {
-      expectedSnapshotHash: localState.hash,
-      expectedStoreAbsent: localState.absent,
-      key,
-    });
+    try {
+      writeTicketsAtomic(dir, { tickets: gate.tickets }, {
+        allowUnsigned,
+        expectedSnapshotHash: localState.hash,
+        expectedStoreAbsent: localState.absent,
+        key,
+      });
+    } catch (error) {
+      // Same classification as push: a policy refusal exits 2 (blocked), everything
+      // else keeps its own kind. Reported rather than thrown so the caller sees the
+      // structured result the rest of this function returns.
+      if (error?.kind === 'policy') return { exitCode: exitCodeFor(error), errors: [error.message] };
+      throw error;
+    }
     const newSidecar = { ...sidecar, tickets: { ...sidecar.tickets } };
     for (const [id, u] of Object.entries(sidecarUpdates)) newSidecar.tickets[id] = { ...u, syncedAt: now };
     writeSidecar(dir, newSidecar);

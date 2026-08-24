@@ -29,6 +29,29 @@ Writers use a per-worktree lock, expected-hash compare-and-swap, a durable
 journal, final hash verification, and dual ticket/store-hash evidence. Interrupted
 transactions fail closed until explicitly completed or rolled back.
 
+## Writing to a frozen trust root
+
+Once any ticket declares `rails`, the store is the configuration that decides what
+the rail guards freeze, so the store itself is frozen. Every `--write` against it is
+then a deliberate, audited override: the service appends one signed `ticket-mutation`
+entry naming the operation, the ticket, and the store hash either side of the change.
+A mutation that already records its own evidence keeps that entry and gains the audit
+fields — one mutation never becomes two entries.
+
+Signing needs `ADLC_MANIFEST_KEY`. Without it the write refuses before touching the
+store, because an unsigned entry proves nothing about who made the change and the
+manifest is append-only. `--allow-unsigned` records one deliberately and warns.
+
+```sh
+ADLC_MANIFEST_KEY=… adlc ticket create --input ticket.json --write
+adlc ticket create --input ticket.json --write --allow-unsigned   # deliberate, warns
+```
+
+The rule holds on every door into the store, not just `adlc ticket`: the legacy
+migration and its recovery, archive/restore, transaction recovery, and `ticket-prune`.
+A repo where no ticket declares a rail — in the active set or the archive — is not a
+trust root: authoring there needs no key and records nothing.
+
 ## Legacy migration
 
 Existing `.adlc/tickets.json` repositories remain writable. Interactive writers

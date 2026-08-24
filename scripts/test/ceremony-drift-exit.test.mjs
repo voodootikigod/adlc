@@ -319,8 +319,13 @@ test('the rendered per-ticket command completes only its named ticket, nothing e
     // Dispatch through the real `adlc` entrypoint, passing the printed args verbatim.
     const args = cmd.replace(/^adlc\s+/, '').trim().split(/\s+/);
     const ADLC = join(REPO_ROOT, 'packages', 'cli', 'bin', 'adlc.mjs');
+    // RAILED declares a rail, so this store is a frozen trust root: the rendered
+    // command is an AUDITED override and refuses without a signing key — which is
+    // why the body now tells the admin to export one before running these
+    // (packages/tickets/test/bypass-audit.test.mjs). Supplying it here is what an
+    // admin running the ceremony does; the command text itself is unchanged.
     execFileSync(process.execPath, [ADLC, ...args], {
-      cwd: repo, stdio: 'ignore', env: { ...process.env },
+      cwd: repo, stdio: 'ignore', env: { ...process.env, ADLC_MANIFEST_KEY: 'test-manifest-key' },
     });
 
     assert.deepEqual(completedIds(repo), ['RAILED'],

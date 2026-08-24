@@ -63,9 +63,12 @@ function sourceFiles(dir) {
  *     `'.adlc'` segment nearby, i.e. `join(x, '.adlc', 'tickets.json')` — the EXACT
  *     spelling the round-trip helpers themselves use.
  *
- * The write primitive set covers sync, promise, and callback forms:
- * writeJsonAtomic / writeTicketsAtomic / writeFileSync / renameSync / writeFile
- * (the bare `writeFile(` alt also catches `fs.promises.writeFile(`).
+ * The write primitive set covers sync, promise, callback, and STAGED forms:
+ * writeJsonAtomic / stageJsonAtomic / writeTicketsAtomic / writeFileSync /
+ * renameSync / writeFile (the bare `writeFile(` alt also catches
+ * `fs.promises.writeFile(`). `stageJsonAtomic` is in the set because a writer that
+ * stages its content and commits it later is still a writer — splitting the write
+ * in two must not take a package out of this gate's sight.
  *
  * Robustness to false positives: still gated on a `{ tickets }`-shaped envelope,
  * so a READER (`data.tickets.map(...)` — a `.` follows `tickets`) and a package
@@ -95,7 +98,7 @@ export function isTicketsWriterSource(src) {
   // (a `.` follows `tickets`), so reads never masquerade as writes.
   const writesEnvelope =
     /\btickets\s*[:,}]/.test(src) &&
-    /(?:writeJsonAtomic|writeTicketsAtomic|writeFileSync|renameSync|writeFile)\s*\(/.test(src);
+    /(?:writeJsonAtomic|stageJsonAtomic|writeTicketsAtomic|writeFileSync|renameSync|writeFile)\s*\(/.test(src);
   return referencesTicketsPath && writesEnvelope;
 }
 
@@ -191,6 +194,19 @@ export function writeIt(dir, tickets) {
 }
 `;
 
+// A writer that STAGES its content and commits the rename later, so the file
+// contains no writeFileSync/renameSync call of its own. Splitting an atomic write
+// in two is a legitimate thing to do — ticket-prune does it to fit the audit append
+// between the halves — and it must not take the package out of this gate's sight.
+const STAGED_WRITER_LIB = `
+import { join } from 'node:path';
+import { stageJsonAtomic } from './store.mjs';
+export function writeIt(dir, tickets) {
+  const staged = stageJsonAtomic(join(dir, '.adlc', 'tickets.json'), { tickets });
+  staged.commit();
+}
+`;
+
 // A writer using the promise form (fs.promises.writeFile) + segmented path.
 const PROMISE_WRITER_LIB = `
 import { writeFile } from 'node:fs/promises';
@@ -269,6 +285,10 @@ test('FIX 1 (evasion closed): flags a SEGMENTED-path writer — join(dir, ".adlc
 
 test('FIX 1 (evasion closed): flags a PROMISE-form writer — fs.promises.writeFile + segmented path', () => {
   assert.equal(isTicketsWriterSource(PROMISE_WRITER_LIB), true);
+});
+
+test('flags a STAGED writer — stageJsonAtomic + segmented path, with no direct fs call', () => {
+  assert.equal(isTicketsWriterSource(STAGED_WRITER_LIB), true);
 });
 
 test('FIX 1: a segmented "tickets.json" with NO .adlc segment is NOT a writer (avoids matching unrelated tickets.json files)', () => {

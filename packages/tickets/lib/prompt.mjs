@@ -14,6 +14,14 @@ export function shouldOfferLegacyMigration(store, flags = {}, { input = stdin, o
  * Dependencies are injectable so the approval policy can be tested without a TTY
  * or filesystem mutation.
  */
+/**
+ * `key`/`allowUnsigned` are threaded to the migration, not defaulted here: a
+ * legacy store that declares rails is a frozen trust root, so migrating it is an
+ * audited override that migrateLegacyStore refuses unless it can be signed.
+ * Dropping the resolved key at this boundary would refuse the interactive
+ * migration of exactly the operator who HAS a key — the accept path answering
+ * "yes" and then failing for a reason the prompt never mentioned.
+ */
 export async function offerLegacyMigration(store, root, flags = {}, {
   input = stdin,
   output = stdout,
@@ -22,6 +30,8 @@ export async function offerLegacyMigration(store, root, flags = {}, {
   plan = migrationPlan,
   migrate = migrateLegacyStore,
   detect = detectTicketStore,
+  key = null,
+  allowUnsigned = false,
 } = {}) {
   if (!shouldOfferLegacyMigration(store, flags, { input, output })) return store;
   emit({ warning: 'Legacy .adlc/tickets.json is active. ADLC can migrate it to independently mergeable shards.' });
@@ -34,6 +44,6 @@ export async function offerLegacyMigration(store, root, flags = {}, {
     finally { readline.close(); }
   }
   if (!/^y(?:es)?$/i.test(String(answer ?? '').trim())) return store;
-  migrate(root, { write: true, yes: true });
+  migrate(root, { write: true, yes: true, key, allowUnsigned });
   return detect({ root, ticketStore: flags['ticket-store'], legacyTickets: flags.tickets });
 }

@@ -22,7 +22,7 @@ import { reduceTicketOutcomes } from './outcomes.mjs';
 import { renderStatus } from './status-render.mjs';
 import { reassignId, migrateManifestEvidence } from './reassign.mjs';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from './store.mjs';
-import { loadTicketSnapshot, readOwnChains } from '@adlc/tickets';
+import { assertSignableTrustRootWrite, exitCodeFor, loadTicketSnapshot, readOwnChains } from '@adlc/tickets';
 
 const SYNCED_RE = /^gh:[^#]+#(\d+)$/;
 /**
@@ -136,7 +136,7 @@ function ticketBody(prose, block, key) {
  * @param {number} [opts.limit]
  */
 export async function push({
-  key = null,
+  key = null, allowUnsigned = false,
   dir = '.', provider, runner, gitRemoteUrl, write = false,
   now = new Date().toISOString(), uuid = randomUUID, manifestEntries, env = process.env, limit,
 } = {}) {
@@ -165,6 +165,36 @@ export async function push({
 
   const localState = loadLocalState(dir, { allowInvalid: !write });
   const localTickets = localState.tickets;
+  // Ahead of any REMOTE write. A push that adopts issues and then hits the local
+  // store's frozen-trust-root refusal has already created issues upstream, leaving
+  // remote and local disagreeing for a reason the operator can do nothing about
+  // mid-flight. The same refusal, asked first, costs nothing and leaves both sides
+  // untouched. A store that is not a trust root answers false and this is a no-op.
+  //
+  // An EARLY-OUT, not the enforcement point. It runs before the store lock, because
+  // the alternative — holding that lock across every network round trip below —
+  // blocks every other writer for the length of a remote sync. So a concurrent
+  // writer can still add a rail in the gap; the authoritative check is the one
+  // inside the transaction, under the lock, which re-evaluates and refuses there.
+  // What this removes is the common case, not the race.
+  // Only when a LOCAL write is possible at all. The local store is touched by one
+  // thing here: reassigning a local-only ticket to the remote id it was just created
+  // or adopted under. A push whose tickets are all already remote ids updates labels
+  // and status comments and never writes the store, so demanding a key for it would
+  // refuse remote-only work that owes no audit. Deliberately conservative — it asks
+  // "could a local write happen", not "will it" — because the alternative is doing
+  // the remote half first and finding out afterwards.
+  const mayWriteLocally = localTickets.some((t) => !String(t?.id ?? '').startsWith('gh:'));
+  if (write && mayWriteLocally) {
+    try {
+      assertSignableTrustRootWrite(localTickets, { key, allowUnsigned, root: dir });
+    } catch (error) {
+      // A trust-root refusal is a deliberate BLOCK, not a transient failure — the
+      // CLI documents exit 2 for that, and automation needs to tell "this may not
+      // happen" apart from "this did not work, try again".
+      return { exitCode: exitCodeFor(error), errors: [error.message] };
+    }
+  }
   let expectedSnapshotHash = localState.hash;
   let expectedStoreAbsent = localState.absent;
   const sidecar = readSidecar(dir, { strict: write });
@@ -396,7 +426,7 @@ export async function push({
         state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number, url: url ?? null };
         writeSidecar(dir, state);
         ticketsDirty = true;
-        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent, key });
+        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent, key, allowUnsigned });
         expectedSnapshotHash = after.hash;
         expectedStoreAbsent = false;
         try {

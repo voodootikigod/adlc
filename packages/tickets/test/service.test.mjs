@@ -31,7 +31,10 @@ test('sensitive update, protected discard/completion, and reassignment require p
   try {
     const path = writeDirectory(root, [ticket('A', { scope: ['a/**'], rails: ['test/**'] }), ticket('B', { edges: [{ to: 'A' }] })]);
     const store = new DirectoryTicketStore(path);
-    const service = new TicketService(store, { root, protectedIds: ['A'] });
+    // Ticket A declares a rail, so this store is a frozen trust root and every
+    // mutation of it is an audited override that must be signable (see
+    // bypass-audit.test.mjs). The key is incidental to what this test asserts.
+    const service = new TicketService(store, { root, protectedIds: ['A'], key: 'test-manifest-key' });
     const a = store.load().get('A');
     assert.throws(() => service.planUpdate('A', { ...a, scope: ['a/**', 'b/**'], rails: [] }), (error) => error.code === 'AUTHORIZATION_REQUIRED');
     assert.throws(() => service.planDiscard('A'), (error) => error.code === 'PROTECTED_TICKET');
@@ -172,7 +175,8 @@ test('#235 — completing a legacy ticket with a manifest rail is unaffected', (
     mkdirSync(join(root, 'packages', 'x'), { recursive: true });
     writeFileSync(join(root, 'packages', 'x', 'package.json'), '{"name":"x"}\n');
     const path = writeDirectory(root, [ticket('A', { rails: ['packages/x/**'] })]);
-    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    // A rail is declared, so the store is a frozen trust root — signable, as above.
+    const service = new TicketService(new DirectoryTicketStore(path), { root, key: 'test-manifest-key' });
     // planComplete routes through its own path, not planUpdate, so the manifest
     // check never sees it — a shipped ticket can always be closed out.
     const plan = service.planComplete('A', { authorized: true });

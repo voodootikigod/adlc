@@ -20,7 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,6 +91,12 @@ test('AC2: pull --write adds a new ticket to .adlc/tickets.json, and the REAL co
       provider: fakeProvider([issue(1, { scope: ['src/newfeature/**'], duration: 1 })]),
       write: true,
       now: 'T',
+      // T1 declares a rail, so the store is a frozen trust root and the sync's
+      // write is an audited override that must be signable
+      // (packages/tickets/test/bypass-audit.test.mjs). The audit entry lands in
+      // the untracked manifest; the committed diff below is still tickets-only,
+      // which is exactly what this test puts in front of the real gate.
+      key: 'test-manifest-key',
     });
     assert.equal(r.exitCode, 0, `pull --write must succeed: ${JSON.stringify(r.errors)}`);
 
@@ -234,7 +240,8 @@ test('AC2 (push): ticket-sync push --write creates a local ticket (writeTicketsA
     // ── run the REAL producer: push creates T7 and reassigns it → gh:acme/app#1,
     //    writing tickets.json via writeTicketsAtomic (push.mjs:292).
     const gh = fakeGitHub(); // empty remote → #5 is not in the selection (skipped), T7 creates as #1
-    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+    // Frozen trust root, as in the pull case above — the write must be signable.
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K', key: 'test-manifest-key' });
     assert.equal(r.exitCode, 0, `push --write must succeed: ${JSON.stringify(r.errors)}`);
 
     // Prove the ACTUAL additive output of the push write path.
@@ -244,12 +251,22 @@ test('AC2 (push): ticket-sync push --write creates a local ticket (writeTicketsA
     assert.ok(ids.includes('gh:acme/app#1'), 'T7 was created and reassigned by the real push writer');
     assert.ok(!ids.includes('T7'), 'the local T7 id was reassigned, not left behind');
 
-    // Guard the manifest assumption: push must not have emitted an untracked
-    // manifest.jsonl (which rails-guard-ci would reject) for a ticket with no evidence.
-    assert.equal(
-      execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).includes('manifest.jsonl'),
-      false,
-      'no untracked manifest.jsonl should exist',
+    // The manifest assumption, restated for a frozen trust root. The base ticket
+    // declares a rail, so the store IS one, and the audited-override contract
+    // (packages/tickets/test/bypass-audit.test.mjs) means this sync deliberately
+    // records one signed entry — the previous expectation of "no manifest at all"
+    // held only while such a write went unaudited. What must still hold, and is
+    // what the gate below actually reads, is that the entry stays OUT of the
+    // committed diff: the PR is tickets-only.
+    const manifest = join(dir, '.adlc', 'manifest.jsonl');
+    const audit = readFileSync(manifest, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(audit.length, 1, 'one mutation, one audit entry');
+    assert.equal(audit[0].data.bypass, true);
+    assert.ok(audit[0].sig, 'and it is signed');
+    assert.match(
+      execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }),
+      /\?\? \.adlc\/manifest\.jsonl/,
+      'the audit entry is untracked here, so it never enters the reviewed diff',
     );
 
     // Commit ONLY the tickets.json change (config/sidecar stay untracked).
@@ -258,6 +275,213 @@ test('AC2 (push): ticket-sync push --write creates a local ticket (writeTicketsA
 
     // ── run the REAL consumer gate on the real additive diff.
     assert.equal(runRailsGuardCi(dir), 0, 'the push additive tickets.json write must merge through the gate');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The other half of the invariant the push test above used to carry alone: the
+// audited-override contract is scoped to frozen trust roots, so a sync against a
+// store where NO ticket declares a rail must still emit nothing at all. Without
+// this, "records an entry" could silently spread to every routine sync — manifest
+// noise on repos that never opted into rails, and a keyless refusal where none was
+// ever intended.
+// The refusal has to come before the REMOTE writes. Reaching it only at
+// writeTicketsAtomic means the push has already created issues upstream, and the
+// operator is left with remote and local disagreeing over a missing key.
+test('a keyless push against a frozen trust root refuses BEFORE it touches the remote', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-refuse-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [
+      { id: 'T-RAILED', title: 'railed in-flight', scope: ['src/x/**'], rails: ['src/guarded/**'], duration: 1 },
+      { id: 'T7', title: 'new local work', scope: ['src/newfeature/**'], duration: 1 },
+    ] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+
+    // 2 = BLOCKED by policy, not 1 = operational failure: automation has to tell a
+    // deliberate refusal apart from a transient error it should retry.
+    assert.equal(r.exitCode, 2);
+    assert.match(r.errors.join('\n'), /ADLC_MANIFEST_KEY/);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before, 'local store untouched');
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'and nothing recorded');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The opt-out has to reach the LOCAL write, not just the preflight: accepting it,
+// clearing the preflight, creating the remote issue, and then refusing at
+// writeTicketsAtomic is the worst of both — the flag was honoured just far enough
+// to do the irreversible half.
+test('a keyless push with --allow-unsigned completes the local write it was granted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-push-unsigned-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [
+      { id: 'T-RAILED', title: 'railed in-flight', scope: ['src/x/**'], rails: ['src/guarded/**'], duration: 1 },
+      { id: 'T7', title: 'new local work', scope: ['src/newfeature/**'], duration: 1 },
+    ] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+
+    const gh = fakeGitHub();
+    const r = await push({
+      dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K',
+      allowUnsigned: true,
+    });
+
+    assert.equal(r.exitCode, 0, `push must complete: ${JSON.stringify(r.errors)}`);
+    const ids = JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8')).tickets.map((t) => t.id);
+    assert.ok(ids.includes('gh:acme/app#1'), 'the local reassignment landed, not just the remote create');
+    assert.ok(!ids.includes('T7'));
+    const audit = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].data.bypass, true);
+    assert.equal(audit[0].sig, undefined, 'recorded unsigned, exactly as asked');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// pull's opt-out defaults OFF, same as everything else here. A default of ON would
+// mean every routine sync of a frozen trust root quietly wrote unsigned evidence.
+test('pull defaults allowUnsigned OFF: a keyless pull into a frozen trust root refuses', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-pull-default-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [
+      { id: 'T1', title: 'railed in-flight', scope: ['src/x/**'], rails: ['src/guarded/**'] },
+    ] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }));
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const refused = await pull({ // allowUnsigned OMITTED
+      dir, provider: fakeProvider([issue(1, { scope: ['src/newfeature/**'], duration: 1 })]), write: true, now: 'T',
+    });
+    assert.equal(refused.exitCode, 2, 'blocked by policy, not an operational failure');
+    assert.match(refused.errors.join('\n'), /ADLC_MANIFEST_KEY/);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before, 'and the store is untouched');
+
+    // The opt-out, passed explicitly, is what gets through.
+    const allowed = await pull({
+      dir, provider: fakeProvider([issue(1, { scope: ['src/newfeature/**'], duration: 1 })]), write: true, now: 'T',
+      allowUnsigned: true,
+    });
+    assert.equal(allowed.exitCode, 0, `pull --allow-unsigned must apply: ${JSON.stringify(allowed.errors)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A push whose tickets are all already remote ids never writes the local store, so
+// it owes no audit and must not be refused for a missing key. Over-refusing here
+// would block routine label and status-comment updates on any railed repo.
+test('a remote-only push against a frozen trust root needs no key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-remote-only-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    // Every ticket already carries a remote id — nothing to create or reassign.
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), `${JSON.stringify({ tickets: [
+      { id: 'gh:acme/app#5', title: 'railed in-flight', scope: ['src/x/**'], rails: ['src/guarded/**'], duration: 1 },
+    ] }, null, 2)}\n`);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(PUSH_CONFIG));
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    const gh = fakeGitHub();
+    const r = await push({ dir, provider: githubProvider(), runner: gh.runner, write: true, now: 'T', uuid: () => 'K' });
+
+    assert.notEqual(
+      (r.errors ?? []).join('\n').includes('ADLC_MANIFEST_KEY'),
+      true,
+      'a push that cannot touch the local store must not demand a signing key',
+    );
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before, 'and indeed it did not');
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'nothing recorded');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A repo can be a trust root with NO ticket store present — the marker lives in the
+// manifest. Initializing the store before the refusal would leave .adlc/tickets/ and
+// .adlc/ticket-archive/ behind for a write that never happened.
+test('a keyless pull into a store-less trust root refuses without creating the store', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-storeless-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    // No ticket store at all, but a recorded override says this repo uses rails.
+    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), `${JSON.stringify({
+      seq: 1, gate: 'rails-bypass', ts: 'T', data: { path: 'src/x', reason: 'r' }, files: {}, prev: null,
+    })}\n`);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }));
+
+    const refused = await pull({
+      dir, provider: fakeProvider([issue(1, { scope: ['src/newfeature/**'], duration: 1 })]), write: true, now: 'T',
+    });
+    assert.equal(refused.exitCode, 2);
+    assert.match(refused.errors.join('\n'), /ADLC_MANIFEST_KEY/);
+    assert.equal(existsSync(join(dir, '.adlc', 'tickets')), false, 'no store was created');
+    assert.equal(existsSync(join(dir, '.adlc', 'ticket-archive')), false, 'no archive either');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a sync against a store with NO rails emits no manifest entry and needs no key', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticket-sync-unrailed-rt-'));
+  try {
+    git(dir, ['init', '-q', '-b', 'main']);
+    git(dir, ['config', 'user.email', 'a@b.c']);
+    git(dir, ['config', 'user.name', 'x']);
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(
+      join(dir, '.adlc', 'tickets.json'),
+      `${JSON.stringify({ tickets: [{ id: 'T1', title: 'unrailed work', scope: ['src/x/**'], rails: [] }] }, null, 2)}\n`,
+    );
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }));
+
+    // No `key` — a store that is not a trust root must not require one.
+    const r = await pull({
+      dir,
+      provider: fakeProvider([issue(1, { scope: ['src/newfeature/**'], duration: 1 })]),
+      write: true,
+      now: 'T',
+    });
+    assert.equal(r.exitCode, 0, `pull --write must succeed with no key: ${JSON.stringify(r.errors)}`);
+    assert.ok(
+      JSON.parse(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8')).tickets.some((t) => t.id === 'gh:acme/app#1'),
+      'the sync really did mutate the store',
+    );
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'and recorded nothing');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

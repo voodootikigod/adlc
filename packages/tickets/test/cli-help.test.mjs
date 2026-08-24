@@ -25,9 +25,31 @@ test('`create --help` describes create, not the generic usage', () => {
     const create = run(['create', '--help'], root);
     assert.equal(create.status, 0, create.stderr);
     assert.notEqual(create.stdout, generic.stdout, 'subcommand --help must not fall through to the generic usage');
-    assert.match(create.stdout, /--input/);
+    // The usage line must show the ARGUMENT SHAPE, not just the flag name: `-`
+    // for stdin is the form the worked example below it pipes into, and an
+    // operator who cannot see it from the usage line goes looking for a file.
+    assert.match(create.stdout, /--input <path\|->/);
     assert.match(create.stdout, /ULID/);
     assert.match(create.stdout, /"rails"/);
+  });
+});
+
+// An operator meets this contract at the moment a write refuses, so `--help` is
+// where the refusal has to be explainable: what a trust root is, which variable
+// signs it, and the one deliberate way past it.
+test('mutating commands document the frozen-trust-root audit, the key, and the opt-out', () => {
+  withTemp((root) => {
+    for (const command of ['create', 'update', 'complete', 'discard', 'archive', 'restore', 'edit']) {
+      const help = run([command, '--help'], root);
+      assert.equal(help.status, 0, help.stderr);
+      assert.match(help.stdout, /FROZEN TRUST ROOT/, `${command} --help must name the condition`);
+      assert.match(help.stdout, /ticket-mutation/, `${command} --help must name the gate it records under`);
+      assert.match(help.stdout, /ADLC_MANIFEST_KEY/, `${command} --help must name the key`);
+      assert.match(help.stdout, /--allow-unsigned/, `${command} --help must name the opt-out`);
+      assert.match(help.stdout, /REFUSES/, `${command} --help must say the write refuses, not warns`);
+    }
+    // And it must NOT claim this of a store with no rails, which needs no key.
+    assert.match(run(['create', '--help'], root).stdout, /needs no key and records nothing/);
   });
 });
 
@@ -45,7 +67,11 @@ test('`update --help` documents the compare-and-swap flag', () => {
   withTemp((root) => {
     const result = run(['update', '--help'], root);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /--expect/);
+    // Both argument SHAPES, not just the flag names: the whole point of --expect
+    // is that it takes the ticketHash rather than the store hash sitting next to
+    // it in the same envelope, and the usage line is where that is stated first.
+    assert.match(result.stdout, /--input <path\|->/);
+    assert.match(result.stdout, /--expect <ticketHash>/);
   });
 });
 

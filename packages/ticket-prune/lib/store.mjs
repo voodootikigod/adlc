@@ -8,6 +8,7 @@
 import {
   mkdirSync,
   rmdirSync,
+  rmSync,
   writeFileSync,
   renameSync,
   readFileSync,
@@ -48,16 +49,26 @@ export function releaseLock(dir = '.') {
   }
 }
 
-function writeAtomic(path, text) {
+/**
+ * Stage `obj` next to `path` and hand back the two ways to finish: `commit`
+ * renames it into place, `discard` removes the staged copy.
+ *
+ * Splitting the atomic write in half lets a caller put another fallible operation
+ * BETWEEN them — the frozen-trust-root audit append — with the parts most likely
+ * to fail (serializing, allocating disk, hitting a permission error) already done.
+ * What remains after the audit is a same-directory rename, which is the closest
+ * this path gets to infallible, so the window where a recorded audit describes a
+ * store change that never landed is as small as it can be without a journal.
+ */
+export function stageJsonAtomic(path, obj) {
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  writeFileSync(tmp, `${JSON.stringify(obj, null, 2)}\n`);
+  return {
+    commit: () => renameSync(tmp, path),
+    discard: () => { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } },
+  };
 }
 
-/** Pretty-print JSON with a trailing newline and write it atomically. */
-export function writeJsonAtomic(path, obj) {
-  writeAtomic(path, `${JSON.stringify(obj, null, 2)}\n`);
-}
 
 /** Read + parse JSON at `path`; return `fallback` if the file is absent. */
 export function readJson(path, fallback) {

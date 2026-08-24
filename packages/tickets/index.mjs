@@ -13,6 +13,7 @@ export * from './lib/durability.mjs';
 export * from './lib/transaction.mjs';
 export * from './lib/service.mjs';
 export * from './lib/manifest-rails.mjs';
+export * from './lib/trust-root.mjs';
 export * from './lib/archive.mjs';
 export * from './lib/migrate.mjs';
 export * from './lib/doctor.mjs';

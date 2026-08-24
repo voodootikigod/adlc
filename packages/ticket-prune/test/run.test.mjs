@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -271,7 +271,7 @@ test('--write with a mix: the rails-less stale ticket is tombstoned, the railed 
       },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
@@ -512,7 +512,7 @@ test('#198 AC1: dry-run surfaces a rails-less preexisting-completed-field ticket
 // ---- #208: --ceremony is deprecated (was #198's ceremony-completion path) ----
 //
 // It completed rail-freezing tickets in place: bulk (no ids, recomputed set —
-// TOCTOU + blast radius), evidence-less (writeJsonAtomic, no manifest), and
+// TOCTOU + blast radius), evidence-less (a direct write, no manifest), and
 // legacy-store-only. The canonical `adlc ticket complete <id> --write --authorize
 // --json` replaces it. runTicketPrune now fails closed on ceremony:true, and the
 // tests below cover the deprecation plus the behavior that REMAINS: --write still
@@ -550,7 +550,7 @@ test('#208: --write still tombstones a rails-less stale ticket; a railed one is 
       { id: 'T2', title: 'railed shipped', scope: ['packages/second-widget/**'], rails: ['test/second-widget/**'] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);           // rails-less → tombstoned
@@ -561,6 +561,148 @@ test('#208: --write still tombstones a rails-less stale ticket; a railed one is 
     const after = readTickets(dir);
     assert.equal(after.tickets[0].completed, true);   // T1 tombstoned
     assert.equal(after.tickets[1].completed, undefined); // T2 untouched — completed via `adlc ticket complete`
+  });
+});
+
+// This path rewrites tickets.json DIRECTLY, so the audited-override contract the
+// ticket store enforces in TicketService does not reach it. A mixed store — one
+// railed ticket, one stale rails-less one — is still a frozen trust root, and
+// tombstoning inside it rewrites the file that holds the rail configuration.
+// Without the guard below, this is a way to mutate a frozen store keylessly with a
+// successful exit and no record at all.
+test('a keyless --write REFUSES when any ticket in the store declares a rail, and mutates nothing', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const ticketsPath = join(dir, '.adlc', 'tickets.json');
+    const before = readFileSync(ticketsPath, 'utf8');
+
+    assert.throws(
+      () => runTicketPrune({ cwd: dir, write: true }),
+      (error) => error.code === 'MANIFEST_KEY_REQUIRED',
+    );
+    assert.equal(readFileSync(ticketsPath, 'utf8'), before, 'tickets.json is byte-identical');
+
+    // With a key the tombstone lands as before — the gate refuses the unsignable
+    // write, it does not refuse the work — and it is RECORDED. Refusing without
+    // recording would have left the invariant half-true: the writes that got
+    // through would still be invisible.
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.tombstoned.map((t) => t.id), ['RAILLESS']);
+
+    const entries = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8')
+      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    assert.equal(entries.length, 1, 'one write, one audit entry');
+    assert.equal(entries[0].gate, 'ticket-mutation');
+    assert.equal(entries[0].data.op, 'prune');
+    assert.equal(entries[0].data.bypass, true);
+    assert.ok(entries[0].sig, 'and it is signed');
+    assert.notEqual(entries[0].data.storeHashBefore, entries[0].data.storeHashAfter,
+      'the entry binds the store either side of a real change');
+    // Store hashes prove that something changed; the ids say what this entry
+    // authorized, which is what an auditor reading only the manifest needs.
+    assert.deepEqual(entries[0].data.ticketIds, ['RAILLESS']);
+  });
+});
+
+// The first half of the split write. A staging failure has to be reported as a
+// FAILED sweep: returning ok:true here would tell automation the tombstones landed
+// when tickets.json is exactly as it was.
+test('a staging failure is reported as a failed sweep, not a silent no-op', () => {
+  withScratchRepo((dir) => {
+    // The store lives in its own read-only directory, so the staged temp file
+    // cannot be created while the lock (which lives under cwd/.adlc) still can.
+    const readOnly = mkdtempSync(join(tmpdir(), 'ticket-prune-ro-'));
+    const ticketsPath = join(readOnly, 'tickets.json');
+    writeFileSync(ticketsPath, JSON.stringify({
+      tickets: [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: [] }],
+    }, null, 2));
+    const before = readFileSync(ticketsPath, 'utf8');
+    chmodSync(readOnly, 0o555);
+    try {
+      const result = runTicketPrune({ cwd: dir, ticketsPath, write: true });
+      assert.equal(result.ok, false, 'the sweep failed and says so');
+      assert.match(result.error, /failed to write completions/);
+      assert.equal(readFileSync(ticketsPath, 'utf8'), before);
+    } finally {
+      chmodSync(readOnly, 0o755);
+      rmSync(readOnly, { recursive: true, force: true });
+    }
+  });
+});
+
+// The audit and the store write cannot be one atomic act on this path, so the
+// content is staged first and the entry appended before the rename. An audit that
+// cannot be written must therefore leave NOTHING behind — not the mutation, and
+// not the staged copy of it.
+test('an audit that cannot be recorded refuses with tickets.json untouched and no staged leftovers', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const ticketsPath = join(dir, '.adlc', 'tickets.json');
+    const before = readFileSync(ticketsPath, 'utf8');
+    // A manifest that cannot be appended to: a directory where the file goes.
+    mkdirSync(join(dir, '.adlc', 'manifest.jsonl'), { recursive: true });
+
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+
+    assert.equal(result.ok, false);
+    assert.match(result.error, /audit entry .* could not be recorded/);
+    assert.equal(readFileSync(ticketsPath, 'utf8'), before, 'the mutation did not land');
+    assert.deepEqual(
+      readdirSync(join(dir, '.adlc')).filter((n) => n.startsWith('tickets.json.tmp')),
+      [],
+      'and the staged copy was cleaned up',
+    );
+  });
+});
+
+// Two stores making an identical tombstone are two mutations and must leave two
+// records. This is the property a transition-derived id would break: identical
+// content and identical hashes would collide, and the second store's change would
+// be waved through as a retry of the first — unaudited.
+test('two stores with identical content get distinct audit entries, not one shared retry', () => {
+  withScratchRepo((dir) => {
+    const tickets = [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ];
+    writeTickets(dir, tickets);
+    const second = join(dir, 'second-store.json');
+    writeFileSync(second, JSON.stringify({ tickets }, null, 2));
+
+    const first = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    assert.equal(first.ok, true, first.error);
+    const other = runTicketPrune({ cwd: dir, ticketsPath: second, write: true, key: 'test-manifest-key' });
+    assert.equal(other.ok, true, other.error);
+
+    const entries = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8')
+      .split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    assert.equal(entries.length, 2, 'one entry per store, not one shared between them');
+    assert.equal(new Set(entries.map((e) => e.data.transactionId)).size, 2, 'and their ids differ');
+    // Both stores really were tombstoned.
+    assert.equal(readTickets(dir).tickets.find((t) => t.id === 'RAILLESS').completed, true);
+    assert.equal(JSON.parse(readFileSync(second, 'utf8')).tickets.find((t) => t.id === 'RAILLESS').completed, true);
+  });
+});
+
+test('a store with NO rails prunes exactly as before: no key needed, no manifest entry', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+      { id: 'STILL-GOING', title: 'in flight', scope: ['packages/never-built/**'], rails: [] },
+    ]);
+
+    const result = runTicketPrune({ cwd: dir, write: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.tombstoned.map((t) => t.id), ['RAILLESS']);
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'prune stays zero-ceremony off a trust root');
   });
 });
 
@@ -623,14 +765,59 @@ test('missing tickets.json is an operational error, not a silent pass', () => {
 
 // ── bin smoke test (exit codes + --json shape) ──────────────────────────────
 
-function runBin(args, cwd) {
+function runBin(args, cwd, env = {}) {
   try {
-    const stdout = execFileSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' });
-    return { code: 0, stdout };
+    // stderr is captured on SUCCESS too: warnings (notably the unsigned-audit one)
+    // are emitted by runs that exit 0, and a helper that only kept stderr on
+    // failure made them unassertable.
+    const result = spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', env: { ...process.env, ...env } });
+    if (result.status !== 0) return { code: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+    return { code: 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
   } catch (err) {
     return { code: err.status ?? 1, stdout: err.stdout?.toString() ?? '', stderr: err.stderr?.toString() ?? '' };
   }
 }
+
+// The bin's own default for the opt-out. A default of ON would leave the library
+// guard intact while the command every operator actually runs sailed past it.
+test('bin: --write against a frozen trust root refuses without a key, and --allow-unsigned is the only way through', () => {
+  withScratchRepo((dir) => {
+    const tickets = [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ];
+    writeTickets(dir, tickets);
+    const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+
+    // ADLC_MANIFEST_KEY scrubbed explicitly: the bin resolves it from the
+    // environment, and a developer who exports one would otherwise never see this
+    // refusal locally while CI, which has none, hit it every time.
+    const refused = runBin(['--write'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.notEqual(refused.code, 0, 'an unsignable trust-root write is refused');
+    assert.match(refused.stderr, /ADLC_MANIFEST_KEY/);
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before, 'and nothing was written');
+
+    const allowed = runBin(['--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(allowed.code, 0, allowed.stderr);
+    assert.match(allowed.stderr, /unsigned/i, 'and going through unsigned says what it costs');
+    assert.equal(readTickets(dir).tickets.find((t) => t.id === 'RAILLESS').completed, true);
+  });
+});
+
+test('bin: --allow-unsigned WITH a key does not warn — the entry is signed either way', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
+    ]);
+    const { code, stderr } = runBin(['--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: 'test-manifest-key' });
+    assert.equal(code, 0, stderr);
+    // Warning on a signed write teaches operators the warning is noise, which is
+    // how the real one gets ignored.
+    assert.doesNotMatch(stderr, /unsigned/i);
+    assert.equal(readTickets(dir).tickets.find((t) => t.id === 'RAILLESS').completed, true);
+  });
+});
 
 test('bin: dry-run exits 0 and --json prints the classification', () => {
   withScratchRepo((dir) => {
@@ -694,7 +881,11 @@ test('#208: directory --write archives only rails-less stale tickets; a rail-fre
       { id: 'RAILLESS', title: 'rails-less shipped', scope: ['packages/util/**'] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    // RAILED declares a rail, so this store is a frozen trust root and archiving
+    // out of it is an audited override that must be signable
+    // (packages/tickets/test/bypass-audit.test.mjs). The key is incidental to
+    // what this test asserts, which is WHICH tickets --write may archive.
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
@@ -703,6 +894,29 @@ test('#208: directory --write archives only rails-less stale tickets; a rail-fre
     // The rail-freezing ticket's shard must still exist — its rails are intact.
     assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('RAILED'))),
       'rail-freezing ticket must NOT be archived by --write');
+  });
+});
+
+// The opt-out was accepted by the CLI and then dropped one call short of
+// archiveTicket, so it worked on the legacy backend and silently did not here.
+test('the --allow-unsigned opt-out reaches the DIRECTORY backend too, not just the legacy one', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    writeDirectoryStore(dir, [
+      { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
+      { id: 'RAILLESS', title: 'rails-less shipped', scope: ['plugins/adlc-widget/**'] },
+    ]);
+
+    // The directory branch reports a failed sweep rather than throwing, so
+    // automation reading the result sees the refusal instead of an exit 0.
+    const refused = runTicketPrune({ cwd: dir, write: true });
+    assert.equal(refused.ok, false, 'keyless still refuses');
+    assert.match(refused.error, /ADLC_MANIFEST_KEY/);
+    assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('RAILLESS'))), 'nothing archived');
+
+    const result = runTicketPrune({ cwd: dir, write: true, allowUnsigned: true });
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
   });
 });
 

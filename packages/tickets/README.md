@@ -35,6 +35,37 @@ the service mints a ULID (`T-01K…`) — there is no "next free `T<n>`" to deri
 fails if the committed schema drifts from it or if a field the validator polices
 goes undocumented.
 
+## Writing to a frozen trust root
+
+Once **any** ticket declares `rails`, the store stops being ordinary data: it is the
+configuration deciding what the rail guards freeze, so freezing it too is the only
+thing that stops one edit from disabling enforcement. The PreToolUse rail hook has
+always denied a structured edit to `.adlc/tickets/**` from that moment on. The store
+service now holds the same line for its own writers, so the audit no longer depends
+on which door a write came through:
+
+- every `--write` against such a store appends **one** signed `ticket-mutation` entry
+  to the gate-manifest, recording the operation, ticket id(s), and the store hash
+  either side of the change (`bypass: true`);
+- a mutation that already records evidence of its own — rail narrowing, completion,
+  reassignment, archive, migration — keeps its existing `ticket-<operation>` entry and
+  gains the audit fields. One mutation is never two entries;
+- with **no** `ADLC_MANIFEST_KEY` the write refuses *before* touching the store. An
+  unsigned entry proves nothing about who made the change, and the manifest is
+  append-only, so writing one anyway would be permanent noise. `--allow-unsigned`
+  (mirroring `adlc prosecute record-cross-model`) records one deliberately and warns;
+- the rule holds on **every** door into the store, not just `adlc ticket`: the legacy
+  → sharded migration and its recovery, archive/restore, an interrupted transaction's
+  recovery, and `ticket-prune`'s direct `tickets.json` write. A contract enforced on
+  one writer and not the others is not a contract;
+- a repo where no ticket declares a rail — in the active set **or the archive** — is
+  not a trust root: authoring there needs no key and records nothing. Completing,
+  archiving or discarding the last railed ticket does not thaw it, because that
+  removal is itself an audited override and the manifest keeps the record after the
+  ticket is gone (#162). The one case this cannot see is a repo that removed its last
+  rail *before* this change and never had a hook override recorded — nothing on disk
+  distinguishes it from a repo that never used rails; see `lib/trust-root.mjs`.
+
 ## Durability
 
 Sensitive mutations use recoverable, evidence-bearing transactions on both supported

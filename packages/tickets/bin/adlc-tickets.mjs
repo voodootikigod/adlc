@@ -24,13 +24,14 @@ import {
   renderCommandHelp,
   renderUsage,
   serializePlan,
+  repoDeclaresRails,
   ticketJsonSchema,
 } from '../index.mjs';
 
 function parse(argv) {
   const flags = {};
   const positionals = [];
-  const boolean = new Set(['write', 'json', 'yes', 'authorize', 'archive', 'complete', 'rollback', 'help', 'force']);
+  const boolean = new Set(['write', 'json', 'yes', 'authorize', 'archive', 'complete', 'rollback', 'help', 'force', 'allow-unsigned']);
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (!value.startsWith('--')) { positionals.push(value); continue; }
@@ -73,22 +74,52 @@ async function main() {
   }
   if (command === 'schema') { emit(ticketJsonSchema(), true); return; }
   const root = resolve(flags.root ?? '.');
+  // Resolved once, here: every mutating path below (including the store-level
+  // migrate/recover ceremonies) is held to the same trust-root audit contract.
+  const key = resolveKeyFromEnv();
+  const allowUnsigned = Boolean(flags['allow-unsigned']);
+  /**
+   * Warn where the operator can still act on it — before the mutation, not after.
+   *
+   * Only when the flag will actually DO something: on a store that is not a frozen
+   * trust root nothing is recorded either way, and with a key present the entry is
+   * signed regardless, so warning there would train people to ignore the warning.
+   * `tickets` omitted means the operation cannot cheaply answer the predicate (the
+   * store ceremonies, whose store is mid-migration or mid-recovery) — unknown warns,
+   * because those rewrite the WHOLE store and are the worst place to be quiet.
+   */
+  const warnIfUnsigned = (tickets) => {
+    if (!allowUnsigned || key) return;
+    let trustRoot = true;
+    if (tickets !== undefined) {
+      try { trustRoot = repoDeclaresRails(root, tickets); } catch { trustRoot = true; }
+    }
+    if (!trustRoot) return;
+    console.error(
+      'warning: --allow-unsigned with no ADLC_MANIFEST_KEY — this mutation of a frozen trust root will be '
+      + 'recorded UNSIGNED. An unsigned audit entry is not evidence: it proves nothing about who made the '
+      + 'change, and anyone who can append to the manifest can forge another just like it. The manifest is '
+      + 'append-only, so this entry is permanent.',
+    );
+  };
   const storeCommand = command === 'store' ? positionals[1] : null;
   if (storeCommand === 'migrate') {
-    emit(migrateLegacyStore(root, { write: Boolean(flags.write), yes: Boolean(flags.yes), key: resolveKeyFromEnv() }), flags.json);
+    if (flags.write) warnIfUnsigned();
+    emit(migrateLegacyStore(root, { write: Boolean(flags.write), yes: Boolean(flags.yes), key, allowUnsigned }), flags.json);
     return;
   }
   if (storeCommand === 'recover') {
+    warnIfUnsigned();
     const transactions = pendingTransactions(root);
     if (transactions.length !== 1) throw new TicketStoreError('conflict', 'RECOVERY_SELECTION_REQUIRED', `expected one pending transaction, found ${transactions.length}`);
     const direction = flags.complete ? 'complete' : flags.rollback ? 'rollback' : null;
     let journal;
     try { journal = JSON.parse(readFileSync(join(root, TRANSACTION_DIRECTORY, transactions[0], 'journal.json'), 'utf8')); }
     catch (error) { throw new TicketStoreError('invalid', 'INVALID_JOURNAL', `cannot read transaction journal: ${error.message}`); }
-    if (journal.operation === 'migrate') emit(recoverMigration(root, transactions[0], { direction, key: resolveKeyFromEnv() }), flags.json);
+    if (journal.operation === 'migrate') emit(recoverMigration(root, transactions[0], { direction, key, allowUnsigned }), flags.json);
     else {
       const recoveryStore = detectTicketStore({ root, ticketStore: flags['ticket-store'], legacyTickets: flags.tickets, allowRecovery: true });
-      emit(recoverDirectoryTransaction(recoveryStore, transactions[0], { root, direction, key: resolveKeyFromEnv() }), flags.json);
+      emit(recoverDirectoryTransaction(recoveryStore, transactions[0], { root, direction, key, allowUnsigned }), flags.json);
     }
     return;
   }
@@ -100,12 +131,12 @@ async function main() {
   }
   if (storeCommand === 'export') {
     if (!flags.output) throw new TicketStoreError('invalid', 'OUTPUT_REQUIRED', 'store export requires --output');
-    const exported = exportLegacyStore(store, resolve(root, flags.output));
+    const exported = exportLegacyStore(store, resolve(root, flags.output), { root });
     emit({ output: flags.output, tickets: exported.tickets.length, storeHash: exported.hash }, flags.json);
     return;
   }
   if (command === 'doctor') {
-    emit(doctorTicketStore(store, { root, archive: Boolean(flags.archive), key: resolveKeyFromEnv() }), flags.json);
+    emit(doctorTicketStore(store, { root, archive: Boolean(flags.archive), key }), flags.json);
     return;
   }
   const snapshot = store.load();
@@ -122,8 +153,9 @@ async function main() {
   }
   const mutationCommands = new Set(['create', 'update', 'edit', 'discard', 'complete', 'archive', 'restore']);
   if (!mutationCommands.has(command)) throw new TicketStoreError('invalid', 'UNKNOWN_COMMAND', `unknown ticket command: ${command}`);
-  store = await offerLegacyMigration(store, root, flags, { emit: (value) => emit(value, false) });
-  const service = new TicketService(store, { root, key: resolveKeyFromEnv() });
+  store = await offerLegacyMigration(store, root, flags, { emit: (value) => emit(value, false), key, allowUnsigned });
+  if (flags.write) warnIfUnsigned(snapshot.tickets);
+  const service = new TicketService(store, { root, key, allowUnsigned });
   let plan;
   // Set only by the edit command. The draft survives a dry run and is removed
   // after a successful write; anything else prints where it is.
@@ -173,7 +205,7 @@ async function main() {
   else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });
   else if (command === 'archive' || command === 'restore') {
     if (!(store instanceof DirectoryTicketStore)) throw new TicketStoreError('policy', 'DIRECTORY_STORE_REQUIRED', `${command} requires a directory store`);
-    const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize), key: resolveKeyFromEnv() };
+    const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize), key, allowUnsigned };
     if (!flags.write) { emit({ operation: command, ticketId: positionals[1], expectedSnapshotHash: snapshot.hash, evidenceRequired: true, dryRun: true }, flags.json); return; }
     const result = command === 'archive'
       ? archiveTicket(store, join(root, '.adlc/ticket-archive'), positionals[1], options)

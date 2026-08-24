@@ -108,7 +108,9 @@ test('#311 legacy store --write: the active set on the write return path exclude
       { id: 'SHIPPED', title: 'rails-less shipped', scope: ['plugins/adlc-widget/**'] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    // DONE-RAILED declares rails, so this store is a frozen trust root and the
+    // write must be signable — incidental to the active-set exclusion asserted here.
+    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['SHIPPED'], 'the write path ran');

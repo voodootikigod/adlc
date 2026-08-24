@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { acquireLock, releaseLock, writeJsonAtomic, readJson } from '../lib/store.mjs';
+import { acquireLock, releaseLock, stageJsonAtomic, readJson } from '../lib/store.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STORE_MJS_URL = new URL('../lib/store.mjs', import.meta.url).href;
@@ -56,13 +56,27 @@ function holdLockInChildThenRelease(dir, holdMs) {
   });
 }
 
-test('writeJsonAtomic writes pretty JSON with a trailing newline and no leftover tmp file', () => {
+test('stageJsonAtomic writes pretty JSON with a trailing newline and no leftover tmp file', () => {
   withTempDir((dir) => {
     const path = join(dir, 'out.json');
-    writeJsonAtomic(path, { a: 1 });
+    stageJsonAtomic(path, { a: 1 }).commit();
     const text = readFileSync(path, 'utf8');
     assert.equal(text, '{\n  "a": 1\n}\n');
     assert.equal(existsSync(`${path}.tmp.${process.pid}`), false);
+  });
+});
+
+test('a staged write is INVISIBLE until it is committed, and discard leaves nothing behind', () => {
+  withTempDir((dir) => {
+    const path = join(dir, 'staged.json');
+    const staged = stageJsonAtomic(path, { a: 1 });
+    // The whole point of the split: a caller can do something fallible here and
+    // still decide not to publish the change.
+    assert.equal(existsSync(path), false, 'nothing is visible at the target yet');
+    assert.equal(existsSync(`${path}.tmp.${process.pid}`), true, 'but the content is on disk');
+    staged.discard();
+    assert.equal(existsSync(path), false);
+    assert.equal(existsSync(`${path}.tmp.${process.pid}`), false, 'discard cleans up the staged copy');
   });
 });
 
@@ -73,10 +87,10 @@ test('readJson returns the fallback when the file is absent', () => {
   });
 });
 
-test('readJson round-trips what writeJsonAtomic wrote', () => {
+test('readJson round-trips what stageJsonAtomic committed', () => {
   withTempDir((dir) => {
     const path = join(dir, 'roundtrip.json');
-    writeJsonAtomic(path, { tickets: [{ id: 'T1' }] });
+    stageJsonAtomic(path, { tickets: [{ id: 'T1' }] }).commit();
     assert.deepEqual(readJson(path, null), { tickets: [{ id: 'T1' }] });
   });
 });

@@ -9,6 +9,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+  assertSignableTrustRootWrite,
   TicketService,
   acquireTicketLock,
   conflict,
@@ -53,18 +54,24 @@ function writeAtomic(path, text) {
 }
 
 /** Atomically replace .adlc/tickets.json (caller must hold the lock). */
-export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expectedStoreAbsent = false, key = null } = {}) {
+export function writeTicketsAtomic(dir, ticketsObj, { expectedSnapshotHash, expectedStoreAbsent = false, key = null, allowUnsigned = false } = {}) {
   let store;
   let storeWasAbsent = false;
   try { store = detectTicketStore({ root: dir }); }
   catch (error) {
     if (error.code !== 'STORE_NOT_FOUND') throw error;
+    // BEFORE creating anything. With no store there are no tickets to declare a
+    // rail, but the repo can still be a trust root through its archive or a recorded
+    // override — and initializing first would leave `.adlc/tickets/` and
+    // `.adlc/ticket-archive/` behind for a write that is then refused. "Refusing
+    // before the write" has to mean the whole operation, here as in archiveTicket.
+    assertSignableTrustRootWrite([], { key, allowUnsigned, root: dir });
     storeWasAbsent = true;
     initializeTicketStores(dir);
     store = detectTicketStore({ root: dir });
   }
   if (expectedStoreAbsent && !storeWasAbsent) throw conflict('STALE_SNAPSHOT', 'ticket store appeared after synchronization planning');
-  const service = new TicketService(store, { root: dir, key });
+  const service = new TicketService(store, { root: dir, key, allowUnsigned });
   const plan = service.planReconciliation(ticketsObj.tickets, { authorized: true, expectedSnapshotHash });
   return service.apply(plan, { lock: heldLocks.get(resolve(dir)) ?? null });
 }

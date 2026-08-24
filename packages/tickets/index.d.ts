@@ -31,11 +31,17 @@ export class TicketSnapshot {
   get(id: string): Readonly<Ticket> | undefined;
   mutableTickets(): Ticket[];
 }
-export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(tickets: Ticket[]): TicketSnapshot }
+/** Read-only. `write` now THROWS READ_ONLY_STORE — writes go through applyLegacyTransaction, which journals and records evidence. */
+/**
+ * Read-only. `write` is retained ONLY so a 1.x caller gets a named refusal
+ * (READ_ONLY_STORE) instead of `write is not a function`; it always throws.
+ * Writes go through applyLegacyTransaction, which journals and records evidence.
+ */
+export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(): never }
 export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot }
 export class GitTreeTicketStore { constructor(options: { cwd?: string; revision: string; storePath?: string }); load(): TicketSnapshot }
 export class TicketService {
-  constructor(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; protectedIds?: string[]; key?: string | null });
+  constructor(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; protectedIds?: string[]; key?: string | null; allowUnsigned?: boolean });
   snapshot(): TicketSnapshot;
   planCreate(input?: Partial<Ticket>): TicketPlan;
   planUpdate(id: string, input: Ticket, options?: { expect?: string; authorized?: boolean }): TicketPlan;
@@ -197,15 +203,16 @@ export type LockReleaseOutcome =
 export function releaseTicketLock(lock: unknown, options?: { removeLock?: (path: string, options?: unknown) => void }): LockReleaseOutcome;
 export function applyDirectoryTransaction(store: DirectoryTicketStore, tickets: Ticket[], options?: Record<string, unknown>): TicketSnapshot;
 export function applyLegacyTransaction(store: LegacyTicketStore, tickets: Ticket[], options?: Record<string, unknown>): TicketSnapshot;
-export function recoverDirectoryTransaction(store: LegacyTicketStore | DirectoryTicketStore, transactionId: string, options: { root?: string; direction: 'complete' | 'rollback' }): TicketSnapshot;
+export function recoverDirectoryTransaction(store: LegacyTicketStore | DirectoryTicketStore, transactionId: string, options: { root?: string; direction: 'complete' | 'rollback'; key?: string | null; allowUnsigned?: boolean }): TicketSnapshot;
 export function initializeDirectoryStore(path: string): void;
 export function initializeTicketStores(root?: string): Record<string, unknown>;
 export function archiveTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; archived: Ticket };
 export function restoreTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; ticket: Ticket };
 export function migrationPlan(root?: string): Record<string, unknown>;
-export function migrateLegacyStore(root?: string, options?: { write?: boolean; yes?: boolean; requireClean?: boolean; faultInjector?: (step: string, context: unknown) => void; key?: string | null }): Record<string, unknown>;
-export function recoverMigration(root: string, id: string, options: { direction: 'complete' | 'rollback' }): TicketSnapshot;
-export function exportLegacyStore(store: LegacyTicketStore | DirectoryTicketStore, outputPath: string): TicketSnapshot;
+export function migrateLegacyStore(root?: string, options?: { write?: boolean; yes?: boolean; requireClean?: boolean; faultInjector?: (step: string, context: unknown) => void; key?: string | null; allowUnsigned?: boolean }): Record<string, unknown>;
+export function recoverMigration(root: string, id: string, options: { direction: 'complete' | 'rollback'; key?: string | null; allowUnsigned?: boolean }): TicketSnapshot;
+/** Refuses (UNSAFE_EXPORT_TARGET) when `outputPath` resolves onto any ticket store, the source store included. */
+export function exportLegacyStore(store: LegacyTicketStore | DirectoryTicketStore, outputPath: string, options?: { root?: string }): TicketSnapshot;
 export function doctorTicketStore(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; archive?: boolean; key?: string | null }): Record<string, unknown>;
 export function recordTicketEvidence(root: string, options: Record<string, unknown>): Record<string, unknown>;
 export function withManifestLock<T>(path: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
@@ -239,13 +246,26 @@ export function serializePlan(plan: TicketPlan): Record<string, unknown>;
 export function asTicketResult<T>(fn: () => T): { ok: true; value: T; warnings: unknown[] } | { ok: false; kind: TicketErrorKind; code: string; message: string; details?: unknown };
 export function exitCodeFor(error: { kind?: TicketErrorKind }): 1 | 2;
 export function shouldOfferLegacyMigration(store: unknown, flags?: Record<string, unknown>, io?: { input?: { isTTY?: boolean }; output?: { isTTY?: boolean } }): boolean;
-export function offerLegacyMigration(store: LegacyTicketStore, root: string, flags?: Record<string, unknown>, dependencies?: Record<string, unknown>): Promise<LegacyTicketStore | DirectoryTicketStore>;
+export function offerLegacyMigration(store: LegacyTicketStore, root: string, flags?: Record<string, unknown>, dependencies?: Record<string, unknown> & { key?: string | null; allowUnsigned?: boolean }): Promise<LegacyTicketStore | DirectoryTicketStore>;
 
 // #235 — manifest-rail hygiene
 export const MANIFEST_BASENAMES: readonly string[];
 export function discoverManifests(root?: string): string[];
 export function coversManifest(glob: unknown, manifestPaths: readonly string[]): boolean;
 export function manifestCoveringRails(rails: unknown, manifestPaths: readonly string[]): string[];
+
+/**
+ * Whether the store is a FROZEN TRUST ROOT: at least one ticket declares a rail,
+ * completed tickets included (#162). Every mutation of such a store is an audited
+ * override. Fails closed — anything unreadable as a definite "no rails" is true.
+ */
+export function storeDeclaresRails(tickets: unknown): boolean;
+/** The repo-wide predicate: rails declared in the active store OR the archive. */
+export function repoDeclaresRails(root: string, tickets: unknown): boolean;
+/** Throw unless this write's audit entry can be signed. For callers that have already settled the predicate. */
+export function assertWriteIsSignable(options?: { key: string | null; allowUnsigned?: boolean }): void;
+/** Whether the store is a trust root (so the caller owes an audit entry); throws when it is and the write cannot be signed. */
+export function assertSignableTrustRootWrite(tickets: unknown, options?: { key: string | null; allowUnsigned?: boolean; root?: string }): boolean;
 
 /**
  * The manifest-key parameter contract (spec: manifest-key-hermeticity, Layer 2).

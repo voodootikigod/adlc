@@ -35,7 +35,11 @@ test('the real repository store migrates and exports with exact logical hashes',
     const plan = migrateLegacyStore(root);
     assert.equal(plan.beforeHash, before.hash);
     assert.equal(detectTicketStore({ root }).backend, undefined);
-    migrateLegacyStore(root, { write: true, yes: true, requireClean: false });
+    // The real repository store declares rails, so it is a frozen trust root and a
+    // migration — which rewrites the whole store — is an audited override that must
+    // be signable (packages/tickets/test/bypass-audit.test.mjs). Incidental to the
+    // hash equivalences this test is about.
+    migrateLegacyStore(root, { write: true, yes: true, requireClean: false, key: 'test-manifest-key' });
     const after = detectTicketStore({ root }).load();
     assert.equal(after.hash, before.hash);
     const exported = exportLegacyStore(detectTicketStore({ root }), join(root, 'export.json'));

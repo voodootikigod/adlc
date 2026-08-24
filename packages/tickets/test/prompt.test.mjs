@@ -46,7 +46,11 @@ test('affirmative approval migrates and redetects the directory backend', async 
   });
   assert.equal(result, directory);
   assert.deepEqual(calls, [
-    ['migrate', '/repo', { write: true, yes: true }],
+    // key/allowUnsigned are threaded through, at their fail-closed defaults here:
+    // a legacy store that declares rails is a frozen trust root, and the migration
+    // refuses one it cannot sign. Dropping them at this boundary would refuse the
+    // operator who HAS a key, after they already answered yes.
+    ['migrate', '/repo', { write: true, yes: true, key: null, allowUnsigned: false }],
     ['detect', { root: '/repo', ticketStore: 'custom', legacyTickets: undefined }],
   ]);
 });

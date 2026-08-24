@@ -2,12 +2,16 @@
 // function. bin/ticket-prune.mjs stays a thin arg-parse + exit-code shell
 // around this (CONVENTIONS layout rule).
 
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTicket, classifyTickets, ceremonyDisposition, listTrackedFiles } from './detect.mjs';
-import { acquireLock, releaseLock, readJson, writeJsonAtomic } from './store.mjs';
+import { acquireLock, releaseLock, readJson, stageJsonAtomic } from './store.mjs';
 import { orderArchiveCandidates } from './archive-order.mjs';
-import { DirectoryTicketStore, archiveTicket, detectTicketStore } from '@adlc/tickets';
+import {
+  DirectoryTicketStore, archiveTicket, assertSignableTrustRootWrite, detectTicketStore,
+  recordTicketEvidence, storeHash,
+} from '@adlc/tickets';
 
 /**
  * Compute the needsCeremony report from the pre-lock classification. Shared by
@@ -37,7 +41,7 @@ function computeNeedsCeremony(stale, ticketsById) {
  * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
-  const { key: pruneKey = null } = options;
+  const { key: pruneKey = null, allowUnsigned: pruneAllowUnsigned = false } = options;
   const {
     cwd = process.cwd(),
     ticketsPath = '.adlc/tickets.json',
@@ -48,7 +52,7 @@ export function runTicketPrune(options = {}) {
 
   // `--ceremony` is DEPRECATED (#208). It was a bulk completion: it took no
   // ticket ids and recomputed its target set at run time (a TOCTOU window and no
-  // per-ticket filter), wrote tickets.json directly via writeJsonAtomic without
+  // per-ticket filter), wrote tickets.json directly without
   // recording manifest evidence, and had no directory-store implementation. The
   // canonical per-ticket path fixes all of that. Fail closed with a redirect,
   // FIRST, before any read — so any already-shipped instruction that still calls
@@ -169,6 +173,10 @@ export function runTicketPrune(options = {}) {
         }
         const result = archiveTicket(canonicalStore, resolve(cwd, '.adlc/ticket-archive'), id, {
           key: pruneKey,
+          // Omitting this makes the documented --allow-unsigned opt-out work on the
+          // legacy backend and silently not on this one — the flag is accepted at the
+          // CLI, then dropped one call short of the writer that honours it.
+          allowUnsigned: pruneAllowUnsigned,
           root: cwd,
           expectedSnapshotHash: current.hash,
           // The RE-classified reason, not the first pass's: archiveTicket embeds this
@@ -278,15 +286,79 @@ export function runTicketPrune(options = {}) {
       return { ok: true, baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
     }
 
+    // This legacy path rewrites tickets.json DIRECTLY rather than through
+    // TicketService, so the trust-root audit the service enforces does not reach it
+    // of its own. It only ever tombstones rails-LESS tickets, but the file it
+    // rewrites is the whole store — and if any ticket in that store declares a rail,
+    // the store is a frozen trust root and this is a write to it, held to the same
+    // contract. Not a trust root → both halves are no-ops and prune stays
+    // zero-ceremony.
+    const auditRequired = assertSignableTrustRootWrite(freshTickets, { key: pruneKey, allowUnsigned: pruneAllowUnsigned, root: cwd });
+
     // Add ONLY `completed: true` to each tombstoned ticket — the exact single-field
     // annotation the gate accepts for a rails-less tombstone; touching any other
     // field would make an ordinary-PR tombstone diff un-mergeable.
     const updatedTickets = freshTickets.map((t) =>
       writeIds.has(t.id) ? { ...t, completed: true } : t);
 
+    // STAGE → AUDIT → COMMIT. This path has no journal, so the store write and the
+    // manifest append cannot be one atomic act; the ordering decides which failure
+    // is possible. Recording after a completed write can leave a real mutation with
+    // NO record — the unauditable trust-root change this contract exists to prevent,
+    // and undetectable afterwards, since the store just looks like it was always
+    // that way. So the audit goes first, and the store write is split around it: by
+    // the time the entry is appended, the content is already staged on disk and only
+    // a same-directory rename remains. A failure before the audit leaves nothing
+    // behind; a failure of the audit discards the staged copy and refuses with the
+    // store untouched; a failure of the rename leaves an entry naming a hash the
+    // store never reached, which is wrong but DETECTABLE — any verifier comparing
+    // the manifest to the store sees it, and nothing unaudited happened.
+    let staged;
     try {
-      writeJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: updatedTickets });
+      staged = stageJsonAtomic(absTicketsPath, { ...rawUnderLock, tickets: updatedTickets });
     } catch (err) {
+      return { ok: false, error: `failed to write completions to tickets.json: ${err.message}` };
+    }
+
+    if (auditRequired) {
+      // A FRESH id per mutation, not one derived from the transition.
+      //
+      // A deterministic id (path + before/after hashes) buys retry convergence: a
+      // re-run after a failed rename reuses its own entry instead of appending a
+      // second. But it cannot tell a retry from a genuine REPEAT — revert a
+      // tombstone in the store and re-apply it, and the second mutation computes the
+      // same id and is silently accepted as an old retry, leaving a real change to a
+      // trust root with no record. That is the exact failure this contract exists to
+      // prevent, and it outranks the cosmetic cost it was buying: a duplicate entry
+      // after a failed rename is noise, and both entries are true records of an
+      // attempted transition, bound to the hashes that let a verifier tell which one
+      // landed.
+      const storeHashBefore = storeHash(freshTickets);
+      const storeHashAfter = storeHash(updatedTickets);
+      try {
+        recordTicketEvidence(cwd, {
+          key: pruneKey,
+          transactionId: randomUUID(),
+          operation: 'prune',
+          gate: 'ticket-mutation',
+          bypass: true,
+          // The tombstoned ids, so an auditor reading the append-only evidence
+          // alone can say WHICH tickets this entry authorized — store hashes prove
+          // that something changed, not what.
+          ticketIds: [...writeIds].sort(),
+          storeHashBefore,
+          storeHash: storeHashAfter,
+        });
+      } catch (err) {
+        staged.discard();
+        return { ok: false, error: `refusing to tombstone: the audit entry for this frozen-trust-root write could not be recorded (${err.message}); tickets.json is unchanged` };
+      }
+    }
+
+    try {
+      staged.commit();
+    } catch (err) {
+      staged.discard();
       return { ok: false, error: `failed to write completions to tickets.json: ${err.message}` };
     }
 

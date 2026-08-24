@@ -10,6 +10,7 @@ import { validateTickets } from './schema.mjs';
 import { recordTicketEvidence } from './evidence.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
 import { validateKeyParam } from './key-contract.mjs';
+import { assertSignableTrustRootWrite, assertWriteIsSignable, repoDeclaresRails, storeDeclaresRails } from './trust-root.mjs';
 
 const fileHash = (path) => sha256(readFileSync(path));
 const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -93,7 +94,55 @@ function evidenceBinding(before, tickets, ticketId, beforeTicketId = null) {
   };
 }
 
-export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, auxiliaryOperations = [], verify = null, key = null } = {}) {
+/**
+ * Does this transaction actually change anything?
+ *
+ * Computed from the LOGICAL content, before any filesystem work, so a converged
+ * transaction can be recognised without side effects. A no-op must not be audited:
+ * demanding a key to apply nothing would break ordinary idempotent syncing, and
+ * recording an entry whose storeHashBefore equals its storeHashAfter would claim a
+ * mutation that never happened — scheduled pulls would grow the append-only
+ * manifest forever with records of nothing. Auxiliary operations count as change:
+ * archive and restore move a shard between stores, which is the whole point of them
+ * even when the active set's hash is unaffected.
+ */
+function transactionChangesAnything(before, tickets, auxiliaryOperations) {
+  return storeHash(tickets) !== before.hash || auxiliaryOperations.length > 0;
+}
+
+/**
+ * Decide how this mutation must be audited, and REFUSE it here if it cannot be.
+ *
+ * T-01M0122WMF8EJTB7ERHTEG8HMJ. Once a ticket declares a rail the store is a frozen
+ * trust root: the rail hook already denies a structured edit to it unless the
+ * override is recorded to the gate-manifest, and the ticket-authoring flow tells
+ * operators that editing the ticket set while rails are frozen is "a deliberate,
+ * audited action". Reaching the same bytes through the CLI is the same act, so it
+ * carries the same audit — enforced HERE, in the one function every door goes
+ * through, rather than in a bin that a different caller can route around.
+ *
+ * Returns null when the store is not a trust root (a pre-bootstrap repo keeps
+ * zero-ceremony authoring), otherwise the gate and before-hash the audit entry
+ * needs.
+ *
+ * ONE ENTRY PER MUTATION. A sensitive mutation (rail narrowing, completion,
+ * reassignment) already records a `ticket-<operation>` entry; it keeps that gate
+ * and gains the audit fields, so auditing the override never turns one mutation
+ * into two manifest lines. Everything else records under `ticket-mutation`.
+ *
+ * The key rule follows #370: recording is a SIGNING operation, so with no key it
+ * cannot do its job, and an unsigned entry proves nothing about who made the
+ * change. Refusing BEFORE the journal is written (rather than warning after) is
+ * what makes the store byte-identical on refusal — the manifest is append-only, so
+ * an entry written in error is permanent, and a mutation applied without one is a
+ * hole that cannot be closed after the fact.
+ */
+function bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsigned, root }) {
+  if (!assertSignableTrustRootWrite(before.tickets, { key, allowUnsigned, root })) return null;
+  return { gate: evidenceRequired ? `ticket-${operation}` : 'ticket-mutation', storeHashBefore: before.hash };
+}
+
+export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, auxiliaryOperations = [], verify = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key); // before ANY journal/lock/mutation — an invalid key must be side-effect-free
   validateTickets(tickets);
   const transactionId = randomUUID();
@@ -102,6 +151,11 @@ export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash
   try {
     const before = store.load();
     if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) throw conflict('STALE_SNAPSHOT', `expected ${expectedSnapshotHash}, found ${before.hash}`);
+    // Before ANY journal or staging directory exists, so a refusal leaves the
+    // repository exactly as it found it — no store change, no pending transaction.
+    const bypassAudit = transactionChangesAnything(before, tickets, auxiliaryOperations)
+      ? bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsigned, root })
+      : null;
     const byFilename = new Map(tickets.map((ticket) => [ticketFilename(ticket.id), ticket]));
     const currentFilenames = new Set(before.tickets.map((ticket) => ticketFilename(ticket.id)));
     durableMkdir(join(transactionRoot, 'stage'));
@@ -157,7 +211,7 @@ export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash
     }
     const afterHash = storeHash(tickets);
     const binding = evidenceBinding(before, tickets, ticketId, beforeTicketId);
-    const journal = { version: 1, id: transactionId, operation, state: 'prepared', beforeHash: before.hash, afterHash, evidenceRequired, ticketId, ...binding, storePath: relative(root, store.path), operations };
+    const journal = { version: 1, id: transactionId, operation, state: 'prepared', beforeHash: before.hash, afterHash, evidenceRequired, bypassAudit: bypassAudit !== null, ticketId, ...binding, storePath: relative(root, store.path), operations };
     durableWrite(join(transactionRoot, 'journal.json'), `${JSON.stringify(journal, null, 2)}\n`);
     faultInjector?.('journal-prepared', { transactionId, operations: operations.length });
     let applied = 0;
@@ -177,13 +231,14 @@ export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash
     const after = store.load();
     if (after.hash !== afterHash) throw invalid('TRANSACTION_VERIFY_FAILED', `transaction produced ${after.hash}, expected ${afterHash}`);
     verify?.(after);
-    if (evidenceRequired) recordTicketEvidence(root, {
+    if (evidenceRequired || bypassAudit) recordTicketEvidence(root, {
       key,
       transactionId,
       operation,
       ticketId,
       ticketHash: journal.afterTicketHash,
       storeHash: after.hash,
+      ...(bypassAudit ? { gate: bypassAudit.gate, bypass: true, storeHashBefore: bypassAudit.storeHashBefore } : {}),
     });
     journal.state = 'complete';
     durableWrite(join(transactionRoot, 'journal.json'), `${JSON.stringify(journal, null, 2)}\n`);
@@ -197,7 +252,7 @@ export function applyDirectoryTransaction(store, tickets, { expectedSnapshotHash
   }
 }
 
-export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, key = null } = {}) {
+export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = 'update', evidenceRequired = false, ticketId = null, beforeTicketId = null, root = '.', faultInjector = null, lock: existingLock = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   validateTickets(tickets);
   const transactionId = randomUUID();
@@ -206,6 +261,10 @@ export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, o
   try {
     const before = store.load();
     if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) throw conflict('STALE_SNAPSHOT', `expected ${expectedSnapshotHash}, found ${before.hash}`);
+    // Same placement as the directory path: before any staging directory exists.
+    const bypassAudit = transactionChangesAnything(before, tickets, [])
+      ? bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsigned, root })
+      : null;
     // The configured store is the trust anchor. It may intentionally be outside the
     // repository during the 1.x compatibility window; recovery later requires the
     // journal target to match this exact configured path.
@@ -227,6 +286,7 @@ export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, o
       beforeHash: before.hash,
       afterHash,
       evidenceRequired,
+      bypassAudit: bypassAudit !== null,
       ticketId,
       ...binding,
       storePath: recordedTarget,
@@ -249,13 +309,14 @@ export function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, o
     faultInjector?.('operation-applied:1', { transactionId, operation: journal.operations[0] });
     const after = store.load();
     if (after.hash !== afterHash) throw invalid('TRANSACTION_VERIFY_FAILED', `transaction produced ${after.hash}, expected ${afterHash}`);
-    if (evidenceRequired) recordTicketEvidence(root, {
+    if (evidenceRequired || bypassAudit) recordTicketEvidence(root, {
       key,
       transactionId,
       operation,
       ticketId,
       ticketHash: journal.afterTicketHash,
       storeHash: after.hash,
+      ...(bypassAudit ? { gate: bypassAudit.gate, bypass: true, storeHashBefore: bypassAudit.storeHashBefore } : {}),
     });
     journal.state = 'complete';
     durableWrite(join(transactionRoot, 'journal.json'), `${JSON.stringify(journal, null, 2)}\n`);
@@ -280,12 +341,121 @@ function loadJournal(root, transactionId) {
   catch (error) { throw invalid('INVALID_JOURNAL', `cannot read transaction ${transactionId}: ${error.message}`); }
 }
 
-export function recoverDirectoryTransaction(store, transactionId, { root = '.', direction, key = null } = {}) {
+/**
+ * Every shard this transaction WROTE — added or replaced.
+ *
+ * All of them carry the transaction's own effects, so none is evidence about the
+ * store as it stood BEFORE. Added shards did not exist; replaced ones now hold
+ * post-change content, which is why excluding only the additions was not enough —
+ * an update that adds the first rail to an existing rails-free ticket left that
+ * ticket looking railed and made a keyless recovery impossible.
+ *
+ * Nothing is lost by excluding them: the PRE-transaction content of every replaced
+ * or deleted shard lives in the journal's backups, which journalBackupsDeclareRails
+ * reads directly.
+ */
+function writtenShardFilenames(journal) {
+  const written = new Set();
+  for (const operation of journal.operations ?? []) {
+    if (operation?.action === 'write' && typeof operation.filename === 'string') {
+      written.add(operation.filename);
+    }
+  }
+  return written;
+}
+
+/**
+ * Whether any shard this transaction was about to replace or delete declared a
+ * rail — read from the journal's own backup copies (ticket shards, the legacy store
+ * envelope, and archive shards alike), which hold the PRE-transaction content. This is how a recovery can still tell that it is touching a trust root
+ * after the transaction being recovered removed the last rail from the store.
+ *
+ * Fails closed on a backup that is present but unreadable.
+ */
+function journalBackupsDeclareRails(root, journal) {
+  for (const operation of journal.operations ?? []) {
+    // AUXILIARY backups are included, not skipped. A restore represents the removal
+    // of the archived shard as an auxiliary delete, and that backup holds the
+    // archived TICKET — which, when it was the last railed one anywhere, is the only
+    // surviving proof the repo used rails at all. Skipping it left a keyless
+    // completion of exactly that recovery.
+    if (!operation?.backup) continue;
+    try {
+      const path = resolve(root, operation.backup);
+      // VERIFY BEFORE TRUSTING. The journal records each backup's pre-transaction
+      // hash and recovery already checks it on the rollback path; checking it here
+      // too means a backup swapped for a rails-free one is caught rather than
+      // believed. It does not make the journal authenticated — an attacker who
+      // rewrites `beforeHash` alongside the file defeats it, which is why the
+      // append-only manifest marker is the tamper-resistant floor — but it closes
+      // the cheaper half of the attack, where only the backup is replaced.
+      if (typeof operation.beforeHash === 'string' && fileHash(path) !== operation.beforeHash) return true;
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      // A legacy-store backup is the whole `{ tickets: [...] }` envelope; a shard
+      // backup is one ticket.
+      if (storeDeclaresRails(Array.isArray(parsed?.tickets) ? parsed.tickets : [parsed])) return true;
+    } catch { return true; }
+  }
+  return false;
+}
+
+export function recoverDirectoryTransaction(store, transactionId, { root = '.', direction, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   if (!['complete', 'rollback'].includes(direction)) throw invalid('RECOVERY_DIRECTION_REQUIRED', 'choose complete or rollback');
   const { transactionRoot, journal } = loadJournal(root, transactionId);
   const lock = acquireTicketLock(root, { transactionId, command: `ticket:recover:${direction}` });
   try {
+    // Recovery drives the store to a new state in BOTH directions, so it is a
+    // trust-root write like any other and is held to the same rule — checked here,
+    // before the first operation is applied.
+    //
+    // Whether an audit is owed is answered by the STORE, and the journal may only
+    // ADD to that answer — never subtract from it.
+    //
+    // The journal is ordinary filesystem state, not authenticated evidence. Taking
+    // `bypassAudit` as authoritative whenever it is a boolean would mean flipping
+    // that one field from true to false in a text editor turns off both the
+    // missing-key refusal and the audit itself. Deriving the predicate from the
+    // tickets on disk cannot be switched off that way. Three sources, OR-ed, none
+    // of which the journal's own claim can subtract from:
+    //
+    //   1. the repo as it stood BEFORE this transaction — the current store minus
+    //      every shard this transaction wrote, plus the archive and the manifest.
+    //      Subtracting them matters: a create (or an update) that introduces the
+    //      FIRST rail leaves a store that looks frozen the moment its shard lands,
+    //      and reading it whole would demand a key to recover a mutation that
+    //      legitimately needed none — a deadlock in both directions for ordinary
+    //      keyless authoring. Their pre-transaction content is not lost; it is in
+    //      the backups, read next;
+    //   2. the journal's BACKUPS — the pre-transaction copy of every shard this
+    //      transaction replaced or deleted. That is what catches the case the store
+    //      can no longer answer: a transaction that removed or un-railed the last
+    //      railed ticket leaves an unrailed store behind, so recovering it would
+    //      look ordinary. The backups are hash-verified against the journal further
+    //      down, and an unreadable one fails closed here;
+    //   3. the journal's own flag, which can only ADD.
+    let storeIsTrustRoot;
+    let preRecoveryHash = null;
+    try {
+      const current = store.load();
+      // A LEGACY journal names one envelope target (.adlc/tickets.json), not shard
+      // filenames, so the shard filter below would match nothing and leave the whole
+      // post-change store in the reconstruction — deadlocking the keyless recovery
+      // of a legacy write that introduced the first rail. That write replaced the
+      // entire envelope, so none of the current tickets is evidence about the
+      // pre-state; the backup is, and journalBackupsDeclareRails reads it.
+      const wholeStoreReplaced = (journal.operations ?? []).some((operation) => operation?.role === 'legacy-store');
+      const written = writtenShardFilenames(journal);
+      const preTransaction = wholeStoreReplaced
+        ? []
+        : current.tickets.filter((item) => !written.has(ticketFilename(item.id)));
+      storeIsTrustRoot = repoDeclaresRails(root, preTransaction);
+      preRecoveryHash = current.hash;
+    } catch { storeIsTrustRoot = true; }
+    const recoveryIsTrustRootWrite = storeIsTrustRoot
+      || journalBackupsDeclareRails(root, journal)
+      || journal.bypassAudit === true;
+    if (recoveryIsTrustRootWrite) assertWriteIsSignable({ key, allowUnsigned });
     let permittedExternalTarget = null;
     let permittedExternalRoot = null;
     if (store.path && journal.storePath) {
@@ -325,11 +495,55 @@ export function recoverDirectoryTransaction(store, transactionId, { root = '.', 
     const snapshot = store.load();
     const expected = direction === 'complete' ? journal.afterHash : journal.beforeHash;
     if (snapshot.hash !== expected) throw invalid('RECOVERY_VERIFY_FAILED', `recovery produced ${snapshot.hash}, expected ${expected}`);
-    if (journal.evidenceRequired) {
+    // A recovered transaction leaves the store in a state it was driven to, so it
+    // is audited on exactly the terms the original mutation was. The gate and the
+    // before-hash are RECOMPUTED from the journal's own trusted fields rather than
+    // read back out of `bypassAudit`, so a hand-edited journal cannot choose the
+    // gate an entry is filed under.
+    // storeHashBefore is the hash the store ACTUALLY held when this recovery
+    // started, read above, not the journal's record of where the interrupted
+    // transaction began. A crash can leave the store part-way between the two, and
+    // on a rollback especially, naming journal.beforeHash would claim a transition
+    // that did not happen: the audit would bind the wrong pair of hashes and the
+    // real intermediate state would go unrecorded. The journal's value is the
+    // fallback for a store that would not load at all.
+    const recoveryAudit = recoveryIsTrustRootWrite
+      ? {
+        gate: journal.evidenceRequired ? `ticket-${journal.operation}` : 'ticket-mutation',
+        storeHashBefore: preRecoveryHash ?? journal.beforeHash,
+      }
+      : null;
+    if (journal.evidenceRequired || recoveryAudit) {
       const recoveredTicketId = direction === 'rollback' ? journal.beforeTicketId ?? journal.ticketId : journal.ticketId;
       const recordedTicketHash = direction === 'rollback' ? journal.beforeTicketHash : journal.afterTicketHash;
       const recoveredTicketHash = recoveredTicketId ? snapshot.ticketHashes[recoveredTicketId] ?? recordedTicketHash ?? null : null;
       if (recoveredTicketId && !recoveredTicketHash) throw invalid('RECOVERY_EVIDENCE_UNBOUND', `cannot bind recovery evidence to ticket ${recoveredTicketId}`);
+      // COMPLETING a recovery finishes the ORIGINAL mutation, so the ledger must
+      // carry that transition too — beforeHash → afterHash — and not only the
+      // recovery's own step. A crash between applying the shards and appending the
+      // evidence would otherwise leave the recover-complete entry as the sole
+      // record, bound from the already-applied after-state to itself: the real
+      // before → after mutation of a trust root would appear nowhere, and removing
+      // the journal below takes the last trace of it with it.
+      //
+      // Idempotent per transactionId/action, so when the original apply DID record
+      // before the crash this is a no-op. acceptLegacyMatch covers the journal that
+      // predates the audit payload, whose entry can never grow one.
+      // Rollback records no apply entry: that transition was undone, not completed.
+      if (direction === 'complete' && recoveryAudit) {
+        recordTicketEvidence(root, {
+          key,
+          transactionId,
+          operation: journal.operation,
+          ticketId: journal.ticketId,
+          ticketHash: journal.afterTicketHash,
+          storeHash: journal.afterHash,
+          gate: recoveryAudit.gate,
+          bypass: true,
+          storeHashBefore: journal.beforeHash,
+          acceptLegacyMatch: true,
+        });
+      }
       recordTicketEvidence(root, {
         key,
         transactionId,
@@ -338,6 +552,9 @@ export function recoverDirectoryTransaction(store, transactionId, { root = '.', 
         ticketId: recoveredTicketId,
         ticketHash: recoveredTicketHash,
         storeHash: snapshot.hash,
+        // On a rollback the store is back at `beforeHash`, so before and after
+        // hashes match — which is precisely what the audit should say happened.
+        ...(recoveryAudit ? { gate: recoveryAudit.gate, bypass: true, storeHashBefore: recoveryAudit.storeHashBefore } : {}),
       });
     }
     durableRemove(transactionRoot, { recursive: true, force: true });
