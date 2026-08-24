@@ -73,7 +73,10 @@ on which door a write came through:
   removal is itself an audited override and the manifest keeps the record after the
   ticket is gone (#162). The one case this cannot see is a repo that removed its last
   rail *before* this change and never had a hook override recorded — nothing on disk
-  distinguishes it from a repo that never used rails; see `lib/trust-root.mjs`.
+  distinguishes it from a repo that never used rails; see `lib/trust-root.mjs`. That
+  residual is **accepted deliberately**: it is historical-only and cannot grow, since
+  every removal from this change forward leaves a marker. Closing it needs a durable
+  adoption record, tracked by ticket `T-01M0TMRSQKGTNWZTFXBPQ2JHNB`.
 
 ## Durability
 

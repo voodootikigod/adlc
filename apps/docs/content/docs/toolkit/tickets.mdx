@@ -52,7 +52,11 @@ migration and its recovery, archive/restore, transaction recovery, `ticket-prune
 the published 1.x `LegacyTicketStore.write(tickets)`, which still works but now routes
 through the audited transaction. A repo where no ticket declares a rail — in the
 active set or the archive — is not a trust root: authoring there needs no key and
-records nothing.
+records nothing. One residual is accepted deliberately: a repo that removed its last
+rail *before* this change and never recorded a hook override leaves nothing on disk to
+distinguish it from a repo that never used rails. It is historical-only and cannot
+grow — every later removal leaves a marker — and closing it is tracked by ticket
+`T-01M0TMRSQKGTNWZTFXBPQ2JHNB`.
 
 `ticket-prune` is the one writer that cannot make the store write and the manifest
 append a single act, so it stages, records, then renames. A failed rename leaves an
