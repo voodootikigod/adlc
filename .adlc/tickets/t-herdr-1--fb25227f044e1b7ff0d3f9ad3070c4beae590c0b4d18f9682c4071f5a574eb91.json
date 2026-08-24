@@ -2,6 +2,7 @@
   "body": "Scaffold plugins/adlc-herdr per docs/herdr-integration-plan.md section 4 (zero-dep Node, repo CONVENTIONS). Deliver: herdr-plugin.toml (id adlc, min_herdr_version 0.7.4, startup/panes/actions/events entrypoints; re-probe manifest field names against live herdr plugin docs before writing — plan section 2.2 is docs-derived); lib/herdr.mjs as the single shim wrapping every herdr CLI call (fixed argv arrays, never shell interpolation, unknown output shapes fail soft — plan section 6.5); lib/sanitize.mjs stripping ANSI/OSC/control escapes from every string rendered into terminals (plan section 6.1) with its tests frozen as rails; an offline manifest smoke test (parse the TOML, assert required fields and that each entrypoint file exists and passes node --check; entrypoints are run via node argv, so do NOT assert the executable bit — it is meaningless here); plugin README. No [[build]] commands in the manifest (plan section 6.6). Verification: node --test 'plugins/adlc-herdr/test/*.test.mjs' (glob form — the bare directory form fails on Node 24). allow-suppression: none",
   "budget": "mid",
   "category": "feature",
+  "completed": true,
   "duration": 2,
   "edges": [
     {
