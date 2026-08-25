@@ -339,7 +339,7 @@ export function runTicketPrune(options = {}) {
     // needs a durable journal or a recovery pass, which is more than this contract
     // builds. The ordering is still the right one: recording AFTER a completed write
     // risks a real mutation with NO record, which is undetectable rather than merely
-    // wrong.
+    // wrong. Tracked for closure by ticket TICKET-REF-PENDING (prune durability).
     let staged;
     try {
       const payload = { ...rawUnderLock, tickets: updatedTickets };

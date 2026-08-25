@@ -522,6 +522,20 @@ export function exportLegacyStore(store, outputPath, { root = '.' } = {}) {
   // runtime and evidence area, holding its legacy store, archive and ledger. The
   // reservation above only knows about this root's.
   const insideSomeAdlcDirectory = (candidate) => candidate.split(sep).includes('.adlc');
+  // RESIDUAL — this is a check, and the write below is a separate act. The mkdir,
+  // temp write and rename address the destination by PATH, so a local writer who can
+  // rename a parent directory of the destination can swap it for a symlink after
+  // these checks pass and redirect the export into a store, archive or ledger. The
+  // window is not closed here: Node has no openat/O_NOFOLLOW for the mkdir+rename
+  // sequence, so there is no directory handle to pin the checked path to.
+  //
+  // What bounds it: the attacker needs write access to a PARENT of the operator's
+  // chosen destination AND has to win the race. Anyone with write access to the repo
+  // can write .adlc directly and needs no race at all, so this guard was never the
+  // boundary in that case; the residual case is a nested destination under a
+  // world-writable directory, where a sticky bit already blocks renaming another
+  // user's directory. Tracked for closure by ticket TICKET-REF-PENDING (export
+  // symlink-race hardening).
   if (reserved.some(insideStore)
     || candidates.some(insideSomeDirectoryStore)
     || candidates.some(insideSomeAdlcDirectory)) {

@@ -81,6 +81,27 @@ on which door a write came through:
   it shrinks as each such repo takes one audited write. Closing it needs a durable
   adoption record, tracked by ticket `T-01M0TMRSQKGTNWZTFXBPQ2JHNB`.
 
+### Known residuals
+
+Two states this contract does not cover. Both are recorded here so the guarantee is
+not read as wider than it is; each is tracked for closure by its own ticket.
+
+- **A crash during `ticket-prune`'s audit-then-rename window.** The compensating entry
+  runs when the rename throws; a crash or power loss between the manifest append and
+  the rename leaves an entry naming a store hash the store never reached. It stays
+  detectable — that hash will not match the store — but this path has no journal and
+  no recovery pass, so nothing repairs it automatically. The ordering is deliberate:
+  recording after a completed write risks a real mutation with no record at all, which
+  is undetectable rather than merely wrong. Tracked by `TICKET-REF-PENDING`.
+- **A parent-directory swap during `export`.** The destination is validated, then the
+  mkdir, temp write and rename address it by path, so a local writer able to rename a
+  parent of the destination can redirect the write after the check. Node offers no
+  `openat`/`O_NOFOLLOW` for that sequence, so the path cannot be pinned to a directory
+  handle. It requires write access to a parent of the operator's chosen destination
+  plus winning the race; write access to the repo makes the race unnecessary, and a
+  sticky bit blocks it in the usual world-writable case. Tracked by
+  `TICKET-REF-PENDING`.
+
 ## Durability
 
 Sensitive mutations use recoverable, evidence-bearing transactions on both supported
