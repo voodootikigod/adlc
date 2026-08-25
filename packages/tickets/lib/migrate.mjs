@@ -534,8 +534,8 @@ export function exportLegacyStore(store, outputPath, { root = '.' } = {}) {
   // can write .adlc directly and needs no race at all, so this guard was never the
   // boundary in that case; the residual case is a nested destination under a
   // world-writable directory, where a sticky bit already blocks renaming another
-  // user's directory. Tracked for closure by ticket TICKET-REF-PENDING (export
-  // symlink-race hardening).
+  // user's directory. Tracked for closure by ticket
+  // T-01M0WNX6ZA0D94HW2VQKZAPGQ2.
   if (reserved.some(insideStore)
     || candidates.some(insideSomeDirectoryStore)
     || candidates.some(insideSomeAdlcDirectory)) {

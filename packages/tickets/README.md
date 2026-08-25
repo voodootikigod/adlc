@@ -92,7 +92,7 @@ not read as wider than it is; each is tracked for closure by its own ticket.
   detectable — that hash will not match the store — but this path has no journal and
   no recovery pass, so nothing repairs it automatically. The ordering is deliberate:
   recording after a completed write risks a real mutation with no record at all, which
-  is undetectable rather than merely wrong. Tracked by `TICKET-REF-PENDING`.
+  is undetectable rather than merely wrong. Tracked by `T-01M0WNX6P09HWKDK429XQ8GGRJ`.
 - **A parent-directory swap during `export`.** The destination is validated, then the
   mkdir, temp write and rename address it by path, so a local writer able to rename a
   parent of the destination can redirect the write after the check. Node offers no
@@ -100,7 +100,7 @@ not read as wider than it is; each is tracked for closure by its own ticket.
   handle. It requires write access to a parent of the operator's chosen destination
   plus winning the race; write access to the repo makes the race unnecessary, and a
   sticky bit blocks it in the usual world-writable case. Tracked by
-  `TICKET-REF-PENDING`.
+  `T-01M0WNX6ZA0D94HW2VQKZAPGQ2`.
 
 ## Durability
 
