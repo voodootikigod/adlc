@@ -166,25 +166,23 @@ function archiveDeclaresRails(root) {
  * performed while the store is still frozen, so it records the marker on its way
  * out.
  *
- * KNOWN BOUNDARY — ACCEPTED, BOUNDED, HISTORICAL-ONLY; tracked for closure by
- * ticket T-01M0TMRSQKGTNWZTFXBPQ2JHNB (the adoption-record / manifest-key
- * hermeticity mechanism). This is a decided residual, not an oversight, and it is
- * deliberately NOT closed here.
+ * KNOWN BOUNDARY — the one state these predicates cannot see. Closure is tracked by
+ * ticket T-01M0TMRSQKGTNWZTFXBPQ2JHNB, the adoption-record / manifest-key
+ * hermeticity mechanism; it is not built here.
  *
  * The state: a repo that used rails, had NO hook override ever recorded, and removed
  * its last railed ticket with the PRE-change writer. Only then is every source
  * silent: the ticket set, the archive, this contract's own audit entries, and the
- * hook's rails-bypass entries. The evidence does not exist to read, and closing it
- * needs a durable adoption record (the mechanism
- * .adlc/specs/manifest-key-hermeticity.md specifies and this ticket does not build)
- * or git archaeology over .adlc/tickets — neither of which a filesystem predicate
- * can synthesise after the fact.
+ * hook's rails-bypass entries. The evidence does not exist to read. Reconstructing
+ * it needs a durable adoption record (the mechanism
+ * .adlc/specs/manifest-key-hermeticity.md specifies) or git archaeology over
+ * .adlc/tickets — neither of which a filesystem predicate can synthesise after the
+ * fact.
  *
- * Why accepting it is safe: it is HISTORICAL-ONLY and cannot grow. Every removal
- * from this change forward leaves a marker regardless, and in practice a repo that
- * enforced rails through the PreToolUse hook already has rails-bypass entries and is
- * covered. So the uncovered set is fixed at whatever pre-change repos already exist
- * and shrinks to nothing as they take a single audited write.
+ * Its extent: the uncovered set is those pre-change repos alone. It cannot grow,
+ * because every removal from this change forward leaves a marker, and it shrinks as
+ * each such repo takes one audited write. A repo that enforced rails through the
+ * PreToolUse hook already has rails-bypass entries and is outside it.
  *
  * TWO shapes count, because two writers record overrides:
  *   - `data.bypass: true` — this contract's own audit entry, on any gate;

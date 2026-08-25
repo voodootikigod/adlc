@@ -420,13 +420,43 @@ export async function push({
       plan.push({ kind: created ? 'create' : 'adopt', id: t.id, newId });
 
       if (write) {
+        const ticketsBeforeWrite = tickets;
+        const dirtyBeforeWrite = ticketsDirty;
         tickets = reassignId(tickets, t.id, newId);
         // Persist a resumable localId→newId handle for adopted issues too. The
         // existing create path already has one, but adoption previously did not.
         state.pendingCreates[createKey] = { localId: t.id, title: t.title, nodeId, number, url: url ?? null };
         writeSidecar(dir, state);
         ticketsDirty = true;
-        const after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent, key, allowUnsigned });
+        let after;
+        try {
+          after = writeTicketsAtomic(dir, { tickets }, { expectedSnapshotHash, expectedStoreAbsent, key, allowUnsigned });
+        } catch (error) {
+          // The preflight above is an early-out, not the enforcement point, and the
+          // gap between them is real: a concurrent writer can freeze the trust root
+          // WITHOUT touching the active ticket set — archiving a railed ticket, or
+          // the rail hook recording an override — so the snapshot hash still agrees
+          // and only this write refuses. By then the remote issue exists.
+          //
+          // Letting that throw unwound the whole run, discarding the report of every
+          // ticket that DID land and leaving the operator with an issue nobody
+          // mentioned. It is not an unrecoverable orphan: the sidecar handle written
+          // just above carries the issue number, so the next run adopts that exact
+          // issue instead of opening a second one. Say all of that, keep the handle,
+          // and undo only the in-memory reassignment — carrying it forward would let
+          // a LATER ticket's successful write persist this id with no evidence
+          // migration behind it.
+          tickets = ticketsBeforeWrite;
+          ticketsDirty = dirtyBeforeWrite;
+          errors.push(
+            `${t.id}: issue #${number} exists remotely, but the local id could not be committed — ${error.message}. `
+            + 'The ticket store is unchanged, and the create handle is saved: re-run after resolving this and '
+            + `#${number} is adopted rather than duplicated.`,
+          );
+          // A refusal needs a human, so it blocks rather than merely failing.
+          blocked = true;
+          continue;
+        }
         expectedSnapshotHash = after.hash;
         expectedStoreAbsent = false;
         try {

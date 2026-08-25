@@ -318,6 +318,66 @@ const p5clear = (ticket, seq) => ({ seq, gate: 'prosecution', ts: '2026-06-01T00
 // Acceptance criterion #2 — idempotency, adoption, lost-write, edge rewrite
 // ---------------------------------------------------------------------------
 
+// The window between push's trust-root preflight and its per-ticket store write.
+// A concurrent writer can freeze the trust root inside that gap WITHOUT touching the
+// active ticket set — archiving a railed ticket, or the PreToolUse hook recording an
+// override — so the snapshot hash still matches and the refusal lands at the write,
+// by which time the remote issue already exists.
+//
+// Letting that throw loses the report of everything the run DID land, and leaves the
+// operator with an issue they were never told about. It is NOT an unrecoverable
+// orphan — the sidecar create handle makes the issue re-adoptable — but the run has
+// to say so instead of unwinding.
+test('a trust root frozen mid-push is REPORTED, and the created issue is re-adopted next run', async () => {
+  const dir = repo({
+    tickets: [{ id: 'T7', title: 'Build it', scope: ['a/**'], duration: 1 }],
+    manifest: [p5clear('T7', 1)],
+  });
+  try {
+    const gh1 = fakeGitHub();
+    const ticketsBefore = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
+    // A concurrent `adlc ticket archive` of a railed ticket, landing the instant the
+    // issue is created. The ARCHIVE is what freezes the trust root here, which is
+    // the point: it leaves the active ticket set — and therefore the snapshot hash —
+    // untouched, so planning still agrees and only the write refuses.
+    const runner = async (args) => {
+      const out = await gh1.runner(args);
+      if (args[0] === 'issue' && args[1] === 'create') {
+        const archive = join(dir, '.adlc', 'ticket-archive');
+        mkdirSync(archive, { recursive: true });
+        writeFileSync(join(archive, '.store.json'), JSON.stringify({ format: 'adlc-ticket-archive', version: 1 }));
+        writeFileSync(join(archive, 't-railed--0.json'), JSON.stringify({
+          id: 'T-RAILED', title: 'railed', scope: ['b/**'], rails: ['src/**'], duration: 1,
+        }));
+      }
+      return out;
+    };
+
+    const r1 = await push({ dir, provider: githubProvider(), runner, write: true, now: 'T', uuid: () => 'KEY-1' });
+
+    assert.equal(r1.exitCode, 2, 'a policy refusal needs a human, so it blocks rather than merely failing');
+    const reported = (r1.errors ?? []).join('\n');
+    assert.match(reported, /ADLC_MANIFEST_KEY/, 'the refusal names what is missing');
+    assert.match(reported, /#1\b/, 'and names the issue that already exists remotely');
+    assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), ticketsBefore,
+      'the store refused the write, so the local ticket keeps its id');
+
+    const handle = Object.values(readSidecar(dir).pendingCreates)[0];
+    assert.equal(handle.number, 1, 'the create handle survives — that is what makes this recoverable');
+
+    // Once the operator resolves the refusal — here by taking the explicit unsigned
+    // override — the next run adopts that exact issue rather than opening a second.
+    const gh2 = fakeGitHub({ issues: gh1.state.issues });
+    const r2 = await push({
+      dir, provider: githubProvider(), runner: gh2.runner, write: true, now: 'T',
+      uuid: () => 'NEVER', allowUnsigned: true,
+    });
+    assert.equal(r2.exitCode, 0, JSON.stringify(r2.errors));
+    assert.equal(gh2.state.issues.length, 1, 'no duplicate issue was created');
+    assert.equal(readTickets(dir).find((t) => t.id.startsWith('gh:')).id, 'gh:acme/app#1');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('push twice → the second run makes ZERO mutating calls (create then converge)', async () => {
   const dir = repo({
     tickets: [{ id: 'T7', title: 'Build it', scope: ['a/**'], duration: 1 }],

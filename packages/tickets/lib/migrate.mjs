@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ACTIVE_DIRECTORY, ACTIVE_MANIFEST, ARCHIVE_DIRECTORY, ARCHIVE_MANIFEST, LEGACY_ARCHIVE_FILE, LEGACY_FILE, TRANSACTION_DIRECTORY } from './constants.mjs';
 import { prettyCanonicalJson, sha256, storeHash } from './canonical.mjs';
@@ -14,6 +14,9 @@ import { validateTickets } from './schema.mjs';
 import { durableCopy, durableMkdir, durableRemove, durableRename, durableWrite } from './durability.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 import { assertSignableTrustRootWrite, assertWriteIsSignable, repoDeclaresRails, storeDeclaresRails } from './trust-root.mjs';
+
+/** A directory store announces itself with this marker file, wherever it lives. */
+const STORE_MARKER = '.store.json';
 
 // The tracked surface of `.adlc/` after a migration. `!.adlc/manifest.jsonl` is
 // NOT optional: the rails-guard CI migration gate requires hash-bound
@@ -495,13 +498,39 @@ export function exportLegacyStore(store, outputPath, { root = '.' } = {}) {
     const rel = relative(dir, candidate);
     return rel === '' || (Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel));
   });
-  if (reserved.some(insideStore)) {
+  // ANY directory store, not just the one being read.
+  //
+  // `reserved` above names this repo's `.adlc` and the SOURCE store. But
+  // --ticket-store / ADLC_TICKET_STORE exist precisely so a store can live
+  // somewhere else, so a repo can have OTHER stores that are trust roots too — and
+  // they are exactly as destroyable: written onto the marker, it becomes a legacy
+  // `{ tickets }` envelope and the store stops loading as what it is; written
+  // beside the shards, a foreign envelope joins the set the store enumerates.
+  // Reserving only the store being read protects the wrong half. A directory store
+  // is identified by its marker, so walk up from the destination and refuse if it
+  // lands inside one.
+  const insideSomeDirectoryStore = (candidate) => {
+    let dir = dirname(candidate);
+    for (;;) {
+      if (existsSync(join(dir, STORE_MARKER))) return true;
+      const parent = dirname(dir);
+      if (parent === dir) return false;
+      dir = parent;
+    }
+  };
+  // Same argument for the OTHER store shape: a `.adlc` anywhere is some repo's
+  // runtime and evidence area, holding its legacy store, archive and ledger. The
+  // reservation above only knows about this root's.
+  const insideSomeAdlcDirectory = (candidate) => candidate.split(sep).includes('.adlc');
+  if (reserved.some(insideStore)
+    || candidates.some(insideSomeDirectoryStore)
+    || candidates.some(insideSomeAdlcDirectory)) {
     throw policy(
       'UNSAFE_EXPORT_TARGET',
       `refusing to export onto ADLC runtime state: ${outputPath}. Export writes a snapshot for ` +
-      'inspection; writing it into .adlc/ or over the source store would replace a ticket set — rails ' +
-      'included — or the append-only evidence ledger, with no record that it happened. Choose a path ' +
-      'outside .adlc/ and outside the store being exported.',
+      'inspection; writing it into any .adlc/, into any directory ticket store, or over the source ' +
+      'store would replace a ticket set — rails included — or the append-only evidence ledger, with ' +
+      'no record that it happened. Choose a path outside .adlc/ and outside every ticket store.',
     );
   }
   const snapshot = store.load();

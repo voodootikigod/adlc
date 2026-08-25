@@ -74,8 +74,8 @@ on which door a write came through:
   ticket is gone (#162). The one case this cannot see is a repo that removed its last
   rail *before* this change and never had a hook override recorded — nothing on disk
   distinguishes it from a repo that never used rails; see `lib/trust-root.mjs`. That
-  residual is **accepted deliberately**: it is historical-only and cannot grow, since
-  every removal from this change forward leaves a marker. Closing it needs a durable
+  set cannot grow, since every removal from this change forward leaves a marker, and
+  it shrinks as each such repo takes one audited write. Closing it needs a durable
   adoption record, tracked by ticket `T-01M0TMRSQKGTNWZTFXBPQ2JHNB`.
 
 ## Durability

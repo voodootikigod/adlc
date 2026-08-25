@@ -1277,6 +1277,59 @@ test('store export refuses a path that only reaches a ticket store through a sym
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+// The guard reserved `.adlc` and the SOURCE store. A repo driven with
+// --ticket-store / ADLC_TICKET_STORE can have ANOTHER directory store somewhere
+// else entirely, and that one is a trust root too — its `.store.json` marker and
+// its shard directory are exactly as destroyable by a stray snapshot as the
+// source's. Reserving only the store being read protects the wrong half.
+test('store export refuses a destination inside a DIFFERENT directory store, not just the source', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-export-other-store-'));
+  const otherRoot = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-export-store-b-'));
+  try {
+    const sourcePath = writeDirectory(root, [ticket('T-SOURCE')]);
+    const store = new DirectoryTicketStore(sourcePath);
+
+    // A second, unrelated directory store — outside this repo's `.adlc` entirely,
+    // which is precisely what --ticket-store makes possible.
+    const otherPath = writeDirectory(otherRoot, [ticket('T-OTHER', { rails: ['src/**'] })]);
+    const marker = join(otherPath, '.store.json');
+    const markerBefore = readFileSync(marker, 'utf8');
+    const shardsBefore = readdirSync(otherPath).sort();
+
+    // Straight onto the marker: it would become a legacy `{ tickets }` envelope and
+    // the store would stop being loadable as the thing it is.
+    assert.throws(
+      () => exportLegacyStore(store, marker, { root }),
+      (error) => error.code === 'UNSAFE_EXPORT_TARGET',
+      'writing onto another store\'s marker is still writing onto a store',
+    );
+    assert.equal(readFileSync(marker, 'utf8'), markerBefore, 'the other store\'s marker is untouched');
+
+    // And anywhere INSIDE it: a directory store enumerates its shards, so dropping
+    // a foreign `{ tickets }` envelope in beside them corrupts the whole store, not
+    // just one file.
+    assert.throws(
+      () => exportLegacyStore(store, join(otherPath, 'snapshot.json'), { root }),
+      (error) => error.code === 'UNSAFE_EXPORT_TARGET',
+    );
+    assert.deepEqual(readdirSync(otherPath).sort(), shardsBefore, 'nothing was added to the other store');
+
+    // The same argument for the other store SHAPE: a `.adlc` anywhere is some
+    // repo's runtime and evidence area. The reservation knows only about this
+    // root's, so another checkout's legacy store and ledger were writable too.
+    const foreignLedger = join(otherRoot, '.adlc', 'manifest.jsonl');
+    assert.throws(
+      () => exportLegacyStore(store, foreignLedger, { root }),
+      (error) => error.code === 'UNSAFE_EXPORT_TARGET',
+      'another repo\'s evidence ledger is still an evidence ledger',
+    );
+    assert.equal(existsSync(foreignLedger), false, 'and it was not created');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(otherRoot, { recursive: true, force: true });
+  }
+});
+
 // The interrupted-then-resumed migration. Recovery REPLAYS the original apply
 // entry, so that replay has to be byte-for-byte what the first run wrote — a
 // different storeHashBefore turns a resumable recovery into a permanent
