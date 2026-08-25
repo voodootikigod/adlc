@@ -1,0 +1,12 @@
+{
+  "body": "## Context\n\nFollow-up accepted by Chris (2026-08-25) as the tracked closure for finding [1] on PR #577 (bypassed-mutation audit), a PRE-EXISTING property of the prune path (not a #577 regression). packages/ticket-prune/lib/run.mjs:319-320: the legacy prune path appends audit evidence BEFORE renaming the staged store, with no journal or startup recovery. A crash or power loss after the manifest append and before the rename leaves tickets.json at the before-hash while the append-only manifest claims the after-hash. The in-process compensation only runs when the rename throws synchronously, so the inconsistency can persist.\n\nWhy the current ordering is deliberate (do NOT simply flip it): recording AFTER the write risks a real mutation with NO record, which is undetectable. The current order keeps the crash residual DETECTABLE — storeHashAfter will not match the store — which is why #577 shipped it as a documented residual rather than a silent hole. The real fix is durability, not reordering.\n\n## What to build\n\nA durable journal/outbox for the prune commit with startup reconciliation: fsync the staged store file and its parent directory before the audit append; fsync the directory after the rename; on startup, reconcile any recorded transition whose after-hash was not actually reached by appending an abandoned/corrected entry. Mirror the recoverability the gate-manifest ledger expects.\n\n## Acceptance criteria\n\n1. A simulated crash between manifest-append and store-rename is detected and corrected on the next run (an abandoned-transition entry is appended; the manifest no longer claims an unreached after-hash). verify: a test injects the crash window (e.g. a rename that throws asynchronously / a killed process fixture) and asserts reconciliation on restart; `node --test packages/ticket-prune/test/*.test.mjs` exits 0.\n2. The normal (no-crash) path records exactly one transition with matching before/after hashes. verify: same suite.\n3. The residual note added to run.mjs and packages/tickets README by #577 is removed/updated to reference the shipped mechanism. verify: reviewer confirms code and docs agree.\n4. Full suite green incl. the ticket-store-platform matrix. verify: `npm test` exits 0.",
+  "category": "feature",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M0WNX6P09HWKDK429XQ8GGRJ",
+  "rails": [],
+  "scope": [
+    "packages/ticket-prune/**"
+  ],
+  "title": "ticket-prune: durable journal + startup reconciliation so a crash between manifest-append and store-rename cannot leave a false audit"
+}

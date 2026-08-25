@@ -1,0 +1,12 @@
+{
+  "body": "## Context\n\nFollow-up accepted by Chris (2026-08-25) as the tracked closure for finding [3] on PR #577. packages/tickets/lib/migrate.mjs:525-540: the export guard resolves and checks the destination before writing, but the subsequent mkdir + temp-file write + rename use path STRINGS without holding a directory handle or revalidating. A concurrent local writer can replace a checked parent directory with a symlink after validation and redirect the export into a ticket store, archive, or manifest.\n\nNarrow by threat model (why #577 shipped it as a tracked residual, not a blocker): the attacker needs write access to a PARENT of the operator's export destination AND must win a race during export; if they already have repo write they can write .adlc directly and need no race; on /tmp the sticky bit blocks renaming another user's directory. Real in principle, very narrow in practice. Also not cleanly fixable with current Node: there is no openat/O_NOFOLLOW for the mkdir+rename sequence, so the naive 'use directory handles' fix is unavailable and needs a real design pass.\n\n## What to build\n\nA symlink-safe final-write path for export: lock and re-validate every parent immediately before the rename (lstat each component, refuse if any is a symlink or changed identity since the check), or adopt whatever no-follow primitive is available (fs.opendir + dirfd-relative ops where the platform/Node version allows), failing closed on any component that cannot be proven safe. Refuse rather than follow when safety cannot be established.\n\n## Acceptance criteria\n\n1. An export whose parent directory is swapped for a symlink between validation and write is REFUSED, not followed (the target store/archive/manifest is untouched). verify: a test that plants the swap in the window asserts refusal + target intact; `node --test packages/tickets/test/*.test.mjs` exits 0.\n2. A normal export to a legitimate destination still succeeds. verify: same suite.\n3. If the mitigation is partial (Node-primitive-limited), the residual is documented factually in code + README with this ticket's disposition (no 'accepted/don't-scrutinize' framing per issue #579). verify: reviewer confirms.\n4. Full suite green. verify: `npm test` exits 0.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M0WNX6ZA0D94HW2VQKZAPGQ2",
+  "rails": [],
+  "scope": [
+    "packages/tickets/**"
+  ],
+  "title": "ticket store export: symlink-safe final write so a TOCTOU parent-swap cannot redirect the export into a store/archive/manifest"
+}
