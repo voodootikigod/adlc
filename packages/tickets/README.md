@@ -66,7 +66,10 @@ on which door a write came through:
   append-only ledger cannot retract that, so prune appends a **correction**
   (`action: 'abandoned'`, before and after hash equal) saying the store did not move.
   If the correction cannot be written either, the failure says so explicitly rather
-  than leaving the caller to assume the ledger is true;
+  than leaving the caller to assume the ledger is true. The correction runs when the
+  rename *throws*; a crash or power loss in the same window leaves the false claim
+  uncorrected, detectable by comparing the entry's `storeHashAfter` to the store but
+  not repaired automatically — this path has no journal and no recovery pass;
 - a repo where no ticket declares a rail — in the active set **or the archive** — is
   not a trust root: authoring there needs no key and records nothing. Completing,
   archiving or discarding the last railed ticket does not thaw it, because that

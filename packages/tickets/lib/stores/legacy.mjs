@@ -1,10 +1,38 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { applyLegacyTransaction } from '../transaction.mjs';
 import { LEGACY_FILE } from '../constants.mjs';
 import { invalid, operational } from '../errors.mjs';
 import { validateTickets } from '../schema.mjs';
 import { TicketSnapshot } from '../snapshot.mjs';
+
+/**
+ * The repository whose trust-root evidence governs a write to `path`.
+ *
+ * `dirname(dirname(path))` is correct for `<root>/.adlc/tickets.json` and for nothing
+ * else. A store configured somewhere else — ADLC_TICKET_STORE, --ticket-store, a 1.x
+ * caller passing its own path — would resolve to an unrelated directory, and the
+ * predicate would go looking for the archive, the manifest and the recorded overrides
+ * THERE. Finding none, it would read "not a trust root" and let a keyless, unrecorded
+ * write through while the store's actual repository is frozen. That is the precise
+ * hole this contract exists to close, arrived at from the other direction.
+ *
+ * So the inference is allowed only where it is sound, and every other path must say
+ * which repository it belongs to. Refusing to answer beats answering wrongly.
+ */
+function repositoryRootFor(path, explicit) {
+  if (explicit !== null && explicit !== undefined) return explicit;
+  const parent = dirname(path);
+  if (basename(path) === basename(LEGACY_FILE) && basename(parent) === dirname(LEGACY_FILE)) {
+    return dirname(parent);
+  }
+  throw invalid(
+    'AMBIGUOUS_STORE_ROOT',
+    `cannot infer which repository governs ${path}: it is not the canonical <root>/${LEGACY_FILE} layout, ` +
+    'so the trust-root evidence (archive, manifest, recorded overrides) would be read from the wrong ' +
+    'directory and a frozen store could be written keylessly. Pass an explicit { root }.',
+  );
+}
 
 /**
  * Reads the 1.x single-file store. It has exactly one writer, `write`, and that
@@ -34,12 +62,16 @@ export class LegacyTicketStore {
   }
 
   /**
-   * `root` defaults to the repository this store lives in — `<root>/.adlc/tickets.json`
-   * — so the 1.x one-argument call keeps working and still resolves the archive and
-   * manifest that decide whether this is a trust root.
+   * `root` is where the trust-root evidence is read from — the archive, the manifest,
+   * and the recorded overrides that decide whether this store is frozen. It is
+   * INFERRED only for the canonical `<root>/.adlc/tickets.json` layout, which keeps
+   * the 1.x one-argument call working; anywhere else it must be passed, because
+   * guessing wrong is not a cosmetic error (see repositoryRootFor).
    */
-  write(tickets, { key = null, allowUnsigned = false, root = dirname(dirname(this.path)) } = {}) {
-    return applyLegacyTransaction(this, tickets, { root, operation: 'update', key, allowUnsigned });
+  write(tickets, { key = null, allowUnsigned = false, root = null } = {}) {
+    return applyLegacyTransaction(this, tickets, {
+      root: repositoryRootFor(this.path, root), operation: 'update', key, allowUnsigned,
+    });
   }
 
   load() {

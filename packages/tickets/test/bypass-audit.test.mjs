@@ -1197,6 +1197,54 @@ test('LegacyTicketStore.write still works for 1.x callers, and is now audited', 
   } finally { rmSync(railed, { recursive: true, force: true }); }
 });
 
+// The adapter defaults the repository root to dirname(dirname(this.path)), which is
+// sound ONLY for the canonical <root>/.adlc/tickets.json layout. For a store
+// configured anywhere else that names an unrelated directory — and the trust-root
+// predicate would then look for the archive, the manifest and the recorded overrides
+// THERE, find nothing, and let a keyless unaudited write through the published
+// one-argument API while the store's real repository is frozen.
+test('LegacyTicketStore.write refuses to GUESS the repository root for a store outside the canonical layout', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-external-repo-'));
+  const external = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-external-store-'));
+  try {
+    // The REPO is a frozen trust root — the rail lives in its archive.
+    const active = [ticket('A')];
+    writeDirectory(repoRoot, active);
+    writeDirectory(repoRoot, [ticket('R', { rails: ['src/**'] })], { archive: true });
+    assert.equal(repoDeclaresRails(repoRoot, active), true, 'precondition: the repository is frozen');
+
+    // ...but its configured legacy store lives somewhere else entirely, and the
+    // directory the old default would infer has no `.adlc` at all.
+    const storeDir = join(external, 'adlc-store');
+    mkdirSync(storeDir, { recursive: true });
+    const storePath = join(storeDir, 'tickets.json');
+    writeFileSync(storePath, JSON.stringify({ tickets: active }, null, 2));
+    const before = readFileSync(storePath, 'utf8');
+    const store = new LegacyTicketStore(storePath);
+
+    assert.throws(
+      () => store.write([ticket('A'), ticket('B')]),
+      (error) => error.code === 'AMBIGUOUS_STORE_ROOT',
+      'guessing the wrong repository is the failure — refuse instead',
+    );
+    assert.equal(readFileSync(storePath, 'utf8'), before, 'and nothing is written');
+
+    // Told which repository it belongs to, it enforces THAT repository's contract.
+    assert.throws(
+      () => store.write([ticket('A'), ticket('B')], { root: repoRoot }),
+      (error) => error.code === 'MANIFEST_KEY_REQUIRED',
+    );
+    assert.equal(readFileSync(storePath, 'utf8'), before, 'still untouched');
+
+    store.write([ticket('A'), ticket('B')], { root: repoRoot, key: KEY });
+    assert.equal(manifestEntries(repoRoot).some((entry) => entry.data.bypass === true), true,
+      'and the override is recorded against the real repository');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
 // `export` writes a snapshot wherever it is pointed. Pointed at the store — with a
 // DIFFERENT source store selected — it replaces the ticket set, rails included,
 // with no evidence that it happened.

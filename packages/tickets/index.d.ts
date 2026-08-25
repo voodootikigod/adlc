@@ -35,6 +35,11 @@ export class TicketSnapshot {
  * `write` is a compatibility adapter over applyLegacyTransaction: the 1.x
  * one-argument call keeps working, but the write is journaled, verified, and held to
  * the frozen-trust-root contract (it refuses without a key on a trust root).
+ *
+ * `root` is where that evidence is read from. It is inferred only for the canonical
+ * `<root>/.adlc/tickets.json` layout; a store configured anywhere else must pass it,
+ * or the write is refused (AMBIGUOUS_STORE_ROOT) rather than consulting the wrong
+ * repository.
  */
 export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(tickets: Ticket[], options?: { key?: string | null; allowUnsigned?: boolean; root?: string }): TicketSnapshot }
 export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot }

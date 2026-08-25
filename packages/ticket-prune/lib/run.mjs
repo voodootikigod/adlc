@@ -329,6 +329,17 @@ export function runTicketPrune(options = {}) {
     // store never reached — which is wrong, but nothing unaudited happened and the
     // ledger can say so: a compensating entry is appended below, and if even that
     // fails the refusal names the uncorrected claim.
+    //
+    // RESIDUAL, stated plainly because the compensation below can read as broader
+    // than it is: it runs only when the rename THROWS. A crash or power loss between
+    // the append and the rename leaves the false claim on disk with no in-process
+    // correction, and this path has no journal and no startup reconciliation to find
+    // it later. It stays DETECTABLE — the entry's storeHashAfter does not match the
+    // store — but detection is on whoever audits the ledger, not on prune. Closing it
+    // needs a durable journal or a recovery pass, which is more than this contract
+    // builds. The ordering is still the right one: recording AFTER a completed write
+    // risks a real mutation with NO record, which is undetectable rather than merely
+    // wrong.
     let staged;
     try {
       const payload = { ...rawUnderLock, tickets: updatedTickets };
