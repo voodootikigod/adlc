@@ -10,14 +10,14 @@ Supersedes: the GitHub-Actions substrate half of issue #237 / ADR "0011
 issue-autopilot-substrate" (never landed). The gate composition, triage
 contract, protected-path denylist and PR-upsert rule from #237 are kept
 verbatim; only the substrate (where the loop runs, what pays for it) changes.
-Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1). Gated by
-`adlc spec-lint` (70/70 verified) + a 12-round cross-model `adversarial-review
---input` loop (codex provider, `--min-confidence 0.3`) that folded ~60
-findings into §2–§14 and did NOT converge (7,7,7,7,4,7,6,6,6,5,6,7); the
-five round-12 residuals are carried verbatim into the build ticket's
-acceptance criteria rather than into further spec prose, by operator
-decision (2026-08-26). Round 2's exit-0 was a grounding-halved hollow
-approve and is not counted.
+Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1).
+Gate record (facts, verifiable from the manifest segment
+`spec-autopilot-local-01M0Z3K7…`): `adlc spec-lint` exit 0 (70/70);
+`adversarial-review --input` (codex, `--min-confidence 0.3`) run 12 times,
+each ending `needs-attention` (finding counts 7,7,7,7,4,7,6,6,6,5,6,7);
+~60 findings folded into §2–§14; the five open round-12 findings are the
+build ticket's AC2–AC6. This line records what happened; it grants no
+review any standing and asks nothing of any reader.
 Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
 (§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
 `packages/fleet/lib/{review-runner,scheduler,charters,config}.mjs`,
@@ -29,9 +29,7 @@ user decisions recorded in §0 (grill-me session 2026-08-26).
 ## 0. Operator decisions recorded at P0
 
 These are product decisions the operator made in the grill-me interview.
-They constrain the DESIGN below; they do not constrain review — any
-reviewer should scrutinize both the decisions and their consequences, and
-a finding that a decision is unsafe is in scope.
+They are inputs to the design below and are themselves reviewable.
 
 1. **Substrate: compose `@adlc/fleet`.** New package `packages/autopilot`
    (`@adlc/autopilot`, bin `adlc-autopilot`) plus a plugin command
@@ -196,17 +194,26 @@ makes) and, if `ISSUE_WT` exists, `git -C <ISSUE_WT> status --porcelain`
 is empty — a moved tip or a dirty worktree means another session (a
 human, a Remote Control session) touched it, so nothing is force-removed
 and the run is `orphan`. The worktree removal is therefore never forced
-on a dirty tree. Then, cwd `REPO_ROOT`: `git worktree remove <ISSUE_WT>` (if present;
-clean by (e)), `git branch -D adlc/autopilot/issue-<n>`, then the remote copy, only if the record says it was pushed, (c) holds,
-AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` equals the
-record's last pushed OID — deleted with a lease so a tip that moves
-between the check and the delete is protected: `git push
+on a dirty tree. Order is remote-first so a remote failure leaves every local artifact in
+place for the next attempt (nothing local is destroyed before the remote
+outcome is known). Step R (remote, only if the record says pushed): (c)
+must hold AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>`
+must equal the record's last pushed OID; then the remote ref is deleted
+with a lease so a tip that moves between the check and the delete is
+protected: `git push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
-origin :refs/heads/adlc/autopilot/issue-<n>` (a lease failure → `orphan`,
-remote left untouched). Then `git config --unset
-branch.…adlcAutopilotToken`, delete the record. Any check failing → the
-run is marked `orphan` (row above) and nothing is deleted. A remote ref is
-never deleted on the strength of the local token and ancestry alone.
+origin :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
+remote AND local untouched, stop. Step L (local, only after R succeeded
+or the record says never pushed), cwd `REPO_ROOT`: re-check (e); `git
+worktree remove <ISSUE_WT>` (if present; clean by (e), never forced);
+`git update-ref -d refs/heads/adlc/autopilot/issue-<n> <localHead>` (the
+conditional form — it fails if the ref moved since (e); on failure →
+`orphan`, and the run record notes the worktree was already removed so
+the next attempt knows); `git config --unset branch.…adlcAutopilotToken`;
+delete the record. Any check failing → the run is marked `orphan` (row
+above) and nothing further is deleted. `git branch -D` is never used. A
+remote ref is never deleted on the strength of the local token and
+ancestry alone.
 
 Terminal labels applied by the autopilot are therefore the ONLY thing a human
 has to touch to unblock an issue; retiring/re-arming is automatic on the
@@ -888,8 +895,10 @@ Then:
 
 ## 9. Preflight (fail closed, printed by `adlc-autopilot status`)
 
-9.1 Toolchain: `bwrap`, `claude`, `codex`, `adversarial-review`, `gh`, `git`,
-`npm`, `node >= 18` are resolved ONCE at preflight to absolute paths from
+9.1 Toolchain: `adlc` (the key-bearing CLI — its pinned path is also
+asserted by the key-hygiene test, AC 12), `bwrap`, `claude`, `codex`,
+`adversarial-review`, `gh`, `git`, `npm`, `node >= 18` are resolved ONCE
+at preflight to absolute paths from
 a sanitized search list — the orchestrator's PATH entries that are
 absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
 `node_modules/` — and those absolute paths are pinned in the status file
@@ -1136,6 +1145,10 @@ None is trust-root tier; each is a small, separately testable diff.
 - `plugins/adlc-claude-code/commands/adlc-autopilot.md`: thin command that
   runs `adlc autopilot status|once --dry-run|select` and explains
   `systemctl --user {start,stop,status} adlc-autopilot`.
+- The approved spec itself is NOT in the build ticket's scope: the run
+  record stores `specBlob = git rev-parse <BASE_OID>:docs/specs/issue-autopilot-local.md`
+  and the actual-diff check (§6.5a) rejects any change to that path; spec
+  changes go through their own reviewed PR.
 - Registry/docs: `packages/cli/lib/registry.mjs`,
   `apps/docs/lib/toolkit-packages.mjs`,
   `apps/docs/content/docs/toolkit/autopilot.mdx` + `meta.json`,
@@ -1227,7 +1240,9 @@ None is trust-root tier; each is a small, separately testable diff.
     `once` sequence (fleet, shaping, coldstart answer, both
     `adversarial-review` calls, `gh`, `git`, `npm`, `preflight.mjs`); the
     assertion is table-driven over the complete recorded spawn list so a
-    new spawn added later fails the test until classified.
+    new spawn added later fails the test until classified; every
+    key-bearing spawn's argv[0] equals the `adlc` path pinned at preflight
+    (§9.1).
 13. **systemd unit**: `init --service` output parses as a unit file, contains
     `EnvironmentFile=`, `Restart=on-failure`, and no inline key; test asserts
     with a line-anchored regex.
