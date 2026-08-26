@@ -85,9 +85,16 @@ They are inputs to the design below and are themselves reviewable.
     labeled `trust-root-change`, merged deliberately by the admin CODEOWNER;
     the #141 non-author-CODEOWNER ceremony is unsatisfiable with a single
     CODEOWNER and this is recorded as the accepted residual).
-13. **Plan gate before build:** this spec passes `adlc spec-lint` and a
-    `adversarial-review --input <this file> --provider codex` fix loop to a
-    clean `approve` before any `packages/autopilot` code is written.
+13. **Plan gate before build (as decided 2026-08-26):** this spec passes
+    `adlc spec-lint`, and an `adversarial-review --input <this file>
+    --provider codex` fix loop is run with a finite budget; the operator
+    then either approves with the remaining findings carried into the
+    build ticket as acceptance criteria, or continues the loop. The
+    binding cross-model APPROVE is required on the CODE: the build PR
+    must carry a `record-cross-model` approve from a diff-mode
+    `adversarial-review --base <BASE_OID> --provider codex` run (exit 0)
+    bound to its revision before merge. Spec-level approval never
+    substitutes for that.
 14. **P6 (merge) stays human, always.** The autopilot never merges, never
     pushes to `main`, never deletes a branch it did not create.
 
@@ -197,8 +204,11 @@ and the run is `orphan`. The worktree removal is therefore never forced
 on a dirty tree. Order is remote-first so a remote failure leaves every local artifact in
 place for the next attempt (nothing local is destroyed before the remote
 outcome is known). Step R (remote, only if the record says pushed): (c)
-must hold AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>`
-must equal the record's last pushed OID; then the remote ref is deleted
+is re-evaluated IMMEDIATELY before the push (`gh pr list --repo <repo>
+--head adlc/autopilot/issue-<n> --state open --json number` must be
+empty — a PR that appeared since the earlier check aborts with `orphan`)
+AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` must
+equal the record's last pushed OID; then the remote ref is deleted
 with a lease so a tip that moves between the check and the delete is
 protected: `git push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
@@ -565,10 +575,32 @@ gitignored `.adlc/autopilot-*` files.
    sha256 of the shard file with the `completed` key removed and keys
    sorted — the **authorizing ticket snapshot** against which every later
    round is checked (§6.5a).
-3. (cwd `ISSUE_WT`) Record P0/P1 evidence bound to the ticket: `adlc
-   coldstart <ULID> --dir <ISSUE_WT>/.adlc --record-verdict -` and `adlc
-   spec-lint <ISSUE_WT>/.adlc/tmp/<ULID>-ac.md --record --ticket <ULID>`
-   (manifest appends, committed with the ticket).
+3. (cwd `ISSUE_WT`) Record P0/P1 evidence bound to the ticket, using the
+   real CLI contracts:
+   - **coldstart**: `--record-verdict` is accepted only together with
+     `--prompt-only`, and the verdict must carry the CURRENT `ticketHash`
+     (from `adlc ticket show <ULID> --json`). The orchestrator obtains the
+     prompt with `adlc coldstart <ULID> --dir <ISSUE_WT>/.adlc
+     --prompt-only`, answers it with the gated `claude -p` call of §5.3,
+     validates the answer as `{"gaps": [...]}`, adds `"ticketHash"`, and
+     pipes it: `printf '%s' '<json>' | adlc coldstart <ULID> --dir
+     <ISSUE_WT>/.adlc --prompt-only --record-verdict -`. A non-empty
+     `gaps` is a CLARIFY (§5.4), never recorded as a pass.
+   - **spec-lint**: the orchestrator first derives the criteria document
+     — the ticket body from its `=== ACCEPTANCE CRITERIA ===` heading to
+     the next `===` heading (or end), written atomically (temp file +
+     `rename`) to `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` with a `##
+     Acceptance criteria` heading prepended so spec-lint's criteria
+     extractor finds the list — then runs `node
+     <REPO_ROOT>/packages/spec-lint/bin/spec-lint.mjs
+     <ISSUE_WT>/.adlc/tmp/<ULID>-ac.md --record --ticket <ULID> --dir
+     <ISSUE_WT>/.adlc` (the in-repo bin; the globally installed `adlc
+     spec-lint` does not accept `--record`). `.adlc/tmp/` is
+     revision-ignored and not committed.
+   Both records are manifest appends committed with the ticket. If either
+   ticket hash changes later in the run (reopen/complete, §6.6/§6.6a) the
+   coldstart verdict is re-recorded against the new hash before
+   attestation, because the runner binds evidence to the ticket hash.
 4. Dispatch fleet **from inside that worktree** so fleet reads the plan that
    contains the new shard and cuts its integration branch from the issue
    branch:
@@ -1172,7 +1204,7 @@ None is trust-root tier; each is a small, separately testable diff.
 | R6 | Verify `claude -p` subagent fan-out (`/adlc:adlc-prosecute`) works under `bwrap` + `acceptEdits`; if not, the charter degrades to `adlc hollow-test`/`behavior-diff` only and the outer Codex loop remains the P5 | build canary | open |
 | R7 | Verify OAuth token refresh and `gh` auth work under `systemd --user` (no TTY, no keyring) | operator | open |
 | R8 | Create labels + the rolling digest issue (`adlc-autopilot init --labels`) | build | open |
-| R9 | Mint the ULID ticket for this spec (T55 is taken); record spec-lint + the Codex `--input` approve against it | this session | open |
+| R9 | Mint the ULID ticket for this spec (T55 is taken); record spec-lint + coldstart against it — DONE 2026-08-26 (`T-01M0Z3FN7SAS4HAH7CS63YQ0DH`, manifest segment `spec-autopilot-local-01M0Z3K7…`). The code-level Codex approve (§0.13) is a build-PR merge prerequisite, not a spec step | this session | done |
 | R10 | Confirm rails-guard-ci accepts a PR that ADDS a ticket shard which is `completed:true` on arrival (fleet completes on the integration branch) — otherwise the completion commit moves to a post-merge step | build canary | open |
 | R11 | Keep PR diffs under adversarial-review's 256 KB grounding limit: deterministic size gate before every review (§6.7a), `--max-bytes` from `reviewMaxBytes` on both reviewers, fleet gains a `reviewMaxBytes` config key (§14) | build | open |
 | R12 | GitHub ruleset restricting pushes to `refs/heads/adlc/autopilot/**` to the operator identity (branch-level write isolation; §6.8 detects intrusion without it but cannot prevent it) | operator | recommended |
@@ -1253,10 +1285,17 @@ None is trust-root tier; each is a small, separately testable diff.
     asserts every key of `packages/autopilot/package.json` `dependencies`
     starts with `@adlc/` and `devDependencies` is absent or empty; verify:
     `node --test packages/autopilot/test/deps.test.mjs` exit code 0.
-16. **Spec gate**: this file passes `adlc spec-lint` (exit code 0) and an
-    `adversarial-review --input docs/specs/issue-autopilot-local.md --provider
-    codex` loop ends at `verdict:"approve"` (exit code 0), recorded via
-    `record-cross-model --ticket <ULID>` before any package code is committed.
+16. **Gate record + code-level cross-model approve**: this file passes
+    `adlc spec-lint` (exit code 0) and the manifest segment bound to the
+    build ticket holds the `spec-lint` and `coldstart` records (verify:
+    `adlc gate-manifest show --ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH`
+    lists both). Before the build PR merges, a diff-mode
+    `adversarial-review --base <BASE_OID> --provider codex` over the
+    build branch ends at `verdict:"approve"` (exit code 0) and is recorded
+    via `adlc prosecute record-cross-model --ticket
+    T-01M0Z3FN7SAS4HAH7CS63YQ0DH --provider codex --author-provider
+    anthropic --verdict approve`; verify: `adlc prosecute tier-check`
+    exit code 0 on that PR.
 17. **Live canary** (manual, recorded in the PR body): `adlc-autopilot once
     --issue <docs issue>` produces one PR whose CI is green and whose
     manifest carries coldstart, spec-lint, cross-model-review entries bound
@@ -1337,6 +1376,15 @@ None is trust-root tier; each is a small, separately testable diff.
     yields a second fleet invocation carrying `--dead-end-file` and
     `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
     after the last successful preflight.
+71. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
+    fake is invoked with `--prompt-only` and, on the record call, with
+    `--prompt-only --record-verdict -` and stdin JSON whose `ticketHash`
+    equals the hash `adlc ticket show` returned immediately before; a
+    `gaps` array with one entry → CLARIFY and zero record calls; the
+    spec-lint fake sees `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` existing,
+    beginning with `## Acceptance criteria`, and argv `--record --ticket
+    <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
+    reopen (§6.6) the coldstart record call repeats with the new hash.
 31. **Pinned baseline by OID** (`run.test.mjs`): the fetch fake asserts
     `git fetch --no-tags origin <40-hex>` (never `main`, never
     `FETCH_HEAD`); an `ls-remote` fake returning a different OID on a second
