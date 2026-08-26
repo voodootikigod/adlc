@@ -518,7 +518,7 @@ describe('loadSnapshot', () => {
   test('loads valid snapshot', () => {
     const dir = tmpDir();
     const file = join(dir, 'snap.json');
-    const data = { baseUrl: 'http://localhost', capturedAt: '2024-01-01T00:00:00Z', routes: [] };
+    const data = { baseUrl: 'http://localhost', capturedAt: '2024-01-01T00:00:00Z', routes: [{ method: 'GET', path: '/health', status: 200 }] };
     writeFileSync(file, JSON.stringify(data));
     try {
       const snap = loadSnapshot(file);

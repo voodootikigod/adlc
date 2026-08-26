@@ -72,9 +72,10 @@ test('railDensity: 1 rail, 4 scope → 0.25', () => {
   assert.equal(railDensity(t), 0.25);
 });
 
-test('railDensity: rails present, no scope → denominator is 1 → 1', () => {
-  const t = { id: 'T1', title: 't', rails: ['a'] };
-  assert.equal(railDensity(t), 1);
+test('railDensity: rails present, no scope or empty scope → 0', () => {
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'] }), 0);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'], scope: [] }), 0);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'], scope: null }), 0);
 });
 
 // ── unit: priors ──────────────────────────────────────────────────────────────

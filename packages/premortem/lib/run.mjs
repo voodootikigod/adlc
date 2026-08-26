@@ -38,6 +38,10 @@ export async function run(opts) {
     opError(`cannot read spec file '${specPath}': ${err.message}`);
   }
 
+  if (specContent.trim() === '') {
+    opError(`spec content is empty or whitespace-only`);
+  }
+
   const prompt = buildPrompt(specContent);
 
   // --prompt-only: print and exit 0

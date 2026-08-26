@@ -70,6 +70,22 @@ const mergeMin = values['merge-min'] !== undefined ? parseNum(values['merge-min'
 const coChangeLimit = parseNum(values['co-change-limit'], 'co-change-limit', 500, true);
 const conflictThreshold = parseNum(values['conflict-threshold'], 'conflict-threshold', 0.5);
 
+if (conflictThreshold < 0 || conflictThreshold > 1) {
+  opError(`--conflict-threshold must be between 0 and 1, got: ${conflictThreshold}`);
+}
+if (widthFlag !== null && widthFlag < 1) {
+  opError(`--width must be >= 1, got: ${widthFlag}`);
+}
+if (buildMin !== null && buildMin <= 0) {
+  opError(`--build-min must be > 0, got: ${buildMin}`);
+}
+if (mergeMin !== null && mergeMin <= 0) {
+  opError(`--merge-min must be > 0, got: ${mergeMin}`);
+}
+if (coChangeLimit < 1) {
+  opError(`--co-change-limit must be >= 1, got: ${coChangeLimit}`);
+}
+
 // Load tickets, then drop completed (tombstoned) tickets: finished work must
 // not be scheduled or conflict-forecast as open backlog.
 const { tickets: allTickets, errors: ticketErrors } = loadTickets(ticketsPath);

@@ -23,6 +23,20 @@ export function loadSnapshot(filePath) {
   if (!parsed || !Array.isArray(parsed.routes)) {
     throw new Error(`snapshot file "${filePath}" is missing required .routes array`);
   }
+  if (parsed.routes.length === 0) {
+    throw new Error(`snapshot file "${filePath}" has empty routes array`);
+  }
+  for (const [i, route] of parsed.routes.entries()) {
+    if (!route || typeof route !== 'object' || Array.isArray(route)) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} is not an object`);
+    }
+    if (typeof route.method !== 'string' || route.method.trim() === '') {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} lacks non-empty string method`);
+    }
+    if (typeof route.path !== 'string' || route.path.trim() === '') {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} lacks non-empty string path`);
+    }
+  }
   return parsed;
 }
 
