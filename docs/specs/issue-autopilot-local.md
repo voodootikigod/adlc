@@ -239,12 +239,16 @@ lease-bounded, so the OID is always known. Step L (local; in automatic
 retirement always, in `reset` only after R succeeded or the record says
 never pushed), cwd `REPO_ROOT`, transactional so that no artifact is
 permanently removed before the conditional ref delete has succeeded:
-L1 re-check (e); L2 if `ISSUE_WT` exists, `git worktree move <ISSUE_WT>
+L1 re-check (e) and, if `ISSUE_WT` exists, verify `git -C <ISSUE_WT>
+rev-parse HEAD` equals the record's `localHead` AND `git -C <ISSUE_WT>
+symbolic-ref HEAD` is exactly `refs/heads/adlc/autopilot/issue-<n>` —
+any mismatch → `orphan`, nothing moved; L2 `git worktree move <ISSUE_WT>
 <ISSUE_WT>.retiring-<token>` (a rename — reversible, and it leaves the
 branch checked out nowhere else); L3 `git update-ref -d
 refs/heads/adlc/autopilot/issue-<n> <localHead>` (the conditional form:
 it fails if the ref moved since (e)) — on failure `git worktree move` it
-back, mark `orphan`, stop, nothing removed; L4 only after L3 succeeded:
+back, mark `orphan`, stop, nothing removed; L4 only after L3 succeeded and after re-verifying the quarantined
+worktree's HEAD OID and symbolic ref exactly as in L1:
 `git worktree remove <ISSUE_WT>.retiring-<token>` (clean by (e), never
 forced; a failure here leaves a quarantined directory the status file
 names and is not an integrity problem), `git config --unset
@@ -415,18 +419,19 @@ else → exit 1 `bad-input:<field>` with no side effect (AC 72).
 
 ### 4.1 Candidate set
 
-`gh api --paginate --slurp --repo <owner/repo>
-"repos/{owner}/{repo}/issues?state=open&per_page=100"`: with `--slurp`
-`gh` emits ONE outer JSON array whose elements are the per-page arrays,
-so the parser reads exactly one JSON document, asserts it is an array of
-arrays, and flattens it; entries carrying a `pull_request` key are
-dropped (the issues API interleaves PRs). Bounds: at most 50 pages (5 000
-issues) are accepted — beyond that, or on a non-zero `gh` exit, a
-non-array outer document, a non-array page, or a page whose elements are
-not objects with an integer `number` → `candidate-set-truncated`: no
+one page per call, never `--paginate`: `gh api --repo <owner/repo>
+"repos/{owner}/{repo}/issues?state=open&per_page=100&page=<k>"` for
+`k = 1, 2, …`, each call a separate child with the §12.1 deadline and a
+4 MiB stdout cap (exceeding the cap kills the child and is a page
+failure); the loop stops when a page has fewer than 100 elements, and it
+NEVER requests page 51 — reaching 50 full pages → `candidate-set-
+truncated`. Each page must parse as a JSON array of objects with an
+integer `number`; entries carrying a `pull_request` key are dropped (the
+issues API interleaves PRs). A non-zero `gh` exit, a non-array page, a
+malformed element, or the 50-page bound → `candidate-set-truncated`: no
 selection this iteration, status records the page count reached and the
-reason. Memory is bounded by the page cap; the result is never streamed
-line-by-line. `gh issue list --limit N` is never
+reason. Memory is bounded by pages × 4 MiB before parsing and by the
+flattened candidate list after. `gh issue list --limit N` is never
 used for enumeration (it truncates silently).
 
 ### 4.2 Hard exclusions (applied before scoring; each is logged with the
@@ -728,11 +733,11 @@ gitignored `.adlc/autopilot-*` files.
    must hash to `ticketSnapshotSha256`, so a worker cannot widen its own
    scope, drop a rail, or alter the acceptance criteria; the only
    permitted difference is the orchestrator-owned `completed` toggle) and
-   `.adlc/manifest.d/*.jsonl` and `.adlc/findings.jsonl` (both append-only
-   vs `BASE_OID`, verified with `git diff <BASE_OID> -- <file>` containing
-   no `-` lines; the findings ledger is written only by the orchestrator's
-   final review via `--findings-ledger`, never by the worker — fleet's
-   inner review runs without that flag); (ii) no path
+   `.adlc/manifest.d/*.jsonl` (append-only vs `BASE_OID`, verified with
+   `git diff <BASE_OID> -- <file>` containing no `-` lines; a diff to
+   `.adlc/findings.jsonl` is a violation — neither the worker nor fleet's
+   inner review may write it, and fleet's inner review runs without
+   `--findings-ledger`); (ii) no path
    matches the protected-path denylist (§4.2) other than those two
    exceptions; (iii) no path is a symlink at HEAD whose target escapes the
    scope. A violation is recorded as a round failure with the offending
@@ -784,7 +789,11 @@ gitignored `.adlc/autopilot-*` files.
    `diff-too-large` failures on one run → `blocked`. Then run the
    orchestrator's own `adversarial-review --base <BASE_OID> --provider codex
    --json --fail-on medium --max-bytes <reviewMaxBytes> --findings-ledger
-   <ISSUE_WT>/.adlc/findings.jsonl` over the whole issue-branch diff
+   <REPO_ROOT>/.adlc/autopilot-runs/<issue>.findings.jsonl` over the whole
+   issue-branch diff (the ledger path is OUTSIDE `ISSUE_WT` and gitignored
+   via `.git/info/exclude`, so the reviewed tree stays clean between 7a
+   and 7b; the tracked `.adlc/findings.jsonl` is never written by the
+   autopilot — feeding run ledgers into P7 is a follow-up)
    (binary resolved off the orchestrator's PATH; key scrubbed;
    `--allow-summary-review` is never passed). The same `--max-bytes` is
    given to fleet's inner reviewer via `fleet.reviewMaxBytes`. Record
@@ -925,9 +934,11 @@ gitignored `.adlc/autopilot-*` files.
   from `roundsUsed`/`wallClockUsedMs`, so a run that exhausted its build
   budget still gets its two CI rounds. The 30-minute watch clock is separate
   from both. Neither CI budget ever refills the build budget.
-- Every round's review findings are appended to `.adlc/findings.jsonl` via
-  `adversarial-review --findings-ledger` (ADR-0014) so P7 distillation sees
-  them.
+- Every final-review round's findings are appended to the gitignored run
+  ledger `<REPO_ROOT>/.adlc/autopilot-runs/<issue>.findings.jsonl` via
+  `adversarial-review --findings-ledger` (ADR-0014 format), linked from
+  the digest; the tracked `.adlc/findings.jsonl` is not written by the
+  autopilot (ingesting run ledgers into P7 is a follow-up ticket).
 
 ## 8. Open-PR maintenance (each iteration, before selection)
 
@@ -1078,7 +1089,8 @@ checkout exits 0.
 
 - `.adlc/autopilot-status.json` (local-only: `adlc-autopilot init` writes
   the entries `.adlc/autopilot-status.json`, `.adlc/autopilot.lock/`,
-  `.adlc/autopilot-runs/` and `.worktrees/autopilot-issue-*` to
+  `.adlc/autopilot-runs/` (run records, attempt ledgers and per-issue
+  findings ledgers) and `.worktrees/autopilot-issue-*` to
   `<REPO_ROOT>/.git/info/exclude` ONCE, idempotently, under the lock; the
   runtime never touches `.gitignore` or any tracked file in the primary
   checkout, and refuses to start (`preflight: exclude-missing`) if those
@@ -1741,11 +1753,12 @@ None is trust-root tier; each is a small, separately testable diff.
     constructed `ISSUE_WT` whose `realpath` escapes `REPO_ROOT` (symlink
     fixture) is refused.
 73. **Pagination contract** (`select.test.mjs`): the `gh api` fake
-    returns a `--slurp` outer array of 13 page arrays → 1 250 candidates;
-    an outer document that is an object, a page that is a string, an
-    element without an integer `number`, or 51 pages → `candidate-set-
-    truncated` with the reason recorded; the spawn recorder shows
-    `--slurp` in argv.
+    serves 13 pages (12 × 100 + 50) → 13 calls with `page=1..13`, 1 250
+    candidates, no `--paginate`/`--slurp` in any argv; a page that is an
+    object, a page that is a string, an element without an integer
+    `number`, a page exceeding the 4 MiB cap, or 50 full pages →
+    `candidate-set-truncated` with the reason recorded and exactly 50
+    calls at most (assert `page=51` is never requested).
 74. **Exact-name dependency guard** (`sequence.test.mjs`): adding
     `@adlc/spec-lint` (an existing published workspace not in the allowed
     set) → `third-party-dep`; adding `@adlc/core` as a workspace link →
