@@ -84,14 +84,14 @@ They are inputs to the design below and are themselves reviewable.
     checks `adversarial-review --help` lists `--input` and records the
     binary's `--version` in the digest — if absent, the diff-mode loop
     over the committed spec is the fallback, which is also what this
-    branch's PR gate ran); the operator
-    then either approves with the remaining findings carried into the
-    build ticket as acceptance criteria, or continues the loop. The
-    binding cross-model APPROVE is required on the CODE: the build PR
-    must carry a `record-cross-model` approve from a diff-mode
-    `adversarial-review --base <BASE_OID> --provider codex` run (exit 0)
-    bound to its revision before merge. Spec-level approval never
-    substitutes for that.
+    branch's PR gate ran); the loop ends either by convergence or by the
+    operator closing it with the remaining findings carried into the
+    build ticket as acceptance criteria. The binding cross-model verdict
+    for this program is required on the CODE: the build PR must carry a
+    `record-cross-model` entry whose `verdict` is the reviewer tool's
+    `"approve"` value, from a diff-mode `adversarial-review --base
+    <BASE_OID> --provider codex` run (exit 0), bound to its revision
+    before merge. A spec-level gate record never substitutes for that.
 14. **P6 (merge) stays human, always.** The autopilot never merges, never
     pushes to `main`, never deletes a branch it did not create.
 
@@ -523,7 +523,12 @@ into "what will it do next".
 
 For the selected issue, the orchestrator (NOT the worker) produces an ADLC
 ticket. Every issue body is untrusted input; the gate chain in step 3 runs
-for every issue regardless of how the ticket fields were obtained.
+for every issue regardless of how the ticket fields were obtained. Only
+the issue BODY and title are ever read — issue comments, reactions,
+linked PR text and timeline text are never part of any model-bound
+input — so under the default dispatch policy (§4.2, `owner-or-label`)
+the only text that can drive the worker without a maintainer label is
+text the repository OWNER wrote.
 
 1. If the issue body carries a `<!-- adlc:begin -->` block AND the issue's
    `authorAssociation` (from `gh issue view --json authorAssociation`) is
@@ -708,14 +713,17 @@ gitignored `.adlc/autopilot-*` files.
    - **spec-lint**: the orchestrator first derives the criteria document
      — the ticket body from its `=== ACCEPTANCE CRITERIA ===` heading to
      the next `===` heading (or end), written atomically (temp file +
-     `rename`) to `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` with a `##
+     `rename`) to `<ISSUE_WT>/.adlc/specs/<ULID>-ac.md` with a `##
      Acceptance criteria` heading prepended so spec-lint's criteria
      extractor finds the list — then runs `node
      <REPO_ROOT>/packages/spec-lint/bin/spec-lint.mjs
-     <ISSUE_WT>/.adlc/tmp/<ULID>-ac.md --record --ticket <ULID> --dir
+     <ISSUE_WT>/.adlc/specs/<ULID>-ac.md --record --ticket <ULID> --dir
      <ISSUE_WT>/.adlc` (the in-repo bin; the globally installed `adlc
-     spec-lint` does not accept `--record`). `.adlc/tmp/` is
-     revision-ignored and not committed.
+     spec-lint` does not accept `--record`). `.adlc/specs/` is a
+     TRACKED directory: the criteria document is committed with the ticket
+     shard in §6.2's commit (`chore(ticket): …`), so the spec-lint record
+     binds a durable, reviewable artifact — its hash is verifiable from
+     the PR, not from a temp file that no longer exists.
    Both records are manifest appends committed with the ticket. If either
    ticket hash changes later in the run (reopen/complete, §6.6/§6.6a) the
    coldstart verdict is re-recorded against the new hash before
@@ -823,13 +831,21 @@ gitignored `.adlc/autopilot-*` files.
    fleet's rails gate and of what the worker declared): `git diff
    --name-only <BASE_OID>...HEAD` in `ISSUE_WT` must satisfy (i) every path
    matches the ticket `scope` OR is one of the pipeline-produced paths
-   `.adlc/tickets/<ulid>--*.json` (exactly one, the run's own ticket,
+   `.adlc/specs/<ulid>-ac.md` (exactly one, the run's own criteria
+   document, byte-identical to the one the orchestrator derived — hash
+   recorded in the run record) and `.adlc/tickets/<ulid>--*.json` (exactly one, the run's own ticket,
    whose content at HEAD — with `completed` removed and keys sorted —
    must hash to `ticketSnapshotSha256`, so a worker cannot widen its own
    scope, drop a rail, or alter the acceptance criteria; the only
    permitted difference is the orchestrator-owned `completed` toggle) and
    `.adlc/manifest.d/*.jsonl` (append-only vs `BASE_OID`, verified with
-   `git diff <BASE_OID> -- <file>` containing no `-` lines; a diff to
+   `git diff <BASE_OID> -- <file>` containing no `-` lines, AND every
+   appended line must be one the ORCHESTRATOR wrote this run — it keeps
+   the sha256 of each entry it appends in the run record and any added
+   line outside that set is a violation `foreign-manifest-line` — AND
+   `adlc gate-manifest verify --dir <ISSUE_WT>/.adlc` must exit 0, which
+   rejects any line not signed with the key the worker never holds; a
+   diff to
    `.adlc/findings.jsonl` is a violation — neither the worker nor fleet's
    inner review may write it, and fleet's inner review runs without
    `--findings-ledger`); (ii) no path
@@ -895,8 +911,12 @@ gitignored `.adlc/autopilot-*` files.
    its output still matches any pattern on a second pass, the material is
    replaced by the fixed string `[dead-end material withheld: redaction
    failed]` and the round proceeds without it (never with the raw text).
-   CI job logs are fetched with `gh run view --log-failed` and redacted
-   the same way; the raw log is never written under `ISSUE_WT`. Each
+   CI job logs are fetched with `gh run view --log-failed` through the
+   shared spawn wrapper with a hard 4 MiB stdout cap (the child is killed
+   on overflow and the capture marked `truncated`), streamed through the
+   redactor in 64 KiB chunks with pattern-boundary overlap, and only the
+   redacted LAST 64 KiB is retained as dead-end material; the raw log is
+   never written to disk anywhere. Each
    retry then repeats steps 5–8 in full: ff, preflight, completion,
    attestation, push. No manifest entry from a superseded round is ever
    removed (append-only); the new attestation is bound to the new revision
@@ -1319,8 +1339,11 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   `READ_SET` — the published baseline, the issue branch, and the worker's
   own harness credentials — can in principle leave through model
   traffic; the credential exposure is inherent to running the harness
-  at all and is bounded by the authorization boundary above, not
-  eliminated; and the diff
+  at all (the CLI has no external auth broker and a scoped
+  non-exportable credential does not exist for it) and is bounded — not
+  eliminated — by the authorization boundary above together with §5's
+  rule that only OWNER-authored body text drives an unlabeled dispatch;
+  and the diff
   secret scan of §6.5a(iv) protects only what reaches GitHub — it is NOT
   a mitigation for content exposed in model requests and is not claimed
   as one.
@@ -1476,7 +1499,7 @@ None is trust-root tier; each is a small, separately testable diff.
 - `plugins/adlc-claude-code/commands/adlc-autopilot.md`: thin command that
   runs `adlc autopilot status|once --dry-run|select` and explains
   `systemctl --user {start,stop,status} adlc-autopilot`.
-- The approved spec itself is NOT in the build ticket's scope: the run
+- This spec itself is NOT in the build ticket's scope: the run
   record stores `specBlob = git rev-parse <BASE_OID>:docs/specs/issue-autopilot-local.md`
   and the actual-diff check (§6.5a) rejects any change to that path; spec
   changes go through their own reviewed PR. Before dispatching the build
@@ -1493,8 +1516,9 @@ None is trust-root tier; each is a small, separately testable diff.
   `spec-approval` record's `approver` must name that same login or the
   e-mail GitHub reports for it; any mismatch → exit 1
   `spec-approval-unbound`. Otherwise → exit 1 `spec-approval-stale`, no
-  dispatch. The approval string in the manifest is therefore evidence of
-  WHAT was approved; WHO approved it is GitHub's merge identity.
+  dispatch. The record's `spec_hash` states WHAT was gated; GitHub's
+  merge identity states WHO — the manifest is data the preflight checks,
+  never a claim it trusts.
 - Registry/docs: `packages/cli/lib/registry.mjs`,
   `apps/docs/lib/toolkit-packages.mjs`,
   `apps/docs/content/docs/toolkit/autopilot.mdx` + `meta.json`,
@@ -1982,7 +2006,7 @@ None is trust-root tier; each is a small, separately testable diff.
     stdin byte-for-byte inside the `what` string and spawns no extra
     process; a
     `gaps` array with one entry → CLARIFY and zero record calls; the
-    spec-lint fake sees `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` existing,
+    spec-lint fake sees `<ISSUE_WT>/.adlc/specs/<ULID>-ac.md` existing,
     beginning with `## Acceptance criteria`, and argv `--record --ticket
     <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
     reopen (§6.6) the coldstart record call repeats with the new hash.
@@ -2142,3 +2166,21 @@ None is trust-root tier; each is a small, separately testable diff.
     whose branch name has a remote ref is excluded with
     `remote-ref-exists` even with no record and no tombstone; a tombstone
     older than 30 days is pruned; the tombstone carries `lastPushedOid`.
+98. **Criteria document is tracked** (`sequence.test.mjs`): the ticket
+    commit contains `.adlc/specs/<ULID>-ac.md`, the spec-lint record's
+    file hash equals its sha256, and the actual-diff check accepts exactly
+    that one criteria file and rejects a second or a modified one.
+99. **Bounded CI log capture** (`redact.test.mjs`): a `gh run view
+    --log-failed` fake emitting 5 MiB is killed at the 4 MiB cap, the
+    capture is marked `truncated`, only the redacted last 64 KiB reaches
+    the dead-end file, and a secret straddling a 64 KiB chunk boundary is
+    still redacted.
+100. **Foreign manifest lines rejected** (`diffcheck.test.mjs`): an
+    appended `.adlc/manifest.d` line not in the run record's
+    orchestrator-written set → `foreign-manifest-line`; a line with an
+    invalid signature makes `gate-manifest verify` exit ≠ 0 → violation;
+    the orchestrator's own signed appends pass.
+101. **Body-only model input** (`triage.test.mjs`): the `gh issue view`
+    argv requests `title,body` and never `comments`; a fixture whose
+    comments contain a directive shows no trace of it in the shaping
+    spawn's stdin.
