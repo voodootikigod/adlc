@@ -464,15 +464,21 @@ issue number and the rule name)
   by selection, revalidation (§6.0a), triage (§5.1) and the threat model
   (§11) alike; `mode = autopilot.dispatchApproval`:
   - `"owner-or-label"` (default): `authorAssociation == "OWNER"`, OR the
-    most recent `labeled` event for `adlc:autopilot` in the issue timeline
-    was performed by an actor whose repository permission is `admin` or
-    `maintain`;
+    **labeled clause**: `adlc:autopilot` is CURRENTLY on the issue (`gh
+    issue view --json labels`) AND, among the issue's timeline events for
+    that label, the LATEST one (by `created_at`, ties broken by event id)
+    is a `labeled` event whose actor's repository permission is `admin` or
+    `maintain` — a later `unlabeled` event, by anyone, revokes eligibility
+    until an authorized actor labels again; the same clause is evaluated
+    identically at selection, revalidation (§6.0a) and triage;
   - `"label-only"`: the labeled clause only;
   - `"trusted-authors"` (opt-in): `authorAssociation ∈ {OWNER, MEMBER,
     COLLABORATOR}`, OR the labeled clause.
   Anything else — including `MEMBER`/`COLLABORATOR` authors under the
-  default, and an `adlc:autopilot` label applied by a `write` actor — is
-  excluded with rule `not-authorized` and is never shaped or dispatched.
+  default, an `adlc:autopilot` label applied by a `write` actor, a label
+  that was removed and re-added by a non-authorized actor, or a timeline
+  the autopilot cannot read — is excluded with rule `not-authorized` and
+  is never shaped or dispatched.
   An unknown mode value → preflight exit 1 `bad-config`.
 - label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
   `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
@@ -1222,9 +1228,16 @@ nameWithOwner,defaultBranchRef` must return that name and default branch
 repos/<repo>/collaborators/<login>/permission` is `admin`, `maintain` or
 `write`. Any mismatch → exit 1 (`repo-mismatch` / `principal-unauthorized`)
 before any issue, PR or git write. Every `gh` invocation thereafter passes
-`--repo <repo>` explicitly (never relies on cwd inference), and every
-`git push`/`ls-remote` names `origin` whose URL was verified this
-iteration.
+`--repo <repo>` explicitly (never relies on cwd inference). The verified
+fetch and push URLs are PINNED for the iteration (stored in the status
+file and copied into each run record as `remoteFetchUrl` /
+`remotePushUrl`), and every network git operation — `ls-remote`, `fetch`,
+`push`, including the lease-guarded deletes — is invoked with that URL
+literal as the remote argument, never with the mutable name `origin`;
+immediately before each such operation `git remote get-url [--push]
+origin` is re-read and must still normalize to the pinned value,
+otherwise the run is `orphan` (`remote-url-changed`) and nothing is
+pushed.
 
 9.2 Plugin parity: the installed `adlc@adlc` plugin version
 (`~/.claude/plugins/installed_plugins.json`) equals the `version` in
@@ -1603,7 +1616,21 @@ None is trust-root tier; each is a small, separately testable diff.
 1. **Offline unit tests green**: `node --test packages/autopilot/test/` exits 0
    with injected `gh`, `claude`, fleet and quota fakes; no network, no
    subprocess outside the fakes (verify: the test harness asserts the spawn
-   recorder saw only whitelisted argv).
+   recorder saw only whitelisted argv). **Coverage is not a name match:**
+   `packages/autopilot/test/ac-registry.mjs` exports an explicit map from
+   every criterion number in this section to one or more exported test
+   functions; `spec-coverage.test.mjs` parses this section at the pinned
+   blob, fails on any number missing from the registry or any registered
+   function that is not defined, and statically checks that each
+   registered test imports at least one module from `packages/autopilot/lib/`
+   and contains at least one `assert` call whose argument references
+   that import (a test with no production seam is rejected); in addition
+   `node scripts/mutation-gate.mjs origin/<base> --max 12` must pass on
+   the package (CI already runs it) and, for the security- and
+   lifecycle-critical criteria (quota, authorization, redaction,
+   retirement, attestation), `adlc hollow-test --test-cmd "node --test
+   packages/autopilot/test/"` must report no hollow test — verify: all
+   three commands exit code 0.
 2. **Quota gate matrix** (`packages/autopilot/test/quota.test.mjs`): 5h 49 /
    7d 49 → ok; 5h 50 → refused; 7d 50 → refused; scoped worker-model window
    50 → refused; endpoint 401 + `/usage` fallback parse → ok/refused per
@@ -2294,3 +2321,20 @@ None is trust-root tier; each is a small, separately testable diff.
     the real fetch-back sequence): after the run, `fleet/run-<id>` in the
     caller repository contains the worker's commit, `adlc/autopilot/issue-<n>`
     fast-forwards to it, and no gate argv references the mirror path.
+109. **Label removal revokes** (`select.test.mjs`): a timeline fixture
+    `labeled(admin) → unlabeled(anyone)` with the label absent → `not-
+    authorized`; `labeled(admin) → unlabeled → labeled(write)` → `not-
+    authorized`; `labeled(admin) → unlabeled → labeled(maintain)` with the
+    label present → eligible; a label present on the issue but with NO
+    timeline event readable → `not-authorized`; the same fixtures drive
+    revalidation and triage.
+110. **Pinned remote URL** (`run.test.mjs` + `recover.test.mjs`): every
+    recorded `git ls-remote`/`fetch`/`push` argv carries the pinned URL
+    literal and never the word `origin` as the remote argument; a `git
+    remote get-url` fake that changes between preflight and a push →
+    `remote-url-changed`, zero pushes, state `orphan`.
+111. **Coverage gate is not vacuous** (`spec-coverage.test.mjs` self-test):
+    a registry entry pointing at a test with no `lib/` import or no
+    `assert` call fails the gate; a criterion number absent from the
+    registry fails it; renumbering the spec without updating the registry
+    fails it.
