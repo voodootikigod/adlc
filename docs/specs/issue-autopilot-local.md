@@ -870,7 +870,18 @@ gitignored `.adlc/autopilot-*` files.
    merged work, and fleet is invoked again exactly as in step 4 — cutting a
    NEW `fleet/run-<id>` from the current tip of `adlc/autopilot/issue-<n>`
    — with the failure output (preflight log / CI job log / conflict
-   markers) supplied as dead-end material for fleet's `fixPrompt`. Each
+   markers) supplied as dead-end material for fleet's `fixPrompt`, AFTER
+   **redaction**: every byte that will enter a model-bound prompt
+   (`--dead-end-file`, the charter addendum, shaping and coldstart inputs,
+   fleet's own captured logs handed back as dead-ends) passes through one
+   redactor that replaces matches of the §6.5a(iv) pattern set and every
+   key-bearing environment value with `[REDACTED:<pattern>]`, truncates to
+   the fence cap, and FAILS CLOSED — if the redactor throws, times out, or
+   its output still matches any pattern on a second pass, the material is
+   replaced by the fixed string `[dead-end material withheld: redaction
+   failed]` and the round proceeds without it (never with the raw text).
+   CI job logs are fetched with `gh run view --log-failed` and redacted
+   the same way; the raw log is never written under `ISSUE_WT`. Each
    retry then repeats steps 5–8 in full: ff, preflight, completion,
    attestation, push. No manifest entry from a superseded round is ever
    removed (append-only); the new attestation is bound to the new revision
@@ -1007,6 +1018,7 @@ gitignored `.adlc/autopilot-*` files.
     | 0 | — | `built` (continue at §6.5) | none yet |
     | 2 | `quota-paused` | `quota-paused` (resumable by re-invocation, §2.1) | none — never a label |
     | 2 | `lock-held` | unchanged (`skipped`) | none |
+    | 2 | `mirror-fetch-failed` | `blocked` (reason preserved; the worker branch is left in the mirror for forensics) | findings comment + `adlc:autopilot-blocked` |
     | 2 | `wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable`, anything else | `blocked` | findings comment (fenced, capped 12 000 chars) + `adlc:autopilot-blocked`; branch and worktree kept for forensics; no PR |
     | 1 | any | unchanged; `lastError` set | none; the loop sleeps |
     | other / unparseable JSON | — | treated as exit 1 | none |
@@ -1429,7 +1441,9 @@ None is trust-root tier; each is a small, separately testable diff.
   `fleet.reviewMaxBytes` forwarded as `--max-bytes` to the inner reviewer;
   `--json` result includes the review's `{provider, verdict, revision,
   rounds}`, the `fleetRunId`, and a machine-readable `reason` from the
-  fixed set in §6.10 for every non-zero exit.
+  fixed set in §6.10 — `quota-paused`, `lock-held`, `wall-clock`,
+  `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable`,
+  `mirror-fetch-failed` — for every non-zero exit.
   Also verify (and test) that `fleet run` invoked with cwd = a git worktree
   reads that worktree's `.adlc/tickets/` and cuts nested worktrees correctly.
 - `plugins/adlc-claude-code/commands/adlc-autopilot.md`: thin command that
@@ -1443,8 +1457,17 @@ None is trust-root tier; each is a small, separately testable diff.
   ticket from the manifest and requires its recorded `spec_hash` to
   equal the sha256 of the blob at `specBlob` AND `adlc run p1 --ticket
   <build ticket> --json` to exit 0 (spec-lint + premortem + spec-approval
-  all present, ordered and bound); otherwise → exit 1
-  `spec-approval-stale`, no dispatch.
+  all present, ordered and bound) AND a **human-identity binding** the
+  manifest alone cannot forge: the commit that introduced `specBlob` on
+  `main` is resolved to its pull request (`gh api
+  repos/<repo>/commits/<sha>/pulls`), that PR must be `merged` with a
+  `merged_by.login` whose repository permission is `admin` or `maintain`
+  (GitHub's own authenticated identity, checked live), and the
+  `spec-approval` record's `approver` must name that same login or the
+  e-mail GitHub reports for it; any mismatch → exit 1
+  `spec-approval-unbound`. Otherwise → exit 1 `spec-approval-stale`, no
+  dispatch. The approval string in the manifest is therefore evidence of
+  WHAT was approved; WHO approved it is GitHub's merge identity.
 - Registry/docs: `packages/cli/lib/registry.mjs`,
   `apps/docs/lib/toolkit-packages.mjs`,
   `apps/docs/content/docs/toolkit/autopilot.mdx` + `meta.json`,
@@ -1985,12 +2008,13 @@ None is trust-root tier; each is a small, separately testable diff.
     `BASE_OID` → `spec-approval-stale`, exit 1, zero dispatches; equal →
     passes; an older matching record followed by a newer non-matching one
     → stale (newest wins).
-81. **Sanitized git view** (`run.test.mjs`): the fleet argv carries
-    `--model-plane-git-sanitize`; the orchestrator-generated `config`
-    overlay contains no `url`, `helper`, `include`, `includeIf`,
-    `hooksPath` or `alias` keys (table-driven negative assertions) and
-    keeps `core.repositoryformatversion`, `core.bare` and the
-    `extensions.worktreeConfig` value of the real config.
+81. **Mirror is the only git database** (`run.test.mjs`): the fleet argv
+    carries `--model-plane-git mirror --model-plane-git-mirror
+    <ISSUE_WT>/.autopilot-mirror.git` and its read set contains that
+    mirror path and NOT `<REPO_ROOT>/.git`; no argv anywhere contains
+    `--model-plane-git-sanitize`; a fleet fake reporting
+    `gitSource: "shared"` back in `--json` is `sandbox-policy-mismatch`
+    (no attestation).
 82. **Revalidation before write and dispatch** (`sequence.test.mjs`): a
     `gh issue view` fake whose second read shows a changed `updatedAt`, a
     newly added `adlc:autopilot-skip`, a closed state, or a new open PR
@@ -2026,3 +2050,20 @@ None is trust-root tier; each is a small, separately testable diff.
     shaping, and each pre-strike helper invocation (run with the fake
     lock held) increments it and applies the reserve from ordinal 2; a
     helper run without the lock exits 1.
+88. **Dead-end redaction is fail-closed** (`redact.test.mjs`): a
+    preflight log containing each `SECRET_PATTERNS` entry and the literal
+    orchestrator key value reaches the `--dead-end-file` with every match
+    replaced by `[REDACTED:<pattern>]`; a redactor fake that throws or
+    returns text still matching a pattern → the file contains only the
+    withheld sentinel; the spawn recorder shows no raw log path passed to
+    fleet, shaping, or coldstart; `gh run view --log-failed` output is
+    redacted before being written.
+89. **Approval bound to a merge identity** (`preflight.test.mjs`): a
+    `gh api` fake returning the spec commit's PR as merged by a `maintain`
+    login that equals the record's `approver` → dispatch allowed; merged
+    by a `write` login, an unmerged PR, no PR, or an `approver` naming a
+    different login → `spec-approval-unbound`, zero dispatches.
+90. **Reason enum is closed** (`run.test.mjs`): the §6.10 mapping is
+    table-driven over exactly the eight reasons of §14 including
+    `mirror-fetch-failed` (→ `blocked`, worker branch preserved); an
+    unknown reason string → treated as exit 1, never `blocked`.
