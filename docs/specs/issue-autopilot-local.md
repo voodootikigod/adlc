@@ -222,7 +222,13 @@ runs only when the operator invokes `reset --issue N --confirm-delete
 <OID> --delete-remote`. When both steps run, order is remote-first so a
 remote failure leaves every local artifact in place for the next attempt
 (nothing local is destroyed before the remote outcome is known). Step R
-(remote, operator-invoked only, and only if the record says pushed): (c)
+(remote, operator-invoked only; eligible whenever the record preserves a
+`lastPushedOid` — including records in `remote-pending`, `blocked`,
+`stale`, `ci-red`, `oid-mismatch` or `done` — the lifecycle state never
+makes a pushed ref undeletable by the operator; `lastPushedOid` is
+preserved in the record for as long as the record exists and is copied
+into the status file's `remoteRefsLeft` entry when the record is
+deleted, so the deletion command stays available): (c)
 is re-evaluated IMMEDIATELY before the push (`gh pr list --repo <repo>
 --head adlc/autopilot/issue-<n> --state open --json number` must be
 empty — a PR that appeared since the earlier check aborts with `orphan`)
@@ -299,12 +305,18 @@ silent success).
   body must parse as a JSON object; `five_hour` and `seven_day` must each
   be objects whose `utilization` is a finite number in `[0, 100]` and whose
   `resets_at` is an ISO-8601 string; `limits`, if present, must be an
-  array whose entries each have string `kind` and finite `percent` in
-  `[0, 100]`, and an entry with `scope.model.display_name` must have it as
-  a non-empty string. Any other shape — missing key, `null` where an
-  object is required, NaN, out-of-range, non-array `limits`, duplicate
-  scoped entries for the same model with different `percent` — →
-  `ok:false, reason:"quota-unknown"`. "No scoped limit for the effective
+  array; EVERY entry must be a plain object with string `kind`, finite
+  `percent` in `[0, 100]`, and either no `scope` key at all or a `scope`
+  that is a plain object whose `model` is a plain object whose
+  `display_name` is a non-empty string (an entry whose `scope` is present
+  but `null`, a scalar, an array, an object without `model`, or a `model`
+  without a string `display_name` is MALFORMED). One malformed entry
+  anywhere in `limits` — whether or not it concerns the effective model —
+  → `ok:false, reason:"quota-unknown"`; the gate never skips an entry it
+  cannot classify. Any other shape — missing key, `null` where an object
+  is required, NaN, out-of-range, non-array `limits`, duplicate scoped
+  entries for the same family with different `percent` — likewise →
+  `quota-unknown`. "No scoped limit for the effective
   model" is signalled ONLY by: no `limits[]` entry whose
   `scope.model.display_name` matches AND `seven_day_<family>` is `null`
   or absent; a scoped entry that matches but fails the per-entry schema
@@ -315,7 +327,7 @@ silent success).
   of those tokens); a model whose family cannot be derived → preflight
   `model-unknown`, exit 1. The gate evaluates every scoped entry whose
   `display_name` equals the family case-insensitively, and the same
-  `effectiveModel` string is what is passed to fleet as `--model` (AC 46).
+  `effectiveModel` string is what is passed to fleet as `--model` (AC 47).
   v1 supports `--adapter claude-code` only; any other adapter → preflight
   `adapter-unsupported`, exit 1 (other harnesses meter different quota
   pools the gate cannot read).
@@ -416,7 +428,7 @@ never taken from input — it is always constructed as
 `adlc/autopilot/issue-<validated number>`; a path is always constructed
 by joining `REPO_ROOT`/`ISSUE_WT` with validated components and then
 verified with `realpath` to still lie under the expected root. Anything
-else → exit 1 `bad-input:<field>` with no side effect (AC 72).
+else → exit 1 `bad-input:<field>` with no side effect (AC 73).
 
 ### 4.1 Candidate set
 
@@ -878,7 +890,7 @@ gitignored `.adlc/autopilot-*` files.
    `name` (e.g. `test (18)`, `ticket-store-platform (` — the platform
    matrix names its jobs `ticket-store-platform (<os>, <node>)`), so a
    matrix expansion cannot hide a job. Contract fixtures for this
-   function are captured from the real `gh` output (AC 65).
+   function are captured from the real `gh` output (AC 66).
 
    | Job | `state` | Meaning |
    |---|---|---|
@@ -1564,24 +1576,31 @@ None is trust-root tier; each is a small, separately testable diff.
     `quota-paused`, zero label calls, and a later iteration with quota ok
     issues `fleet run --resume <fleetRunId>`; exit 2 + `reason:"lock-held"`
     → no state change; unparseable JSON → treated as exit 1.
-42. **Re-arm vs retire** (`recover.test.mjs`): removing
+42. **Remote-pending is resettable** (`recover.test.mjs`, real temporary
+    git repository with a bare `origin`): CLOSED → `remote-pending`, then
+    `reset --issue N --confirm-delete <tip> --delete-remote` deletes the
+    remote ref with the lease form using the preserved `lastPushedOid`,
+    the record is then deleted and the issue is selectable; the same for
+    MERGED → `remote-pending` and for `blocked` with a pushed branch; a
+    record without `lastPushedOid` refuses `--delete-remote` (exit 2).
+43. **Re-arm vs retire** (`recover.test.mjs`): removing
     `adlc:autopilot-stale` from a run with an open PR → counters reset,
     state `pr-open`, branch and PR untouched, issue NOT selectable, and
     the next maintenance pass performs a retry round; removing
     `adlc:autopilot-blocked` from a run with no PR → retire per §2.1a and
     the issue becomes selectable; an `oid-mismatch` run is skipped by
     maintenance until its label is removed.
-43. **Diff size gate** (`run.test.mjs`): a branch whose diff is
+44. **Diff size gate** (`run.test.mjs`): a branch whose diff is
     `reviewMaxBytes + 1` bytes → round failure `diff-too-large`, zero
     `adversarial-review` calls; two consecutive → `blocked`; both
     reviewer argvs carry `--max-bytes 262144` and never
     `--allow-summary-review`.
-44. **Orphan reset authorization** (`recover.test.mjs`, real temporary
+45. **Orphan reset authorization** (`recover.test.mjs`, real temporary
     git repository): `reset --issue N --confirm-delete <tip>` deletes a
     marker-bearing recordless branch; the same command refuses (exit 2,
     nothing deleted) when the marker is absent, when the OID is not the
     tip, or when an open-PR fake has that head.
-45. **Reopen for retry** (`sequence.test.mjs` + `reopen-cli.test.mjs`):
+46. **Reopen for retry** (`sequence.test.mjs` + `reopen-cli.test.mjs`):
     a final-review-fake `needs-attention` after the completion commit →
     one `adlc ticket update <ULID> --input - --expect <hash> --authorize
     --write --dir <ISSUE_WT>/.adlc` call whose stdin is the FULL document
@@ -1594,13 +1613,16 @@ None is trust-root tier; each is a small, separately testable diff.
     (`.adlc/tickets/.store.json`): create → complete → reopen as above
     asserts exit 0 and `completed:false`, and the same update without
     `--authorize` asserts exit 2 with code `AUTHORIZATION_REQUIRED`.
-46. **Effective model binding + strict schema** (`quota.test.mjs`):
+47. **Effective model binding + strict schema** (`quota.test.mjs`):
     `--model sonnet` makes the gate read the `Sonnet` scoped entry and
     passes `--model sonnet` to fleet; `--model gpt-5` → preflight
     `model-unknown`; `--adapter codex` → `adapter-unsupported`; endpoint
     fixtures with HTTP 500, a non-object body, `five_hour: null`,
-    `utilization: "70"`, `utilization: 101`, `limits: {}`, and a matching
-    scoped entry lacking `percent` all yield `quota-unknown`; the canonical
+    `utilization: "70"`, `utilization: 101`, `limits: {}`, a matching
+    scoped entry lacking `percent`, and — for a NON-matching entry —
+    `scope: null`, `scope: "opus"`, `scope: []`, `scope: {}`, `scope:
+    {model: {}}` and `scope: {model: {display_name: ""}}` all yield
+    `quota-unknown` (no entry is skipped as irrelevant); the canonical
     no-scoped-limit predicate is `noScopedLimit(body, family) :=
     (body["seven_day_" + family] === null || !(("seven_day_" + family) in
     body)) && !body.limits?.some(e => familyOf(e?.scope?.model?.display_name)
@@ -1610,12 +1632,12 @@ None is trust-root tier; each is a small, separately testable diff.
     where `seven_day_opus` is an object but `limits` has no Opus entry
     uses the object's `utilization` (both shapes are read; disagreement
     between them → `quota-unknown`).
-47. **Carry-forward equivalence** (`maintain.test.mjs`, real temporary git
+48. **Carry-forward equivalence** (`maintain.test.mjs`, real temporary git
     repository): a clean rebase whose patch-id is unchanged → one
     `--carry-forward` call and re-entry to `ci-watch`; a clean rebase
     whose patch-id changed (fixture: context drift in the same hunk) →
     zero `--carry-forward` calls and a full retry round.
-48. **Deadlines** (`deadline.test.mjs`, fake timers + a child fake that
+49. **Deadlines** (`deadline.test.mjs`, fake timers + a child fake that
     ignores SIGTERM): every row of §12.1 has a fixture; expiry sends
     SIGTERM to the process group, SIGKILL after 15 s, and the step fails
     with `timeout:<command>`; SIGTERM to the orchestrator during a stalled
@@ -1623,63 +1645,63 @@ None is trust-root tier; each is a small, separately testable diff.
     primary checkout is byte-identical before and after a full `once`
     sequence, while `.git/info/exclude` carries the four entries after
     `init`.
-49. **Effective model propagates** (`quota.test.mjs` + `run.test.mjs`):
+50. **Effective model propagates** (`quota.test.mjs` + `run.test.mjs`):
     with `--model sonnet`, the shaping `claude` argv, the coldstart-answer
     `claude` argv and the fleet argv all carry `--model sonnet`, and the
     gate reads the `Sonnet` scoped window; with no override all three
     carry `--model opus`.
-50. **Head binding during CI** (`ci.test.mjs`): a `headRefOid` that differs
+51. **Head binding during CI** (`ci.test.mjs`): a `headRefOid` that differs
     from `attestedHead` on any poll → `oid-mismatch`, zero fix rounds, and
     `done` is never reached even with all jobs green; equal head + all
     green → `done`.
-51. **Outer-gate integrity** (`sequence.test.mjs`, real temporary git
+52. **Outer-gate integrity** (`sequence.test.mjs`, real temporary git
     repository): a worker fake that adds `"left-pad"` to a
     `packages/foo/package.json` → `third-party-dep` round failure before
     preflight; one that adds `"@adlc/core"` → passes the check; one that
     changes `scripts.test` → failure; an unexpected ignored file planted in
     `ISSUE_WT` → `ignored-file-drift`; `npm ci --ignore-scripts` is
     observed in `ISSUE_WT` after every ff.
-52. **Repo/principal binding** (`preflight.test.mjs`): an `origin` URL for
+53. **Repo/principal binding** (`preflight.test.mjs`): an `origin` URL for
     a different repo (each of the three URL forms) → `repo-mismatch`; a
     push URL differing from the fetch URL → `repo-mismatch`; a principal
     with `read` permission → `principal-unauthorized`; every recorded `gh`
     argv in a full `once` sequence carries `--repo voodootikigod/adlc`.
-53. **Paginated enumeration** (`select.test.mjs`): a `gh api` fake serving
+54. **Paginated enumeration** (`select.test.mjs`): a `gh api` fake serving
     1,250 issues across 13 pages yields 1,250 candidates with PR entries
     dropped; a fake whose third page fails → `candidate-set-truncated`,
     zero selections, status `pagesReached: 2`.
-54. **Ticket snapshot** (`diffcheck.test.mjs`): a worker fake that adds a
+55. **Ticket snapshot** (`diffcheck.test.mjs`): a worker fake that adds a
     glob to the shard's `scope`, removes a rail, or edits the body → round
     failure naming the shard; a shard differing only by
     `completed: true|false` → pass; the recorded `ticketSnapshotSha256`
     equals sha256 of the canonicalized shard written at §6.2.
-55. **Lockfile canonical comparison** (`sequence.test.mjs`): a
+56. **Lockfile canonical comparison** (`sequence.test.mjs`): a
     `package-lock.json` change that adds `node_modules/left-pad`, changes
     an existing entry's `resolved` or `integrity`, or removes an entry →
     `lockfile-drift`; one that adds a `packages/autopilot` workspace link
     and `node_modules/@adlc/autopilot` with `link: true` → pass; `npm ci`
     argv carries `--ignore-scripts --no-audit --no-fund`.
-56. **Upsert head binding** (`pr.test.mjs`): an `ls-remote` fake that
+57. **Upsert head binding** (`pr.test.mjs`): an `ls-remote` fake that
     changes between the post-push check and the upsert → zero `gh pr`
     mutating calls and `oid-mismatch`; a `gh pr view` fake returning a
     different `headRefOid` right after `gh pr create` → `oid-mismatch`
     with the PR number named in the comment.
-57. **`oid-mismatch` without a PR** (`recover.test.mjs`): a pre-push
+58. **`oid-mismatch` without a PR** (`recover.test.mjs`): a pre-push
     mismatch → comment on the ISSUE + `adlc:autopilot-blocked`, branch
     kept; label removed → retire, including `git push --delete` only when
     the record says pushed; a pushed-but-no-PR mismatch → same path; a
     mismatch with an open PR → label removed → re-arm (branch and PR
     untouched, full retry round).
-58. **Durable attempt ledger** (`triage.test.mjs`): the ledger file is
+59. **Durable attempt ledger** (`triage.test.mjs`): the ledger file is
     written with `outcome:"started"` before the shaping fake is spawned; a
     simulated crash (process exit) between write and spawn leaves an entry
     that a fresh process counts; the third such entry within 24 h yields
     `shaping-failed`; 8-day-old entries are ignored.
-59. **Pre-strike helper receives resolved values** (`run.test.mjs`): the
+60. **Pre-strike helper receives resolved values** (`run.test.mjs`): the
     fleet argv's `--pre-strike-argv` JSON array contains the elements `--model
     <effectiveModel> --quota-threshold <T> --quota-reserve <R>` for a
     non-default `--model sonnet --quota-threshold 40 --quota-reserve 10`.
-60. **Maintenance ownership + selector** (`maintain.test.mjs`): records
+61. **Maintenance ownership + selector** (`maintain.test.mjs`): records
     in every non-candidate state (table-driven over the full enum,
     including `oid-mismatch` with an OPEN PR and `blocked`) produce zero
     git/gh mutating calls; a `pr-open` record whose token mismatches the
@@ -1687,14 +1709,14 @@ None is trust-root tier; each is a small, separately testable diff.
     whose `ls-remote` differs from the last pushed OID → `orphan`, zero
     mutations; `headRefOid != attestedHead` → `oid-mismatch`; all
     preconditions met → the rebase path runs.
-61. **PR lifecycle** (`maintain.test.mjs`): `MERGED` → `done`, local
+62. **PR lifecycle** (`maintain.test.mjs`): `MERGED` → `done`, local
     worktree/branch/marker removed, zero `git push` calls, record deleted
     only when the `ls-remote` fake shows the ref gone, else
     `remote-pending`; `CLOSED` → local retire, zero `git push` calls,
     `remote-pending` while the ref exists, `adlc:autopilot-skip` +
     comment naming the exact remote-deletion command on the issue; PR not
     found → `orphan`.
-62. **Lease-guarded remote delete is operator-only** (`recover.test.mjs`,
+63. **Lease-guarded remote delete is operator-only** (`recover.test.mjs`,
     real temporary git repository with a bare `origin`): automatic
     retirement of a pushed run issues zero `git push` calls and reports
     the ref under `remoteRefsLeft`; `reset --issue N --confirm-delete
@@ -1703,29 +1725,29 @@ None is trust-root tier; each is a small, separately testable diff.
     another push, the delete fails the lease, the remote ref survives,
     and the run is `orphan`; a PR fake that appears right after a
     successful delete is reported as `pr-after-delete`.
-63. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
+64. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
     'opus;touch /tmp/x'` preflight exits 1 `model-unknown` (grammar
     `^[a-z0-9][a-z0-9.-]{0,63}$`); the `--pre-strike-argv` value parses
     as a JSON array whose elements equal the resolved values verbatim; the
     spawn recorder shows every child (including the pre-strike helper as
     executed by the fleet fake) spawned with an argv array and
     `shell:false`.
-64. **Fallback family normalization** (`quota.test.mjs`): `familyOf` maps
+65. **Fallback family normalization** (`quota.test.mjs`): `familyOf` maps
     `"Fable"`, `"claude-opus-5"`, `"Claude Sonnet 5"` and `"opus"` to
     their families and `"gpt-5"` to `unknown`; a fallback text with a
     `Current week (Opus): 70% used` line and `--model claude-opus-5` →
     refused; two `(Opus)` lines with different values → `quota-unknown`.
-65. **CI normalization contract** (`ci.test.mjs`): fixtures captured
+66. **CI normalization contract** (`ci.test.mjs`): fixtures captured
     verbatim from `gh pr checks --json name,state,bucket,workflow` for
     pass, fail, pending, skipping and cancel rows normalize as §6.9; a row
     with no `bucket` → red; `ticket-store-platform (windows-latest, 18)`
     matches the blocking prefix; a non-blocking `pre-ga-gate` fail is
     ignored.
-66. **Authorized unlabel** (`recover.test.mjs`): an `unlabeled` timeline
+67. **Authorized unlabel** (`recover.test.mjs`): an `unlabeled` timeline
     event by a `write`-permission actor → no transition, label re-applied,
     status `unauthorized-unlabel`; by an `admin` actor → transition, and
     the same event id is not acted on again on the next iteration.
-67. **Pinned tools** (`preflight.test.mjs`): a PATH whose first entry is
+68. **Pinned tools** (`preflight.test.mjs`): a PATH whose first entry is
     `<REPO_ROOT>/node_modules/.bin` containing a fake `adversarial-review`
     → that entry is skipped and the system binary is pinned; a tool that
     resolves only under `REPO_ROOT` → `untrusted-tool`; a fake `adlc`
@@ -1735,12 +1757,12 @@ None is trust-root tier; each is a small, separately testable diff.
     never placed in any child env; `--trusted-bin-dirs` restricts the
     search to the given directories; every recorded child env has the
     sanitized PATH.
-68. **Digest protocol** (`digest.test.mjs`): a `gh` fake that fails after
+69. **Digest protocol** (`digest.test.mjs`): a `gh` fake that fails after
     the comment is posted leaves `digestPosted:false`, and the next
     iteration finds the sentinel and posts nothing; a closed log issue →
     a new issue is created and cached; two open log issues → the lowest
     is used and `digest-issue-ambiguous` is reported.
-69. **Local deletion revalidation** (`recover.test.mjs`, real temporary
+70. **Local deletion revalidation** (`recover.test.mjs`, real temporary
     git repository): a retire whose branch tip moved after the record's
     `localHead`, or whose worktree has an uncommitted file, performs no
     deletion and marks `orphan`; the worktree removal is never forced; a
@@ -1749,13 +1771,13 @@ None is trust-root tier; each is a small, separately testable diff.
     byte-identical; a record is deleted only when the `ls-remote` fake is
     empty and no local branch/worktree exists (the §2.1 canonical rule),
     table-driven over every row that ends in record deletion.
-70. **Unit file paths** (`service.test.mjs`): generated unit contains
+71. **Unit file paths** (`service.test.mjs`): generated unit contains
     line-anchored `WorkingDirectory=/<abs>`, `ExecStart=/<abs node>
     /<abs>/packages/autopilot/bin/adlc-autopilot.mjs loop --rest 10m`,
     `EnvironmentFile=/<abs>/.env.local`, `Restart=on-failure`,
     `KillMode=control-group`; no `%h`; a working directory lacking
     `.adlc/config.json` makes generation exit 1 `bad-working-directory`.
-71. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
+72. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
     fake is invoked with cwd = `ISSUE_WT`, `--tickets
     <ISSUE_WT>/.adlc/tickets`, `--prompt-only`, never `--dir`, and, on
     the record call, with `--prompt-only --record-verdict -`,
@@ -1770,20 +1792,20 @@ None is trust-root tier; each is a small, separately testable diff.
     beginning with `## Acceptance criteria`, and argv `--record --ticket
     <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
     reopen (§6.6) the coldstart record call repeats with the new hash.
-72. **Input grammar** (`input.test.mjs`): `--issue 0`, `--issue 12a`,
+73. **Input grammar** (`input.test.mjs`): `--issue 0`, `--issue 12a`,
     `--issue ../x`, an OID of 39 hex chars, a ticket id with a lowercase
     ULID, and a branch name supplied through any config field each exit 1
     `bad-input:<field>` with zero spawns and zero filesystem writes; a
     constructed `ISSUE_WT` whose `realpath` escapes `REPO_ROOT` (symlink
     fixture) is refused.
-73. **Pagination contract** (`select.test.mjs`): the `gh api` fake
+74. **Pagination contract** (`select.test.mjs`): the `gh api` fake
     serves 13 pages (12 × 100 + 50) → 13 calls with `page=1..13`, 1 250
     candidates, no `--paginate`/`--slurp` in any argv; a page that is an
     object, a page that is a string, an element without an integer
     `number`, a page exceeding the 4 MiB cap, or 50 full pages →
     `candidate-set-truncated` with the reason recorded and exactly 50
     calls at most (assert `page=51` is never requested).
-74. **Exact-name dependency guard** (`sequence.test.mjs`): adding
+75. **Exact-name dependency guard** (`sequence.test.mjs`): adding
     `@adlc/spec-lint` (an existing published workspace not in the allowed
     set) → `third-party-dep`; adding `@adlc/core` as a workspace link →
     pass; a lockfile entry `node_modules/@adlc/core` with a registry
