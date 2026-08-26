@@ -180,7 +180,7 @@ disambiguate by inspecting git/`gh`.
 
 | Found | Action |
 |---|---|
-| `creating` (record persisted, git op may or may not have happened) | crash-safe repair, touching ONLY the token-named staging path `<ISSUE_WT>.creating-<token>` (never `ISSUE_WT` itself, which this run has not yet claimed): if the branch exists, its tip MUST equal the record's `baseOid` — then write the missing marker from the record's `token`, `git worktree move` the staging path to `ISSUE_WT` (which must still be absent), and continue; if the tip differs → `orphan`; if the branch does not exist → `git worktree remove` / `rm -rf` of the staging path only if it is registered to this branch or is empty, delete the record, re-enter selection; a staging path whose token is not the record's is never touched |
+| `creating` (record persisted; the staging git ops may or may not have happened) | crash-safe repair that touches ONLY artifacts whose NAME embeds the record's token — `adlc/autopilot/staging-<token>` and `<ISSUE_WT>.creating-<token>` — and never adopts anything else: staging branch present at `baseOid` → finish the marker/rename/move steps; staging branch present with a moved tip → `orphan`; staging branch absent → remove the empty staging path if any, delete the record, re-enter selection. A branch named `adlc/autopilot/issue-<n>` that exists WITHOUT the marker is never claimed and never deleted: the run is `orphan` until the operator runs `reset` |
 | `shaped` (ticket cached, not dispatched) | reuse the cached ticket if the issue's `updatedAt` is unchanged, else re-shape |
 | `dispatched` with fleet's run lock free | re-invoke fleet EXACTLY as in §6.4 (same cwd `ISSUE_WT`, same `--tickets <ULID>`, same flags) when quota is ok: fleet has no `--resume` flag — on startup it reads its persisted `<ISSUE_WT>/.adlc/fleet-status.json` and `reconcileRun` (fleet §6.4) either resumes (`resuming run <fleetRunId> on <integrationBranch>` on stderr, and the same `fleetRunId` in `--json`) or refuses (`cannot resume: <reason>`, exit 1). The orchestrator asserts the reported `fleetRunId` equals the record's; a refusal or a mismatch → the run is `blocked` with reason `resume-refused` (never silently restarted, because a fresh run would re-cut the integration branch) |
 | `quota-paused` | same as `dispatched`, gated on quota |
@@ -670,21 +670,26 @@ gitignored `.adlc/autopilot-*` files.
    (`revalidation-changed`, nothing written or, if a worktree already
    exists, retired per §2.1a) and selection restarts on the next
    iteration.
-1. (cwd `REPO_ROOT`) `ISSUE_WT` must NOT exist (an existing directory or
-   registered worktree there → `orphan-dir`, nothing touched, the issue
-   excluded until `reset`). FIRST persist the run record with `state:
-   "creating"`, the generated `token`, `baseOid` and the constructed
-   branch name (write-to-temp + `rename`); THEN `git worktree add
-   <ISSUE_WT>.creating-<token> -b adlc/autopilot/issue-<n> <BASE_OID>` —
-   a staging path that embeds the token, so only this run can have made
-   it; then write the **ownership marker**: `git config
-   branch.adlc/autopilot/issue-<n>.adlcAutopilotToken <token>` where
-   `token` is 32 random bytes hex also stored in the run record. The marker
-   lives in the repo's local git config (never pushed) and is the only
-   authorization recovery accepts for deleting a branch or worktree (§2.1).
-   Only after the marker is written: `git worktree move
-   <ISSUE_WT>.creating-<token> <ISSUE_WT>` and the record moves to
-   `shaped`/`dispatched`; from here on `ISSUE_WT` is the working path.
+1. (cwd `REPO_ROOT`) `ISSUE_WT` must NOT exist and the final branch
+   `adlc/autopilot/issue-<n>` must NOT exist (either → `orphan-dir` /
+   `orphan-branch`, nothing touched, the issue excluded until `reset`).
+   Ownership is established on token-named STAGING artifacts before the
+   final names ever exist: FIRST persist the run record with `state:
+   "creating"`, the generated `token` (32 random bytes hex), `baseOid`
+   and the constructed names (write-to-temp + `rename`); THEN `git
+   worktree add <ISSUE_WT>.creating-<token> -b
+   adlc/autopilot/staging-<token> <BASE_OID>` (both the path and the
+   BRANCH embed the token — no human branch can share the name); THEN
+   write the **ownership marker** `git config
+   branch.adlc/autopilot/staging-<token>.adlcAutopilotToken <token>`;
+   THEN `git branch -m adlc/autopilot/staging-<token>
+   adlc/autopilot/issue-<n>` (git refuses if the final name appeared
+   meanwhile → retire the staging artifacts, which are provably ours, and
+   mark `orphan-branch`; the marker config section is renamed by git with
+   the branch); THEN `git worktree move <ISSUE_WT>.creating-<token>
+   <ISSUE_WT>` and the record moves to `shaped`. The marker lives in the
+   repo's local git config (never pushed) and is the only authorization
+   recovery accepts for deleting a branch or worktree (§2.1).
    Then (cwd `ISSUE_WT`) `npm ci --ignore-scripts`.
 2. (cwd `ISSUE_WT`) Write the ticket: `adlc ticket create --input - --write
    --dir <ISSUE_WT>/.adlc` (id omitted → ULID). This is a signed
@@ -749,53 +754,45 @@ gitignored `.adlc/autopilot-*` files.
      --pre-strike-env '{"PATH":"<sanitized PATH>","HOME":"<HOME>","ADLC_AUTOPILOT_STATUS_FILE":"<REPO_ROOT>/.adlc/autopilot-status.json","ADLC_AUTOPILOT_LOCK_TOKEN":"<token>"}' \
      --charter-file <autopilot>/lib/charter-adlc.md --json
    ```
-   plus `--model-plane-read bounded --model-plane-read-only
-   <READ_SET>` (fleet-extensions ticket, §14), where `READ_SET` is the
-   comma-joined absolute list of READ-ONLY binds — the worker's WRITABLE
-   roots are separate and are fleet's: its own nested worktree
-   (`<ISSUE_WT>/.worktrees/<ticket>`) and the per-run git mirror below,
-   both of which the worker must write to in order to commit (objects,
-   refs and worktree metadata land in the mirror; `ISSUE_WT` itself is in
-   NEITHER set, so no read-only bind is an ancestor of a writable root and
-   the orchestrator's `.adlc/`, run records and the mirror's parent
-   directory stay invisible). Read-only: the per-run **git mirror** `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`
-   (fleet-extensions item 12, `--model-plane-git mirror`: before dispatch
-   the orchestrator creates a bare repository containing ONLY the objects
-   reachable from `BASE_OID` and from the issue branch tip — `git clone
-   --bare --no-local --single-branch --branch adlc/autopilot/issue-<n>
-   <REPO_ROOT> <mirror>` followed by `git -C <mirror> remote remove
-   origin` and `git -C <mirror> config --unset-all` of every non-`core.*`
-   key — so it holds no remote URL, credential helper, hook, other
-   branch, reflog, stash, or unreachable object; fleet cuts the worker's
-   nested worktree from the mirror — the mirror is a WRITABLE root for the
-   worker (it is this run's disposable, public-only object store; every
-   object the worker creates lands there and nowhere else) — and after
-   the worker finishes fleet fetches the result back with `git -C
-   <ISSUE_WT> fetch <mirror> <workerBranch>` before its gates and merge,
-   verifying the fetched tip fast-forwards from the branch tip it cut;
-   the shared `<REPO_ROOT>/.git` is NEVER bound into the model plane;
-   the mirror is recreated from
-   scratch before every dispatch — `rm -rf` of the previous one first,
-   under the lock — and removed at retirement Step L together with the
-   run directory, so a crash leaves at most a stale mirror that the next
-   dispatch replaces and that no gate ever reads), the directories of every pinned tool (§9.1),
-   `/usr`, `/lib`, `/lib64`, `/etc/ssl`, `/etc/resolv.conf`,
-   `/etc/hosts`, and the adapter's
-   synthetic home (fleet §7.3 `homeState`). Tool access is per FILE, not
-   per directory: for every pinned tool (§9.1) the orchestrator passes the
-   `realpath` of the executable itself, and for `node` additionally the
-   installation's `lib/node_modules/npm` and `lib/node_modules/corepack`
-   trees (the only runtime the pinned `npm` needs) — never a parent
-   directory such as `~/.local/bin` or the fnm versions root, so unrelated
-   executables and dotfiles beside a tool are not visible. The worker's
-   `/tmp` is a private empty tmpfs mounted by fleet in bounded mode with
-   `TMPDIR`/`TMP`/`TEMP` pointing inside it (fleet-extensions item 11), so
-   host `/tmp` — including the orchestrator's scratch files — is neither
-   readable nor writable. `<REPO_ROOT>` itself, `$HOME` and `/tmp` are NOT in the
-   set, so `.env.local`, the operator's other checkouts and the
-   orchestrator's state files are unreadable to the worker. What remains
-   readable through the mirror is exactly the history already published
-   at `BASE_OID` on GitHub plus the issue branch — nothing unpublished. Fleet: sandboxed worker (`bwrap`, `--permission-mode
+   plus `--model-plane-read bounded --model-plane-read-only <READ_SET>
+   --model-plane-git mirror --model-plane-git-mirror <MIRROR>`
+   (fleet-extensions items 11–12, §14). **Sandbox contract (normative,
+   one statement):**
+   - WRITABLE roots (granted by fleet, never listed in `READ_SET`):
+     (a) the worker's nested worktree `<ISSUE_WT>/.worktrees/<ticket>`;
+     (b) `MIRROR` = `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`,
+     this run's disposable bare repository — created before dispatch with
+     `git clone --bare --no-local --single-branch --branch
+     adlc/autopilot/issue-<n> <REPO_ROOT> <MIRROR>` followed by `git -C
+     <MIRROR> remote remove origin` and `git -C <MIRROR> config
+     --unset-all` of every non-`core.*` key, so it holds only objects
+     reachable from `BASE_OID` and the issue branch (no remote URL,
+     credential helper, hook, other branch, reflog, stash or unreachable
+     object); the worker's commits write objects, refs and worktree
+     metadata INTO it and nowhere else; (c) a private empty tmpfs at `/tmp`
+     with `TMPDIR`/`TMP`/`TEMP` inside it (item 11).
+   - READ-ONLY binds (`READ_SET`, comma-joined absolute paths): the
+     `realpath` of each pinned executable of §9.1 as a single FILE bind
+     (never its parent directory), plus `<node prefix>/lib/node_modules/npm`
+     and `<node prefix>/lib/node_modules/corepack`, plus `/usr`, `/lib`,
+     `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, plus the
+     adapter's synthetic home (fleet §7.3 `homeState`, which necessarily
+     holds the harness's own credentials).
+   - INVARIANT (checked by the orchestrator before dispatch and asserted
+     by fleet's `--json` echo): no `READ_SET` entry is an ancestor of, or
+     equal to, a writable root or a pinned executable's parent; and none of
+     `<REPO_ROOT>`, `<REPO_ROOT>/.git`, `<ISSUE_WT>`, `$HOME`, host `/tmp`
+     appears in either set — so `.env.local`, the operator's other
+     checkouts, the orchestrator's state, the shared git database and the
+     mirror's parent directory are invisible to the worker.
+   - After the worker exits, fleet runs `git -C <ISSUE_WT> fetch <MIRROR>
+     <workerBranch>` and requires a fast-forward from the tip it cut
+     (else `mirror-fetch-failed`); the mirror is `rm -rf`'d and recreated
+     before every dispatch (under the lock) and removed at retirement
+     Step L with the run directory, so a stale mirror is never read by any
+     gate. What the worker can read of the repository is exactly the
+     history already published at `BASE_OID` plus the issue branch.
+   Fleet: sandboxed worker (`bwrap`, `--permission-mode
    acceptEdits`, allowlist from `fleet.allowedCommands`), deterministic gates
    (`fleet.gate.build/test`), blocking `adversarial-review --provider codex
    --json --fail-on medium` (binary resolved off the ORCHESTRATOR's PATH,
@@ -1070,8 +1067,9 @@ gitignored `.adlc/autopilot-*` files.
     | 2 | `quota-paused` | `quota-paused` (resumable by re-invocation, §2.1) | none — never a label |
     | 2 | `lock-held` | unchanged (`skipped`) | none |
     | 2 | `mirror-fetch-failed` | `blocked` (reason preserved; the worker branch is left in the mirror for forensics) | findings comment + `adlc:autopilot-blocked` |
-    | 2 | `wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable`, anything else | `blocked` | findings comment (REDACTED per §6.6 — the same fail-closed redactor as dead-end material — fenced, capped 12 000 chars) + `adlc:autopilot-blocked`; branch and worktree kept for forensics; no PR |
+    | 2 | `wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable` | `blocked` | findings comment (REDACTED per §6.6 — the same fail-closed redactor as dead-end material — fenced, capped 12 000 chars) + `adlc:autopilot-blocked`; branch and worktree kept for forensics; no PR |
     | 1 | any | unchanged; `lastError` set | none; the loop sleeps |
+    | 2 | any `reason` outside the closed enum of §14, or missing | operational error: unchanged state, `lastError` set, NO GitHub mutation (the enum is validated before any side effect) | none |
     | other / unparseable JSON | — | treated as exit 1 | none |
 11. Worktree cleanup: (cwd `REPO_ROOT` — never from inside the worktree
     being removed) `git worktree remove <ISSUE_WT>` only after the PR is
@@ -1609,9 +1607,14 @@ None is trust-root tier; each is a small, separately testable diff.
    GitHub but absent from the record → zero `--add-label` calls.
 5. **Dispatch** (`run.test.mjs`): captured argv asserts exactly one ticket id,
    `--no-pr`, `--max-strikes 15`, `--wall-clock-minutes 90`, `--model opus`,
-   and cwd = the issue worktree; fleet exit 2 → label + comment, no `pr
-   create`; exit 1 → no `gh` write; exit 0 → ff, preflight, attest, push,
-   PR upsert in that order (spawn recorder asserts ordering).
+   and cwd = the issue worktree; fleet outcomes are asserted
+   table-driven over the §6.10 mapping: exit 2 + `quota-paused` → state
+   `quota-paused`, zero `gh` calls; exit 2 + `lock-held` → unchanged,
+   zero `gh` calls; exit 2 + each blocking reason → label + redacted
+   comment, no `pr create`; exit 2 + an unknown reason → no state change
+   and zero `gh` calls; exit 1 → no `gh` write; exit 0 → ff, actual-diff
+   check, preflight, completion, final review, attest, push, PR upsert
+   in that order (spawn recorder asserts ordering).
 6. **PR upsert** (`pr.test.mjs`): a second successful run for the same issue
    performs `gh pr edit`, never a second `gh pr create`; body contains
    `Closes #<n>`, the ticket id, and the evidence block.
