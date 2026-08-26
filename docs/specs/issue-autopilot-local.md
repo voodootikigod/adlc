@@ -755,9 +755,21 @@ gitignored `.adlc/autopilot-*` files.
    `--findings-ledger`); (ii) no path
    matches the protected-path denylist (§4.2) other than those two
    exceptions; (iii) no path is a symlink at HEAD whose target escapes the
-   scope. A violation is recorded as a round failure with the offending
-   paths as dead-end material (the retry protocol of §6.6 applies) and is
-   never attested or pushed. The same check runs again immediately before
+   scope; (iv) **secret scan, fail closed**: the full text of `git diff
+   <BASE_OID>...HEAD` (added lines, all files including tests, docs and
+   the ticket shard) is scanned with the same pattern set
+   `adversarial-review` uses for its own payload scan (`src/secrets.js`
+   `SECRET_PATTERNS` — provider API keys, OAuth/bearer tokens, private-key
+   blocks, `ADLC_MANIFEST_KEY`-shaped values, `.env`-style assignments of
+   `*_KEY|*_TOKEN|*_SECRET`) plus the literal value of every environment
+   variable in the orchestrator's key-bearing set; ANY hit → outcome
+   `secret-in-diff`: the run is `blocked` immediately (no retry round —
+   the same content must not be re-reviewed or re-dispatched), the
+   issue comment names only the file and line and the pattern NAME,
+   never the matched text, and the branch is never pushed. A violation
+   of (i)–(iii) is recorded as a round failure with the offending paths
+   as dead-end material (the retry protocol of §6.6 applies) and is never
+   attested or pushed. The same check runs again immediately before
    step 7 and before every push in §6.8/§8/§6.9 — a diff that passed once
    is not trusted after any later write.
 6. Final local gate in the issue worktree: `node scripts/preflight.mjs --base
@@ -1103,7 +1115,11 @@ byte-for-byte.
 
 9.4 Repo: `.adlc/config.json` exists on `origin/main` with a `fleet` block
 (`gate.build`, `gate.test`, `init`, `allowedCommands`, `reviewProvider:
-"codex"`, `prosecuteFailOn`, `timeoutMinutes`) — §0.12.
+"codex"`, `prosecuteFailOn`, `timeoutMinutes`) and a `ticketSync` block
+that validates against
+`packages/ticket-sync/schemas/adlc-config.schema.json` (`provider` is
+required; `query` is omitted or a string, never `null`) — §0.12. The R1
+ticket's AC1 runs that schema validation.
 
 9.5 Labels exist: `adlc:autopilot`, `adlc:autopilot-skip`,
 `adlc:needs-clarification`, `adlc:autopilot-blocked`, `adlc:autopilot-stale`,
@@ -1167,7 +1183,20 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
 - **Hostile issue body** → enters the shaping prompt fenced; scope is
   mechanically checked against the denylist; the worker's charter declares
   constraints authoritative over the spec. A body that tries to widen scope
-  is a CLARIFY, not a build.
+  is a CLARIFY, not a build. **Accepted residual (inherited from fleet
+  K2):** the worker runs on the MODEL plane, which by fleet's design has
+  network egress (it must reach the model API) and host-scope reads — the
+  same access any coding assistant on this machine has. A hostile issue
+  that gets shaped and dispatched could therefore make the worker read
+  host files into its own context. The autopilot does not claim to
+  prevent that; it bounds it: only issues authored by `OWNER`/`MEMBER`/
+  `COLLABORATOR` accounts or labeled by an `admin`/`maintain` actor are
+  ever shaped (§4.2), scope/rails are enforced mechanically on the actual
+  diff (§6.5a), nothing the worker produces reaches GitHub without the
+  secret scan of §6.5a(iv), the orchestrator's key never enters the
+  worker's environment, and `.env.local` lives only in `REPO_ROOT`
+  (never copied into `ISSUE_WT`). Tightening the model plane's read scope
+  is fleet's decision (spec §7.3), tracked there, not here.
 - **Worker forging its own review/attestation** → the reviewer binary and the
   key live only on the orchestrator; fleet scrubs `ADLC_MANIFEST_KEY` and
   resolves `adversarial-review` off the orchestrator PATH. The attestation is
@@ -1259,7 +1288,7 @@ Repo-committed (`.adlc/config.json`, trust root):
     "repo": "voodootikigod/adlc",
     "protectedPathsExtra": []
   },
-  "ticketSync": { "select": { "state": "open", "labels": [], "query": null } }
+  "ticketSync": { "provider": "github", "select": { "state": "open", "labels": [] } }
 }
 ```
 
@@ -1810,3 +1839,16 @@ None is trust-root tier; each is a small, separately testable diff.
     set) → `third-party-dep`; adding `@adlc/core` as a workspace link →
     pass; a lockfile entry `node_modules/@adlc/core` with a registry
     `resolved` URL → `lockfile-drift`.
+76. **Secret scan is fail-closed** (`diffcheck.test.mjs`): a worker fake
+    that adds a line matching each `SECRET_PATTERNS` entry (one fixture
+    per pattern name, including a private-key block inside a test file
+    and an `.env`-style `FOO_TOKEN=` line inside the ticket shard) and
+    one that adds the literal orchestrator key value → outcome
+    `secret-in-diff`, state `blocked`, zero `git push` / attestation /
+    fleet re-dispatch calls, and the issue comment contains the pattern
+    NAME and file:line but not the matched text (assert the secret string
+    is absent from every recorded `gh` argv and from the status file).
+77. **ticketSync config validates** (`config.test.mjs`): the §13
+    example config passes `packages/ticket-sync/schemas/adlc-config.schema.json`
+    (assert via the same validator ticket-sync uses); a block with
+    `query: null` or without `provider` fails it.
