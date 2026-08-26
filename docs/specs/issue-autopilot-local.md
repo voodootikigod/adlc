@@ -191,7 +191,7 @@ disambiguate by inspecting git/`gh`.
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
 | branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
-| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Every other row and §2.1a defer to this rule for the final record deletion |
+| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
 
 ### 2.1a Retiring a run — ownership-checked deletion
 
@@ -475,6 +475,9 @@ issue number and the rule name)
   `maintain` (the #237 actor-permission guard). Anything else — including
   an `adlc:autopilot` label applied by a non-maintainer — is excluded with
   rule `not-trusted` and is never shaped or dispatched.
+- **remote ref exists**: `git ls-remote origin
+  refs/heads/adlc/autopilot/issue-<n>` non-empty → excluded with rule
+  `remote-ref-exists` (independent of any record or tombstone).
 - label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
   `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
   `adlc:autopilot-stale`, `adlc:autopilot-ci-red`, `adlc:needs-clarification`,
@@ -564,7 +567,12 @@ for every issue regardless of how the ticket fields were obtained.
    `GitHub issue: <url>` and ends with an `=== ACCEPTANCE CRITERIA ===`
    section where every criterion carries a `VERIFY:` clause. The issue body
    enters the prompt fenced (`@adlc/core` `fence()`, 8000-char cap) as
-   authored content; the constraints prose is authoritative over it.
+   authored content AFTER the fail-closed redactor of §6.6 has run over
+   it (an issue body that trips redaction failure is shaped from the
+   withheld sentinel and therefore lands in CLARIFY); the same redaction
+   applies to a trusted `adlc:begin` block's assembled body (§5.1) and to
+   the coldstart prompt input (§6.3) — no model-bound byte skips it; the
+   constraints prose is authoritative over it.
 3. Gate chain (each fails closed, findings collected verbatim):
    - ticket schema (`adlc ticket create --input - --json`, dry run)
    - scope present, non-empty, no wildcard `**` at root, no protected-path
@@ -730,7 +738,7 @@ gitignored `.adlc/autopilot-*` files.
    fleet also grants as the writable root — `ISSUE_WT` itself is NOT in
    the set, so no read-only bind is an ancestor of the writable root and
    the orchestrator's `.adlc/`, run records and the mirror's parent stay
-   invisible), the per-run **git mirror** `<ISSUE_WT>/.autopilot-mirror.git`
+   invisible), the per-run **git mirror** `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`
    (fleet-extensions item 12, `--model-plane-git mirror`: before dispatch
    the orchestrator creates a bare repository containing ONLY the objects
    reachable from `BASE_OID` and from the issue branch tip — `git clone
@@ -742,10 +750,24 @@ gitignored `.adlc/autopilot-*` files.
    nested worktree from the mirror, and after the worker finishes fleet
    fetches the result back with `git -C <ISSUE_WT> fetch <mirror>
    <workerBranch>` before its gates and merge; the shared `<REPO_ROOT>/.git`
-   is NEVER bound into the model plane), the directories of every pinned tool (§9.1),
+   is NEVER bound into the model plane; the mirror is recreated from
+   scratch before every dispatch — `rm -rf` of the previous one first,
+   under the lock — and removed at retirement Step L together with the
+   run directory, so a crash leaves at most a stale mirror that the next
+   dispatch replaces and that no gate ever reads), the directories of every pinned tool (§9.1),
    `/usr`, `/lib`, `/lib64`, `/etc/ssl`, `/etc/resolv.conf`,
-   `/etc/hosts`, and the adapter's synthetic home (fleet §7.3
-   `homeState`). `<REPO_ROOT>` itself, `$HOME` and `/tmp` are NOT in the
+   `/etc/hosts`, and the adapter's
+   synthetic home (fleet §7.3 `homeState`). Tool access is per FILE, not
+   per directory: for every pinned tool (§9.1) the orchestrator passes the
+   `realpath` of the executable itself, and for `node` additionally the
+   installation's `lib/node_modules/npm` and `lib/node_modules/corepack`
+   trees (the only runtime the pinned `npm` needs) — never a parent
+   directory such as `~/.local/bin` or the fnm versions root, so unrelated
+   executables and dotfiles beside a tool are not visible. The worker's
+   `/tmp` is a private empty tmpfs mounted by fleet in bounded mode with
+   `TMPDIR`/`TMP`/`TEMP` pointing inside it (fleet-extensions item 11), so
+   host `/tmp` — including the orchestrator's scratch files — is neither
+   readable nor writable. `<REPO_ROOT>` itself, `$HOME` and `/tmp` are NOT in the
    set, so `.env.local`, the operator's other checkouts and the
    orchestrator's state files are unreadable to the worker. What remains
    readable through the mirror is exactly the history already published
@@ -1213,8 +1235,11 @@ label is still applied, so a quarantine is never silent and never leaks.
 
 - `.adlc/autopilot-status.json` (local-only: `adlc-autopilot init` writes
   the entries `.adlc/autopilot-status.json`, `.adlc/autopilot.lock/`,
-  `.adlc/autopilot-runs/` (run records, attempt ledgers and per-issue
-  findings ledgers) and `.worktrees/autopilot-issue-*` to
+  `.adlc/autopilot-runs/` (run records, attempt ledgers, per-issue
+  findings ledgers, and each run's bare git mirror under
+  `.adlc/autopilot-runs/<issue>/mirror.git` — outside `ISSUE_WT`, so the
+  reviewed worktree's `git status --porcelain` never sees it) and
+  `.worktrees/autopilot-issue-*` to
   `<REPO_ROOT>/.git/info/exclude` ONCE, idempotently, under the lock; the
   runtime never touches `.gitignore` or any tracked file in the primary
   checkout, and refuses to start (`preflight: exclude-missing`) if those
@@ -2015,7 +2040,7 @@ None is trust-root tier; each is a small, separately testable diff.
     → stale (newest wins).
 81. **Mirror is the only git database** (`run.test.mjs`): the fleet argv
     carries `--model-plane-git mirror --model-plane-git-mirror
-    <ISSUE_WT>/.autopilot-mirror.git` and its read set contains that
+    <REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git` and its read set contains that
     mirror path and NOT `<REPO_ROOT>/.git`; no argv anywhere contains
     `--model-plane-git-sanitize`; a fleet fake reporting
     `gitSource: "shared"` back in `--json` is `sandbox-policy-mismatch`
@@ -2093,3 +2118,27 @@ None is trust-root tier; each is a small, separately testable diff.
     `orphan`; with no branch → the record and any empty `ISSUE_WT` are
     removed and the issue is selectable; the record is observed on disk
     BEFORE the `git worktree add` argv in the spawn recorder.
+94. **Mirror outside the worktree** (`sequence.test.mjs`, real temporary
+    git repository): after dispatch the mirror exists at
+    `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`, `git -C
+    <ISSUE_WT> status --porcelain` is empty, the clean-tree assertions of
+    §6.7 pass, a stale mirror from a previous run is replaced before
+    dispatch, and retirement removes the run directory including the
+    mirror.
+95. **Private tmp and per-file tool binds** (`run.test.mjs` +
+    fleet's real-bwrap containment test): the read set contains the
+    `realpath` of each pinned executable and the npm/corepack trees, and
+    no directory that is a parent of a pinned executable; the fleet argv
+    requests the private tmpfs; inside the sandbox a pre-existing host
+    `/tmp` file is absent and a write to `/tmp` lands in the tmpfs
+    (skipped loudly without bwrap).
+96. **Model inputs are redacted** (`redact.test.mjs`): an issue body
+    containing every `SECRET_PATTERNS` entry reaches the shaping `claude`
+    spawn redacted; the same for a trusted-block body and the coldstart
+    prompt; a redactor failure yields a CLARIFY without any `claude`
+    spawn.
+97. **Tombstone and selection-time remote check** (`select.test.mjs` +
+    `recover.test.mjs`): deleting a record writes the tombstone; an issue
+    whose branch name has a remote ref is excluded with
+    `remote-ref-exists` even with no record and no tombstone; a tombstone
+    older than 30 days is pruned; the tombstone carries `lastPushedOid`.
