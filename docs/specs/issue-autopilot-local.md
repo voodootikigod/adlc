@@ -372,7 +372,7 @@ across steps beyond that:
 | coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
 | after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
-| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
+| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
 | each maintenance conflict-fix round (§8) | skip that PR this iteration; no label |
 | each CI fix round (§0.11) | pause the CI watch; the 30-minute CI budget does not advance while paused |
 
@@ -424,6 +424,12 @@ The parser is a pure function with a fixture per case (AC 2).
   the threshold for every start after the first in an iteration, i.e. a
   fleet strike starts only when both windows are `< threshold − reserve`,
   so the last step before the boundary cannot itself begin above 45%.
+  "First" is defined by a persisted counter `startsThisIteration` in the
+  status file, reset to 0 at the top of each loop iteration and
+  incremented atomically (write-to-temp + `rename` under the autopilot
+  lock) by every start — the loop's own steps and the pre-strike helper
+  alike — so the ordinal is a fact of record, not an argument a caller
+  could get wrong.
 - **Concurrent consumers** (the operator's interactive sessions share the
   same windows): the autopilot has no way to see them ahead of time; it
   re-reads the endpoint before every start (§3.2), which is the only
@@ -468,11 +474,13 @@ used for enumeration (it truncates silently).
 ### 4.2 Hard exclusions (applied before scoring; each is logged with the
 issue number and the rule name)
 
-- **dispatch approval**: when `autopilot.dispatchApproval` is
-  `"label-only"`, an issue is eligible ONLY if it carries `adlc:autopilot`
-  applied by an `admin`/`maintain` actor (the human approval boundary);
-  the default `"trusted-authors"` applies the next rule instead. Any
-  other value → preflight exit 1 `bad-config`.
+- **dispatch approval** (`autopilot.dispatchApproval`): default
+  `"owner-or-label"` — eligible iff `authorAssociation == "OWNER"` OR the
+  issue carries `adlc:autopilot` applied by an `admin`/`maintain` actor;
+  `"label-only"` — eligible ONLY with that label (every issue needs the
+  human boundary); `"trusted-authors"` (opt-in) — the next rule's
+  `OWNER`/`MEMBER`/`COLLABORATOR` set. Any other value → preflight exit 1
+  `bad-config`.
 - **not trusted**: the issue is eligible only if its `authorAssociation`
   (`gh issue view --json authorAssociation`) is `OWNER`, `MEMBER` or
   `COLLABORATOR`, OR the most recent `labeled` event for `adlc:autopilot` in
@@ -729,25 +737,26 @@ gitignored `.adlc/autopilot-*` files.
    plus `--model-plane-read bounded --model-plane-read-only
    <READ_SET>` (fleet-extensions ticket, §14), where `READ_SET` is the
    comma-joined absolute list: `<ISSUE_WT>` (the worker's nested worktree
-   lives under it), a SANITIZED view of `<REPO_ROOT>/.git` (linked
-   worktrees share the git database; fleet-extensions item 12 provides
-   `--model-plane-git-sanitize`, which binds `.git` read-only and then
-   overlays: `config` replaced by an orchestrator-generated copy
-   containing only `core.*` and the `extensions.*`/`worktree` settings git
-   needs — no `remote.*`, `url.*`, `credential.*`, `include*`, `alias.*`
-   or `core.hooksPath`; `hooks/` masked by an empty tmpfs; `worktrees/`
-   masked by a tmpfs with only the worker's own entry re-bound;
-   `info/exclude`, `logs/`, `FETCH_HEAD`, `ORIG_HEAD`, `COMMIT_EDITMSG`
-   and any `*.lock` masked), the directories of every pinned tool (§9.1),
+   lives under it), the per-run **git mirror** `<ISSUE_WT>/.autopilot-mirror.git`
+   (fleet-extensions item 12, `--model-plane-git mirror`: before dispatch
+   the orchestrator creates a bare repository containing ONLY the objects
+   reachable from `BASE_OID` and from the issue branch tip — `git clone
+   --bare --no-local --single-branch --branch adlc/autopilot/issue-<n>
+   <REPO_ROOT> <mirror>` followed by `git -C <mirror> remote remove
+   origin` and `git -C <mirror> config --unset-all` of every non-`core.*`
+   key — so it holds no remote URL, credential helper, hook, other
+   branch, reflog, stash, or unreachable object; fleet cuts the worker's
+   nested worktree from the mirror, and after the worker finishes fleet
+   fetches the result back with `git -C <ISSUE_WT> fetch <mirror>
+   <workerBranch>` before its gates and merge; the shared `<REPO_ROOT>/.git`
+   is NEVER bound into the model plane), the directories of every pinned tool (§9.1),
    `/usr`, `/lib`, `/lib64`, `/etc/ssl`, `/etc/resolv.conf`,
    `/etc/hosts`, and the adapter's synthetic home (fleet §7.3
    `homeState`). `<REPO_ROOT>` itself, `$HOME` and `/tmp` are NOT in the
    set, so `.env.local`, the operator's other checkouts and the
    orchestrator's state files are unreadable to the worker. What remains
-   readable through the sanitized `.git` is the object database and refs
-   — the full history of THIS repository, which is public on GitHub —
-   and that is stated as an accepted residual in §11, not a containment
-   claim. Fleet: sandboxed worker (`bwrap`, `--permission-mode
+   readable through the mirror is exactly the history already published
+   at `BASE_OID` on GitHub plus the issue branch — nothing unpublished. Fleet: sandboxed worker (`bwrap`, `--permission-mode
    acceptEdits`, allowlist from `fleet.allowedCommands`), deterministic gates
    (`fleet.gate.build/test`), blocking `adversarial-review --provider codex
    --json --fail-on medium` (binary resolved off the ORCHESTRATOR's PATH,
@@ -1135,9 +1144,10 @@ before any issue, PR or git write. Every `gh` invocation thereafter passes
 iteration.
 
 9.2 Plugin parity: the installed `adlc@adlc` plugin version
-(`~/.claude/plugins/installed_plugins.json`) equals
-`plugins/adlc-claude-code/.claude-plugin/plugin.json` `version` on
-`origin/main`. Mismatch → refuse to dispatch (the headless worker would load
+(`~/.claude/plugins/installed_plugins.json`) equals the `version` in
+`git show <BASE_OID>:plugins/adlc-claude-code/.claude-plugin/plugin.json`
+— read from the pinned baseline of THIS iteration (§6.0), never from a
+possibly stale local `origin/main` ref. Mismatch → refuse to dispatch (the headless worker would load
 stale hooks/skills). Today: installed 1.7.0 vs repo 1.11.0.
 
 9.3 Key: `ADLC_MANIFEST_KEY` present in the orchestrator env (systemd
@@ -1244,24 +1254,34 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   context is sent to the model API. Controls, in order of strength:
   (1) the worker's READ scope is bounded (§6.4 `READ_SET`): it cannot read
   `<REPO_ROOT>/.env.local`, `$HOME`, the orchestrator's state, or other
-  checkouts — only its worktree, a SANITIZED `.git` view (no remote
-  URLs, credential helpers, hooks or other worktrees' metadata — but the
-  object database and refs, i.e. this public repository's full history,
-  remain readable, accepted below), system libraries and its synthetic
-  home (which necessarily holds the harness's own credentials, because
-  the worker IS the harness); (2) only issues
+  checkouts — only its worktree, a per-run git MIRROR holding nothing
+  but objects reachable from the pinned public baseline and the issue
+  branch (no other refs, no unreachable objects, no remote URLs,
+  credential helpers or hooks; the host `.git` is never mounted), system
+  libraries and its synthetic home (which necessarily holds the harness's
+  own credentials, because the worker IS the harness); (2) only issues
   authored by `OWNER`/`MEMBER`/`COLLABORATOR` accounts or labeled by an
   `admin`/`maintain` actor are ever shaped (§4.2), and
-  `autopilot.dispatchApproval: "label-only"` (§13) turns that into an
-  explicit per-issue human approval boundary — the operator's chosen
-  default is `"trusted-authors"`; (3) the orchestrator's manifest key
-  never enters the worker's environment. **Accepted residuals:** network
-  egress from the model plane is not filtered (fleet K2; bwrap cannot
-  filter by destination without a proxy, deferred), so anything within
-  `READ_SET` can in principle leave through model traffic (for this
-  public repository that is its already-public history plus the worker's
-  own harness credentials, the latter being inherent to running the
-  harness at all); and the diff
+  the default `autopilot.dispatchApproval: "owner-or-label"` (§13)
+  dispatches without further approval ONLY issues authored by the repo
+  `OWNER` (the operator's own backlog); any other author's issue needs the
+  `adlc:autopilot` label from an `admin`/`maintain` actor — an explicit
+  human authorization boundary before non-owner-authored content ever
+  drives the worker (`"label-only"` extends that to every issue;
+  `"trusted-authors"` relaxes it to `MEMBER`/`COLLABORATOR` authors and is
+  opt-in); (3) the orchestrator's manifest key never enters the worker's
+  environment; (4) the worker's harness credentials (its OAuth token in
+  the synthetic home) are the ONE secret it must hold — the harness
+  cannot authenticate without them and there is no external auth broker
+  for the CLI — which is why (1) and (2) exist. **Accepted residuals:** network
+  egress from the model plane is not filtered in v1 (fleet K2; a
+  destination-allowlisting proxy inside the network namespace is the v2
+  item, tracked in the fleet ticket's NOT-IN-SCOPE), so anything within
+  `READ_SET` — the published baseline, the issue branch, and the worker's
+  own harness credentials — can in principle leave through model
+  traffic; the credential exposure is inherent to running the harness
+  at all and is bounded by the authorization boundary above, not
+  eliminated; and the diff
   secret scan of §6.5a(iv) protects only what reaches GitHub — it is NOT
   a mitigation for content exposed in model requests and is not claimed
   as one.
@@ -1354,7 +1374,7 @@ Repo-committed (`.adlc/config.json`, trust root):
     "ciWatchMinutes": 30,
     "reviewMaxBytes": 262144,
     "repo": "voodootikigod/adlc",
-    "dispatchApproval": "trusted-authors",
+    "dispatchApproval": "owner-or-label",
     "protectedPathsExtra": []
   },
   "ticketSync": { "provider": "github", "select": { "state": "open", "labels": [] } }
@@ -1385,10 +1405,12 @@ None is trust-root tier; each is a small, separately testable diff.
   MODEL plane — worktree + synthetic home + the allowlist — instead of the
   current `READ_POLICY.HOST`; the adapter's `homeState` still provides
   the harness's own config/credentials inside the synthetic home; default
-  unchanged = `host`), `--model-plane-git-sanitize` (item 12 of the fleet
-  ticket: the sanitized `.git` view of §6.4 — sanitized `config` overlay,
-  masked `hooks/`, `worktrees/` limited to the worker's own entry, masked
-  logs/lock/transient files; real-bwrap containment test), `--no-pr`,
+  unchanged = `host`), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
+  worktree is cut from a caller-supplied bare mirror holding only the
+  pinned baseline and the issue branch, and the worker branch is fetched
+  back into the caller's repository before gates/merge; real-bwrap
+  containment test proves the worker cannot enumerate any other ref or
+  reach the host `.git`), `--no-pr`,
   `--no-complete` (skip
   `completeTicketOnIntegration`; the caller owns completion),
   `--dead-end-file <path>` (initial dead-end material for strike 1, so a
@@ -1981,3 +2003,26 @@ None is trust-root tier; each is a small, separately testable diff.
     → exit 0 and dispatch allowed; missing `premortem`, `unresolved: 1`,
     `rounds: 0`, or a `spec_hash` that differs from the blob at `specBlob`
     → `spec-approval-stale`, zero dispatches.
+84. **Git mirror** (`sequence.test.mjs`, real temporary git repository):
+    the mirror created before dispatch has exactly one branch
+    (`adlc/autopilot/issue-<n>`), no `remote.*`/`credential.*`/`hooksPath`
+    config, no hooks, and `git -C <mirror> rev-list --all` equals the
+    objects reachable from `BASE_OID` plus the issue branch (an extra
+    local branch and a dangling commit planted in `REPO_ROOT` are absent);
+    the fleet argv carries `--model-plane-git mirror` and the mirror path,
+    and never `<REPO_ROOT>/.git` in any read set.
+85. **Dispatch approval default** (`select.test.mjs`): with the default,
+    an `OWNER`-authored issue is eligible without a label; a
+    `COLLABORATOR`-authored issue is excluded (`dispatch-approval`) until
+    an `admin` actor labels it; `"trusted-authors"` admits it; the
+    `label-only` and unknown-value cases of the earlier criterion still
+    hold.
+86. **Plugin parity reads the baseline** (`preflight.test.mjs`): the
+    parity check's git argv is `show <BASE_OID>:plugins/adlc-claude-code/.claude-plugin/plugin.json`;
+    a local `origin/main` ref pointing at a manifest with a different
+    version does not affect the verdict.
+87. **Reservation ordinal is recorded** (`quota.test.mjs`): the status
+    file's `startsThisIteration` is 0 at the top of an iteration, 1 after
+    shaping, and each pre-strike helper invocation (run with the fake
+    lock held) increments it and applies the reserve from ordinal 2; a
+    helper run without the lock exits 1.
