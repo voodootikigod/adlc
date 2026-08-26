@@ -189,7 +189,7 @@ disambiguate by inspecting git/`gh`.
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
 | branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
-| record whose branch and PR are both gone | delete the record |
+| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Every other row and §2.1a defer to this rule for the final record deletion |
 
 ### 2.1a Retiring a run — ownership-checked deletion
 
@@ -237,13 +237,19 @@ the window is reported (`pr-after-delete: <number>`) so the operator can
 restore the ref from the recorded OID — the deletion itself is
 lease-bounded, so the OID is always known. Step L (local; in automatic
 retirement always, in `reset` only after R succeeded or the record says
-never pushed), cwd `REPO_ROOT`: re-check (e); `git
-worktree remove <ISSUE_WT>` (if present; clean by (e), never forced);
-`git update-ref -d refs/heads/adlc/autopilot/issue-<n> <localHead>` (the
-conditional form — it fails if the ref moved since (e); on failure →
-`orphan`, and the run record notes the worktree was already removed so
-the next attempt knows); `git config --unset branch.…adlcAutopilotToken`;
-delete the record. Any check failing → the run is marked `orphan` (row
+never pushed), cwd `REPO_ROOT`, transactional so that no artifact is
+permanently removed before the conditional ref delete has succeeded:
+L1 re-check (e); L2 if `ISSUE_WT` exists, `git worktree move <ISSUE_WT>
+<ISSUE_WT>.retiring-<token>` (a rename — reversible, and it leaves the
+branch checked out nowhere else); L3 `git update-ref -d
+refs/heads/adlc/autopilot/issue-<n> <localHead>` (the conditional form:
+it fails if the ref moved since (e)) — on failure `git worktree move` it
+back, mark `orphan`, stop, nothing removed; L4 only after L3 succeeded:
+`git worktree remove <ISSUE_WT>.retiring-<token>` (clean by (e), never
+forced; a failure here leaves a quarantined directory the status file
+names and is not an integrity problem), `git config --unset
+branch.…adlcAutopilotToken`; L5 apply the canonical deletion rule of
+§2.1 to the record (remote ref present → `remote-pending`, else delete). Any check failing → the run is marked `orphan` (row
 above) and nothing further is deleted. `git branch -D` is never used. A
 remote ref is never deleted on the strength of the local token and
 ancestry alone.
@@ -1028,8 +1034,14 @@ iteration.
 stale hooks/skills). Today: installed 1.7.0 vs repo 1.11.0.
 
 9.3 Key: `ADLC_MANIFEST_KEY` present in the orchestrator env (systemd
-`EnvironmentFile=<abs repo root>/.env.local`, mode 0600). Never an argument,
-never logged. The key is passed to exactly these children and scrubbed
+`EnvironmentFile=<abs repo root>/.env.local`). Preflight — and `init
+--service` — verify the key file BEFORE any key-bearing spawn and fail
+closed (`key-file-insecure`, exit 1, no dispatch) unless
+`<REPO_ROOT>/.env.local` is a regular file (not a symlink), owned by the
+invoking uid, with mode exactly `0600`, and its parent `<REPO_ROOT>` is
+not group- or world-writable; the env value itself must be non-empty. A
+`systemctl --user start` therefore cannot bring the service up on a
+permissive key file. Never an argument, never logged. The key is passed to exactly these children and scrubbed
 from every other spawn (the **key-bearing allowlist**, asserted by AC 12):
 `adlc ticket create --write`, `adlc ticket complete --write`, `adlc ticket
 update --write` (reopen-for-retry only, §6.6), `adlc coldstart
@@ -1340,7 +1352,10 @@ None is trust-root tier; each is a small, separately testable diff.
     appended.
 11. **Preflight**: each §9 item has a red fixture that makes `once` exit 1
     with the item named; plugin-parity mismatch (1.7.0 vs 1.11.0 fixture) is
-    one of them (`preflight.test.mjs`).
+    one of them, and so are a `.env.local` that is a symlink, mode `0640`,
+    owned by another uid (injected `stat`), or an empty
+    `ADLC_MANIFEST_KEY` — each → `key-file-insecure` with zero key-bearing
+    spawns (`preflight.test.mjs`).
 12. **Key hygiene** (`keys.test.mjs`): the spawn recorder asserts
     `ADLC_MANIFEST_KEY` is present in the env of exactly the six
     key-bearing commands of §9.3 (`ticket create --write`, `ticket complete
@@ -1692,7 +1707,12 @@ None is trust-root tier; each is a small, separately testable diff.
 69. **Local deletion revalidation** (`recover.test.mjs`, real temporary
     git repository): a retire whose branch tip moved after the record's
     `localHead`, or whose worktree has an uncommitted file, performs no
-    deletion and marks `orphan`; the worktree removal is never forced.
+    deletion and marks `orphan`; the worktree removal is never forced; a
+    ref that moves BETWEEN L2 and L3 makes `update-ref -d` fail, the
+    worktree is moved back to `ISSUE_WT`, and both artifacts survive
+    byte-identical; a record is deleted only when the `ls-remote` fake is
+    empty and no local branch/worktree exists (the §2.1 canonical rule),
+    table-driven over every row that ends in record deletion.
 70. **Unit file paths** (`service.test.mjs`): generated unit contains
     line-anchored `WorkingDirectory=/<abs>`, `ExecStart=/<abs node>
     /<abs>/packages/autopilot/bin/adlc-autopilot.mjs loop --rest 10m`,
