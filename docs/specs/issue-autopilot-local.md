@@ -15,11 +15,18 @@ verbatim; only the substrate (where the loop runs, what pays for it) changes.
 Approval: not asserted here — see the `spec-approval` manifest record
 (`adlc gate-manifest show --ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH`), which
 carries the approver, date, phase and the hash of the approved file.
-Every edit to this file is followed by a fresh `spec-approval` record as
-the last manifest append of that change (so the newest such record always
-hashes the current blob); the build ticket's preflight (§14, `specBlob`)
-requires that the newest `spec-approval` record's file hash equals the
-hash of this file at `BASE_OID`, and refuses to dispatch otherwise
+The record follows the repository's own P1 contract
+(`packages/runner/lib/assertions.mjs`, `/adlc:adlc-approve-spec`): it is
+bound to exactly this file via `--files`, its `data` carries
+`verdict:"approved"`, `approver`, `spec_hash` (sha256 of the file),
+positive `rounds` and `questions`, non-empty `sources`, `unresolved: 0`
+and `approved_assumptions[]`, and it is recorded AFTER the `spec-lint`
+and `premortem` evidence for the same file hash. Every edit to this file
+is followed by fresh `spec-lint` → `premortem` → `spec-approval` records
+as the last manifest appends of that change, and `adlc run p1 --ticket
+T-01M0Z3FN7SAS4HAH7CS63YQ0DH` must exit 0 on the result; the build
+ticket's preflight (§14, `specBlob`) runs that same gate against the
+blob at `BASE_OID` and refuses to dispatch on exit ≠ 0
 (`spec-approval-stale`).
 Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
 (§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
@@ -90,7 +97,12 @@ They are inputs to the design below and are themselves reviewable.
     CODEOWNER and this is recorded as the accepted residual).
 13. **Plan gate before build (as decided 2026-08-26):** this spec passes
     `adlc spec-lint`, and an `adversarial-review --input <this file>
-    --provider codex` fix loop is run with a finite budget; the operator
+    --provider codex` fix loop is run with a finite budget (artifact
+    `--input` mode exists from adversarial-review 2.9.1; the gate first
+    checks `adversarial-review --help` lists `--input` and records the
+    binary's `--version` in the digest — if absent, the diff-mode loop
+    over the committed spec is the fallback, which is also what this
+    branch's PR gate ran); the operator
     then either approves with the remaining findings carried into the
     build ticket as acceptance criteria, or continues the loop. The
     binding cross-model APPROVE is required on the CODE: the build PR
@@ -639,6 +651,18 @@ gitignored `.adlc/autopilot-*` files.
    policy prevents merging it as-is and §8 rebases it onto a new
    `BASE_OID` with a fresh or carried-forward attestation. The evidence
    always describes the tree that was actually reviewed.
+0a. **Revalidation.** Immediately before step 1 and again immediately
+   before the fleet dispatch of step 4 (and before every retry dispatch),
+   the issue is re-fetched (`gh issue view <n> --repo <repo> --json
+   updatedAt,labels,milestone,state,authorAssociation,body`) and every
+   selection input is re-evaluated: `state == "OPEN"`, `updatedAt`
+   unchanged since selection, the same hard-exclusion verdict (§4.2,
+   including trust/dispatch-approval provenance from the timeline), no
+   new open PR or branch for the issue, and — when the body changed — the
+   shaped ticket is discarded. Any change → the candidate is dropped
+   (`revalidation-changed`, nothing written or, if a worktree already
+   exists, retired per §2.1a) and selection restarts on the next
+   iteration.
 1. (cwd `REPO_ROOT`) `git worktree add <ISSUE_WT> -b adlc/autopilot/issue-<n>
    <BASE_OID>`, then write the **ownership marker**: `git config
    branch.adlc/autopilot/issue-<n>.adlcAutopilotToken <token>` where
@@ -1394,8 +1418,10 @@ None is trust-root tier; each is a small, separately testable diff.
   and the actual-diff check (§6.5a) rejects any change to that path; spec
   changes go through their own reviewed PR. Before dispatching the build
   ticket, preflight reads the newest `spec-approval` entry bound to the
-  ticket from the manifest and requires its recorded file hash to equal
-  the sha256 of the blob at `specBlob`; a mismatch → exit 1
+  ticket from the manifest and requires its recorded `spec_hash` to
+  equal the sha256 of the blob at `specBlob` AND `adlc run p1 --ticket
+  <build ticket> --json` to exit 0 (spec-lint + premortem + spec-approval
+  all present, ordered and bound); otherwise → exit 1
   `spec-approval-stale`, no dispatch.
 - Registry/docs: `packages/cli/lib/registry.mjs`,
   `apps/docs/lib/toolkit-packages.mjs`,
@@ -1783,10 +1809,11 @@ None is trust-root tier; each is a small, separately testable diff.
     with the PR number named in the comment.
 58. **`oid-mismatch` without a PR** (`recover.test.mjs`): a pre-push
     mismatch → comment on the ISSUE + `adlc:autopilot-blocked`, branch
-    kept; label removed → retire, including `git push --delete` only when
-    the record says pushed; a pushed-but-no-PR mismatch → same path; a
-    mismatch with an open PR → label removed → re-arm (branch and PR
-    untouched, full retry round).
+    kept; label removed → retire per §2.1a Step L only (zero `git push`
+    argv of any kind; a pushed run becomes `remote-pending` and its ref is
+    listed under `remoteRefsLeft`); a pushed-but-no-PR mismatch → same
+    path; a mismatch with an open PR → label removed → re-arm (branch and
+    PR untouched, full retry round).
 59. **Durable attempt ledger** (`triage.test.mjs`): the ledger file is
     written with `outcome:"started"` before the shaping fake is spawned; a
     simulated crash (process exit) between write and spawn leaves an entry
@@ -1942,3 +1969,15 @@ None is trust-root tier; each is a small, separately testable diff.
     `hooksPath` or `alias` keys (table-driven negative assertions) and
     keeps `core.repositoryformatversion`, `core.bare` and the
     `extensions.worktreeConfig` value of the real config.
+82. **Revalidation before write and dispatch** (`sequence.test.mjs`): a
+    `gh issue view` fake whose second read shows a changed `updatedAt`, a
+    newly added `adlc:autopilot-skip`, a closed state, or a new open PR
+    → zero worktree creation (before step 1) or, when triggered before
+    dispatch, retirement of the worktree with zero fleet spawns, and
+    outcome `revalidation-changed`; unchanged reads proceed.
+83. **P1 gate is the runner's** (`preflight.test.mjs`, real `adlc run p1`
+    binary against a temporary manifest): a segment with `spec-lint` +
+    `premortem` + a `spec-approval` whose `data` has the full contract
+    → exit 0 and dispatch allowed; missing `premortem`, `unresolved: 1`,
+    `rounds: 0`, or a `spec_hash` that differs from the blob at `specBlob`
+    → `spec-approval-stale`, zero dispatches.
