@@ -179,7 +179,7 @@ disambiguate by inspecting git/`gh`.
 | `blocked`/`clarify` (no PR exists) whose mapped label a human REMOVED | **retire** the run (§2.1a) → the issue re-enters selection and reruns from scratch (never resumed: the human changed the premise) |
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
-| branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes it only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; a branch with NO marker is not the autopilot's and `reset` refuses (exit 2) — the operator removes it with git by hand |
+| branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
 | record whose branch and PR are both gone | delete the record |
 
 ### 2.1a Retiring a run — ownership-checked deletion
@@ -387,15 +387,31 @@ The parser is a pure function with a fixture per case (AC 2).
 
 ## 4. Selection
 
+Input grammar (normative before ANY filesystem, git or GitHub operation):
+an issue number is accepted only if it matches `^[1-9][0-9]{0,9}$` and is
+≤ `Number.MAX_SAFE_INTEGER`; every OID is accepted only if it matches
+`^[0-9a-f]{40}$` (or `^[0-9a-f]{64}$` on a SHA-256 repository); a ticket
+id only if it matches `^T-[0-9A-HJKMNP-TV-Z]{26}$`; a branch name is
+never taken from input — it is always constructed as
+`adlc/autopilot/issue-<validated number>`; a path is always constructed
+by joining `REPO_ROOT`/`ISSUE_WT` with validated components and then
+verified with `realpath` to still lie under the expected root. Anything
+else → exit 1 `bad-input:<field>` with no side effect (AC 72).
+
 ### 4.1 Candidate set
 
-`gh api --paginate --repo <owner/repo>
-"repos/{owner}/{repo}/issues?state=open&per_page=100"` iterated until the
-`Link: rel="next"` header is absent, dropping entries that carry a
-`pull_request` key (the issues API interleaves PRs). A page failure,
-non-array page, or a `--paginate` run that ends while `rel="next"` is
-still present → `candidate-set-truncated`: no selection this iteration,
-status records the page count reached. `gh issue list --limit N` is never
+`gh api --paginate --slurp --repo <owner/repo>
+"repos/{owner}/{repo}/issues?state=open&per_page=100"`: with `--slurp`
+`gh` emits ONE outer JSON array whose elements are the per-page arrays,
+so the parser reads exactly one JSON document, asserts it is an array of
+arrays, and flattens it; entries carrying a `pull_request` key are
+dropped (the issues API interleaves PRs). Bounds: at most 50 pages (5 000
+issues) are accepted — beyond that, or on a non-zero `gh` exit, a
+non-array outer document, a non-array page, or a page whose elements are
+not objects with an integer `number` → `candidate-set-truncated`: no
+selection this iteration, status records the page count reached and the
+reason. Memory is bounded by the page cap; the result is never streamed
+line-by-line. `gh issue list --limit N` is never
 used for enumeration (it truncates silently).
 
 ### 4.2 Hard exclusions (applied before scoring; each is logged with the
@@ -659,18 +675,24 @@ gitignored `.adlc/autopilot-*` files.
    `ignored-file-drift`; (ii) **dependency-diff check**: for every
    `package.json` in `git diff --name-only <BASE_OID>...HEAD`, the parsed
    `dependencies`/`devDependencies`/`optionalDependencies`/`peerDependencies`
-   may differ from base only by keys starting `@adlc/` (CONVENTIONS.md
-   zero-third-party rule) and `scripts` may not change — otherwise round
+   may differ from base only by ADDING keys from the exact set the ticket
+   names (for this program: `@adlc/core`, `@adlc/fleet`, `@adlc/tickets`;
+   `autopilot.allowedWorkspaceDeps` in config may narrow but not widen
+   it) whose value is a workspace range (`*`, `workspace:*` or the
+   lockstep version), and `scripts` may not change — otherwise round
    failure `third-party-dep`; a changed `package-lock.json` is compared
    canonically (both sides parsed, `packages` map): every entry present
    on both sides must have identical `resolved`, `integrity`, `version`,
    `dependencies`, `optional`, `dev`, `link` fields; entries added may
-   only have keys of the form `packages/<x>` or `node_modules/@adlc/<x>`
-   with `link: true` or a `resolved` under `https://registry.npmjs.org/@adlc/`;
-   no entry may be removed; any other difference → `lockfile-drift`.
-   Because the only admissible additions are workspace links, `npm ci
-   --ignore-scripts --no-audit --no-fund` never fetches a new third-party
-   tarball; (iii) that command is then re-run in `ISSUE_WT` so the
+   only be `packages/<x>` (the new workspace itself) or
+   `node_modules/@adlc/<x>` for an `<x>` in the allowed set above, and
+   each such `node_modules/@adlc/<x>` entry must be a workspace LINK
+   (`link: true`, `resolved: "packages/<x>"`); an added entry with a
+   registry `resolved` URL of any scope — `@adlc/` included — is
+   `lockfile-drift`; no entry may be removed; any other difference →
+   `lockfile-drift`. Because the only admissible additions are workspace
+   links, `npm ci --ignore-scripts --no-audit --no-fund` never fetches a
+   new tarball of any kind; (iii) that command is then re-run in `ISSUE_WT` so the
    install matches the lock the gates will test. All outer gates (5a,
    preflight, final review, attestation) run in `ISSUE_WT`, never in the
    worker's worktree.
@@ -1505,8 +1527,16 @@ None is trust-root tier; each is a small, separately testable diff.
     `model-unknown`; `--adapter codex` → `adapter-unsupported`; endpoint
     fixtures with HTTP 500, a non-object body, `five_hour: null`,
     `utilization: "70"`, `utilization: 101`, `limits: {}`, and a matching
-    scoped entry lacking `percent` all yield `quota-unknown`; a body with
-    `seven_day_opus: null` and no matching entry yields "no scoped limit".
+    scoped entry lacking `percent` all yield `quota-unknown`; the canonical
+    no-scoped-limit predicate is `noScopedLimit(body, family) :=
+    (body["seven_day_" + family] === null || !(("seven_day_" + family) in
+    body)) && !body.limits?.some(e => familyOf(e?.scope?.model?.display_name)
+    === family)` — a fixture with `seven_day_opus: null` and a `limits`
+    array with no Opus entry yields "no scoped limit"; the same body with
+    an Opus entry present but malformed yields `quota-unknown`; a body
+    where `seven_day_opus` is an object but `limits` has no Opus entry
+    uses the object's `utilization` (both shapes are read; disagreement
+    between them → `quota-unknown`).
 47. **Carry-forward equivalence** (`maintain.test.mjs`, real temporary git
     repository): a clean rebase whose patch-id is unchanged → one
     `--carry-forward` call and re-entry to `ci-watch`; a clean rebase
@@ -1660,3 +1690,20 @@ None is trust-root tier; each is a small, separately testable diff.
     beginning with `## Acceptance criteria`, and argv `--record --ticket
     <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
     reopen (§6.6) the coldstart record call repeats with the new hash.
+72. **Input grammar** (`input.test.mjs`): `--issue 0`, `--issue 12a`,
+    `--issue ../x`, an OID of 39 hex chars, a ticket id with a lowercase
+    ULID, and a branch name supplied through any config field each exit 1
+    `bad-input:<field>` with zero spawns and zero filesystem writes; a
+    constructed `ISSUE_WT` whose `realpath` escapes `REPO_ROOT` (symlink
+    fixture) is refused.
+73. **Pagination contract** (`select.test.mjs`): the `gh api` fake
+    returns a `--slurp` outer array of 13 page arrays → 1 250 candidates;
+    an outer document that is an object, a page that is a string, an
+    element without an integer `number`, or 51 pages → `candidate-set-
+    truncated` with the reason recorded; the spawn recorder shows
+    `--slurp` in argv.
+74. **Exact-name dependency guard** (`sequence.test.mjs`): adding
+    `@adlc/spec-lint` (an existing published workspace not in the allowed
+    set) → `third-party-dep`; adding `@adlc/core` as a workspace link →
+    pass; a lockfile entry `node_modules/@adlc/core` with a registry
+    `resolved` URL → `lockfile-drift`.
