@@ -77,3 +77,5 @@ apps/docs/.impeccable/mocks/mobile.html
 # impossible.
 /release-blockers.md
 /HANDOFF.md
+.booster/
+!.adlc/config.json
