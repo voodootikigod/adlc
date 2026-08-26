@@ -764,28 +764,39 @@ test('recovery ignores a journal that claims NO audit is owed — the store deci
 // The shared guard is exported, so a library caller can reach it directly. An
 // omitted key must not read as "a key is present" — that is the fail-OPEN reading
 // of the single thing it exists to refuse.
+//
+// Every call that can reach the repository names an EMPTY temp root. The guard's
+// `root` defaults to '.', the process cwd — under `npm test` that is this
+// repository — and the repository's own .adlc/manifest.d is a legitimate trust-root
+// witness (a recorded bypass is sticky, see manifestRecordsBypass). The first
+// audited `ticket complete` to land there made the rails-free case below read the
+// repo instead of the fixture and refuse a store that declares nothing.
 test('the exported trust-root guard fails CLOSED on an omitted or invalid key, per the key contract', () => {
-  const railed = [ticket('T-RAILED', { rails: ['src/**'] })];
-  // No options bag at all.
-  assert.throws(() => assertSignableTrustRootWrite(railed), TypeError);
-  for (const bad of [undefined, '', 0, false, {}]) {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-bypass-audit-guard-'));
+  try {
+    const railed = [ticket('T-RAILED', { rails: ['src/**'] })];
+    // No options bag at all. A railed store is a trust root wherever it sits, so
+    // this reaches the key contract without consulting the cwd's evidence.
+    assert.throws(() => assertSignableTrustRootWrite(railed), TypeError);
+    for (const bad of [undefined, '', 0, false, {}]) {
+      assert.throws(
+        () => assertSignableTrustRootWrite(railed, { key: bad, root }),
+        TypeError,
+        `key ${JSON.stringify(bad)} is a caller bug, not a usable key`,
+      );
+      assert.throws(() => assertWriteIsSignable({ key: bad }), TypeError);
+    }
+    // An explicit null is the legal "no key" form, and THAT is what refuses.
     assert.throws(
-      () => assertSignableTrustRootWrite(railed, { key: bad }),
-      TypeError,
-      `key ${JSON.stringify(bad)} is a caller bug, not a usable key`,
+      () => assertSignableTrustRootWrite(railed, { key: null, root }),
+      (error) => error.code === 'MANIFEST_KEY_REQUIRED',
     );
-    assert.throws(() => assertWriteIsSignable({ key: bad }), TypeError);
-  }
-  // An explicit null is the legal "no key" form, and THAT is what refuses.
-  assert.throws(
-    () => assertSignableTrustRootWrite(railed, { key: null }),
-    (error) => error.code === 'MANIFEST_KEY_REQUIRED',
-  );
-  // The two legal ways through.
-  assert.equal(assertSignableTrustRootWrite(railed, { key: KEY }), true);
-  assert.equal(assertSignableTrustRootWrite(railed, { key: null, allowUnsigned: true }), true);
-  // And a store that is not a trust root never reaches the key question at all.
-  assert.equal(assertSignableTrustRootWrite([ticket('A')], { key: null }), false);
+    // The two legal ways through.
+    assert.equal(assertSignableTrustRootWrite(railed, { key: KEY, root }), true);
+    assert.equal(assertSignableTrustRootWrite(railed, { key: null, allowUnsigned: true, root }), true);
+    // And a store that is not a trust root never reaches the key question at all.
+    assert.equal(assertSignableTrustRootWrite([ticket('A')], { key: null, root }), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 // The interactive accept path resolves the key at the bin and then hands the
