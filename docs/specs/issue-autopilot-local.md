@@ -10,14 +10,10 @@ Supersedes: the GitHub-Actions substrate half of issue #237 / ADR "0011
 issue-autopilot-substrate" (never landed). The gate composition, triage
 contract, protected-path denylist and PR-upsert rule from #237 are kept
 verbatim; only the substrate (where the loop runs, what pays for it) changes.
-Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1).
-Gate record (facts, verifiable from the manifest segment
-`spec-autopilot-local-01M0Z3K7…`): `adlc spec-lint` exit 0 (70/70);
-`adversarial-review --input` (codex, `--min-confidence 0.3`) run 12 times,
-each ending `needs-attention` (finding counts 7,7,7,7,4,7,6,6,6,5,6,7);
-~60 findings folded into §2–§14; the five open round-12 findings are the
-build ticket's AC2–AC6. This line records what happened; it grants no
-review any standing and asks nothing of any reader.
+Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1). The gate
+record (spec-lint, coldstart, ticket-update audits) is the manifest segment
+`spec-autopilot-local-01M0Z3K7…` bound to ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH;
+this document carries no review standing of its own.
 Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
 (§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
 `packages/fleet/lib/{review-runner,scheduler,charters,config}.mjs`,
@@ -1234,10 +1230,10 @@ None is trust-root tier; each is a small, separately testable diff.
 
 | # | Item | Owner | Status |
 |---|---|---|---|
-| R1 | Land `.adlc/config.json` (§13) via the admin trust-root commit | operator | open |
-| R2 | Update the installed `adlc` plugin from 1.7.0 to 1.11.0 (`/plugin` marketplace update); add the parity check | operator + build | open |
+| R1 | Land `.adlc/config.json` (§13) via the admin trust-root commit — tracked as prerequisite ticket `T-01M0ZHZA1E2JHS0KZPA8J7HPBJ` (see the ticket DAG: edge → build ticket), whose ACs include R4 | operator | ticketed |
+| R2 | Update the installed `adlc` plugin from 1.7.0 to 1.11.0 (`/plugin` marketplace update). Machine-local, so not a ticket: it is enforced deterministically by preflight §9.2, which refuses to dispatch on mismatch | operator | preflight-gated |
 | R3 | Fleet extensions (§14) built and tested first, as their own ticket/PR | build | open |
-| R4 | Fleet has never run live in this repo: `fleet run --dry-run` then one live run on a docs issue via `adlc-autopilot once --issue N` before enabling the service | operator | open |
+| R4 | Fleet has never run live in this repo: `fleet run --dry-run --json` exit 0 is an AC of the R1 ticket; the live canary on a docs issue is build-ticket AC10 | operator | ticketed |
 | R5 | Weekly window is at 70% used at authoring time; the first autonomous run cannot start until it resets (today 09:59 ET) | — | informational |
 | R6 | Verify `claude -p` subagent fan-out (`/adlc:adlc-prosecute`) works under `bwrap` + `acceptEdits`; if not, the charter degrades to `adlc hollow-test`/`behavior-diff` only and the outer Codex loop remains the P5 | build canary | open |
 | R7 | Verify OAuth token refresh and `gh` auth work under `systemd --user` (no TTY, no keyring) | operator | open |
@@ -1589,10 +1585,12 @@ None is trust-root tier; each is a small, separately testable diff.
     mutations; `headRefOid != attestedHead` → `oid-mismatch`; all
     preconditions met → the rebase path runs.
 61. **PR lifecycle** (`maintain.test.mjs`): `MERGED` → `done`, local
-    worktree/branch/marker/record removed, zero remote deletes; `CLOSED`
-    → local retire, remote delete only via the lease form and only when
-    `ls-remote` equals the recorded OID, `adlc:autopilot-skip` + comment
-    on the issue; PR not found → `orphan`.
+    worktree/branch/marker removed, zero `git push` calls, record deleted
+    only when the `ls-remote` fake shows the ref gone, else
+    `remote-pending`; `CLOSED` → local retire, zero `git push` calls,
+    `remote-pending` while the ref exists, `adlc:autopilot-skip` +
+    comment naming the exact remote-deletion command on the issue; PR not
+    found → `orphan`.
 62. **Lease-guarded remote delete is operator-only** (`recover.test.mjs`,
     real temporary git repository with a bare `origin`): automatic
     retirement of a pushed run issues zero `git push` calls and reports
