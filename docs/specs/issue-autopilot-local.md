@@ -338,7 +338,7 @@ across steps beyond that:
 |---|---|
 | loop head | sleep 10m |
 | shaping call (§5.2) | sleep 10m; nothing written |
-| coldstart answer call (§5.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping) | sleep 10m; the shaped ticket stays cached |
+| coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
 | after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
 | every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
@@ -547,14 +547,16 @@ for every issue regardless of how the ticket fields were obtained.
      files the bijective/dispatcher guards require (§14). A second new
      directory, or a new directory anywhere else, → CLARIFY.
    - `adlc spec-lint <ticket-body.md>` exit 0
-   - `adlc coldstart <ticket> --tickets <ISSUE_WT>/.adlc/tickets
-     --prompt-only` (cwd `ISSUE_WT`) → answered by one `claude -p
-     --model <effectiveModel> --max-turns 1` call with the same process-group, 5-minute
-     timeout, 64 KiB output cap, key scrub, quota gate and reconciliation
-     as the shaping call (§5.2, §3.2, §3.4) → `--record-verdict` with an
-     empty `gaps[]`; any gap → CLARIFY; a timed-out or malformed answer is
-     an operational failure handled like a shaping failure (counts toward
-     the 3-per-24h `shaping-failed` rule)
+   - spec-lint at triage is a LINT ONLY (no `--record`, no ticket needed):
+     the criteria section is written to `<REPO_ROOT>/.adlc/autopilot-runs/
+     <issue>-ac.md` (gitignored) and `adlc spec-lint <that file>` must
+     exit 0; the recorded run happens in §6.3 against the persisted ticket.
+   - coldstart is NOT run at triage: it needs the ticket in a store, which
+     exists only after §6.2. It runs exactly ONCE per ticket hash, in §6.3;
+     a non-empty `gaps` there is a CLARIFY (§5.4) that additionally retires
+     the just-created worktree/branch (§2.1a, nothing pushed yet). There
+     is therefore one shaping call and one coldstart-answer call per
+     issue before dispatch, both gated (§3.2).
 4. Verdict **PROCEED** (ticket + verdict evidence) or **CLARIFY**: one
    comment keyed by the sentinel `<!-- adlc-autopilot:clarify sha256(findings) -->`
    listing every failed gate's findings verbatim plus the fix template (the
@@ -948,17 +950,19 @@ every other state (`clarify`, `shaped`, `dispatched`, `quota-paused`,
 `built`, `attested`, `pushed`, `oid-mismatch`, `blocked`, `stale`,
 `ci-red`, `done`, `orphan`) is skipped by construction, so a quarantined
 run is never rebased, dispatched, attested or pushed until recovery (§2.1)
-has explicitly moved it back to `pr-open`. For each candidate, ALL of the
-following **ownership preconditions** must hold before any action; a
-failure marks the run `orphan` (nothing mutated) and is reported in
-status:
+has explicitly moved it back to `pr-open`. For each candidate, the PR is read FIRST: `gh pr view <prNumber>
+--repo <repo> --json headRefName,headRefOid,state,baseRefName`. Provenance
+(applies to every state): the record's `token` must equal the local
+ownership marker for the branch (§6.1) and `headRefName` must equal
+`adlc/autopilot/issue-<n>` — otherwise `orphan`, nothing mutated. If
+`state` is `MERGED` or `CLOSED`, the PR-lifecycle table below applies and
+the mutation preconditions are skipped (those transitions only retire
+local artifacts and never push). Only for `state == "OPEN"` must ALL of
+the following **mutation preconditions** additionally hold before any
+rebase/dispatch/push; a failure marks the run `orphan` (nothing mutated)
+and is reported in status:
 
-- the record's `token` equals the local ownership marker for the branch
-  (§6.1);
-- the record's `prNumber` resolves via `gh pr view <prNumber> --repo
-  <repo> --json headRefName,headRefOid,state,baseRefName` to `state ==
-  "OPEN"`, `headRefName == adlc/autopilot/issue-<n>`, `baseRefName ==
-  main`;
+- `baseRefName == main`;
 - `headRefOid` equals the record's `attestedHead` (the PR head is the tree
   the autopilot last attested and pushed) — a mismatch is `oid-mismatch`
   (§6.8), not `orphan`;
@@ -1324,8 +1328,10 @@ None is trust-root tier; each is a small, separately testable diff.
    outranks `P0-critical`; the denylist cannot be shrunk by config (assert a
    config that omits `.adlc/**` still excludes it).
 4. **Triage** (`triage.test.mjs`): schema fail, wildcard scope, protected
-   path, spec-lint WISH, coldstart gap → CLARIFY with findings verbatim and
-   the fix template; all-pass → PROCEED with a ticket whose body's first line
+   path, spec-lint WISH → CLARIFY with findings verbatim and the fix
+   template, with zero coldstart calls; a coldstart gap in §6.3 → CLARIFY
+   plus retirement of the fresh worktree/branch, with exactly one
+   coldstart-answer `claude` call per ticket hash in a full sequence; all-pass → PROCEED with a ticket whose body's first line
    is `GitHub issue: <url>`; second unchanged run → zero mutating `gh` calls
    (recording fake asserts); a `gh` fake that fails AFTER the comment and
    BEFORE the label → the record shows `commentPosted:true,
