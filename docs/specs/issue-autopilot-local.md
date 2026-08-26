@@ -201,9 +201,14 @@ makes) and, if `ISSUE_WT` exists, `git -C <ISSUE_WT> status --porcelain`
 is empty — a moved tip or a dirty worktree means another session (a
 human, a Remote Control session) touched it, so nothing is force-removed
 and the run is `orphan`. The worktree removal is therefore never forced
-on a dirty tree. Order is remote-first so a remote failure leaves every local artifact in
-place for the next attempt (nothing local is destroyed before the remote
-outcome is known). Step R (remote, only if the record says pushed): (c)
+on a dirty tree. The loop NEVER deletes a remote ref on its own: automatic retirement
+performs Step L only and leaves any pushed remote ref in place (status
+lists it under `remoteRefsLeft` with the exact deletion command). Step R
+runs only when the operator invokes `reset --issue N --confirm-delete
+<OID> --delete-remote`. When both steps run, order is remote-first so a
+remote failure leaves every local artifact in place for the next attempt
+(nothing local is destroyed before the remote outcome is known). Step R
+(remote, operator-invoked only, and only if the record says pushed): (c)
 is re-evaluated IMMEDIATELY before the push (`gh pr list --repo <repo>
 --head adlc/autopilot/issue-<n> --state open --json number` must be
 empty — a PR that appeared since the earlier check aborts with `orphan`)
@@ -213,8 +218,13 @@ with a lease so a tip that moves between the check and the delete is
 protected: `git push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
 origin :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
-remote AND local untouched, stop. Step L (local, only after R succeeded
-or the record says never pushed), cwd `REPO_ROOT`: re-check (e); `git
+remote AND local untouched, stop. After a successful delete, `gh pr list
+--head` is queried once more; a PR that was created against the ref in
+the window is reported (`pr-after-delete: <number>`) so the operator can
+restore the ref from the recorded OID — the deletion itself is
+lease-bounded, so the OID is always known. Step L (local; in automatic
+retirement always, in `reset` only after R succeeded or the record says
+never pushed), cwd `REPO_ROOT`: re-check (e); `git
 worktree remove <ISSUE_WT>` (if present; clean by (e), never forced);
 `git update-ref -d refs/heads/adlc/autopilot/issue-<n> <localHead>` (the
 conditional form — it fails if the ref moved since (e); on failure →
@@ -934,8 +944,16 @@ at preflight to absolute paths from
 a sanitized search list — the orchestrator's PATH entries that are
 absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
 `node_modules/` — and those absolute paths are pinned in the status file
-and used for every spawn thereafter (a tool that resolves under a
-rejected directory → exit 1 `untrusted-tool:<name>`). Children receive
+and used for every spawn thereafter. Each pinned executable is
+additionally checked after `realpath` resolution (symlinks followed): the
+file and every ancestor directory up to `/` must be owned by the
+invoking user or by root and must not be group- or world-writable; a
+tool whose resolved path or any ancestor fails that check, or that
+resolves under a rejected directory → exit 1 `untrusted-tool:<name>`.
+The operator may narrow further with `--trusted-bin-dirs <abs,abs,…>`
+(operator-local): when given, only those directories are searched. The
+key-bearing `adlc` is always verified this way before the key is ever
+placed in a child environment. Children receive
 `PATH` = that sanitized list (the same rule fleet's `review-runner`
 applies), never the raw inherited PATH. `gh auth status` ok; `claude auth
 status --json` `loggedIn:true`.
@@ -1560,12 +1578,15 @@ None is trust-root tier; each is a small, separately testable diff.
     → local retire, remote delete only via the lease form and only when
     `ls-remote` equals the recorded OID, `adlc:autopilot-skip` + comment
     on the issue; PR not found → `orphan`.
-62. **Lease-guarded remote delete** (`recover.test.mjs`, real temporary
-    git repository with a bare `origin`): retire of a pushed run whose
-    remote tip equals the recorded OID deletes the remote ref using
+62. **Lease-guarded remote delete is operator-only** (`recover.test.mjs`,
+    real temporary git repository with a bare `origin`): automatic
+    retirement of a pushed run issues zero `git push` calls and reports
+    the ref under `remoteRefsLeft`; `reset --issue N --confirm-delete
+    <OID> --delete-remote` deletes the remote ref using
     `--force-with-lease=<ref>:<oid>`; when the remote tip was advanced by
     another push, the delete fails the lease, the remote ref survives,
-    and the run is `orphan`.
+    and the run is `orphan`; a PR fake that appears right after a
+    successful delete is reported as `pr-after-delete`.
 63. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
     'opus;touch /tmp/x'` preflight exits 1 `model-unknown` (grammar
     `^[a-z0-9][a-z0-9.-]{0,63}$`); the `--pre-strike-argv` value parses
@@ -1591,8 +1612,13 @@ None is trust-root tier; each is a small, separately testable diff.
 67. **Pinned tools** (`preflight.test.mjs`): a PATH whose first entry is
     `<REPO_ROOT>/node_modules/.bin` containing a fake `adversarial-review`
     → that entry is skipped and the system binary is pinned; a tool that
-    resolves only under `REPO_ROOT` → `untrusted-tool`; every recorded
-    child env has the sanitized PATH.
+    resolves only under `REPO_ROOT` → `untrusted-tool`; a fake `adlc`
+    in a world-writable directory, one owned by another uid (fixture via
+    an injected `stat`), and one reached through a symlink whose target
+    directory is group-writable → `untrusted-tool:adlc` and the key is
+    never placed in any child env; `--trusted-bin-dirs` restricts the
+    search to the given directories; every recorded child env has the
+    sanitized PATH.
 68. **Digest protocol** (`digest.test.mjs`): a `gh` fake that fails after
     the comment is posted leaves `digestPosted:false`, and the next
     iteration finds the sentinel and posts nothing; a closed log issue →
