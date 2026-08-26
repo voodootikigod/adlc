@@ -180,7 +180,7 @@ disambiguate by inspecting git/`gh`.
 
 | Found | Action |
 |---|---|
-| `creating` (record persisted; the staging git ops may or may not have happened) | crash-safe repair that touches ONLY artifacts whose NAME embeds the record's token — `adlc/autopilot/staging-<token>` and `<ISSUE_WT>.creating-<token>` — and never adopts anything else: staging branch present at `baseOid` → finish the marker/rename/move steps; staging branch present with a moved tip → `orphan`; staging branch absent → remove the empty staging path if any, delete the record, re-enter selection. A branch named `adlc/autopilot/issue-<n>` that exists WITHOUT the marker is never claimed and never deleted: the run is `orphan` until the operator runs `reset` |
+| `creating` (record persisted; `creationPhase` names the step that may have half-happened) | crash-safe repair keyed on `creationPhase` and touching ONLY artifacts the record names whose ownership is provable — a staging branch/path whose NAME embeds the token, or the final branch/path carrying the marker with the record's token: `recorded`/`staged` → staging branch present at `baseOid` → continue (marker → rename → move); staging tip moved → `orphan`; nothing present → delete the record; `marked` → same, marker already there; `renamed` → the final branch exists WITH the marker (git renames the config section) and the staging path may still exist → finish the move; `moved` → set `shaped`. The record is NEVER deleted while any token-owned artifact (staging or marker-bearing final branch/worktree) exists. A final branch that exists WITHOUT the marker is never claimed and never deleted: `orphan` until the operator runs `reset` |
 | `shaped` (ticket cached, not dispatched) | reuse the cached ticket if the issue's `updatedAt` is unchanged, else re-shape |
 | `dispatched` with fleet's run lock free | re-invoke fleet EXACTLY as in §6.4 (same cwd `ISSUE_WT`, same `--tickets <ULID>`, same flags) when quota is ok: fleet has no `--resume` flag — on startup it reads its persisted `<ISSUE_WT>/.adlc/fleet-status.json` and `reconcileRun` (fleet §6.4) either resumes (`resuming run <fleetRunId> on <integrationBranch>` on stderr, and the same `fleetRunId` in `--json`) or refuses (`cannot resume: <reason>`, exit 1). The orchestrator asserts the reported `fleetRunId` equals the record's; a refusal or a mismatch → the run is `blocked` with reason `resume-refused` (never silently restarted, because a fresh run would re-cut the integration branch) |
 | `quota-paused` | same as `dispatched`, gated on quota |
@@ -674,9 +674,16 @@ gitignored `.adlc/autopilot-*` files.
    `adlc/autopilot/issue-<n>` must NOT exist (either → `orphan-dir` /
    `orphan-branch`, nothing touched, the issue excluded until `reset`).
    Ownership is established on token-named STAGING artifacts before the
-   final names ever exist: FIRST persist the run record with `state:
-   "creating"`, the generated `token` (32 random bytes hex), `baseOid`
-   and the constructed names (write-to-temp + `rename`); THEN `git
+   final names ever exist, and every transition is journaled: the run
+   record carries `creationPhase ∈ {recorded, staged, marked, renamed,
+   moved}` together with BOTH name pairs (`stagingBranch`,
+   `stagingPath`, `finalBranch`, `finalPath`), and the record is
+   rewritten (write-to-temp + `rename`) with the NEXT phase value
+   immediately BEFORE each git operation below is attempted, so recovery
+   always knows which step may have half-happened. FIRST persist the run
+   record with `state: "creating"`, `creationPhase: "recorded"`, the
+   generated `token` (32 random bytes hex), `baseOid` and the constructed
+   names; THEN `git
    worktree add <ISSUE_WT>.creating-<token> -b
    adlc/autopilot/staging-<token> <BASE_OID>` (both the path and the
    BRANCH embed the token — no human branch can share the name); THEN
@@ -785,9 +792,18 @@ gitignored `.adlc/autopilot-*` files.
      appears in either set — so `.env.local`, the operator's other
      checkouts, the orchestrator's state, the shared git database and the
      mirror's parent directory are invisible to the worker.
-   - After the worker exits, fleet runs `git -C <ISSUE_WT> fetch <MIRROR>
-     <workerBranch>` and requires a fast-forward from the tip it cut
-     (else `mirror-fetch-failed`); the mirror is `rm -rf`'d and recreated
+   - After the worker exits, fleet synchronizes the worker branch back
+     with an explicit sequence (a bare `git fetch <MIRROR> <branch>` only
+     updates `FETCH_HEAD` and is NOT sufficient): `git -C <ISSUE_WT> fetch
+     <MIRROR> +refs/heads/<workerBranch>:refs/autopilot/fetched/<workerBranch>`
+     into a temporary ref; `git merge-base --is-ancestor <cutTip>
+     refs/autopilot/fetched/<workerBranch>` must succeed (the worker's tip
+     descends from the tip fleet cut); then `git update-ref
+     refs/heads/<workerBranch> refs/autopilot/fetched/<workerBranch>
+     <cutTip>` (compare-and-swap on the old value) — the worker branch is
+     never checked out in `ISSUE_WT`'s repository, so the ref can be
+     advanced directly; then the temporary ref is deleted. Any step
+     failing → `mirror-fetch-failed`, ref untouched; the mirror is `rm -rf`'d and recreated
      before every dispatch (under the lock) and removed at retirement
      Step L with the run directory, so a stale mirror is never read by any
      gate. What the worker can read of the repository is exactly the
@@ -2104,11 +2120,13 @@ None is trust-root tier; each is a small, separately testable diff.
     → stale (newest wins).
 81. **Mirror is the only git database** (`run.test.mjs`): the fleet argv
     carries `--model-plane-git mirror --model-plane-git-mirror
-    <REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git` and its read set contains that
-    mirror path and NOT `<REPO_ROOT>/.git`; no argv anywhere contains
-    `--model-plane-git-sanitize`; a fleet fake reporting
-    `gitSource: "shared"` back in `--json` is `sandbox-policy-mismatch`
-    (no attestation).
+    <REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`; the mirror
+    path appears ONLY as a writable root (fleet's `--json` echo lists it
+    under `writableRoots`) and never in `--model-plane-read-only`;
+    `<REPO_ROOT>/.git` appears in neither; no argv anywhere contains
+    `--model-plane-git-sanitize`; a fleet fake reporting `gitSource:
+    "shared"` back in `--json` is `sandbox-policy-mismatch` (no
+    attestation).
 82. **Revalidation before write and dispatch** (`sequence.test.mjs`): a
     `gh issue view` fake whose second read shows a changed `updatedAt`, a
     newly added `adlc:autopilot-skip`, a closed state, or a new open PR
@@ -2246,3 +2264,19 @@ None is trust-root tier; each is a small, separately testable diff.
     `lastError` yields `lastError: null` plus `redactionFailed:
     ["lastError"]` and the record still parses and drives recovery; the
     identifier fields are never handed to the redactor (spy assertion).
+106. **Fetch-back advances the worker branch** (`sequence.test.mjs`,
+    real temporary git repository): after a worker commit in the mirror,
+    the recorded git argv shows the temp-ref fetch, the `merge-base
+    --is-ancestor` check and the CAS `update-ref` with the cut tip as the
+    old value; the worker branch in `ISSUE_WT`'s repository points at the
+    worker's commit; a mirror tip that does not descend from the cut tip
+    → `mirror-fetch-failed` with the branch ref untouched and the temp
+    ref deleted.
+107. **Creation phases are journaled** (`recover.test.mjs`, real
+    temporary git repository): for each `creationPhase` value a crash
+    fixture leaves the corresponding half-done state and recovery
+    finishes it (staging branch at base → final branch with marker →
+    worktree at `ISSUE_WT`, state `shaped`); the record is observed on
+    disk with the next phase BEFORE each git argv; a `renamed` crash
+    leaves no dangling staging path; the record is never deleted while a
+    marker-bearing final branch exists.
