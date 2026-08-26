@@ -180,7 +180,7 @@ disambiguate by inspecting git/`gh`.
 
 | Found | Action |
 |---|---|
-| `creating` (record persisted, git op may or may not have happened) | crash-safe repair: if the branch exists, its tip MUST equal the record's `baseOid` (nothing has been committed yet) — then write the missing marker from the record's `token` and continue at §6.1's marker step; if the tip differs → `orphan`; if the branch does not exist → delete any half-made `ISSUE_WT` directory (it holds no commits) and the record, and re-enter selection |
+| `creating` (record persisted, git op may or may not have happened) | crash-safe repair, touching ONLY the token-named staging path `<ISSUE_WT>.creating-<token>` (never `ISSUE_WT` itself, which this run has not yet claimed): if the branch exists, its tip MUST equal the record's `baseOid` — then write the missing marker from the record's `token`, `git worktree move` the staging path to `ISSUE_WT` (which must still be absent), and continue; if the tip differs → `orphan`; if the branch does not exist → `git worktree remove` / `rm -rf` of the staging path only if it is registered to this branch or is empty, delete the record, re-enter selection; a staging path whose token is not the record's is never touched |
 | `shaped` (ticket cached, not dispatched) | reuse the cached ticket if the issue's `updatedAt` is unchanged, else re-shape |
 | `dispatched` with fleet's run lock free | re-invoke fleet EXACTLY as in §6.4 (same cwd `ISSUE_WT`, same `--tickets <ULID>`, same flags) when quota is ok: fleet has no `--resume` flag — on startup it reads its persisted `<ISSUE_WT>/.adlc/fleet-status.json` and `reconcileRun` (fleet §6.4) either resumes (`resuming run <fleetRunId> on <integrationBranch>` on stderr, and the same `fleetRunId` in `--json`) or refuses (`cannot resume: <reason>`, exit 1). The orchestrator asserts the reported `fleetRunId` equals the record's; a refusal or a mismatch → the run is `blocked` with reason `resume-refused` (never silently restarted, because a fresh run would re-cut the integration branch) |
 | `quota-paused` | same as `dispatched`, gated on quota |
@@ -358,7 +358,7 @@ across steps beyond that:
 | coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
 | after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
-| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
+| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the helper runs with a MINIMAL environment — `PATH` = the sanitized list of §9.1, `HOME`, `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN` and nothing else, so no orchestrator secret (the manifest key, `gh`/`claude` tokens, `*_KEY`/`*_TOKEN`) is inherited; its executable is the pinned `adlc` path; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
 | each maintenance conflict-fix round (§8) | skip that PR this iteration; no label |
 | each CI fix round (§0.11) | pause the CI watch; the 30-minute CI budget does not advance while paused |
 
@@ -670,15 +670,21 @@ gitignored `.adlc/autopilot-*` files.
    (`revalidation-changed`, nothing written or, if a worktree already
    exists, retired per §2.1a) and selection restarts on the next
    iteration.
-1. (cwd `REPO_ROOT`) FIRST persist the run record with `state:
+1. (cwd `REPO_ROOT`) `ISSUE_WT` must NOT exist (an existing directory or
+   registered worktree there → `orphan-dir`, nothing touched, the issue
+   excluded until `reset`). FIRST persist the run record with `state:
    "creating"`, the generated `token`, `baseOid` and the constructed
-   branch name (write-to-temp + `rename`), THEN `git worktree add
-   <ISSUE_WT> -b adlc/autopilot/issue-<n> <BASE_OID>`, then write the
-   **ownership marker**: `git config
+   branch name (write-to-temp + `rename`); THEN `git worktree add
+   <ISSUE_WT>.creating-<token> -b adlc/autopilot/issue-<n> <BASE_OID>` —
+   a staging path that embeds the token, so only this run can have made
+   it; then write the **ownership marker**: `git config
    branch.adlc/autopilot/issue-<n>.adlcAutopilotToken <token>` where
    `token` is 32 random bytes hex also stored in the run record. The marker
    lives in the repo's local git config (never pushed) and is the only
    authorization recovery accepts for deleting a branch or worktree (§2.1).
+   Only after the marker is written: `git worktree move
+   <ISSUE_WT>.creating-<token> <ISSUE_WT>` and the record moves to
+   `shaped`/`dispatched`; from here on `ISSUE_WT` is the working path.
    Then (cwd `ISSUE_WT`) `npm ci --ignore-scripts`.
 2. (cwd `ISSUE_WT`) Write the ticket: `adlc ticket create --input - --write
    --dir <ISSUE_WT>/.adlc` (id omitted → ULID). This is a signed
@@ -708,7 +714,10 @@ gitignored `.adlc/autopilot-*` files.
      "--tickets", "<ISSUE_WT>/.adlc/tickets", "--prompt-only",
      "--record-verdict", "-"]`, the
      serialized JSON is written to `stdin` and the stream is then ended.
-     No shell ever sees the JSON. A non-empty `gaps` is a CLARIFY (§5.4),
+     No shell ever sees the JSON. The PROMPT of both `claude -p` calls
+     (§5.2 shaping, this coldstart answer) is likewise delivered on stdin
+     through the shared wrapper's `stdinBytes` — never as an argv element
+     or a temp file. A non-empty `gaps` is a CLARIFY (§5.4),
      never recorded as a pass.
    - **spec-lint**: the orchestrator first derives the criteria document
      — the ticket body from its `=== ACCEPTANCE CRITERIA ===` heading to
@@ -1375,7 +1384,7 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
 | quota unknown / gated | sleep 10m, status `waiting-quota`, no GitHub write |
 | preflight red | exit 1 (`once`) / sleep 10m with `lastError` (`loop`); no dispatch |
 | CLARIFY | comment + label, sleep 10m |
-| fleet exit 2 | `adlc:autopilot-blocked` + findings comment, branch kept |
+| fleet exit 2 | per the reason-keyed mapping of §6.10 (the SOLE normative rule): `quota-paused` → resumable, `lock-held` → skipped, otherwise `blocked` + redacted findings comment + `adlc:autopilot-blocked`, branch kept |
 | fleet exit 1 | no GitHub write, `lastError`, sleep 10m |
 | preflight.mjs red after fleet | counts as a fix round within the 90-min clock |
 | CI red after 2 fix rounds | `adlc:autopilot-ci-red` + comment |
@@ -1389,7 +1398,11 @@ process group, with a deadline, and with stdin CLOSED — except the
 enumerated **stdin-bearing commands**, whose stdin receives exactly the
 orchestrator-serialized bytes and is then ended: `adlc ticket create
 --input -`, `adlc ticket update --input -`, `adlc coldstart
---record-verdict -`. The shared spawn wrapper takes an explicit
+--record-verdict -`, and the two `claude -p` calls (shaping, §5.2, and
+the coldstart answer, §6.3) — their PROMPT is the stdin payload (`claude
+-p` with no positional prompt reads it from stdin), never an argv element
+(argv is visible to every process on the host via `/proc`) and never a
+file; both are also subject to the 5-minute deadline of §12.1. The shared spawn wrapper takes an explicit
 `stdinBytes` option; every other spawn passes none and gets a closed
 stream; on expiry SIGTERM is sent to the group, SIGKILL 15 s later, and
 the step fails with `reason:"timeout:<command>"`. The orchestrator's own
@@ -1479,8 +1492,10 @@ None is trust-root tier; each is a small, separately testable diff.
   retry can hand fleet the previous round's failure), `--max-strikes N`,
   `--wall-clock-minutes M`, `--charter-file <path>`, `--pre-strike-argv
   <json-array>` (operator-local; a JSON array of strings executed with
-  `execFile`-style argv and NO shell, with the ORCHESTRATOR's env minus
-  the key, before every strike; non-zero → stop with
+  `execFile`-style argv and NO shell, with a caller-supplied minimal env
+  (`--pre-strike-env <json-object>`; fleet passes exactly those variables
+  plus nothing — not its own env, not the worker's), the executable
+  resolved from `argv[0]` as an absolute path only, before every strike; non-zero → stop with
   `reason:"quota-paused"`, exit 2, run left resumable through fleet's
   EXISTING status reconciliation on the next identical invocation — there
   is no `--resume` flag and none is added; `reconcileRun`'s "resuming run
@@ -2184,3 +2199,19 @@ None is trust-root tier; each is a small, separately testable diff.
     argv requests `title,body` and never `comments`; a fixture whose
     comments contain a directive shows no trace of it in the shaping
     spawn's stdin.
+102. **Prompt transport** (`triage.test.mjs`): both `claude -p` spawns
+    carry no positional prompt in argv, receive the prompt as `stdinBytes`
+    (the recorder captures it), have no prompt file on disk, and are
+    killed at the 5-minute deadline like every other child.
+103. **Pre-strike minimal env** (`run.test.mjs`): the `--pre-strike-env`
+    object passed to fleet has exactly the keys `PATH`, `HOME`,
+    `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN`; an
+    orchestrator env seeded with `ADLC_MANIFEST_KEY`, `GH_TOKEN` and
+    `FOO_SECRET` leaks none of them (table-driven over the recorded env).
+104. **Staged creation** (`recover.test.mjs`, real temporary git
+    repository): a pre-existing `ISSUE_WT` directory → `orphan-dir`, zero
+    git calls; creation goes through `<ISSUE_WT>.creating-<token>` and is
+    moved only after the marker exists; a `creating` record with a
+    staging path of a DIFFERENT token → nothing deleted, `orphan`; a
+    crash after `worktree add` and before the marker → repair writes the
+    marker and completes the move.
