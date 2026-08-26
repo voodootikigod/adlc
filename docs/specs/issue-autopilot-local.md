@@ -15,6 +15,12 @@ verbatim; only the substrate (where the loop runs, what pays for it) changes.
 Approval: not asserted here — see the `spec-approval` manifest record
 (`adlc gate-manifest show --ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH`), which
 carries the approver, date, phase and the hash of the approved file.
+Every edit to this file is followed by a fresh `spec-approval` record as
+the last manifest append of that change (so the newest such record always
+hashes the current blob); the build ticket's preflight (§14, `specBlob`)
+requires that the newest `spec-approval` record's file hash equals the
+hash of this file at `BASE_OID`, and refuses to dispatch otherwise
+(`spec-approval-stale`).
 Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
 (§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
 `packages/fleet/lib/{review-runner,scheduler,charters,config}.mjs`,
@@ -699,13 +705,25 @@ gitignored `.adlc/autopilot-*` files.
    plus `--model-plane-read bounded --model-plane-read-only
    <READ_SET>` (fleet-extensions ticket, §14), where `READ_SET` is the
    comma-joined absolute list: `<ISSUE_WT>` (the worker's nested worktree
-   lives under it), `<REPO_ROOT>/.git` (linked worktrees share it), the
-   directories of every pinned tool (§9.1), `/usr`, `/lib`, `/lib64`,
-   `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, and the adapter's
-   synthetic home (fleet §7.3 `homeState`). `<REPO_ROOT>` itself, `$HOME`
-   and `/tmp` are NOT in the set, so `.env.local`, the operator's other
-   checkouts and the orchestrator's state files are unreadable to the
-   worker. Fleet: sandboxed worker (`bwrap`, `--permission-mode
+   lives under it), a SANITIZED view of `<REPO_ROOT>/.git` (linked
+   worktrees share the git database; fleet-extensions item 12 provides
+   `--model-plane-git-sanitize`, which binds `.git` read-only and then
+   overlays: `config` replaced by an orchestrator-generated copy
+   containing only `core.*` and the `extensions.*`/`worktree` settings git
+   needs — no `remote.*`, `url.*`, `credential.*`, `include*`, `alias.*`
+   or `core.hooksPath`; `hooks/` masked by an empty tmpfs; `worktrees/`
+   masked by a tmpfs with only the worker's own entry re-bound;
+   `info/exclude`, `logs/`, `FETCH_HEAD`, `ORIG_HEAD`, `COMMIT_EDITMSG`
+   and any `*.lock` masked), the directories of every pinned tool (§9.1),
+   `/usr`, `/lib`, `/lib64`, `/etc/ssl`, `/etc/resolv.conf`,
+   `/etc/hosts`, and the adapter's synthetic home (fleet §7.3
+   `homeState`). `<REPO_ROOT>` itself, `$HOME` and `/tmp` are NOT in the
+   set, so `.env.local`, the operator's other checkouts and the
+   orchestrator's state files are unreadable to the worker. What remains
+   readable through the sanitized `.git` is the object database and refs
+   — the full history of THIS repository, which is public on GitHub —
+   and that is stated as an accepted residual in §11, not a containment
+   claim. Fleet: sandboxed worker (`bwrap`, `--permission-mode
    acceptEdits`, allowlist from `fleet.allowedCommands`), deterministic gates
    (`fleet.gate.build/test`), blocking `adversarial-review --provider codex
    --json --fail-on medium` (binary resolved off the ORCHESTRATOR's PATH,
@@ -1202,9 +1220,12 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   context is sent to the model API. Controls, in order of strength:
   (1) the worker's READ scope is bounded (§6.4 `READ_SET`): it cannot read
   `<REPO_ROOT>/.env.local`, `$HOME`, the orchestrator's state, or other
-  checkouts — only its worktree, the shared `.git`, system libraries and
-  its synthetic home (which necessarily holds the harness's own
-  credentials, because the worker IS the harness); (2) only issues
+  checkouts — only its worktree, a SANITIZED `.git` view (no remote
+  URLs, credential helpers, hooks or other worktrees' metadata — but the
+  object database and refs, i.e. this public repository's full history,
+  remain readable, accepted below), system libraries and its synthetic
+  home (which necessarily holds the harness's own credentials, because
+  the worker IS the harness); (2) only issues
   authored by `OWNER`/`MEMBER`/`COLLABORATOR` accounts or labeled by an
   `admin`/`maintain` actor are ever shaped (§4.2), and
   `autopilot.dispatchApproval: "label-only"` (§13) turns that into an
@@ -1213,7 +1234,10 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   never enters the worker's environment. **Accepted residuals:** network
   egress from the model plane is not filtered (fleet K2; bwrap cannot
   filter by destination without a proxy, deferred), so anything within
-  `READ_SET` can in principle leave through model traffic; and the diff
+  `READ_SET` can in principle leave through model traffic (for this
+  public repository that is its already-public history plus the worker's
+  own harness credentials, the latter being inherent to running the
+  harness at all); and the diff
   secret scan of §6.5a(iv) protects only what reaches GitHub — it is NOT
   a mitigation for content exposed in model requests and is not claimed
   as one.
@@ -1337,7 +1361,11 @@ None is trust-root tier; each is a small, separately testable diff.
   MODEL plane — worktree + synthetic home + the allowlist — instead of the
   current `READ_POLICY.HOST`; the adapter's `homeState` still provides
   the harness's own config/credentials inside the synthetic home; default
-  unchanged = `host`), `--no-pr`, `--no-complete` (skip
+  unchanged = `host`), `--model-plane-git-sanitize` (item 12 of the fleet
+  ticket: the sanitized `.git` view of §6.4 — sanitized `config` overlay,
+  masked `hooks/`, `worktrees/` limited to the worker's own entry, masked
+  logs/lock/transient files; real-bwrap containment test), `--no-pr`,
+  `--no-complete` (skip
   `completeTicketOnIntegration`; the caller owns completion),
   `--dead-end-file <path>` (initial dead-end material for strike 1, so a
   retry can hand fleet the previous round's failure), `--max-strikes N`,
@@ -1364,7 +1392,11 @@ None is trust-root tier; each is a small, separately testable diff.
 - The approved spec itself is NOT in the build ticket's scope: the run
   record stores `specBlob = git rev-parse <BASE_OID>:docs/specs/issue-autopilot-local.md`
   and the actual-diff check (§6.5a) rejects any change to that path; spec
-  changes go through their own reviewed PR.
+  changes go through their own reviewed PR. Before dispatching the build
+  ticket, preflight reads the newest `spec-approval` entry bound to the
+  ticket from the manifest and requires its recorded file hash to equal
+  the sha256 of the blob at `specBlob`; a mismatch → exit 1
+  `spec-approval-stale`, no dispatch.
 - Registry/docs: `packages/cli/lib/registry.mjs`,
   `apps/docs/lib/toolkit-packages.mjs`,
   `apps/docs/content/docs/toolkit/autopilot.mdx` + `meta.json`,
@@ -1899,3 +1931,14 @@ None is trust-root tier; each is a small, separately testable diff.
     issue labeled by an `admin` actor is eligible, labeled by a `write`
     actor is excluded; with the default, the §4.2 trust predicate applies;
     an unknown value → `bad-config`.
+80. **Approval hash pinned** (`preflight.test.mjs`): a manifest fixture
+    whose newest `spec-approval` file hash differs from the spec blob at
+    `BASE_OID` → `spec-approval-stale`, exit 1, zero dispatches; equal →
+    passes; an older matching record followed by a newer non-matching one
+    → stale (newest wins).
+81. **Sanitized git view** (`run.test.mjs`): the fleet argv carries
+    `--model-plane-git-sanitize`; the orchestrator-generated `config`
+    overlay contains no `url`, `helper`, `include`, `includeIf`,
+    `hooksPath` or `alias` keys (table-driven negative assertions) and
+    keeps `core.repositoryformatversion`, `core.bare` and the
+    `extensions.worktreeConfig` value of the real config.
