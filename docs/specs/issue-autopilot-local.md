@@ -358,7 +358,7 @@ across steps beyond that:
 | coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
 | after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
-| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the helper runs with a MINIMAL environment — `PATH` = the sanitized list of §9.1, `HOME`, `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN` and nothing else, so no orchestrator secret (the manifest key, `gh`/`claude` tokens, `*_KEY`/`*_TOKEN`) is inherited; its executable is the pinned `adlc` path; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
+| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `[<pinned absolute adlc path, §9.1>,"autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the helper runs with a MINIMAL environment — `PATH` = the sanitized list of §9.1, `HOME`, `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN` and nothing else, so no orchestrator secret (the manifest key, `gh`/`claude` tokens, `*_KEY`/`*_TOKEN`) is inherited; its executable is the pinned `adlc` path; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
 | each maintenance conflict-fix round (§8) | skip that PR this iteration; no label |
 | each CI fix round (§0.11) | pause the CI watch; the 30-minute CI budget does not advance while paused |
 
@@ -745,17 +745,20 @@ gitignored `.adlc/autopilot-*` files.
      --adapter claude-code --model <effectiveModel> --concurrency 1 \
      --max-strikes <15 − roundsUsed> --wall-clock-minutes <remaining> \
      --no-pr --no-complete \
-     --pre-strike-argv '["adlc","autopilot","quota","--json","--model","<effectiveModel>","--quota-threshold","<T>","--quota-reserve","<R>"]' \
+     --pre-strike-argv '["<pinned adlc path>","autopilot","quota","--json","--model","<effectiveModel>","--quota-threshold","<T>","--quota-reserve","<R>","--iteration","<iterationId>","--start-ordinal","auto"]' \
+     --pre-strike-env '{"PATH":"<sanitized PATH>","HOME":"<HOME>","ADLC_AUTOPILOT_STATUS_FILE":"<REPO_ROOT>/.adlc/autopilot-status.json","ADLC_AUTOPILOT_LOCK_TOKEN":"<token>"}' \
      --charter-file <autopilot>/lib/charter-adlc.md --json
    ```
    plus `--model-plane-read bounded --model-plane-read-only
    <READ_SET>` (fleet-extensions ticket, §14), where `READ_SET` is the
-   comma-joined absolute list: the worker's OWN worktree directory only
-   (fleet's nested worktree under `<ISSUE_WT>/.worktrees/<ticket>`, which
-   fleet also grants as the writable root — `ISSUE_WT` itself is NOT in
-   the set, so no read-only bind is an ancestor of the writable root and
-   the orchestrator's `.adlc/`, run records and the mirror's parent stay
-   invisible), the per-run **git mirror** `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`
+   comma-joined absolute list of READ-ONLY binds — the worker's WRITABLE
+   roots are separate and are fleet's: its own nested worktree
+   (`<ISSUE_WT>/.worktrees/<ticket>`) and the per-run git mirror below,
+   both of which the worker must write to in order to commit (objects,
+   refs and worktree metadata land in the mirror; `ISSUE_WT` itself is in
+   NEITHER set, so no read-only bind is an ancestor of a writable root and
+   the orchestrator's `.adlc/`, run records and the mirror's parent
+   directory stay invisible). Read-only: the per-run **git mirror** `<REPO_ROOT>/.adlc/autopilot-runs/<issue>/mirror.git`
    (fleet-extensions item 12, `--model-plane-git mirror`: before dispatch
    the orchestrator creates a bare repository containing ONLY the objects
    reachable from `BASE_OID` and from the issue branch tip — `git clone
@@ -764,10 +767,14 @@ gitignored `.adlc/autopilot-*` files.
    origin` and `git -C <mirror> config --unset-all` of every non-`core.*`
    key — so it holds no remote URL, credential helper, hook, other
    branch, reflog, stash, or unreachable object; fleet cuts the worker's
-   nested worktree from the mirror, and after the worker finishes fleet
-   fetches the result back with `git -C <ISSUE_WT> fetch <mirror>
-   <workerBranch>` before its gates and merge; the shared `<REPO_ROOT>/.git`
-   is NEVER bound into the model plane; the mirror is recreated from
+   nested worktree from the mirror — the mirror is a WRITABLE root for the
+   worker (it is this run's disposable, public-only object store; every
+   object the worker creates lands there and nowhere else) — and after
+   the worker finishes fleet fetches the result back with `git -C
+   <ISSUE_WT> fetch <mirror> <workerBranch>` before its gates and merge,
+   verifying the fetched tip fast-forwards from the branch tip it cut;
+   the shared `<REPO_ROOT>/.git` is NEVER bound into the model plane;
+   the mirror is recreated from
    scratch before every dispatch — `rm -rf` of the previous one first,
    under the lock — and removed at retirement Step L together with the
    run directory, so a crash leaves at most a stale mirror that the next
@@ -1258,9 +1265,19 @@ outside its own process — issue/PR comments (CLARIFY, blocked, stale,
 ci-red, oid-mismatch, pr-closed, findings), labels' reasons, the digest
 body, the status file, run records, and the systemd journal — passes
 through the single fail-closed redactor of §6.6 (secret pattern set +
-every key-bearing environment value); if redaction fails the ENTIRE body
-is replaced by `[withheld: redaction failed — see local status]` and the
+every key-bearing environment value). For FREE-TEXT outputs (comments,
+digest bodies, journal lines) a redaction failure replaces the entire
+body with `[withheld: redaction failed — see local status]` and the
 label is still applied, so a quarantine is never silent and never leaks.
+For STRUCTURED documents (the status file, run records, tombstones,
+attempt ledgers) only the free-text fields (`lastError`, `reason`
+strings, captured excerpts, comment drafts) are redacted; identifiers and
+state (`state`, `token`, OIDs, ticket ids, hashes, counters, timestamps)
+are never passed through the redactor because they are validated by
+grammar (§4) and cannot carry a secret; a redaction failure on a
+free-text field withholds THAT field (`"<field>": null,
+"redactionFailed": ["<field>"]`) and the document keeps its schema, so
+recovery is never broken by redaction.
 
 - `.adlc/autopilot-status.json` (local-only: `adlc-autopilot init` writes
   the entries `.adlc/autopilot-status.json`, `.adlc/autopilot.lock/`,
@@ -1931,9 +1948,13 @@ None is trust-root tier; each is a small, separately testable diff.
     that a fresh process counts; the third such entry within 24 h yields
     `shaping-failed`; 8-day-old entries are ignored.
 60. **Pre-strike helper receives resolved values** (`run.test.mjs`): the
-    fleet argv's `--pre-strike-argv` JSON array contains the elements `--model
-    <effectiveModel> --quota-threshold <T> --quota-reserve <R>` for a
-    non-default `--model sonnet --quota-threshold 40 --quota-reserve 10`.
+    fleet argv's `--pre-strike-argv` JSON array has the pinned absolute
+    `adlc` path (§9.1) as element 0 — never the bare name — and contains
+    the elements `--model <effectiveModel> --quota-threshold <T>
+    --quota-reserve <R> --iteration <id> --start-ordinal auto` for a
+    non-default `--model sonnet --quota-threshold 40 --quota-reserve 10`;
+    every fleet invocation that carries `--pre-strike-argv` also carries
+    `--pre-strike-env` with exactly the four documented keys.
 61. **Maintenance ownership + selector** (`maintain.test.mjs`): records
     in every non-candidate state (table-driven over the full enum,
     including `oid-mismatch` with an OPEN PR and `blocked`) produce zero
@@ -2056,16 +2077,17 @@ None is trust-root tier; each is a small, separately testable diff.
     example config passes `packages/ticket-sync/schemas/adlc-config.schema.json`
     (assert via the same validator ticket-sync uses); a block with
     `query: null` or without `provider` fails it.
-78. **Bounded model-plane reads** (`run.test.mjs` + `sequence.test.mjs`):
-    the fleet argv carries `--model-plane-read bounded` and a
-    `--model-plane-read-only` list that contains the mirror path and every
-    pinned tool directory, and contains NEITHER `<REPO_ROOT>`,
-    `<REPO_ROOT>/.git`, `<ISSUE_WT>`, `$HOME`, `/tmp`, nor any path that
-    is an ancestor of the worker's writable worktree (assert with a
-    path-prefix check over the full list); a run in which the fleet fake
-    reports `readPolicy: "host"` or `gitSource: "shared"` back in its
-    `--json` is treated as an operational error
-    (`sandbox-policy-mismatch`, no attestation).
+78. **Bounded model-plane reads** (`run.test.mjs` + `sequence.test.mjs`
+    + fleet's real-bwrap test): the fleet argv carries `--model-plane-read
+    bounded`; the `--model-plane-read-only` list contains the pinned tool
+    files and system paths and contains NEITHER `<REPO_ROOT>`,
+    `<REPO_ROOT>/.git`, `<ISSUE_WT>`, `$HOME`, `/tmp`, the worker's
+    worktree, nor the mirror (those two are writable roots), nor any path
+    that is an ancestor of a writable root (path-prefix check over the
+    full list); inside the sandbox the worker performs `git commit` in
+    its worktree successfully and the new object appears in the mirror;
+    a fleet fake reporting `readPolicy: "host"` or `gitSource: "shared"`
+    is `sandbox-policy-mismatch` (no attestation).
 79. **Dispatch approval modes** (`select.test.mjs`): with
     `dispatchApproval: "label-only"`, a `COLLABORATOR`-authored issue
     without `adlc:autopilot` is excluded (`dispatch-approval`), the same
@@ -2215,3 +2237,9 @@ None is trust-root tier; each is a small, separately testable diff.
     staging path of a DIFFERENT token → nothing deleted, `orphan`; a
     crash after `worktree add` and before the marker → repair writes the
     marker and completes the move.
+105. **Structured redaction keeps the schema** (`redact.test.mjs`): a
+    run record whose `lastError` contains a secret is written with that
+    field redacted and every identifier intact; a redactor failure on
+    `lastError` yields `lastError: null` plus `redactionFailed:
+    ["lastError"]` and the record still parses and drives recovery; the
+    identifier fields are never handed to the redactor (spy assertion).
