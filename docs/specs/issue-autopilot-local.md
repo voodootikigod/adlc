@@ -151,7 +151,16 @@ that issue's prior run (§2.1); it never lifts the protected-path denylist,
 the `trust-root-change`/`question`/`wontfix`/`duplicate`/`invalid` labels,
 the `Programs` milestone rule, or the open-PR duplicate check. `--dry-run`
 prints the full plan (selected issue, shaped ticket, fleet argv, PR
-title/body) and records zero mutating calls.
+title/body) and performs zero mutations of any kind: no lock directory,
+no `.git/info/exclude` write, no `git fetch` (the baseline OID comes from
+`git ls-remote` alone and objects are not downloaded), no worktree, no
+ownership marker, no run record, no status-file write, no `gh` mutation,
+and no manifest append; the shaping call is replaced by a deterministic
+placeholder unless `--dry-run-shape` is also passed (which spends the one
+gated Claude call and nothing else). The spawn recorder in AC 10 rejects
+any argv that is not in the read-only set (`git ls-remote`, `git
+rev-parse`, `git cat-file`, `gh … view|list|api GET`, `adlc … --json`
+without `--write`/`--record`).
 
 ### 2.1 Recovery state machine (runs before selection, every iteration)
 
@@ -527,7 +536,8 @@ for every issue regardless of how the ticket fields were obtained.
      files the bijective/dispatcher guards require (§14). A second new
      directory, or a new directory anywhere else, → CLARIFY.
    - `adlc spec-lint <ticket-body.md>` exit 0
-   - `adlc coldstart <ticket> --prompt-only` → answered by one `claude -p
+   - `adlc coldstart <ticket> --tickets <ISSUE_WT>/.adlc/tickets
+     --prompt-only` (cwd `ISSUE_WT`) → answered by one `claude -p
      --model <effectiveModel> --max-turns 1` call with the same process-group, 5-minute
      timeout, 64 KiB output cap, key scrub, quota gate and reconciliation
      as the shaping call (§5.2, §3.2, §3.4) → `--record-verdict` with an
@@ -562,8 +572,10 @@ checkout — the systemd `WorkingDirectory`, or `git rev-parse
 (`git worktree list` first entry), never a linked worktree. `ISSUE_WT =
 <REPO_ROOT>/.worktrees/autopilot-issue-<n>` (absolute). `git fetch` and
 `git worktree add` run with cwd = `REPO_ROOT`; every command from step 1
-onward runs with cwd = `ISSUE_WT`, and every `--dir` argument is the
-absolute `<ISSUE_WT>/.adlc`. Fleet, invoked with cwd = `ISSUE_WT`, creates
+onward runs with cwd = `ISSUE_WT`; every command that accepts `--dir`
+(`ticket`, `spec-lint`, `prosecute`, `gate-manifest`) receives the
+absolute `<ISSUE_WT>/.adlc`, and the one that does not (`coldstart`)
+receives `--tickets <ISSUE_WT>/.adlc/tickets` and relies on cwd. Fleet, invoked with cwd = `ISSUE_WT`, creates
 its own nested worktrees under `<ISSUE_WT>/.worktrees/` and its integration
 worktree `<ISSUE_WT>/.worktrees/fleet-integration`; both are removed by
 fleet at run end. The primary checkout's working tree is never written
@@ -610,15 +622,20 @@ gitignored `.adlc/autopilot-*` files.
    - **coldstart**: `--record-verdict` is accepted only together with
      `--prompt-only`, and the verdict must carry the CURRENT `ticketHash`
      (from `adlc ticket show <ULID> --json`). The orchestrator obtains the
-     prompt with `adlc coldstart <ULID> --dir <ISSUE_WT>/.adlc
-     --prompt-only`, answers it with the gated `claude -p` call of §5.3,
+     prompt with `adlc coldstart <ULID> --tickets <ISSUE_WT>/.adlc/tickets
+     --prompt-only` run with cwd = `ISSUE_WT` (coldstart has NO `--dir`
+     option: it resolves `.adlc/` from cwd and takes the ticket store via
+     `--tickets`; the path contract of §6 already makes cwd = `ISSUE_WT`
+     for every command from step 1 on), answers it with the gated
+     `claude -p` call of §5.3,
      validates the answer as `{"gaps": [...]}` (schema-checked: an object
      whose only keys are `gaps` — an array of `{what, why_blocking}`
      strings — re-serialized by the orchestrator, never forwarded
      verbatim), adds `"ticketHash"`, and delivers it as bytes on the
      child's stdin: the pinned `adlc` executable is spawned with
-     `shell:false` and argv `["coldstart", "<ULID>", "--dir",
-     "<ISSUE_WT>/.adlc", "--prompt-only", "--record-verdict", "-"]`, the
+     `shell:false`, cwd `ISSUE_WT`, and argv `["coldstart", "<ULID>",
+     "--tickets", "<ISSUE_WT>/.adlc/tickets", "--prompt-only",
+     "--record-verdict", "-"]`, the
      serialized JSON is written to `stdin` and the stream is then ended.
      No shell ever sees the JSON. A non-empty `gaps` is a CLARIFY (§5.4),
      never recorded as a pass.
@@ -1315,7 +1332,12 @@ None is trust-root tier; each is a small, separately testable diff.
 9. **Wall clock**: a fleet fake that never returns is killed at 90 minutes
    (fake timers), outcome `wall-clock`, label applied (`run.test.mjs`).
 10. **Dry-run honesty**: `adlc-autopilot once --dry-run --issue N` exits 0,
-    prints the full plan, and the spawn recorder shows zero mutating calls.
+    prints the full plan, and the spawn recorder shows only argv from the
+    read-only set of §2 (assert: no `git fetch`, `git worktree`, `git
+    config`, `git push`, `mkdir` of the lock, `.git/info/exclude` write,
+    `gh` mutation, or `--write`/`--record` flag), the filesystem fixture
+    is byte-identical before and after, and no manifest line was
+    appended.
 11. **Preflight**: each §9 item has a red fixture that makes `once` exit 1
     with the item named; plugin-parity mismatch (1.7.0 vs 1.11.0 fixture) is
     one of them (`preflight.test.mjs`).
@@ -1678,8 +1700,10 @@ None is trust-root tier; each is a small, separately testable diff.
     `KillMode=control-group`; no `%h`; a working directory lacking
     `.adlc/config.json` makes generation exit 1 `bad-working-directory`.
 71. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
-    fake is invoked with `--prompt-only` and, on the record call, with
-    `--prompt-only --record-verdict -`, `shell:false`, and stdin bytes
+    fake is invoked with cwd = `ISSUE_WT`, `--tickets
+    <ISSUE_WT>/.adlc/tickets`, `--prompt-only`, never `--dir`, and, on
+    the record call, with `--prompt-only --record-verdict -`,
+    `shell:false`, and stdin bytes
     that parse to an object whose `ticketHash` equals the hash `adlc
     ticket show` returned immediately before; a coldstart answer
     containing `'; touch /tmp/x; echo '` and `$(id)` reaches the fake's
