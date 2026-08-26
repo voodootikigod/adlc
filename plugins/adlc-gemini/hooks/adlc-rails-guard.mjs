@@ -87,6 +87,9 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
   let enforcing = false;
   try {
     enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
+    }
     const tool = extractToolName(payload);
     const cls = classifyTool(tool);
 
@@ -167,10 +170,17 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 /** Parse a raw stdin string and return the agy verdict. Enforcement-aware on bad JSON. */
 export function runFromStdin(raw, env = process.env) {
   const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
-  let payload = {};
-  if (raw && raw.trim()) {
-    try { payload = JSON.parse(raw); }
-    catch { return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow(); }
+  if (!raw || !raw.trim()) {
+    return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
+  }
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
   }
   const toolName = extractToolName(payload);
   const cls = classifyTool(toolName);

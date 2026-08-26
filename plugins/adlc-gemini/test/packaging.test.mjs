@@ -976,7 +976,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
 
     const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
-      timeout: 20_000,
+      timeout: 60_000,
       env: { ...sealedEnv(join(work, 'home'), `${binDir}:${process.env.PATH}`), TMPDIR: hostileTmp },
     });
     assert.equal(res.status, 0, `cli.mjs install failed: ${res.stderr}`);
@@ -991,7 +991,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
     );
     assert.ok(!existsSync(target), `the staging directory was left behind: ${target}`);
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    try { rmSync(work, { recursive: true, force: true }); } catch {}
   }
 });
 

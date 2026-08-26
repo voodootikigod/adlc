@@ -4,6 +4,7 @@
 // provider; the pull logic itself is in lib/pull.mjs (offline-tested).
 
 import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { pull } from '../lib/pull.mjs';
 import { push } from '../lib/push.mjs';
@@ -152,7 +153,16 @@ async function main() {
   process.exit(1);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   main().catch((err) => {
     process.stderr.write(`adlc ticket: ${err?.message ?? err}\n`);
     process.exit(1);

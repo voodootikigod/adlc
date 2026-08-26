@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,3 +133,28 @@ test('pull with no .adlc/config.json → exit 1 (operational, before any network
     assert.match(r.stdout + r.stderr, /config not found/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('invocation through a symlink (like npm .bin) executes main correctly', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-symlink-'));
+  const linkPath = join(dir, 'adlc-ticket-sync');
+  symlinkSync(BIN, linkPath);
+  try {
+    const helpOut = execFileSync(process.execPath, [linkPath, '--help'], { encoding: 'utf8' });
+    assert.match(helpOut, /usage: adlc ticket/);
+    assert.match(helpOut, /pull\|push\|sync\|doctor/);
+
+    const doctorRes = (() => {
+      try {
+        const stdout = execFileSync(process.execPath, [linkPath, 'doctor', '--json'], { cwd: dir, encoding: 'utf8' });
+        return { code: 0, stdout };
+      } catch (e) {
+        return { code: e.status ?? 1, stdout: e.stdout ?? '' };
+      }
+    })();
+    assert.notEqual(doctorRes.stdout.trim(), '', 'must not produce empty output through symlink');
+    const parsed = JSON.parse(doctorRes.stdout);
+    assert.equal(typeof parsed.exitCode, 'number');
+    assert.ok(Array.isArray(parsed.checks));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+

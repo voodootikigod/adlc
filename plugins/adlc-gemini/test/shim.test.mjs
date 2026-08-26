@@ -16,12 +16,46 @@ test('runFromStdin: malformed JSON with enforcement off allows', () => {
   const v = runFromStdin('{not json', {});
   assert.equal(v.allow_tool, true);
 });
+test('runFromStdin: empty/blank stdin under enforcement fails closed', () => {
+  assert.equal(runFromStdin('', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('   ', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+});
+test('runFromStdin: empty/blank stdin with enforcement off allows', () => {
+  assert.equal(runFromStdin('', {}).allow_tool, true);
+  assert.equal(runFromStdin('   ', {}).allow_tool, true);
+});
+test('runFromStdin: non-object JSON payloads under enforcement fail closed', () => {
+  assert.equal(runFromStdin('null', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('"hi"', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('123', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('[]', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+});
+test('runFromStdin: non-object JSON payloads with enforcement off allow', () => {
+  assert.equal(runFromStdin('null', {}).allow_tool, true);
+  assert.equal(runFromStdin('"hi"', {}).allow_tool, true);
+  assert.equal(runFromStdin('123', {}).allow_tool, true);
+  assert.equal(runFromStdin('[]', {}).allow_tool, true);
+});
 test('shim: exits 0 and prints an allow verdict for a read tool', () => {
   const out = execFileSync(process.execPath, [SHIM], {
     input: JSON.stringify({ toolCall: { name: 'view_file', args: { AbsolutePath: '/x' } } }),
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
   assert.deepEqual(JSON.parse(out), { allow_tool: true });
+});
+test('shim: empty stdin under enforcement fails closed with allow_tool: false', () => {
+  const out = execFileSync(process.execPath, [SHIM], {
+    input: '',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
+  });
+  assert.equal(JSON.parse(out).allow_tool, false);
+});
+test('shim: scalar JSON under enforcement fails closed with allow_tool: false', () => {
+  const out = execFileSync(process.execPath, [SHIM], {
+    input: 'null',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
+  });
+  assert.equal(JSON.parse(out).allow_tool, false);
 });
 test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', () => {
   // execFileSync only throws on non-zero exit; since the shim always exits 0,

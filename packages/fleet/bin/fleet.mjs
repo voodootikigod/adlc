@@ -5,7 +5,8 @@
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound } from '../lib/scheduler.mjs';
@@ -180,9 +181,18 @@ if (!['run', 'status', 'unlock'].includes(sub)) {
 }
 }
 
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
 // Dispatch the CLI ONLY when run as the entry point. Importing this module (e.g. a unit
 // test importing runLive) must not parse argv, hit process.exit, or gateFail.
-if (import.meta.url === `file://${process.argv[1]}`) runCli();
+if (isMain()) runCli();
 
 // Collaborators are injectable (defaulting to the real implementations) purely for
 // testability: the production call site passes no overrides, so behavior is unchanged, but a

@@ -11,6 +11,7 @@
  */
 
 import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { parseArgs, printJson } from '@adlc/core';
 import { DEFAULT_ROOTS, findSkills } from '../lib/find-skills.mjs';
 import { checkSkill } from '../lib/rot-checker.mjs';
@@ -26,9 +27,25 @@ const { values, positionals } = parseArgs({
 const repoRoot = process.cwd();
 
 // Determine search roots: positionals override defaults
-const searchRoots = positionals.length > 0 ? positionals : DEFAULT_ROOTS;
+const isExplicit = positionals.length > 0;
+const searchRoots = isExplicit ? positionals : DEFAULT_ROOTS;
 
-const skillPaths = findSkills(searchRoots, repoRoot);
+if (isExplicit) {
+  for (const root of positionals) {
+    const absRoot = resolve(repoRoot, root);
+    if (!existsSync(absRoot)) {
+      const msg = `explicit search path does not exist: ${absRoot}`;
+      if (values.json) {
+        printJson({ error: 'explicit search path does not exist', path: root, resolved: absRoot });
+      } else {
+        console.error(`error: ${msg}`);
+      }
+      process.exit(1);
+    }
+  }
+}
+
+const skillPaths = findSkills(searchRoots, repoRoot, { strict: isExplicit });
 
 if (skillPaths.length === 0) {
   const searchedPaths = searchRoots
