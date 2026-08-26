@@ -1,0 +1,1547 @@
+# Issue Autopilot (local substrate) — `@adlc/autopilot`
+
+Status: APPROVED (P1 G1 — implementation may begin once the §15 blockers R1–R4
+are green; the build ticket carries the review residuals as acceptance criteria)
+Ticket: T-01M0Z3FN7SAS4HAH7CS63YQ0DH (build; carries the five review residuals as
+AC2–AC6), prerequisite fleet-extensions ticket minted alongside it with a DAG
+edge — see §14/§15 R3. (The original T55 id was reclaimed by another ticket and
+is not reused.)
+Supersedes: the GitHub-Actions substrate half of issue #237 / ADR "0011
+issue-autopilot-substrate" (never landed). The gate composition, triage
+contract, protected-path denylist and PR-upsert rule from #237 are kept
+verbatim; only the substrate (where the loop runs, what pays for it) changes.
+Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1). Gated by
+`adlc spec-lint` (70/70 verified) + a 12-round cross-model `adversarial-review
+--input` loop (codex provider, `--min-confidence 0.3`) that folded ~60
+findings into §2–§14 and did NOT converge (7,7,7,7,4,7,6,6,6,5,6,7); the
+five round-12 residuals are carried verbatim into the build ticket's
+acceptance criteria rather than into further spec prose, by operator
+decision (2026-08-26). Round 2's exit-0 was a grounding-halved hollow
+approve and is not counted.
+Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
+(§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
+`packages/fleet/lib/{review-runner,scheduler,charters,config}.mjs`,
+`packages/ticket-sync/README.md`, `packages/prosecute/README.md`
+(`record-cross-model`, `--carry-forward`), `packages/rails-guard/lib/ci/
+trust-roots.mjs`, `AGENTS.md`, the `/adlc:adlc` router skill, and the eleven
+user decisions recorded in §0 (grill-me session 2026-08-26).
+
+## 0. Operator decisions recorded at P0
+
+These are product decisions the operator made in the grill-me interview.
+They constrain the DESIGN below; they do not constrain review — any
+reviewer should scrutinize both the decisions and their consequences, and
+a finding that a decision is unsafe is in scope.
+
+1. **Substrate: compose `@adlc/fleet`.** New package `packages/autopilot`
+   (`@adlc/autopilot`, bin `adlc-autopilot`) plus a plugin command
+   `/adlc:adlc-autopilot`. The autopilot adds **no new gate logic**: it is an
+   issue picker + quota gate + rest loop that dispatches
+   `fleet run --tickets <id>` **one ticket per run**, so each issue gets its
+   own branch and PR. Sandbox, worker permissions, deterministic gates, the
+   blocking cross-model review loop and worktree hygiene are fleet's.
+2. **Quota gate (literal):** a run starts only when BOTH the 5-hour window and
+   the 7-day window report `< 50` utilization (i.e. more than half remaining),
+   read from `GET https://api.anthropic.com/api/oauth/usage`. Any model-scoped
+   weekly window for the worker model must also be `< 50`. Unknown quota =
+   no run (fail closed). **Accepted residual:** this is a best-effort
+   START gate. The windows are shared with the operator's interactive
+   sessions and there is no reservation API, so a step that started below
+   the threshold can end above it (bounded per §3.4); the autopilot cannot
+   prevent that, only make it visible (`overshoot` in the status file and
+   digest) and stop starting new steps.
+3. **Models:** worker `--model opus`; reviewer `adversarial-review --provider
+   codex`. Distinct providers satisfy ADR-0007 cross-model and keep the fix
+   loop off the Claude quota.
+4. **Selection: auto-score + hard exclusions + label overrides** (§4).
+5. **ADLC depth:** the worker follows `/adlc:adlc` for P3–P5 inside its
+   headless session (rails, hollow-test/behavior-diff, `/adlc:adlc-prosecute`
+   before `TICKET-DONE`); fleet's Codex `adversarial-review` fix loop is the
+   blocking OUTER gate. P0 shaping is done once by the orchestrator (§5) —
+   the sandboxed worker never holds the manifest key.
+6. **Fix loop cap: 15 review rounds inside a 90-minute wall clock** per issue.
+   Exhaustion → label `adlc:autopilot-blocked`, findings comment, move on;
+   never auto-retried until the label is removed by a human.
+7. **Triage writes to GitHub:** on CLARIFY, one idempotent sentinel-keyed
+   comment (failed gates verbatim + fix template) and label
+   `adlc:needs-clarification`. Re-running on an unchanged issue makes zero
+   mutating calls.
+8. **PR backpressure: cap 5 open autopilot PRs; auto-rebase + re-attest.**
+   Clean rebase → `record-cross-model --carry-forward` + force-with-lease
+   push, no model call. Conflict → exactly one worker conflict-fix round +
+   fresh Codex review + fresh attestation; failure → label
+   `adlc:autopilot-stale`, PR left as-is and no longer counted toward the cap.
+9. **Deployment: `systemd --user` service** running `adlc-autopilot loop
+   --rest 10m` (single-instance lock, `Restart=on-failure`), plus
+   `adlc-autopilot once [--issue N] [--dry-run]` for manual/canary runs.
+10. **Observability:** gitignored `.adlc/autopilot-status.json`,
+    `adlc-autopilot status [--json]`, and one rolling GitHub "autopilot log"
+    issue (label `adlc:autopilot-log`) that receives one comment per run.
+11. **CI follow-up:** after the PR opens, poll `gh pr checks` for up to 30
+    minutes; `test (18|20|22)` AND `rails-guard`, `mutation-gate`,
+    `cross-model-gate`, `ticket-store-platform` are all treated as blocking.
+    Red → one worker fix round + Codex re-review + push, max 2 rounds on a
+    separate 30-minute budget; still red → label `adlc:autopilot-ci-red`,
+    comment naming the failing job, move on.
+12. **`.adlc/config.json` lands via a one-time admin trust-root commit** (PR
+    labeled `trust-root-change`, merged deliberately by the admin CODEOWNER;
+    the #141 non-author-CODEOWNER ceremony is unsatisfiable with a single
+    CODEOWNER and this is recorded as the accepted residual).
+13. **Plan gate before build:** this spec passes `adlc spec-lint` and a
+    `adversarial-review --input <this file> --provider codex` fix loop to a
+    clean `approve` before any `packages/autopilot` code is written.
+14. **P6 (merge) stays human, always.** The autopilot never merges, never
+    pushes to `main`, never deletes a branch it did not create.
+
+## 1. Goals / non-goals
+
+Goals
+
+- Turn the open backlog into a stream of evidence-bearing PRs while the
+  operator is away, never STARTING a Claude-consuming step when either
+  window is at or past 50% used. This is a start-gate, not an invariant on
+  the final reading: one in-flight step (bounded by fleet's per-dispatch
+  `timeoutMinutes`) can carry a window past 50% by at most that step's
+  spend; §3.4 states the overshoot bound and the reconciliation that makes
+  it observable.
+- Every phase transition is an existing ADLC gate; every outcome (PR,
+  CLARIFY, blocked, stale, ci-red) is visible on GitHub and in a local status
+  file.
+- Zero third-party runtime dependencies (CONVENTIONS.md); `@adlc/core`,
+  `@adlc/fleet`, `@adlc/tickets` only.
+
+Non-goals (v1)
+
+- No automatic P6 merge. No multi-issue batching (one ticket per fleet run).
+- No forked-repo / untrusted-contributor issues: the repo is the operator's
+  own; the label overrides are the authorization surface.
+- No trust-root-tier changes (§4.2 excludes them); no edits to base tickets.
+- No per-model quota pools beyond the single worker model's scoped window.
+- No Windows support (fleet is POSIX-only; `bwrap` is required).
+
+## 2. Loop
+
+```
+loop:
+  acquire single-instance lock       # §2.2 — atomic, owner-checked
+  preflight()                        # §9 — fail closed on any red item
+  BASE_OID = fetch_base()            # §6.0 — pinned OID; fetch failure → sleep 10m; continue
+  recover()                          # §2.1 — resume/finish/retire orphaned runs BEFORE selection
+  if !quota().ok                     → sleep 10m; continue         # §3
+  maintain_open_prs()                # §8 — every fix round re-checks quota (§3.2)
+  if active_autopilot_prs >= 5       → sleep 10m; continue
+  issue = select()                   # §4 — null → sleep 10m; continue
+  verdict = triage(issue)            # §5 — shaping re-checks quota first (§3.2)
+  if CLARIFY                         → comment+label; sleep 10m; continue
+  if !quota().ok                     → cache the PROCEED ticket (§3.2); sleep 10m; continue
+  outcome = run(issue, verdict.ticket)   # §6–§7 (fleet re-checks quota before every strike)
+  digest(outcome)                    # §10
+  sleep 10m                          # the "rest" — unconditional after a run, success or not
+```
+
+`once` executes exactly one iteration and exits 0/1/2 per the toolkit
+contract. `--issue N` pins the candidate: it bypasses SCORING only — every
+§4.2 hard exclusion, the open-PR/branch duplicate checks, triage, the quota
+gate, the PR cap and recovery all still apply, and a pinned issue that is
+excluded exits 2 naming the rule. `--force` (only with `--issue`) lifts
+exactly the autopilot-owned STOP labels (`adlc:autopilot-blocked`, `-stale`,
+`-ci-red`, `adlc:needs-clarification`, `adlc:autopilot-skip`) after retiring
+that issue's prior run (§2.1); it never lifts the protected-path denylist,
+the `trust-root-change`/`question`/`wontfix`/`duplicate`/`invalid` labels,
+the `Programs` milestone rule, or the open-PR duplicate check. `--dry-run`
+prints the full plan (selected issue, shaped ticket, fleet argv, PR
+title/body) and records zero mutating calls.
+
+### 2.1 Recovery state machine (runs before selection, every iteration)
+
+Every run has a record `.adlc/autopilot-runs/<issue>.json` (gitignored)
+with `state ∈ {clarify, shaped, dispatched, quota-paused, built, attested,
+pushed, pr-open, ci-watch, oid-mismatch, blocked, stale, ci-red, done, orphan}`, `runId`,
+`ticketId`, `baseOid`, `branch`, `fleetRunId`, `prNumber`,
+`roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed`, and timestamps. The
+label↔state mapping is fixed: `adlc:needs-clarification`↔`clarify`,
+`adlc:autopilot-blocked`↔`blocked`, `adlc:autopilot-stale`↔`stale`,
+`adlc:autopilot-ci-red`↔`ci-red`.
+State is written BEFORE the world-effect it names is attempted and confirmed
+after, so a crash between the two leaves a record the next iteration can
+disambiguate by inspecting git/`gh`.
+
+| Found | Action |
+|---|---|
+| `shaped` (ticket cached, not dispatched) | reuse the cached ticket if the issue's `updatedAt` is unchanged, else re-shape |
+| `dispatched` with fleet's run lock free | `adlc fleet run --resume <fleetRunId>` (fleet §6.4) when quota is ok; a resume that fails → treat as fleet exit 2 |
+| `quota-paused` | same as `dispatched`, gated on quota |
+| `built` (ff done, not attested) | attest + push + PR (steps §6.7–§6.8) |
+| `attested`/`pushed` (no PR, or `gh` said pushed but no PR) | `gh pr list --head <branch>`; upsert PR; enter `ci-watch` |
+| `ci-watch` past its 30-minute budget | evaluate checks once; label per §0.11 |
+| `blocked`/`clarify` (no PR exists) whose mapped label a human REMOVED | **retire** the run (§2.1a) → the issue re-enters selection and reruns from scratch (never resumed: the human changed the premise) |
+| `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
+| `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
+| branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes it only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; a branch with NO marker is not the autopilot's and `reset` refuses (exit 2) — the operator removes it with git by hand |
+| record whose branch and PR are both gone | delete the record |
+
+### 2.1a Retiring a run — ownership-checked deletion
+
+Deletion of a branch or worktree requires ALL of: (a) a run record for the
+issue with a `token`; (b) `git config --get
+branch.adlc/autopilot/issue-<n>.adlcAutopilotToken` equal to that token
+(the marker written at creation, §6.1, in the repo's LOCAL config — a name
+alone is never authorization); (c) no open PR whose head is that branch
+(`gh pr list --head`); (d) the branch's merge-base with its recorded
+`baseOid` equals `baseOid` (the branch still descends from what the
+autopilot created); (e) re-validated immediately before each destructive
+command, under the lock: `git rev-parse adlc/autopilot/issue-<n>` equals
+the record's `localHead` (updated after every commit the orchestrator
+makes) and, if `ISSUE_WT` exists, `git -C <ISSUE_WT> status --porcelain`
+is empty — a moved tip or a dirty worktree means another session (a
+human, a Remote Control session) touched it, so nothing is force-removed
+and the run is `orphan`. The worktree removal is therefore never forced
+on a dirty tree. Then, cwd `REPO_ROOT`: `git worktree remove <ISSUE_WT>` (if present;
+clean by (e)), `git branch -D adlc/autopilot/issue-<n>`, then the remote copy, only if the record says it was pushed, (c) holds,
+AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` equals the
+record's last pushed OID — deleted with a lease so a tip that moves
+between the check and the delete is protected: `git push
+--force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
+origin :refs/heads/adlc/autopilot/issue-<n>` (a lease failure → `orphan`,
+remote left untouched). Then `git config --unset
+branch.…adlcAutopilotToken`, delete the record. Any check failing → the
+run is marked `orphan` (row above) and nothing is deleted. A remote ref is
+never deleted on the strength of the local token and ancestry alone.
+
+Terminal labels applied by the autopilot are therefore the ONLY thing a human
+has to touch to unblock an issue; retiring/re-arming is automatic on the
+next iteration — but only when the removal is **authorized**: recovery
+reads the issue timeline (`gh api repos/{o}/{r}/issues/<n>/timeline`),
+finds the most recent `unlabeled` event for that label, and requires its
+actor's repository permission to be `admin` or `maintain` (§4.2 predicate).
+The event id is stored in the record as `unlabeledEventId` so the same
+event is never acted on twice. An unlabel by any other actor is ignored:
+the run stays in its terminal state, status reports
+`unauthorized-unlabel` with the actor login, and the autopilot re-applies
+the label (idempotent add) so the quarantine remains visible.
+
+### 2.2 Single-instance lock
+
+`.adlc/autopilot.lock/` is created with `mkdir` (atomic on POSIX; the same
+primitive `@adlc/fleet` uses for `.adlc/fleet.lock/`). Inside:
+`owner.json = { pid, pidStartTime (from /proc/<pid>/stat field 22),
+token (32 random bytes hex), heartbeatAt }`. The holder rewrites
+`heartbeatAt` every 60 s (write-to-temp + `rename`). Another starter may
+reclaim only when `heartbeatAt` is older than 10 minutes AND (the pid is not
+alive OR its `/proc` start time differs from `pidStartTime`); reclaim is
+`rename(lockdir → lockdir.stale-<token>)` then `rmdir`, then a fresh `mkdir`
+— a losing racer's `rename` fails and it exits 1 `lock-held`. Release checks
+`token` before removing. `fleet.lock` is separate and still honored by fleet
+(a held fleet lock is a visible `skipped: "lock-held"` outcome, never a
+silent success).
+
+## 3. Quota gate
+
+### 3.1 Source of truth
+
+- Source of truth: `GET https://api.anthropic.com/api/oauth/usage` with
+  `Authorization: Bearer <claudeAiOauth.accessToken>` from
+  `~/.claude/.credentials.json` and `anthropic-beta: oauth-2025-04-20`.
+  Fields: `five_hour.utilization`, `seven_day.utilization` (0–100 used),
+  `limits[]` entries with `scope.model` for model-scoped windows.
+- **Strict response schema (fail closed):** HTTP status must be 200; the
+  body must parse as a JSON object; `five_hour` and `seven_day` must each
+  be objects whose `utilization` is a finite number in `[0, 100]` and whose
+  `resets_at` is an ISO-8601 string; `limits`, if present, must be an
+  array whose entries each have string `kind` and finite `percent` in
+  `[0, 100]`, and an entry with `scope.model.display_name` must have it as
+  a non-empty string. Any other shape — missing key, `null` where an
+  object is required, NaN, out-of-range, non-array `limits`, duplicate
+  scoped entries for the same model with different `percent` — →
+  `ok:false, reason:"quota-unknown"`. "No scoped limit for the effective
+  model" is signalled ONLY by: no `limits[]` entry whose
+  `scope.model.display_name` matches AND `seven_day_<family>` is `null`
+  or absent; a scoped entry that matches but fails the per-entry schema
+  is `quota-unknown`, never "no limit".
+- **Effective model binding:** `effectiveModel = --model > ADLC_AUTOPILOT_MODEL
+  > "opus"`, resolved once at preflight. Its family is derived from the
+  alias or full id (`fable|opus|sonnet|haiku`, or a full id containing one
+  of those tokens); a model whose family cannot be derived → preflight
+  `model-unknown`, exit 1. The gate evaluates every scoped entry whose
+  `display_name` equals the family case-insensitively, and the same
+  `effectiveModel` string is what is passed to fleet as `--model` (AC 46).
+  v1 supports `--adapter claude-code` only; any other adapter → preflight
+  `adapter-unsupported`, exit 1 (other harnesses meter different quota
+  pools the gate cannot read).
+- Gate: `five_hour < T && seven_day < T && every(scoped entry for the
+  effective model).percent < T` where `T` is `--quota-threshold` (default
+  50, max 50 — §13).
+- Bounds: the HTTP request has a 10-second timeout and one retry; the
+  `/usage` fallback subprocess has a 60-second timeout in its own process
+  group. Either bound exceeded → that source is "unavailable" and the next
+  source (or `quota-unknown`) applies.
+- `resets_at` for the binding window is written to the status file so
+  `status` can say when the next attempt could succeed.
+
+### 3.2 Where the gate is evaluated
+
+The gate is re-evaluated immediately before EVERY Claude-consuming step,
+not once per iteration; a result is valid for 60 seconds and never reused
+across steps beyond that:
+
+| Step | On refusal |
+|---|---|
+| loop head | sleep 10m |
+| shaping call (§5.2) | sleep 10m; nothing written |
+| coldstart answer call (§5.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping) | sleep 10m; the shaped ticket stays cached |
+| final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
+| after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
+| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `["adlc","autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
+| each maintenance conflict-fix round (§8) | skip that PR this iteration; no label |
+| each CI fix round (§0.11) | pause the CI watch; the 30-minute CI budget does not advance while paused |
+
+The Codex reviewer, `gh`, git, `npm ci`, and `preflight.mjs` are not
+Claude-consuming and are never gated. A step already executing is never
+killed by the gate; the wall clocks bound it.
+
+### 3.3 Fallback grammar (versioned: `usage-text/v1`)
+
+When the endpoint returns 401 or is unreachable: `claude -p "/usage"
+--output-format json`, take `.result`, and require ALL of these
+line-anchored matches (case-sensitive, `m` flag):
+
+```
+^Current session: (\d{1,3})% used
+^Current week \(all models\): (\d{1,3})% used
+```
+
+plus zero or more `^Current week \(([A-Za-z0-9 .-]+)\): (\d{1,3})% used`
+scoped lines. Mapping: line 1 → `five_hour`, line 2 → `seven_day`, scoped
+line → the scoped window for `familyOf(name)`. ONE normalization
+function `familyOf(x)` (lower-case, strip non-alphanumerics, take the
+first of `fable|opus|sonnet|haiku` that occurs as a token; otherwise
+`unknown`) is applied to the endpoint's `scope.model.display_name`, to
+the fallback's parenthesized name, and to `effectiveModel` — so both
+sources are compared in the same family space. Two scoped lines that
+normalize to the same family with different values → `quota-unknown`; a
+scoped line whose family is `unknown` is ignored only if it cannot be the
+effective model's family. Absence of a scoped line for the effective
+model's family means "no scoped limit" — the same semantics as the
+endpoint's `seven_day_<family>: null`. A missing mandatory line, a value > 100, a
+duplicate mandatory line with different values, or a `.result` that does
+not contain the literal `subscription` → `ok:false, reason:"quota-unknown"`.
+The parser is a pure function with a fixture per case (AC 2).
+
+### 3.4 Overshoot bound, reservation, and reconciliation
+
+- The gate is a START gate. The autopilot cannot meter a step while it
+  runs; the endpoint is the only usage source and it lags. So the guarantee
+  offered is: **no Claude-consuming step starts after a quota SAMPLE that
+  reads ≥ threshold**, where a sample is a point-in-time read at most 60 s
+  old; the read-to-start race with concurrent consumers (the operator's
+  own sessions, which share the windows and cannot be coordinated) is an
+  accepted residual — it is detected after the fact by reconciliation and
+  reported as `overshoot`, never prevented. A single step's spend is
+  bounded by fleet's `timeoutMinutes` (one dispatch) or the shaping call's
+  `--max-turns 1`.
+- **Reservation:** `--quota-reserve <pct>` (default 5) is subtracted from
+  the threshold for every start after the first in an iteration, i.e. a
+  fleet strike starts only when both windows are `< threshold − reserve`,
+  so the last step before the boundary cannot itself begin above 45%.
+- **Concurrent consumers** (the operator's interactive sessions share the
+  same windows): the autopilot has no way to see them ahead of time; it
+  re-reads the endpoint before every start (§3.2), which is the only
+  coordination possible. The status file publishes `quota.before`/`after`
+  per step so an operator can see the autopilot's share.
+- **Reconciliation:** after every Claude-consuming step the endpoint is
+  re-read and `{step, before, after, delta}` is appended to the run record
+  and to `.adlc/autopilot-status.json`. If `after` is ≥ threshold, the loop
+  records `overshoot: true` for that step and the next start is refused by
+  the ordinary gate.
+
+## 4. Selection
+
+### 4.1 Candidate set
+
+`gh api --paginate --repo <owner/repo>
+"repos/{owner}/{repo}/issues?state=open&per_page=100"` iterated until the
+`Link: rel="next"` header is absent, dropping entries that carry a
+`pull_request` key (the issues API interleaves PRs). A page failure,
+non-array page, or a `--paginate` run that ends while `rel="next"` is
+still present → `candidate-set-truncated`: no selection this iteration,
+status records the page count reached. `gh issue list --limit N` is never
+used for enumeration (it truncates silently).
+
+### 4.2 Hard exclusions (applied before scoring; each is logged with the
+issue number and the rule name)
+
+- **not trusted**: the issue is eligible only if its `authorAssociation`
+  (`gh issue view --json authorAssociation`) is `OWNER`, `MEMBER` or
+  `COLLABORATOR`, OR the most recent `labeled` event for `adlc:autopilot` in
+  `gh api repos/{o}/{r}/issues/<n>/timeline` was performed by an actor whose
+  `gh api repos/{o}/{r}/collaborators/<actor>/permission` is `admin` or
+  `maintain` (the #237 actor-permission guard). Anything else — including
+  an `adlc:autopilot` label applied by a non-maintainer — is excluded with
+  rule `not-trusted` and is never shaped or dispatched.
+- label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
+  `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
+  `adlc:autopilot-stale`, `adlc:autopilot-ci-red`, `adlc:needs-clarification`,
+  `adlc:autopilot-log`}
+- milestone title starts with `Programs` (multi-slice work)
+- an open PR exists whose head is `adlc/autopilot/issue-<n>` or whose body
+  contains `Closes #<n>` / `Fixes #<n>`
+- a local branch `adlc/autopilot/issue-<n>` exists (a run is or was in flight)
+- the issue's `<!-- adlc:begin -->` scope, or the scope produced at shaping
+  (§5), intersects the **protected-path denylist** — non-shrinkable, config
+  may only extend it:
+  `.adlc/**`, `.github/**`, `scripts/rails-guard-ci.mjs`, `docs/ci/**`,
+  `CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`, `package.json`,
+  `.npmrc`, plus the **trust-root tier** packages
+  `packages/rails-guard/**`, `packages/prosecute/**`,
+  `packages/gate-manifest/**`, `packages/build-gate/**`,
+  `packages/ticket-prune/**`, `packages/ticket-sync/**`, and
+  `packages/core/**` (frozen by CONVENTIONS.md).
+  Exception: `.adlc/tickets/<new-shard>.json` and `.adlc/manifest.d/*.jsonl`
+  appends are produced by the pipeline itself, not by the worker, and are not
+  part of the ticket scope.
+
+### 4.3 Score (higher first; ties → lower issue number)
+
+| Signal | Points |
+|---|---|
+| `adlc:autopilot` label (operator override) | +1000 |
+| `P0-critical` / `P1-high` / `P2-medium` / `P3-low` | 400 / 300 / 200 / 100 |
+| `bug` / `documentation` / `enhancement` | +30 / +20 / +10 |
+| `security` | +15 |
+| single `area:*` label (one package family) | +10 |
+| age: +1 per 7 days open, capped at +20 | |
+
+Rationale: "next likely best" = highest priority × highest probability of
+autonomous success. Docs and single-area bugs are cheap and self-verifying;
+enhancements are less specified and rank lower at equal priority.
+
+`adlc-autopilot select [--json] [--top N]` prints the ranked list with the
+per-issue score breakdown and exclusion reasons; it is the operator's window
+into "what will it do next".
+
+## 5. Triage / P0 shaping
+
+For the selected issue, the orchestrator (NOT the worker) produces an ADLC
+ticket. Every issue body is untrusted input; the gate chain in step 3 runs
+for every issue regardless of how the ticket fields were obtained.
+
+1. If the issue body carries a `<!-- adlc:begin -->` block AND the issue's
+   `authorAssociation` (from `gh issue view --json authorAssociation`) is
+   `OWNER` or `MEMBER`, the ticket is assembled deterministically with NO
+   model call:
+   - `scope`, `rails`, `edges`, `duration`, `category` ← the block (the
+     `@adlc/ticket-sync` grammar: fenced JSON between `<!-- adlc:begin … -->`
+     and `<!-- adlc:end -->`; `category` must be in the ticket-sync set);
+   - `title` ← the issue title, prefixed `#<n>: `;
+   - `body` ← `GitHub issue: <url>` + newline + the issue body with the
+     block removed;
+   - acceptance criteria ← the issue body MUST contain a heading matching
+     `spec-lint`'s criteria-heading regex (`/acceptance|criteria|…/i`) with
+     a list beneath it; that section is what `adlc spec-lint` in step 3
+     lints. If the section is absent, the block is kept for
+     scope/rails/edges/duration/category but the shaping call (step 2)
+     still runs, constrained to produce ONLY `body` (with the criteria
+     section) — it may not alter the block's fields.
+   The block never bypasses step 3; a block with a protected-path scope is
+   a CLARIFY like any other. A block on an issue whose author association is
+   anything else is ignored and the issue is shaped in full.
+2. Otherwise run ONE shaping call: `claude -p --model <effectiveModel>
+   --output-format
+   json --permission-mode plan --max-turns 1`, spawned in its own process
+   group with a 5-minute timeout (SIGTERM, then SIGKILL after 15 s, to the
+   whole group), stdout capped at 64 KiB (a longer response is discarded
+   as malformed), stdin closed, env scrubbed of `ADLC_MANIFEST_KEY`. A
+   timeout or malformed response is an operational failure: `lastError`
+   is set, no run record is created, no GitHub write, and the issue is
+   retried on a later iteration (at most 3 shaping attempts per issue per
+   24 h, then rule `shaping-failed` excludes it until the operator resets).
+   The attempt ledger is durable: `.adlc/autopilot-runs/<issue>.attempts.json`
+   (array of `{ts, kind: "shaping"|"coldstart", outcome}`) is appended via
+   write-to-temp + `rename` BEFORE the call is spawned with
+   `outcome:"started"` and updated after it returns; an entry left at
+   `started` by a crash counts as a failed attempt; entries older than 7
+   days are pruned on read.
+   The prompt is a fixed prompt (in
+   `lib/shaping-prompt.mjs`) that returns a JSON ticket
+   `{title, body, scope[], rails[], category, duration}` whose body begins
+   `GitHub issue: <url>` and ends with an `=== ACCEPTANCE CRITERIA ===`
+   section where every criterion carries a `VERIFY:` clause. The issue body
+   enters the prompt fenced (`@adlc/core` `fence()`, 8000-char cap) as
+   authored content; the constraints prose is authoritative over it.
+3. Gate chain (each fails closed, findings collected verbatim):
+   - ticket schema (`adlc ticket create --input - --json`, dry run)
+   - scope present, non-empty, no wildcard `**` at root, no protected-path
+     intersection (§4.2), every glob resolves to ≥1 existing path or a path
+     under an existing `packages/<x>/` or `plugins/<x>/` — with ONE bounded
+     bootstrap exception: a ticket whose `category` is `feature` may name
+     at most one NEW top-level `packages/<name>/**` or `plugins/<name>/**`
+     that does not exist at `BASE_OID`, provided `<name>` matches
+     `^[a-z][a-z0-9-]{1,40}$` and the same ticket also scopes the registry
+     files the bijective/dispatcher guards require (§14). A second new
+     directory, or a new directory anywhere else, → CLARIFY.
+   - `adlc spec-lint <ticket-body.md>` exit 0
+   - `adlc coldstart <ticket> --prompt-only` → answered by one `claude -p
+     --model <effectiveModel> --max-turns 1` call with the same process-group, 5-minute
+     timeout, 64 KiB output cap, key scrub, quota gate and reconciliation
+     as the shaping call (§5.2, §3.2, §3.4) → `--record-verdict` with an
+     empty `gaps[]`; any gap → CLARIFY; a timed-out or malformed answer is
+     an operational failure handled like a shaping failure (counts toward
+     the 3-per-24h `shaping-failed` rule)
+4. Verdict **PROCEED** (ticket + verdict evidence) or **CLARIFY**: one
+   comment keyed by the sentinel `<!-- adlc-autopilot:clarify sha256(findings) -->`
+   listing every failed gate's findings verbatim plus the fix template (the
+   `adlc:begin` block skeleton), label `adlc:needs-clarification`. The two
+   effects are reconciled INDEPENDENTLY and idempotently: the comment is
+   posted only if no comment with that sentinel exists; the label is added
+   with `gh issue edit --add-label` only if `gh issue view --json labels`
+   does not already show it. The run record `{state:"clarify", sentinel,
+   issueUpdatedAt, commentPosted, labelApplied}` is written BEFORE each
+   effect is attempted and updated after it succeeds, so a crash or `gh`
+   failure between the two leaves a record that the next iteration
+   completes (it re-checks GitHub, never the record alone, before writing).
+   "Zero writes on an unchanged issue" therefore means: both effects
+   already observed on GitHub → no mutating call. There is no branch or
+   worktree to retire — when a human removes the label, recovery deletes
+   the record and the issue re-enters selection.
+
+The shaping call is the only Claude-quota spend before dispatch and is
+bounded by `--max-turns 1`.
+
+## 6. Run — one issue, one ticket, one branch, one PR
+
+Path contract (AC 25): `REPO_ROOT` is the absolute path of the primary
+checkout — the systemd `WorkingDirectory`, or `git rev-parse
+--show-toplevel` of the cwd for `once`; it must be the main worktree
+(`git worktree list` first entry), never a linked worktree. `ISSUE_WT =
+<REPO_ROOT>/.worktrees/autopilot-issue-<n>` (absolute). `git fetch` and
+`git worktree add` run with cwd = `REPO_ROOT`; every command from step 1
+onward runs with cwd = `ISSUE_WT`, and every `--dir` argument is the
+absolute `<ISSUE_WT>/.adlc`. Fleet, invoked with cwd = `ISSUE_WT`, creates
+its own nested worktrees under `<ISSUE_WT>/.worktrees/` and its integration
+worktree `<ISSUE_WT>/.worktrees/fleet-integration`; both are removed by
+fleet at run end. The primary checkout's working tree is never written
+(AGENTS.md); the only writes under `REPO_ROOT` outside `ISSUE_WT` are the
+gitignored `.adlc/autopilot-*` files.
+
+0. **Pinned baseline.** `BASE_OID = git ls-remote --exit-code origin
+   refs/heads/main` (first column; exit ≠ 0 → exit 1 / sleep, no dispatch),
+   then `git fetch --no-tags origin <BASE_OID>` (fetch BY OID — GitHub
+   serves reachable commits by SHA — so a concurrent `git fetch` in another
+   session cannot move what this run resolved; `FETCH_HEAD` is never read),
+   then `git cat-file -e <BASE_OID>^{commit}` must succeed. The OID is
+   recorded in the run record and the status file. Every later
+   reference to the base in this run uses that OID, never the name
+   `origin/main` or local `main`: worktree creation, fleet `--base`,
+   `preflight.mjs --base`, `record-cross-model --base`, the rebase target in
+   §8, and the PR body's `base-oid:` line. Two different things are both
+   called "base" and must not be confused: `BASE_OID` is the **evidence
+   baseline** (what the build, gates and attestation were computed
+   against); the **PR base** is the branch NAME `main`, because GitHub PRs
+   target a branch, not a commit — `gh pr create --base main` is therefore
+   correct and not a contradiction. If `main` has moved past `BASE_OID` by
+   the time the PR is opened, the PR is simply `BEHIND`; CI's `strict`
+   policy prevents merging it as-is and §8 rebases it onto a new
+   `BASE_OID` with a fresh or carried-forward attestation. The evidence
+   always describes the tree that was actually reviewed.
+1. (cwd `REPO_ROOT`) `git worktree add <ISSUE_WT> -b adlc/autopilot/issue-<n>
+   <BASE_OID>`, then write the **ownership marker**: `git config
+   branch.adlc/autopilot/issue-<n>.adlcAutopilotToken <token>` where
+   `token` is 32 random bytes hex also stored in the run record. The marker
+   lives in the repo's local git config (never pushed) and is the only
+   authorization recovery accepts for deleting a branch or worktree (§2.1).
+   Then (cwd `ISSUE_WT`) `npm ci --ignore-scripts`.
+2. (cwd `ISSUE_WT`) Write the ticket: `adlc ticket create --input - --write
+   --dir <ISSUE_WT>/.adlc` (id omitted → ULID). This is a signed
+   `ticket-mutation` because the store is a frozen trust root; the
+   orchestrator holds `ADLC_MANIFEST_KEY` (§9.3). Commit
+   `chore(ticket): <ULID> <title> (#<n>)`. Record `ticketSnapshotSha256` =
+   sha256 of the shard file with the `completed` key removed and keys
+   sorted — the **authorizing ticket snapshot** against which every later
+   round is checked (§6.5a).
+3. (cwd `ISSUE_WT`) Record P0/P1 evidence bound to the ticket: `adlc
+   coldstart <ULID> --dir <ISSUE_WT>/.adlc --record-verdict -` and `adlc
+   spec-lint <ISSUE_WT>/.adlc/tmp/<ULID>-ac.md --record --ticket <ULID>`
+   (manifest appends, committed with the ticket).
+4. Dispatch fleet **from inside that worktree** so fleet reads the plan that
+   contains the new shard and cuts its integration branch from the issue
+   branch:
+   ```
+   adlc fleet run --tickets <ULID> --base adlc/autopilot/issue-<n> \
+     --adapter claude-code --model <effectiveModel> --concurrency 1 \
+     --max-strikes <15 − roundsUsed> --wall-clock-minutes <remaining> \
+     --no-pr --no-complete \
+     --pre-strike-argv '["adlc","autopilot","quota","--json","--model","<effectiveModel>","--quota-threshold","<T>","--quota-reserve","<R>"]' \
+     --charter-file <autopilot>/lib/charter-adlc.md --json
+   ```
+   Fleet: sandboxed worker (`bwrap`, `--permission-mode acceptEdits`,
+   allowlist from `fleet.allowedCommands`), deterministic gates
+   (`fleet.gate.build/test`), blocking `adversarial-review --provider codex
+   --json --fail-on medium` (binary resolved off the ORCHESTRATOR's PATH,
+   never `npx` from the worktree; `ADLC_MANIFEST_KEY` scrubbed from worker
+   and reviewer), fix strikes on findings, sequential merge into
+   `fleet/run-<id>`. `--no-complete` suppresses fleet's `adlc ticket
+   complete` on the integration branch: the ticket stays open until §6.6a so
+   that every retry (§6.6, §8, §6.9) can re-dispatch the SAME ticket and the
+   completion is the last content commit before attestation.
+   The charter addendum instructs the worker to follow `/adlc:adlc` P3–P5
+   (respect rails, run `adlc hollow-test`/`behavior-diff`, run
+   `/adlc:adlc-prosecute` and fix surviving findings) before `TICKET-DONE`.
+5. On fleet exit 0: fast-forward `adlc/autopilot/issue-<n>` to
+   `fleet/run-<id>` (the integration branch was cut from it, so ff always
+   succeeds; a non-ff is an invariant violation → exit 1, nothing pushed).
+5b. **Outer-gate environment integrity.** The worker never had write
+   access to `ISSUE_WT`: fleet's sandbox grants the worker writes only to
+   its own nested worktree and the model plane (fleet spec §7.3), so
+   `ISSUE_WT/node_modules` and every ignored file in `ISSUE_WT` are as the
+   orchestrator left them. Nevertheless, after the ff and before any outer
+   gate: (i) `git status --porcelain --ignored` in `ISSUE_WT` must list no
+   ignored paths outside `node_modules/`, `.worktrees/`, `.adlc/tmp/` and
+   the fleet status/log paths — anything else → round failure
+   `ignored-file-drift`; (ii) **dependency-diff check**: for every
+   `package.json` in `git diff --name-only <BASE_OID>...HEAD`, the parsed
+   `dependencies`/`devDependencies`/`optionalDependencies`/`peerDependencies`
+   may differ from base only by keys starting `@adlc/` (CONVENTIONS.md
+   zero-third-party rule) and `scripts` may not change — otherwise round
+   failure `third-party-dep`; a changed `package-lock.json` is compared
+   canonically (both sides parsed, `packages` map): every entry present
+   on both sides must have identical `resolved`, `integrity`, `version`,
+   `dependencies`, `optional`, `dev`, `link` fields; entries added may
+   only have keys of the form `packages/<x>` or `node_modules/@adlc/<x>`
+   with `link: true` or a `resolved` under `https://registry.npmjs.org/@adlc/`;
+   no entry may be removed; any other difference → `lockfile-drift`.
+   Because the only admissible additions are workspace links, `npm ci
+   --ignore-scripts --no-audit --no-fund` never fetches a new third-party
+   tarball; (iii) that command is then re-run in `ISSUE_WT` so the
+   install matches the lock the gates will test. All outer gates (5a,
+   preflight, final review, attestation) run in `ISSUE_WT`, never in the
+   worker's worktree.
+5a. **Actual-diff check** (deterministic, orchestrator-side, independent of
+   fleet's rails gate and of what the worker declared): `git diff
+   --name-only <BASE_OID>...HEAD` in `ISSUE_WT` must satisfy (i) every path
+   matches the ticket `scope` OR is one of the pipeline-produced paths
+   `.adlc/tickets/<ulid>--*.json` (exactly one, the run's own ticket,
+   whose content at HEAD — with `completed` removed and keys sorted —
+   must hash to `ticketSnapshotSha256`, so a worker cannot widen its own
+   scope, drop a rail, or alter the acceptance criteria; the only
+   permitted difference is the orchestrator-owned `completed` toggle) and
+   `.adlc/manifest.d/*.jsonl` and `.adlc/findings.jsonl` (both append-only
+   vs `BASE_OID`, verified with `git diff <BASE_OID> -- <file>` containing
+   no `-` lines; the findings ledger is written only by the orchestrator's
+   final review via `--findings-ledger`, never by the worker — fleet's
+   inner review runs without that flag); (ii) no path
+   matches the protected-path denylist (§4.2) other than those two
+   exceptions; (iii) no path is a symlink at HEAD whose target escapes the
+   scope. A violation is recorded as a round failure with the offending
+   paths as dead-end material (the retry protocol of §6.6 applies) and is
+   never attested or pushed. The same check runs again immediately before
+   step 7 and before every push in §6.8/§8/§6.9 — a diff that passed once
+   is not trusted after any later write.
+6. Final local gate in the issue worktree: `node scripts/preflight.mjs --base
+   <BASE_OID>` (tests + rail-freeze + mutation-gate + ledger + comment
+   gates, CI order). Failure consumes one round of the SAME budget (§7):
+   the run record's `roundsUsed` is incremented and steps 4–6 repeat with
+   `--max-strikes <15 − roundsUsed>` and `--wall-clock-minutes <remaining>`;
+   if either remaining budget is 0 the run is `blocked` exactly as a fleet
+   exit 2 would be.
+   **Retry protocol** (identical for a preflight failure here, a
+   final-review failure in §6.7a, a CI red in §6.9, and a rebase conflict
+   in §8). Step 0 — **reopen if completed**: if the run has passed §6.6a
+   in a previous round, the shard is `completed:true` and fleet would not
+   plan it; the orchestrator first runs `adlc ticket update <ULID> --input
+   - --expect <ticketHash> --write --dir <ISSUE_WT>/.adlc` with
+   `{"completed": false}` (a signed `ticket-mutation`, key-bearing, §9.3)
+   and commits `chore(ticket): reopen <ULID> for retry round <k>`. This
+   is legal under rails-guard-ci because the shard does not exist on the
+   base ref — only tickets present on base are contract-frozen — and the
+   PR's final state is always `completed:true` after the last successful
+   §6.6a. Then: the issue branch already contains the previous round's
+   merged work, and fleet is invoked again exactly as in step 4 — cutting a
+   NEW `fleet/run-<id>` from the current tip of `adlc/autopilot/issue-<n>`
+   — with the failure output (preflight log / CI job log / conflict
+   markers) supplied as dead-end material for fleet's `fixPrompt`. Each
+   retry then repeats steps 5–8 in full: ff, preflight, completion,
+   attestation, push. No manifest entry from a superseded round is ever
+   removed (append-only); the new attestation is bound to the new revision
+   and the PR body's evidence block names the latest one.
+6a. (cwd `ISSUE_WT`) `adlc ticket complete <ULID> --dir <ISSUE_WT>/.adlc
+   --write` (signed; orchestrator key) and commit `chore(ticket): complete
+   <ULID>`. This is the last content commit of the round.
+7. **Final review, then attest — on the exact tree that is pushed.** Fleet's
+   inner Codex review approved the worker's diff at fleet's review SHA, but
+   steps 5–6a have since added the preflight-verified tree and the
+   completion commit, and the ticket shard is NOT revision-ignored, so that
+   inner approve does not describe HEAD. Therefore:
+   7a. (cwd `ISSUE_WT`, clean tree asserted with `git status --porcelain`
+   empty) **size gate first**: `git diff <BASE_OID>...HEAD | wc -c` must be
+   ≤ `autopilot.reviewMaxBytes` (default 262144, the reviewer's grounding
+   limit — above it findings are silently dropped as ungrounded); an
+   oversize diff is a round failure `diff-too-large` with the byte count
+   and the largest paths as dead-end material, and two consecutive
+   `diff-too-large` failures on one run → `blocked`. Then run the
+   orchestrator's own `adversarial-review --base <BASE_OID> --provider codex
+   --json --fail-on medium --max-bytes <reviewMaxBytes> --findings-ledger
+   <ISSUE_WT>/.adlc/findings.jsonl` over the whole issue-branch diff
+   (binary resolved off the orchestrator's PATH; key scrubbed;
+   `--allow-summary-review` is never passed). The same `--max-bytes` is
+   given to fleet's inner reviewer via `fleet.reviewMaxBytes`. Record
+   `reviewedHead = git rev-parse HEAD`. A `needs-attention` verdict is a
+   round failure (retry protocol §6.6, findings as dead-end material).
+   7b. With HEAD still equal to `reviewedHead` and the tree still clean
+   (asserted again), `adlc prosecute record-cross-model --ticket <ULID>
+   --provider codex --author-provider anthropic --verdict approve --base
+   <BASE_OID> --dir <ISSUE_WT>/.adlc`. The command derives the change-set
+   revision from the working tree at that instant; because nothing may
+   write between 7a and 7b (single-threaded orchestrator, lock held, fleet
+   finished), the attested revision IS the reviewed revision.
+   7c. Commit the manifest append; assert `git diff --name-only HEAD~1
+   HEAD` lists only `.adlc/manifest.d/*.jsonl` paths (these are
+   revision-ignored, so `revision(HEAD) == revision(reviewedHead)` by
+   construction). Record `attestedHead = git rev-parse HEAD`. Any
+   assertion failing in 7a–7c → state `oid-mismatch` (§6.8), nothing
+   pushed.
+8. **Verify, then push, then verify.** Before pushing: `git rev-parse HEAD`
+   in `ISSUE_WT` must equal `attestedHead` (the HEAD recorded alongside the
+   step-7 attestation in the run record), the actual-diff check (§6.5a)
+   must pass again, and the working tree must be clean. Push with `git push
+   --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<expectedRemoteOid>
+   origin adlc/autopilot/issue-<n>` where `expectedRemoteOid` is the OID
+   recorded at the previous push (or the empty-ref form for a first push);
+   a lease failure means someone else pushed to the autopilot's branch →
+   state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
+   After pushing: `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>`
+   must equal `attestedHead`; otherwise state `oid-mismatch`. Only after
+   the post-push verification does the autopilot **upsert** the PR keyed by
+   head branch (never a body sentinel), and the upsert is itself bound:
+   immediately before `gh pr create`/`gh pr edit` the `ls-remote` check is
+   repeated, and immediately after, `gh pr view --json headRefOid` must
+   equal `attestedHead` — otherwise `oid-mismatch` (a PR that was created
+   in between is left as-is and named in the comment). Branch-level write
+   isolation is recommended, not assumed: pre-implementation item R12 adds
+   a GitHub ruleset restricting pushes to `adlc/autopilot/**` to the
+   operator identity; until it exists, "another writer on the autopilot
+   branch" is detected (lease + head checks), not prevented.
+
+   **`oid-mismatch` transition (one rule for every case):** the run is
+   quarantined with the branch preserved locally and, if pushed, remotely;
+   the comment goes on the PR when one exists, otherwise on the ISSUE, and
+   the label `adlc:autopilot-blocked` is applied with reason
+   `oid-mismatch` and the expected/observed OIDs. Recovery never resumes
+   it automatically. Exit paths: (a) the operator removes the label → if
+   a PR exists, **re-arm** (§2.1: full retry round with fresh review +
+   attestation on the current branch tip, which the operator has
+   implicitly accepted by removing the label); if no PR exists, **retire**
+   (§2.1a: local branch, its remote copy if pushed and marker-owned, and
+   worktree are deleted, the issue re-enters selection); (b) `reset
+   --issue N --confirm-delete <OID>` → retire regardless of PR presence,
+   never touching an open PR's remote branch (exit 2 if one exists).
+   `gh pr create --base main --head adlc/autopilot/issue-<n> --title
+   "<type>(<area>): <title> (#<n>)" --body-file <evidence.md>`; if a PR for
+   that head already exists, `gh pr edit --body-file`. Body: `Closes #<n>`,
+   ticket id, gate-manifest evidence summary (`adlc gate-manifest attest
+   --ticket <ULID>`), review verdict + round count, quota snapshot at start.
+9. CI follow-up per §0.11, with this normative check-state table applied
+   to `gh pr checks <prNumber> --repo <repo> --json name,state,bucket,workflow`
+   every 60 s for up to the 30-minute watch clock (paused while the quota
+   gate refuses, §3.2). Normalization is ONE function over the raw rows:
+   `bucket` is primary (`pass` → pass, `fail` → red, `pending` → wait,
+   `skipping` → skipped, `cancel` → red, anything else → red) and `state`
+   is consulted only to disambiguate `skipping` (`SKIPPED` vs `NEUTRAL`)
+   and for the comment text; a row whose `bucket` is missing or not a
+   string → red. Blocking jobs are matched by NAME PREFIX on the raw
+   `name` (e.g. `test (18)`, `ticket-store-platform (` — the platform
+   matrix names its jobs `ticket-store-platform (<os>, <node>)`), so a
+   matrix expansion cannot hide a job. Contract fixtures for this
+   function are captured from the real `gh` output (AC 65).
+
+   | Job | `state` | Meaning |
+   |---|---|---|
+   | any BLOCKING job (name prefix in `test (18)`, `test (20)`, `test (22)`, `rails-guard`, `mutation-gate`, `cross-model-gate`, `ticket-store-platform (`) | normalized `pass` | pass |
+   | any BLOCKING job | normalized `red` | **red** |
+   | any BLOCKING job | normalized `wait` | wait |
+   | any BLOCKING job | normalized `skipped` | red for `test (N)` (required checks must run); pass for the others (they skip by design on some events) |
+   | a blocking job absent from the list | — | wait until the watch clock expires, then red (`missing: <job>`) |
+   | non-blocking job (anything else, e.g. `pre-ga-gate`, canaries) | any | ignored |
+
+   **Head binding, every poll:** before evaluating the table, `gh pr view
+   --json headRefOid` must equal the run record's `attestedHead`; a
+   mismatch (someone pushed to the autopilot's branch, or a re-push the
+   orchestrator did not record) → state `oid-mismatch` immediately, no CI
+   fix round, no `done`. `done` is reached only when all blocking jobs pass
+   AND `headRefOid == attestedHead` in the same poll.
+
+   Precedence: any **red** → a CI fix round immediately (even if other jobs
+   are still pending), provided `ciRoundsUsed < 2` and quota permits. A CI
+   fix round IS the retry protocol of §6.6 (fleet re-dispatch with
+   `--max-strikes 2 --wall-clock-minutes 15` and the failing job's log as
+   dead-end material → ff → actual-diff check → `preflight.mjs` → ticket
+   completion → final review + fresh attestation (§6.7) → verify-push-verify
+   (§6.8)), charged to `ciRoundsUsed` and its own fleet allowance (§7),
+   never to `roundsUsed`; after the push the watch clock restarts. All
+   blocking jobs pass → `done`.
+   Watch clock expired with jobs still waiting → record stays `ci-watch`
+   and is re-evaluated once per later iteration, at most 3 times, then
+   `adlc:autopilot-ci-red` with reason `ci-incomplete`. `ciRoundsUsed == 2`
+   and still red → `adlc:autopilot-ci-red` + comment naming the failing
+   job(s).
+10. Fleet outcome mapping — the `--json` result's `reason` is authoritative
+    over the numeric exit code:
+
+    | fleet exit | `reason` | run state | GitHub effect |
+    |---|---|---|---|
+    | 0 | — | `built` (continue at §6.5) | none yet |
+    | 2 | `quota-paused` | `quota-paused` (resumable, §2.1) | none — never a label |
+    | 2 | `lock-held` | unchanged (`skipped`) | none |
+    | 2 | `wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable`, anything else | `blocked` | findings comment (fenced, capped 12 000 chars) + `adlc:autopilot-blocked`; branch and worktree kept for forensics; no PR |
+    | 1 | any | unchanged; `lastError` set | none; the loop sleeps |
+    | other / unparseable JSON | — | treated as exit 1 | none |
+11. Worktree cleanup: (cwd `REPO_ROOT` — never from inside the worktree
+    being removed) `git worktree remove <ISSUE_WT>` only after the PR is
+    opened (state `ci-watch`/`done`); on `blocked` the worktree is kept for
+    forensics. Fleet's own `<ISSUE_WT>/.worktrees/<ticket>` and
+    `<ISSUE_WT>/.worktrees/fleet-integration` are removed by fleet.
+
+## 7. Fix-loop accounting
+
+- "Round" = one fleet strike (dispatch → gates → Codex review) OR one
+  `preflight.mjs` failure (§6.6) OR one conflict-fix dispatch (§8). There is
+  ONE counter per run, `roundsUsed`, persisted in the run record before
+  each round starts. Every fleet invocation for the run — first dispatch,
+  `--resume` after `quota-paused`, or a repeat after preflight — receives
+  `--max-strikes <15 − roundsUsed>`; fleet's `--json` result reports strikes
+  consumed and the orchestrator adds them to `roundsUsed`. An invocation
+  whose remaining budget is 0 is never made: the run is `blocked`.
+  Fleet's `TICKET-BLOCKED` and flail-detector short-circuits still apply.
+- Wall clock = 90 minutes of accumulated `wallClockUsedMs` across every
+  dispatch of the run (paused time does not count); each fleet invocation
+  receives `--wall-clock-minutes <remaining>`; the orchestrator also
+  enforces it (kills the fleet process group, records `wall-clock`).
+- The CI-fix budget (§0.11) is a separate counter `ciRoundsUsed` (max 2)
+  with its OWN fleet allowance: each CI fix round invokes fleet with
+  `--max-strikes 2 --wall-clock-minutes 15` drawn from `ciRoundsUsed`, NOT
+  from `roundsUsed`/`wallClockUsedMs`, so a run that exhausted its build
+  budget still gets its two CI rounds. The 30-minute watch clock is separate
+  from both. Neither CI budget ever refills the build budget.
+- Every round's review findings are appended to `.adlc/findings.jsonl` via
+  `adversarial-review --findings-ledger` (ADR-0014) so P7 distillation sees
+  them.
+
+## 8. Open-PR maintenance (each iteration, before selection)
+
+Maintenance iterates over RUN RECORDS, never over branches or PRs found on
+GitHub: only records in state `pr-open` or `ci-watch` are candidates;
+every other state (`clarify`, `shaped`, `dispatched`, `quota-paused`,
+`built`, `attested`, `pushed`, `oid-mismatch`, `blocked`, `stale`,
+`ci-red`, `done`, `orphan`) is skipped by construction, so a quarantined
+run is never rebased, dispatched, attested or pushed until recovery (§2.1)
+has explicitly moved it back to `pr-open`. For each candidate, ALL of the
+following **ownership preconditions** must hold before any action; a
+failure marks the run `orphan` (nothing mutated) and is reported in
+status:
+
+- the record's `token` equals the local ownership marker for the branch
+  (§6.1);
+- the record's `prNumber` resolves via `gh pr view <prNumber> --repo
+  <repo> --json headRefName,headRefOid,state,baseRefName` to `state ==
+  "OPEN"`, `headRefName == adlc/autopilot/issue-<n>`, `baseRefName ==
+  main`;
+- `headRefOid` equals the record's `attestedHead` (the PR head is the tree
+  the autopilot last attested and pushed) — a mismatch is `oid-mismatch`
+  (§6.8), not `orphan`;
+- `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` equals the
+  record's last pushed OID.
+
+Then:
+
+- `gh pr view --json mergeStateStatus,headRefOid`. `BEHIND`/`DIRTY` →
+  rebase in the issue worktree (recreated at `ISSUE_WT` if missing) onto
+  this iteration's `BASE_OID` (§6.0); on success the run record's `baseOid`
+  is updated to it.
+  - clean → **equivalence check first**: `git diff <oldBaseOid>...<oldHead>
+    | git patch-id --stable` must equal `git diff <BASE_OID>...HEAD | git
+    patch-id --stable` (the rebase changed no hunk); the actual-diff check
+    (§6.5a) must pass on the new base; only then `record-cross-model
+    --ticket <ULID> --carry-forward <prior-revision> --base <BASE_OID>
+    --dir <ISSUE_WT>/.adlc` (the tool independently recomputes and
+    compares the change-set digests and refuses on inequality — a second,
+    authoritative gate). Then verify-push-verify (§6.8) and re-enter
+    `ci-watch` so CI re-validates the patch against the new base; no
+    model call; digest "rebased". A patch-id mismatch on a "clean" rebase
+    (e.g. context drift changed a hunk) → full retry round (fresh review,
+    preflight, attestation) charged to `roundsUsed`.
+  - conflict → one conflict-fix round (counts against the run's
+    `roundsUsed`; refused as `stale` if the budget is exhausted): fleet
+    `fixPrompt` with the conflict markers as the dead-end material + Codex
+    review + `preflight.mjs --base <BASE_OID>` + fresh `record-cross-model
+    --base <BASE_OID>` + push. Failure → `adlc:autopilot-stale` + comment.
+- Counting toward the cap of 5: run records in state `pr-open`, `ci-watch`
+  or `oid-mismatch` whose PR is `OPEN` (stale/ci-red are excluded; a
+  quarantined open PR still counts because it still needs the operator).
+- The autopilot never closes a PR. **PR lifecycle observed by maintenance
+  (every candidate record, plus every record in `stale`/`ci-red`/
+  `oid-mismatch` with a `prNumber`):**
+
+  | `gh pr view` result | Transition |
+  |---|---|
+  | `state == "MERGED"` | run → `done`; retire LOCAL artifacts only (worktree, local branch, marker, record); the remote branch is left to GitHub's delete-on-merge setting; the issue is closed by `Closes #<n>` |
+  | `state == "CLOSED"` (not merged) | the operator rejected the PR: retire local artifacts; delete the remote branch only under §2.1a's lease rule; add `adlc:autopilot-skip` to the issue with a comment naming the closed PR (the operator removes the label to allow a fresh attempt) |
+  | `headRefName` no longer matches, or PR not found | `orphan`; no mutation |
+
+## 9. Preflight (fail closed, printed by `adlc-autopilot status`)
+
+9.1 Toolchain: `bwrap`, `claude`, `codex`, `adversarial-review`, `gh`, `git`,
+`npm`, `node >= 18` are resolved ONCE at preflight to absolute paths from
+a sanitized search list — the orchestrator's PATH entries that are
+absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
+`node_modules/` — and those absolute paths are pinned in the status file
+and used for every spawn thereafter (a tool that resolves under a
+rejected directory → exit 1 `untrusted-tool:<name>`). Children receive
+`PATH` = that sanitized list (the same rule fleet's `review-runner`
+applies), never the raw inherited PATH. `gh auth status` ok; `claude auth
+status --json` `loggedIn:true`.
+
+9.1a Repository and principal binding: `autopilot.repo` (repo-committed,
+e.g. `"voodootikigod/adlc"`) is the canonical identity. Preflight requires
+`git remote get-url origin` AND `git remote get-url --push origin` to
+resolve (after normalizing `git@github.com:` / `https://github.com/` /
+trailing `.git`) to exactly that repo; `gh repo view <repo> --json
+nameWithOwner,defaultBranchRef` must return that name and default branch
+`main`; `gh api user` must return a login whose `gh api
+repos/<repo>/collaborators/<login>/permission` is `admin`, `maintain` or
+`write`. Any mismatch → exit 1 (`repo-mismatch` / `principal-unauthorized`)
+before any issue, PR or git write. Every `gh` invocation thereafter passes
+`--repo <repo>` explicitly (never relies on cwd inference), and every
+`git push`/`ls-remote` names `origin` whose URL was verified this
+iteration.
+
+9.2 Plugin parity: the installed `adlc@adlc` plugin version
+(`~/.claude/plugins/installed_plugins.json`) equals
+`plugins/adlc-claude-code/.claude-plugin/plugin.json` `version` on
+`origin/main`. Mismatch → refuse to dispatch (the headless worker would load
+stale hooks/skills). Today: installed 1.7.0 vs repo 1.11.0.
+
+9.3 Key: `ADLC_MANIFEST_KEY` present in the orchestrator env (systemd
+`EnvironmentFile=<abs repo root>/.env.local`, mode 0600). Never an argument,
+never logged. The key is passed to exactly these children and scrubbed
+from every other spawn (the **key-bearing allowlist**, asserted by AC 12):
+`adlc ticket create --write`, `adlc ticket complete --write`, `adlc ticket
+update --write` (reopen-for-retry only, §6.6), `adlc coldstart
+--record-verdict`, `adlc spec-lint --record`, `adlc prosecute
+record-cross-model`. Fleet, the shaping/coldstart `claude -p` calls, both
+`adversarial-review` invocations, `gh`, `git`, `npm`, and `preflight.mjs`
+never receive it.
+
+9.3a systemd unit (generated by `adlc-autopilot init --service`): `[Service]`
+carries an absolute `WorkingDirectory=<repo root>` (validated at generation
+and at start: the directory must contain `.git` and `.adlc/config.json`,
+else exit 1 `bad-working-directory`), an absolute `ExecStart=<abs path to
+node> <abs path to packages/autopilot/bin/adlc-autopilot.mjs> loop --rest
+10m`, `EnvironmentFile=<abs repo root>/.env.local`, `Restart=on-failure`,
+`RestartSec=60`, `KillMode=control-group`, and `TimeoutStopSec=120` (the
+loop traps SIGTERM: finishes the current git/gh step, writes the run record,
+releases the lock, exits 0; an in-flight fleet run is left resumable per
+§2.1). No `%h` expansion is used for paths the tests must assert
+byte-for-byte.
+
+9.4 Repo: `.adlc/config.json` exists on `origin/main` with a `fleet` block
+(`gate.build`, `gate.test`, `init`, `allowedCommands`, `reviewProvider:
+"codex"`, `prosecuteFailOn`, `timeoutMinutes`) — §0.12.
+
+9.5 Labels exist: `adlc:autopilot`, `adlc:autopilot-skip`,
+`adlc:needs-clarification`, `adlc:autopilot-blocked`, `adlc:autopilot-stale`,
+`adlc:autopilot-ci-red`, `adlc:autopilot-log` (`adlc-autopilot init
+--labels` creates them idempotently).
+
+9.6 Fleet dry-run: `adlc fleet run --dry-run --json` from the primary
+checkout exits 0.
+
+## 10. Observability
+
+- `.adlc/autopilot-status.json` (local-only: `adlc-autopilot init` writes
+  the entries `.adlc/autopilot-status.json`, `.adlc/autopilot.lock/`,
+  `.adlc/autopilot-runs/` and `.worktrees/autopilot-issue-*` to
+  `<REPO_ROOT>/.git/info/exclude` ONCE, idempotently, under the lock; the
+  runtime never touches `.gitignore` or any tracked file in the primary
+  checkout, and refuses to start (`preflight: exclude-missing`) if those
+  entries are absent): `{ state, since, lastRun:{issue, ticket, outcome,
+  rounds, minutes}, quota:{fiveHour, sevenDay, scoped, checkedAt, ok,
+  reason, nextResetAt}, openPrs:[...], blocked:[...], lastError }`.
+- `adlc-autopilot status [--json]` renders it plus preflight.
+- Digest: one comment per run on the rolling issue labeled
+  `adlc:autopilot-log`: issue, ticket, outcome, PR link, rounds, minutes,
+  quota before/after. Protocol: the rolling issue is located by `gh issue
+  list --repo <repo> --label adlc:autopilot-log --state open --json
+  number` (exactly one expected; none → create it; more than one → use
+  the lowest number and report `digest-issue-ambiguous`; the located
+  number is cached in the status file but re-validated as OPEN before
+  every post — a closed one is replaced by a new issue, never reopened).
+  Each comment starts with the sentinel `<!-- adlc-autopilot:run <runId>
+  -->`; before posting, the record's `digestPosted:false` intent is
+  persisted, the issue's comments are searched for the sentinel, the
+  comment is posted only if absent, and `digestPosted:true` is written
+  only after `gh` confirms. A failure leaves the intent for the next
+  iteration; the digest is never a reason to block or re-run work.
+- Every fleet run's `--json` result is stored under
+  `.adlc/autopilot-runs/<runId>.json` (gitignored).
+
+### 10.1 Human in the mobile loop
+
+v1's human channel is GitHub itself: every escalation is a label the
+operator can flip from GitHub mobile (remove `adlc:needs-clarification` /
+`-blocked` / `-stale` / `-ci-red` → recovery retires and re-queues the
+issue; add `adlc:autopilot` → jumps the queue; add `adlc:autopilot-skip` →
+excluded), and every PR is an ordinary PR review. GitHub's own mobile
+notifications on the digest issue and the PRs are the push channel.
+
+Claude Code **Remote Control** (`claude remote-control --spawn worktree
+--name adlc-autopilot`) is a companion PULL channel, not a v1 dependency:
+it lets the operator open a Claude session on this machine from the mobile
+app and run `/adlc:adlc-autopilot status`, inspect a blocked worktree, or
+answer a CLARIFY by editing the issue — but it cannot initiate a question
+to the operator, so it cannot replace the label channel. If adopted, the
+hub runs as a second `systemd --user` unit, never inside the autopilot
+process, and any session it spawns is subject to the same lock and
+worktree rules as a human session (§11). Deferred to a follow-up ticket.
+
+## 11. Threat model (delta over fleet §13)
+
+- **Hostile issue body** → enters the shaping prompt fenced; scope is
+  mechanically checked against the denylist; the worker's charter declares
+  constraints authoritative over the spec. A body that tries to widen scope
+  is a CLARIFY, not a build.
+- **Worker forging its own review/attestation** → the reviewer binary and the
+  key live only on the orchestrator; fleet scrubs `ADLC_MANIFEST_KEY` and
+  resolves `adversarial-review` off the orchestrator PATH. The attestation is
+  recorded by the orchestrator from the reviewer's exit status, never from
+  worker output.
+- **Quota exhaustion of the operator** → the gate is evaluated before every
+  dispatch with the literal 50/50 rule; the reviewer runs on a different
+  provider's quota.
+- **Runaway loop** → atomic single-instance lock (§2.2), 90-minute wall
+  clock, 15-round cap, 5-PR cap, 10-minute rest, quota re-checked before
+  every Claude-consuming step (§3.2), and every label in §4.2 is a stop for
+  that issue that only a human can lift (§2.1).
+- **Two orchestrators / a human session on the same repo** → the lock plus
+  the rule that the autopilot only ever writes inside
+  `.worktrees/autopilot-issue-*`, `.adlc/autopilot-*` (gitignored) and its
+  own branches; a human `adlc fleet run` is serialized by `fleet.lock`.
+- **Trust-root drift** → the denylist is non-shrinkable in config; any diff
+  touching a trust root is a CLARIFY at triage and a rails-guard failure in
+  CI, and CI red is treated as blocking (§0.11).
+- **Stale plugin** → parity check (§9.2) refuses to dispatch.
+
+## 12. Failure policy
+
+| Condition | Effect |
+|---|---|
+| quota unknown / gated | sleep 10m, status `waiting-quota`, no GitHub write |
+| preflight red | exit 1 (`once`) / sleep 10m with `lastError` (`loop`); no dispatch |
+| CLARIFY | comment + label, sleep 10m |
+| fleet exit 2 | `adlc:autopilot-blocked` + findings comment, branch kept |
+| fleet exit 1 | no GitHub write, `lastError`, sleep 10m |
+| preflight.mjs red after fleet | counts as a fix round within the 90-min clock |
+| CI red after 2 fix rounds | `adlc:autopilot-ci-red` + comment |
+| rebase conflict unresolved | `adlc:autopilot-stale` + comment |
+| `gh`/network failure mid-PR | retry 3× with backoff; then `lastError`, branch pushed state recorded so the next iteration upserts |
+
+### 12.1 Execution deadlines (every external command)
+
+Every child is spawned in its own process group with stdin closed and a
+deadline; on expiry SIGTERM is sent to the group, SIGKILL 15 s later, and
+the step fails with `reason:"timeout:<command>"`. The orchestrator's own
+SIGTERM handler forwards to the current child's group and exits within
+`TimeoutStopSec` (§9.3a).
+
+| Command | Deadline | Retry |
+|---|---|---|
+| `git ls-remote`, `git fetch <oid>`, `git push` | 120 s | 3× (5 s, 15 s, 45 s backoff) — fetch/ls-remote only; push is never retried after a lease failure |
+| other `git` (worktree add/remove, rebase, diff, rev-parse) | 60 s | none |
+| `gh` (any) | 60 s | 3× (5 s, 15 s, 45 s); a 4xx other than 429 is not retried |
+| `npm ci --ignore-scripts` | 15 min | none → `lastError`, run stays `shaped` |
+| `scripts/preflight.mjs` | 30 min | none → counts as a round failure |
+| fleet | `--wall-clock-minutes` + 5 min grace | none → `blocked` (`wall-clock`) |
+| `adversarial-review` (final) | 15 min | none → round failure `review-unavailable` |
+| `adlc` recorders (ticket, coldstart record, spec-lint record, record-cross-model) | 60 s | none → `oid-mismatch` if after §6.7a, else round failure |
+| quota HTTP / `/usage` fallback | 10 s / 60 s | 1× / none (§3.1) |
+| `claude -p` shaping / coldstart | 5 min | none (§5.2) |
+| CI poll (`gh pr checks`) | 60 s per poll, 30-min watch | per §6.9 |
+
+## 13. Configuration
+
+Repo-committed (`.adlc/config.json`, trust root):
+
+```json
+{
+  "fleet": {
+    "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
+    "init": "npm ci --ignore-scripts",
+    "concurrency": 1,
+    "base": "main",
+    "timeoutMinutes": 30,
+    "prosecuteFailOn": "medium",
+    "reviewProvider": "codex",
+    "reviewMaxBytes": 262144,
+    "allowedCommands": ["npm test", "npm run build:*", "node --test *", "node scripts/*", "adlc *"]
+  },
+  "autopilot": {
+    "restMinutes": 10,
+    "maxOpenPrs": 5,
+    "maxRounds": 15,
+    "wallClockMinutes": 90,
+    "ciFixRounds": 2,
+    "ciWatchMinutes": 30,
+    "reviewMaxBytes": 262144,
+    "repo": "voodootikigod/adlc",
+    "protectedPathsExtra": []
+  },
+  "ticketSync": { "select": { "state": "open", "labels": [], "query": null } }
+}
+```
+
+Operator-local only — the quota is the OPERATOR's, so its policy never comes
+from repo-committed config (same rule as fleet's `adapter`/`model`):
+`--quota-threshold` (default 50, integer 1–50 — values above 50 are
+rejected with exit 1 so the operator's "more than half remaining" rule can
+be tightened but never loosened), `--quota-reserve` (default 5, integer
+0–49, must be `< threshold`), `--model`, `--adapter`, `--issue`,
+`--force`, `--dry-run`. Precedence for every operator-local value: CLI flag
+> environment variable `ADLC_AUTOPILOT_<UPPER_SNAKE>` > built-in default. A
+repo config that names `quotaThreshold` or `quotaReserve` is warned and
+ignored (AC 28). Repo-config keys (`restMinutes`, `maxOpenPrs`,
+`maxRounds`, `wallClockMinutes`, `ciFixRounds`, `ciWatchMinutes`,
+`protectedPathsExtra`) may be lowered but not raised by CLI (`--max-rounds
+20` against a config of 15 exits 1).
+
+## 14. Required changes outside `packages/autopilot`
+
+None is trust-root tier; each is a small, separately testable diff.
+
+- `@adlc/fleet`: CLI flags `--no-pr`, `--no-complete` (skip
+  `completeTicketOnIntegration`; the caller owns completion),
+  `--dead-end-file <path>` (initial dead-end material for strike 1, so a
+  retry can hand fleet the previous round's failure), `--max-strikes N`,
+  `--wall-clock-minutes M`, `--charter-file <path>`, `--pre-strike-argv
+  <json-array>` (operator-local; a JSON array of strings executed with
+  `execFile`-style argv and NO shell, with the ORCHESTRATOR's env minus
+  the key, before every strike; non-zero → stop with
+  `reason:"quota-paused"`, exit 2, run left resumable via the existing
+  `--resume`); `advanceTicket` takes
+  `maxStrikes` from config; `run` accepts an external wall-clock deadline;
+  charter addendum appended after the Constraints block; config key
+  `fleet.reviewMaxBytes` forwarded as `--max-bytes` to the inner reviewer;
+  `--json` result includes the review's `{provider, verdict, revision,
+  rounds}`, the `fleetRunId`, and a machine-readable `reason` from the
+  fixed set in §6.10 for every non-zero exit.
+  Also verify (and test) that `fleet run` invoked with cwd = a git worktree
+  reads that worktree's `.adlc/tickets/` and cuts nested worktrees correctly.
+- `plugins/adlc-claude-code/commands/adlc-autopilot.md`: thin command that
+  runs `adlc autopilot status|once --dry-run|select` and explains
+  `systemctl --user {start,stop,status} adlc-autopilot`.
+- Registry/docs: `packages/cli/lib/registry.mjs`,
+  `apps/docs/lib/toolkit-packages.mjs`,
+  `apps/docs/content/docs/toolkit/autopilot.mdx` + `meta.json`,
+  `docs/package-reference.md`, README toolkit table.
+- `docs/systemd/adlc-autopilot.service` template (installed by
+  `adlc-autopilot init --service`, which prints the unit and the
+  `systemctl --user enable --now` line; it never writes outside the repo
+  unless `--write` is passed).
+- Issue #237: comment recording the substrate change and linking this spec;
+  ADR `docs/adr/0016-issue-autopilot-local-substrate.md`.
+
+## 15. Pre-implementation resolutions (must be green before P4)
+
+| # | Item | Owner | Status |
+|---|---|---|---|
+| R1 | Land `.adlc/config.json` (§13) via the admin trust-root commit | operator | open |
+| R2 | Update the installed `adlc` plugin from 1.7.0 to 1.11.0 (`/plugin` marketplace update); add the parity check | operator + build | open |
+| R3 | Fleet extensions (§14) built and tested first, as their own ticket/PR | build | open |
+| R4 | Fleet has never run live in this repo: `fleet run --dry-run` then one live run on a docs issue via `adlc-autopilot once --issue N` before enabling the service | operator | open |
+| R5 | Weekly window is at 70% used at authoring time; the first autonomous run cannot start until it resets (today 09:59 ET) | — | informational |
+| R6 | Verify `claude -p` subagent fan-out (`/adlc:adlc-prosecute`) works under `bwrap` + `acceptEdits`; if not, the charter degrades to `adlc hollow-test`/`behavior-diff` only and the outer Codex loop remains the P5 | build canary | open |
+| R7 | Verify OAuth token refresh and `gh` auth work under `systemd --user` (no TTY, no keyring) | operator | open |
+| R8 | Create labels + the rolling digest issue (`adlc-autopilot init --labels`) | build | open |
+| R9 | Mint the ULID ticket for this spec (T55 is taken); record spec-lint + the Codex `--input` approve against it | this session | open |
+| R10 | Confirm rails-guard-ci accepts a PR that ADDS a ticket shard which is `completed:true` on arrival (fleet completes on the integration branch) — otherwise the completion commit moves to a post-merge step | build canary | open |
+| R11 | Keep PR diffs under adversarial-review's 256 KB grounding limit: deterministic size gate before every review (§6.7a), `--max-bytes` from `reviewMaxBytes` on both reviewers, fleet gains a `reviewMaxBytes` config key (§14) | build | open |
+| R12 | GitHub ruleset restricting pushes to `refs/heads/adlc/autopilot/**` to the operator identity (branch-level write isolation; §6.8 detects intrusion without it but cannot prevent it) | operator | recommended |
+
+## 16. Acceptance criteria
+
+1. **Offline unit tests green**: `node --test packages/autopilot/test/` exits 0
+   with injected `gh`, `claude`, fleet and quota fakes; no network, no
+   subprocess outside the fakes (verify: the test harness asserts the spawn
+   recorder saw only whitelisted argv).
+2. **Quota gate matrix** (`packages/autopilot/test/quota.test.mjs`): 5h 49 /
+   7d 49 → ok; 5h 50 → refused; 7d 50 → refused; scoped worker-model window
+   50 → refused; endpoint 401 + `/usage` fallback parse → ok/refused per
+   text; both sources failing → refused with `reason:"quota-unknown"`.
+   Assert the endpoint fake is called with exactly the two headers and that
+   the token value never appears in any log line.
+3. **Selection** (`select.test.mjs`): every §4.2 exclusion rule has a fixture
+   that is excluded with that rule name in `--json`; the scoring table
+   produces the documented order on a 12-issue fixture; `adlc:autopilot`
+   outranks `P0-critical`; the denylist cannot be shrunk by config (assert a
+   config that omits `.adlc/**` still excludes it).
+4. **Triage** (`triage.test.mjs`): schema fail, wildcard scope, protected
+   path, spec-lint WISH, coldstart gap → CLARIFY with findings verbatim and
+   the fix template; all-pass → PROCEED with a ticket whose body's first line
+   is `GitHub issue: <url>`; second unchanged run → zero mutating `gh` calls
+   (recording fake asserts); a `gh` fake that fails AFTER the comment and
+   BEFORE the label → the record shows `commentPosted:true,
+   labelApplied:false`, and the next iteration adds only the label (one
+   `--add-label` call, zero comment calls); a label already present on
+   GitHub but absent from the record → zero `--add-label` calls.
+5. **Dispatch** (`run.test.mjs`): captured argv asserts exactly one ticket id,
+   `--no-pr`, `--max-strikes 15`, `--wall-clock-minutes 90`, `--model opus`,
+   and cwd = the issue worktree; fleet exit 2 → label + comment, no `pr
+   create`; exit 1 → no `gh` write; exit 0 → ff, preflight, attest, push,
+   PR upsert in that order (spawn recorder asserts ordering).
+6. **PR upsert** (`pr.test.mjs`): a second successful run for the same issue
+   performs `gh pr edit`, never a second `gh pr create`; body contains
+   `Closes #<n>`, the ticket id, and the evidence block.
+7. **Rebase** (`maintain.test.mjs`): BEHIND + clean → `--carry-forward` argv
+   + `--force-with-lease` push, zero worker dispatches; DIRTY → exactly one
+   conflict-fix dispatch, then fresh `record-cross-model` (no
+   `--carry-forward`); failure → `adlc:autopilot-stale`; stale PRs are not
+   counted toward the cap (assert cap 5 with 5 stale + 0 active → dispatch
+   proceeds).
+8. **CI follow-up** (`ci.test.mjs`): one fixture per row of the §6.9 table
+   asserts pass/red/wait/ignored; `rails-guard` = `FAILURE` → fix round;
+   `test (20)` = `SKIPPED` → red; `pre-ga-gate` = `FAILURE` → ignored; a
+   red with other jobs pending → fix round without waiting; third red →
+   `adlc:autopilot-ci-red` + comment naming the job; assert `ciRoundsUsed`
+   and the watch clock are independent of `roundsUsed` and the 90-minute
+   build clock (a run with `roundsUsed == 15` still gets 2 CI rounds).
+9. **Wall clock**: a fleet fake that never returns is killed at 90 minutes
+   (fake timers), outcome `wall-clock`, label applied (`run.test.mjs`).
+10. **Dry-run honesty**: `adlc-autopilot once --dry-run --issue N` exits 0,
+    prints the full plan, and the spawn recorder shows zero mutating calls.
+11. **Preflight**: each §9 item has a red fixture that makes `once` exit 1
+    with the item named; plugin-parity mismatch (1.7.0 vs 1.11.0 fixture) is
+    one of them (`preflight.test.mjs`).
+12. **Key hygiene** (`keys.test.mjs`): the spawn recorder asserts
+    `ADLC_MANIFEST_KEY` is present in the env of exactly the six
+    key-bearing commands of §9.3 (`ticket create --write`, `ticket complete
+    --write`, `ticket update --write`, `coldstart --record-verdict`,
+    `spec-lint --record`, `record-cross-model`) and absent from every other
+    spawn in a full
+    `once` sequence (fleet, shaping, coldstart answer, both
+    `adversarial-review` calls, `gh`, `git`, `npm`, `preflight.mjs`); the
+    assertion is table-driven over the complete recorded spawn list so a
+    new spawn added later fails the test until classified.
+13. **systemd unit**: `init --service` output parses as a unit file, contains
+    `EnvironmentFile=`, `Restart=on-failure`, and no inline key; test asserts
+    with a line-anchored regex.
+14. **Registry guards**: root `npm test` green including
+    `apps/docs/test/toolkit-packages.test.mjs` (bijective) and
+    `toolkit-usage-dispatcher.test.mjs` for the new `autopilot` slug.
+15. **Dependency discipline** (`packages/autopilot/test/deps.test.mjs`):
+    asserts every key of `packages/autopilot/package.json` `dependencies`
+    starts with `@adlc/` and `devDependencies` is absent or empty; verify:
+    `node --test packages/autopilot/test/deps.test.mjs` exit code 0.
+16. **Spec gate**: this file passes `adlc spec-lint` (exit code 0) and an
+    `adversarial-review --input docs/specs/issue-autopilot-local.md --provider
+    codex` loop ends at `verdict:"approve"` (exit code 0), recorded via
+    `record-cross-model --ticket <ULID>` before any package code is committed.
+17. **Live canary** (manual, recorded in the PR body): `adlc-autopilot once
+    --issue <docs issue>` produces one PR whose CI is green and whose
+    manifest carries coldstart, spec-lint, cross-model-review entries bound
+    to the ULID; verify: `adlc run p5 --ticket <ULID>` exits 0 in that
+    worktree.
+18. **Quota re-check points** (`quota.test.mjs`): a quota fake that flips to
+    refused after the shaping call asserts zero fleet dispatches and a run
+    record in state `shaped`; a fake that flips during a maintenance round
+    asserts that PR is skipped without a label; the fleet argv assertion in
+    AC 5 also asserts `--pre-strike-argv`; a 61-second-old quota result is
+    never reused (fake timers).
+19. **Pinned issue honors exclusions** (`select.test.mjs`): for EVERY §4.2
+    rule, `once --issue N` on an excluded fixture exits 2 naming the rule;
+    `--force` lifts only the five autopilot-owned labels (table-driven
+    assert over the full label list), and never the protected-path,
+    `trust-root-change`, milestone, or open-PR rules.
+20. **Pinned baseline** (`run.test.mjs`): fetch-fake failure → exit 1 and
+    zero worktree/dispatch calls; on success the recorded `baseOid` appears
+    verbatim in the `git worktree add`, fleet `--base`, `preflight.mjs
+    --base`, and `record-cross-model --base` argv even when the fake moves
+    `origin/main` between steps.
+21. **Recovery state machine** (`recover.test.mjs`): one fixture per row of
+    the §2.1 table asserts the named action and the resulting state; the
+    "human removed the label" row asserts worktree removal + branch delete +
+    record deletion and that the issue is then selectable; the "open PR has
+    that head" guard asserts the branch is NOT deleted; `orphan` is excluded
+    from selection until `reset --issue N`.
+22. **Lock** (`lock.test.mjs`): two concurrent starters against the same
+    dir → exactly one acquires (the other exits 1 `lock-held`); a lock with
+    a dead pid and a 11-minute-old heartbeat is reclaimed; a lock with a
+    live pid and stale heartbeat is NOT reclaimed; a lock with a reused pid
+    but different start time is reclaimed; release with the wrong token is
+    refused.
+23. **Fallback grammar** (`quota.test.mjs`): fixtures for the current
+    `/usage` text, a text with the scoped line absent, a text missing the
+    weekly line, a value of 101, and a text without the word `subscription`
+    map to ok / ok(no scoped) / quota-unknown / quota-unknown /
+    quota-unknown respectively.
+24. **Path resolution** (`paths.test.mjs`): with a fake `REPO_ROOT`, the
+    spawn recorder asserts `git worktree add` runs with cwd = `REPO_ROOT`
+    and an absolute `ISSUE_WT` target; every later spawn has cwd =
+    `ISSUE_WT` and every `--dir` is `<ISSUE_WT>/.adlc`; invoking `once` from
+    inside a linked worktree exits 1 `not-main-worktree`.
+25. **Round budget is global** (`run.test.mjs`): preflight-fail → the next
+    fleet argv carries `--max-strikes 14`; a resumed run after
+    `quota-paused` carries `--max-strikes <15 − roundsUsed>`; `roundsUsed
+    == 15` → no fleet spawn and state `blocked`; a conflict-fix round
+    increments the same counter.
+26. **Shaping trust** (`triage.test.mjs`): an `adlc:begin` block on an issue
+    with `authorAssociation: "NONE"` is ignored and the shaping fake is
+    called; with `"OWNER"` the shaping fake is NOT called but every §5.3
+    gate still runs (a block with a protected-path scope → CLARIFY).
+27. **Quota overshoot bookkeeping** (`quota.test.mjs`): a step whose
+    post-reconciliation reading is ≥ threshold records `overshoot: true`
+    and the next start is refused; the reserve makes a strike refused at
+    46% when the threshold is 50 and the reserve 5.
+28. **Operator-local precedence** (`config.test.mjs`): a repo config with
+    `quotaThreshold: 80` is warned and ignored (gate uses 50); env
+    `ADLC_AUTOPILOT_QUOTA_THRESHOLD=40` + `--quota-threshold 30` → 30;
+    `--quota-reserve 50` with threshold 50 exits 1; `--max-rounds 20`
+    against config 15 exits 1 and `--max-rounds 10` is honored.
+29. **Ownership-checked deletion** (`recover.test.mjs`, against a REAL
+    temporary git repository, not argv fakes): a branch created by the
+    autopilot (marker + record + descends from `baseOid`) is deleted on
+    retire; the same branch with the marker removed, with a mismatched
+    token, with an open-PR fake for its head, or whose history no longer
+    contains `baseOid` is NOT deleted and is reported `orphan`;
+    `reset --issue N` without `--confirm-delete <OID>` or with the wrong
+    OID deletes nothing and exits 2.
+30. **Executable command sequence** (`sequence.test.mjs`, real temporary
+    git repository with a fake `origin`, fake `adlc`/fleet/`gh`/`claude`
+    on PATH that record argv and create the files the real tools would):
+    a full `once --issue N` run produces the worktree at `ISSUE_WT`, the
+    ticket shard under `<ISSUE_WT>/.adlc/tickets/`, the ownership marker in
+    the repo's local config, a branch whose merge-base with `origin/main`
+    is `baseOid`, and a pushed head equal to the OID passed to the
+    `record-cross-model` fake; a preflight-fake failure on the first pass
+    yields a second fleet invocation carrying `--dead-end-file` and
+    `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
+    after the last successful preflight.
+31. **Pinned baseline by OID** (`run.test.mjs`): the fetch fake asserts
+    `git fetch --no-tags origin <40-hex>` (never `main`, never
+    `FETCH_HEAD`); an `ls-remote` fake returning a different OID on a second
+    call does not change the run's recorded `baseOid`.
+32. **Trusted block assembly** (`triage.test.mjs`): an OWNER issue whose
+    body has a block and an `## Acceptance criteria` list → ticket fields as
+    §5.1 with zero shaping calls; the same issue without the criteria
+    section → one shaping call whose recorded output leaves the block
+    fields byte-identical.
+33. **Trust predicate** (`select.test.mjs`): an issue with
+    `authorAssociation: "NONE"` and no label is `not-trusted`; the same
+    issue labeled `adlc:autopilot` by a `write`-permission actor stays
+    `not-trusted`; labeled by an `admin` actor → eligible; `COLLABORATOR`
+    author → eligible; assert the shaping fake and fleet fake are never
+    invoked for a `not-trusted` issue.
+34. **Actual-diff check** (`diffcheck.test.mjs`, real temporary git
+    repository): a worker fake that edits `scripts/rails-guard-ci.mjs`
+    despite a `packages/foo/**` scope → round failure naming that path, no
+    attestation, no push; a diff that removes a line from a
+    `.adlc/manifest.d/*.jsonl` segment → failure; a diff limited to scope +
+    exactly one new ticket shard + appended manifest lines → pass; a
+    symlink inside scope pointing outside it → failure.
+35. **Shaping bounds** (`triage.test.mjs`): a shaping fake that never
+    exits is killed at 5 minutes (fake timers) with the whole process
+    group signalled, no run record and no GitHub write; a 65 KiB response
+    is rejected as malformed; the fourth failed shaping attempt within
+    24 h excludes the issue with rule `shaping-failed`; the quota HTTP
+    fake that stalls is abandoned at 10 s and the `/usage` fallback is
+    consulted.
+36. **Verify-then-push** (`run.test.mjs` + `sequence.test.mjs`): the
+    `git push` argv carries `--force-with-lease=refs/heads/…:<OID>` with
+    the previously recorded remote OID; a HEAD ≠ `attestedHead` before
+    push → no push, state `oid-mismatch`; a lease failure → no PR upsert,
+    state `oid-mismatch`; a post-push `ls-remote` mismatch → no PR upsert;
+    recovery never auto-resumes an `oid-mismatch` run.
+37. **Threshold ceiling** (`config.test.mjs`): `--quota-threshold 51`
+    exits 1; `ADLC_AUTOPILOT_QUOTA_THRESHOLD=60` exits 1; `50` and `20`
+    are accepted.
+38. **Reviewed = attested = pushed** (`run.test.mjs` +
+    `sequence.test.mjs`): the final `adversarial-review` fake is invoked
+    with `--base <baseOid>` in `ISSUE_WT` AFTER the completion commit; the
+    `record-cross-model` fake runs while `git rev-parse HEAD ==
+    reviewedHead` and the tree is clean; the manifest commit's diff names
+    only `.adlc/manifest.d/*.jsonl`; a fake that writes a source file
+    between 7a and 7b → state `oid-mismatch`, no push; the pushed OID
+    equals `attestedHead`. A `needs-attention` from the final review →
+    retry round with the findings as `--dead-end-file` content.
+39. **Coldstart is gated** (`quota.test.mjs`): a quota fake that refuses
+    between shaping and coldstart → zero coldstart `claude` calls, ticket
+    cached (`state: shaped`); the coldstart fake that stalls is killed at
+    5 minutes with no run record change.
+40. **CI budget is independent of build budget** (`ci.test.mjs`): with
+    `roundsUsed == 15` and `wallClockUsedMs == 90 min`, a CI red still
+    produces a fleet argv with `--max-strikes 2 --wall-clock-minutes 15`;
+    the third CI red produces no fleet call and the `adlc:autopilot-ci-red`
+    label.
+41. **Fleet outcome mapping** (`run.test.mjs`): one fixture per row of the
+    §6.10 table; in particular exit 2 + `reason:"quota-paused"` → state
+    `quota-paused`, zero label calls, and a later iteration with quota ok
+    issues `fleet run --resume <fleetRunId>`; exit 2 + `reason:"lock-held"`
+    → no state change; unparseable JSON → treated as exit 1.
+42. **Re-arm vs retire** (`recover.test.mjs`): removing
+    `adlc:autopilot-stale` from a run with an open PR → counters reset,
+    state `pr-open`, branch and PR untouched, issue NOT selectable, and
+    the next maintenance pass performs a retry round; removing
+    `adlc:autopilot-blocked` from a run with no PR → retire per §2.1a and
+    the issue becomes selectable; an `oid-mismatch` run is skipped by
+    maintenance until its label is removed.
+43. **Diff size gate** (`run.test.mjs`): a branch whose diff is
+    `reviewMaxBytes + 1` bytes → round failure `diff-too-large`, zero
+    `adversarial-review` calls; two consecutive → `blocked`; both
+    reviewer argvs carry `--max-bytes 262144` and never
+    `--allow-summary-review`.
+44. **Orphan reset authorization** (`recover.test.mjs`, real temporary
+    git repository): `reset --issue N --confirm-delete <tip>` deletes a
+    marker-bearing recordless branch; the same command refuses (exit 2,
+    nothing deleted) when the marker is absent, when the OID is not the
+    tip, or when an open-PR fake has that head.
+45. **Reopen for retry** (`sequence.test.mjs`): a final-review-fake
+    `needs-attention` after the completion commit → one `adlc ticket
+    update … --expect <hash> --write` call with `{"completed": false}` and a
+    commit `chore(ticket): reopen …` BEFORE the second fleet invocation;
+    the PR's final shard is `completed:true`; a CI-red retry and a
+    rebase-conflict retry exercise the same path; the reopen call is in
+    the key-bearing set of AC 12.
+46. **Effective model binding + strict schema** (`quota.test.mjs`):
+    `--model sonnet` makes the gate read the `Sonnet` scoped entry and
+    passes `--model sonnet` to fleet; `--model gpt-5` → preflight
+    `model-unknown`; `--adapter codex` → `adapter-unsupported`; endpoint
+    fixtures with HTTP 500, a non-object body, `five_hour: null`,
+    `utilization: "70"`, `utilization: 101`, `limits: {}`, and a matching
+    scoped entry lacking `percent` all yield `quota-unknown`; a body with
+    `seven_day_opus: null` and no matching entry yields "no scoped limit".
+47. **Carry-forward equivalence** (`maintain.test.mjs`, real temporary git
+    repository): a clean rebase whose patch-id is unchanged → one
+    `--carry-forward` call and re-entry to `ci-watch`; a clean rebase
+    whose patch-id changed (fixture: context drift in the same hunk) →
+    zero `--carry-forward` calls and a full retry round.
+48. **Deadlines** (`deadline.test.mjs`, fake timers + a child fake that
+    ignores SIGTERM): every row of §12.1 has a fixture; expiry sends
+    SIGTERM to the process group, SIGKILL after 15 s, and the step fails
+    with `timeout:<command>`; SIGTERM to the orchestrator during a stalled
+    `npm ci` releases the lock and exits within 120 s; `.gitignore` in the
+    primary checkout is byte-identical before and after a full `once`
+    sequence, while `.git/info/exclude` carries the four entries after
+    `init`.
+49. **Effective model propagates** (`quota.test.mjs` + `run.test.mjs`):
+    with `--model sonnet`, the shaping `claude` argv, the coldstart-answer
+    `claude` argv and the fleet argv all carry `--model sonnet`, and the
+    gate reads the `Sonnet` scoped window; with no override all three
+    carry `--model opus`.
+50. **Head binding during CI** (`ci.test.mjs`): a `headRefOid` that differs
+    from `attestedHead` on any poll → `oid-mismatch`, zero fix rounds, and
+    `done` is never reached even with all jobs green; equal head + all
+    green → `done`.
+51. **Outer-gate integrity** (`sequence.test.mjs`, real temporary git
+    repository): a worker fake that adds `"left-pad"` to a
+    `packages/foo/package.json` → `third-party-dep` round failure before
+    preflight; one that adds `"@adlc/core"` → passes the check; one that
+    changes `scripts.test` → failure; an unexpected ignored file planted in
+    `ISSUE_WT` → `ignored-file-drift`; `npm ci --ignore-scripts` is
+    observed in `ISSUE_WT` after every ff.
+52. **Repo/principal binding** (`preflight.test.mjs`): an `origin` URL for
+    a different repo (each of the three URL forms) → `repo-mismatch`; a
+    push URL differing from the fetch URL → `repo-mismatch`; a principal
+    with `read` permission → `principal-unauthorized`; every recorded `gh`
+    argv in a full `once` sequence carries `--repo voodootikigod/adlc`.
+53. **Paginated enumeration** (`select.test.mjs`): a `gh api` fake serving
+    1,250 issues across 13 pages yields 1,250 candidates with PR entries
+    dropped; a fake whose third page fails → `candidate-set-truncated`,
+    zero selections, status `pagesReached: 2`.
+54. **Ticket snapshot** (`diffcheck.test.mjs`): a worker fake that adds a
+    glob to the shard's `scope`, removes a rail, or edits the body → round
+    failure naming the shard; a shard differing only by
+    `completed: true|false` → pass; the recorded `ticketSnapshotSha256`
+    equals sha256 of the canonicalized shard written at §6.2.
+55. **Lockfile canonical comparison** (`sequence.test.mjs`): a
+    `package-lock.json` change that adds `node_modules/left-pad`, changes
+    an existing entry's `resolved` or `integrity`, or removes an entry →
+    `lockfile-drift`; one that adds a `packages/autopilot` workspace link
+    and `node_modules/@adlc/autopilot` with `link: true` → pass; `npm ci`
+    argv carries `--ignore-scripts --no-audit --no-fund`.
+56. **Upsert head binding** (`pr.test.mjs`): an `ls-remote` fake that
+    changes between the post-push check and the upsert → zero `gh pr`
+    mutating calls and `oid-mismatch`; a `gh pr view` fake returning a
+    different `headRefOid` right after `gh pr create` → `oid-mismatch`
+    with the PR number named in the comment.
+57. **`oid-mismatch` without a PR** (`recover.test.mjs`): a pre-push
+    mismatch → comment on the ISSUE + `adlc:autopilot-blocked`, branch
+    kept; label removed → retire, including `git push --delete` only when
+    the record says pushed; a pushed-but-no-PR mismatch → same path; a
+    mismatch with an open PR → label removed → re-arm (branch and PR
+    untouched, full retry round).
+58. **Durable attempt ledger** (`triage.test.mjs`): the ledger file is
+    written with `outcome:"started"` before the shaping fake is spawned; a
+    simulated crash (process exit) between write and spawn leaves an entry
+    that a fresh process counts; the third such entry within 24 h yields
+    `shaping-failed`; 8-day-old entries are ignored.
+59. **Pre-strike helper receives resolved values** (`run.test.mjs`): the
+    fleet argv's `--pre-strike-argv` JSON array contains the elements `--model
+    <effectiveModel> --quota-threshold <T> --quota-reserve <R>` for a
+    non-default `--model sonnet --quota-threshold 40 --quota-reserve 10`.
+60. **Maintenance ownership + selector** (`maintain.test.mjs`): records
+    in every non-candidate state (table-driven over the full enum,
+    including `oid-mismatch` with an OPEN PR and `blocked`) produce zero
+    git/gh mutating calls; a `pr-open` record whose token mismatches the
+    marker, whose PR head name differs, whose PR base is not `main`, or
+    whose `ls-remote` differs from the last pushed OID → `orphan`, zero
+    mutations; `headRefOid != attestedHead` → `oid-mismatch`; all
+    preconditions met → the rebase path runs.
+61. **PR lifecycle** (`maintain.test.mjs`): `MERGED` → `done`, local
+    worktree/branch/marker/record removed, zero remote deletes; `CLOSED`
+    → local retire, remote delete only via the lease form and only when
+    `ls-remote` equals the recorded OID, `adlc:autopilot-skip` + comment
+    on the issue; PR not found → `orphan`.
+62. **Lease-guarded remote delete** (`recover.test.mjs`, real temporary
+    git repository with a bare `origin`): retire of a pushed run whose
+    remote tip equals the recorded OID deletes the remote ref using
+    `--force-with-lease=<ref>:<oid>`; when the remote tip was advanced by
+    another push, the delete fails the lease, the remote ref survives,
+    and the run is `orphan`.
+63. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
+    'opus;touch /tmp/x'` preflight exits 1 `model-unknown` (grammar
+    `^[a-z0-9][a-z0-9.-]{0,63}$`); the `--pre-strike-argv` value parses
+    as a JSON array whose elements equal the resolved values verbatim; the
+    spawn recorder shows every child (including the pre-strike helper as
+    executed by the fleet fake) spawned with an argv array and
+    `shell:false`.
+64. **Fallback family normalization** (`quota.test.mjs`): `familyOf` maps
+    `"Fable"`, `"claude-opus-5"`, `"Claude Sonnet 5"` and `"opus"` to
+    their families and `"gpt-5"` to `unknown`; a fallback text with a
+    `Current week (Opus): 70% used` line and `--model claude-opus-5` →
+    refused; two `(Opus)` lines with different values → `quota-unknown`.
+65. **CI normalization contract** (`ci.test.mjs`): fixtures captured
+    verbatim from `gh pr checks --json name,state,bucket,workflow` for
+    pass, fail, pending, skipping and cancel rows normalize as §6.9; a row
+    with no `bucket` → red; `ticket-store-platform (windows-latest, 18)`
+    matches the blocking prefix; a non-blocking `pre-ga-gate` fail is
+    ignored.
+66. **Authorized unlabel** (`recover.test.mjs`): an `unlabeled` timeline
+    event by a `write`-permission actor → no transition, label re-applied,
+    status `unauthorized-unlabel`; by an `admin` actor → transition, and
+    the same event id is not acted on again on the next iteration.
+67. **Pinned tools** (`preflight.test.mjs`): a PATH whose first entry is
+    `<REPO_ROOT>/node_modules/.bin` containing a fake `adversarial-review`
+    → that entry is skipped and the system binary is pinned; a tool that
+    resolves only under `REPO_ROOT` → `untrusted-tool`; every recorded
+    child env has the sanitized PATH.
+68. **Digest protocol** (`digest.test.mjs`): a `gh` fake that fails after
+    the comment is posted leaves `digestPosted:false`, and the next
+    iteration finds the sentinel and posts nothing; a closed log issue →
+    a new issue is created and cached; two open log issues → the lowest
+    is used and `digest-issue-ambiguous` is reported.
+69. **Local deletion revalidation** (`recover.test.mjs`, real temporary
+    git repository): a retire whose branch tip moved after the record's
+    `localHead`, or whose worktree has an uncommitted file, performs no
+    deletion and marks `orphan`; the worktree removal is never forced.
+70. **Unit file paths** (`service.test.mjs`): generated unit contains
+    line-anchored `WorkingDirectory=/<abs>`, `ExecStart=/<abs node>
+    /<abs>/packages/autopilot/bin/adlc-autopilot.mjs loop --rest 10m`,
+    `EnvironmentFile=/<abs>/.env.local`, `Restart=on-failure`,
+    `KillMode=control-group`; no `%h`; a working directory lacking
+    `.adlc/config.json` makes generation exit 1 `bad-working-directory`.
