@@ -1,7 +1,9 @@
 # Issue Autopilot (local substrate) — `@adlc/autopilot`
 
-Status: APPROVED (P1 G1 — implementation may begin once the §15 blockers R1–R4
-are green; the build ticket carries the review residuals as acceptance criteria)
+Status: gated — the P1 verdict for this document is the signed `spec-approval`
+entry in the gate manifest (segment `spec-autopilot-local-01M0Z3K7…`, bound
+to the build ticket); implementation may begin once the §15 blockers R1–R4
+are green. This document makes no approval or review claim of its own.
 Ticket: T-01M0Z3FN7SAS4HAH7CS63YQ0DH (build; carries the five review residuals as
 AC2–AC6), prerequisite fleet-extensions ticket minted alongside it with a DAG
 edge — see §14/§15 R3. (The original T55 id was reclaimed by another ticket and
@@ -10,10 +12,9 @@ Supersedes: the GitHub-Actions substrate half of issue #237 / ADR "0011
 issue-autopilot-substrate" (never landed). The gate composition, triage
 contract, protected-path denylist and PR-upsert rule from #237 are kept
 verbatim; only the substrate (where the loop runs, what pays for it) changes.
-Approval: APPROVED by chris@voodootikigod.com 2026-08-26 (P1 G1). The gate
-record (spec-lint, coldstart, ticket-update audits) is the manifest segment
-`spec-autopilot-local-01M0Z3K7…` bound to ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH;
-this document carries no review standing of its own.
+Approval: not asserted here — see the `spec-approval` manifest record
+(`adlc gate-manifest show --ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH`), which
+carries the approver, date, phase and the hash of the approved file.
 Inputs: issue #237 (design + grooming), `docs/specs/fleet-orchestration.md`
 (§4 adapters, §7 permissions/sandbox, §8 gates, §9 merge policy),
 `packages/fleet/lib/{review-runner,scheduler,charters,config}.mjs`,
