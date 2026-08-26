@@ -191,7 +191,7 @@ disambiguate by inspecting git/`gh`.
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
 | branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
-| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
+| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
 
 ### 2.1a Retiring a run — ownership-checked deletion
 
@@ -233,12 +233,12 @@ deleted, so the deletion command stays available): (c)
 is re-evaluated IMMEDIATELY before the push (`gh pr list --repo <repo>
 --head adlc/autopilot/issue-<n> --state open --json number` must be
 empty — a PR that appeared since the earlier check aborts with `orphan`)
-AND `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` must
+AND `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` must
 equal the record's last pushed OID; then the remote ref is deleted
 with a lease so a tip that moves between the check and the delete is
 protected: `git push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
-origin :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
+<remotePushUrl> :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
 remote AND local untouched, stop. After a successful delete, `gh pr list
 --head` is queried once more; a PR that was created against the ref in
 the window is reported (`pr-after-delete: <number>`) so the operator can
@@ -642,9 +642,9 @@ fleet at run end. The primary checkout's working tree is never written
 (AGENTS.md); the only writes under `REPO_ROOT` outside `ISSUE_WT` are the
 gitignored `.adlc/autopilot-*` files.
 
-0. **Pinned baseline.** `BASE_OID = git ls-remote --exit-code origin
+0. **Pinned baseline.** `BASE_OID = git ls-remote --exit-code <remoteFetchUrl>
    refs/heads/main` (first column; exit ≠ 0 → exit 1 / sleep, no dispatch),
-   then `git fetch --no-tags origin <BASE_OID>` (fetch BY OID — GitHub
+   then `git fetch --no-tags <remoteFetchUrl> <BASE_OID>` (fetch BY OID — GitHub
    serves reachable commits by SHA — so a concurrent `git fetch` in another
    session cannot move what this run resolved; `FETCH_HEAD` is never read),
    then `git cat-file -e <BASE_OID>^{commit}` must succeed. The OID is
@@ -791,7 +791,16 @@ gitignored `.adlc/autopilot-*` files.
      holds the harness's own credentials).
    - INVARIANT (checked by the orchestrator before dispatch and asserted
      by fleet's `--json` echo): no `READ_SET` entry is an ancestor of, or
-     equal to, a writable root or a pinned executable's parent; and none of
+     equal to, a writable root; every entry is either one of the FIXED
+     SYSTEM ROOTS (`/usr`, `/lib`, `/lib64`, `/etc/ssl`,
+     `/etc/resolv.conf`, `/etc/hosts` — bound whole, and a pinned
+     executable that lives under one of them, e.g. `/usr/bin/git` or
+     `/usr/bin/bwrap`, needs no separate bind) or a single FILE bind of a
+     pinned executable outside those roots (user-installed tools such as
+     `~/.local/bin/claude`, the fnm `node`, the npm-global `adlc`,
+     `adversarial-review`, `codex`) plus the two npm/corepack trees; no
+     other directory bind is permitted, so a user-installed tool's parent
+     directory is never exposed; and none of
      `<REPO_ROOT>`, `<REPO_ROOT>/.git`, `<ISSUE_WT>`, `$HOME`, host `/tmp`
      appears in either set — so `.env.local`, the operator's other
      checkouts, the orchestrator's state, the shared git database and the
@@ -1007,11 +1016,11 @@ gitignored `.adlc/autopilot-*` files.
    step-7 attestation in the run record), the actual-diff check (§6.5a)
    must pass again, and the working tree must be clean. Push with `git push
    --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<expectedRemoteOid>
-   origin adlc/autopilot/issue-<n>` where `expectedRemoteOid` is the OID
+   <remotePushUrl> adlc/autopilot/issue-<n>` where `expectedRemoteOid` is the OID
    recorded at the previous push (or the empty-ref form for a first push);
    a lease failure means someone else pushed to the autopilot's branch →
    state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
-   After pushing: `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>`
+   After pushing: `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>`
    must equal `attestedHead`; otherwise state `oid-mismatch`. Only after
    the post-push verification does the autopilot **upsert** the PR keyed by
    head branch (never a body sentinel), and the upsert is itself bound:
@@ -1156,7 +1165,7 @@ and is reported in status:
 - `headRefOid` equals the record's `attestedHead` (the PR head is the tree
   the autopilot last attested and pushed) — a mismatch is `oid-mismatch`
   (§6.8), not `orphan`;
-- `git ls-remote origin refs/heads/adlc/autopilot/issue-<n>` equals the
+- `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` equals the
   record's last pushed OID.
 
 Then:
@@ -1231,7 +1240,12 @@ before any issue, PR or git write. Every `gh` invocation thereafter passes
 `--repo <repo>` explicitly (never relies on cwd inference). The verified
 fetch and push URLs are PINNED for the iteration (stored in the status
 file and copied into each run record as `remoteFetchUrl` /
-`remotePushUrl`), and every network git operation — `ls-remote`, `fetch`,
+`remotePushUrl`) in CANONICAL, credential-free form: a URL containing
+userinfo (`scheme://user:token@host/…` or any `@` before the host in an
+`https` URL) is rejected at preflight (`remote-url-credentials`, exit 1)
+rather than canonicalized, so no token can reach argv, the status file,
+a run record, a comment or the journal; authentication is git's own
+(SSH agent / credential helper / `GIT_ASKPASS`), never the URL, and every network git operation — `ls-remote`, `fetch`,
 `push`, including the lease-guarded deletes — is invoked with that URL
 literal as the remote argument, never with the mutable name `origin`;
 immediately before each such operation `git remote get-url [--push]
@@ -1474,6 +1488,28 @@ SIGTERM handler forwards to the current child's group and exits within
 
 ## 13. Configuration
 
+### 13.0 Normative CLI grammar (`adlc-autopilot`, also reachable as `adlc autopilot`)
+
+```
+loop    [--rest <duration>] [--dry-run]
+once    [--issue <n>] [--force] [--dry-run] [--dry-run-shape]
+status  [--json]
+select  [--top <n>] [--json]
+quota   [--json] [--model <m>] [--quota-threshold <T>] [--quota-reserve <R>]
+        [--iteration <id>] [--start-ordinal auto]        # pre-strike helper form
+triage  --issue <n> [--json]
+reset   --issue <n> ( --confirm-delete <OID> [--delete-remote] | --attempts )
+init    [--labels] [--service] [--write]
+```
+Global operator-local flags: `--model`, `--adapter`, `--quota-threshold`,
+`--quota-reserve`, `--trusted-bin-dirs`. Every subcommand exits 0/1/2 and
+supports `--json`. `reset --attempts` clears the issue's shaping-attempt
+ledger into `.adlc/autopilot-runs/<issue>.attempts.archive.json`
+(append-only, never pruned), requires the autopilot lock, needs no OID,
+touches nothing else, is idempotent (a second call archives nothing and
+exits 0), and is the only exit from `shaping-failed`; `reset
+--confirm-delete` is §2.1a; `--delete-remote` is §2.1a Step R.
+
 Repo-committed (`.adlc/config.json`, trust root):
 
 ```json
@@ -1621,10 +1657,19 @@ None is trust-root tier; each is a small, separately testable diff.
    every criterion number in this section to one or more exported test
    functions; `spec-coverage.test.mjs` parses this section at the pinned
    blob, fails on any number missing from the registry or any registered
-   function that is not defined, and statically checks that each
-   registered test imports at least one module from `packages/autopilot/lib/`
-   and contains at least one `assert` call whose argument references
-   that import (a test with no production seam is rejected); in addition
+   function that is not defined, EXECUTES every registered function at
+   runtime (a registered test that does not run is a failure), requires
+   each registered test's title to begin with `AC<n>:` for the number it
+   is registered under, and statically checks that each registered test
+   imports at least one module from `packages/autopilot/lib/` and
+   contains at least one `assert` call whose argument references that
+   import (a test with no production seam is rejected); for the
+   security- and lifecycle-critical criteria (quota, authorization,
+   redaction, retirement, attestation, sandbox contract) the registry
+   additionally names a **mutation fixture** — a deterministic defect
+   injected through a documented seam in `lib/` (e.g. `redactor.disable`,
+   `quota.forceOk`) — and the gate asserts the registered test FAILS with
+   that fixture applied and passes without it; in addition
    `node scripts/mutation-gate.mjs origin/<base> --max 12` must pass on
    the package (CI already runs it) and, for the security- and
    lifecycle-critical criteria (quota, authorization, redaction,
@@ -1813,8 +1858,7 @@ None is trust-root tier; each is a small, separately testable diff.
     `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
     after the last successful preflight.
 31. **Pinned baseline by OID** (`run.test.mjs`): the fetch fake asserts
-    `git fetch --no-tags origin <40-hex>` (never `main`, never
-    `FETCH_HEAD`); an `ls-remote` fake returning a different OID on a second
+    `git fetch --no-tags <remoteFetchUrl> <40-hex>` (never `main`, never `FETCH_HEAD`, never the remote NAME `origin`); an `ls-remote` fake returning a different OID on a second
     call does not change the run's recorded `baseOid`.
 32. **Trusted block assembly** (`triage.test.mjs`): an OWNER issue whose
     body has a block and an `## Acceptance criteria` list → ticket fields as
@@ -2338,3 +2382,23 @@ None is trust-root tier; each is a small, separately testable diff.
     `assert` call fails the gate; a criterion number absent from the
     registry fails it; renumbering the spec without updating the registry
     fails it.
+112. **Credential-free remote URLs** (`preflight.test.mjs`): an `origin`
+    URL with userinfo (`https://x:ghp_abc@github.com/o/r.git`) →
+    `remote-url-credentials`, exit 1, and the token string appears in no
+    recorded argv, status file or record; SSH and plain HTTPS forms are
+    accepted and pinned.
+113. **System-root exception** (`run.test.mjs`): a pinned `git` at
+    `/usr/bin/git` yields no extra file bind (covered by `/usr`); a pinned
+    `claude` at `~/.local/bin/claude` yields exactly one file bind and no
+    bind of `~/.local/bin`; `/usr` being an ancestor of `/usr/bin/git`
+    does not trip the invariant, while `~/.local/bin` in the list does.
+114. **Registry executes and mutation fixtures bite**
+    (`spec-coverage.test.mjs`): every registered function is invoked
+    (spy count equals registry size); a registered test titled without
+    its `AC<n>:` prefix fails the gate; for each critical criterion the
+    named mutation fixture makes its test fail and its removal makes it
+    pass (table-driven over the critical set).
+115. **`reset --attempts` grammar** (`triage.test.mjs`): the command
+    archives the attempt ledger, is refused without the lock, is
+    idempotent on a second call, and touches no other file (fixture
+    directory byte-identical apart from the ledger and archive).
