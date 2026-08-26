@@ -759,10 +759,21 @@ gitignored `.adlc/autopilot-*` files.
    final-review failure in §6.7a, a CI red in §6.9, and a rebase conflict
    in §8). Step 0 — **reopen if completed**: if the run has passed §6.6a
    in a previous round, the shard is `completed:true` and fleet would not
-   plan it; the orchestrator first runs `adlc ticket update <ULID> --input
-   - --expect <ticketHash> --write --dir <ISSUE_WT>/.adlc` with
-   `{"completed": false}` (a signed `ticket-mutation`, key-bearing, §9.3)
-   and commits `chore(ticket): reopen <ULID> for retry round <k>`. This
+   plan it. `adlc ticket update` REPLACES the whole document (a document
+   that omits `completed` removes the key, which the service also treats
+   as a lifecycle change), so the orchestrator: (i) reads the current
+   document and hash with `adlc ticket show <ULID> --json --dir
+   <ISSUE_WT>/.adlc`; (ii) sets `completed` to `false` on that full
+   document and changes nothing else; (iii) runs `adlc ticket update
+   <ULID> --input - --expect <ticketHash> --authorize --write --dir
+   <ISSUE_WT>/.adlc` with the document on stdin — `--authorize` is
+   REQUIRED because the service classifies a completion toggle as
+   `lifecycle-change` (verified against the real CLI: without it the call
+   exits 2 `AUTHORIZATION_REQUIRED`); the authorized write appends a
+   signed `ticket-update` audit entry (key-bearing, §9.3); (iv) re-reads
+   the hash (it changes on every write) for the coldstart re-record of
+   §6.3; and commits `chore(ticket): reopen <ULID> for retry round <k>`.
+   This
    is legal under rails-guard-ci because the shard does not exist on the
    base ref — only tickets present on base are contract-frozen — and the
    PR's final state is always `completed:true` after the last successful
@@ -1570,13 +1581,19 @@ None is trust-root tier; each is a small, separately testable diff.
     marker-bearing recordless branch; the same command refuses (exit 2,
     nothing deleted) when the marker is absent, when the OID is not the
     tip, or when an open-PR fake has that head.
-45. **Reopen for retry** (`sequence.test.mjs`): a final-review-fake
-    `needs-attention` after the completion commit → one `adlc ticket
-    update … --expect <hash> --write` call with `{"completed": false}` and a
-    commit `chore(ticket): reopen …` BEFORE the second fleet invocation;
-    the PR's final shard is `completed:true`; a CI-red retry and a
-    rebase-conflict retry exercise the same path; the reopen call is in
-    the key-bearing set of AC 12.
+45. **Reopen for retry** (`sequence.test.mjs` + `reopen-cli.test.mjs`):
+    a final-review-fake `needs-attention` after the completion commit →
+    one `adlc ticket update <ULID> --input - --expect <hash> --authorize
+    --write --dir <ISSUE_WT>/.adlc` call whose stdin is the FULL document
+    from the preceding `show` with only `completed` changed to `false`,
+    then a commit `chore(ticket): reopen …` BEFORE the second fleet
+    invocation; the PR's final shard is `completed:true`; a CI-red retry
+    and a rebase-conflict retry exercise the same path; the reopen call
+    is in the key-bearing set of AC 12. `reopen-cli.test.mjs` runs the
+    REAL `adlc ticket` binary against a temporary sharded store
+    (`.adlc/tickets/.store.json`): create → complete → reopen as above
+    asserts exit 0 and `completed:false`, and the same update without
+    `--authorize` asserts exit 2 with code `AUTHORIZATION_REQUIRED`.
 46. **Effective model binding + strict schema** (`quota.test.mjs`):
     `--model sonnet` makes the gate read the `Sonnet` scoped entry and
     passes `--model sonnet` to fleet; `--model gpt-5` → preflight
