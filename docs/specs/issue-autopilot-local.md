@@ -181,7 +181,7 @@ disambiguate by inspecting git/`gh`.
 | Found | Action |
 |---|---|
 | `shaped` (ticket cached, not dispatched) | reuse the cached ticket if the issue's `updatedAt` is unchanged, else re-shape |
-| `dispatched` with fleet's run lock free | `adlc fleet run --resume <fleetRunId>` (fleet §6.4) when quota is ok; a resume that fails → treat as fleet exit 2 |
+| `dispatched` with fleet's run lock free | re-invoke fleet EXACTLY as in §6.4 (same cwd `ISSUE_WT`, same `--tickets <ULID>`, same flags) when quota is ok: fleet has no `--resume` flag — on startup it reads its persisted `<ISSUE_WT>/.adlc/fleet-status.json` and `reconcileRun` (fleet §6.4) either resumes (`resuming run <fleetRunId> on <integrationBranch>` on stderr, and the same `fleetRunId` in `--json`) or refuses (`cannot resume: <reason>`, exit 1). The orchestrator asserts the reported `fleetRunId` equals the record's; a refusal or a mismatch → the run is `blocked` with reason `resume-refused` (never silently restarted, because a fresh run would re-cut the integration branch) |
 | `quota-paused` | same as `dispatched`, gated on quota |
 | `built` (ff done, not attested) | attest + push + PR (steps §6.7–§6.8) |
 | `attested`/`pushed` (no PR, or `gh` said pushed but no PR) | `gh pr list --head <branch>`; upsert PR; enter `ci-watch` |
@@ -450,6 +450,11 @@ used for enumeration (it truncates silently).
 ### 4.2 Hard exclusions (applied before scoring; each is logged with the
 issue number and the rule name)
 
+- **dispatch approval**: when `autopilot.dispatchApproval` is
+  `"label-only"`, an issue is eligible ONLY if it carries `adlc:autopilot`
+  applied by an `admin`/`maintain` actor (the human approval boundary);
+  the default `"trusted-authors"` applies the next rule instead. Any
+  other value → preflight exit 1 `bad-config`.
 - **not trusted**: the issue is eligible only if its `authorAssociation`
   (`gh issue view --json authorAssociation`) is `OWNER`, `MEMBER` or
   `COLLABORATOR`, OR the most recent `labeled` event for `adlc:autopilot` in
@@ -691,8 +696,17 @@ gitignored `.adlc/autopilot-*` files.
      --pre-strike-argv '["adlc","autopilot","quota","--json","--model","<effectiveModel>","--quota-threshold","<T>","--quota-reserve","<R>"]' \
      --charter-file <autopilot>/lib/charter-adlc.md --json
    ```
-   Fleet: sandboxed worker (`bwrap`, `--permission-mode acceptEdits`,
-   allowlist from `fleet.allowedCommands`), deterministic gates
+   plus `--model-plane-read bounded --model-plane-read-only
+   <READ_SET>` (fleet-extensions ticket, §14), where `READ_SET` is the
+   comma-joined absolute list: `<ISSUE_WT>` (the worker's nested worktree
+   lives under it), `<REPO_ROOT>/.git` (linked worktrees share it), the
+   directories of every pinned tool (§9.1), `/usr`, `/lib`, `/lib64`,
+   `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, and the adapter's
+   synthetic home (fleet §7.3 `homeState`). `<REPO_ROOT>` itself, `$HOME`
+   and `/tmp` are NOT in the set, so `.env.local`, the operator's other
+   checkouts and the orchestrator's state files are unreadable to the
+   worker. Fleet: sandboxed worker (`bwrap`, `--permission-mode
+   acceptEdits`, allowlist from `fleet.allowedCommands`), deterministic gates
    (`fleet.gate.build/test`), blocking `adversarial-review --provider codex
    --json --fail-on medium` (binary resolved off the ORCHESTRATOR's PATH,
    never `npx` from the worktree; `ADLC_MANIFEST_KEY` scrubbed from worker
@@ -940,7 +954,7 @@ gitignored `.adlc/autopilot-*` files.
     | fleet exit | `reason` | run state | GitHub effect |
     |---|---|---|---|
     | 0 | — | `built` (continue at §6.5) | none yet |
-    | 2 | `quota-paused` | `quota-paused` (resumable, §2.1) | none — never a label |
+    | 2 | `quota-paused` | `quota-paused` (resumable by re-invocation, §2.1) | none — never a label |
     | 2 | `lock-held` | unchanged (`skipped`) | none |
     | 2 | `wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`, `review-unavailable`, anything else | `blocked` | findings comment (fenced, capped 12 000 chars) + `adlc:autopilot-blocked`; branch and worktree kept for forensics; no PR |
     | 1 | any | unchanged; `lastError` set | none; the loop sleeps |
@@ -1183,20 +1197,26 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
 - **Hostile issue body** → enters the shaping prompt fenced; scope is
   mechanically checked against the denylist; the worker's charter declares
   constraints authoritative over the spec. A body that tries to widen scope
-  is a CLARIFY, not a build. **Accepted residual (inherited from fleet
-  K2):** the worker runs on the MODEL plane, which by fleet's design has
-  network egress (it must reach the model API) and host-scope reads — the
-  same access any coding assistant on this machine has. A hostile issue
-  that gets shaped and dispatched could therefore make the worker read
-  host files into its own context. The autopilot does not claim to
-  prevent that; it bounds it: only issues authored by `OWNER`/`MEMBER`/
-  `COLLABORATOR` accounts or labeled by an `admin`/`maintain` actor are
-  ever shaped (§4.2), scope/rails are enforced mechanically on the actual
-  diff (§6.5a), nothing the worker produces reaches GitHub without the
-  secret scan of §6.5a(iv), the orchestrator's key never enters the
-  worker's environment, and `.env.local` lives only in `REPO_ROOT`
-  (never copied into `ISSUE_WT`). Tightening the model plane's read scope
-  is fleet's decision (spec §7.3), tracked there, not here.
+  is a CLARIFY, not a build. **Exfiltration through the model plane** —
+  a hostile issue that gets shaped and dispatched drives a worker whose
+  context is sent to the model API. Controls, in order of strength:
+  (1) the worker's READ scope is bounded (§6.4 `READ_SET`): it cannot read
+  `<REPO_ROOT>/.env.local`, `$HOME`, the orchestrator's state, or other
+  checkouts — only its worktree, the shared `.git`, system libraries and
+  its synthetic home (which necessarily holds the harness's own
+  credentials, because the worker IS the harness); (2) only issues
+  authored by `OWNER`/`MEMBER`/`COLLABORATOR` accounts or labeled by an
+  `admin`/`maintain` actor are ever shaped (§4.2), and
+  `autopilot.dispatchApproval: "label-only"` (§13) turns that into an
+  explicit per-issue human approval boundary — the operator's chosen
+  default is `"trusted-authors"`; (3) the orchestrator's manifest key
+  never enters the worker's environment. **Accepted residuals:** network
+  egress from the model plane is not filtered (fleet K2; bwrap cannot
+  filter by destination without a proxy, deferred), so anything within
+  `READ_SET` can in principle leave through model traffic; and the diff
+  secret scan of §6.5a(iv) protects only what reaches GitHub — it is NOT
+  a mitigation for content exposed in model requests and is not claimed
+  as one.
 - **Worker forging its own review/attestation** → the reviewer binary and the
   key live only on the orchestrator; fleet scrubs `ADLC_MANIFEST_KEY` and
   resolves `adversarial-review` off the orchestrator PATH. The attestation is
@@ -1286,6 +1306,7 @@ Repo-committed (`.adlc/config.json`, trust root):
     "ciWatchMinutes": 30,
     "reviewMaxBytes": 262144,
     "repo": "voodootikigod/adlc",
+    "dispatchApproval": "trusted-authors",
     "protectedPathsExtra": []
   },
   "ticketSync": { "provider": "github", "select": { "state": "open", "labels": [] } }
@@ -1310,7 +1331,13 @@ ignored (AC 28). Repo-config keys (`restMinutes`, `maxOpenPrs`,
 
 None is trust-root tier; each is a small, separately testable diff.
 
-- `@adlc/fleet`: CLI flags `--no-pr`, `--no-complete` (skip
+- `@adlc/fleet`: CLI flags `--model-plane-read host|bounded` and
+  `--model-plane-read-only <abs,abs,…>` (operator-local; `bounded`
+  selects the sandbox module's existing `READ_POLICY.BOUNDED` for the
+  MODEL plane — worktree + synthetic home + the allowlist — instead of the
+  current `READ_POLICY.HOST`; the adapter's `homeState` still provides
+  the harness's own config/credentials inside the synthetic home; default
+  unchanged = `host`), `--no-pr`, `--no-complete` (skip
   `completeTicketOnIntegration`; the caller owns completion),
   `--dead-end-file <path>` (initial dead-end material for strike 1, so a
   retry can hand fleet the previous round's failure), `--max-strikes N`,
@@ -1318,8 +1345,11 @@ None is trust-root tier; each is a small, separately testable diff.
   <json-array>` (operator-local; a JSON array of strings executed with
   `execFile`-style argv and NO shell, with the ORCHESTRATOR's env minus
   the key, before every strike; non-zero → stop with
-  `reason:"quota-paused"`, exit 2, run left resumable via the existing
-  `--resume`); `advanceTicket` takes
+  `reason:"quota-paused"`, exit 2, run left resumable through fleet's
+  EXISTING status reconciliation on the next identical invocation — there
+  is no `--resume` flag and none is added; `reconcileRun`'s "resuming run
+  <id>" / "cannot resume" contract is what the orchestrator keys on);
+  `advanceTicket` takes
   `maxStrikes` from config; `run` accepts an external wall-clock deadline;
   charter addendum appended after the Constraints block; config key
   `fleet.reviewMaxBytes` forwarded as `--max-bytes` to the inner reviewer;
@@ -1603,7 +1633,11 @@ None is trust-root tier; each is a small, separately testable diff.
 41. **Fleet outcome mapping** (`run.test.mjs`): one fixture per row of the
     §6.10 table; in particular exit 2 + `reason:"quota-paused"` → state
     `quota-paused`, zero label calls, and a later iteration with quota ok
-    issues `fleet run --resume <fleetRunId>`; exit 2 + `reason:"lock-held"`
+    re-invokes fleet with an argv identical to the first dispatch (no
+    `--resume` token anywhere), asserts the `fleetRunId` fleet reports
+    equals the record's, and a fleet fake that prints `cannot resume`
+    (exit 1) → `blocked` with reason `resume-refused`; exit 2 +
+    `reason:"lock-held"`
     → no state change; unparseable JSON → treated as exit 1.
 42. **Remote-pending is resettable** (`recover.test.mjs`, real temporary
     git repository with a bare `origin`): CLOSED → `remote-pending`, then
@@ -1852,3 +1886,16 @@ None is trust-root tier; each is a small, separately testable diff.
     example config passes `packages/ticket-sync/schemas/adlc-config.schema.json`
     (assert via the same validator ticket-sync uses); a block with
     `query: null` or without `provider` fails it.
+78. **Bounded model-plane reads** (`run.test.mjs` + `sequence.test.mjs`):
+    the fleet argv carries `--model-plane-read bounded` and a
+    `--model-plane-read-only` list that contains `<ISSUE_WT>`,
+    `<REPO_ROOT>/.git` and every pinned tool directory, and does NOT
+    contain `<REPO_ROOT>`, `$HOME` or `/tmp`; a run in which the fleet
+    fake reports `readPolicy: "host"` back in its `--json` is treated as
+    an operational error (`sandbox-policy-mismatch`, no attestation).
+79. **Dispatch approval modes** (`select.test.mjs`): with
+    `dispatchApproval: "label-only"`, a `COLLABORATOR`-authored issue
+    without `adlc:autopilot` is excluded (`dispatch-approval`), the same
+    issue labeled by an `admin` actor is eligible, labeled by a `write`
+    actor is excluded; with the default, the §4.2 trust predicate applies;
+    an unknown value → `bad-config`.
