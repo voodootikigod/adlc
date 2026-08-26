@@ -161,7 +161,8 @@ title/body) and records zero mutating calls.
 
 Every run has a record `.adlc/autopilot-runs/<issue>.json` (gitignored)
 with `state ∈ {clarify, shaped, dispatched, quota-paused, built, attested,
-pushed, pr-open, ci-watch, oid-mismatch, blocked, stale, ci-red, done, orphan}`, `runId`,
+pushed, pr-open, ci-watch, oid-mismatch, blocked, stale, ci-red, done,
+remote-pending, orphan}`, `runId`,
 `ticketId`, `baseOid`, `branch`, `fleetRunId`, `prNumber`,
 `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed`, and timestamps. The
 label↔state mapping is fixed: `adlc:needs-clarification`↔`clarify`,
@@ -202,8 +203,15 @@ is empty — a moved tip or a dirty worktree means another session (a
 human, a Remote Control session) touched it, so nothing is force-removed
 and the run is `orphan`. The worktree removal is therefore never forced
 on a dirty tree. The loop NEVER deletes a remote ref on its own: automatic retirement
-performs Step L only and leaves any pushed remote ref in place (status
-lists it under `remoteRefsLeft` with the exact deletion command). Step R
+performs Step L only. If `git ls-remote` shows the run's remote ref still
+present, the run record is NOT deleted — it moves to state
+`remote-pending` (terminal; the issue is excluded from selection with rule
+`remote-ref-pending`, because a fresh run would collide with that ref on
+its first push), status lists the ref under `remoteRefsLeft` with the
+exact deletion command, and a later iteration whose `ls-remote` is empty
+(the operator deleted the ref by hand or via `reset --delete-remote`)
+deletes the record and re-admits the issue. The record is deleted
+immediately only when no remote ref exists. Step R
 runs only when the operator invokes `reset --issue N --confirm-delete
 <OID> --delete-remote`. When both steps run, order is remote-first so a
 remote failure leaves every local artifact in place for the next attempt
@@ -592,10 +600,16 @@ gitignored `.adlc/autopilot-*` files.
      (from `adlc ticket show <ULID> --json`). The orchestrator obtains the
      prompt with `adlc coldstart <ULID> --dir <ISSUE_WT>/.adlc
      --prompt-only`, answers it with the gated `claude -p` call of §5.3,
-     validates the answer as `{"gaps": [...]}`, adds `"ticketHash"`, and
-     pipes it: `printf '%s' '<json>' | adlc coldstart <ULID> --dir
-     <ISSUE_WT>/.adlc --prompt-only --record-verdict -`. A non-empty
-     `gaps` is a CLARIFY (§5.4), never recorded as a pass.
+     validates the answer as `{"gaps": [...]}` (schema-checked: an object
+     whose only keys are `gaps` — an array of `{what, why_blocking}`
+     strings — re-serialized by the orchestrator, never forwarded
+     verbatim), adds `"ticketHash"`, and delivers it as bytes on the
+     child's stdin: the pinned `adlc` executable is spawned with
+     `shell:false` and argv `["coldstart", "<ULID>", "--dir",
+     "<ISSUE_WT>/.adlc", "--prompt-only", "--record-verdict", "-"]`, the
+     serialized JSON is written to `stdin` and the stream is then ended.
+     No shell ever sees the JSON. A non-empty `gaps` is a CLARIFY (§5.4),
+     never recorded as a pass.
    - **spec-lint**: the orchestrator first derives the criteria document
      — the ticket body from its `=== ACCEPTANCE CRITERIA ===` heading to
      the next `===` heading (or end), written atomically (temp file +
@@ -931,8 +945,8 @@ Then:
 
   | `gh pr view` result | Transition |
   |---|---|
-  | `state == "MERGED"` | run → `done`; retire LOCAL artifacts only (worktree, local branch, marker, record); the remote branch is left to GitHub's delete-on-merge setting; the issue is closed by `Closes #<n>` |
-  | `state == "CLOSED"` (not merged) | the operator rejected the PR: retire local artifacts; delete the remote branch only under §2.1a's lease rule; add `adlc:autopilot-skip` to the issue with a comment naming the closed PR (the operator removes the label to allow a fresh attempt) |
+| `state == "MERGED"` | run → `done`; retire LOCAL artifacts (worktree, local branch, marker); the remote branch is left to GitHub's delete-on-merge setting; the record is deleted only once `ls-remote` shows the ref gone, otherwise it stays `remote-pending` (§2.1a); the issue is closed by `Closes #<n>` |
+| `state == "CLOSED"` (not merged) | the operator rejected the PR: retire local artifacts under §2.1a (Step L only; the remote ref is never deleted automatically, so the record becomes `remote-pending` until the operator removes the ref); add `adlc:autopilot-skip` to the issue with a comment naming the closed PR and the exact remote-deletion command |
   | `headRefName` no longer matches, or PR not found | `orphan`; no mutation |
 
 ## 9. Preflight (fail closed, printed by `adlc-autopilot status`)
@@ -1104,8 +1118,14 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
 
 ### 12.1 Execution deadlines (every external command)
 
-Every child is spawned in its own process group with stdin closed and a
-deadline; on expiry SIGTERM is sent to the group, SIGKILL 15 s later, and
+Every child is spawned with `shell:false` and an argv array, in its own
+process group, with a deadline, and with stdin CLOSED — except the
+enumerated **stdin-bearing commands**, whose stdin receives exactly the
+orchestrator-serialized bytes and is then ended: `adlc ticket create
+--input -`, `adlc ticket update --input -`, `adlc coldstart
+--record-verdict -`. The shared spawn wrapper takes an explicit
+`stdinBytes` option; every other spawn passes none and gets a closed
+stream; on expiry SIGTERM is sent to the group, SIGKILL 15 s later, and
 the step fails with `reason:"timeout:<command>"`. The orchestrator's own
 SIGTERM handler forwards to the current child's group and exits within
 `TimeoutStopSec` (§9.3a).
@@ -1336,7 +1356,11 @@ None is trust-root tier; each is a small, separately testable diff.
     --base`, and `record-cross-model --base` argv even when the fake moves
     `origin/main` between steps.
 21. **Recovery state machine** (`recover.test.mjs`): one fixture per row of
-    the §2.1 table asserts the named action and the resulting state; the
+    the §2.1 table asserts the named action and the resulting state; a
+    retire whose `ls-remote` still shows the ref → state `remote-pending`,
+    record kept, issue excluded with `remote-ref-pending`; a later
+    iteration with an empty `ls-remote` deletes the record and the issue
+    is selectable; the
     "human removed the label" row asserts worktree removal + branch delete +
     record deletion and that the issue is then selectable; the "open PR has
     that head" guard asserts the branch is NOT deleted; `orphan` is excluded
@@ -1394,15 +1418,6 @@ None is trust-root tier; each is a small, separately testable diff.
     yields a second fleet invocation carrying `--dead-end-file` and
     `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
     after the last successful preflight.
-71. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
-    fake is invoked with `--prompt-only` and, on the record call, with
-    `--prompt-only --record-verdict -` and stdin JSON whose `ticketHash`
-    equals the hash `adlc ticket show` returned immediately before; a
-    `gaps` array with one entry → CLARIFY and zero record calls; the
-    spec-lint fake sees `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` existing,
-    beginning with `## Acceptance criteria`, and argv `--record --ticket
-    <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
-    reopen (§6.6) the coldstart record call repeats with the new hash.
 31. **Pinned baseline by OID** (`run.test.mjs`): the fetch fake asserts
     `git fetch --no-tags origin <40-hex>` (never `main`, never
     `FETCH_HEAD`); an `ls-remote` fake returning a different OID on a second
@@ -1634,3 +1649,16 @@ None is trust-root tier; each is a small, separately testable diff.
     `EnvironmentFile=/<abs>/.env.local`, `Restart=on-failure`,
     `KillMode=control-group`; no `%h`; a working directory lacking
     `.adlc/config.json` makes generation exit 1 `bad-working-directory`.
+71. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
+    fake is invoked with `--prompt-only` and, on the record call, with
+    `--prompt-only --record-verdict -`, `shell:false`, and stdin bytes
+    that parse to an object whose `ticketHash` equals the hash `adlc
+    ticket show` returned immediately before; a coldstart answer
+    containing `'; touch /tmp/x; echo '` and `$(id)` reaches the fake's
+    stdin byte-for-byte inside the `what` string and spawns no extra
+    process; a
+    `gaps` array with one entry → CLARIFY and zero record calls; the
+    spec-lint fake sees `<ISSUE_WT>/.adlc/tmp/<ULID>-ac.md` existing,
+    beginning with `## Acceptance criteria`, and argv `--record --ticket
+    <ULID> --dir <ISSUE_WT>/.adlc` on the in-repo bin path; after a
+    reopen (§6.6) the coldstart record call repeats with the new hash.
