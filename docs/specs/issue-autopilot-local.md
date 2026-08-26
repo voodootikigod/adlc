@@ -460,24 +460,20 @@ used for enumeration (it truncates silently).
 ### 4.2 Hard exclusions (applied before scoring; each is logged with the
 issue number and the rule name)
 
-- **dispatch approval** (`autopilot.dispatchApproval`): default
-  `"owner-or-label"` — eligible iff `authorAssociation == "OWNER"` OR the
-  issue carries `adlc:autopilot` applied by an `admin`/`maintain` actor;
-  `"label-only"` — eligible ONLY with that label (every issue needs the
-  human boundary); `"trusted-authors"` (opt-in) — the next rule's
-  `OWNER`/`MEMBER`/`COLLABORATOR` set. Any other value → preflight exit 1
-  `bad-config`.
-- **not trusted**: the issue is eligible only if its `authorAssociation`
-  (`gh issue view --json authorAssociation`) is `OWNER`, `MEMBER` or
-  `COLLABORATOR`, OR the most recent `labeled` event for `adlc:autopilot` in
-  `gh api repos/{o}/{r}/issues/<n>/timeline` was performed by an actor whose
-  `gh api repos/{o}/{r}/collaborators/<actor>/permission` is `admin` or
-  `maintain` (the #237 actor-permission guard). Anything else — including
-  an `adlc:autopilot` label applied by a non-maintainer — is excluded with
-  rule `not-trusted` and is never shaped or dispatched.
-- **remote ref exists**: `git ls-remote origin
-  refs/heads/adlc/autopilot/issue-<n>` non-empty → excluded with rule
-  `remote-ref-exists` (independent of any record or tombstone).
+- **authorization** — ONE predicate, `eligibleAuthor(issue, mode)`, used
+  by selection, revalidation (§6.0a), triage (§5.1) and the threat model
+  (§11) alike; `mode = autopilot.dispatchApproval`:
+  - `"owner-or-label"` (default): `authorAssociation == "OWNER"`, OR the
+    most recent `labeled` event for `adlc:autopilot` in the issue timeline
+    was performed by an actor whose repository permission is `admin` or
+    `maintain`;
+  - `"label-only"`: the labeled clause only;
+  - `"trusted-authors"` (opt-in): `authorAssociation ∈ {OWNER, MEMBER,
+    COLLABORATOR}`, OR the labeled clause.
+  Anything else — including `MEMBER`/`COLLABORATOR` authors under the
+  default, and an `adlc:autopilot` label applied by a `write` actor — is
+  excluded with rule `not-authorized` and is never shaped or dispatched.
+  An unknown mode value → preflight exit 1 `bad-config`.
 - label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
   `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
   `adlc:autopilot-stale`, `adlc:autopilot-ci-red`, `adlc:needs-clarification`,
@@ -530,10 +526,13 @@ input — so under the default dispatch policy (§4.2, `owner-or-label`)
 the only text that can drive the worker without a maintainer label is
 text the repository OWNER wrote.
 
-1. If the issue body carries a `<!-- adlc:begin -->` block AND the issue's
-   `authorAssociation` (from `gh issue view --json authorAssociation`) is
-   `OWNER` or `MEMBER`, the ticket is assembled deterministically with NO
-   model call:
+1. If the issue body carries a `<!-- adlc:begin -->` block AND the issue
+   satisfies `eligibleAuthor(issue, mode)` (§4.2 — under the default that
+   means an `OWNER` author or an `admin`/`maintain` label event; a block
+   authored by anyone else is ignored and the issue is shaped in full,
+   which under the default it cannot be either, so it is simply not
+   eligible), the ticket is assembled deterministically with NO model
+   call:
    - `scope`, `rails`, `edges`, `duration`, `category` ← the block (the
      `@adlc/ticket-sync` grammar: fenced JSON between `<!-- adlc:begin … -->`
      and `<!-- adlc:end -->`; `category` must be in the ticket-sync set);
@@ -548,8 +547,7 @@ text the repository OWNER wrote.
      still runs, constrained to produce ONLY `body` (with the criteria
      section) — it may not alter the block's fields.
    The block never bypasses step 3; a block with a protected-path scope is
-   a CLARIFY like any other. A block on an issue whose author association is
-   anything else is ignored and the issue is shaped in full.
+   a CLARIFY like any other.
 2. Otherwise run ONE shaping call: `claude -p --model <effectiveModel>
    --output-format
    json --permission-mode plan --max-turns 1`, spawned in its own process
@@ -664,7 +662,7 @@ gitignored `.adlc/autopilot-*` files.
    updatedAt,labels,milestone,state,authorAssociation,body`) and every
    selection input is re-evaluated: `state == "OPEN"`, `updatedAt`
    unchanged since selection, the same hard-exclusion verdict (§4.2,
-   including trust/dispatch-approval provenance from the timeline), no
+   including `eligibleAuthor` re-evaluated from the timeline), no
    new open PR or branch for the issue, and — when the body changed — the
    shaped ticket is discarded. Any change → the candidate is dropped
    (`revalidation-changed`, nothing written or, if a worktree already
@@ -803,7 +801,15 @@ gitignored `.adlc/autopilot-*` files.
      <cutTip>` (compare-and-swap on the old value) — the worker branch is
      never checked out in `ISSUE_WT`'s repository, so the ref can be
      advanced directly; then the temporary ref is deleted. Any step
-     failing → `mirror-fetch-failed`, ref untouched; the mirror is `rm -rf`'d and recreated
+     failing → `mirror-fetch-failed`, ref untouched. From that point the
+     worker branch lives in the CALLER repository (the shared git database
+     reached through `ISSUE_WT`), which is where fleet's integration
+     worktree `<ISSUE_WT>/.worktrees/fleet-integration` and its
+     integration branch `fleet/run-<id>` also live — so fleet's existing
+     deterministic gates, prosecution and merge operate unchanged on the
+     fetched-back branch, and the `fleet/run-<id>` tip that §6.5
+     fast-forwards `adlc/autopilot/issue-<n>` to contains the worker's
+     commits. The mirror is never read by any gate; the mirror is `rm -rf`'d and recreated
      before every dispatch (under the lock) and removed at retirement
      Step L with the run directory, so a stale mirror is never read by any
      gate. What the worker can read of the repository is exactly the
@@ -1358,9 +1364,8 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   branch (no other refs, no unreachable objects, no remote URLs,
   credential helpers or hooks; the host `.git` is never mounted), system
   libraries and its synthetic home (which necessarily holds the harness's
-  own credentials, because the worker IS the harness); (2) only issues
-  authored by `OWNER`/`MEMBER`/`COLLABORATOR` accounts or labeled by an
-  `admin`/`maintain` actor are ever shaped (§4.2), and
+  own credentials, because the worker IS the harness); (2) only issues satisfying the single authorization predicate
+  `eligibleAuthor` of §4.2 are ever shaped, and
   the default `autopilot.dispatchApproval: "owner-or-label"` (§13)
   dispatches without further approval ONLY issues authored by the repo
   `OWNER` (the operator's own backlog); any other author's issue needs the
@@ -1748,9 +1753,10 @@ None is trust-root tier; each is a small, separately testable diff.
     == 15` → no fleet spawn and state `blocked`; a conflict-fix round
     increments the same counter.
 26. **Shaping trust** (`triage.test.mjs`): an `adlc:begin` block on an issue
-    with `authorAssociation: "NONE"` is ignored and the shaping fake is
-    called; with `"OWNER"` the shaping fake is NOT called but every §5.3
-    gate still runs (a block with a protected-path scope → CLARIFY).
+    that fails `eligibleAuthor` is never reached (the issue is
+    `not-authorized` at selection); with an `"OWNER"` author under the
+    default the shaping fake is NOT called but every §5.3 gate still runs
+    (a block with a protected-path scope → CLARIFY).
 27. **Quota overshoot bookkeeping** (`quota.test.mjs`): a step whose
     post-reconciliation reading is ≥ threshold records `overshoot: true`
     and the next start is refused; the reserve makes a strike refused at
@@ -1788,12 +1794,15 @@ None is trust-root tier; each is a small, separately testable diff.
     §5.1 with zero shaping calls; the same issue without the criteria
     section → one shaping call whose recorded output leaves the block
     fields byte-identical.
-33. **Trust predicate** (`select.test.mjs`): an issue with
-    `authorAssociation: "NONE"` and no label is `not-trusted`; the same
-    issue labeled `adlc:autopilot` by a `write`-permission actor stays
-    `not-trusted`; labeled by an `admin` actor → eligible; `COLLABORATOR`
-    author → eligible; assert the shaping fake and fleet fake are never
-    invoked for a `not-trusted` issue.
+33. **One authorization predicate** (`select.test.mjs`, table-driven
+    over mode × authorAssociation × label-actor permission): under the
+    default an `OWNER` author is eligible with no label; `MEMBER` and
+    `COLLABORATOR` authors are `not-authorized` until an `admin`/`maintain`
+    actor labels them; a `write`-actor label never authorizes; under
+    `label-only` even `OWNER` needs the label; under `trusted-authors`
+    `MEMBER`/`COLLABORATOR` are eligible unlabeled; the same table drives
+    triage's trusted-block acceptance and revalidation (the shaping fake
+    and fleet fake are never invoked for a `not-authorized` issue).
 34. **Actual-diff check** (`diffcheck.test.mjs`, real temporary git
     repository): a worker fake that edits `scripts/rails-guard-ci.mjs`
     despite a `packages/foo/**` scope → round failure naming that path, no
@@ -2280,3 +2289,8 @@ None is trust-root tier; each is a small, separately testable diff.
     disk with the next phase BEFORE each git argv; a `renamed` crash
     leaves no dangling staging path; the record is never deleted while a
     marker-bearing final branch exists.
+108. **Mirror output reaches the integration branch** (`sequence.test.mjs`,
+    real temporary git repository, one ticket, fleet fake that performs
+    the real fetch-back sequence): after the run, `fleet/run-<id>` in the
+    caller repository contains the worker's commit, `adlc/autopilot/issue-<n>`
+    fast-forwards to it, and no gate argv references the mirror path.
