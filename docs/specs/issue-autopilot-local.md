@@ -193,9 +193,13 @@ view|list|api GET`, `adlc … --json` without `--write`/`--record`).
 Every run has a record `.adlc/autopilot-runs/<issue>.json` (gitignored)
 with `state ∈ {creating, clarify, shaped, dispatched, quota-paused, built,
 attested, pushed, pr-open, ci-watch, oid-mismatch, blocked, stale, ci-red,
-done, remote-pending, orphan}`, `runId`,
+done, remote-pending, remote-deleted, orphan}`, `runId`,
 `ticketId`, `baseOid`, `branch`, `fleetRunId`, `prNumber`,
-`roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed`, and timestamps. The
+`roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed`, `lastPushedOid` and
+`lastPushedAt` (ISO-8601 UTC from the orchestrator clock, both written
+in the SAME atomic record write as the post-push verification of §6.8 —
+never separately, so a crash cannot leave an OID without its time), and
+the other timestamps. The
 label↔state mapping is fixed: `adlc:needs-clarification`↔`clarify`,
 `adlc:autopilot-blocked`↔`blocked`, `adlc:autopilot-stale`↔`stale`,
 `adlc:autopilot-ci-red`↔`ci-red`.
@@ -216,6 +220,7 @@ disambiguate by inspecting git/`gh`.
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
 | branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
+| `remote-deleted` (operator delete less than 24 h ago) | re-run `gh pr list --head <branch> --state all`; a PR whose head is that branch → lease-guarded restore at `lastPushedOid` + `adlc:needs-human` (§2.1a); after 24 h with none observed → fall through to the canonical deletion rule |
 | record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git --git-dir=<NET_GIT> ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
 
 ### 2.1a Retiring a run — ownership-checked deletion
@@ -269,10 +274,16 @@ unless a pull request exists", so a PR can be opened against the ref
 between the re-check and the lease-guarded delete; that window is an
 accepted residual (§11.1 item 8) and is bounded three ways: the delete
 is operator-only (`--delete-remote`, never automatic), it is REFUSED
-when the ref's last push is younger than 10 minutes (`ref-too-fresh` —
+when the record's `lastPushedAt` is absent (fail closed — a record from
+before the field existed, or a crash between push and record, is
+treated as fresh) or younger than 10 minutes (`ref-too-fresh` —
 a PR is opened within minutes of a push, not hours), and after a
-successful delete `gh pr list --head` is queried once more and a PR
-created in the window is repaired immediately, not merely reported:
+successful delete the ref stays under watch rather than being read
+once: the `reset` command holds for a grace period and re-queries `gh
+pr list --head` at 0 s, 30 s and 120 s, the record moves to
+`remote-deleted` and is kept for 24 h, and every recovery pass (§2.1)
+re-runs the query for such records; a PR observed at ANY of those reads
+is repaired immediately, not merely reported:
 the orchestrator re-creates the ref from the recorded OID with a lease
 that expects the ref to be ABSENT (`git --git-dir=<NET_GIT> push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>: <remotePushUrl>
@@ -397,7 +408,7 @@ across steps beyond that:
 | coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
 | after PROCEED, before dispatch | cache the shaped ticket in the run record (`state: shaped`, keyed by issue `updatedAt`); sleep 10m; next iteration reuses it via §2.1 |
-| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `[<pinned absolute adlc path, §9.1>,"autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the helper runs with a MINIMAL environment — `PATH` = the sanitized list of §9.1, `HOME`, `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN` and nothing else, so no orchestrator secret (the manifest key, `gh`/`claude` tokens, `*_KEY`/`*_TOKEN`) is inherited; its executable is the pinned `adlc` path; the array also carries `"--iteration", <iterationId>` and `"--start-ordinal", "auto"`: the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
+| every fleet strike | fleet runs `--pre-strike-argv <json-array>` = `[<pinned absolute adlc path, §9.1>,"autopilot","quota","--json","--model",<effectiveModel>,"--quota-threshold",<T>,"--quota-reserve",<R>]` (the resolved values are passed explicitly as separate argv elements — never a shell string — so the helper cannot re-resolve them differently and no metacharacter can split an argument; the helper runs with a MINIMAL environment — `PATH` = the sanitized list of §9.1, `HOME`, `ADLC_AUTOPILOT_STATUS_FILE`, `ADLC_AUTOPILOT_LOCK_TOKEN` and nothing else, so no orchestrator secret (the manifest key, `gh`/`claude` tokens, `*_KEY`/`*_TOKEN`) is inherited; its executable is the pinned `adlc` path; the array also carries `"--iteration", <iterationId>`, `"--start-ordinal", "auto"` and `"--wall-clock-remaining", <minutes>` (the helper re-reads the host credential file's `expiresAt` and exits 1 `token-expiring` when `expiresAt − now < minutes + 30`): the helper reads and atomically increments `startsThisIteration` in `.adlc/autopilot-status.json` under the autopilot lock, so the FIRST start of an iteration is gated at the threshold and every later start — including every fleet strike — at threshold minus reserve, exactly as §3.4 requires; a helper invoked without a lock-holding parent refuses with exit 1); non-zero exit → fleet stops cleanly with `reason: "quota-paused"`, exit 2, run resumable; the record becomes `quota-paused` |
 | each maintenance conflict-fix round (§8) | skip that PR this iteration; no label |
 | each CI fix round (§0.11) | pause the CI watch; the 30-minute CI budget does not advance while paused |
 
@@ -542,7 +553,7 @@ issue number and the rule name)
 - label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
   `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
   `adlc:autopilot-stale`, `adlc:autopilot-ci-red`, `adlc:needs-clarification`,
-  `adlc:autopilot-log`}
+  `adlc:needs-human`, `adlc:autopilot-log`}
 - milestone title starts with `Programs` (multi-slice work)
 - an open PR exists whose head is `adlc/autopilot/issue-<n>` or whose body
   contains `Closes #<n>` / `Fixes #<n>`
@@ -768,7 +779,14 @@ gitignored `.adlc/autopilot-*` files.
    before the fleet dispatch of step 4 (and before every retry dispatch),
    the issue is re-fetched (`gh issue view <n> --repo <repo> --json
    updatedAt,labels,milestone,state,authorAssociation,body`) and every
-   selection input is re-evaluated: `state == "OPEN"`, `updatedAt`
+   selection input is re-evaluated — together with the token margin of
+   §6.4 item 14, re-read from the host file at that moment: `expiresAt −
+   now ≥ remainingWallClock + 30 min`, else the run stays `shaped` with
+   `token-expiring` and the next iteration's gated refresh handles it
+   (and fleet's pre-strike helper, §3.2, receives `"--wall-clock-
+   remaining", <minutes>` and refuses a strike whose margin has become
+   short with the same reason, so no strike starts that its token cannot
+   outlive) — : `state == "OPEN"`, `updatedAt`
    unchanged since selection, the same hard-exclusion verdict (§4.2,
    including `eligibleAuthor` re-evaluated from the timeline), no
    new open PR or branch for the issue, and the `issueRevision` of §4.2
@@ -1339,7 +1357,10 @@ gitignored `.adlc/autopilot-*` files.
    a lease failure means someone else pushed to the autopilot's branch →
    state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
    After pushing: `git --git-dir=<NET_GIT> ls-remote <remotePushUrl> refs/heads/adlc/autopilot/issue-<n>`
-   must equal `attestedHead`; otherwise state `oid-mismatch`. Only after
+   must equal `attestedHead`; otherwise state `oid-mismatch`; on
+   success the record's `lastPushedOid = attestedHead` and
+   `lastPushedAt = now` are written in one atomic record write with the
+   state change. Only after
    the post-push verification does the autopilot **upsert** the PR keyed by
    head branch (never a body sentinel), and the upsert is itself bound:
    immediately before `gh pr create`/`gh pr edit` the `ls-remote` check is
@@ -1902,8 +1923,11 @@ entries.
 
 9.5 Labels exist: `adlc:autopilot`, `adlc:autopilot-skip`,
 `adlc:needs-clarification`, `adlc:autopilot-blocked`, `adlc:autopilot-stale`,
-`adlc:autopilot-ci-red`, `adlc:autopilot-log` (`adlc-autopilot init
---labels` creates them idempotently).
+`adlc:autopilot-ci-red`, `adlc:needs-human`, `adlc:autopilot-log`
+(`adlc-autopilot init --labels` creates them idempotently; phase A
+fails closed with `labels-missing` naming the absent ones, so every
+label mutation this spec performs — the `adlc:needs-human` escalation
+of §2.1a included — targets a label that is known to exist).
 
 9.6 (phase B) Fleet dry-run at the pinned baseline: a detached temporary
 worktree is created at `BASE_OID` under
@@ -2083,7 +2107,9 @@ Prose elsewhere in §11 explains the residuals; only these items bind.
    rather than as spec prose.
 8. An operator-requested remote branch delete cannot be made atomic
    against a concurrent pull-request creation; the window is bounded by
-   ref-too-fresh and repaired by the lease-guarded restore of §2.1a.
+   ref-too-fresh, a 120 s post-delete grace loop and 24 h of
+   per-iteration re-checks, and repaired by the lease-guarded restore of
+   §2.1a; a pull request opened after the last re-check is the residual.
 
 ## 12. Failure policy
 
@@ -2825,7 +2851,12 @@ None is trust-root tier; each is a small, separately testable diff.
     result is `pr-after-delete-restored: <number>`, the issue carries
     `adlc:needs-human` and the record survives; a fake that re-creates
     the ref at another OID before the restore → the restore's lease
-    fails, the foreign ref survives, `pr-after-delete-unrestored`.
+    fails, the foreign ref survives, `pr-after-delete-unrestored`. A record
+    without `lastPushedAt` → `ref-too-fresh`, zero pushes; a PR fake
+    that appears only at the 120 s re-query → restored and
+    `pr-after-delete-restored`; a record in `remote-deleted` for 2 h
+    whose next recovery pass finds a PR → restored; one older than 24 h
+    with none → deleted by the canonical rule.
 64. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
     'opus;touch /tmp/x'` preflight exits 1 `model-unknown` (grammar
     `^[a-z0-9][a-z0-9.-]{0,63}$`); the `--pre-strike-argv` value parses
@@ -3529,7 +3560,13 @@ None is trust-root tier; each is a small, separately testable diff.
     8 hours left → no refresh spawn; the refresh spawn's argv equals the
     §12.1 refresh argv exactly, its `stdinBytes` equal `ok\n`, its `cwd`
     is an empty directory under the run directory, its env lacks
-    `ADLC_MANIFEST_KEY`, and it never carries the sandbox argv.
+    `ADLC_MANIFEST_KEY`, and it never carries the sandbox argv. A fixture whose
+    margin is sufficient in phase B but, after a slow shaping fake,
+    short at §6.0a revalidation → the run stays `shaped` with
+    `token-expiring`, zero dispatches; a pre-strike helper invocation
+    with `--wall-clock-remaining 60` against a file expiring in 70
+    minutes → exit 1 `token-expiring`, and fleet's fake stops with the
+    run resumable.
 159. **Dry-run transport is transient and isolated** (`preflight.test.mjs`
     with the spawn recorder): under `--dry-run` the `ls-remote` spawn
     carries a `GIT_SSH` wrapper whose realpath is under `mkdtemp` in
