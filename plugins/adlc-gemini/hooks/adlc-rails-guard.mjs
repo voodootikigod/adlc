@@ -80,6 +80,17 @@ const allow = () => ({ allow_tool: true });
 const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: ${reason}` });
 
 /**
+ * A parsed payload the decision tree can reason about: a plain (non-array)
+ * object. Anything else — null, a scalar, an array — has no tool name to
+ * classify and used to fall through as an unclassified tool (#823). ONE
+ * definition, shared by decide() and runFromStdin(): the two call sites must
+ * never disagree about what a payload is.
+ */
+function isToolPayload(p) {
+  return Boolean(p) && typeof p === 'object' && !Array.isArray(p);
+}
+
+/**
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
  */
@@ -87,7 +98,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
   let enforcing = false;
   try {
     enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    if (!isToolPayload(payload)) {
       return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
     }
     const tool = extractToolName(payload);
@@ -179,7 +190,7 @@ export function runFromStdin(raw, env = process.env) {
   } catch {
     return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
   }
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+  if (!isToolPayload(payload)) {
     return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
   }
   const toolName = extractToolName(payload);
