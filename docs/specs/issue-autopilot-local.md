@@ -845,14 +845,23 @@ gitignored `.adlc/autopilot-*` files.
      tmpfs with three enumerated read-only leaf binds layered inside) is
      stated in the `READ_SET` bullet below. The worker's dependency tree
      is provided BEFORE the sandbox starts, because inside it there is
-     no registry route (the egress allowlist names only the model API):
-     fleet item 15, `--init-on-host`, makes fleet run the configured
-     `init` command (`npm ci --ignore-scripts`, which executes no package
-     code) on the HOST in the orchestrator plane with `cwd = <worker
-     worktree>` once per strike before the sandboxed worker starts, so
-     the worker finds `node_modules` populated from the pinned lock; the
-     worker's charter states that it cannot install anything (an `npm
-     ci`/`npm install` inside fails for want of a route) and that adding
+     no registry route (the egress allowlist names only the model API)
+     — and npm on the host must never consume worker-controlled input,
+     since on a retry the worktree carries the previous strike's
+     `package.json`, lockfile and any `.npmrc` the worker wrote, none of
+     it validated yet (`--ignore-scripts` silences lifecycle scripts, not
+     manifest-driven registry, `file:`/`git:` or configuration inputs):
+     the orchestrator builds the tree ONCE per run in `<run
+     dir>/worker-deps`, a clone at `BASE_OID` cut from the worker mirror
+     (immutable, reviewed content only), with the sanitized npm
+     invocation of §6.5b(iii) — and fleet item 15, `--worker-deps <abs
+     path>`, makes fleet COPY that tree (`cp -a`, a plain file copy, no
+     npm) into `<worker worktree>/node_modules` on the host before every
+     strike and skip the configured `init`; the worker finds
+     `node_modules` populated from the pinned baseline lock, and npm is
+     never run against anything the worker wrote. The worker's charter
+     states that it cannot install anything (an `npm ci`/`npm install`
+     inside fails for want of a route) and that adding
      a workspace package means creating the relative symlink
      `node_modules/@adlc/<x>` → `../../packages/<x>` that npm would
      create (no network) plus the `link: true` lockfile entry §6.5b
@@ -1034,11 +1043,28 @@ gitignored `.adlc/autopilot-*` files.
    `lockfile-drift`; no entry may be removed; any other difference →
    `lockfile-drift`. Because the only admissible additions are workspace
    links, `npm ci --ignore-scripts --no-audit --no-fund` never fetches a
-   new tarball of any kind; (iii) that command is then run by the
+   new tarball of any kind; (ii-b) **npm-config drift**: every `.npmrc`
+   and `package.json` `publishConfig`/`overrides`/`resolutions` in the
+   tree must be byte-identical to `BASE_OID`'s, `workspaces` may only
+   gain `packages/<x>` entries, and no `file:`/`git:`/`http:` dependency
+   spec may appear anywhere (`npm-config-drift` otherwise, no gate); (iii)
+   only after (i), (ii) and (ii-b) have passed is the install run by the
    orchestrator ON THE HOST with `cwd = <run dir>/gate-deps` (§6.6, a
-   clone at `attestedHead` used only for this install) — it executes no
-   package code (`--ignore-scripts`), its only egress is the registry
-   for tarballs the attested lock already pins, and it produces
+   clone at `attestedHead` used only for this install), with the
+   **sanitized npm invocation** used for every host-side install of
+   this spec: the pinned `npm` with `ci --ignore-scripts --no-audit
+   --no-fund --offline`, `--userconfig` pointing at an
+   orchestrator-generated file that pins `registry=https://registry.
+   npmjs.org/` and nothing else, `--globalconfig /dev/null`, `HOME` set
+   to an empty private directory (the operator's `~/.npmrc` is never
+   read), an environment containing no inherited `NPM_CONFIG_*`/
+   `npm_config_*`, and `npm_config_cache` = `<run dir>/npm-cache`, the
+   private cache that the once-per-run `worker-deps` install (§6.4,
+   the ONE invocation that may reach the registry, sourced from
+   `BASE_OID` only) populated — so the gate install needs no network
+   at all: because the only admissible lock additions are workspace
+   links, every tarball it needs is already in that cache, and a miss
+   is `gate-deps-missing`. It executes no package code and produces
    `gate-deps/node_modules`, bound read-only into every per-gate clone,
    whose workspace links (`node_modules/@adlc/<x>` → the relative
    `../../packages/<x>`) resolve INSIDE that clone — so the sandboxed
@@ -2136,11 +2162,12 @@ None is trust-root tier; each is a small, separately testable diff.
   the adapter's `homeState.dirs` as empty writable scratch, everything
   else ENOENT; real-bwrap tests for authentication, refresh
   read-only enforcement and denial; `--json` echoes `homeBinds`),
-  `--init-on-host` (item 15: the configured `init` command runs on the
-  host in the orchestrator plane with `cwd = <worker worktree>` once
-  per strike before the sandboxed worker starts; the worker starts with
-  `node_modules` populated and no install path of its own; real-bwrap
-  worker-start test), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
+  `--worker-deps <abs path>` (item 15: fleet copies the caller-built
+  dependency tree into `<worker worktree>/node_modules` on the host
+  before every strike — a plain copy, never an npm run — and skips the
+  configured `init`; the worker starts with `node_modules` populated
+  and no install path of its own; real-bwrap worker-start test),
+  `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
   worktree is cut from a caller-supplied bare mirror holding only the
   pinned baseline and the issue branch, and the worker branch is fetched
   back into the caller's repository before gates/merge; real-bwrap
@@ -3349,14 +3376,21 @@ None is trust-root tier; each is a small, separately testable diff.
     a `homeBinds` entry outside `HOME`, and a read-only bind of a scratch
     directory (`sandbox-policy-mismatch`, no dispatch).
 157. **Sandboxed gates find their dependencies** (`sequence.test.mjs` +
-    fleet real-bwrap test): the single `npm ci --ignore-scripts` spawn
-    of the sequence has `cwd = <run dir>/gate-deps` and runs on the host
-    (no `bwrap` in its argv); inside the sandbox a fixture test that
-    imports a workspace package through `<clone>/node_modules/@adlc/<x>`
-    (a read-only bind — a write into it fails `EROFS`) passes and
-    `scripts/run-tests.mjs` resolves `node_modules/.bin`; a clone whose
-    install was skipped → `gate-deps-missing`, the run fails, no
-    attestation.
+    fleet real-bwrap test): the gate install spawn has `cwd = <run
+    dir>/gate-deps`, runs on the host (no `bwrap` in its argv), carries
+    `--offline`, `--userconfig <generated>`, `--globalconfig /dev/null`,
+    an env whose `HOME` is an empty private directory and which holds no
+    `NPM_CONFIG_*`/`npm_config_*` beyond `npm_config_cache=<run
+    dir>/npm-cache`, and is recorded AFTER the dependency-diff, lockfile
+    and npm-config checks; a worker-written `.npmrc`, a changed
+    `overrides`, or a `file:` spec → `npm-config-drift` and no install
+    spawn at all; a lock addition that is not a workspace link never
+    reaches the install; a cache miss → `gate-deps-missing`, the run
+    fails; inside the sandbox a fixture test that imports a workspace
+    package through `<clone>/node_modules/@adlc/<x>` (a read-only bind —
+    a write into it fails `EROFS`) passes and `scripts/run-tests.mjs`
+    resolves `node_modules/.bin`; a per-gate clone whose bind was
+    skipped → `gate-deps-missing`, the run fails, no attestation.
 158. **Token lifetime gate** (`preflight.test.mjs`, `quota.test.mjs`):
     a host credential fixture whose `expiresAt` is 100 minutes away with
     a 90-minute wall clock → the pinned `claude -p` refresh spawn runs on
@@ -3390,12 +3424,17 @@ None is trust-root tier; each is a small, separately testable diff.
     attestation commits present; a mirror created BEFORE the attestation
     commit → `gate-mirror-stale`, no gate runs, no attestation.
 162. **Worker starts with its dependencies** (`run.test.mjs` + fleet
-    real-bwrap test): the fleet argv carries `--init-on-host`; the
-    recorded `init` spawn (`npm ci --ignore-scripts`) has `cwd = <worker
-    worktree>`, no `bwrap` in its argv, and precedes the worker spawn;
-    inside the sandbox `node -e "import('@adlc/core')"` run from the
-    worker worktree resolves, an `npm ci` attempted inside exits non-zero
-    with no registry connection observed at the proxy, and a symlink
+    real-bwrap test): the fleet argv carries `--worker-deps <run
+    dir>/worker-deps/node_modules` and no `--init-on-host`; the only
+    `npm` spawn before the worker has `cwd = <run dir>/worker-deps` (a
+    clone at `BASE_OID`), the sanitized invocation of §6.5b(iii) minus
+    `--offline`, and precedes the worker spawn; on a retry whose
+    worktree carries a worker-written `.npmrc` and a rewritten
+    `package.json`, NO `npm` spawn has `cwd` under the worker worktree
+    and the copy is byte-identical to `worker-deps`; inside the sandbox
+    `node -e "import('@adlc/core')"` run from the worker worktree
+    resolves, an `npm ci` attempted inside exits non-zero with no
+    registry connection observed at the proxy, and a symlink
     `node_modules/@adlc/<new>` → `../../packages/<new>` created by the
-    worker makes `import('@adlc/<new>')` resolve; a run whose init spawn
-    failed never spawns the worker (`init-failed`, strike consumed).
+    worker makes `import('@adlc/<new>')` resolve; a run whose
+    `worker-deps` build failed never spawns the worker (`init-failed`).
