@@ -2060,7 +2060,12 @@ None is trust-root tier; each is a small, separately testable diff.
   changes go through their own reviewed PR. Before dispatching the build
   ticket, preflight reads the newest `spec-approval` entry bound to the
   ticket from the manifest and requires its recorded `spec_hash` to
-  equal the sha256 of the blob at `specBlob` AND `adlc run p1 --ticket
+  equal the **sha256 of the CONTENT** of the blob at `specBlob` — the
+  bytes `git cat-file blob <specBlob>` emits, i.e. what `sha256sum
+  docs/specs/issue-autopilot-local.md` prints at that commit; this is
+  NOT the git object id (`git hash-object` / `git rev-parse
+  HEAD:<path>`, a SHA-1 over a `blob <size>\0` header plus content, 40
+  hex) and the two are never compared to each other — AND `adlc run p1 --ticket
   <build ticket> --json` to exit 0 (spec-lint + premortem + spec-approval
   all present, ordered and bound) AND a **human-identity binding** the
   manifest alone cannot forge: the commit that introduced `specBlob` on
@@ -2698,8 +2703,13 @@ None is trust-root tier; each is a small, separately testable diff.
     binary against a temporary manifest): a segment with `spec-lint` +
     `premortem` + a `spec-approval` whose `data` has the full contract
     → exit 0 and dispatch allowed; missing `premortem`, `unresolved: 1`,
-    `rounds: 0`, or a `spec_hash` that differs from the blob at `specBlob`
-    → `spec-approval-stale`, zero dispatches.
+    `rounds: 0`, or a `spec_hash` that differs from the sha256 of the
+    content of the blob at `specBlob` → `spec-approval-stale`, zero
+    dispatches; a record carrying the git blob OID of the same file
+    (`git rev-parse HEAD:<path>`) instead of the content sha256 is
+    `spec-approval-stale` too (the identities are never conflated), and
+    a repository test recomputes `sha256sum` of the committed spec and
+    asserts it equals the newest committed `spec-approval` record.
 84. **Git mirror** (`sequence.test.mjs`, real temporary git repository):
     the mirror created before dispatch has exactly one branch
     (`adlc/autopilot/issue-<n>`), no `remote.*`/`credential.*`/`hooksPath`
