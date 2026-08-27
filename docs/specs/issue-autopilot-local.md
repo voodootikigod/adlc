@@ -822,6 +822,25 @@ gitignored `.adlc/autopilot-*` files.
      `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, plus the
      adapter's synthetic home (fleet §7.3 `homeState`, which necessarily
      holds the harness's own credentials).
+   - EGRESS: the model plane runs with `--unshare-net` (loopback only)
+     plus fleet-extensions item 13, `--model-plane-egress allowlist`:
+     fleet starts, on the HOST, a minimal HTTP CONNECT proxy listening on
+     a unix socket under the run directory whose allowlist is exactly the
+     model API host(s) the adapter declares (for `claude-code`:
+     `api.anthropic.com:443`, plus the OAuth refresh host the adapter
+     names) — every other `CONNECT` target, every plain `GET`, and every
+     non-443 port is refused and logged; the socket is bind-mounted into
+     the sandbox, a tiny bridge process inside the sandbox (spawned by
+     fleet from the pinned `node`) listens on `127.0.0.1:<port>` and
+     forwards bytes to the unix socket (unix sockets are filesystem
+     objects and cross network namespaces; TCP does not), and the worker
+     is given `HTTPS_PROXY=http://127.0.0.1:<port>`, `HTTP_PROXY` likewise,
+     and `NO_PROXY=` empty. With no route out of the namespace except the
+     bridge and a proxy that only connects to the model API, the
+     harness's OAuth token can reach exactly the service that issued it
+     and nothing else. Fleet's `--json` reports `egress: "allowlist"` and
+     the allowlist; the orchestrator treats any other value as
+     `sandbox-policy-mismatch`.
    - INVARIANT (checked by the orchestrator before dispatch and asserted
      by fleet's `--json` echo): no `READ_SET` entry is an ancestor of, or
      equal to, a writable root; every entry is either one of the FIXED
@@ -1339,7 +1358,9 @@ key); in agent mode the candidates are the keys the agent actually
 holds (`ssh-add -L`) — fetches the authenticated login's keys with `gh
 api user/keys`, requires at least one candidate fingerprint to appear
 there, selects that key, and the wrapper names exactly it: explicit
-mode → `-o IdentityAgent=none -i <private key path>`; agent mode → `-o
+mode → `-o IdentityAgent=none -i <REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/identity`
+(the `0600` COPY made at phase A after binding, §9.4a — never the
+operator's original path, which could be swapped after verification); agent mode → `-o
 IdentityAgent=<socket> -i <orchestrator-written public-key file of the
 matched agent key>` (with `IdentitiesOnly=yes`, naming an agent key's
 public file makes ssh offer only that agent identity). No match → exit
@@ -1348,7 +1369,7 @@ existing socket, `-o IdentityAgent=<SSH_AUTH_SOCK>` (with an optional
 `-i <file>` from `--ssh-identity` to select the key); otherwise, if
 `--ssh-identity <abs file>` is given (a regular PRIVATE-key file owned by
 the invoking uid, mode `0600`, from which `ssh-keygen -y` succeeds),
-`-o IdentityAgent=none -i <that private key file>`; otherwise
+`-o IdentityAgent=none -i <the per-iteration copy of that key, §9.4a>`; otherwise
 phase A exits 1 `ssh-auth-missing` — an `IdentityAgent=` with an empty
 value is never generated. The generated unit (§9.3a) must carry one of
 the two: `Environment=SSH_AUTH_SOCK=<abs socket>` when `init --service`
@@ -1715,18 +1736,17 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   environment; (4) the worker's harness credentials (its OAuth token in
   the synthetic home) are the ONE secret it must hold — the harness
   cannot authenticate without them and there is no external auth broker
-  for the CLI — which is why (1) and (2) exist. **Accepted residuals:** network
-  egress from the model plane is not filtered in v1 (fleet K2; a
-  destination-allowlisting proxy inside the network namespace is the v2
-  item, tracked in the fleet ticket's NOT-IN-SCOPE), so anything within
-  `READ_SET` — the published baseline, the issue branch, and the worker's
-  own harness credentials — can in principle leave through model
-  traffic; the credential exposure is inherent to running the harness
-  at all (the CLI has no external auth broker and a scoped
-  non-exportable credential does not exist for it) and is bounded — not
-  eliminated — by the authorization boundary above together with §5's
-  rule that only OWNER-authored body text drives an unlabeled dispatch;
-  and the diff
+  for the CLI — which is why (1) and (2) exist. **Egress is allowlisted, not open:** the model plane has no network
+  route except a loopback bridge to a host-side CONNECT proxy whose only
+  permitted destination is the model API (§6.4, fleet item 13), so the
+  harness's OAuth token — which the worker must hold, the CLI having no
+  external auth broker — can be presented only to the service that
+  issued it; content in `READ_SET` can still leave INSIDE model requests
+  to that service (inherent to using a hosted model at all, and bounded
+  by the authorization boundary above together with §5's rule that only
+  OWNER-authored body text drives an unlabeled dispatch), but it cannot
+  be posted anywhere else. **Accepted residual:** the model API itself
+  is the one permitted destination; and the diff
   secret scan of §6.5a(iv) protects only what reaches GitHub — it is NOT
   a mitigation for content exposed in model requests and is not claimed
   as one.
@@ -1893,7 +1913,12 @@ ignored (AC 28). Repo-config keys (`restMinutes`, `maxOpenPrs`,
 
 None is trust-root tier; each is a small, separately testable diff.
 
-- `@adlc/fleet`: CLI flags `--model-plane-read host|bounded` and
+- `@adlc/fleet`: `--model-plane-egress open|allowlist` (item 13:
+  `allowlist` = `--unshare-net` for the model plane + a host-side CONNECT
+  proxy on a unix socket with the adapter-declared model hosts as the
+  only permitted targets + an in-sandbox loopback bridge + `HTTPS_PROXY`
+  for the worker; default unchanged = `open`; `--json` reports the mode
+  and allowlist), CLI flags `--model-plane-read host|bounded` and
   `--model-plane-read-only <abs,abs,…>` (operator-local; `bounded`
   selects the sandbox module's existing `READ_POLICY.BOUNDED` for the
   MODEL plane — worktree + synthetic home + the allowlist — instead of the
@@ -2999,3 +3024,18 @@ None is trust-root tier; each is a small, separately testable diff.
     valid lines, status shows `archive-corrupt`, replay then re-appends
     missing ids exactly once; a merely truncated tail is still handled
     without quarantine.
+151. **Explicit key is the verified copy** (`preflight.test.mjs`): in
+    explicit mode the wrapper's `-i` names
+    `<REPO_ROOT>/.adlc/autopilot-runs/ssh-<token>/identity`, never the
+    `--ssh-identity` path; replacing the original file after phase A
+    changes nothing; replacing the copy → `ssh-material-tampered`.
+152. **Model-plane egress is allowlisted** (`run.test.mjs` + fleet's
+    real-bwrap test): the fleet argv carries `--model-plane-egress
+    allowlist`; a fleet fake echoing `egress: "open"` →
+    `sandbox-policy-mismatch`; inside the real sandbox a process can
+    reach `127.0.0.1:<port>` and, through it, only `CONNECT
+    api.anthropic.com:443` succeeds while `CONNECT example.com:443`, a
+    plain `GET`, a direct TCP connect to any external address, and DNS
+    resolution all fail; the proxy log shows the refused targets; the
+    worker env has `HTTPS_PROXY`/`HTTP_PROXY` set to the bridge and an
+    empty `NO_PROXY`.
