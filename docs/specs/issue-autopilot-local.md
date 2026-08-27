@@ -216,7 +216,7 @@ disambiguate by inspecting git/`gh`.
 | `stale`/`ci-red`/`oid-mismatch` (an open PR exists) whose mapped label a human REMOVED | **re-arm** the run: keep the branch and PR, reset `roundsUsed`, `wallClockUsedMs`, `ciRoundsUsed` and the watch clock to 0, set state `pr-open`; the next `maintain_open_prs()` (§8) or CI watch (§6.9) then performs a full retry round (fresh review + attestation). The PR is never closed by the autopilot; the issue does NOT re-enter selection while its PR is open |
 | `oid-mismatch` (label `adlc:autopilot-blocked` with reason `oid-mismatch` in the comment) | quarantined: branch and PR (if any) preserved untouched; excluded from selection and from maintenance until a human removes the label (row above) or runs `reset --issue N --confirm-delete <OID>` (§2.1a) |
 | branch `adlc/autopilot/issue-<n>` with no record, or with a record whose `token` does not match the branch's ownership marker | mark `orphan` in status with the branch OID; excluded from selection; **never deleted automatically**. `adlc-autopilot reset --issue N --confirm-delete <OID>` deletes LOCAL artifacts only, and only if the branch carries an ownership marker in the LOCAL git config (any token — proof the autopilot created it on this machine), `<OID>` equals the branch tip, and no open PR has that head; for a recordless branch `--delete-remote` is refused (exit 2) because the marker alone is not proof for a remote ref, and `reset` prints the exact `git push` command the operator may run by hand; a branch with NO marker is not the autopilot's and `reset` refuses entirely (exit 2) |
-| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
+| record whose local branch and PR are both gone | **canonical deletion rule** (the only path that deletes a record anywhere in this spec): delete the record iff `git --git-dir=<NET_GIT> ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` is empty AND no local branch exists AND no worktree exists; if the remote ref exists → `remote-pending`; if a local branch or worktree exists → retire per §2.1a first. Deletion is not atomic with the remote check, so it leaves a **tombstone** `.adlc/autopilot-runs/<issue>.tombstone.json` `{lastPushedOid, deletedAt}` (kept 30 days) and selection independently runs `git ls-remote` for the issue's branch name: an existing remote ref excludes the issue with rule `remote-ref-exists` whether or not any record or tombstone exists, so a ref that reappears between check and delete can never be collided with. Server-side ownership of `adlc/autopilot/**` (R12 ruleset) is the intended long-term guard. Every other row and §2.1a defer to this rule for the final record deletion |
 
 ### 2.1a Retiring a run — ownership-checked deletion
 
@@ -1304,7 +1304,7 @@ gitignored `.adlc/autopilot-*` files.
    recorded at the previous push (or the empty-ref form for a first push);
    a lease failure means someone else pushed to the autopilot's branch →
    state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
-   After pushing: `git ls-remote <remotePushUrl> refs/heads/adlc/autopilot/issue-<n>`
+   After pushing: `git --git-dir=<NET_GIT> ls-remote <remotePushUrl> refs/heads/adlc/autopilot/issue-<n>`
    must equal `attestedHead`; otherwise state `oid-mismatch`. Only after
    the post-push verification does the autopilot **upsert** the PR keyed by
    head branch (never a body sentinel), and the upsert is itself bound:
@@ -1641,7 +1641,7 @@ network operation ever runs against the repository's configuration
 lose to. The phase-A audit still forbids
 such entries so their appearance is reported. Finally every network
 operation is VERIFIED at the endpoint, not the config: after a push,
-`git ls-remote <remotePushUrl> refs/heads/<branch>` (itself run under the
+`git --git-dir=<NET_GIT> ls-remote <remotePushUrl> refs/heads/<branch>` (itself run under the
 same bound environment, and by §9.1a the same endpoint as every fetch)
 must return `attestedHead` (§6.8); after a fetch, the fetched object's
 OID must equal the one `ls-remote` announced (§6.0). The repository-local
