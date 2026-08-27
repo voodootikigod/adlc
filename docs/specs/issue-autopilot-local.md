@@ -945,10 +945,15 @@ gitignored `.adlc/autopilot-*` files.
    preflight result is DISCARDED, the run is `orphan`
    (`remote-url-changed` / `git-config-untrusted`), and nothing is
    attested or pushed.
-   Adding a `--fetch-url` option to `scripts/preflight.mjs` so the
-   orchestrator can pass the pinned URL is tracked as §15 R13 — a
-   trust-root change requiring the #141 ceremony, outside this program's
-   scope. Failure consumes one round of the SAME budget (§7):
+   The bracket is a DETECTION layer; the binding itself is §9.1b: the
+   script's internal `git fetch origin …` resolves `origin` from the
+   environment-supplied `remote.origin.url` the orchestrator set for that
+   process, so the fetch cannot reach any URL but the pinned one even if
+   `.git/config` is rewritten while the script runs. Adding a
+   `--fetch-url` option to `scripts/preflight.mjs` would make the binding
+   explicit in the script's own argv and is tracked as §15 R13 (a
+   trust-root change requiring the #141 ceremony); it is not required for
+   the binding to hold. Failure consumes one round of the SAME budget (§7):
    the run record's `roundsUsed` is incremented and steps 4–6 repeat with
    `--max-strikes <15 − roundsUsed>` and `--wall-clock-minutes <remaining>`;
    if either remaining budget is 0 the run is `blocked` exactly as a fleet
@@ -1273,12 +1278,24 @@ process the orchestrator spawns — including the bracketed
 inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
 `GIT_CONFIG_SYSTEM=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, and with every
 `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`,
-`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
+`GIT_CONFIG_PARAMETERS`, inherited `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
 `GIT_CONFIG_VALUE_*`, `http_proxy`/`https_proxy`/`all_proxy`
 (any case) and `GIT_TERMINAL_PROMPT` variable removed from the
 environment; the ONLY transport inputs are `SSH_AUTH_SOCK` (agent) and,
 if the operator sets it, `--git-ssh-command <abs path> [args]` which is
-passed as `GIT_SSH_COMMAND` verbatim. The repository-local
+passed as `GIT_SSH_COMMAND` verbatim. **`origin` is BOUND, not
+observed:** after stripping, the orchestrator sets its OWN
+environment-supplied configuration on every git process —
+`GIT_CONFIG_COUNT=3`, `GIT_CONFIG_KEY_0=remote.origin.url` /
+`GIT_CONFIG_VALUE_0=<remoteFetchUrl>`, `GIT_CONFIG_KEY_1=remote.origin.pushurl`
+/ `GIT_CONFIG_VALUE_1=<remotePushUrl>`, `GIT_CONFIG_KEY_2=core.hooksPath`
+/ `GIT_CONFIG_VALUE_2=/dev/null` — which git applies with precedence
+over every config FILE, so any process that names `origin` (including
+the immutable `scripts/preflight.mjs` and fleet's git calls) resolves it
+to the pinned URLs for the lifetime of that process regardless of what
+`.git/config` says at any instant; combined with `GIT_CONFIG_GLOBAL`/
+`GIT_CONFIG_SYSTEM` = `/dev/null` and the phase-A ban on
+`url.*.insteadOf`, no configuration source can rewrite the transport. The repository-local
 `<REPO_ROOT>/.git/config` (operator-owned, never part of a PR) is
 audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
 `core.sshCommand`, `core.gitProxy`, `http.proxy`, `https.proxy`,
@@ -1388,7 +1405,9 @@ worktree — so it reads the pinned `.adlc/config.json` and ticket store,
 never the primary checkout's working tree — must exit 0, and the
 worktree is removed afterwards (a leftover from a crash is removed before
 the next attempt). The primary checkout is never the cwd of any
-preflight command.
+preflight command. Fleet's own git processes inherit the same bound
+environment (§9.1b) from the orchestrator, so their `origin` is pinned
+too.
 
 ## 10. Observability
 
@@ -2573,3 +2592,14 @@ None is trust-root tier; each is a small, separately testable diff.
     example block parses with `JSON.parse` and validates against both
     schemas (self-test that reads the block out of the spec at the pinned
     blob).
+126. **`origin` is bound per process** (`preflight.test.mjs` +
+    `sequence.test.mjs`, real temporary git repository): every recorded
+    `git` spawn env carries `GIT_CONFIG_KEY_0=remote.origin.url` with the
+    pinned value and `GIT_CONFIG_KEY_1=remote.origin.pushurl`; inside a
+    child started with that env, `git config --get remote.origin.url`
+    returns the pinned value even after `.git/config` is rewritten to a
+    different URL mid-run; a preflight fake that performs a real `git
+    fetch origin` against a bare fixture reaches the pinned fixture and
+    not the rewritten one; inherited `GIT_CONFIG_COUNT`/`KEY`/`VALUE`
+    variables from the orchestrator's own env are dropped before the
+    bound ones are set.
