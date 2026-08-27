@@ -1492,9 +1492,15 @@ against `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`; without it phase A exits 1
 read from the pinned blob (§9.4) to EQUAL the operator-local value
 (`repo-mismatch` otherwise), so the committed config confirms but never
 defines the identity. The HOST of the pinned URLs is bound to the host `gh` is authenticated
-against: `gh auth status --json` (or `gh api meta` on that host) yields
-the gh host (`github.com` or a GHES host), the SSH URL's host part must
-equal it exactly (`remote-host-mismatch` otherwise, before any network
+against: the pinned `gh auth status --hostname <host> --active --json
+hosts` (gh ≥ 2.40 grammar; `--json hosts` yields `{"hosts":{"<host>":
+[{state,active,host,login,…}]}}`) must yield exactly one entry for
+`<host>` with `state:"success"` and `active:true`, where `<host>` is the
+host part of the pinned SSH URL (`github.com` or a GHES host) — any other
+shape, a non-zero exit, or a `login` different from the `gh api user`
+principal of §9.1a → `gh-host-unbound`; every `gh api` call in this spec
+passes `--hostname <host>` explicitly. So the SSH URL's host part must
+equal the authenticated host exactly (`remote-host-mismatch` otherwise, before any network
 operation), and the pinned `known_hosts` is sourced only from that
 host's `gh api meta` — so the repository identity (§9.1a), the SSH
 endpoint and the host keys all name one host. Preflight OBSERVES the
@@ -1781,6 +1787,34 @@ worktree rules as a human session (§11). Deferred to a follow-up ticket.
   CI, and CI red is treated as blocking (§0.11).
 - **Stale plugin** → parity check (§9.2) refuses to dispatch.
 
+### 11.1 Accepted residuals (canonical, hashed)
+
+This numbered list is the ONLY input of the `spec-approval` assumptions
+binding (§14): the extractor takes the ordered items of this section,
+each item being the text after its `N. ` marker up to the next item or
+blank line with every run of whitespace (including line breaks)
+collapsed to one space, and hashes `JSON.stringify(items)` with sha256.
+The newest `spec-approval` record's `approved_assumptions` must equal
+that array element for element and its `assumptions_hash` that digest.
+Prose elsewhere in §11 explains the residuals; only these items bind.
+
+1. The model API host is the one permitted model-plane egress
+   destination; content in READ_SET can leave inside model requests to
+   that service (§6.4, §11).
+2. The worker holds the harness OAuth token in its synthetic home
+   because the CLI has no external auth broker; the egress allowlist
+   bounds where it can be presented (§11).
+3. The diff secret scan of §6.5a(iv) protects only what reaches GitHub;
+   it is not a mitigation for content exposed in model requests.
+4. The quota gate makes overshoot visible and refuses the next start;
+   it never prevents a single step's overshoot (§3.4).
+5. The #141 non-author-CODEOWNER ceremony is unsatisfiable with a single
+   CODEOWNER; .adlc/config.json lands by deliberate admin merge (§0).
+6. scripts/preflight.mjs gates run gate by gate in a sandbox until R13
+   lands (§6.6).
+7. Five spec-review residuals are enforced as build-ticket AC2–AC6
+   rather than as spec prose.
+
 ## 12. Failure policy
 
 | Condition | Effect |
@@ -1989,8 +2023,9 @@ None is trust-root tier; each is a small, separately testable diff.
   revision's residuals (§11), not an earlier design's: the record also
   carries `assumptions_hash` (sha256 of the canonical JSON of
   `approved_assumptions`) and preflight requires it to equal the hash of
-  the `Accepted residual` items extracted from §11 of the blob at
-  `specBlob` (a pure extractor with a fixture for the current §11);
+  the §11.1 items extracted from the blob at `specBlob` by the rule
+  stated there (a pure extractor with a fixture for the current §11.1),
+  and `approved_assumptions` to equal those items element for element;
   mismatch or absent hash → exit 1 `spec-approval-assumptions-stale`, no
   dispatch. The record's `spec_hash` states WHAT was gated; GitHub's
   merge identity states WHO — the manifest is data the preflight checks,
@@ -3031,8 +3066,11 @@ None is trust-root tier; each is a small, separately testable diff.
     spawn, zero network spawns; unchanged material → the spawn proceeds;
     a pre-existing directory of the same name → `ssh-dir-exists`.
 148. **Remote host bound to the gh host** (`preflight.test.mjs`): with
-    `gh auth status` reporting `github.com`, `git@ghe.example.com:o/r.git`
-    → `remote-host-mismatch`; `git@github.com:o/r.git` is accepted; the
+    a fake `gh` answering `auth status --hostname github.com --active
+    --json hosts` with one `success`/`active` entry for `github.com`,
+    `git@ghe.example.com:o/r.git` → `remote-host-mismatch`; an empty
+    `hosts`, `state:"error"`, a mismatched `login`, or the old
+    `--json`-only argv → `gh-host-unbound`; `git@github.com:o/r.git` is accepted; the
     `known_hosts` fixture is written from `gh api meta` of that host and
     a key for any other host is ignored.
 149. **Gates that run repository code are sandboxed** (`sequence.test.mjs`
@@ -3073,7 +3111,11 @@ None is trust-root tier; each is a small, separately testable diff.
     user-writable directory → `untrusted-tool:ssh-add`, zero network
     spawns.
 154. **Assumptions bound to the revision** (`preflight.test.mjs`): a
-    `spec-approval` fixture whose `assumptions_hash` differs from the
-    §11 residuals of the pinned blob → `spec-approval-assumptions-stale`,
-    zero dispatches; a matching one passes; the extractor is a pure
-    function with a fixture for the current §11.
+    `spec-approval` fixture whose `assumptions_hash` or
+    `approved_assumptions` differ from the §11.1 items of the pinned blob
+    → `spec-approval-assumptions-stale`, zero dispatches; a matching one
+    passes; the extractor is a pure function with a fixture for the
+    current §11.1; and a test reads THIS repository's committed spec and
+    the newest `spec-approval` record of the build ticket's manifest
+    segment and asserts the real preflight comparison passes (the
+    committed approval must satisfy its own binding).
