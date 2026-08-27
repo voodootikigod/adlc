@@ -264,11 +264,24 @@ with a lease so a tip that moves between the check and the delete is
 protected: `git --git-dir=<NET_GIT> push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
 <remotePushUrl> :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
-remote AND local untouched, stop. After a successful delete, `gh pr list
---head` is queried once more; a PR that was created against the ref in
-the window is reported (`pr-after-delete: <number>`) so the operator can
-restore the ref from the recorded OID — the deletion itself is
-lease-bounded, so the OID is always known. Step L (local; in automatic
+remote AND local untouched, stop. GitHub offers no atomic "delete
+unless a pull request exists", so a PR can be opened against the ref
+between the re-check and the lease-guarded delete; that window is an
+accepted residual (§11.1 item 8) and is bounded three ways: the delete
+is operator-only (`--delete-remote`, never automatic), it is REFUSED
+when the ref's last push is younger than 10 minutes (`ref-too-fresh` —
+a PR is opened within minutes of a push, not hours), and after a
+successful delete `gh pr list --head` is queried once more and a PR
+created in the window is repaired immediately, not merely reported:
+the orchestrator re-creates the ref from the recorded OID with a lease
+that expects the ref to be ABSENT (`git --git-dir=<NET_GIT> push
+--force-with-lease=refs/heads/adlc/autopilot/issue-<n>: <remotePushUrl>
+<lastPushedOid>:refs/heads/adlc/autopilot/issue-<n>` — a ref someone
+re-created meanwhile is never overwritten), reports
+`pr-after-delete-restored: <number>` (or `pr-after-delete-unrestored`
+when that lease fails), labels the issue `adlc:needs-human`, leaves the
+record in place and stops; the deletion itself is lease-bounded, so the
+OID is always known. Step L (local; in automatic
 retirement always, in `reset` only after R succeeded or the record says
 never pushed), cwd `REPO_ROOT`, transactional so that no artifact is
 permanently removed before the conditional ref delete has succeeded:
@@ -1763,8 +1776,16 @@ nameWithOwner,defaultBranchRef` must return that name and default branch
 `main`; `gh api user` must return a login whose `gh api
 repos/<repo>/collaborators/<login>/permission` is `admin`, `maintain` or
 `write`. Any mismatch → exit 1 (`repo-mismatch` / `principal-unauthorized`)
-before any issue, PR or git write. Every `gh` invocation thereafter passes
-`--repo <repo>` explicitly (never relies on cwd inference). The verified
+before any issue, PR or git write. Every `gh` invocation thereafter is
+host-bound twice over, so a verified GHES host can never fall back to
+`github.com`: wherever this spec writes `--repo <repo>`, `<repo>` is
+`REPO_SPEC` = `<host>/<owner>/<name>` (gh's `HOST/OWNER/REPO` form),
+passed explicitly on every command that accepts `--repo` (issue
+list/view/edit/comment, pr create/view/edit/list/checks, repo view —
+never cwd inference); `gh api` and `gh auth status` carry `--hostname
+<host>`; and every gh spawn's environment carries `GH_HOST=<host>` (the
+one variable gh consults for host selection) and no other `GH_*`/
+`GITHUB_*` variable but the token gh itself manages. The verified
 fetch and push URLs are PINNED for the iteration (stored in the status
 file and copied into each run record as `remoteFetchUrl` /
 `remotePushUrl`) in CANONICAL form, and in v1 they MUST be SSH URLs
@@ -2060,6 +2081,9 @@ Prose elsewhere in §11 explains the residuals; only these items bind.
    lands (§6.6).
 7. Five spec-review residuals are enforced as build-ticket AC2–AC6
    rather than as spec prose.
+8. An operator-requested remote branch delete cannot be made atomic
+   against a concurrent pull-request creation; the window is bounded by
+   ref-too-fresh and repaired by the lease-guarded restore of §2.1a.
 
 ## 12. Failure policy
 
@@ -2794,8 +2818,14 @@ None is trust-root tier; each is a small, separately testable diff.
     <OID> --delete-remote` deletes the remote ref using
     `--force-with-lease=<ref>:<oid>`; when the remote tip was advanced by
     another push, the delete fails the lease, the remote ref survives,
-    and the run is `orphan`; a PR fake that appears right after a
-    successful delete is reported as `pr-after-delete`.
+    and the run is `orphan`; a record whose last push is 5 minutes old →
+    `ref-too-fresh`, zero pushes; a PR fake that appears right after a
+    successful delete → the ref is re-created at the recorded OID with a
+    lease expecting absence (asserted on the real bare `origin`), the
+    result is `pr-after-delete-restored: <number>`, the issue carries
+    `adlc:needs-human` and the record survives; a fake that re-creates
+    the ref at another OID before the restore → the restore's lease
+    fails, the foreign ref survives, `pr-after-delete-unrestored`.
 64. **Argv-safe pre-strike** (`run.test.mjs`): with `--model
     'opus;touch /tmp/x'` preflight exits 1 `model-unknown` (grammar
     `^[a-z0-9][a-z0-9.-]{0,63}$`); the `--pre-strike-argv` value parses
@@ -3543,3 +3573,15 @@ None is trust-root tier; each is a small, separately testable diff.
     `node_modules/@adlc/<new>` → `../../packages/<new>` created by the
     worker makes `import('@adlc/<new>')` resolve; a run whose
     `worker-deps` build failed never spawns the worker (`init-failed`).
+163. **Every gh spawn is host-bound** (`keys.test.mjs`, spawn recorder
+    over a full `once` sequence against a GHES fixture whose pinned URL is
+    `git@ghe.example.com:o/r.git`): every recorded `gh` spawn carries
+    `GH_HOST=ghe.example.com` in its env, `--hostname ghe.example.com`
+    when it is `gh api`/`gh auth status`, and `--repo ghe.example.com/o/r`
+    when its subcommand accepts `--repo` — covering issue list, view,
+    edit and comment, pr create, view, edit, list and checks, and repo
+    view; the assertion is table-driven over the complete spawn list so
+    an unclassified gh spawn fails; a spawn with `--repo o/r`, without
+    `GH_HOST`, or with `GH_HOST=github.com` fails the test; the same
+    sequence against a `github.com` fixture passes with
+    `--repo github.com/o/r`.
