@@ -508,9 +508,21 @@ issue number and the rule name)
 - the issue's `<!-- adlc:begin -->` scope, or the scope produced at shaping
   (§5), intersects the **protected-path denylist** — non-shrinkable, config
   may only extend it:
-  `.adlc/**`, `.github/**`, `scripts/rails-guard-ci.mjs`, `docs/ci/**`,
-  `CODEOWNERS`, `.github/CODEOWNERS`, `docs/CODEOWNERS`, `package.json`,
-  `.npmrc`, plus the **trust-root tier** packages
+  the UNION of (a) every path in rails-guard's
+  `DEFAULT_IMMUTABLE_TRUST_ROOTS` (`packages/rails-guard/lib/ci/trust-roots.mjs`)
+  and this repository's `REPO_TRUST_ROOTS` (`scripts/rails-guard-ci.mjs`),
+  both read from the pinned blob at `BASE_OID` so the denylist can never
+  lag the repository's own trust-root set — today that includes
+  `scripts/preflight.mjs`, `scripts/test/preflight.test.mjs`,
+  `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`,
+  `scripts/test/toolkit-floor.test.mjs`,
+  `scripts/check-reviewer-directed-comments.mjs` and its test,
+  `scripts/test/rails-guard-workflow-hashes.json`, `.github/workflows/ci.yml`
+  and `docs/ci/rails-guard.yml` — and (b) the static extras `.adlc/**`,
+  `.github/**`, `scripts/rails-guard-ci.mjs`, `scripts/mutation-gate.mjs`,
+  `scripts/run-tests.mjs`, `docs/ci/**`, `CODEOWNERS`, `.github/CODEOWNERS`,
+  `docs/CODEOWNERS`, `package.json`, `.npmrc`, plus the **trust-root tier**
+  packages
   `packages/rails-guard/**`, `packages/prosecute/**`,
   `packages/gate-manifest/**`, `packages/build-gate/**`,
   `packages/ticket-prune/**`, `packages/ticket-sync/**`, and
@@ -964,14 +976,22 @@ gitignored `.adlc/autopilot-*` files.
    the OID LITERAL as `--base`, which is immutable input; the one mutable
    intermediate it creates is the tracking ref
    `refs/remotes/origin/<BASE_OID>` its fetch materializes. The
-   orchestrator therefore (a) pre-creates that ref with `git update-ref
-   refs/remotes/origin/<BASE_OID> <BASE_OID>` before the call, so the
-   script's fetch is a no-op and every gate inside it compares against
-   the same object; (b) after the call verifies `git rev-parse
-   refs/remotes/origin/<BASE_OID>` still equals `BASE_OID` and, where the
-   script reports the base it used (its `--json` summary), that it equals
-   `BASE_OID`; any mismatch → the result is DISCARDED (`base-ref-moved`),
-   the run is `orphan`; (c) deletes the tracking ref afterwards. A
+   orchestrator therefore (a) before the call reads that ref: if it
+   already exists and equals `BASE_OID` it is left alone and marked
+   `preexisting` in the run record; if it exists with ANY other value the
+   run stops with `base-ref-conflict` (nothing touched — the ref belongs
+   to someone else); if absent it is created with the compare-and-swap
+   form `git update-ref refs/remotes/origin/<BASE_OID> <BASE_OID>
+   0000000000000000000000000000000000000000` (fails if it appeared
+   meanwhile → `base-ref-conflict`), so the script's fetch is a no-op and
+   every gate inside it compares against the same object; (b) after the
+   call verifies `git rev-parse refs/remotes/origin/<BASE_OID>` still
+   equals `BASE_OID` and, where the script reports the base it used (its
+   `--json` summary), that it equals `BASE_OID`; any mismatch → the
+   result is DISCARDED (`base-ref-moved`), the run is `orphan`; (c)
+   deletes the ref only if the orchestrator created it, with the
+   compare-and-swap form `git update-ref -d refs/remotes/origin/<BASE_OID>
+   <BASE_OID>` — a `preexisting` ref is never deleted. A
    `--base-oid` mode in which the script never touches a named ref is
    part of §15 R13. Adding a
    `--fetch-url` option to `scripts/preflight.mjs` would make the binding
@@ -1358,7 +1378,7 @@ destructive or network git operation the orchestrator asserts `git -C
 BOUND, not observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
 the following env-supplied configuration table, numbered in this
-order with `GIT_CONFIG_COUNT=6` (exactly these rows; the test asserts
+order with `GIT_CONFIG_COUNT=7` (exactly these rows; the test asserts
 the exact list):
 
 | n | key | value |
@@ -1368,7 +1388,8 @@ the exact list):
 | 2 | `core.hooksPath` | `/dev/null` |
 | 3 | `url.<remoteFetchUrl>.insteadOf` | `<remoteFetchUrl>` |
 | 4 | `url.<remotePushUrl>.pushInsteadOf` | `<remotePushUrl>` |
-| 5 | `core.sshCommand` | the single-quoted absolute path of the `GIT_SSH` wrapper (belt and braces: `GIT_SSH` already wins, this row also pins the file-level key to the same wrapper) |
+| 5 | `url.<remotePushUrl>.insteadOf` | `<remotePushUrl>` (identical to row 3 when the URLs are byte-identical, kept as its own row so a future split-URL mode cannot forget it) |
+| 6 | `core.sshCommand` | the single-quoted absolute path of the `GIT_SSH` wrapper (belt and braces: `GIT_SSH` already wins, this row also pins the file-level key to the same wrapper) |
 
 Because remotes are SSH-only (§9.1a), no HTTP credential helper, proxy,
 TLS, redirect, cookie or header setting can ever apply to an autopilot
@@ -1419,11 +1440,13 @@ run WITHOUT the `GIT_CONFIG_COUNT` overlay (only the sanitization of
 `git@github.com:` / `ssh://git@github.com/` / `https://github.com/` /
 trailing `.git` canonicalization) to exactly that repo; the observed,
 canonical values are what get pinned as `remoteFetchUrl` /
-`remotePushUrl` — and in v1 they MUST canonicalize to the SAME endpoint
-(`remote-url-split`, exit 1, otherwise), so every fetch, `ls-remote`
-and push, and every post-operation verification, addresses one endpoint
-and a push can never be verified against a different host than it went
-to — and every later "immediately before the operation"
+`remotePushUrl` — and in v1 the two canonical strings MUST be
+BYTE-IDENTICAL (`remote-url-split`, exit 1, otherwise; canonicalization
+maps `git@<host>:<o>/<r>.git` and `ssh://git@<host>/<o>/<r>.git` to one
+form first), so every fetch, `ls-remote` and push, and every
+post-operation verification, addresses one endpoint through one string
+that the same identity `insteadOf`/`pushInsteadOf` rows protect — and
+every later "immediately before the operation"
 re-read uses the same `--file` form, so identity is always verified
 against the file and never against the overlay that would echo it back; `gh repo view <repo> --json
 nameWithOwner,defaultBranchRef` must return that name and default branch
@@ -2740,7 +2763,7 @@ None is trust-root tier; each is a small, separately testable diff.
     `url.<evil>.insteadOf=<prefix of pinned>` written into `.git/config`
     AFTER the audit, a push under the bound env still lands in the pinned
     bare repo and never in the evil one (assert by ref presence in each);
-    the bound env carries the full §9.1b table (count 6 for an SSH URL)
+    the bound env carries the full §9.1b table (count 7 for an SSH URL)
     with the two identity `insteadOf` entries; a post-push `ls-remote <pinned>` mismatch →
     `oid-mismatch`.
 128. **Dry-run never needs a worktree** (`run.test.mjs`): in dry-run the
@@ -2775,8 +2798,8 @@ None is trust-root tier; each is a small, separately testable diff.
     are written into `.git/config`; a push under the bound env is
     executed by the PINNED wrapper (its log shows the pinned `-F
     /dev/null … UserKnownHostsFile=…` argv reaching it through the
-    generated `GIT_SSH` wrapper, the evil wrapper's log is empty) and lands in the pinned bare repo; `GIT_CONFIG_COUNT` equals 6
-    and row 5 pins `core.sshCommand` to the same string.
+    generated `GIT_SSH` wrapper, the evil wrapper's log is empty) and lands in the pinned bare repo; `GIT_CONFIG_COUNT` equals 7
+    and row 6 pins `core.sshCommand` to the same string.
 132. **SSH-only remotes** (`preflight.test.mjs`): `https://github.com/o/r.git`
     → `remote-url-scheme`, exit 1, zero network spawns; `git@github.com:o/r.git`
     and `ssh://git@github.com/o/r.git` are accepted and canonicalize to the
@@ -2826,3 +2849,27 @@ None is trust-root tier; each is a small, separately testable diff.
     paths), the wrapper is mode `0500`, its recorded sha256 matches, a
     modified wrapper → `ssh-wrapper-tampered` before any network spawn,
     and no git spawn carries `GIT_SSH_COMMAND`.
+140. **Denylist derives from the trust-root lists** (`select.test.mjs` +
+    `diffcheck.test.mjs`): the denylist used at triage and in the
+    actual-diff check is built from the pinned blob's
+    `DEFAULT_IMMUTABLE_TRUST_ROOTS` and `REPO_TRUST_ROOTS` plus the static
+    extras; a shaped scope naming `scripts/preflight.mjs` or
+    `scripts/toolkit-floor.json` → CLARIFY; a worker fake that edits
+    `scripts/preflight.mjs` despite a `packages/foo/**` scope → actual-diff
+    violation, no attestation, no push; adding a path to either source
+    list in the fixture blob extends the denylist without any autopilot
+    change.
+141. **Tracking ref is never clobbered** (`sequence.test.mjs`, real
+    temporary git repository): a pre-existing `refs/remotes/origin/<oid>`
+    equal to the OID is left untouched and survives the bracket; one with
+    a different value → `base-ref-conflict`, zero preflight spawns; an
+    absent ref is created with the zero-OID compare-and-swap and deleted
+    afterwards with `update-ref -d <ref> <oid>`; a ref that appears
+    between the read and the create → `base-ref-conflict`.
+142. **Byte-identical endpoint** (`preflight.test.mjs`): `url =
+    git@github.com:o/r.git` with `pushurl = ssh://git@github.com/o/r.git`
+    canonicalize to one string and are accepted; a push URL with a
+    different owner/repo or host → `remote-url-split`; the bound table has
+    seven rows including `url.<pushUrl>.insteadOf`; a post-audit
+    `url.<prefix>.insteadOf` race against the post-push `ls-remote` still
+    resolves to the pinned endpoint (real fixture, two bare remotes).
