@@ -41,10 +41,12 @@ export function validateConfig(config) {
         errors.push(`config.routes[${i}] must be an object`);
         continue;
       }
-      if (!route.method || typeof route.method !== 'string') {
+      // trim() on both, matching loadSnapshot: a whitespace-only method or
+      // path would capture "successfully" into a snapshot compare then rejects.
+      if (typeof route.method !== 'string' || route.method.trim() === '') {
         errors.push(`config.routes[${i}].method must be a non-empty string`);
       }
-      if (!route.path || typeof route.path !== 'string') {
+      if (typeof route.path !== 'string' || route.path.trim() === '') {
         errors.push(`config.routes[${i}].path must be a non-empty string`);
       }
       if (typeof route.method === 'string' && typeof route.path === 'string') {

@@ -36,6 +36,20 @@ export function loadSnapshot(filePath) {
     if (typeof route.path !== 'string' || route.path.trim() === '') {
       throw new Error(`snapshot file "${filePath}" route at index ${i} lacks non-empty string path`);
     }
+    // capture writes exactly one of {status, contentType, body} or {error}.
+    // diffRoute compares whatever is there, so two entries carrying NEITHER
+    // (no HTTP result was ever captured) diff as identical — a false green.
+    if (route.error !== undefined && typeof route.error !== 'string') {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} has a non-string error`);
+    }
+    const hasError = typeof route.error === 'string' && route.error.trim() !== '';
+    const hasStatus = Number.isInteger(route.status);
+    if (!hasError && !hasStatus) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} records no observation (neither an integer status nor a non-empty error string)`);
+    }
+    if (hasError && hasStatus) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} records both an error and a status`);
+    }
   }
   // compareSnapshots keys each side on routeKey() alone, so two entries sharing a
   // key silently collapse to the LAST one — a changed duplicate hidden behind an

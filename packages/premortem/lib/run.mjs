@@ -38,10 +38,11 @@ export async function run(opts) {
     opError(`cannot read spec file '${specPath}': ${err.message}`);
   }
 
-  // trim() strips White_Space only; a spec made of zero-width spaces, BOMs or
-  // control characters (\p{Cf}, \p{Cc}) would pass it and still be recorded
-  // as analyzed P1 evidence. Anything with no visible code point is empty.
-  if (specContent.replace(/[\s\p{Cf}\p{Cc}]/gu, '') === '') {
+  // trim() strips White_Space only; a spec made of zero-width spaces, BOMs,
+  // control characters or bare combining marks (\p{Cf}, \p{Cc}, \p{M}) would
+  // pass it and still be recorded as analyzed P1 evidence. Anything with no
+  // visible base code point is empty.
+  if (specContent.replace(/[\s\p{Cf}\p{Cc}\p{M}]/gu, '') === '') {
     opError(`spec content is empty or whitespace-only`);
   }
 

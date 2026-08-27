@@ -276,6 +276,18 @@ describe('validateConfig', () => {
     assert.deepEqual(errors, []);
   });
 
+  test('whitespace-only method or path returns an error (parity with loadSnapshot)', () => {
+    const errors = validateConfig({
+      baseUrl: 'http://localhost:3000',
+      routes: [
+        { method: 'GET', path: '   ' },
+        { method: '\t', path: '/x' },
+      ],
+    });
+    assert.ok(errors.some((e) => e.includes('config.routes[0].path')), JSON.stringify(errors));
+    assert.ok(errors.some((e) => e.includes('config.routes[1].method')), JSON.stringify(errors));
+  });
+
   test('duplicate method+path routes return an error (case-insensitive on method)', () => {
     const errors = validateConfig({
       baseUrl: 'http://localhost:3000',

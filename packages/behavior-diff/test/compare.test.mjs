@@ -74,9 +74,14 @@ describe('loadSnapshot validation (unit)', () => {
       [{ routes: [{ method: 'GET', path: '' }] }, /route at index 0 lacks non-empty string path/],
       [{ routes: [{ method: 'GET', path: 123 }] }, /route at index 0 lacks non-empty string path/],
       [{ routes: [
-          { method: 'GET', path: '/foo' },
+          { method: 'GET', path: '/foo', status: 200 },
           { method: 'GET' }
         ] }, /route at index 1 lacks non-empty string path/],
+      [{ routes: [{ method: 'GET', path: '/foo' }] }, /route at index 0 records no observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: '200' }] }, /route at index 0 records no observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', error: '' }] }, /route at index 0 records no observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', error: 42 }] }, /route at index 0 has a non-string error/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, error: 'boom' }] }, /route at index 0 records both an error and a status/],
     ];
 
     try {
@@ -89,10 +94,22 @@ describe('loadSnapshot validation (unit)', () => {
     }
   });
 
+  test('accepts an error-only (unreachable) observation', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'err.json');
+    const data = { routes: [{ method: 'GET', path: '/down', error: 'ECONNREFUSED' }] };
+    writeFileSync(file, JSON.stringify(data));
+    try {
+      assert.deepEqual(loadSnapshot(file), data);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('accepts valid routes and parses correctly', () => {
     const dir = tmpDir();
     const file = join(dir, 'valid.json');
-    const data = { routes: [{ method: 'GET', path: '/hello' }] };
+    const data = { routes: [{ method: 'GET', path: '/hello', status: 200 }] };
     writeFileSync(file, JSON.stringify(data));
 
     try {
@@ -105,13 +122,35 @@ describe('loadSnapshot validation (unit)', () => {
 });
 
 describe('CLI compare integration (empty/malformed rejection)', () => {
+  test('exits 1 when both sides hold the same NON-observation (no status, no error) instead of reporting identical', () => {
+    const dir = tmpDir();
+    const before = join(dir, 'before.json');
+    const after = join(dir, 'after.json');
+    const nonObservation = JSON.stringify({ routes: [{ method: 'GET', path: '/x' }] });
+    writeFileSync(before, nonObservation);
+    writeFileSync(after, nonObservation);
+    try {
+      let threw = false;
+      try {
+        execFileSync(process.execPath, [cliPath, 'compare', before, after], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        threw = true;
+        assert.equal(err.status, 1, 'Process should exit with code 1');
+        assert.match(err.stderr, /records no observation/);
+      }
+      assert.ok(threw, 'two non-observations must not compare as identical (exit 0)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('exits 1 on empty before snapshot', () => {
     const dir = tmpDir();
     const emptyFile = join(dir, 'empty.json');
     const validFile = join(dir, 'valid.json');
 
     writeFileSync(emptyFile, JSON.stringify({ routes: [] }));
-    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo' }] }));
+    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200 }] }));
 
     try {
       let threw = false;
@@ -134,7 +173,7 @@ describe('CLI compare integration (empty/malformed rejection)', () => {
     const validFile = join(dir, 'valid.json');
 
     writeFileSync(malformed, JSON.stringify({ routes: [{ method: 'GET' }] }));
-    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo' }] }));
+    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200 }] }));
 
     try {
       let threw = false;
