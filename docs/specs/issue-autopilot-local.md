@@ -497,6 +497,23 @@ issue number and the rule name)
   the autopilot cannot read — is excluded with rule `not-authorized` and
   is never shaped or dispatched.
   An unknown mode value → preflight exit 1 `bad-config`.
+  The predicate is evaluated over the issue REVISION that will be
+  shaped, not over the issue as an object — GitHub lets any collaborator
+  with triage permission edit another user's issue body, so authorship
+  alone does not bind the text: alongside `authorAssociation` and the
+  label timeline the autopilot reads the body-edit history (GraphQL
+  `issue.userContentEdits { editor { login } editedAt }`) and the
+  `renamed` timeline events, and records `issueRevision = {titleSha256,
+  bodySha256, lastEditedAt, editors[]}` at selection. Under the OWNER
+  clause every body editor and every rename actor must be the author
+  (an issue whose body or title anyone else touched is `not-authorized`
+  until an authorized actor labels it); under the labeled clause the
+  authorizing `labeled` event must be later than `lastEditedAt` and than
+  every rename by an actor who is not `admin`/`maintain` — the label
+  authorizes THAT revision, and any later edit by anyone revokes it
+  until an authorized actor labels again. An edit history the autopilot
+  cannot read → `not-authorized`. The recorded `issueRevision` is what
+  §5 shapes and what §6.0a revalidates byte for byte.
 - label in {`trust-root-change`, `question`, `wontfix`, `duplicate`,
   `invalid`, `adlc:autopilot-skip`, `adlc:autopilot-blocked`,
   `adlc:autopilot-stale`, `adlc:autopilot-ci-red`, `adlc:needs-clarification`,
@@ -702,8 +719,10 @@ gitignored `.adlc/autopilot-*` files.
    selection input is re-evaluated: `state == "OPEN"`, `updatedAt`
    unchanged since selection, the same hard-exclusion verdict (§4.2,
    including `eligibleAuthor` re-evaluated from the timeline), no
-   new open PR or branch for the issue, and — when the body changed — the
-   shaped ticket is discarded. Any change → the candidate is dropped
+   new open PR or branch for the issue, and the `issueRevision` of §4.2
+   (title, body, `lastEditedAt`, editors) equal to the one recorded at
+   selection — any body or title change, by anyone, discards the shaped
+   ticket and the candidate. Any change → the candidate is dropped
    (`revalidation-changed`, nothing written or, if a worktree already
    exists, retired per §2.1a) and selection restarts on the next
    iteration.
@@ -821,7 +840,23 @@ gitignored `.adlc/autopilot-*` files.
      and `<node prefix>/lib/node_modules/corepack`, plus `/usr`, `/lib`,
      `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, plus the
      adapter's synthetic home (fleet §7.3 `homeState`, which necessarily
-     holds the harness's own credentials).
+     holds the harness's own credentials) — constructed per fleet item 14
+     (§14): a private tmpfs `HOME` (`0700`, the invoking uid) holding
+     ONLY (i) `.claude/.credentials.json`, a `0600` COPY of the host file
+     (validated before copying: regular file, uid-owned, mode `0600`,
+     opened `O_NOFOLLOW`; sha256 recorded), writable so the harness can
+     refresh its OAuth token, and written BACK at worker exit only when
+     the copy changed AND the host file still hashes to the recorded
+     sha256 (atomic rename, `0600`; otherwise `credentials-refresh-
+     conflict` is logged and the host file is left alone); (ii) a
+     `.claude/settings.json` generated from an allowlist of keys (model
+     and permission settings; hooks and MCP servers stripped), `0400`;
+     (iii) a minimal `.claude.json` generated from an allowlist (the
+     account record and onboarding flags — never the host file, which
+     carries per-project history); (iv) the pinned plugin tree of §9.2,
+     read-only. Nothing else of the operator's `HOME` exists inside —
+     `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects`,
+     other `~/.claude/*` and `~/.npmrc` are ENOENT, not denied.
    - EGRESS: the model plane runs with `--unshare-net` (loopback only)
      plus fleet-extensions item 13, `--model-plane-egress allowlist`:
      fleet starts, on the HOST, a minimal HTTP CONNECT proxy listening on
@@ -980,10 +1015,22 @@ gitignored `.adlc/autopilot-*` files.
    and the sequence must match it exactly, `preflight-order-drift`
    otherwise) — and every gate that EXECUTES repository code (the test
    run, the mutation gate, anything that imports from `ISSUE_WT`) runs
-   inside a **repo-command-plane sandbox** (fleet's `bwrap` profile with
-   network DENIED, reads bounded to `ISSUE_WT`, the pinned tool files and
-   system roots, writes bounded to `ISSUE_WT` and a private tmpfs, a
-   synthetic empty `HOME`, and an environment that contains no
+   inside a **repo-command-plane sandbox** whose git view is fully
+   inside it: the gates need `.git` (rails-guard and the mutation gate
+   diff against `refs/remotes/origin/<BASE_OID>`, the test run resolves
+   `HEAD`), and neither the host `.git` nor the mirror is ever bound, so
+   before the gate sequence the orchestrator cuts `GATE_REPO` — a
+   throwaway `git clone` of the mirror (local, hard links disabled) under
+   the run directory, checked out at `attestedHead`, with
+   `refs/remotes/origin/<BASE_OID>` created inside it and no config
+   beyond `core.*` — and every gate runs with `cwd = GATE_REPO` (fleet's
+   `bwrap` profile with network DENIED, reads bounded to `GATE_REPO`,
+   the pinned tool files and system roots, writes bounded to `GATE_REPO`
+   and a private tmpfs, a synthetic empty `HOME`); after the sequence
+   `git -C GATE_REPO rev-parse HEAD` must still equal `attestedHead`
+   (`gate-repo-moved` otherwise, the run fails) and `GATE_REPO` is
+   removed — gate results are attached to `attestedHead`, never to a
+   path. The sandbox environment contains no
    `SSH_AUTH_SOCK`, no `gh`/`GITHUB_TOKEN`, no `ADLC_MANIFEST_KEY`, no
    `.env.local`, none of the orchestrator's state paths): the worker's
    code never runs on the host with the orchestrator's credentials or
@@ -1968,7 +2015,12 @@ None is trust-root tier; each is a small, separately testable diff.
   MODEL plane — worktree + synthetic home + the allowlist — instead of the
   current `READ_POLICY.HOST`; the adapter's `homeState` still provides
   the harness's own config/credentials inside the synthetic home; default
-  unchanged = `host`), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
+  unchanged = `host`), the synthetic-home construction contract (item
+  14: tmpfs `HOME` populated from the allowlist of §6.4 — validated
+  `0600` credential copy with checksum-guarded write-back, generated
+  `settings.json`/`.claude.json` from key allowlists, pinned plugin tree,
+  everything else ENOENT; real-bwrap tests for authentication, refresh
+  write-back, refresh conflict and denial), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
   worktree is cut from a caller-supplied bare mirror holding only the
   pinned baseline and the issue branch, and the worker branch is fetched
   back into the caller's repository before gates/merge; real-bwrap
@@ -3075,13 +3127,21 @@ None is trust-root tier; each is a small, separately testable diff.
     a key for any other host is ignored.
 149. **Gates that run repository code are sandboxed** (`sequence.test.mjs`
     + fleet's real-bwrap test): every gate spawn that executes code from
-    `ISSUE_WT` (`run-tests`, `mutation-gate`) is wrapped in the
-    repo-command-plane sandbox — argv shows `bwrap` with `--unshare-net`,
-    no bind of `$HOME`, `.env.local`, the agent socket or the
-    orchestrator state — and its env lacks `SSH_AUTH_SOCK`, `GH_TOKEN`,
-    `GITHUB_TOKEN` and `ADLC_MANIFEST_KEY`; a test fixture in `ISSUE_WT`
-    that tries to read `~/.claude/.credentials.json`, open a TCP socket,
-    or read `.env.local` fails inside the sandbox; the gate order equals
+    the issue branch (`run-tests`, `mutation-gate`, rails-guard) is
+    wrapped in the repo-command-plane sandbox with `cwd = GATE_REPO` —
+    argv shows `bwrap` with `--unshare-net`, a bind of `GATE_REPO` and
+    no bind of `$HOME`, `.env.local`, the host `.git`, the mirror, the
+    agent socket or the orchestrator state — and its env lacks
+    `SSH_AUTH_SOCK`, `GH_TOKEN`, `GITHUB_TOKEN` and `ADLC_MANIFEST_KEY`;
+    the REAL `scripts/rails-guard-ci.mjs` and `scripts/mutation-gate.mjs`
+    executed inside the sandbox against a fixture `GATE_REPO` (a clone of
+    a fixture mirror with `refs/remotes/origin/<BASE_OID>` created)
+    produce the same verdicts as on the host — including a planted
+    trust-root edit and a planted surviving mutant being caught — while
+    `git rev-parse --git-dir` resolves inside `GATE_REPO`; a fixture in
+    the clone that tries to read `~/.claude/.credentials.json`, open a
+    TCP socket, or read `.env.local` fails inside the sandbox; a gate
+    that commits inside `GATE_REPO` → `gate-repo-moved`; the gate order equals
     the pinned `preflight.mjs` `buildGates()` list and a reordered list
     → `preflight-order-drift`.
 150. **Corrupt archive line is quarantined** (`triage.test.mjs`): an
@@ -3119,3 +3179,21 @@ None is trust-root tier; each is a small, separately testable diff.
     the newest `spec-approval` record of the build ticket's manifest
     segment and asserts the real preflight comparison passes (the
     committed approval must satisfy its own binding).
+155. **Authorization binds the issue revision** (`select.test.mjs`,
+    `sequence.test.mjs`): under `owner-or-label` an OWNER-authored issue
+    whose `userContentEdits` lists a collaborator editor, or whose
+    timeline holds a `renamed` event by a collaborator → `not-authorized`,
+    never shaped; the same issue after an `admin` `labeled` event later
+    than `lastEditedAt` → eligible; a body edit AFTER that label event →
+    `not-authorized` again; an unreadable edit history → `not-authorized`;
+    a body edited between selection and §6.0a revalidation →
+    `revalidation-changed`, the shaped ticket discarded, zero dispatches.
+156. **Synthetic HOME contract** (fleet real-bwrap test): inside the
+    model plane `$HOME/.claude/.credentials.json` is readable, `0600`,
+    and byte-equal to the host file; a worker fake that rewrites it →
+    the host file is replaced atomically with the new content (`0600`)
+    when the host file is unchanged, and left alone with
+    `credentials-refresh-conflict` logged when the host file changed
+    meanwhile; `settings.json` inside carries no `hooks`/`mcpServers`
+    keys; `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects`
+    and `~/.npmrc` are ENOENT inside; the host `HOME` is not bound.
