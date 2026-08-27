@@ -1077,7 +1077,7 @@ gitignored `.adlc/autopilot-*` files.
    recorded at the previous push (or the empty-ref form for a first push);
    a lease failure means someone else pushed to the autopilot's branch →
    state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
-   After pushing: `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>`
+   After pushing: `git ls-remote <remotePushUrl> refs/heads/adlc/autopilot/issue-<n>`
    must equal `attestedHead`; otherwise state `oid-mismatch`. Only after
    the post-push verification does the autopilot **upsert** the PR keyed by
    head branch (never a body sentinel), and the upsert is itself bound:
@@ -1276,8 +1276,8 @@ failure (`base-unresolved`) and the iteration sleeps.
 
 9.1 Toolchain: `adlc` (the key-bearing CLI — its pinned path is also
 asserted by the key-hygiene test, AC 12), `bwrap`, `claude`, `codex`,
-`adversarial-review`, `gh`, `git`, `ssh` (the transport executable named
-in `GIT_SSH_COMMAND`, §9.1b), `npm`, `node >= 18` are resolved ONCE
+`adversarial-review`, `gh`, `git`, `ssh` (the transport executable the `GIT_SSH`
+wrapper execs, §9.1b), `npm`, `node >= 18` are resolved ONCE
 at preflight to absolute paths from
 a sanitized search list — the orchestrator's PATH entries that are
 absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
@@ -1307,8 +1307,18 @@ inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
 `GIT_CONFIG_VALUE_*`, `http_proxy`/`https_proxy`/`all_proxy`
 (any case) and `GIT_TERMINAL_PROMPT` variable removed from the
 environment; the transport itself is ISOLATED, not inherited: for SSH URLs the
-orchestrator always sets `GIT_SSH_COMMAND` (which git prefers over any
-`core.sshCommand` in a config file) to the pinned `ssh` executable with
+orchestrator always sets `GIT_SSH` (which git executes DIRECTLY, without
+a shell, and prefers over any `core.sshCommand`) to an orchestrator-
+generated wrapper at `<REPO_ROOT>/.adlc/autopilot-runs/ssh-wrapper-<token>`
+— a regular file, mode `0500`, owned by the invoking uid, whose sha256
+is recorded in the status file and re-verified immediately before every
+spawn that carries it (`ssh-wrapper-tampered` otherwise), containing a
+fixed template that `exec`s the pinned `ssh` executable with the
+options below, every embedded path written with POSIX single-quote
+escaping (`'…'` with `'\''` for embedded quotes) so `REPO_ROOT`,
+known_hosts, identity and socket paths containing spaces or shell
+metacharacters are passed intact, and forwarding git's own arguments
+(`"$@"`) unchanged — the pinned `ssh` executable with
 `-F /dev/null` (no user or system `ssh_config`, so no `Host`/`HostName`/
 `ProxyCommand`/`ProxyJump`/`LocalCommand` rewrite can apply),
 `-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`
@@ -1330,8 +1340,22 @@ is run with the socket present, or the `--ssh-identity` path baked into
 validated). HTTPS remotes are not supported in v1 (§9.1a), so no HTTP transport
 setting can apply; the phase-A audit nevertheless rejects ANY `http.*` /
 `https.*` / `credential.*` / `core.sshCommand` / `core.gitProxy` key in
-the repo-local config outright. **`origin` is BOUND, not
-observed:** after stripping, the orchestrator sets its OWN
+the repo-local config outright. In addition EVERY `GIT_*` variable inherited from the orchestrator's
+own environment is removed before the bound set is applied — in
+particular the repository-selection variables `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`,
+`GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
+`GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`,
+`GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`,
+`GIT_EXTERNAL_DIFF`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_PAGER`
+and every `GIT_TRACE*`/`GIT_ATTR_*`/`GIT_LITERAL_PATHSPECS`-style
+variable — so a poisoned inherited environment cannot redirect which
+repository, index or object store a spawn operates on; and before every
+destructive or network git operation the orchestrator asserts `git -C
+<cwd> rev-parse --show-toplevel` equals the expected `REPO_ROOT` or
+`ISSUE_WT` and `git -C <cwd> rev-parse --git-dir` lies under
+`<REPO_ROOT>/.git` (`repo-identity-mismatch` otherwise). **`origin` is
+BOUND, not observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
 the following env-supplied configuration table, numbered in this
 order with `GIT_CONFIG_COUNT=6` (exactly these rows; the test asserts
@@ -1344,7 +1368,7 @@ the exact list):
 | 2 | `core.hooksPath` | `/dev/null` |
 | 3 | `url.<remoteFetchUrl>.insteadOf` | `<remoteFetchUrl>` |
 | 4 | `url.<remotePushUrl>.pushInsteadOf` | `<remotePushUrl>` |
-| 5 | `core.sshCommand` | the full `GIT_SSH_COMMAND` string of §9.1b (belt and braces: the env variable already wins, this row also pins the file-level key) |
+| 5 | `core.sshCommand` | the single-quoted absolute path of the `GIT_SSH` wrapper (belt and braces: `GIT_SSH` already wins, this row also pins the file-level key to the same wrapper) |
 
 Because remotes are SSH-only (§9.1a), no HTTP credential helper, proxy,
 TLS, redirect, cookie or header setting can ever apply to an autopilot
@@ -1367,9 +1391,9 @@ literal (the identity rewrite wins). The phase-A audit still forbids
 such entries so their appearance is reported. Finally every network
 operation is VERIFIED at the endpoint, not the config: after a push,
 `git ls-remote <remotePushUrl> refs/heads/<branch>` (itself run under the
-same bound environment) must return `attestedHead` (§6.8); after a
-fetch, the fetched object's OID must equal the one `ls-remote` announced
-(§6.0). The repository-local
+same bound environment, and by §9.1a the same endpoint as every fetch)
+must return `attestedHead` (§6.8); after a fetch, the fetched object's
+OID must equal the one `ls-remote` announced (§6.0). The repository-local
 `<REPO_ROOT>/.git/config` (operator-owned, never part of a PR) is
 audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
 `core.sshCommand`, `core.gitProxy`, `http.proxy`, `https.proxy`,
@@ -1395,7 +1419,11 @@ run WITHOUT the `GIT_CONFIG_COUNT` overlay (only the sanitization of
 `git@github.com:` / `ssh://git@github.com/` / `https://github.com/` /
 trailing `.git` canonicalization) to exactly that repo; the observed,
 canonical values are what get pinned as `remoteFetchUrl` /
-`remotePushUrl`, and every later "immediately before the operation"
+`remotePushUrl` — and in v1 they MUST canonicalize to the SAME endpoint
+(`remote-url-split`, exit 1, otherwise), so every fetch, `ls-remote`
+and push, and every post-operation verification, addresses one endpoint
+and a push can never be verified against a different host than it went
+to — and every later "immediately before the operation"
 re-read uses the same `--file` form, so identity is always verified
 against the file and never against the overlay that would echo it back; `gh repo view <repo> --json
 nameWithOwner,defaultBranchRef` must return that name and default branch
@@ -2721,8 +2749,9 @@ None is trust-root tier; each is a small, separately testable diff.
     read-only phase-B checks run when the baseline objects are local and
     are all `skipped` when they are not.
 129. **Isolated SSH transport** (`preflight.test.mjs` + `run.test.mjs`):
-    every git spawn for a network operation carries `GIT_SSH_COMMAND`
-    beginning with the pinned `ssh` path and containing `-F /dev/null`,
+    every git spawn for a network operation carries `GIT_SSH` naming the
+    generated wrapper (mode `0500`, sha256 verified before the spawn);
+    the wrapper's content execs the pinned `ssh` path with `-F /dev/null`,
     `StrictHostKeyChecking=yes`,
     `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`,
     `IdentitiesOnly=yes`, `BatchMode=yes`; a `~/.ssh/config` fixture that
@@ -2745,8 +2774,8 @@ None is trust-root tier; each is a small, separately testable diff.
     `core.sshCommand=<evil wrapper>` and `url.<evil>.insteadOf=<prefix>`
     are written into `.git/config`; a push under the bound env is
     executed by the PINNED wrapper (its log shows the pinned `-F
-    /dev/null … UserKnownHostsFile=…` argv, the evil wrapper's log is
-    empty) and lands in the pinned bare repo; `GIT_CONFIG_COUNT` equals 6
+    /dev/null … UserKnownHostsFile=…` argv reaching it through the
+    generated `GIT_SSH` wrapper, the evil wrapper's log is empty) and lands in the pinned bare repo; `GIT_CONFIG_COUNT` equals 6
     and row 5 pins `core.sshCommand` to the same string.
 132. **SSH-only remotes** (`preflight.test.mjs`): `https://github.com/o/r.git`
     → `remote-url-scheme`, exit 1, zero network spawns; `git@github.com:o/r.git`
@@ -2777,3 +2806,23 @@ None is trust-root tier; each is a small, separately testable diff.
     the string `IdentityAgent=` followed by a space never appears in any
     argv; `init --service` without a socket or identity exits 1, and with
     a socket writes `Environment=SSH_AUTH_SOCK=`.
+137. **One endpoint, verified where pushed** (`preflight.test.mjs` +
+    `run.test.mjs`): a repo whose `pushurl` canonicalizes to a different
+    host than `url` → `remote-url-split`; the post-push `ls-remote` argv
+    carries the push URL; a fixture in which only the fetch endpoint has
+    the pushed ref → `oid-mismatch`.
+138. **Repository-selection env scrubbed** (`run.test.mjs`, real
+    temporary repository): with `GIT_DIR`, `GIT_WORK_TREE`,
+    `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and
+    `GIT_ALTERNATE_OBJECT_DIRECTORIES` seeded in the orchestrator env to
+    point at a decoy repository, every recorded git spawn env lacks all of
+    them, the identity assertion (`rev-parse --show-toplevel`/`--git-dir`)
+    passes for the real repository and fails (`repo-identity-mismatch`)
+    when the cwd is the decoy.
+139. **SSH wrapper is safe for odd paths** (`preflight.test.mjs`, real
+    `ssh -G`): with `REPO_ROOT`, the known_hosts path and an identity
+    path each containing a space, a `$(`, and a single quote, the
+    generated wrapper resolves them intact (`ssh -G` reports the exact
+    paths), the wrapper is mode `0500`, its recorded sha256 matches, a
+    modified wrapper → `ssh-wrapper-tampered` before any network spawn,
+    and no git spawn carries `GIT_SSH_COMMAND`.
