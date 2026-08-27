@@ -1348,33 +1348,37 @@ metacharacters are passed intact, and forwarding git's own arguments
 `ssh_keys` for the pinned host and refreshed only by `init --write`; a
 host-key mismatch fails the operation, never prompts), `-o
 IdentitiesOnly=yes`, `-o BatchMode=yes`, and exactly ONE authentication
-mode resolved in phase A — and in either mode the key is BOUND to the
-`gh`-verified principal (§9.1a): phase A computes the SHA256 fingerprint
-of every candidate key FROM THE KEY MATERIAL THAT WILL AUTHENTICATE —
-never from a sidecar file: in explicit mode the public key is derived
-from the private key itself with `ssh-keygen -y -f <private>` (a `.pub`
-beside it is ignored, so a mismatched sidecar cannot bind the wrong
-key); in agent mode the candidates are the keys the agent actually
-holds (`ssh-add -L`) — fetches the authenticated login's keys with `gh
-api user/keys`, requires at least one candidate fingerprint to appear
-there, selects that key, and the wrapper names exactly it: explicit
-mode → `-o IdentityAgent=none -i <REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/identity`
-(the `0600` COPY made at phase A after binding, §9.4a — never the
-operator's original path, which could be swapped after verification); agent mode → `-o
-IdentityAgent=<socket> -i <orchestrator-written public-key file of the
-matched agent key>` (with `IdentitiesOnly=yes`, naming an agent key's
-public file makes ssh offer only that agent identity). No match → exit
-1 `ssh-identity-unbound`, no network spawn. The modes: if `SSH_AUTH_SOCK` is set and names an
-existing socket, `-o IdentityAgent=<SSH_AUTH_SOCK>` (with an optional
-`-i <file>` from `--ssh-identity` to select the key); otherwise, if
-`--ssh-identity <abs file>` is given (a regular PRIVATE-key file owned by
-the invoking uid, mode `0600`, from which `ssh-keygen -y` succeeds),
-`-o IdentityAgent=none -i <the per-iteration copy of that key, §9.4a>`; otherwise
-phase A exits 1 `ssh-auth-missing` — an `IdentityAgent=` with an empty
-value is never generated. The generated unit (§9.3a) must carry one of
-the two: `Environment=SSH_AUTH_SOCK=<abs socket>` when `init --service`
-is run with the socket present, or the `--ssh-identity` path baked into
-`ExecStart`; `init --service` refuses to generate a unit with neither;
+mode resolved in phase A — the modes are EXCLUSIVE: `--ssh-identity`
+present → explicit mode and the agent is not consulted at all (if
+`SSH_AUTH_SOCK` is also set the run stops with `ssh-mode-ambiguous`
+rather than silently preferring either); `--ssh-identity` absent and
+`SSH_AUTH_SOCK` naming an existing socket → agent mode; neither → phase
+A exits 1 `ssh-auth-missing`. In BOTH modes the key that will
+authenticate is bound to the `gh`-verified principal (§9.1a) with the
+fingerprint taken from the material that will actually be used, and
+the binding happens AFTER that material is under the orchestrator's
+control so nothing can be swapped between verification and use:
+- explicit mode: the orchestrator first COPIES the operator's file into
+  the per-iteration directory (§9.4a) — opened with `O_NOFOLLOW`, must be
+  a regular file owned by the invoking uid with mode `0600`, copied with
+  `0600`, and the copy's inode/device/size/sha256 recorded — then derives
+  the public key from the COPY (`ssh-keygen -y -f <copy>`), fingerprints
+  it, requires the fingerprint in `gh api user/keys`, and only then
+  generates the wrapper with `-o IdentityAgent=none -i <copy>`; a `.pub`
+  beside the original is never read; the original path is never named
+  in any argv;
+- agent mode: the candidates are the keys the agent holds (`ssh-add -L`
+  over the recorded socket); exactly the matched key's public line is
+  written by the orchestrator to `<ssh dir>/identity.pub` (`0600`,
+  recorded), and the wrapper carries `-o IdentityAgent=<socket> -i
+  <ssh dir>/identity.pub` (with `IdentitiesOnly=yes`, naming an agent
+  key's public file makes ssh offer only that agent identity);
+no match in either mode → exit 1 `ssh-identity-unbound`, no network
+spawn; every file named here is re-validated before each network spawn
+per §9.4a. The generated unit (§9.3a) must carry exactly one mode:
+`Environment=SSH_AUTH_SOCK=<abs socket>` when `init --service` is run
+with the socket present and no `--ssh-identity`, or the `--ssh-identity`
+path baked into `ExecStart` (and no `SSH_AUTH_SOCK` line); `init --service` refuses to generate a unit with neither;
 `--git-ssh-command` is NOT an option (a free-form command cannot be
 validated). HTTPS remotes are not supported in v1 (§9.1a), so no HTTP transport
 setting can apply; the phase-A audit nevertheless rejects ANY `http.*` /
@@ -2912,7 +2916,7 @@ None is trust-root tier; each is a small, separately testable diff.
 136. **SSH auth mode** (`preflight.test.mjs` + `service.test.mjs`): with
     `SSH_AUTH_SOCK` set to an existing socket the command carries
     `IdentityAgent=<sock>`; unset with `--ssh-identity` (mode `0600`) →
-    `IdentityAgent=none -i <file>`; unset without it → `ssh-auth-missing`
+    `IdentityAgent=none -i <ssh dir>/identity`; unset without it → `ssh-auth-missing`
     before any network spawn; a `0644` identity → `key-file-insecure`;
     the string `IdentityAgent=` followed by a space never appears in any
     argv; `init --service` without a socket or identity exits 1, and with
@@ -2984,15 +2988,21 @@ None is trust-root tier; each is a small, separately testable diff.
     agent offering only B → `ssh-identity-unbound`, zero network spawns;
     `--ssh-identity` whose `.pub` fingerprint is not listed →
     `ssh-identity-unbound`.
-146. **Identity binding uses the authenticating key** (`preflight.test.mjs`,
-    real `ssh-keygen`): in explicit mode the fingerprint is computed from
-    `ssh-keygen -y -f <private>` and a mismatched `.pub` sidecar beside it
-    changes nothing; the wrapper carries `IdentityAgent=none -i <private
-    path>`; in agent mode the wrapper carries `IdentityAgent=<socket> -i
-    <orchestrator-written .pub of the matched key>`; a live agentless
-    push against a bare fixture over a local `sshd` fixture succeeds with
-    the bound private key and is refused (`ssh-identity-unbound`) when
-    only an unlisted key is available (skipped loudly without `sshd`).
+146. **Identity binding uses the authenticating copy** (`preflight.test.mjs`,
+    real `ssh-keygen`): in explicit mode the orchestrator copies the key
+    (`O_NOFOLLOW`, `0600`) BEFORE fingerprinting, the fingerprint is
+    computed from the copy, a mismatched `.pub` sidecar beside the
+    original changes nothing, and the wrapper carries `IdentityAgent=none
+    -i <ssh dir>/identity` — never the original path; a fixture that
+    swaps the original file between the copy and the fingerprint step has
+    no effect (the copy is what was fingerprinted and what is used);
+    `--ssh-identity` together with `SSH_AUTH_SOCK` → `ssh-mode-ambiguous`,
+    zero network spawns; in agent mode the wrapper carries
+    `IdentityAgent=<socket> -i <ssh dir>/identity.pub` holding only the
+    matched key; a live agentless push against a bare fixture over a
+    local `sshd` succeeds with the bound copy and is refused
+    (`ssh-identity-unbound`) when only an unlisted key is available
+    (skipped loudly without `sshd`).
 147. **SSH material revalidated before every spawn** (`preflight.test.mjs`
     + `run.test.mjs`, real files): the per-iteration `ssh-<token>/`
     directory is `0700` and holds the wrapper, `known_hosts`, and the
