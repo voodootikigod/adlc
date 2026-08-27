@@ -851,24 +851,20 @@ gitignored `.adlc/autopilot-*` files.
      (§14): a private tmpfs `HOME` (`0700`, the invoking uid) holding
      ONLY (i) `.claude/.credentials.json`, a `0600` COPY of the host file
      (validated before copying: regular file, uid-owned, mode `0600`,
-     opened `O_NOFOLLOW`; sha256 recorded), writable so the harness can
-     refresh its OAuth token — but worker-controlled bytes are NEVER
-     copied back as such: at worker exit a changed copy is written back
-     only if it parses as JSON with exactly the host file's top-level
-     keys, the ONLY fields that differ from the host file are the
-     refresh triple inside the OAuth record (`accessToken`,
-     `refreshToken`, `expiresAt`), both tokens are non-empty strings
-     carrying the same prefix as the host's, `expiresAt` is later than
-     the host's, and every other field is byte-equal (a token removed,
-     an account or scope changed, an added key, or unparseable content
-     → `credentials-refresh-rejected`, host untouched — the harness
-     simply refreshes again next run); the accepted refresh is applied
-     as a locked compare-and-swap: under an exclusive `flock` on
-     `<host .claude>/.credentials.lock` the host file is re-opened
-     `O_NOFOLLOW`, must still have the recorded inode and sha256, and is
-     replaced by a `0600` temp file via atomic rename; a host file that
-     changed meanwhile (an interactive refresh) → `credentials-refresh-
-     conflict`, host untouched; (ii) a
+     opened `O_NOFOLLOW`; sha256 recorded), bound READ-ONLY (`0400`,
+     on a read-only bind) — nothing the worker writes is EVER copied
+     back to the host credential store, there is no write-back path at
+     all, and the copy is discarded with the tmpfs; the worker therefore
+     cannot refresh or rotate the operator's token, so validity for the
+     whole run is established BEFORE dispatch, on the host, by the
+     trusted harness: phase B (§9.4) reads the host file's OAuth
+     `expiresAt` and requires `expiresAt − now ≥ wallClock + 30 min`;
+     when it is shorter the orchestrator first runs the pinned `claude`
+     on the host with `-p` and a one-token prompt (the harness's own
+     refresh path, in the real `HOME`, a quota-consuming step under
+     §3.2's gate), re-reads the file, and if the margin is still short
+     exits 1 `token-expiring` with the remaining lifetime printed and
+     no dispatch — never a mid-run refresh inside the sandbox; (ii) a
      `.claude/settings.json` generated from an allowlist of keys (model
      and permission settings; hooks and MCP servers stripped), `0400`;
      (iii) a minimal `.claude.json` generated from an allowlist (the
@@ -931,10 +927,25 @@ gitignored `.adlc/autopilot-*` files.
      deterministic gates, prosecution and merge operate unchanged on the
      fetched-back branch, and the `fleet/run-<id>` tip that §6.5
      fast-forwards `adlc/autopilot/issue-<n>` to contains the worker's
-     commits. The mirror is never read by any gate; the mirror is `rm -rf`'d and recreated
-     before every dispatch (under the lock) and removed at retirement
-     Step L with the run directory, so a stale mirror is never read by any
-     gate. What the worker can read of the repository is exactly the
+     commits. This WORKER mirror is never read by any gate — it stops
+     at the pre-dispatch baseline plus the issue branch as it was cut,
+     and the worker's, completion and attestation commits never enter
+     it; it is `rm -rf`'d and recreated before every dispatch (under the
+     lock) and removed at retirement Step L with the run directory. The
+     gates instead read a second, later mirror: after the LAST
+     orchestrator commit (attestation, §6.5a) the orchestrator creates
+     the empty bare **gate mirror** `<run dir>/gate.git`, pushes into it
+     LOCALLY from the caller repository exactly `attestedHead:refs/heads/
+     adlc/autopilot/issue-<n>` and `<BASE_OID>:refs/remotes/origin/
+     <BASE_OID>` (a push transfers only the objects reachable from those
+     two tips — never the caller repository's other branches, stashes or
+     unreachable objects, which a local `git clone` of the caller
+     repository would copy wholesale), verifies `git -C gate.git
+     rev-parse refs/heads/adlc/autopilot/issue-<n>` equals `attestedHead`
+     and `rev-list --all` equals the objects reachable from the two tips
+     (`gate-mirror-stale` otherwise, the run fails), and only then cuts
+     `GATE_REPO` (§6.6) from it; the gate mirror is removed with
+     `GATE_REPO` after the sequence. What the worker can read of the repository is exactly the
      history already published at `BASE_OID` plus the issue branch.
    Fleet: sandboxed worker (`bwrap`, `--permission-mode
    acceptEdits`, allowlist from `fleet.allowedCommands`), deterministic gates
@@ -1053,10 +1064,14 @@ gitignored `.adlc/autopilot-*` files.
    diff against `refs/remotes/origin/<BASE_OID>`, the test run resolves
    `HEAD`), and neither the host `.git` nor the mirror is ever bound, so
    before the gate sequence the orchestrator cuts `GATE_REPO` — a
-   throwaway `git clone` of the mirror (local, hard links disabled) under
-   the run directory, checked out at `attestedHead`, with
-   `refs/remotes/origin/<BASE_OID>` created inside it and no config
-   beyond `core.*` — and every gate runs with `cwd = GATE_REPO` (fleet's
+   throwaway single-branch `git clone` of the GATE mirror of §6.4
+   (`<run dir>/gate.git`, synchronized to `attestedHead` after the last
+   orchestrator commit; local, hard links disabled) under the run
+   directory, checked out at `attestedHead` (`gate-repo-stale` if
+   `rev-parse HEAD` differs), with `refs/remotes/origin/<BASE_OID>`
+   created inside it and no config beyond `core.*` (the clone's
+   `remote.origin.*` is deleted) — and every gate runs with `cwd =
+   GATE_REPO` (fleet's
    `bwrap` profile with network DENIED, reads bounded to `GATE_REPO`,
    the pinned tool files and system roots, writes bounded to `GATE_REPO`
    and a private tmpfs, a synthetic empty `HOME`); after the sequence
@@ -2056,10 +2071,10 @@ None is trust-root tier; each is a small, separately testable diff.
   the harness's own config/credentials inside the synthetic home; default
   unchanged = `host`), the synthetic-home construction contract (item
   14: tmpfs `HOME` populated from the allowlist of §6.4 — validated
-  `0600` credential copy with checksum-guarded write-back, generated
+  `0600` credential copy bound read-only with NO write-back, generated
   `settings.json`/`.claude.json` from key allowlists, pinned plugin tree,
   everything else ENOENT; real-bwrap tests for authentication, refresh
-  write-back, refresh conflict and denial), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
+  read-only enforcement and denial), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
   worktree is cut from a caller-supplied bare mirror holding only the
   pinned baseline and the issue branch, and the worker branch is fetched
   back into the caller's repository before gates/merge; real-bwrap
@@ -3238,15 +3253,16 @@ None is trust-root tier; each is a small, separately testable diff.
     a body edited between selection and §6.0a revalidation →
     `revalidation-changed`, the shaped ticket discarded, zero dispatches.
 156. **Synthetic HOME contract** (fleet `sandbox.test.mjs`, real `bwrap`,
-    skipped loudly without it): inside the
-    model plane `$HOME/.claude/.credentials.json` is readable, `0600`,
-    and byte-equal to the host file; a worker fake that rewrites it →
-    the host file is replaced atomically with the new content (`0600`)
-    when the host file is unchanged, and left alone with
-    `credentials-refresh-conflict` logged when the host file changed
-    meanwhile; `settings.json` inside carries no `hooks`/`mcpServers`
-    keys; `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects`
-    and `~/.npmrc` are ENOENT inside; the host `HOME` is not bound.
+    skipped loudly without it): inside the model plane
+    `$HOME/.claude/.credentials.json` is readable, `0400`, and byte-equal
+    to the host file; a worker fake that tries to rewrite, truncate,
+    unlink or rename over it fails (`EROFS`/`EACCES`) and the host file is
+    byte-identical and has the same inode afterwards; the orchestrator
+    has no code path that opens the host credential file for writing
+    (a spawn/fs recorder asserts zero writes under `~/.claude`);
+    `settings.json` inside carries no `hooks`/`mcpServers` keys;
+    `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects` and
+    `~/.npmrc` are ENOENT inside; the host `HOME` is not bound.
 157. **Sandboxed gates find their dependencies** (`sequence.test.mjs` +
     fleet real-bwrap test): the post-clone `npm ci --ignore-scripts` spawn
     has `cwd = GATE_REPO` and runs on the host (no `bwrap` in its argv);
@@ -3255,14 +3271,14 @@ None is trust-root tier; each is a small, separately testable diff.
     `scripts/run-tests.mjs` resolves `node_modules/.bin`; a clone whose
     install was skipped → `gate-deps-missing`, the run fails, no
     attestation.
-158. **Credential refresh is validated, not copied** (fleet
-    `sandbox.test.mjs`): a worker fake that rewrites only the refresh
-    triple with a later `expiresAt` → the host file is replaced under
-    the lock with `0600` and the recorded inode check; a copy that drops
-    a token, changes the account or scopes, adds a key, or is not JSON →
-    `credentials-refresh-rejected`, host byte-identical; a host file
-    modified between copy-in and exit → `credentials-refresh-conflict`,
-    host untouched; the write happens only while the lock is held.
+158. **Token lifetime gate** (`preflight.test.mjs`, `quota.test.mjs`):
+    a host credential fixture whose `expiresAt` is 100 minutes away with
+    a 90-minute wall clock → the pinned `claude -p` refresh spawn runs on
+    the host (real `HOME`, counted as a quota-consuming step) and, when
+    the fixture then reports a later `expiresAt`, dispatch proceeds; when
+    it does not → exit 1 `token-expiring` naming the remaining minutes,
+    zero dispatches; a fixture with 8 hours left → no refresh spawn at
+    all; the refresh spawn never carries the sandbox argv.
 159. **Dry-run transport is transient and isolated** (`preflight.test.mjs`
     with the spawn recorder): under `--dry-run` the `ls-remote` spawn
     carries a `GIT_SSH` wrapper whose realpath is under `mkdtemp` in
@@ -3276,3 +3292,14 @@ None is trust-root tier; each is a small, separately testable diff.
     forged signature makes the gate fail; the key-bearing allowlist
     fixture lists exactly the §9.3 children and a `verify` spawn without
     the key fails the test.
+161. **Gate mirror is synchronized after the last orchestrator commit**
+    (`sequence.test.mjs`, real temporary git repositories): with a
+    caller repository holding the worker's commits, the completion
+    commit and the attestation commit on `adlc/autopilot/issue-<n>`, plus
+    an unrelated branch and a dangling commit, the gate mirror created
+    after attestation has exactly two refs whose tips are `attestedHead`
+    and `BASE_OID`, `rev-list --all` equals the objects reachable from
+    them (the unrelated branch's and dangling objects are absent), and
+    `GATE_REPO`'s `HEAD` is `attestedHead` with the completion and
+    attestation commits present; a mirror created BEFORE the attestation
+    commit → `gate-mirror-stale`, no gate runs, no attestation.
