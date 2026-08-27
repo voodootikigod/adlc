@@ -869,10 +869,24 @@ gitignored `.adlc/autopilot-*` files.
      and permission settings; hooks and MCP servers stripped), `0400`;
      (iii) a minimal `.claude.json` generated from an allowlist (the
      account record and onboarding flags — never the host file, which
-     carries per-project history); (iv) the pinned plugin tree of §9.2,
-     read-only. Nothing else of the operator's `HOME` exists inside —
-     `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects`,
-     other `~/.claude/*` and `~/.npmrc` are ENOENT, not denied.
+     carries per-project history), writable inside the tmpfs because
+     the harness rewrites it on every start (the adapter's `homeState.
+     files` also names `.claude.json.backup`), and discarded with the
+     tmpfs; (iv) the pinned plugin tree of §9.2, read-only; (v) the
+     adapter's declared session-state directories — `claude-code`'s
+     `homeState.dirs`: `.claude/projects`, `.claude/todos`,
+     `.claude/statsig`, `.claude/shell-snapshots`, `.claude/file-history`,
+     `.claude/logs`, `.claude/downloads`, `.cache/claude-cli-nodejs` —
+     created EMPTY and writable inside the tmpfs so headless execution
+     can persist its own session state, and discarded with the tmpfs;
+     the operator's copies of those directories are never bound. Nothing
+     else of the operator's `HOME` exists inside — `~/.ssh`,
+     `~/.config/gh`, `~/.gitconfig`, other `~/.claude/*` and `~/.npmrc`
+     are ENOENT, not denied. This profile deliberately departs from the
+     adapter's default rationale for a WRITABLE credential ("the CLI
+     refreshes its OAuth token in place"): under item 14 the file is
+     read-only and the mid-run-expiry failure that rationale guards
+     against is excluded beforehand by the token lifetime gate above.
    - EGRESS: the model plane runs with `--unshare-net` (loopback only)
      plus fleet-extensions item 13, `--model-plane-egress allowlist`:
      fleet starts, on the HOST, a minimal HTTP CONNECT proxy listening on
@@ -992,15 +1006,16 @@ gitignored `.adlc/autopilot-*` files.
    `lockfile-drift`. Because the only admissible additions are workspace
    links, `npm ci --ignore-scripts --no-audit --no-fund` never fetches a
    new tarball of any kind; (iii) that command is then run by the
-   orchestrator ON THE HOST with `cwd = GATE_REPO` (§6.6) as soon as the
-   clone is cut — it executes no package code (`--ignore-scripts`), its
-   only egress is the registry for tarballs the attested lock already
-   pins, and it produces `GATE_REPO/node_modules` whose workspace links
-   (`node_modules/@adlc/<x>` → the relative `../../packages/<x>`) resolve
-   INSIDE the clone — so the sandboxed gates import the tree built from
-   the attested lockfile in the directory they run in; a `GATE_REPO`
-   without that tree fails the gate closed (`gate-deps-missing`), never
-   silently. Every gate that executes repository code (5b's test run,
+   orchestrator ON THE HOST with `cwd = <run dir>/gate-deps` (§6.6, a
+   clone at `attestedHead` used only for this install) — it executes no
+   package code (`--ignore-scripts`), its only egress is the registry
+   for tarballs the attested lock already pins, and it produces
+   `gate-deps/node_modules`, bound read-only into every per-gate clone,
+   whose workspace links (`node_modules/@adlc/<x>` → the relative
+   `../../packages/<x>`) resolve INSIDE that clone — so the sandboxed
+   gates import the tree built from the attested lockfile; a per-gate
+   clone without that bind fails the gate closed (`gate-deps-missing`),
+   never silently. Every gate that executes repository code (5b's test run,
    the mutation gate, rails-guard) runs in `GATE_REPO`; the git-only
    checks (5a's actual-diff check, attestation) read `ISSUE_WT`; nothing
    runs in the worker's worktree.
@@ -1070,15 +1085,31 @@ gitignored `.adlc/autopilot-*` files.
    directory, checked out at `attestedHead` (`gate-repo-stale` if
    `rev-parse HEAD` differs), with `refs/remotes/origin/<BASE_OID>`
    created inside it and no config beyond `core.*` (the clone's
-   `remote.origin.*` is deleted) — and every gate runs with `cwd =
-   GATE_REPO` (fleet's
-   `bwrap` profile with network DENIED, reads bounded to `GATE_REPO`,
-   the pinned tool files and system roots, writes bounded to `GATE_REPO`
-   and a private tmpfs, a synthetic empty `HOME`); after the sequence
-   `git -C GATE_REPO rev-parse HEAD` must still equal `attestedHead`
-   (`gate-repo-moved` otherwise, the run fails) and `GATE_REPO` is
-   removed — gate results are attached to `attestedHead`, never to a
-   path. The sandbox environment contains no
+   `remote.origin.*` is deleted). Because repository code runs inside
+   the writable clone — including its `.git`, where the baseline ref
+   the trust-root gates diff against lives — no gate may inherit a git
+   view another gate's code could have touched, and no gate's verdict
+   is accepted from a view its own code changed: EVERY gate gets its
+   OWN fresh clone (`GATE_REPO-<k>` for the k-th gate, cut from the
+   gate mirror immediately before it, removed immediately after), the
+   dependency tree is installed ONCE per sequence into `<run
+   dir>/gate-deps` (a further clone at `attestedHead` used only for the
+   host-side `npm ci --ignore-scripts` of §6.5b) and bound READ-ONLY at
+   `GATE_REPO-<k>/node_modules` (the workspace links are relative, so
+   they resolve inside each clone), and around each gate the
+   orchestrator snapshots and re-verifies the clone's git state — `git
+   rev-parse HEAD` (= `attestedHead`), `git rev-parse
+   refs/remotes/origin/<BASE_OID>` (= `BASE_OID`), the complete
+   `for-each-ref` output, `git config --list --local`, the absence of
+   `.git/hooks/*` executables and of `.git/info/exclude` changes, and
+   `git status --porcelain` being empty — before the gate spawn and
+   after it exits; any difference → `gate-repo-moved`, the gate's verdict
+   is discarded and the run fails. Each gate runs with `cwd =
+   GATE_REPO-<k>` under fleet's `bwrap` profile with network DENIED,
+   reads bounded to the clone, the read-only dependency tree, the pinned
+   tool files and system roots, writes bounded to the clone and a
+   private tmpfs, a synthetic empty `HOME`. Gate results are attached to
+   `attestedHead`, never to a path. The sandbox environment contains no
    `SSH_AUTH_SOCK`, no `gh`/`GITHUB_TOKEN`, no `ADLC_MANIFEST_KEY`, no
    `.env.local`, none of the orchestrator's state paths): the worker's
    code never runs on the host with the orchestrator's credentials or
@@ -2073,7 +2104,8 @@ None is trust-root tier; each is a small, separately testable diff.
   14: tmpfs `HOME` populated from the allowlist of §6.4 — validated
   `0600` credential copy bound read-only with NO write-back, generated
   `settings.json`/`.claude.json` from key allowlists, pinned plugin tree,
-  everything else ENOENT; real-bwrap tests for authentication, refresh
+  the adapter's `homeState.dirs` as empty writable scratch, everything
+  else ENOENT; real-bwrap tests for authentication, refresh
   read-only enforcement and denial), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
   worktree is cut from a caller-supplied bare mirror holding only the
   pinned baseline and the issue branch, and the worker branch is fetched
@@ -2274,11 +2306,14 @@ None is trust-root tier; each is a small, separately testable diff.
     `ADLC_MANIFEST_KEY` — each → `key-file-insecure` with zero key-bearing
     spawns (`preflight.test.mjs`).
 12. **Key hygiene** (`keys.test.mjs`): the spawn recorder asserts
-    `ADLC_MANIFEST_KEY` is present in the env of exactly the six
-    key-bearing commands of §9.3 (`ticket create --write`, `ticket complete
-    --write`, `ticket update --write`, `coldstart --record-verdict`,
-    `spec-lint --record`, `record-cross-model`) and absent from every other
-    spawn in a full
+    `ADLC_MANIFEST_KEY` is present in the env of exactly the key-bearing
+    commands of §9.3 — that list is the ONE authority: the orchestrator
+    exports it as the constant `KEY_BEARING_ARGV` and the test's table is
+    built from the same export, so the two cannot drift; today seven
+    entries: `ticket create --write`, `ticket complete --write`, `ticket
+    update --write`, `coldstart --record-verdict`, `spec-lint --record`,
+    `record-cross-model`, `gate-manifest verify` — and absent from every
+    other spawn in a full
     `once` sequence (fleet, shaping, coldstart answer, both
     `adversarial-review` calls, `gh`, `git`, `npm`, `preflight.mjs`); the
     assertion is table-driven over the complete recorded spawn list so a
@@ -3205,7 +3240,11 @@ None is trust-root tier; each is a small, separately testable diff.
     `git rev-parse --git-dir` resolves inside `GATE_REPO`; a fixture in
     the clone that tries to read `~/.claude/.credentials.json`, open a
     TCP socket, or read `.env.local` fails inside the sandbox; a gate
-    that commits inside `GATE_REPO` → `gate-repo-moved`; the gate order equals
+    that commits inside its clone, and a gate whose fixture rewrites
+    `refs/remotes/origin/<BASE_OID>` or adds a `.git/hooks/pre-commit`
+    WITHOUT moving `HEAD` → `gate-repo-moved`, verdict discarded, run
+    failed; two consecutive gates receive different clone paths and the
+    second's `for-each-ref` equals the mirror's, not the first's; the gate order equals
     the pinned `preflight.mjs` `buildGates()` list and a reordered list
     → `preflight-order-drift`.
 150. **Corrupt archive line is quarantined** (`triage.test.mjs`): an
@@ -3260,14 +3299,22 @@ None is trust-root tier; each is a small, separately testable diff.
     byte-identical and has the same inode afterwards; the orchestrator
     has no code path that opens the host credential file for writing
     (a spawn/fs recorder asserts zero writes under `~/.claude`);
-    `settings.json` inside carries no `hooks`/`mcpServers` keys;
-    `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects` and
-    `~/.npmrc` are ENOENT inside; the host `HOME` is not bound.
+    `settings.json` inside carries no `hooks`/`mcpServers` keys; each of
+    the adapter's `homeState.dirs` exists inside, empty and writable
+    (a file written there is absent from the host's directory of the
+    same name afterwards), and `.claude.json` inside is writable;
+    `~/.ssh`, `~/.config/gh`, `~/.gitconfig` and `~/.npmrc` are ENOENT
+    inside; the host `HOME` is not bound; and an integration test runs
+    the pinned harness headless (`claude -p` with a trivial prompt)
+    inside the synthetic HOME to completion, asserting it initialized
+    and wrote only under the scratch directories (skipped loudly without
+    `bwrap` or the harness, recorded as such in the AC registry).
 157. **Sandboxed gates find their dependencies** (`sequence.test.mjs` +
-    fleet real-bwrap test): the post-clone `npm ci --ignore-scripts` spawn
-    has `cwd = GATE_REPO` and runs on the host (no `bwrap` in its argv);
-    inside the sandbox a fixture test that imports a workspace package
-    through `GATE_REPO/node_modules/@adlc/<x>` passes and
+    fleet real-bwrap test): the single `npm ci --ignore-scripts` spawn
+    of the sequence has `cwd = <run dir>/gate-deps` and runs on the host
+    (no `bwrap` in its argv); inside the sandbox a fixture test that
+    imports a workspace package through `<clone>/node_modules/@adlc/<x>`
+    (a read-only bind — a write into it fails `EROFS`) passes and
     `scripts/run-tests.mjs` resolves `node_modules/.bin`; a clone whose
     install was skipped → `gate-deps-missing`, the run fails, no
     attestation.
