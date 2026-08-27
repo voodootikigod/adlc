@@ -50,6 +50,25 @@ describe('merge-forecast CLI parameter validation', () => {
     });
   }
 
+  // Boundary: the smallest legal fan-out. A gate can still FAIL on width
+  // (exit 2, > certifiedWidth) but it must never be rejected as malformed.
+  for (const [flag, val, rejectRe] of [
+    ['--width', '1', /--width must be >= 1/],
+    ['--co-change-limit', '1', /--co-change-limit must be >= 1/],
+    ['--conflict-threshold', '0', /--conflict-threshold must be between 0 and 1/],
+    ['--conflict-threshold', '1', /--conflict-threshold must be between 0 and 1/],
+  ]) {
+    test(`accepts the boundary value ${flag} ${val} (not an operational error)`, () => {
+      withTickets((ticketsFile) => {
+        const res = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, flag, val, '--json'], {
+          encoding: 'utf8', cwd: repoRoot,
+        });
+        assert.notEqual(res.status, 1, res.stdout + res.stderr);
+        assert.doesNotMatch(res.stderr, rejectRe);
+      });
+    });
+  }
+
   test('accepts an integer written in scientific notation (--co-change-limit 1e2)', () => {
     withTickets((ticketsFile) => {
       const res = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, '--co-change-limit', '1e2', '--json'], {
