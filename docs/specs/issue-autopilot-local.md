@@ -572,8 +572,9 @@ text the repository OWNER wrote.
    retried on a later iteration (at most 3 shaping attempts per issue per
    24 h, then rule `shaping-failed` excludes it until the operator resets).
    The attempt ledger is durable: `.adlc/autopilot-runs/<issue>.attempts.json`
-   (array of `{ts, kind: "shaping"|"coldstart", outcome}`) is appended via
-   write-to-temp + `rename` BEFORE the call is spawned with
+   (array of `{id, ts, kind: "shaping"|"coldstart", outcome}` where `id`
+   is a ULID minted when the entry is created and never changed) is
+   appended via write-to-temp + `rename` BEFORE the call is spawned with
    `outcome:"started"` and updated after it returns; an entry left at
    `started` by a crash counts as a failed attempt; entries older than 7
    days are pruned on read — by ORDINARY reads only; `reset --attempts`
@@ -930,7 +931,21 @@ gitignored `.adlc/autopilot-*` files.
    is not trusted after any later write.
 6. Final local gate in the issue worktree: `node scripts/preflight.mjs --base
    <BASE_OID>` (tests + rail-freeze + mutation-gate + ledger + comment
-   gates, CI order). Failure consumes one round of the SAME budget (§7):
+   gates, CI order). `scripts/preflight.mjs` is an immutable trust root
+   (§4.2) that the autopilot may not modify, and it performs its own
+   `git fetch` of the base through the remote NAME `origin` — the one
+   network operation this spec cannot route through the pinned URL
+   literal. It is therefore BRACKETED: immediately before invoking it
+   the orchestrator re-reads `git remote get-url origin` and `--push` and
+   requires both to normalize to the pinned values, and immediately after
+   it returns it re-reads them again and additionally verifies `git
+   rev-parse <BASE_OID>^{commit}` still resolves to the same object; any
+   change on either side → the preflight result is DISCARDED, the run is
+   `orphan` (`remote-url-changed`), and nothing is attested or pushed.
+   Adding a `--fetch-url` option to `scripts/preflight.mjs` so the
+   orchestrator can pass the pinned URL is tracked as §15 R13 — a
+   trust-root change requiring the #141 ceremony, outside this program's
+   scope. Failure consumes one round of the SAME budget (§7):
    the run record's `roundsUsed` is incremented and steps 4–6 repeat with
    `--max-strikes <15 − roundsUsed>` and `--wall-clock-minutes <remaining>`;
    if either remaining budget is 0 the run is `blocked` exactly as a fleet
@@ -1548,14 +1563,20 @@ init    [--labels] [--service] [--write]
 Global operator-local flags: `--repo` (or `ADLC_AUTOPILOT_REPO`; required
 for `loop`/`once`), `--model`, `--adapter`, `--quota-threshold`,
 `--quota-reserve`, `--trusted-bin-dirs`. Every subcommand exits 0/1/2 and
-supports `--json`. `reset --attempts` reads the issue's shaping-attempt
-ledger RAW (no retention pruning), appends every entry — including
-`started` entries and entries older than 7 days — to
-`.adlc/autopilot-runs/<issue>.attempts.archive.json` (append-only, never
-pruned), then truncates the active ledger atomically; it requires the
-autopilot lock, needs no OID, touches nothing else, is idempotent (a
-second call archives nothing and exits 0), and is the only exit from
-`shaping-failed`; `reset
+supports `--json`. `reset --attempts` is a journaled, crash-idempotent transaction under
+the autopilot lock: (1) write
+`.adlc/autopilot-runs/<issue>.attempts.reset.journal` `{startedAt,
+ledgerSha256}`; (2) read the ledger RAW (no retention pruning) and append
+to `.adlc/autopilot-runs/<issue>.attempts.archive.json` (append-only,
+never pruned) every entry — including `started` entries and entries
+older than 7 days — whose `id` is not already present in the archive
+(replay is deduplicated by `id`, so a crash after a partial append never
+duplicates); (3) truncate the active ledger (temp + `rename`); (4)
+remove the journal. Recovery, and every other ledger operation, first
+checks for a journal under the lock and completes steps 2–4 before doing
+anything else. The command needs no OID, touches nothing else, is
+idempotent (a second call archives nothing and exits 0), and is the only
+exit from `shaping-failed`; `reset
 --confirm-delete` is §2.1a; `--delete-remote` is §2.1a Step R.
 
 Repo-committed (`.adlc/config.json`, trust root):
@@ -1694,6 +1715,7 @@ None is trust-root tier; each is a small, separately testable diff.
 | R10 | Confirm rails-guard-ci accepts a PR that ADDS a ticket shard which is `completed:true` on arrival (fleet completes on the integration branch) — otherwise the completion commit moves to a post-merge step | build canary | open |
 | R11 | Keep PR diffs under adversarial-review's 256 KB grounding limit: deterministic size gate before every review (§6.7a), `--max-bytes` from `reviewMaxBytes` on both reviewers, fleet gains a `reviewMaxBytes` config key (§14) | build | open |
 | R12 | GitHub ruleset restricting pushes to `refs/heads/adlc/autopilot/**` to the operator identity (branch-level write isolation; §6.8 detects intrusion without it but cannot prevent it) | operator | recommended |
+| R13 | `scripts/preflight.mjs --fetch-url <url>` so the outer gate's internal base fetch can use the pinned URL instead of `origin` (trust-root change, #141 ceremony); until then §6.6 brackets the script with before/after URL re-validation | operator (ceremony) | follow-up |
 
 ## 16. Acceptance criteria
 
@@ -2494,3 +2516,15 @@ None is trust-root tier; each is a small, separately testable diff.
     `noFixture:` reason fails the gate; more than 5 `noFixture` entries
     fail it; an assertion that only checks a module's existence or an
     exported constant is rejected by the static check.
+122. **preflight.mjs is bracketed** (`sequence.test.mjs`): a `git remote
+    get-url` fake that returns the pinned URL before the preflight spawn
+    and a different URL after → the preflight result is discarded, no
+    attestation, no push, state `orphan` with `remote-url-changed`; an
+    object-store fake in which `<baseOid>` no longer resolves after the
+    script → the same; unchanged URLs and object → the pass is honored.
+123. **Crash-idempotent reset** (`triage.test.mjs`): a crash injected
+    after a partial archive append (journal present, ledger intact) is
+    recovered on the next ledger operation: the archive contains each
+    attempt `id` exactly once, the ledger is empty, the journal is gone;
+    running `reset --attempts` twice in a row archives nothing the second
+    time; every ledger entry carries a ULID `id` minted at creation.
