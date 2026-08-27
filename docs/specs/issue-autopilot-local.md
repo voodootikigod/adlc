@@ -1299,7 +1299,9 @@ failure (`base-unresolved`) and the iteration sleeps.
 9.1 Toolchain: `adlc` (the key-bearing CLI — its pinned path is also
 asserted by the key-hygiene test, AC 12), `bwrap`, `claude`, `codex`,
 `adversarial-review`, `gh`, `git`, `ssh` (the transport executable the `GIT_SSH`
-wrapper execs, §9.1b), `npm`, `node >= 18` are resolved ONCE
+wrapper execs, §9.1b), `ssh-add` and `ssh-keygen` (agent enumeration and
+public-key derivation, §9.1b — invoked by their pinned absolute paths
+only), `npm`, `node >= 18` are resolved ONCE
 at preflight to absolute paths from
 a sanitized search list — the orchestrator's PATH entries that are
 absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
@@ -1367,8 +1369,8 @@ control so nothing can be swapped between verification and use:
   generates the wrapper with `-o IdentityAgent=none -i <copy>`; a `.pub`
   beside the original is never read; the original path is never named
   in any argv;
-- agent mode: the candidates are the keys the agent holds (`ssh-add -L`
-  over the recorded socket); exactly the matched key's public line is
+- agent mode: the candidates are the keys the agent holds (the PINNED `ssh-add -L`
+  over the recorded socket, §9.1); exactly the matched key's public line is
   written by the orchestrator to `<ssh dir>/identity.pub` (`0600`,
   recorded), and the wrapper carries `-o IdentityAgent=<socket> -i
   <ssh dir>/identity.pub` (with `IdentitiesOnly=yes`, naming an agent
@@ -1575,7 +1577,11 @@ carries an absolute `WorkingDirectory=<repo root>` (validated at generation
 and at start: the directory must contain `.git` and `.adlc/config.json`,
 else exit 1 `bad-working-directory`), an absolute `ExecStart=<abs path to
 node> <abs path to packages/autopilot/bin/adlc-autopilot.mjs> loop --rest
-10m`, `EnvironmentFile=<abs repo root>/.env.local`,
+10m [--ssh-identity <abs private key path>]` — the `--ssh-identity`
+argument is emitted exactly when `init --service` was run in explicit
+mode (§9.1b) and then no `Environment=SSH_AUTH_SOCK=` line is emitted;
+in agent mode the reverse; a unit with both or neither is never
+generated — `EnvironmentFile=<abs repo root>/.env.local`,
 `Environment=ADLC_AUTOPILOT_REPO=<owner/name>` (the phase-A identity, set
 at generation from `--repo` and never read from the repository),
 `Restart=on-failure`,
@@ -1979,6 +1985,13 @@ None is trust-root tier; each is a small, separately testable diff.
   `spec-approval` record's `approver` must name that same login or the
   e-mail GitHub reports for it; any mismatch → exit 1
   `spec-approval-unbound`. Otherwise → exit 1 `spec-approval-stale`, no
+  dispatch. The record's `approved_assumptions[]` must describe THIS
+  revision's residuals (§11), not an earlier design's: the record also
+  carries `assumptions_hash` (sha256 of the canonical JSON of
+  `approved_assumptions`) and preflight requires it to equal the hash of
+  the `Accepted residual` items extracted from §11 of the blob at
+  `specBlob` (a pure extractor with a fixture for the current §11);
+  mismatch or absent hash → exit 1 `spec-approval-assumptions-stale`, no
   dispatch. The record's `spec_hash` states WHAT was gated; GitHub's
   merge identity states WHO — the manifest is data the preflight checks,
   never a claim it trusts.
@@ -2504,7 +2517,12 @@ None is trust-root tier; each is a small, separately testable diff.
     line-anchored `WorkingDirectory=/<abs>`, `ExecStart=/<abs node>
     /<abs>/packages/autopilot/bin/adlc-autopilot.mjs loop --rest 10m`,
     `EnvironmentFile=/<abs>/.env.local`, `Restart=on-failure`,
-    `KillMode=control-group`; no `%h`; a working directory lacking
+    `KillMode=control-group`; no `%h`; generated in explicit mode the
+    `ExecStart` line ends with `--ssh-identity /<abs key>` and no
+    `SSH_AUTH_SOCK` line exists, generated in agent mode the reverse, and
+    a start under each generated unit reaches phase A's auth-mode
+    resolution with that mode (service.test spawns the ExecStart argv
+    against fakes); a working directory lacking
     `.adlc/config.json` makes generation exit 1 `bad-working-directory`.
 72. **P0/P1 record mechanics** (`sequence.test.mjs`): the coldstart
     fake is invoked with cwd = `ISSUE_WT`, `--tickets
@@ -3049,3 +3067,13 @@ None is trust-root tier; each is a small, separately testable diff.
     resolution all fail; the proxy log shows the refused targets; the
     worker env has `HTTPS_PROXY`/`HTTP_PROXY` set to the bridge and an
     empty `NO_PROXY`.
+153. **Pinned ssh-add and ssh-keygen** (`preflight.test.mjs`): the
+    agent-enumeration and key-derivation spawns use the pinned absolute
+    paths; an `ssh-add` that resolves under `REPO_ROOT` or a
+    user-writable directory → `untrusted-tool:ssh-add`, zero network
+    spawns.
+154. **Assumptions bound to the revision** (`preflight.test.mjs`): a
+    `spec-approval` fixture whose `assumptions_hash` differs from the
+    §11 residuals of the pinned blob → `spec-approval-assumptions-stale`,
+    zero dispatches; a matching one passes; the extractor is a pure
+    function with a fixture for the current §11.
