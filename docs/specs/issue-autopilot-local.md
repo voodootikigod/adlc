@@ -960,7 +960,20 @@ gitignored `.adlc/autopilot-*` files.
    script's internal `git fetch origin …` resolves `origin` from the
    environment-supplied `remote.origin.url` the orchestrator set for that
    process, so the fetch cannot reach any URL but the pinned one even if
-   `.git/config` is rewritten while the script runs. Adding a
+   `.git/config` is rewritten while the script runs. The script is given
+   the OID LITERAL as `--base`, which is immutable input; the one mutable
+   intermediate it creates is the tracking ref
+   `refs/remotes/origin/<BASE_OID>` its fetch materializes. The
+   orchestrator therefore (a) pre-creates that ref with `git update-ref
+   refs/remotes/origin/<BASE_OID> <BASE_OID>` before the call, so the
+   script's fetch is a no-op and every gate inside it compares against
+   the same object; (b) after the call verifies `git rev-parse
+   refs/remotes/origin/<BASE_OID>` still equals `BASE_OID` and, where the
+   script reports the base it used (its `--json` summary), that it equals
+   `BASE_OID`; any mismatch → the result is DISCARDED (`base-ref-moved`),
+   the run is `orphan`; (c) deletes the tracking ref afterwards. A
+   `--base-oid` mode in which the script never touches a named ref is
+   part of §15 R13. Adding a
    `--fetch-url` option to `scripts/preflight.mjs` would make the binding
    explicit in the script's own argv and is tracked as §15 R13 (a
    trust-root change requiring the #141 ceremony); it is not required for
@@ -1302,8 +1315,17 @@ orchestrator always sets `GIT_SSH_COMMAND` (which git prefers over any
 (an orchestrator-owned file written by `init` from `gh api meta`'s
 `ssh_keys` for the pinned host and refreshed only by `init --write`; a
 host-key mismatch fails the operation, never prompts), `-o
-IdentitiesOnly=yes`, `-o BatchMode=yes`, `-o IdentityAgent=<SSH_AUTH_SOCK>`
-and, if the operator gives `--ssh-identity <abs file>`, `-i <file>`;
+IdentitiesOnly=yes`, `-o BatchMode=yes`, and exactly ONE authentication
+mode resolved in phase A: if `SSH_AUTH_SOCK` is set and names an
+existing socket, `-o IdentityAgent=<SSH_AUTH_SOCK>` (with an optional
+`-i <file>` from `--ssh-identity` to select the key); otherwise, if
+`--ssh-identity <abs file>` is given (a regular file owned by the
+invoking uid, mode `0600`), `-o IdentityAgent=none -i <file>`; otherwise
+phase A exits 1 `ssh-auth-missing` — an `IdentityAgent=` with an empty
+value is never generated. The generated unit (§9.3a) must carry one of
+the two: `Environment=SSH_AUTH_SOCK=<abs socket>` when `init --service`
+is run with the socket present, or the `--ssh-identity` path baked into
+`ExecStart`; `init --service` refuses to generate a unit with neither;
 `--git-ssh-command` is NOT an option (a free-form command cannot be
 validated). HTTPS remotes are not supported in v1 (§9.1a), so no HTTP transport
 setting can apply; the phase-A audit nevertheless rejects ANY `http.*` /
@@ -1844,7 +1866,7 @@ None is trust-root tier; each is a small, separately testable diff.
 | R10 | Confirm rails-guard-ci accepts a PR that ADDS a ticket shard which is `completed:true` on arrival (fleet completes on the integration branch) — otherwise the completion commit moves to a post-merge step | build canary | open |
 | R11 | Keep PR diffs under adversarial-review's 256 KB grounding limit: deterministic size gate before every review (§6.7a), `--max-bytes` from `reviewMaxBytes` on both reviewers, fleet gains a `reviewMaxBytes` config key (§14) | build | open |
 | R12 | GitHub ruleset restricting pushes to `refs/heads/adlc/autopilot/**` to the operator identity (branch-level write isolation; §6.8 detects intrusion without it but cannot prevent it) | operator | recommended |
-| R13 | `scripts/preflight.mjs --fetch-url <url>` so the outer gate's internal base fetch can use the pinned URL instead of `origin` (trust-root change, #141 ceremony); until then §6.6 brackets the script with before/after URL re-validation | operator (ceremony) | follow-up |
+| R13 | `scripts/preflight.mjs --fetch-url <url>` and `--base-oid <oid>` so the outer gate's internal base fetch uses the pinned URL and compares against the immutable OID without materializing a named tracking ref (trust-root change, #141 ceremony); until then §6.6 binds the transport via the environment and pre-creates/verifies/deletes the tracking ref around the call | operator (ceremony) | follow-up |
 
 ## 16. Acceptance criteria
 
@@ -2741,3 +2763,17 @@ None is trust-root tier; each is a small, separately testable diff.
     without that line, recovery re-appends the missing attempt by `id`,
     and the resulting archive has each `id` exactly once with valid
     checksums on every line.
+135. **Tracking ref pre-created and verified** (`sequence.test.mjs`, real
+    temporary git repository): before the preflight spawn
+    `refs/remotes/origin/<baseOid>` equals `baseOid`; a fixture that moves
+    that ref while the preflight fake runs → result discarded,
+    `base-ref-moved`, `orphan`, no attestation; on success the ref is
+    deleted afterwards; the preflight argv's `--base` is the 40-hex OID.
+136. **SSH auth mode** (`preflight.test.mjs` + `service.test.mjs`): with
+    `SSH_AUTH_SOCK` set to an existing socket the command carries
+    `IdentityAgent=<sock>`; unset with `--ssh-identity` (mode `0600`) →
+    `IdentityAgent=none -i <file>`; unset without it → `ssh-auth-missing`
+    before any network spawn; a `0644` identity → `key-file-insecure`;
+    the string `IdentityAgent=` followed by a space never appears in any
+    argv; `init --service` without a socket or identity exits 1, and with
+    a socket writes `Environment=SSH_AUTH_SOCK=`.
