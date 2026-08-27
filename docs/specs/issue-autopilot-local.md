@@ -126,8 +126,9 @@ Non-goals (v1)
 ```
 loop:
   acquire single-instance lock       # §2.2 — atomic, owner-checked
-  preflight()                        # §9 — fail closed on any red item
-  BASE_OID = fetch_base()            # §6.0 — pinned OID; fetch failure → sleep 10m; continue
+  preflightA()                       # §9 phase A (needs no baseline): tools, key file, repo/principal + URL pinning, labels, exclude entries — fail closed
+  BASE_OID = fetch_base()            # §6.0 — pinned OID via the pinned fetch URL; failure → sleep 10m; continue
+  preflightB(BASE_OID)               # §9 phase B (reads the pinned blob): plugin parity, config schema, fleet dry-run, spec-approval binding — fail closed
   recover()                          # §2.1 — resume/finish/retire orphaned runs BEFORE selection
   if !quota().ok                     → sleep 10m; continue         # §3
   maintain_open_prs()                # §8 — every fix round re-checks quota (§3.2)
@@ -1206,6 +1207,17 @@ Then:
 
 ## 9. Preflight (fail closed, printed by `adlc-autopilot status`)
 
+Preflight has two phases with a strict ordering, because several checks
+read the pinned baseline: **phase A** (§9.1, §9.1a, §9.3, §9.3a, §9.5)
+needs no baseline and runs before `BASE_OID` is resolved — it is what
+makes the fetch itself trustworthy (pinned tools, pinned remote URLs);
+**phase B** (§9.2, §9.4, §9.6, and the `spec-approval`/`specBlob`
+binding of §14) runs only after §6.0 has produced `BASE_OID` and reads
+every repository input as `git show <BASE_OID>:<path>`. No phase-B check
+may ever fall back to a working-tree file or a tracking ref when
+`BASE_OID` is unavailable — an unavailable baseline is itself a phase-A
+failure (`base-unresolved`) and the iteration sleeps.
+
 9.1 Toolchain: `adlc` (the key-bearing CLI — its pinned path is also
 asserted by the key-hygiene test, AC 12), `bwrap`, `claude`, `codex`,
 `adversarial-review`, `gh`, `git`, `npm`, `node >= 18` are resolved ONCE
@@ -1253,7 +1265,7 @@ origin` is re-read and must still normalize to the pinned value,
 otherwise the run is `orphan` (`remote-url-changed`) and nothing is
 pushed.
 
-9.2 Plugin parity: the installed `adlc@adlc` plugin version
+9.2 (phase B) Plugin parity: the installed `adlc@adlc` plugin version
 (`~/.claude/plugins/installed_plugins.json`) equals the `version` in
 `git show <BASE_OID>:plugins/adlc-claude-code/.claude-plugin/plugin.json`
 — read from the pinned baseline of THIS iteration (§6.0), never from a
@@ -1289,7 +1301,7 @@ releases the lock, exits 0; an in-flight fleet run is left resumable per
 §2.1). No `%h` expansion is used for paths the tests must assert
 byte-for-byte.
 
-9.4 Repo: `.adlc/config.json` is read as `git show
+9.4 (phase B) Repo: `.adlc/config.json` is read as `git show
 <BASE_OID>:.adlc/config.json` — the pinned baseline of this iteration,
 never the working tree, a local `main`, or a tracking ref — parses as
 JSON, validates against the schema the autopilot ships for its own
@@ -1307,7 +1319,7 @@ ticket's AC1 runs that schema validation.
 `adlc:autopilot-ci-red`, `adlc:autopilot-log` (`adlc-autopilot init
 --labels` creates them idempotently).
 
-9.6 Fleet dry-run: `adlc fleet run --dry-run --json` from the primary
+9.6 (phase B) Fleet dry-run: `adlc fleet run --dry-run --json` from the primary
 checkout exits 0.
 
 ## 10. Observability
@@ -2413,3 +2425,10 @@ None is trust-root tier; each is a small, separately testable diff.
     `.adlc/config.json` and a local `origin/main` ref carrying different
     (even invalid) content do not change the preflight verdict; a blob
     that fails either schema → exit 1 `bad-config`, zero dispatches.
+117. **Preflight phases** (`preflight.test.mjs` + `sequence.test.mjs`):
+    the spawn recorder shows every phase-A check before `git ls-remote`
+    of §6.0 and every phase-B `git show <oid>:…` after the fetch, with the
+    OID equal to the one `ls-remote` returned; a phase-B check invoked
+    with no baseline throws `base-unresolved` rather than reading the
+    working tree; an `ls-remote` fake failure yields zero phase-B reads
+    and zero dispatches.
