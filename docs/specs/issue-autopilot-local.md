@@ -253,7 +253,7 @@ empty — a PR that appeared since the earlier check aborts with `orphan`)
 AND `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` must
 equal the record's last pushed OID; then the remote ref is deleted
 with a lease so a tip that moves between the check and the delete is
-protected: `git push
+protected: `git --git-dir=<NET_GIT> push
 --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<lastPushedOid>
 <remotePushUrl> :refs/heads/adlc/autopilot/issue-<n>`. A lease failure → `orphan`,
 remote AND local untouched, stop. After a successful delete, `gh pr list
@@ -1091,9 +1091,13 @@ gitignored `.adlc/autopilot-*` files.
 8. **Verify, then push, then verify.** Before pushing: `git rev-parse HEAD`
    in `ISSUE_WT` must equal `attestedHead` (the HEAD recorded alongside the
    step-7 attestation in the run record), the actual-diff check (§6.5a)
-   must pass again, and the working tree must be clean. Push with `git push
+   must pass again, and the working tree must be clean. Push from the network repository (§9.1c), which holds no local
+   branch refs, by explicit OID refspec: `git --git-dir=<NET_GIT> push
    --force-with-lease=refs/heads/adlc/autopilot/issue-<n>:<expectedRemoteOid>
-   <remotePushUrl> adlc/autopilot/issue-<n>` where `expectedRemoteOid` is the OID
+   <remotePushUrl> <attestedHead>:refs/heads/adlc/autopilot/issue-<n>` —
+   the source is the immutable attested OID (readable through the
+   alternates), never a branch name that could move — where
+   `expectedRemoteOid` is the OID
    recorded at the previous push (or the empty-ref form for a first push);
    a lease failure means someone else pushed to the autopilot's branch →
    state `oid-mismatch`, no PR upsert, comment on the PR if one exists.
@@ -1346,7 +1350,16 @@ metacharacters are passed intact, and forwarding git's own arguments
 `ssh_keys` for the pinned host and refreshed only by `init --write`; a
 host-key mismatch fails the operation, never prompts), `-o
 IdentitiesOnly=yes`, `-o BatchMode=yes`, and exactly ONE authentication
-mode resolved in phase A: if `SSH_AUTH_SOCK` is set and names an
+mode resolved in phase A — and in either mode the key is BOUND to the
+`gh`-verified principal (§9.1a): phase A computes the SHA256 fingerprint
+of every candidate public key (the `--ssh-identity` file's `.pub`, or
+`ssh-add -L` over the agent), fetches the authenticated login's keys with
+`gh api user/keys`, requires at least one candidate fingerprint to
+appear there, selects that key, and the wrapper passes `-i <its public
+key file>` so ssh presents exactly that identity (with
+`IdentitiesOnly=yes` an agent-held key is still usable when its public
+key is named); no match → exit 1 `ssh-identity-unbound`, no network
+spawn. The modes: if `SSH_AUTH_SOCK` is set and names an
 existing socket, `-o IdentityAgent=<SSH_AUTH_SOCK>` (with an optional
 `-i <file>` from `--ssh-identity` to select the key); otherwise, if
 `--ssh-identity <abs file>` is given (a regular file owned by the
@@ -1446,7 +1459,9 @@ without copying. Fetches land in `NET_GIT`'s own object store and refs
 (`refs/autopilot/fetched/*`); the orchestrator then moves what it needs
 into the main repository with a LOCAL, file-transport `git -C <REPO_ROOT>
 fetch <NET_GIT> <oid>` (no network, no rewrite surface). Pushes read the
-attested objects through the alternates. `GIT_CONFIG_GLOBAL`/`SYSTEM` =
+attested objects through the alternates and always name the source as an
+OID refspec (`<attestedHead>:refs/heads/<branch>`), since `NET_GIT`
+deliberately has no `refs/heads/*` of its own. `GIT_CONFIG_GLOBAL`/`SYSTEM` =
 `/dev/null` still apply, so `NET_GIT`'s config is the complete
 configuration of every network process; the env-bound rows of §9.1b are
 retained as defense in depth, not as the boundary. The immutable
@@ -2919,3 +2934,15 @@ None is trust-root tier; each is a small, separately testable diff.
     modified `NET_GIT/config` → `net-config-tampered`, zero network
     spawns; `NET_GIT/hooks` is empty; a fetched OID reaches the main
     repository only through a local `git fetch <NET_GIT>` argv.
+144. **Push source is the attested OID** (`sequence.test.mjs`, real
+    temporary repositories): the push argv is `--git-dir=<NET_GIT> push
+    --force-with-lease=… <pushUrl> <attestedHead>:refs/heads/adlc/autopilot/issue-<n>`;
+    `NET_GIT` has no `refs/heads/*` before or after; the bare remote's
+    branch equals `attestedHead`; moving `ISSUE_WT`'s branch between
+    attestation and push does not change what is pushed.
+145. **SSH key bound to the gh principal** (`preflight.test.mjs`): a
+    `gh api user/keys` fake listing fingerprint A and an agent fake
+    offering keys A and B → the wrapper carries `-i <A.pub>` only; an
+    agent offering only B → `ssh-identity-unbound`, zero network spawns;
+    `--ssh-identity` whose `.pub` fingerprint is not listed →
+    `ssh-identity-unbound`.
