@@ -26,11 +26,13 @@ test('CLI: empty spec file exits 1 and writes zero manifest entries', () => {
   }
 });
 
-test('CLI: spec file of only invisible code points (zero-width space, BOM, NUL, combining marks) exits 1 and writes zero manifest entries', () => {
+test('CLI: spec file with no letter or digit (zero-width, BOM, NUL, combining marks, fillers, punctuation) exits 1 and writes zero manifest entries', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-cli-test-'));
   try {
     const specPath = join(tmpDir, 'invisible.md');
-    writeFileSync(specPath, '\uFEFF\u200B\u200B\n\u0000\u2060 \u200D\n\u034F\u034F\u0301\n', 'utf8');
+    // BOM, zero-width spaces, NUL, word joiner, ZWJ, combining marks, Hangul
+    // fillers (U+115F/U+1160/U+3164/U+FFA0), Braille blank, punctuation-only.
+    writeFileSync(specPath, '\uFEFF\u200B\u200B\n\u0000\u2060 \u200D\n\u034F\u034F\u0301\n\u115F\u1160\u3164\uFFA0\n\u2800\u2800\n---\n#\n', 'utf8');
 
     const result = spawnSync(process.execPath, [
       CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'

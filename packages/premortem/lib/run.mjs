@@ -38,12 +38,16 @@ export async function run(opts) {
     opError(`cannot read spec file '${specPath}': ${err.message}`);
   }
 
-  // trim() strips White_Space only; a spec made of zero-width spaces, BOMs,
-  // control characters or bare combining marks (\p{Cf}, \p{Cc}, \p{M}) would
-  // pass it and still be recorded as analyzed P1 evidence. Anything with no
-  // visible base code point is empty.
-  if (specContent.replace(/[\s\p{Cf}\p{Cc}\p{M}]/gu, '') === '') {
-    opError(`spec content is empty or whitespace-only`);
+  // A positive policy, not a deny-list: trim() strips White_Space only, and
+  // every deny-list of "invisible" code points (zero-width spaces, BOMs,
+  // controls, combining marks, the Braille blank, ...) has a next member.
+  // A specification must contain at least one letter or digit that is not a
+  // Default_Ignorable_Code_Point (the Hangul fillers U+115F/U+1160/U+3164/
+  // U+FFA0 are category Lo yet render blank); otherwise it has no readable
+  // content and must not become analyzed P1 evidence.
+  const readable = specContent.replace(/\p{Default_Ignorable_Code_Point}/gu, '');
+  if (!/[\p{L}\p{N}]/u.test(readable)) {
+    opError(`spec content is empty or whitespace-only (no readable letter or digit)`);
   }
 
   const prompt = buildPrompt(specContent);
