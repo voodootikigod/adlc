@@ -927,8 +927,13 @@ gitignored `.adlc/autopilot-*` files.
      BEFORE the loop-head quota gate; the refresh is its own gated step
      (§2, §3.2 row "token refresh"): after the loop-head gate has
      admitted the iteration the orchestrator runs the pinned `claude`
-     on the host with `-p` and a one-token prompt (the harness's own
-     refresh path, in the real `HOME`), counted as a Claude start,
+     on the host as the stdin-bearing refresh call of §12.1 (exact argv,
+     payload, cwd and env stated there; the harness's own refresh path,
+     in the real `HOME` — whether the harness refreshes a not-yet-expired
+     token is the harness's policy, and the autopilot simply keeps
+     sleeping 10 m until a refresh has landed or the operator refreshes
+     interactively, never dispatching into a run the token cannot
+     outlive), counted as a Claude start,
      reconciled like shaping, followed by a fresh quota sample before
      any later Claude-consuming step; then the file is re-read and, if
      the margin is still short, the iteration ends with `token-expiring`
@@ -1554,7 +1559,7 @@ inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
 environment; the transport itself is ISOLATED, not inherited: for SSH URLs the
 orchestrator always sets `GIT_SSH` (which git executes DIRECTLY, without
 a shell, and prefers over any `core.sshCommand`) to an orchestrator-
-generated wrapper at `<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/wrapper`
+generated wrapper at `<SSH_DIR>/wrapper`
 — a regular file, mode `0500`, owned by the invoking uid, whose sha256
 is recorded in the status file and re-verified immediately before every
 spawn that carries it (`ssh-wrapper-tampered` otherwise), containing a
@@ -1566,7 +1571,7 @@ metacharacters are passed intact, and forwarding git's own arguments
 (`"$@"`) unchanged — the pinned `ssh` executable with
 `-F /dev/null` (no user or system `ssh_config`, so no `Host`/`HostName`/
 `ProxyCommand`/`ProxyJump`/`LocalCommand` rewrite can apply),
-`-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/known_hosts`
+`-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<SSH_DIR>/known_hosts`
 (an orchestrator-owned file written by `init` from `gh api meta`'s
 `ssh_keys` for the pinned host and refreshed only by `init --write`; a
 host-key mismatch fails the operation, never prompts), `-o
@@ -1585,13 +1590,24 @@ control so nothing can be swapped between verification and use:
   the per-iteration directory (§9.4a) — opened with `O_NOFOLLOW`, must be
   a regular file owned by the invoking uid with mode `0600`, copied with
   `0600`, and the copy's inode/device/size/sha256 recorded — then derives
-  the public key from the COPY (`ssh-keygen -y -f <copy>`), fingerprints
-  it, requires the fingerprint in `gh api user/keys`, and only then
-  generates the wrapper with `-o IdentityAgent=none -i <copy>`; a `.pub`
+  the public key from the COPY (`ssh-keygen -y -f <copy>`) and requires
+  it to be one of the principal's registered keys per the **key-match
+  rule**: `gh api --hostname <host> --paginate user/keys` returns
+  objects carrying each registered public key's `key` line (`<type>
+  <base64 blob> [comment]`), `id`, `title`, `created_at`, `verified`,
+  `read_only` — and NO fingerprint field — so the orchestrator canonic-
+  alizes both sides to `<type> <base64 blob>` (comment dropped, one
+  space) and requires byte equality with at least one returned `key`
+  across ALL pages, additionally recording the pinned `ssh-keygen -lf`
+  SHA256 fingerprint of the matched key for the log; an empty or
+  unparseable response, or a page fetch failure, is `ssh-identity-
+  unbound`, never a pass; only then it generates the wrapper with `-o
+  IdentityAgent=none -i <copy>`; a `.pub`
   beside the original is never read; the original path is never named
   in any argv;
 - agent mode: the candidates are the keys the agent holds (the PINNED `ssh-add -L`
-  over the recorded socket, §9.1); exactly the matched key's public line is
+  over the recorded socket, §9.1), matched by the same key-match rule
+  against the paginated `user/keys` `key` lines; exactly the matched key's public line is
   written by the orchestrator to `<ssh dir>/identity.pub` (`0600`,
   recorded), and the wrapper carries `-o IdentityAgent=<socket> -i
   <ssh dir>/identity.pub` (with `IdentitiesOnly=yes`, naming an agent
@@ -1835,11 +1851,16 @@ ticket's AC1 runs that schema validation.
 
 9.4a (phase A) SSH material directory and revalidation: everything the
 transport depends on lives in ONE exclusive per-iteration directory
-`<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/` created with
-mode `0700` by the orchestrator (`ssh-dir-exists` if it already exists —
-never reused; under `--dry-run` the same directory, with the same
-contents and validations, is created by `mkdtemp` outside `REPO_ROOT`
-and removed on exit, §0): the `GIT_SSH` wrapper (§9.1b), `known_hosts` (copied from
+`SSH_DIR` — `<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/`
+in a run, created with mode `0700` by the orchestrator (`ssh-dir-exists`
+if it already exists — never reused); under `--dry-run` the `mkdtemp`
+directory outside `REPO_ROOT` of §0, with the same contents and
+validations, removed on exit. Every path the wrapper names —
+`known_hosts`, the identity copy or public line, the wrapper itself —
+is derived from the ACTUAL `SSH_DIR` of that invocation and nothing is
+ever hard-coded under `REPO_ROOT`, so a dry-run wrapper references only
+its temporary directory and can never read a stale repository-local
+file: the `GIT_SSH` wrapper (§9.1b), `known_hosts` (copied from
 `<REPO_ROOT>/.adlc/autopilot-known_hosts`, which `init --write` creates
 from `gh api meta` of the gh host and which must be a regular `0600`
 file owned by the invoking uid, else `known-hosts-missing`), the
@@ -2061,11 +2082,17 @@ process group, with a deadline, and with stdin CLOSED — except the
 enumerated **stdin-bearing commands**, whose stdin receives exactly the
 orchestrator-serialized bytes and is then ended: `adlc ticket create
 --input -`, `adlc ticket update --input -`, `adlc coldstart
---record-verdict -`, and the two `claude -p` calls (shaping, §5.2, and
-the coldstart answer, §6.3) — their PROMPT is the stdin payload (`claude
--p` with no positional prompt reads it from stdin), never an argv element
-(argv is visible to every process on the host via `/proc`) and never a
-file; both are also subject to the 5-minute deadline of §12.1. The shared spawn wrapper takes an explicit
+--record-verdict -`, and the three `claude -p` calls (shaping, §5.2;
+the coldstart answer, §6.3; and the **token refresh**, §6.4 item 14 —
+argv exactly `claude -p --model <effectiveModel> --output-format json
+--permission-mode plan --max-turns 1`, stdin payload exactly the bytes
+`ok\n`, `cwd` an empty private directory under the run directory, env
+the minimal set of §3.2's helper plus the real `HOME`, `ADLC_MANIFEST_
+KEY` scrubbed, stdout capped at 64 KiB and discarded after the exit
+status is read) — their PROMPT is the stdin payload (`claude -p` with no
+positional prompt reads it from stdin), never an argv element (argv is
+visible to every process on the host via `/proc`) and never a file; all
+three are also subject to the 5-minute deadline of §12.1. The shared spawn wrapper takes an explicit
 `stdinBytes` option; every other spawn passes none and gets a closed
 stream; on expiry SIGTERM is sent to the group, SIGKILL 15 s later, and
 the step fails with `reason:"timeout:<command>"`. The orchestrator's own
@@ -3193,7 +3220,7 @@ None is trust-root tier; each is a small, separately testable diff.
     generated wrapper (mode `0500`, sha256 verified before the spawn);
     the wrapper's content execs the pinned `ssh` path with `-F /dev/null`,
     `StrictHostKeyChecking=yes`,
-    `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/known_hosts`,
+    `UserKnownHostsFile=<SSH_DIR>/known_hosts`,
     `IdentitiesOnly=yes`, `BatchMode=yes`; a `~/.ssh/config` fixture that
     rewrites `github.com` via `HostName` is not consulted (real `ssh -G`
     under that command prints the pinned host); a missing or `0644`
@@ -3308,11 +3335,16 @@ None is trust-root tier; each is a small, separately testable diff.
     branch equals `attestedHead`; moving `ISSUE_WT`'s branch between
     attestation and push does not change what is pushed.
 145. **SSH key bound to the gh principal** (`preflight.test.mjs`): a
-    `gh api user/keys` fake listing fingerprint A and an agent fake
-    offering keys A and B → the wrapper carries `-i <A.pub>` only; an
-    agent offering only B → `ssh-identity-unbound`, zero network spawns;
-    `--ssh-identity` whose `.pub` fingerprint is not listed →
-    `ssh-identity-unbound`.
+    `gh api --hostname <host> --paginate user/keys` fake whose SECOND
+    page carries key A's `key` line (with a comment that differs from the
+    agent's) and an agent fake offering keys A and B → the wrapper
+    carries `-i <A.pub>` only and the log names A's SHA256 fingerprint;
+    an agent offering only B → `ssh-identity-unbound`, zero network
+    spawns; `--ssh-identity` whose derived public key equals no returned
+    `key` → `ssh-identity-unbound`; a fake returning a `fingerprint`
+    field but no `key` field, an empty array, or a failing second page →
+    `ssh-identity-unbound`; the matcher is a pure function with fixtures
+    for comment/whitespace variants of the same key.
 146. **Identity binding uses the authenticating copy** (`preflight.test.mjs`,
     real `ssh-keygen`): in explicit mode the orchestrator copies the key
     (`O_NOFOLLOW`, `0600`) BEFORE fingerprinting, the fingerprint is
@@ -3464,15 +3496,21 @@ None is trust-root tier; each is a small, separately testable diff.
     `expiresAt`, dispatch proceeds; when it does not → `token-expiring`
     naming the remaining minutes, sleep, zero dispatches; a quota fake
     refusing at the loop head → no refresh spawn at all; a fixture with
-    8 hours left → no refresh spawn; the refresh spawn never carries the
-    sandbox argv.
+    8 hours left → no refresh spawn; the refresh spawn's argv equals the
+    §12.1 refresh argv exactly, its `stdinBytes` equal `ok\n`, its `cwd`
+    is an empty directory under the run directory, its env lacks
+    `ADLC_MANIFEST_KEY`, and it never carries the sandbox argv.
 159. **Dry-run transport is transient and isolated** (`preflight.test.mjs`
     with the spawn recorder): under `--dry-run` the `ls-remote` spawn
     carries a `GIT_SSH` wrapper whose realpath is under `mkdtemp` in
     `$XDG_RUNTIME_DIR`, not under `REPO_ROOT`; `ls -A
     <REPO_ROOT>/.adlc/autopilot-runs` is unchanged before and after; the
-    temporary directory is gone at exit; a planted `~/.ssh/config` is
-    not read (`-F /dev/null` present).
+    temporary directory is gone at exit; the dry-run wrapper's text and
+    argv name no path under `REPO_ROOT` (its `UserKnownHostsFile` and
+    `-i` values are under the temporary directory) and a stale
+    `<REPO_ROOT>/.adlc/autopilot-runs/ssh-*/known_hosts` planted before
+    the dry-run is never opened; a planted `~/.ssh/config` is not read
+    (`-F /dev/null` present).
 160. **Manifest verification is keyed** (`keys.test.mjs`): the
     `gate-manifest verify` spawn's env carries `ADLC_MANIFEST_KEY` and
     its argv lacks `--allow-legacy-unsigned`; a manifest line with a
