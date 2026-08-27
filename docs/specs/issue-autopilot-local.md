@@ -944,8 +944,9 @@ gitignored `.adlc/autopilot-*` files.
    `git fetch` of the base through the remote NAME `origin` — the one
    network operation this spec cannot route through the pinned URL
    literal. It is therefore BRACKETED: immediately before invoking it
-   the orchestrator re-reads `git remote get-url origin` and `--push` and
-   requires both to normalize to the pinned values, and immediately after
+   the orchestrator re-reads `remote.origin.url`/`.pushurl` with the
+   unoverlaid `git config --file` form of §9.1a and requires both to
+   normalize to the pinned values, and immediately after
    it returns it re-reads them again, re-runs the §9.1b config audit, and
    additionally verifies `git rev-parse <BASE_OID>^{commit}` still
    resolves to the same object; the script itself runs under the §9.1b
@@ -1260,7 +1261,8 @@ failure (`base-unresolved`) and the iteration sleeps.
 
 9.1 Toolchain: `adlc` (the key-bearing CLI — its pinned path is also
 asserted by the key-hygiene test, AC 12), `bwrap`, `claude`, `codex`,
-`adversarial-review`, `gh`, `git`, `npm`, `node >= 18` are resolved ONCE
+`adversarial-review`, `gh`, `git`, `ssh` (the transport executable named
+in `GIT_SSH_COMMAND`, §9.1b), `npm`, `node >= 18` are resolved ONCE
 at preflight to absolute paths from
 a sanitized search list — the orchestrator's PATH entries that are
 absolute, exist, and are not under `REPO_ROOT`, any `.worktrees/`, or any
@@ -1301,20 +1303,15 @@ host-key mismatch fails the operation, never prompts), `-o
 IdentitiesOnly=yes`, `-o BatchMode=yes`, `-o IdentityAgent=<SSH_AUTH_SOCK>`
 and, if the operator gives `--ssh-identity <abs file>`, `-i <file>`;
 `--git-ssh-command` is NOT an option (a free-form command cannot be
-validated). For HTTPS URLs the env-bound configuration additionally
-carries `http.proxy=` (empty, disabling proxies), `http.sslVerify=true`,
-`http.followRedirects=false`, `http.cookieFile=` and
-`http.extraHeader=` (an empty value RESETS the multi-valued header list
-for that process), and the phase-A audit rejects ANY `http.*` /
-`https.*` / `core.sshCommand` / `core.gitProxy` key in the repo-local
-config outright. **`origin` is BOUND, not
+validated). HTTPS remotes are not supported in v1 (§9.1a), so no HTTP transport
+setting can apply; the phase-A audit nevertheless rejects ANY `http.*` /
+`https.*` / `credential.*` / `core.sshCommand` / `core.gitProxy` key in
+the repo-local config outright. **`origin` is BOUND, not
 observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
 the following env-supplied configuration table, numbered in this
-order with `GIT_CONFIG_COUNT` equal to the number of rows actually set
-(the HTTPS rows are set only for `https://` pinned URLs; the count is
-therefore 6 for SSH and 12 for HTTPS, and the test asserts the exact
-list, never a literal):
+order with `GIT_CONFIG_COUNT=6` (exactly these rows; the test asserts
+the exact list):
 
 | n | key | value |
 |---|---|---|
@@ -1323,13 +1320,13 @@ list, never a literal):
 | 2 | `core.hooksPath` | `/dev/null` |
 | 3 | `url.<remoteFetchUrl>.insteadOf` | `<remoteFetchUrl>` |
 | 4 | `url.<remotePushUrl>.pushInsteadOf` | `<remotePushUrl>` |
-| 5 | `credential.helper` | `` (empty — resets the multi-valued list) followed, only if `--git-credential-helper` was given, by a second `credential.helper` row with that value |
-| 6 | `http.proxy` | `` (HTTPS only) |
-| 7 | `http.sslVerify` | `true` (HTTPS only) |
-| 8 | `http.followRedirects` | `false` (HTTPS only) |
-| 9 | `http.cookieFile` | `` (HTTPS only) |
-| 10 | `http.extraHeader` | `` (HTTPS only — resets the multi-valued list) |
-| 11 | `http.<remoteFetchUrl>.extraHeader` | `` (HTTPS only) |
+| 5 | `core.sshCommand` | the full `GIT_SSH_COMMAND` string of §9.1b (belt and braces: the env variable already wins, this row also pins the file-level key) |
+
+Because remotes are SSH-only (§9.1a), no HTTP credential helper, proxy,
+TLS, redirect, cookie or header setting can ever apply to an autopilot
+network operation — `credential.*`, `http.*` and `https.*` keys in the
+repo-local config are still rejected by the phase-A audit so their
+appearance is reported, but they have no transport to influence.
 
 git applies these with precedence over every config FILE, so any process
 that names `origin` (including the immutable `scripts/preflight.mjs` and
@@ -1352,9 +1349,7 @@ fetch, the fetched object's OID must equal the one `ls-remote` announced
 `<REPO_ROOT>/.git/config` (operator-owned, never part of a PR) is
 audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
 `core.sshCommand`, `core.gitProxy`, `http.proxy`, `https.proxy`,
-`remote.*.proxy`, `remote.*.uploadpack`/`receivepack`, `credential.*`
-(other than an operator-allowlisted `credential.helper` value given via
-`--git-credential-helper`), `include.*`/`includeIf.*`, or
+`remote.*.proxy`, `remote.*.uploadpack`/`receivepack`, `credential.*`, `include.*`/`includeIf.*`, or
 `core.hooksPath` entry → exit 1 `git-config-untrusted`, no network
 operation. The audit re-runs inside the preflight bracket of §6.6 and
 before every push.
@@ -1387,16 +1382,23 @@ before any issue, PR or git write. Every `gh` invocation thereafter passes
 `--repo <repo>` explicitly (never relies on cwd inference). The verified
 fetch and push URLs are PINNED for the iteration (stored in the status
 file and copied into each run record as `remoteFetchUrl` /
-`remotePushUrl`) in CANONICAL, credential-free form: a URL containing
-userinfo (`scheme://user:token@host/…` or any `@` before the host in an
-`https` URL) is rejected at preflight (`remote-url-credentials`, exit 1)
-rather than canonicalized, so no token can reach argv, the status file,
-a run record, a comment or the journal; authentication is git's own
-(SSH agent / credential helper / `GIT_ASKPASS`), never the URL, and every network git operation — `ls-remote`, `fetch`,
+`remotePushUrl`) in CANONICAL form, and in v1 they MUST be SSH URLs
+(`git@<host>:<owner>/<repo>.git` or `ssh://git@<host>/<owner>/<repo>.git`
+with the user part exactly `git`): an `https://` (or any non-SSH) remote
+is rejected at phase A (`remote-url-scheme`, exit 1) — HTTPS transport
+would need credential helpers and TLS/proxy/cookie/header settings that
+a mutable config can influence, and SSH with an isolated `ssh_config`
+and pinned host keys (§9.1b) has no such surface; a URL with any other
+userinfo is rejected (`remote-url-credentials`) rather than
+canonicalized, so no token can reach argv, the status file, a run
+record, a comment or the journal; authentication is the SSH agent or an
+explicit `--ssh-identity`, never the URL, and every network git operation — `ls-remote`, `fetch`,
 `push`, including the lease-guarded deletes — is invoked with that URL
 literal as the remote argument, never with the mutable name `origin`;
-immediately before each such operation `git remote get-url [--push]
-origin` is re-read and must still normalize to the pinned value,
+immediately before each such operation `git config --file
+<REPO_ROOT>/.git/config --get remote.origin.url` (and `.pushurl`) is
+re-read WITHOUT the overlay and must still normalize to the pinned
+value,
 otherwise the run is `orphan` (`remote-url-changed`) and nothing is
 pushed. The bound overlay of §9.1b is applied ONLY to processes that
 perform network operations (and to the bracketed preflight and fleet,
@@ -1470,9 +1472,11 @@ insecure → exit 1 `known-hosts-missing` (run `adlc-autopilot init
 worktree is created at `BASE_OID` under
 `<REPO_ROOT>/.adlc/autopilot-runs/preflight-<BASE_OID>` (`git worktree
 add --detach <path> <BASE_OID>`; objects are local by phase-B
-precondition), `adlc fleet run --dry-run --json` runs with cwd = that
+precondition), `adlc fleet run --dry-run --base <BASE_OID> --json` runs with cwd = that
 worktree — so it reads the pinned `.adlc/config.json` and ticket store,
-never the primary checkout's working tree — must exit 0, and the
+never the primary checkout's working tree, and its `--base` is the OID
+literal, never `main` — must exit 0 and its `--json` must report
+`baseSha == BASE_OID`, and the
 worktree is removed afterwards (a leftover from a crash is removed before
 the next attempt). The primary checkout is never the cwd of any
 preflight command. Fleet's own git processes inherit the same bound
@@ -1677,14 +1681,17 @@ init    [--labels] [--service] [--write]
 ```
 Global operator-local flags: `--repo` (or `ADLC_AUTOPILOT_REPO`; required
 for `loop`/`once`), `--model`, `--adapter`, `--quota-threshold`,
-`--quota-reserve`, `--trusted-bin-dirs`, `--ssh-identity`,
-`--git-credential-helper`. Every subcommand exits 0/1/2 and
+`--quota-reserve`, `--trusted-bin-dirs`, `--ssh-identity`. Every subcommand exits 0/1/2 and
 supports `--json`. `reset --attempts` is a journaled, crash-idempotent transaction under
 the autopilot lock: (1) write
 `.adlc/autopilot-runs/<issue>.attempts.reset.journal` `{startedAt,
 ledgerSha256}`; (2) read the ledger RAW (no retention pruning) and append
-to `.adlc/autopilot-runs/<issue>.attempts.archive.json` (append-only,
-never pruned) every entry — including `started` entries and entries
+to `.adlc/autopilot-runs/<issue>.attempts.archive.jsonl` (append-only,
+never pruned; ONE complete JSON record per line, each line carrying its
+own `sha256` of the record and written with a single `O_APPEND` write
+that ends in `\n`, so a crash can leave at most one truncated tail line,
+which readers and recovery discard when its trailing newline or
+checksum is missing) every entry — including `started` entries and entries
 older than 7 days — whose `id` is not already present in the archive
 (replay is deduplicated by `id`, so a crash after a partial append never
 duplicates); (3) truncate the active ledger (temp + `rename`); (4)
@@ -2574,9 +2581,9 @@ None is trust-root tier; each is a small, separately testable diff.
     revalidation and triage.
 110. **Pinned remote URL** (`run.test.mjs` + `recover.test.mjs`): every
     recorded `git ls-remote`/`fetch`/`push` argv carries the pinned URL
-    literal and never the word `origin` as the remote argument; a `git
-    remote get-url` fake that changes between preflight and a push →
-    `remote-url-changed`, zero pushes, state `orphan`.
+    literal and never the word `origin` as the remote argument; a `git config --file … --get remote.origin.url` fake that changes
+    between preflight and a push → `remote-url-changed`, zero pushes,
+    state `orphan`.
 111. **Coverage gate is not vacuous** (`spec-coverage.test.mjs` self-test):
     a registry entry pointing at a test with no `lib/` import or no
     `assert` call fails the gate; a criterion number absent from the
@@ -2637,9 +2644,9 @@ None is trust-root tier; each is a small, separately testable diff.
     `noFixture:` reason fails the gate; more than 5 `noFixture` entries
     fail it; an assertion that only checks a module's existence or an
     exported constant is rejected by the static check.
-122. **preflight.mjs is bracketed** (`sequence.test.mjs`): a `git remote
-    get-url` fake that returns the pinned URL before the preflight spawn
-    and a different URL after → the preflight result is discarded, no
+122. **preflight.mjs is bracketed** (`sequence.test.mjs`): a `git config --file … --get
+    remote.origin.url` fake that returns the pinned URL before the
+    preflight spawn and a different URL after → the preflight result is discarded, no
     attestation, no push, state `orphan` with `remote-url-changed`; an
     object-store fake in which `<baseOid>` no longer resolves after the
     script → the same; unchanged URLs and object → the pass is honored.
@@ -2716,3 +2723,18 @@ None is trust-root tier; each is a small, separately testable diff.
     fixture server's request log and `GIT_TRACE_CURL`) TLS verification
     on, no proxy, no redirect follow, no cookie, no extra header, and no
     helper invocation; `GIT_CONFIG_COUNT` equals the table row count.
+132. **SSH-only remotes** (`preflight.test.mjs`): `https://github.com/o/r.git`
+    → `remote-url-scheme`, exit 1, zero network spawns; `git@github.com:o/r.git`
+    and `ssh://git@github.com/o/r.git` are accepted and canonicalize to the
+    same pinned pair; `ssh://alice@github.com/o/r.git` →
+    `remote-url-credentials`; `ssh` is in the pinned toolchain and a PATH
+    entry under `REPO_ROOT` containing an `ssh` is never selected.
+133. **Fleet dry-run bound to the OID** (`preflight.test.mjs`): the
+    dry-run argv carries `--base <baseOid>`; a fixture where `main`
+    points elsewhere still reports `baseSha == baseOid`; a fake reporting
+    a different `baseSha` fails phase B.
+134. **Framed archive recovery** (`triage.test.mjs`): an archive whose
+    last line is truncated (no newline) or has a wrong checksum is read
+    without that line, recovery re-appends the missing attempt by `id`,
+    and the resulting archive has each `id` exactly once with valid
+    checksums on every line.
