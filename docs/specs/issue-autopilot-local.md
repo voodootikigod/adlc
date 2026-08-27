@@ -157,7 +157,14 @@ title/body) and performs zero mutations of any kind: no lock directory,
 no `.git/info/exclude` write, no `git fetch` (the baseline OID comes from
 `git ls-remote` alone and objects are not downloaded), no worktree, no
 ownership marker, no run record, no status-file write, no `gh` mutation,
-and no manifest append; the shaping call is replaced by a deterministic
+and no manifest append — with ONE transient exception, because the
+`ls-remote` needs the isolated transport of §9.1b: dry-run builds its
+§9.4a SSH material directory (wrapper, `known_hosts`, identity copy or
+public line, every validation of §9.4a) under a private `mkdtemp` in
+`$XDG_RUNTIME_DIR` (else `$TMPDIR`), mode `0700`, OUTSIDE `REPO_ROOT`,
+and removes it on exit; nothing under `REPO_ROOT`, on the remote, or in
+the operator's state is touched, and ambient SSH configuration is never
+consulted, dry-run or not; the shaping call is replaced by a deterministic
 placeholder unless `--dry-run-shape` is also passed (which spends the one
 gated Claude call and nothing else). Because dry-run may not fetch or
 create a worktree, phase B (§9) is split for dry-run into its READ-ONLY
@@ -845,10 +852,23 @@ gitignored `.adlc/autopilot-*` files.
      ONLY (i) `.claude/.credentials.json`, a `0600` COPY of the host file
      (validated before copying: regular file, uid-owned, mode `0600`,
      opened `O_NOFOLLOW`; sha256 recorded), writable so the harness can
-     refresh its OAuth token, and written BACK at worker exit only when
-     the copy changed AND the host file still hashes to the recorded
-     sha256 (atomic rename, `0600`; otherwise `credentials-refresh-
-     conflict` is logged and the host file is left alone); (ii) a
+     refresh its OAuth token — but worker-controlled bytes are NEVER
+     copied back as such: at worker exit a changed copy is written back
+     only if it parses as JSON with exactly the host file's top-level
+     keys, the ONLY fields that differ from the host file are the
+     refresh triple inside the OAuth record (`accessToken`,
+     `refreshToken`, `expiresAt`), both tokens are non-empty strings
+     carrying the same prefix as the host's, `expiresAt` is later than
+     the host's, and every other field is byte-equal (a token removed,
+     an account or scope changed, an added key, or unparseable content
+     → `credentials-refresh-rejected`, host untouched — the harness
+     simply refreshes again next run); the accepted refresh is applied
+     as a locked compare-and-swap: under an exclusive `flock` on
+     `<host .claude>/.credentials.lock` the host file is re-opened
+     `O_NOFOLLOW`, must still have the recorded inode and sha256, and is
+     replaced by a `0600` temp file via atomic rename; a host file that
+     changed meanwhile (an interactive refresh) → `credentials-refresh-
+     conflict`, host untouched; (ii) a
      `.claude/settings.json` generated from an allowlist of keys (model
      and permission settings; hooks and MCP servers stripped), `0400`;
      (iii) a minimal `.claude.json` generated from an allowlist (the
@@ -960,10 +980,19 @@ gitignored `.adlc/autopilot-*` files.
    `lockfile-drift`; no entry may be removed; any other difference →
    `lockfile-drift`. Because the only admissible additions are workspace
    links, `npm ci --ignore-scripts --no-audit --no-fund` never fetches a
-   new tarball of any kind; (iii) that command is then re-run in `ISSUE_WT` so the
-   install matches the lock the gates will test. All outer gates (5a,
-   preflight, final review, attestation) run in `ISSUE_WT`, never in the
-   worker's worktree.
+   new tarball of any kind; (iii) that command is then run by the
+   orchestrator ON THE HOST with `cwd = GATE_REPO` (§6.6) as soon as the
+   clone is cut — it executes no package code (`--ignore-scripts`), its
+   only egress is the registry for tarballs the attested lock already
+   pins, and it produces `GATE_REPO/node_modules` whose workspace links
+   (`node_modules/@adlc/<x>` → the relative `../../packages/<x>`) resolve
+   INSIDE the clone — so the sandboxed gates import the tree built from
+   the attested lockfile in the directory they run in; a `GATE_REPO`
+   without that tree fails the gate closed (`gate-deps-missing`), never
+   silently. Every gate that executes repository code (5b's test run,
+   the mutation gate, rails-guard) runs in `GATE_REPO`; the git-only
+   checks (5a's actual-diff check, attestation) read `ISSUE_WT`; nothing
+   runs in the worker's worktree.
 5a. **Actual-diff check** (deterministic, orchestrator-side, independent of
    fleet's rails gate and of what the worker declared): `git diff
    --name-only <BASE_OID>...HEAD` in `ISSUE_WT` must satisfy (i) every path
@@ -980,7 +1009,11 @@ gitignored `.adlc/autopilot-*` files.
    appended line must be one the ORCHESTRATOR wrote this run — it keeps
    the sha256 of each entry it appends in the run record and any added
    line outside that set is a violation `foreign-manifest-line` — AND
-   `adlc gate-manifest verify --dir <ISSUE_WT>/.adlc` must exit 0, which
+   `adlc gate-manifest verify --dir <ISSUE_WT>/.adlc` — a key-bearing
+   child (§9.3): keyless verification checks only chain consistency,
+   so the orchestrator passes it `ADLC_MANIFEST_KEY` (with the key
+   present `verify` requires a valid signature on every line by
+   default; `--allow-legacy-unsigned` is never passed) — must exit 0, which
    rejects any line not signed with the key the worker never holds; a
    diff to
    `.adlc/findings.jsonl` is a violation — neither the worker nor fleet's
@@ -1041,7 +1074,9 @@ gitignored `.adlc/autopilot-*` files.
    and cannot be run with network denied; §15 R13 requests `--no-fetch
    --sandboxed` so the script itself can be the runner; until then the
    orchestrator runs its gates. `npm ci --ignore-scripts --no-audit
-   --no-fund` (§6.5b) executes no package code and stays on the host.
+   --no-fund` (§6.5b) executes no package code, stays on the host, and
+   targets `GATE_REPO`, so the sandboxed gates find the dependency tree
+   where they run.
    Failure of any gate consumes one round of the SAME budget (§7): the
    run record's `roundsUsed` is incremented and steps 4–6 repeat with
    `--max-strikes <15 − roundsUsed>` and `--wall-clock-minutes <remaining>`;
@@ -1621,7 +1656,9 @@ from every other spawn (the **key-bearing allowlist**, asserted by AC 12):
 `adlc ticket create --write`, `adlc ticket complete --write`, `adlc ticket
 update --write` (reopen-for-retry only, §6.6), `adlc coldstart
 --record-verdict`, `adlc spec-lint --record`, `adlc prosecute
-record-cross-model`. Fleet, the shaping/coldstart `claude -p` calls, both
+record-cross-model`, and `adlc gate-manifest verify` (§6.5a — the one
+reader on the list, because signature verification is inert without
+the key). Fleet, the shaping/coldstart `claude -p` calls, both
 `adversarial-review` invocations, `gh`, `git`, `npm`, and `preflight.mjs`
 never receive it.
 
@@ -1661,7 +1698,9 @@ ticket's AC1 runs that schema validation.
 transport depends on lives in ONE exclusive per-iteration directory
 `<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/` created with
 mode `0700` by the orchestrator (`ssh-dir-exists` if it already exists —
-never reused): the `GIT_SSH` wrapper (§9.1b), `known_hosts` (copied from
+never reused; under `--dry-run` the same directory, with the same
+contents and validations, is created by `mkdtemp` outside `REPO_ROOT`
+and removed on exit, §0): the `GIT_SSH` wrapper (§9.1b), `known_hosts` (copied from
 `<REPO_ROOT>/.adlc/autopilot-known_hosts`, which `init --write` creates
 from `gh api meta` of the gh host and which must be a regular `0600`
 file owned by the invoking uid, else `known-hosts-missing`), the
@@ -3208,3 +3247,32 @@ None is trust-root tier; each is a small, separately testable diff.
     meanwhile; `settings.json` inside carries no `hooks`/`mcpServers`
     keys; `~/.ssh`, `~/.config/gh`, `~/.gitconfig`, `~/.claude/projects`
     and `~/.npmrc` are ENOENT inside; the host `HOME` is not bound.
+157. **Sandboxed gates find their dependencies** (`sequence.test.mjs` +
+    fleet real-bwrap test): the post-clone `npm ci --ignore-scripts` spawn
+    has `cwd = GATE_REPO` and runs on the host (no `bwrap` in its argv);
+    inside the sandbox a fixture test that imports a workspace package
+    through `GATE_REPO/node_modules/@adlc/<x>` passes and
+    `scripts/run-tests.mjs` resolves `node_modules/.bin`; a clone whose
+    install was skipped → `gate-deps-missing`, the run fails, no
+    attestation.
+158. **Credential refresh is validated, not copied** (fleet
+    `sandbox.test.mjs`): a worker fake that rewrites only the refresh
+    triple with a later `expiresAt` → the host file is replaced under
+    the lock with `0600` and the recorded inode check; a copy that drops
+    a token, changes the account or scopes, adds a key, or is not JSON →
+    `credentials-refresh-rejected`, host byte-identical; a host file
+    modified between copy-in and exit → `credentials-refresh-conflict`,
+    host untouched; the write happens only while the lock is held.
+159. **Dry-run transport is transient and isolated** (`preflight.test.mjs`
+    with the spawn recorder): under `--dry-run` the `ls-remote` spawn
+    carries a `GIT_SSH` wrapper whose realpath is under `mkdtemp` in
+    `$XDG_RUNTIME_DIR`, not under `REPO_ROOT`; `ls -A
+    <REPO_ROOT>/.adlc/autopilot-runs` is unchanged before and after; the
+    temporary directory is gone at exit; a planted `~/.ssh/config` is
+    not read (`-F /dev/null` present).
+160. **Manifest verification is keyed** (`keys.test.mjs`): the
+    `gate-manifest verify` spawn's env carries `ADLC_MANIFEST_KEY` and
+    its argv lacks `--allow-legacy-unsigned`; a manifest line with a
+    forged signature makes the gate fail; the key-bearing allowlist
+    fixture lists exactly the §9.3 children and a `verify` spawn without
+    the key fails the test.
