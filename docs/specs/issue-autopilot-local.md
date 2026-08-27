@@ -1166,10 +1166,17 @@ gitignored `.adlc/autopilot-*` files.
    line outside that set is a violation `foreign-manifest-line` — AND
    `adlc gate-manifest verify --dir <ISSUE_WT>/.adlc` — a key-bearing
    child (§9.3): keyless verification checks only chain consistency,
-   so the orchestrator passes it `ADLC_MANIFEST_KEY` (with the key
-   present `verify` requires a valid signature on every line by
-   default; `--allow-legacy-unsigned` is never passed) — must exit 0, which
-   rejects any line not signed with the key the worker never holds; a
+   so the orchestrator passes it `ADLC_MANIFEST_KEY` together with
+   `--allow-legacy-unsigned`, because the repository's root manifest
+   begins with a legacy UNSIGNED prefix that strict verification rejects
+   at `seq 1` (verified against the real verifier: strict → "chain
+   broken at seq 1: unsigned entry"; tolerant → "manifest ok"); the
+   flag tolerates a MISSING signature only on that legacy prefix — a
+   forged signature anywhere, and a missing one on any later entry,
+   still fail — and the orchestrator additionally requires every entry
+   it appended this run (§6.5a's recorded sha256 set) to be present AND
+   signed (`run-entry-unsigned` otherwise) — must exit 0, which rejects
+   any line not signed with the key the worker never holds; a
    diff to
    `.adlc/findings.jsonl` is a violation — neither the worker nor fleet's
    inner review may write it, and fleet's inner review runs without
@@ -3580,8 +3587,12 @@ None is trust-root tier; each is a small, separately testable diff.
     (`-F /dev/null` present).
 160. **Manifest verification is keyed** (`keys.test.mjs`): the
     `gate-manifest verify` spawn's env carries `ADLC_MANIFEST_KEY` and
-    its argv lacks `--allow-legacy-unsigned`; a manifest line with a
-    forged signature makes the gate fail; the key-bearing allowlist
+    its argv carries `--allow-legacy-unsigned`; run against a copy of
+    THIS repository's real manifest (legacy unsigned prefix included)
+    plus a signed run segment the gate passes, while a forged signature
+    on any line, a missing signature on a post-prefix line, or one of
+    the run's own appended entries left unsigned (`run-entry-unsigned`)
+    makes the gate fail; the key-bearing allowlist
     fixture lists exactly the §9.3 children and a `verify` spawn without
     the key fails the test.
 161. **Gate mirror is synchronized after the last orchestrator commit**
