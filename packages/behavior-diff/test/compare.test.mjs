@@ -23,9 +23,9 @@ describe('loadSnapshot validation (unit)', () => {
     const dir = tmpDir();
     const file = join(dir, 'dup.json');
     writeFileSync(file, JSON.stringify({ routes: [
-      { method: 'POST', path: '/items', status: 400 },
-      { method: 'GET', path: '/items', status: 200 },
-      { method: 'POST', path: '/items', status: 201 },
+      { method: 'POST', path: '/items', status: 400, contentType: 'application/json', body: {} },
+      { method: 'GET', path: '/items', status: 200, contentType: 'application/json', body: {} },
+      { method: 'POST', path: '/items', status: 201, contentType: 'application/json', body: {} },
     ] }));
     try {
       assert.throws(() => loadSnapshot(file), /route at index 2 duplicates an earlier "POST \/items" entry/);
@@ -38,9 +38,9 @@ describe('loadSnapshot validation (unit)', () => {
     const dir = tmpDir();
     const file = join(dir, 'ok.json');
     writeFileSync(file, JSON.stringify({ routes: [
-      { method: 'GET', path: '/items', status: 200 },
-      { method: 'POST', path: '/items', status: 201 },
-      { method: 'GET', path: '/items/1', status: 200 },
+      { method: 'GET', path: '/items', status: 200, contentType: 'application/json', body: {} },
+      { method: 'POST', path: '/items', status: 201, contentType: 'application/json', body: {} },
+      { method: 'GET', path: '/items/1', status: 200, contentType: 'application/json', body: {} },
     ] }));
     try {
       assert.equal(loadSnapshot(file).routes.length, 3);
@@ -74,7 +74,7 @@ describe('loadSnapshot validation (unit)', () => {
       [{ routes: [{ method: 'GET', path: '' }] }, /route at index 0 lacks non-empty string path/],
       [{ routes: [{ method: 'GET', path: 123 }] }, /route at index 0 lacks non-empty string path/],
       [{ routes: [
-          { method: 'GET', path: '/foo', status: 200 },
+          { method: 'GET', path: '/foo', status: 200, contentType: 'application/json', body: {} },
           { method: 'GET' }
         ] }, /route at index 1 lacks non-empty string path/],
       [{ routes: [{ method: 'GET', path: '/foo' }] }, /route at index 0 records no observation/],
@@ -82,12 +82,16 @@ describe('loadSnapshot validation (unit)', () => {
       [{ routes: [{ method: 'GET', path: '/foo', status: -1 }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 0 }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 99 }] }, /route at index 0 has an invalid HTTP status/],
-      [{ routes: [{ method: 'GET', path: '/foo', status: 600 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 600, contentType: 'application/json', body: {} }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 200.5 }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', status: null }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', error: '' }] }, /route at index 0 records no observation/],
       [{ routes: [{ method: 'GET', path: '/foo', error: 42 }] }, /route at index 0 has a non-string error/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 200, error: 'boom' }] }, /route at index 0 records both an error and a status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200 }] }, /route at index 0 is an incomplete observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain' }] }, /route at index 0 is an incomplete observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, body: {} }] }, /route at index 0 is an incomplete observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: null, body: {} }] }, /route at index 0 is an incomplete observation/],
     ];
 
     try {
@@ -115,7 +119,7 @@ describe('loadSnapshot validation (unit)', () => {
   test('accepts valid routes and parses correctly', () => {
     const dir = tmpDir();
     const file = join(dir, 'valid.json');
-    const data = { routes: [{ method: 'GET', path: '/hello', status: 200 }] };
+    const data = { routes: [{ method: 'GET', path: '/hello', status: 200, contentType: 'application/json', body: {} }] };
     writeFileSync(file, JSON.stringify(data));
 
     try {
@@ -128,6 +132,28 @@ describe('loadSnapshot validation (unit)', () => {
 });
 
 describe('CLI compare integration (empty/malformed rejection)', () => {
+  test('exits 1 when both sides hold the same STATUS-ONLY entry (no contentType/body) instead of reporting identical', () => {
+    const dir = tmpDir();
+    const before = join(dir, 'before.json');
+    const after = join(dir, 'after.json');
+    const partial = JSON.stringify({ routes: [{ method: 'GET', path: '/account', status: 200 }] });
+    writeFileSync(before, partial);
+    writeFileSync(after, partial);
+    try {
+      let threw = false;
+      try {
+        execFileSync(process.execPath, [cliPath, 'compare', before, after], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        threw = true;
+        assert.equal(err.status, 1, 'Process should exit with code 1');
+        assert.match(err.stderr, /incomplete observation/);
+      }
+      assert.ok(threw, 'two status-only entries must not compare as identical (exit 0)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('exits 1 when both sides hold the same impossible status (-1) instead of reporting identical', () => {
     const dir = tmpDir();
     const before = join(dir, 'before.json');
@@ -178,7 +204,7 @@ describe('CLI compare integration (empty/malformed rejection)', () => {
     const validFile = join(dir, 'valid.json');
 
     writeFileSync(emptyFile, JSON.stringify({ routes: [] }));
-    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200 }] }));
+    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'application/json', body: {} }] }));
 
     try {
       let threw = false;
@@ -201,7 +227,7 @@ describe('CLI compare integration (empty/malformed rejection)', () => {
     const validFile = join(dir, 'valid.json');
 
     writeFileSync(malformed, JSON.stringify({ routes: [{ method: 'GET' }] }));
-    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200 }] }));
+    writeFileSync(validFile, JSON.stringify({ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'application/json', body: {} }] }));
 
     try {
       let threw = false;

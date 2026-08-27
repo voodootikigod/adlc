@@ -55,6 +55,12 @@ export function loadSnapshot(filePath) {
     if (hasError && hasStatus) {
       throw new Error(`snapshot file "${filePath}" route at index ${i} records both an error and a status`);
     }
+    // A captured response is {status, contentType, body} — always all three
+    // (see capture.mjs). A status-only entry compares missing contentType and
+    // body as equal on both sides, so a changed body would read as identical.
+    if (hasStatus && (typeof route.contentType !== 'string' || !Object.hasOwn(route, 'body'))) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} is an incomplete observation (a captured response carries status, contentType and body)`);
+    }
   }
   // compareSnapshots keys each side on routeKey() alone, so two entries sharing a
   // key silently collapse to the LAST one — a changed duplicate hidden behind an
