@@ -159,7 +159,13 @@ no `.git/info/exclude` write, no `git fetch` (the baseline OID comes from
 ownership marker, no run record, no status-file write, no `gh` mutation,
 and no manifest append; the shaping call is replaced by a deterministic
 placeholder unless `--dry-run-shape` is also passed (which spends the one
-gated Claude call and nothing else). The spawn recorder in AC 10 rejects
+gated Claude call and nothing else). Because dry-run may not fetch,
+phase-B checks (§9) run only if the resolved `BASE_OID` is already
+present locally (`git cat-file -e <BASE_OID>^{commit}`); otherwise the
+plan is printed with `complete: false` and `incomplete: ["baseline-not-
+local"]`, every phase-B item is reported as `skipped`, and the exit code
+is still 0 — a dry-run never claims a full plan it could not build and
+never fetches to build one. The spawn recorder in AC 10 rejects
 any argv that is not in the read-only set (`git ls-remote`, `git
 rev-parse`, `git cat-file`, `gh … view|list|api GET`, `adlc … --json`
 without `--write`/`--record`).
@@ -570,7 +576,10 @@ text the repository OWNER wrote.
    write-to-temp + `rename` BEFORE the call is spawned with
    `outcome:"started"` and updated after it returns; an entry left at
    `started` by a crash counts as a failed attempt; entries older than 7
-   days are pruned on read.
+   days are pruned on read — by ORDINARY reads only; `reset --attempts`
+   (§13.0) reads the raw file without pruning, appends every entry to
+   the archive, and only then truncates the active ledger (temp file +
+   `rename`), so no attempt is ever lost between ledger and archive.
    The prompt is a fixed prompt (in
    `lib/shaping-prompt.mjs`) that returns a JSON ticket
    `{title, body, scope[], rails[], category, duration}` whose body begins
@@ -1520,11 +1529,14 @@ init    [--labels] [--service] [--write]
 ```
 Global operator-local flags: `--model`, `--adapter`, `--quota-threshold`,
 `--quota-reserve`, `--trusted-bin-dirs`. Every subcommand exits 0/1/2 and
-supports `--json`. `reset --attempts` clears the issue's shaping-attempt
-ledger into `.adlc/autopilot-runs/<issue>.attempts.archive.json`
-(append-only, never pruned), requires the autopilot lock, needs no OID,
-touches nothing else, is idempotent (a second call archives nothing and
-exits 0), and is the only exit from `shaping-failed`; `reset
+supports `--json`. `reset --attempts` reads the issue's shaping-attempt
+ledger RAW (no retention pruning), appends every entry — including
+`started` entries and entries older than 7 days — to
+`.adlc/autopilot-runs/<issue>.attempts.archive.json` (append-only, never
+pruned), then truncates the active ledger atomically; it requires the
+autopilot lock, needs no OID, touches nothing else, is idempotent (a
+second call archives nothing and exits 0), and is the only exit from
+`shaping-failed`; `reset
 --confirm-delete` is §2.1a; `--delete-remote` is §2.1a Step R.
 
 Repo-committed (`.adlc/config.json`, trust root):
@@ -1744,8 +1756,10 @@ None is trust-root tier; each is a small, separately testable diff.
 9. **Wall clock**: a fleet fake that never returns is killed at 90 minutes
    (fake timers), outcome `wall-clock`, label applied (`run.test.mjs`).
 10. **Dry-run honesty**: `adlc-autopilot once --dry-run --issue N` exits 0,
-    prints the full plan, and the spawn recorder shows only argv from the
-    read-only set of §2 (assert: no `git fetch`, `git worktree`, `git
+    prints the plan — `complete: true` when the baseline objects are
+    local, otherwise `complete: false` with `baseline-not-local` and every
+    phase-B item marked `skipped` (assert both fixtures) — and the spawn
+    recorder shows only argv from the read-only set of §2 (assert: no `git fetch`, `git worktree`, `git
     config`, `git push`, `mkdir` of the lock, `.git/info/exclude` write,
     `gh` mutation, or `--write`/`--record` flag), the filesystem fixture
     is byte-identical before and after, and no manifest line was
@@ -2432,3 +2446,8 @@ None is trust-root tier; each is a small, separately testable diff.
     with no baseline throws `base-unresolved` rather than reading the
     working tree; an `ls-remote` fake failure yields zero phase-B reads
     and zero dispatches.
+118. **Archive precedes pruning** (`triage.test.mjs`): a ledger holding a
+    9-day-old entry, a `started` entry and a recent entry → `reset
+    --attempts` archives all three (archive count 3) and leaves an empty
+    active ledger; an ordinary read of the same ledger returns only the
+    recent entry and never writes the archive.
