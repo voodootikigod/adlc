@@ -201,9 +201,13 @@ export function runFromStdin(raw, env = process.env) {
     return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
   }
   const toolName = extractToolName(payload);
+  const trackerCache = new Map();
+  // A nameless envelope is decided (denied under enforcement) by decide(); it
+  // must not first count as a tool call against the session — repeated
+  // malformed envelopes would poison persistent depth and deny later edits.
+  if (!toolName) return decide(payload, { env, trackerCache });
   const cls = classifyTool(toolName);
 
-  const trackerCache = new Map();
   const sessionID = resolveSessionId({ payload, env });
 
   // For readonly tools, skip session lock persistence entirely

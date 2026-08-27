@@ -192,6 +192,32 @@ test('checkBuildGate: correctly loads active ticket from sharded .adlc/tickets/.
   }
 });
 
+test('runFromStdin: a NAMELESS envelope is denied under enforcement WITHOUT advancing session depth', () => {
+  const root = mkdtempSync(join(tmpdir(), 'nameless-env-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+
+    // Malformed hook envelopes (no toolCall.name) aimed at a victim session.
+    const nameless = JSON.stringify({ conversationId: 'victim', workspacePaths: [root] });
+    for (let i = 0; i < 3; i++) {
+      const v = runFromStdin(nameless, env);
+      assert.equal(v.allow_tool, false);
+      assert.match(v.deny_reason, /exposes no tool name/);
+    }
+    assert.equal(createPersistentTracker(root, env).depth('victim'), 0,
+      'denied malformed envelopes must not poison the session depth counter');
+
+    // Positive control: the same envelope WITH a tool name does advance depth,
+    // so the zero above is a real observation of the short-circuit.
+    runFromStdin(JSON.stringify({ conversationId: 'victim', workspacePaths: [root], toolCall: { name: 'run_command', command: 'ls' } }), env);
+    assert.equal(createPersistentTracker(root, env).depth('victim'), 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('runFromStdin: pathless run_command payload advances tool call depth', () => {
   const root = mkdtempSync(join(tmpdir(), 'pathless-cmd-'));
   try {
