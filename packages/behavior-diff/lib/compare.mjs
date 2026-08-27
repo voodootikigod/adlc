@@ -42,8 +42,13 @@ export function loadSnapshot(filePath) {
     if (route.error !== undefined && typeof route.error !== 'string') {
       throw new Error(`snapshot file "${filePath}" route at index ${i} has a non-string error`);
     }
+    // fetch() only ever yields an integer HTTP status in 100..599; anything
+    // else (-1, 0, 999) is a failed or hand-made capture, not an observation.
+    if (route.status !== undefined && !(Number.isInteger(route.status) && route.status >= 100 && route.status <= 599)) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} has an invalid HTTP status (expected an integer 100-599): ${JSON.stringify(route.status)}`);
+    }
     const hasError = typeof route.error === 'string' && route.error.trim() !== '';
-    const hasStatus = Number.isInteger(route.status);
+    const hasStatus = route.status !== undefined;
     if (!hasError && !hasStatus) {
       throw new Error(`snapshot file "${filePath}" route at index ${i} records no observation (neither an integer status nor a non-empty error string)`);
     }

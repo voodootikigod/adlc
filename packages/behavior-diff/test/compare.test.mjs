@@ -78,7 +78,13 @@ describe('loadSnapshot validation (unit)', () => {
           { method: 'GET' }
         ] }, /route at index 1 lacks non-empty string path/],
       [{ routes: [{ method: 'GET', path: '/foo' }] }, /route at index 0 records no observation/],
-      [{ routes: [{ method: 'GET', path: '/foo', status: '200' }] }, /route at index 0 records no observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: '200' }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: -1 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 0 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 99 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 600 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200.5 }] }, /route at index 0 has an invalid HTTP status/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: null }] }, /route at index 0 has an invalid HTTP status/],
       [{ routes: [{ method: 'GET', path: '/foo', error: '' }] }, /route at index 0 records no observation/],
       [{ routes: [{ method: 'GET', path: '/foo', error: 42 }] }, /route at index 0 has a non-string error/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 200, error: 'boom' }] }, /route at index 0 records both an error and a status/],
@@ -122,6 +128,28 @@ describe('loadSnapshot validation (unit)', () => {
 });
 
 describe('CLI compare integration (empty/malformed rejection)', () => {
+  test('exits 1 when both sides hold the same impossible status (-1) instead of reporting identical', () => {
+    const dir = tmpDir();
+    const before = join(dir, 'before.json');
+    const after = join(dir, 'after.json');
+    const bogus = JSON.stringify({ routes: [{ method: 'GET', path: '/x', status: -1 }] });
+    writeFileSync(before, bogus);
+    writeFileSync(after, bogus);
+    try {
+      let threw = false;
+      try {
+        execFileSync(process.execPath, [cliPath, 'compare', before, after], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        threw = true;
+        assert.equal(err.status, 1, 'Process should exit with code 1');
+        assert.match(err.stderr, /invalid HTTP status/);
+      }
+      assert.ok(threw, 'two impossible statuses must not compare as identical (exit 0)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('exits 1 when both sides hold the same NON-observation (no status, no error) instead of reporting identical', () => {
     const dir = tmpDir();
     const before = join(dir, 'before.json');
