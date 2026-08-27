@@ -3188,7 +3188,8 @@ None is trust-root tier; each is a small, separately testable diff.
     `not-authorized` again; an unreadable edit history → `not-authorized`;
     a body edited between selection and §6.0a revalidation →
     `revalidation-changed`, the shaped ticket discarded, zero dispatches.
-156. **Synthetic HOME contract** (fleet real-bwrap test): inside the
+156. **Synthetic HOME contract** (fleet `sandbox.test.mjs`, real `bwrap`,
+    skipped loudly without it): inside the
     model plane `$HOME/.claude/.credentials.json` is readable, `0600`,
     and byte-equal to the host file; a worker fake that rewrites it →
     the host file is replaced atomically with the new content (`0600`)
