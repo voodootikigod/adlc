@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseFlags, syncFlow } from '../bin/ticket-sync.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'ticket-sync.mjs');
@@ -158,3 +158,15 @@ test('invocation through a symlink (like npm .bin) executes main correctly', () 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+
+// The other side of the #786 guard: under `node -e` process.argv is [node]
+// alone, so argv[1] is undefined. That must read as "not the entry point" — a
+// guard that answered true there would run main() from a bare import (this
+// file imports parseFlags/syncFlow from the bin), which prints usage and exits 1.
+test('importing ticket-sync.mjs from a process with NO argv[1] (node -e) does NOT run main', () => {
+  const r = spawnSync(process.execPath,
+    ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(BIN).href)})`],
+    { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '', 'a bare import must not print usage');
+});

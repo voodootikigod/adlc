@@ -72,3 +72,20 @@ test('enforcement OFF is a no-op allow even on a rail', () => {
   const root = adlcRepo({ rails: ['src/frozen.js'] });
   assert.equal(call('write_to_file', { TargetFile: join(root, 'src', 'frozen.js') }, {}).allow_tool, true);
 });
+
+// ── #823: non-object payloads reaching decide() DIRECTLY ─────────────────────
+// runFromStdin carries its own copy of this guard, so its tests never exercise
+// the decide()-level one. Each shape below is a distinct way a mis-joined guard
+// lets a payload through to extractToolName, where it reads as an unclassified
+// tool and is allowed. The deny reason is pinned so the categorical catch-all
+// ("internal error while enforcing") cannot stand in for the guard.
+for (const [label, payload] of [['null', null], ['undefined', undefined], ['string', 'hi'], ['number', 123], ['array', []]]) {
+  test(`decide(): ${label} payload under enforcement fails CLOSED at the payload guard`, () => {
+    const v = decide(payload, { env: ENF });
+    assert.equal(v.allow_tool, false);
+    assert.match(v.deny_reason, /unparseable tool payload while enforcing/);
+  });
+  test(`decide(): ${label} payload with enforcement off allows`, () => {
+    assert.deepEqual(decide(payload, { env: {} }), { allow_tool: true });
+  });
+}
