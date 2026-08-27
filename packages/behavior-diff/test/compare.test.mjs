@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { loadSnapshot } from '../lib/compare.mjs';
@@ -110,10 +111,15 @@ describe('loadSnapshot validation (unit)', () => {
     }
   });
 
-  test('accepts a well-formed text observation ({textHash, bytes})', () => {
+  test('accepts a well-formed text observation ({textHash, bytes}) with a REAL digest', () => {
     const dir = tmpDir();
     const file = join(dir, 'text.json');
-    const data = { routes: [{ method: 'GET', path: '/plain', status: 200, contentType: 'text/plain; charset=utf-8', body: { textHash: 'b'.repeat(64), bytes: 12 } }] };
+    // A genuine sha256 hex, not a synthetic run of one letter: the hash
+    // alphabet is [0-9a-f] and a real digest exercises the digits too.
+    const textHash = createHash('sha256').update('hello world\n', 'utf8').digest('hex');
+    assert.match(textHash, /0/, 'fixture digest must contain a zero digit');
+    assert.match(textHash, /[a-f]/, 'fixture digest must contain a hex letter');
+    const data = { routes: [{ method: 'GET', path: '/plain', status: 200, contentType: 'text/plain; charset=utf-8', body: { textHash, bytes: 12 } }] };
     writeFileSync(file, JSON.stringify(data));
     try {
       assert.deepEqual(loadSnapshot(file), data);
