@@ -62,7 +62,7 @@ the run. The snapshot always contains an entry for every route in the config.
 
 | Code | Meaning |
 |------|---------|
-| `0` | All routes attempted, snapshot written (even if some routes errored) |
+| `0` | All routes attempted and at least one reachable; snapshot written (some routes may have errored) |
 | `1` | Operational error: config file unreadable, invalid config, cannot write output |
 
 ---

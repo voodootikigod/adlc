@@ -79,6 +79,19 @@ test('railDensity: blank or non-string rail entries do not count as coverage', (
   assert.equal(railDensity({ id: 'T1', title: 't', rails: ['', 'test/a.test.mjs'], scope: ['src/a.mjs', 'src/b.mjs'] }), 0.5);
 });
 
+test('railDensity: invisible-only patterns (zero-width, word joiner, Braille blank, Hangul filler) do not count', () => {
+  for (const ghost of ['\u200b', '\u2060', '\u2800', '\u3164', '\u115f\u1160', '\ufeff', '\u0000']) {
+    assert.equal(railDensity({ id: 'T1', title: 't', rails: [ghost], scope: ['src/**'] }), 0, JSON.stringify(ghost));
+    assert.equal(railDensity({ id: 'T1', title: 't', rails: [ghost], scope: [ghost] }), 0, JSON.stringify(ghost));
+    assert.equal(railDensity({ id: 'T1', title: 't', rails: ['test/a.mjs'], scope: [ghost] }), 0, JSON.stringify(ghost));
+  }
+});
+
+test('railDensity: a glob-only pattern counts, and an invisible suffix does not make a pattern distinct', () => {
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['**'], scope: ['src/**'] }), 1);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['test/a.mjs', 'test/a.mjs\u200b'], scope: ['src/a.mjs', 'src/b.mjs'] }), 0.5);
+});
+
 test('railDensity: duplicate rails and scope entries count once', () => {
   assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a', 'a', 'a'], scope: ['x', 'y', 'z'] }), 1 / 3);
   assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a', ' a '], scope: ['x', 'x'] }), 1);
