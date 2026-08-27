@@ -72,6 +72,23 @@ test('railDensity: 1 rail, 4 scope → 0.25', () => {
   assert.equal(railDensity(t), 0.25);
 });
 
+test('railDensity: blank or non-string rail entries do not count as coverage', () => {
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: [''], scope: ['src/**'] }), 0);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['   '], scope: ['src/**'] }), 0);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: [null, 42], scope: ['src/**'] }), 0);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['', 'test/a.test.mjs'], scope: ['src/a.mjs', 'src/b.mjs'] }), 0.5);
+});
+
+test('railDensity: duplicate rails and scope entries count once', () => {
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a', 'a', 'a'], scope: ['x', 'y', 'z'] }), 1 / 3);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a', ' a '], scope: ['x', 'x'] }), 1);
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'], scope: ['x', 'x', 'x', 'y'] }), 0.5);
+});
+
+test('railDensity: blank-only scope → 0 (unbounded), not division by a padded length', () => {
+  assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'], scope: ['', '  '] }), 0);
+});
+
 test('railDensity: rails present, no scope or empty scope → 0', () => {
   assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'] }), 0);
   assert.equal(railDensity({ id: 'T1', title: 't', rails: ['a'], scope: [] }), 0);
