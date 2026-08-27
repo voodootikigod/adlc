@@ -29,7 +29,7 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
     }
     const stat = statSync(absRoot);
     if (stat.isDirectory()) {
-      collectSkills(absRoot, results, { strict });
+      collectSkills(absRoot, results, strict);
     } else if (stat.isFile() && basename(absRoot) === 'SKILL.md') {
       results.push(absRoot);
     } else if (strict) {
@@ -44,11 +44,13 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
 
 /**
  * Recursively walk dir and collect SKILL.md files.
- * Skips node_modules and .git directories. In strict mode (explicit roots) an
+ * Skips node_modules and .git directories. With strict (explicit roots) an
  * unreadable subtree is an error — a clean verdict must mean everything the
  * caller named was inspected; best-effort skipping is for default discovery.
+ * `strict` is a required positional: a defaulted option that every caller
+ * overrides is dead code the mutation gate rightly flags.
  */
-function collectSkills(dir, results, { strict = false } = {}) {
+function collectSkills(dir, results, strict) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -63,7 +65,7 @@ function collectSkills(dir, results, { strict = false } = {}) {
     const fullPath = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      collectSkills(fullPath, results, { strict });
+      collectSkills(fullPath, results, strict);
     } else if (entry.isFile() && entry.name === 'SKILL.md') {
       results.push(fullPath);
     }
