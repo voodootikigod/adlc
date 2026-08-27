@@ -1402,13 +1402,13 @@ that names `origin` (including the immutable `scripts/preflight.mjs` and
 fleet's git calls) resolves it to the pinned URLs for the lifetime of
 that process regardless of what `.git/config` says at any instant, and
 the HTTPS safety settings likewise cannot be undone by a file edit
-during the operation. Entries 3–4 close the remaining
-TOCTOU: git rewrites a URL with the LONGEST matching `insteadOf` /
-`pushInsteadOf` key, and a key equal to the full pinned URL is by
-construction at least as long as any prefix a repo-local rewrite could
-match, so an `url.*.insteadOf` written into `.git/config` between the
-phase-A audit and a network operation can no longer redirect the pinned
-literal (the identity rewrite wins). The phase-A audit still forbids
+during the operation. Entries 3–5 are defense in depth only: git rewrites a URL with the
+LONGEST matching `insteadOf` / `pushInsteadOf` key but keeps the FIRST
+of equal-length matches, and files are read before the environment, so
+an exact-URL rewrite in `.git/config` would still win — which is why no
+network operation ever runs against the repository's configuration
+(§9.1c); inside `NET_GIT` there are no file rewrites for these rows to
+lose to. The phase-A audit still forbids
 such entries so their appearance is reported. Finally every network
 operation is VERIFIED at the endpoint, not the config: after a push,
 `git ls-remote <remotePushUrl> refs/heads/<branch>` (itself run under the
@@ -1422,6 +1422,39 @@ audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
 `core.hooksPath` entry → exit 1 `git-config-untrusted`, no network
 operation. The audit re-runs inside the preflight bracket of §6.6 and
 before every push.
+
+9.1c (phase A) Network repository — the ONLY place network git runs:
+git resolves `url.*.insteadOf` by longest match and, among EQUAL-length
+matches, keeps the first one read, and config FILES are read before
+environment-supplied entries; so an exact-URL rewrite planted in
+`.git/config` would beat the env identity pin of §9.1b. The autopilot
+therefore never performs a network operation against the repository's
+own configuration. Every `ls-remote`, `fetch` and `push` (and every
+lease-guarded delete) runs as `git --git-dir=<NET_GIT> …` where
+`NET_GIT` = `<REPO_ROOT>/.adlc/autopilot-runs/net.git`, a bare
+repository the orchestrator creates at `init --write` and re-verifies in
+phase A: its `config` is orchestrator-written from a fixed template
+(`core.repositoryformatversion=0`, `core.bare=true`,
+`remote.origin.url`/`pushurl` = the pinned URL, `core.sshCommand` = the
+wrapper path, `core.hooksPath=/dev/null`, nothing else — in particular no
+`url.*`, `credential.*`, `http.*`, `include*`), its sha256 is recorded in
+the status file and re-checked immediately before every network spawn
+(`net-config-tampered` → `orphan`, nothing sent), its `hooks/` directory
+is empty, and `objects/info/alternates` names `<REPO_ROOT>/.git/objects`
+so the network repository can read every object the main repository has
+without copying. Fetches land in `NET_GIT`'s own object store and refs
+(`refs/autopilot/fetched/*`); the orchestrator then moves what it needs
+into the main repository with a LOCAL, file-transport `git -C <REPO_ROOT>
+fetch <NET_GIT> <oid>` (no network, no rewrite surface). Pushes read the
+attested objects through the alternates. `GIT_CONFIG_GLOBAL`/`SYSTEM` =
+`/dev/null` still apply, so `NET_GIT`'s config is the complete
+configuration of every network process; the env-bound rows of §9.1b are
+retained as defense in depth, not as the boundary. The immutable
+`scripts/preflight.mjs` is the one network user that cannot be routed
+through `NET_GIT`: its fetch is by OID with the tracking ref pre-created
+(§6.6), so the worst a redirected endpoint can do is answer or refuse —
+it cannot substitute content for a requested OID — and the after-call
+checks discard the run if the ref moved.
 
 9.1a (phase A) Repository and principal binding: the expected identity
 comes from an OPERATOR-LOCAL source that exists before any repository
@@ -1468,8 +1501,10 @@ userinfo is rejected (`remote-url-credentials`) rather than
 canonicalized, so no token can reach argv, the status file, a run
 record, a comment or the journal; authentication is the SSH agent or an
 explicit `--ssh-identity`, never the URL, and every network git operation — `ls-remote`, `fetch`,
-`push`, including the lease-guarded deletes — is invoked with that URL
-literal as the remote argument, never with the mutable name `origin`;
+`push`, including the lease-guarded deletes — is invoked as `git
+--git-dir=<NET_GIT>` (§9.1c) with that URL literal as the remote
+argument, never with the mutable name `origin` and never against the
+repository's own configuration;
 immediately before each such operation `git config --file
 <REPO_ROOT>/.git/config --get remote.origin.url` (and `.pushurl`) is
 re-read WITHOUT the overlay and must still normalize to the pinned
@@ -2873,3 +2908,14 @@ None is trust-root tier; each is a small, separately testable diff.
     seven rows including `url.<pushUrl>.insteadOf`; a post-audit
     `url.<prefix>.insteadOf` race against the post-push `ls-remote` still
     resolves to the pinned endpoint (real fixture, two bare remotes).
+143. **Network repository isolates transport** (`preflight.test.mjs` +
+    `sequence.test.mjs`, real temporary repositories with two bare
+    remotes): every recorded network git spawn carries
+    `--git-dir=<NET_GIT>`; an EXACT-URL `url.<pinned>.insteadOf=<evil>`
+    planted in `<REPO_ROOT>/.git/config` after the audit does not affect
+    a push (the ref lands only in the pinned bare remote) — the same
+    fixture run against the main repository's config, without `NET_GIT`,
+    is shown to redirect, proving the isolation is load-bearing; a
+    modified `NET_GIT/config` → `net-config-tampered`, zero network
+    spawns; `NET_GIT/hooks` is empty; a fetched OID reaches the main
+    repository only through a local `git fetch <NET_GIT>` argv.
