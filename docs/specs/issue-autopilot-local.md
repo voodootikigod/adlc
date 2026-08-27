@@ -840,16 +840,38 @@ gitignored `.adlc/autopilot-*` files.
      credential helper, hook, other branch, reflog, stash or unreachable
      object); the worker's commits write objects, refs and worktree
      metadata INTO it and nowhere else; (c) a private empty tmpfs at `/tmp`
-     with `TMPDIR`/`TMP`/`TEMP` inside it (item 11).
+     with `TMPDIR`/`TMP`/`TEMP` inside it (item 11); (d) the synthetic
+     `HOME` tmpfs of item 14 — a WRITABLE root whose layout (writable
+     tmpfs with three enumerated read-only leaf binds layered inside) is
+     stated in the `READ_SET` bullet below. The worker's dependency tree
+     is provided BEFORE the sandbox starts, because inside it there is
+     no registry route (the egress allowlist names only the model API):
+     fleet item 15, `--init-on-host`, makes fleet run the configured
+     `init` command (`npm ci --ignore-scripts`, which executes no package
+     code) on the HOST in the orchestrator plane with `cwd = <worker
+     worktree>` once per strike before the sandboxed worker starts, so
+     the worker finds `node_modules` populated from the pinned lock; the
+     worker's charter states that it cannot install anything (an `npm
+     ci`/`npm install` inside fails for want of a route) and that adding
+     a workspace package means creating the relative symlink
+     `node_modules/@adlc/<x>` → `../../packages/<x>` that npm would
+     create (no network) plus the `link: true` lockfile entry §6.5b
+     admits — the gates rebuild their own tree from the attested lock
+     (`gate-deps`) and never trust the worker's.
    - READ-ONLY binds (`READ_SET`, comma-joined absolute paths): the
      `realpath` of each pinned executable of §9.1 as a single FILE bind
      (never its parent directory), plus `<node prefix>/lib/node_modules/npm`
      and `<node prefix>/lib/node_modules/corepack`, plus `/usr`, `/lib`,
-     `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`, plus the
+     `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`. The
      adapter's synthetic home (fleet §7.3 `homeState`, which necessarily
-     holds the harness's own credentials) — constructed per fleet item 14
-     (§14): a private tmpfs `HOME` (`0700`, the invoking uid) holding
-     ONLY (i) `.claude/.credentials.json`, a `0600` COPY of the host file
+     holds the harness's own credentials) is NOT a `READ_SET` entry — it
+     is writable root (d), constructed per fleet item 14 (§14) with this
+     explicit mount order: first a private tmpfs at `HOME` (`0700`, the
+     invoking uid), then, layered INSIDE it, exactly three read-only
+     binds — the credential file, `settings.json` and the plugin tree —
+     which fleet's `--json` echo enumerates as `homeBinds`; a write to a
+     bound path fails `EROFS` while the tmpfs around it stays writable.
+     The tmpfs holds ONLY (i) `.claude/.credentials.json`, a `0600` COPY of the host file
      (validated before copying: regular file, uid-owned, mode `0600`,
      opened `O_NOFOLLOW`; sha256 recorded), bound READ-ONLY (`0400`,
      on a read-only bind) — nothing the worker writes is EVER copied
@@ -908,7 +930,14 @@ gitignored `.adlc/autopilot-*` files.
      `sandbox-policy-mismatch`.
    - INVARIANT (checked by the orchestrator before dispatch and asserted
      by fleet's `--json` echo): no `READ_SET` entry is an ancestor of, or
-     equal to, a writable root; every entry is either one of the FIXED
+     equal to, a writable root; the converse layering — a read-only bind
+     INSIDE a writable root — exists only for the item-14 `homeBinds`
+     (three leaves under the synthetic `HOME`: two files and the plugin
+     tree), each of which must lie under `HOME`, be a file or the plugin
+     directory, and be an ancestor of no scratch directory; any other
+     read-only path under a writable root, or any `homeBinds` entry not
+     under `HOME`, is `sandbox-policy-mismatch`; every `READ_SET` entry
+     is either one of the FIXED
      SYSTEM ROOTS (`/usr`, `/lib`, `/lib64`, `/etc/ssl`,
      `/etc/resolv.conf`, `/etc/hosts` — bound whole, and a pinned
      executable that lives under one of them, e.g. `/usr/bin/git` or
@@ -2106,7 +2135,12 @@ None is trust-root tier; each is a small, separately testable diff.
   `settings.json`/`.claude.json` from key allowlists, pinned plugin tree,
   the adapter's `homeState.dirs` as empty writable scratch, everything
   else ENOENT; real-bwrap tests for authentication, refresh
-  read-only enforcement and denial), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
+  read-only enforcement and denial; `--json` echoes `homeBinds`),
+  `--init-on-host` (item 15: the configured `init` command runs on the
+  host in the orchestrator plane with `cwd = <worker worktree>` once
+  per strike before the sandboxed worker starts; the worker starts with
+  `node_modules` populated and no install path of its own; real-bwrap
+  worker-start test), `--model-plane-git mirror` (item 12 of the fleet ticket: the worker's
   worktree is cut from a caller-supplied bare mirror holding only the
   pinned baseline and the issue branch, and the worker branch is fetched
   back into the caller's repository before gates/merge; real-bwrap
@@ -3308,7 +3342,12 @@ None is trust-root tier; each is a small, separately testable diff.
     the pinned harness headless (`claude -p` with a trivial prompt)
     inside the synthetic HOME to completion, asserting it initialized
     and wrote only under the scratch directories (skipped loudly without
-    `bwrap` or the harness, recorded as such in the AC registry).
+    `bwrap` or the harness, recorded as such in the AC registry). Fleet's `--json`
+    echo lists `homeBinds` as exactly the credential file, `settings.json`
+    and the plugin tree under the synthetic `HOME`; the invariant test
+    accepts those three and rejects a fourth read-only path under `HOME`,
+    a `homeBinds` entry outside `HOME`, and a read-only bind of a scratch
+    directory (`sandbox-policy-mismatch`, no dispatch).
 157. **Sandboxed gates find their dependencies** (`sequence.test.mjs` +
     fleet real-bwrap test): the single `npm ci --ignore-scripts` spawn
     of the sequence has `cwd = <run dir>/gate-deps` and runs on the host
@@ -3350,3 +3389,13 @@ None is trust-root tier; each is a small, separately testable diff.
     `GATE_REPO`'s `HEAD` is `attestedHead` with the completion and
     attestation commits present; a mirror created BEFORE the attestation
     commit → `gate-mirror-stale`, no gate runs, no attestation.
+162. **Worker starts with its dependencies** (`run.test.mjs` + fleet
+    real-bwrap test): the fleet argv carries `--init-on-host`; the
+    recorded `init` spawn (`npm ci --ignore-scripts`) has `cwd = <worker
+    worktree>`, no `bwrap` in its argv, and precedes the worker spawn;
+    inside the sandbox `node -e "import('@adlc/core')"` run from the
+    worker worktree resolves, an `npm ci` attempted inside exits non-zero
+    with no registry connection observed at the proxy, and a symlink
+    `node_modules/@adlc/<new>` → `../../packages/<new>` created by the
+    worker makes `import('@adlc/<new>')` resolve; a run whose init spawn
+    failed never spawns the worker (`init-failed`, strike consumed).
