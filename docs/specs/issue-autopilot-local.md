@@ -951,58 +951,37 @@ gitignored `.adlc/autopilot-*` files.
    attested or pushed. The same check runs again immediately before
    step 7 and before every push in §6.8/§8/§6.9 — a diff that passed once
    is not trusted after any later write.
-6. Final local gate in the issue worktree: `node scripts/preflight.mjs --base
-   <BASE_OID>` (tests + rail-freeze + mutation-gate + ledger + comment
-   gates, CI order). `scripts/preflight.mjs` is an immutable trust root
-   (§4.2) that the autopilot may not modify, and it performs its own
-   `git fetch` of the base through the remote NAME `origin` — the one
-   network operation this spec cannot route through the pinned URL
-   literal. It is therefore BRACKETED: immediately before invoking it
-   the orchestrator re-reads `remote.origin.url`/`.pushurl` with the
-   unoverlaid `git config --file` form of §9.1a and requires both to
-   normalize to the pinned values, and immediately after
-   it returns it re-reads them again, re-runs the §9.1b config audit, and
-   additionally verifies `git rev-parse <BASE_OID>^{commit}` still
-   resolves to the same object; the script itself runs under the §9.1b
-   sanitized transport environment; any change on either side → the
-   preflight result is DISCARDED, the run is `orphan`
-   (`remote-url-changed` / `git-config-untrusted`), and nothing is
-   attested or pushed.
-   The bracket is a DETECTION layer; the binding itself is §9.1b: the
-   script's internal `git fetch origin …` resolves `origin` from the
-   environment-supplied `remote.origin.url` the orchestrator set for that
-   process, so the fetch cannot reach any URL but the pinned one even if
-   `.git/config` is rewritten while the script runs. The script is given
-   the OID LITERAL as `--base`, which is immutable input; the one mutable
-   intermediate it creates is the tracking ref
-   `refs/remotes/origin/<BASE_OID>` its fetch materializes. The
-   orchestrator therefore (a) before the call reads that ref: if it
-   already exists and equals `BASE_OID` it is left alone and marked
-   `preexisting` in the run record; if it exists with ANY other value the
-   run stops with `base-ref-conflict` (nothing touched — the ref belongs
-   to someone else); if absent it is created with the compare-and-swap
-   form `git update-ref refs/remotes/origin/<BASE_OID> <BASE_OID>
-   0000000000000000000000000000000000000000` (fails if it appeared
-   meanwhile → `base-ref-conflict`), so the script's fetch is a no-op and
-   every gate inside it compares against the same object; (b) after the
-   call verifies `git rev-parse refs/remotes/origin/<BASE_OID>` still
-   equals `BASE_OID` and, where the script reports the base it used (its
-   `--json` summary), that it equals `BASE_OID`; any mismatch → the
-   result is DISCARDED (`base-ref-moved`), the run is `orphan`; (c)
-   deletes the ref only if the orchestrator created it, with the
-   compare-and-swap form `git update-ref -d refs/remotes/origin/<BASE_OID>
-   <BASE_OID>` — a `preexisting` ref is never deleted. A
-   `--base-oid` mode in which the script never touches a named ref is
-   part of §15 R13. Adding a
-   `--fetch-url` option to `scripts/preflight.mjs` would make the binding
-   explicit in the script's own argv and is tracked as §15 R13 (a
-   trust-root change requiring the #141 ceremony); it is not required for
-   the binding to hold. Failure consumes one round of the SAME budget (§7):
-   the run record's `roundsUsed` is incremented and steps 4–6 repeat with
+6. Final local gates — the SAME gate sequence `scripts/preflight.mjs`
+   runs in CI order (`scripts/run-tests.mjs`, `scripts/rails-guard-ci.mjs
+   refs/remotes/origin/<BASE_OID>`, `scripts/mutation-gate.mjs
+   refs/remotes/origin/<BASE_OID> --max 12`, the findings-ledger,
+   findings-append-only and reviewer-directed-comment gates), invoked
+   gate by gate by the orchestrator with `scripts/preflight.mjs` as the
+   normative ORDER (its `buildGates()` list is read from the pinned blob
+   and the sequence must match it exactly, `preflight-order-drift`
+   otherwise) — and every gate that EXECUTES repository code (the test
+   run, the mutation gate, anything that imports from `ISSUE_WT`) runs
+   inside a **repo-command-plane sandbox** (fleet's `bwrap` profile with
+   network DENIED, reads bounded to `ISSUE_WT`, the pinned tool files and
+   system roots, writes bounded to `ISSUE_WT` and a private tmpfs, a
+   synthetic empty `HOME`, and an environment that contains no
+   `SSH_AUTH_SOCK`, no `gh`/`GITHUB_TOKEN`, no `ADLC_MANIFEST_KEY`, no
+   `.env.local`, none of the orchestrator's state paths): the worker's
+   code never runs on the host with the orchestrator's credentials or
+   filesystem. The base fetch the script would perform is unnecessary —
+   the tracking ref is pre-created (below) and the objects are local —
+   so no gate needs network. `scripts/preflight.mjs` itself is an
+   immutable trust root (§4.2) that performs its own `git fetch origin`
+   and cannot be run with network denied; §15 R13 requests `--no-fetch
+   --sandboxed` so the script itself can be the runner; until then the
+   orchestrator runs its gates. `npm ci --ignore-scripts --no-audit
+   --no-fund` (§6.5b) executes no package code and stays on the host.
+   Failure of any gate consumes one round of the SAME budget (§7): the
+   run record's `roundsUsed` is incremented and steps 4–6 repeat with
    `--max-strikes <15 − roundsUsed>` and `--wall-clock-minutes <remaining>`;
    if either remaining budget is 0 the run is `blocked` exactly as a fleet
    exit 2 would be.
-   **Retry protocol** (identical for a preflight failure here, a
+      **Retry protocol** (identical for a preflight failure here, a
    final-review failure in §6.7a, a CI red in §6.9, and a rebase conflict
    in §8). Step 0 — **reopen if completed**: if the run has passed §6.6a
    in a previous round, the shard is `completed:true` and fleet would not
@@ -1843,9 +1822,14 @@ ledgerSha256}`; (2) read the ledger RAW (no retention pruning) and append
 to `.adlc/autopilot-runs/<issue>.attempts.archive.jsonl` (append-only,
 never pruned; ONE complete JSON record per line, each line carrying its
 own `sha256` of the record and written with a single `O_APPEND` write
-that ends in `\n`, so a crash can leave at most one truncated tail line,
-which readers and recovery discard when its trailing newline or
-checksum is missing) every entry — including `started` entries and entries
+that ends in `\n`, so a crash can leave at most one truncated tail line — which readers
+and recovery discard when its trailing newline is missing — whereas a
+COMPLETE line whose checksum does not match is an integrity failure,
+not a crash artifact: the archive is quarantined as
+`<name>.corrupt-<ts>` (bytes preserved, never rewritten), a fresh
+archive is rebuilt atomically from the valid lines, the event is
+reported in status as `archive-corrupt`, and only then does replay
+continue) every entry — including `started` entries and entries
 older than 7 days — whose `id` is not already present in the archive
 (replay is deduplicated by `id`, so a crash after a partial append never
 duplicates); (3) truncate the active ledger (temp + `rename`); (4)
@@ -1996,7 +1980,7 @@ None is trust-root tier; each is a small, separately testable diff.
 | R10 | Confirm rails-guard-ci accepts a PR that ADDS a ticket shard which is `completed:true` on arrival (fleet completes on the integration branch) — otherwise the completion commit moves to a post-merge step | build canary | open |
 | R11 | Keep PR diffs under adversarial-review's 256 KB grounding limit: deterministic size gate before every review (§6.7a), `--max-bytes` from `reviewMaxBytes` on both reviewers, fleet gains a `reviewMaxBytes` config key (§14) | build | open |
 | R12 | GitHub ruleset restricting pushes to `refs/heads/adlc/autopilot/**` to the operator identity (branch-level write isolation; §6.8 detects intrusion without it but cannot prevent it) | operator | recommended |
-| R13 | `scripts/preflight.mjs --fetch-url <url>` and `--base-oid <oid>` so the outer gate's internal base fetch uses the pinned URL and compares against the immutable OID without materializing a named tracking ref (trust-root change, #141 ceremony); until then §6.6 binds the transport via the environment and pre-creates/verifies/deletes the tracking ref around the call | operator (ceremony) | follow-up |
+| R13 | `scripts/preflight.mjs --fetch-url <url>`, `--base-oid <oid>`, `--no-fetch` and `--sandboxed` so the script itself can be the gate runner inside the repo-command-plane sandbox with no network and an immutable OID (trust-root change, #141 ceremony); until then §6.6 runs the script's gate list gate by gate with the order checked against the pinned script | operator (ceremony) | follow-up |
 
 ## 16. Acceptance criteria
 
@@ -2998,3 +2982,20 @@ None is trust-root tier; each is a small, separately testable diff.
     → `remote-host-mismatch`; `git@github.com:o/r.git` is accepted; the
     `known_hosts` fixture is written from `gh api meta` of that host and
     a key for any other host is ignored.
+149. **Gates that run repository code are sandboxed** (`sequence.test.mjs`
+    + fleet's real-bwrap test): every gate spawn that executes code from
+    `ISSUE_WT` (`run-tests`, `mutation-gate`) is wrapped in the
+    repo-command-plane sandbox — argv shows `bwrap` with `--unshare-net`,
+    no bind of `$HOME`, `.env.local`, the agent socket or the
+    orchestrator state — and its env lacks `SSH_AUTH_SOCK`, `GH_TOKEN`,
+    `GITHUB_TOKEN` and `ADLC_MANIFEST_KEY`; a test fixture in `ISSUE_WT`
+    that tries to read `~/.claude/.credentials.json`, open a TCP socket,
+    or read `.env.local` fails inside the sandbox; the gate order equals
+    the pinned `preflight.mjs` `buildGates()` list and a reordered list
+    → `preflight-order-drift`.
+150. **Corrupt archive line is quarantined** (`triage.test.mjs`): an
+    archive with a complete line whose checksum is wrong → the file is
+    moved to `.corrupt-<ts>` byte-for-byte, a rebuilt archive holds only
+    valid lines, status shows `archive-corrupt`, replay then re-appends
+    missing ids exactly once; a merely truncated tail is still handled
+    without quarantine.
