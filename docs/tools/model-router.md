@@ -114,8 +114,13 @@ Rationale: Retries on tickets with DAG float are absorbed by schedule slack with
 ### Rail density
 
 ```
-railDensity = min(1, rails.length / max(1, scope.length))
+railDensity = min(1, rails.length / scope.length)   # 0 when rails or scope is absent/empty
 ```
+
+A ticket with rails but **no scope** (missing or empty) has density **0**, not 1:
+rails without a bounded scope are unbounded, and an unbounded ticket must not
+be routed to the cheapest tier on the strength of a denominator that was never
+measured (#698). Give the ticket a scope to route it cheap.
 
 `rails` is the list of frozen paths that provide deterministic checks (test files, contract files). `scope` is the set of paths the ticket may touch. High density means most outputs are covered by fast, deterministic gates; errors are caught cheaply and regeneration is inexpensive.
 

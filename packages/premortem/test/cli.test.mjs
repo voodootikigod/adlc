@@ -26,6 +26,24 @@ test('CLI: empty spec file exits 1 and writes zero manifest entries', () => {
   }
 });
 
+test('CLI: spec file of only invisible code points (zero-width space, BOM, NUL) exits 1 and writes zero manifest entries', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-cli-test-'));
+  try {
+    const specPath = join(tmpDir, 'invisible.md');
+    writeFileSync(specPath, '\uFEFF\u200B\u200B\n\u0000\u2060 \u200D\n', 'utf8');
+
+    const result = spawnSync(process.execPath, [
+      CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'
+    ], { cwd: tmpDir, input: 'No failure modes found.\n', encoding: 'utf8' });
+
+    assert.equal(result.status, 1, 'exits with code 1 for an invisible-only file');
+    assert.ok(result.stderr.includes('empty or whitespace-only'), 'error message mentions empty');
+    assert.equal(existsSync(join(tmpDir, '.adlc', 'manifest.jsonl')), false, 'no manifest file should be created');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('CLI: whitespace-only spec file exits 1 and writes zero manifest entries', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-cli-test-'));
   try {

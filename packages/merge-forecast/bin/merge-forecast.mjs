@@ -65,7 +65,11 @@ function parseNum(val, name, defaultVal, integer = false) {
   const text = typeof val === 'string' ? val.trim() : '';
   const n = text === '' ? NaN : Number(text);
   if (!Number.isFinite(n)) opError(`--${name} must be a number, got: ${val}`);
-  if (integer && !Number.isInteger(n)) opError(`--${name} must be an integer, got: ${val}`);
+  // isSafeInteger, not isInteger: 1e20 is an "integer" JS cannot represent
+  // exactly, and its decimal spelling is rejected by git (-n 1e20) — the
+  // co-change pass then degrades to a warning and the forecast exits 0
+  // without coupling data.
+  if (integer && !Number.isSafeInteger(n)) opError(`--${name} must be an integer, got: ${val}`);
   return n;
 }
 

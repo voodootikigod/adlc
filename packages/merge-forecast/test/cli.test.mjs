@@ -32,6 +32,8 @@ describe('merge-forecast CLI parameter validation', () => {
     ['--width', '2.9', /--width must be an integer/],
     ['--width', '1e2junk', /--width must be a number/],
     ['--co-change-limit', '2.5', /--co-change-limit must be an integer/],
+    ['--co-change-limit', '1e20', /--co-change-limit must be an integer/],
+    ['--width', '9007199254740993', /--width must be an integer/],
     ['--conflict-threshold', '0.95junk', /--conflict-threshold must be a number/],
     ['--conflict-threshold', 'Infinity', /--conflict-threshold must be a number/],
     ['--build-min', '', /--build-min must be a number/],
