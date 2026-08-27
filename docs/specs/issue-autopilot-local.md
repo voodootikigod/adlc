@@ -131,6 +131,7 @@ loop:
   preflightB(BASE_OID)               # §9 phase B (reads the pinned blob): plugin parity, config schema, fleet dry-run, spec-approval binding — fail closed
   recover()                          # §2.1 — resume/finish/retire orphaned runs BEFORE selection
   if !quota().ok                     → sleep 10m; continue         # §3
+  if tokenShort: refresh_token()     # §6.4 item 14 — Claude-consuming, gated + reconciled (§3.2); still short → sleep 10m; continue
   maintain_open_prs()                # §8 — every fix round re-checks quota (§3.2)
   if active_autopilot_prs >= 5       → sleep 10m; continue
   issue = select()                   # §4 — null → sleep 10m; continue
@@ -257,7 +258,7 @@ deleted, so the deletion command stays available): (c)
 is re-evaluated IMMEDIATELY before the push (`gh pr list --repo <repo>
 --head adlc/autopilot/issue-<n> --state open --json number` must be
 empty — a PR that appeared since the earlier check aborts with `orphan`)
-AND `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` must
+AND `git --git-dir=<NET_GIT> ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` must
 equal the record's last pushed OID; then the remote ref is deleted
 with a lease so a tip that moves between the check and the delete is
 protected: `git --git-dir=<NET_GIT> push
@@ -378,6 +379,7 @@ across steps beyond that:
 | Step | On refusal |
 |---|---|
 | loop head | sleep 10m |
+| token refresh (§6.4 item 14 — a host-side `claude -p` one-token call, run only when phase B recorded `tokenShort`; counted as a start via `--start-ordinal`, reconciled like shaping, and followed by a fresh sample) | sleep 10m; nothing written, no dispatch |
 | shaping call (§5.2) | sleep 10m; nothing written |
 | coldstart answer call (§6.3 — the `--prompt-only` prompt is answered by a `claude -p` call, so it is Claude-consuming and gated + reconciled exactly like shaping; exactly one per ticket hash) | sleep 10m; the run stays `shaped` with the ticket persisted, resumed next iteration |
 | final review + attestation (§6.7) | not Claude-consuming (Codex); never gated |
@@ -511,10 +513,13 @@ issue number and the rule name)
   label timeline the autopilot reads the body-edit history (GraphQL
   `issue.userContentEdits { editor { login } editedAt }`) and the
   `renamed` timeline events, and records `issueRevision = {titleSha256,
-  bodySha256, lastEditedAt, editors[]}` at selection. Under the OWNER
-  clause every body editor and every rename actor must be the author
-  (an issue whose body or title anyone else touched is `not-authorized`
-  until an authorized actor labels it); under the labeled clause the
+  bodySha256, lastEditedAt, editors[]}` at selection. Under the AUTHOR
+  clause of ANY mode — `OWNER` by default, `OWNER`/`MEMBER`/`COLLABORATOR`
+  under `trusted-authors` — every body editor and every rename actor
+  must be the issue's author (an issue whose body or title anyone else
+  touched, a collaborator editing a trusted member's issue included, is
+  `not-authorized` until an authorized actor labels it); under the
+  labeled clause the
   authorizing `labeled` event must be later than `lastEditedAt` and than
   every rename by an actor who is not `admin`/`maintain` — the label
   authorizes THAT revision, and any later edit by anyone revokes it
@@ -699,12 +704,23 @@ fleet at run end. The primary checkout's working tree is never written
 (AGENTS.md); the only writes under `REPO_ROOT` outside `ISSUE_WT` are the
 gitignored `.adlc/autopilot-*` files.
 
-0. **Pinned baseline.** `BASE_OID = git ls-remote --exit-code <remoteFetchUrl>
-   refs/heads/main` (first column; exit ≠ 0 → exit 1 / sleep, no dispatch),
-   then `git fetch --no-tags <remoteFetchUrl> <BASE_OID>` (fetch BY OID — GitHub
-   serves reachable commits by SHA — so a concurrent `git fetch` in another
-   session cannot move what this run resolved; `FETCH_HEAD` is never read),
-   then `git cat-file -e <BASE_OID>^{commit}` must succeed. The OID is
+0. **Pinned baseline.** Both network steps run in the network
+   repository of §9.1c, never against the primary checkout's
+   configuration: `BASE_OID = git --git-dir=<NET_GIT> ls-remote
+   --exit-code <remoteFetchUrl> refs/heads/main` (first column; exit ≠ 0
+   → exit 1 / sleep, no dispatch), then `git --git-dir=<NET_GIT> fetch
+   --no-tags <remoteFetchUrl> <BASE_OID>` (fetch BY OID — GitHub serves
+   reachable commits by SHA — so a concurrent `git fetch` in another
+   session cannot move what this run resolved; `FETCH_HEAD` is never
+   read; the objects land in `NET_GIT`'s own object store), then the
+   objects are IMPORTED into the primary repository over the local file
+   transport only — `git -C <REPO_ROOT> fetch --no-tags <NET_GIT>
+   <BASE_OID>` (a filesystem path, no network, no remote name; the
+   primary's config has already passed the §9.1b audit, so no
+   `url.*.insteadOf` can redirect it) — and `git -C <REPO_ROOT> cat-file
+   -e <BASE_OID>^{commit}` must succeed. No `git fetch`, `ls-remote` or
+   `push` in this spec ever runs with the primary repository as its git
+   dir; the spawn recorder classifies any such spawn as a violation. The OID is
    recorded in the run record and the status file. Every later
    reference to the base in this run uses that OID, never the name
    `origin/main` or local `main`: worktree creation, fleet `--base`,
@@ -889,13 +905,19 @@ gitignored `.adlc/autopilot-*` files.
      cannot refresh or rotate the operator's token, so validity for the
      whole run is established BEFORE dispatch, on the host, by the
      trusted harness: phase B (§9.4) reads the host file's OAuth
-     `expiresAt` and requires `expiresAt − now ≥ wallClock + 30 min`;
-     when it is shorter the orchestrator first runs the pinned `claude`
+     `expiresAt` and requires `expiresAt − now ≥ wallClock + 30 min`,
+     recording `tokenShort` when it is not — phase B itself never
+     refreshes, because a refresh is Claude-consuming and phase B runs
+     BEFORE the loop-head quota gate; the refresh is its own gated step
+     (§2, §3.2 row "token refresh"): after the loop-head gate has
+     admitted the iteration the orchestrator runs the pinned `claude`
      on the host with `-p` and a one-token prompt (the harness's own
-     refresh path, in the real `HOME`, a quota-consuming step under
-     §3.2's gate), re-reads the file, and if the margin is still short
-     exits 1 `token-expiring` with the remaining lifetime printed and
-     no dispatch — never a mid-run refresh inside the sandbox; (ii) a
+     refresh path, in the real `HOME`), counted as a Claude start,
+     reconciled like shaping, followed by a fresh quota sample before
+     any later Claude-consuming step; then the file is re-read and, if
+     the margin is still short, the iteration ends with `token-expiring`
+     (remaining lifetime printed, sleep 10m, no dispatch) — never a
+     mid-run refresh inside the sandbox; (ii) a
      `.claude/settings.json` generated from an allowlist of keys (model
      and permission settings; hooks and MCP servers stripped), `0400`;
      (iii) a minimal `.claude.json` generated from an allowlist (the
@@ -1427,7 +1449,7 @@ and is reported in status:
 - `headRefOid` equals the record's `attestedHead` (the PR head is the tree
   the autopilot last attested and pushed) — a mismatch is `oid-mismatch`
   (§6.8), not `orphan`;
-- `git ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` equals the
+- `git --git-dir=<NET_GIT> ls-remote <remoteFetchUrl> refs/heads/adlc/autopilot/issue-<n>` equals the
   record's last pushed OID.
 
 Then:
@@ -2489,8 +2511,16 @@ None is trust-root tier; each is a small, separately testable diff.
     `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
     after the last successful preflight.
 31. **Pinned baseline by OID** (`run.test.mjs`): the fetch fake asserts
-    `git fetch --no-tags <remoteFetchUrl> <40-hex>` (never `main`, never `FETCH_HEAD`, never the remote NAME `origin`); an `ls-remote` fake returning a different OID on a second
-    call does not change the run's recorded `baseOid`.
+    `git --git-dir=<NET_GIT> fetch --no-tags <remoteFetchUrl> <40-hex>`
+    (never `main`, never `FETCH_HEAD`, never the remote NAME `origin`)
+    preceded by `git --git-dir=<NET_GIT> ls-remote --exit-code
+    <remoteFetchUrl> refs/heads/main` and followed by the local import
+    `git -C <REPO_ROOT> fetch --no-tags <NET_GIT> <40-hex>`; an
+    `ls-remote` fake returning a different OID on a second call does not
+    change the run's recorded `baseOid`; the spawn recorder's
+    classification rejects any `fetch`/`ls-remote`/`push` spawn whose git
+    dir is the primary repository or whose URL argument is a remote NAME,
+    over the complete recorded spawn list of a full `once` sequence.
 32. **Trusted block assembly** (`triage.test.mjs`): an OWNER issue whose
     body has a block and an `## Acceptance criteria` list → ticket fields as
     §5.1 with zero shaping calls; the same issue without the criteria
@@ -3347,11 +3377,14 @@ None is trust-root tier; each is a small, separately testable diff.
     `sequence.test.mjs`): under `owner-or-label` an OWNER-authored issue
     whose `userContentEdits` lists a collaborator editor, or whose
     timeline holds a `renamed` event by a collaborator → `not-authorized`,
-    never shaped; the same issue after an `admin` `labeled` event later
-    than `lastEditedAt` → eligible; a body edit AFTER that label event →
-    `not-authorized` again; an unreadable edit history → `not-authorized`;
-    a body edited between selection and §6.0a revalidation →
-    `revalidation-changed`, the shaped ticket discarded, zero dispatches.
+    never shaped; under `trusted-authors` a MEMBER-authored unlabeled
+    issue edited or renamed by a different COLLABORATOR → `not-authorized`,
+    and edited only by its author → eligible; the same issue after an
+    `admin` `labeled` event later than `lastEditedAt` → eligible in every
+    mode; a body edit AFTER that label event → `not-authorized` again; an
+    unreadable edit history → `not-authorized`; a body edited between
+    selection and §6.0a revalidation → `revalidation-changed`, the shaped
+    ticket discarded, zero dispatches.
 156. **Synthetic HOME contract** (fleet `sandbox.test.mjs`, real `bwrap`,
     skipped loudly without it): inside the model plane
     `$HOME/.claude/.credentials.json` is readable, `0400`, and byte-equal
@@ -3393,12 +3426,16 @@ None is trust-root tier; each is a small, separately testable diff.
     skipped → `gate-deps-missing`, the run fails, no attestation.
 158. **Token lifetime gate** (`preflight.test.mjs`, `quota.test.mjs`):
     a host credential fixture whose `expiresAt` is 100 minutes away with
-    a 90-minute wall clock → the pinned `claude -p` refresh spawn runs on
-    the host (real `HOME`, counted as a quota-consuming step) and, when
-    the fixture then reports a later `expiresAt`, dispatch proceeds; when
-    it does not → exit 1 `token-expiring` naming the remaining minutes,
-    zero dispatches; a fixture with 8 hours left → no refresh spawn at
-    all; the refresh spawn never carries the sandbox argv.
+    a 90-minute wall clock → phase B records `tokenShort` and spawns
+    nothing; the pinned `claude -p` refresh spawn is recorded AFTER the
+    loop-head quota sample, with a quota sample and reconciliation
+    entry of its own (`startsThisIteration` incremented) and a fresh
+    sample before shaping; when the fixture then reports a later
+    `expiresAt`, dispatch proceeds; when it does not → `token-expiring`
+    naming the remaining minutes, sleep, zero dispatches; a quota fake
+    refusing at the loop head → no refresh spawn at all; a fixture with
+    8 hours left → no refresh spawn; the refresh spawn never carries the
+    sandbox argv.
 159. **Dry-run transport is transient and isolated** (`preflight.test.mjs`
     with the spawn recorder): under `--dry-run` the `ls-remote` spawn
     carries a `GIT_SSH` wrapper whose realpath is under `mkdtemp` in
