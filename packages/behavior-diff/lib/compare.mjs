@@ -1,7 +1,9 @@
 // lib/compare.mjs — load and compare two capture snapshots
 
 import { readFileSync } from 'node:fs';
-import { diffRoute, routeKey } from './diff.mjs';
+import { diffRoute, routeKey, isJsonBody } from './diff.mjs';
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /**
  * Load and parse a snapshot file.
@@ -60,6 +62,18 @@ export function loadSnapshot(filePath) {
     // body as equal on both sides, so a changed body would read as identical.
     if (hasStatus && (typeof route.contentType !== 'string' || !Object.hasOwn(route, 'body'))) {
       throw new Error(`snapshot file "${filePath}" route at index ${i} is an incomplete observation (a captured response carries status, contentType and body)`);
+    }
+    // Non-JSON bodies are compared by hash (diffRoute), and a body without a
+    // textHash compares null === null — two different malformed text bodies
+    // would read as identical. capture writes {textHash, bytes} for text.
+    if (hasStatus && !isJsonBody(route)) {
+      const b = route.body;
+      const wellFormed = !!b && typeof b === 'object' && !Array.isArray(b)
+        && typeof b.textHash === 'string' && SHA256_HEX.test(b.textHash)
+        && Number.isInteger(b.bytes) && b.bytes >= 0;
+      if (!wellFormed) {
+        throw new Error(`snapshot file "${filePath}" route at index ${i} has a malformed text body (expected {textHash: <sha256 hex>, bytes: <integer >= 0>} for content-type ${JSON.stringify(route.contentType)})`);
+      }
     }
   }
   // compareSnapshots keys each side on routeKey() alone, so two entries sharing a

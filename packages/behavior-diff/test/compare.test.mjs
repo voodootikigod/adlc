@@ -92,6 +92,12 @@ describe('loadSnapshot validation (unit)', () => {
       [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain' }] }, /route at index 0 is an incomplete observation/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 200, body: {} }] }, /route at index 0 is an incomplete observation/],
       [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: null, body: {} }] }, /route at index 0 is an incomplete observation/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: {} }] }, /route at index 0 has a malformed text body/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: null }] }, /route at index 0 has a malformed text body/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: 'raw text' }] }, /route at index 0 has a malformed text body/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: { textHash: 'abc', bytes: 3 } }] }, /route at index 0 has a malformed text body/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: { textHash: 'a'.repeat(64), bytes: -1 } }] }, /route at index 0 has a malformed text body/],
+      [{ routes: [{ method: 'GET', path: '/foo', status: 200, contentType: 'text/plain', body: { textHash: 'a'.repeat(64) } }] }, /route at index 0 has a malformed text body/],
     ];
 
     try {
@@ -99,6 +105,18 @@ describe('loadSnapshot validation (unit)', () => {
         writeFileSync(file, JSON.stringify(data));
         assert.throws(() => loadSnapshot(file), regex);
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('accepts a well-formed text observation ({textHash, bytes})', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'text.json');
+    const data = { routes: [{ method: 'GET', path: '/plain', status: 200, contentType: 'text/plain; charset=utf-8', body: { textHash: 'b'.repeat(64), bytes: 12 } }] };
+    writeFileSync(file, JSON.stringify(data));
+    try {
+      assert.deepEqual(loadSnapshot(file), data);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -132,6 +150,27 @@ describe('loadSnapshot validation (unit)', () => {
 });
 
 describe('CLI compare integration (empty/malformed rejection)', () => {
+  test('exits 1 on malformed TEXT bodies instead of comparing their missing hashes as identical', () => {
+    const dir = tmpDir();
+    const before = join(dir, 'before.json');
+    const after = join(dir, 'after.json');
+    writeFileSync(before, JSON.stringify({ routes: [{ method: 'GET', path: '/t', status: 200, contentType: 'text/plain', body: {} }] }));
+    writeFileSync(after, JSON.stringify({ routes: [{ method: 'GET', path: '/t', status: 200, contentType: 'text/plain', body: { different: true } }] }));
+    try {
+      let threw = false;
+      try {
+        execFileSync(process.execPath, [cliPath, 'compare', before, after], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        threw = true;
+        assert.equal(err.status, 1, 'Process should exit with code 1');
+        assert.match(err.stderr, /malformed text body/);
+      }
+      assert.ok(threw, 'two hash-less text bodies must not compare as identical (exit 0)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('exits 1 when both sides hold the same STATUS-ONLY entry (no contentType/body) instead of reporting identical', () => {
     const dir = tmpDir();
     const before = join(dir, 'before.json');

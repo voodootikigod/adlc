@@ -165,7 +165,12 @@ export function diffRoute(beforeEntry, afterEntry) {
   return diffs.length ? { route: routeKey(beforeEntry), diffs } : null;
 }
 
-function isJsonBody(entry) {
+/**
+ * Whether an entry's body is compared structurally (JSON) or by text hash.
+ * Exported so loadSnapshot validates the body SHAPE with the same predicate
+ * diffRoute compares it with — two definitions would drift.
+ */
+export function isJsonBody(entry) {
   const ct = entry.contentType ?? '';
   return ct.includes('application/json') || ct.includes('+json');
 }
