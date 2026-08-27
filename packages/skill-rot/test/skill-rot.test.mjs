@@ -4,7 +4,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -125,6 +125,38 @@ describe('findSkills', () => {
     }
   });
 
+  // chmod 000 does not restrict root, and is not a permission model Windows
+  // honours — the unreadable-subtree cases only mean something elsewhere.
+  const canLockDirs = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  test('strict: an unreadable subtree under an explicit root throws (not silently skipped)', { skip: !canLockDirs }, () => {
+    const tmp = makeTempDir();
+    const locked = join(tmp, 'skills', 'locked');
+    try {
+      writeSkill(tmp, 'skills/ok/SKILL.md', '# ok');
+      mkdirSync(locked, { recursive: true });
+      chmodSync(locked, 0o000);
+      assert.throws(() => findSkills(['skills'], tmp, { strict: true }), /cannot read directory .*locked/);
+    } finally {
+      try { chmodSync(locked, 0o755); } catch {}
+      cleanup(tmp);
+    }
+  });
+
+  test('non-strict: an unreadable subtree is skipped and the readable skills are returned', { skip: !canLockDirs }, () => {
+    const tmp = makeTempDir();
+    const locked = join(tmp, 'skills', 'locked');
+    try {
+      const ok = writeSkill(tmp, 'skills/ok/SKILL.md', '# ok');
+      mkdirSync(locked, { recursive: true });
+      chmodSync(locked, 0o000);
+      assert.deepEqual(findSkills(['skills'], tmp), [ok]);
+    } finally {
+      try { chmodSync(locked, 0o755); } catch {}
+      cleanup(tmp);
+    }
+  });
+
   test('searches multiple roots', () => {
     const tmp = makeTempDir();
     try {
@@ -195,6 +227,22 @@ describe('CLI explicit path validation', () => {
       assert.match(r.stderr, /not a skills directory or SKILL\.md file/);
       assert.match(r.stderr, /README\.md/);
     } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('fails with exit 1 when an explicit root holds an unreadable subtree', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+    const tmp = makeTempDir();
+    const locked = join(tmp, 'skills', 'locked');
+    try {
+      writeSkill(tmp, 'skills/ok/SKILL.md', '# ok\nRun `ls` to list.');
+      mkdirSync(locked, { recursive: true });
+      chmodSync(locked, 0o000);
+      const r = spawnSync(process.execPath, [BIN, 'skills'], { cwd: tmp, encoding: 'utf8' });
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /cannot read directory .*locked/);
+    } finally {
+      try { chmodSync(locked, 0o755); } catch {}
       cleanup(tmp);
     }
   });

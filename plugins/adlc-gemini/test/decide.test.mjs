@@ -89,3 +89,16 @@ for (const [label, payload] of [['null', null], ['undefined', undefined], ['stri
     assert.deepEqual(decide(payload, { env: {} }), { allow_tool: true });
   });
 }
+
+// A well-formed object that carries NO tool name is a malformed envelope
+// (agy names every PreToolUse call), not an unknown tool.
+for (const [label, payload] of [['{}', {}], ['{toolCall:{}}', { toolCall: {} }], ['{toolCall:{args:{}}}', { toolCall: { args: {} } }], ['{toolCall:{name:"  "}}', { toolCall: { name: '  ' } }]]) {
+  test(`decide(): ${label} (no tool name) under enforcement fails CLOSED`, () => {
+    const v = decide(payload, { env: ENF });
+    assert.equal(v.allow_tool, false);
+    assert.match(v.deny_reason, /exposes no tool name/);
+  });
+  test(`decide(): ${label} (no tool name) with enforcement off allows`, () => {
+    assert.deepEqual(decide(payload, { env: {} }), { allow_tool: true });
+  });
+}

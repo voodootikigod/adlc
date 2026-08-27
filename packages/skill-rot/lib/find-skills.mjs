@@ -29,7 +29,7 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
     }
     const stat = statSync(absRoot);
     if (stat.isDirectory()) {
-      collectSkills(absRoot, results);
+      collectSkills(absRoot, results, { strict });
     } else if (stat.isFile() && basename(absRoot) === 'SKILL.md') {
       results.push(absRoot);
     } else if (strict) {
@@ -44,13 +44,16 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
 
 /**
  * Recursively walk dir and collect SKILL.md files.
- * Skips node_modules and .git directories.
+ * Skips node_modules and .git directories. In strict mode (explicit roots) an
+ * unreadable subtree is an error — a clean verdict must mean everything the
+ * caller named was inspected; best-effort skipping is for default discovery.
  */
-function collectSkills(dir, results) {
+function collectSkills(dir, results, { strict = false } = {}) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    if (strict) throw new Error(`cannot read directory ${dir}: ${err.message}`);
     return;
   }
 
@@ -60,7 +63,7 @@ function collectSkills(dir, results) {
     const fullPath = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      collectSkills(fullPath, results);
+      collectSkills(fullPath, results, { strict });
     } else if (entry.isFile() && entry.name === 'SKILL.md') {
       results.push(fullPath);
     }

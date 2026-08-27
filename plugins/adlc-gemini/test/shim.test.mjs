@@ -32,6 +32,15 @@ test('runFromStdin: null/undefined raw with enforcement off allows', () => {
   assert.equal(runFromStdin(null, {}).allow_tool, true);
   assert.equal(runFromStdin(undefined, {}).allow_tool, true);
 });
+test('runFromStdin: an object with no tool name under enforcement fails closed', () => {
+  assert.equal(runFromStdin('{}', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('{"toolCall":{}}', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin('{"toolCall":{"args":{"AbsolutePath":"/x"}}}', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+});
+test('runFromStdin: an object with no tool name with enforcement off allows', () => {
+  assert.equal(runFromStdin('{}', {}).allow_tool, true);
+  assert.equal(runFromStdin('{"toolCall":{}}', {}).allow_tool, true);
+});
 test('runFromStdin: non-object JSON payloads under enforcement fail closed', () => {
   assert.equal(runFromStdin('null', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
   assert.equal(runFromStdin('"hi"', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);

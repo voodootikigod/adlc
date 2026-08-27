@@ -102,6 +102,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
     }
     const tool = extractToolName(payload);
+    // A payload with no tool name is a malformed hook envelope, not an unknown
+    // tool: agy names every PreToolUse call. Without this, {} or {toolCall:{}}
+    // classifies 'other', exposes no path and reaches the allow branch — the
+    // same fall-through #823 closes for scalars, one step later.
+    if (!tool) {
+      return enforcing ? deny('tool payload exposes no tool name while enforcing — failing closed') : allow();
+    }
     const cls = classifyTool(tool);
 
     // Step 2 — classify first. Reads and shell tools are never rail-gated in-session.
