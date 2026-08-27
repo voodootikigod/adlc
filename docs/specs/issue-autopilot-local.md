@@ -1248,8 +1248,15 @@ placed in a child environment. Children receive
 applies), never the raw inherited PATH. `gh auth status` ok; `claude auth
 status --json` `loggedIn:true`.
 
-9.1a Repository and principal binding: `autopilot.repo` (repo-committed,
-e.g. `"voodootikigod/adlc"`) is the canonical identity. Preflight requires
+9.1a (phase A) Repository and principal binding: the expected identity
+comes from an OPERATOR-LOCAL source that exists before any repository
+content is trusted — `--repo <owner/name>` or `ADLC_AUTOPILOT_REPO`
+(the generated unit file carries it as `Environment=`), validated
+against `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`; without it phase A exits 1
+`repo-unbound`. Phase B then requires `autopilot.repo` in the config
+read from the pinned blob (§9.4) to EQUAL the operator-local value
+(`repo-mismatch` otherwise), so the committed config confirms but never
+defines the identity. Preflight requires
 `git remote get-url origin` AND `git remote get-url --push origin` to
 resolve (after normalizing `git@github.com:` / `https://github.com/` /
 trailing `.git`) to exactly that repo; `gh repo view <repo> --json
@@ -1303,7 +1310,10 @@ carries an absolute `WorkingDirectory=<repo root>` (validated at generation
 and at start: the directory must contain `.git` and `.adlc/config.json`,
 else exit 1 `bad-working-directory`), an absolute `ExecStart=<abs path to
 node> <abs path to packages/autopilot/bin/adlc-autopilot.mjs> loop --rest
-10m`, `EnvironmentFile=<abs repo root>/.env.local`, `Restart=on-failure`,
+10m`, `EnvironmentFile=<abs repo root>/.env.local`,
+`Environment=ADLC_AUTOPILOT_REPO=<owner/name>` (the phase-A identity, set
+at generation from `--repo` and never read from the repository),
+`Restart=on-failure`,
 `RestartSec=60`, `KillMode=control-group`, and `TimeoutStopSec=120` (the
 loop traps SIGTERM: finishes the current git/gh step, writes the run record,
 releases the lock, exits 0; an in-flight fleet run is left resumable per
@@ -1328,8 +1338,16 @@ ticket's AC1 runs that schema validation.
 `adlc:autopilot-ci-red`, `adlc:autopilot-log` (`adlc-autopilot init
 --labels` creates them idempotently).
 
-9.6 (phase B) Fleet dry-run: `adlc fleet run --dry-run --json` from the primary
-checkout exits 0.
+9.6 (phase B) Fleet dry-run at the pinned baseline: a detached temporary
+worktree is created at `BASE_OID` under
+`<REPO_ROOT>/.adlc/autopilot-runs/preflight-<BASE_OID>` (`git worktree
+add --detach <path> <BASE_OID>`; objects are local by phase-B
+precondition), `adlc fleet run --dry-run --json` runs with cwd = that
+worktree — so it reads the pinned `.adlc/config.json` and ticket store,
+never the primary checkout's working tree — must exit 0, and the
+worktree is removed afterwards (a leftover from a crash is removed before
+the next attempt). The primary checkout is never the cwd of any
+preflight command.
 
 ## 10. Observability
 
@@ -1527,7 +1545,8 @@ triage  --issue <n> [--json]
 reset   --issue <n> ( --confirm-delete <OID> [--delete-remote] | --attempts )
 init    [--labels] [--service] [--write]
 ```
-Global operator-local flags: `--model`, `--adapter`, `--quota-threshold`,
+Global operator-local flags: `--repo` (or `ADLC_AUTOPILOT_REPO`; required
+for `loop`/`once`), `--model`, `--adapter`, `--quota-threshold`,
 `--quota-reserve`, `--trusted-bin-dirs`. Every subcommand exits 0/1/2 and
 supports `--json`. `reset --attempts` reads the issue's shaping-attempt
 ledger RAW (no retention pruning), appends every entry — including
@@ -1562,7 +1581,7 @@ Repo-committed (`.adlc/config.json`, trust root):
     "ciFixRounds": 2,
     "ciWatchMinutes": 30,
     "reviewMaxBytes": 262144,
-    "repo": "voodootikigod/adlc",
+    "repo": "voodootikigod/adlc",   // must equal the operator-local --repo / ADLC_AUTOPILOT_REPO (§9.1a)
     "dispatchApproval": "owner-or-label",
     "protectedPathsExtra": []
   },
@@ -1692,13 +1711,19 @@ None is trust-root tier; each is a small, separately testable diff.
    is registered under, and statically checks that each registered test
    imports at least one module from `packages/autopilot/lib/` and
    contains at least one `assert` call whose argument references that
-   import (a test with no production seam is rejected); for the
-   security- and lifecycle-critical criteria (quota, authorization,
-   redaction, retirement, attestation, sandbox contract) the registry
-   additionally names a **mutation fixture** — a deterministic defect
-   injected through a documented seam in `lib/` (e.g. `redactor.disable`,
-   `quota.forceOk`) — and the gate asserts the registered test FAILS with
-   that fixture applied and passes without it; in addition
+   import (a test with no production seam is rejected — and an assertion
+   whose subject is merely a module's existence, an exported constant, or
+   a value unrelated to the criterion's behavior is rejected by the same
+   static check, which requires the asserted expression to reference a
+   CALL into the imported module or its recorded side effect); for EVERY
+   registered criterion the registry names a **mutation fixture** — a
+   deterministic defect injected through a documented seam in `lib/`
+   (e.g. `redactor.disable`, `quota.forceOk`, `selector.ignoreLabels`) —
+   and the gate asserts the registered test FAILS with that fixture
+   applied and passes without it; a criterion for which no fixture can be
+   named must be justified in the registry with a `noFixture:` reason the
+   gate prints, and the count of such criteria is capped at 5; in
+   addition
    `node scripts/mutation-gate.mjs origin/<base> --max 12` must pass on
    the package (CI already runs it) and, for the security- and
    lifecycle-critical criteria (quota, authorization, redaction,
@@ -2451,3 +2476,21 @@ None is trust-root tier; each is a small, separately testable diff.
     --attempts` archives all three (archive count 3) and leaves an empty
     active ledger; an ordinary read of the same ledger returns only the
     recent entry and never writes the archive.
+119. **Phase-A identity is operator-local** (`preflight.test.mjs`): with
+    no `--repo`/`ADLC_AUTOPILOT_REPO`, `once` exits 1 `repo-unbound`
+    before any `git`/`gh` spawn; with it set, phase A binds the remote
+    URLs against it; a pinned-blob config whose `autopilot.repo` differs
+    → `repo-mismatch` in phase B; the generated unit carries
+    `Environment=ADLC_AUTOPILOT_REPO=`.
+120. **Fleet dry-run at the baseline** (`preflight.test.mjs` +
+    `sequence.test.mjs`): the fleet dry-run argv runs with cwd =
+    `<REPO_ROOT>/.adlc/autopilot-runs/preflight-<baseOid>` created by
+    `git worktree add --detach … <baseOid>`; a working-tree
+    `.adlc/config.json` with an invalid fleet block does not change the
+    result; the temporary worktree is removed afterwards and a stale one
+    is removed first.
+121. **Every criterion has a fixture** (`spec-coverage.test.mjs`
+    self-test): a registry entry without a mutation fixture and without a
+    `noFixture:` reason fails the gate; more than 5 `noFixture` entries
+    fail it; an assertion that only checks a module's existence or an
+    exported constant is rejected by the static check.
