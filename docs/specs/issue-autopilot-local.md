@@ -938,10 +938,13 @@ gitignored `.adlc/autopilot-*` files.
    literal. It is therefore BRACKETED: immediately before invoking it
    the orchestrator re-reads `git remote get-url origin` and `--push` and
    requires both to normalize to the pinned values, and immediately after
-   it returns it re-reads them again and additionally verifies `git
-   rev-parse <BASE_OID>^{commit}` still resolves to the same object; any
-   change on either side → the preflight result is DISCARDED, the run is
-   `orphan` (`remote-url-changed`), and nothing is attested or pushed.
+   it returns it re-reads them again, re-runs the §9.1b config audit, and
+   additionally verifies `git rev-parse <BASE_OID>^{commit}` still
+   resolves to the same object; the script itself runs under the §9.1b
+   sanitized transport environment; any change on either side → the
+   preflight result is DISCARDED, the run is `orphan`
+   (`remote-url-changed` / `git-config-untrusted`), and nothing is
+   attested or pushed.
    Adding a `--fetch-url` option to `scripts/preflight.mjs` so the
    orchestrator can pass the pinned URL is tracked as §15 R13 — a
    trust-root change requiring the #141 ceremony, outside this program's
@@ -1263,6 +1266,29 @@ placed in a child environment. Children receive
 applies), never the raw inherited PATH. `gh auth status` ok; `claude auth
 status --json` `loggedIn:true`.
 
+9.1b (phase A) Git transport sanitization: a pinned URL is only as
+trustworthy as the transport git resolves it through, so EVERY git
+process the orchestrator spawns — including the bracketed
+`scripts/preflight.mjs` and fleet's own git calls via the env fleet
+inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
+`GIT_CONFIG_SYSTEM=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, and with every
+`GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS`,
+`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
+`GIT_CONFIG_VALUE_*`, `http_proxy`/`https_proxy`/`all_proxy`
+(any case) and `GIT_TERMINAL_PROMPT` variable removed from the
+environment; the ONLY transport inputs are `SSH_AUTH_SOCK` (agent) and,
+if the operator sets it, `--git-ssh-command <abs path> [args]` which is
+passed as `GIT_SSH_COMMAND` verbatim. The repository-local
+`<REPO_ROOT>/.git/config` (operator-owned, never part of a PR) is
+audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
+`core.sshCommand`, `core.gitProxy`, `http.proxy`, `https.proxy`,
+`remote.*.proxy`, `remote.*.uploadpack`/`receivepack`, `credential.*`
+(other than an operator-allowlisted `credential.helper` value given via
+`--git-credential-helper`), `include.*`/`includeIf.*`, or
+`core.hooksPath` entry → exit 1 `git-config-untrusted`, no network
+operation. The audit re-runs inside the preflight bracket of §6.6 and
+before every push.
+
 9.1a (phase A) Repository and principal binding: the expected identity
 comes from an OPERATOR-LOCAL source that exists before any repository
 content is trusted — `--repo <owner/name>` or `ADLC_AUTOPILOT_REPO`
@@ -1562,7 +1588,8 @@ init    [--labels] [--service] [--write]
 ```
 Global operator-local flags: `--repo` (or `ADLC_AUTOPILOT_REPO`; required
 for `loop`/`once`), `--model`, `--adapter`, `--quota-threshold`,
-`--quota-reserve`, `--trusted-bin-dirs`. Every subcommand exits 0/1/2 and
+`--quota-reserve`, `--trusted-bin-dirs`, `--git-ssh-command`,
+`--git-credential-helper`. Every subcommand exits 0/1/2 and
 supports `--json`. `reset --attempts` is a journaled, crash-idempotent transaction under
 the autopilot lock: (1) write
 `.adlc/autopilot-runs/<issue>.attempts.reset.journal` `{startedAt,
@@ -1602,13 +1629,17 @@ Repo-committed (`.adlc/config.json`, trust root):
     "ciFixRounds": 2,
     "ciWatchMinutes": 30,
     "reviewMaxBytes": 262144,
-    "repo": "voodootikigod/adlc",   // must equal the operator-local --repo / ADLC_AUTOPILOT_REPO (§9.1a)
+    "repo": "voodootikigod/adlc",
     "dispatchApproval": "owner-or-label",
     "protectedPathsExtra": []
   },
   "ticketSync": { "provider": "github", "select": { "state": "open", "labels": [] } }
 }
 ```
+
+`autopilot.repo` in the committed block must EQUAL the operator-local
+`--repo` / `ADLC_AUTOPILOT_REPO` of §9.1a — the committed value confirms
+the identity, it never defines it.
 
 Operator-local only — the quota is the OPERATOR's, so its policy never comes
 from repo-committed config (same rule as fleet's `adapter`/`model`):
@@ -2528,3 +2559,17 @@ None is trust-root tier; each is a small, separately testable diff.
     attempt `id` exactly once, the ledger is empty, the journal is gone;
     running `reset --attempts` twice in a row archives nothing the second
     time; every ledger entry carries a ULID `id` minted at creation.
+124. **Sanitized git transport** (`preflight.test.mjs` + `run.test.mjs`):
+    every recorded `git` spawn (orchestrator, preflight bracket, fleet
+    env) has `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null`,
+    `GIT_CONFIG_NOSYSTEM=1`, and none of the removed variables (table-
+    driven over the §9.1b list, seeded in the orchestrator env); a
+    repo-local config fixture with each of `url.<x>.insteadOf`,
+    `core.sshCommand`, `credential.helper` (non-allowlisted), `http.proxy`
+    and `includeIf` → `git-config-untrusted` before any `ls-remote`; a
+    real temporary repository with `url.<evil>.insteadOf=<pinned>` proves
+    no push argv is issued.
+125. **Config example is valid JSON** (`config.test.mjs`): the §13
+    example block parses with `JSON.parse` and validates against both
+    schemas (self-test that reads the block out of the spec at the pinned
+    blob).
