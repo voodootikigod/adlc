@@ -175,8 +175,10 @@ dry-run plan is always `complete: false` with an explicit skip list, and
 the exit code is still 0. A dry-run never claims a full plan and never
 mutates to build one. The spawn recorder in AC 10 rejects
 any argv that is not in the read-only set (`git ls-remote`, `git
-rev-parse`, `git cat-file`, `gh … view|list|api GET`, `adlc … --json`
-without `--write`/`--record`).
+rev-parse`, `git cat-file`, `git config --file <REPO_ROOT>/.git/config
+--get …` — the unoverlaid identity read of §9.1a, which dry-run performs
+exactly like a live run so the binding check is never skipped —, `gh …
+view|list|api GET`, `adlc … --json` without `--write`/`--record`).
 
 ### 2.1 Recovery state machine (runs before selection, every iteration)
 
@@ -1934,9 +1936,11 @@ None is trust-root tier; each is a small, separately testable diff.
     always contains `fleet-dry-run-needs-worktree` (and
     `baseline-not-local` when the objects are absent, in which case every
     phase-B item is `skipped`; assert both fixtures), and the spawn
-    recorder shows only argv from the read-only set of §2 (assert: no `git fetch`, `git worktree`, `git
-    config`, `git push`, `mkdir` of the lock, `.git/info/exclude` write,
-    `gh` mutation, or `--write`/`--record` flag), the filesystem fixture
+    recorder shows only argv from the read-only set of §2 (assert: no `git
+    fetch`, `git worktree`, `git push`, no `git config` WRITE — the
+    `git config --file … --get` identity read is present and allowed —,
+    `mkdir` of the lock, `.git/info/exclude` write, `gh` mutation, or
+    `--write`/`--record` flag), the filesystem fixture
     is byte-identical before and after, and no manifest line was
     appended.
 11. **Preflight**: each §9 item has a red fixture that makes `once` exit 1
@@ -2592,8 +2596,8 @@ None is trust-root tier; each is a small, separately testable diff.
 112. **Credential-free remote URLs** (`preflight.test.mjs`): an `origin`
     URL with userinfo (`https://x:ghp_abc@github.com/o/r.git`) →
     `remote-url-credentials`, exit 1, and the token string appears in no
-    recorded argv, status file or record; SSH and plain HTTPS forms are
-    accepted and pinned.
+    recorded argv, status file or record; both SSH forms are accepted
+    and pinned; the plain `https://` form → `remote-url-scheme`.
 113. **System-root exception** (`run.test.mjs`): a pinned `git` at
     `/usr/bin/git` yields no extra file bind (covered by `/usr`); a pinned
     `claude` at `~/.local/bin/claude` yields exactly one file bind and no
@@ -2694,19 +2698,18 @@ None is trust-root tier; each is a small, separately testable diff.
     plan's `incomplete` list contains `fleet-dry-run-needs-worktree`; the
     read-only phase-B checks run when the baseline objects are local and
     are all `skipped` when they are not.
-129. **Isolated SSH and HTTPS transport** (`preflight.test.mjs` +
-    `run.test.mjs`): every git spawn for an SSH URL carries
-    `GIT_SSH_COMMAND` beginning with the pinned `ssh` path and containing
-    `-F /dev/null`, `StrictHostKeyChecking=yes`,
+129. **Isolated SSH transport** (`preflight.test.mjs` + `run.test.mjs`):
+    every git spawn for a network operation carries `GIT_SSH_COMMAND`
+    beginning with the pinned `ssh` path and containing `-F /dev/null`,
+    `StrictHostKeyChecking=yes`,
     `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`,
     `IdentitiesOnly=yes`, `BatchMode=yes`; a `~/.ssh/config` fixture that
     rewrites `github.com` via `HostName` is not consulted (real `ssh -G`
     under that command prints the pinned host); a missing or `0644`
-    known_hosts → `known-hosts-missing`; for an HTTPS URL the bound env
-    carries the full 12-row table (`http.proxy=`, `http.sslVerify=true`,
-    `http.followRedirects=false`, `http.cookieFile=`, `http.extraHeader=`,
-    the credential-helper reset) and `GIT_CONFIG_COUNT=12`; a repo-local
-    `http.sslVerify=false` or `core.sshCommand` → `git-config-untrusted`.
+    known_hosts → `known-hosts-missing`; a repo-local `http.sslVerify`,
+    `credential.helper` or `core.sshCommand` key → `git-config-untrusted`
+    (HTTPS transport does not exist in v1, so these keys have nothing to
+    influence and are rejected for reporting).
 130. **Identity is observed unoverlaid** (`preflight.test.mjs`): the
     identity read is `git config --file <REPO_ROOT>/.git/config --get
     remote.origin.url` with NO `GIT_CONFIG_COUNT` in its env; a
@@ -2714,15 +2717,15 @@ None is trust-root tier; each is a small, separately testable diff.
     → `repo-mismatch` even though a bound-env read would have returned
     the pinned value (assert both reads in one fixture); every
     "immediately before" re-read uses the `--file` form.
-131. **HTTPS settings survive a config race** (`preflight.test.mjs`,
-    real temporary repository served over `https://` by a local fixture):
-    after the audit, `http.sslVerify=false`, `http.proxy=<evil>`,
-    `http.followRedirects=true`, `http.cookieFile=<file>`,
-    `http.extraHeader=<hdr>` and `credential.helper=<evil>` are written
-    into `.git/config`; a push under the bound env shows (via the
-    fixture server's request log and `GIT_TRACE_CURL`) TLS verification
-    on, no proxy, no redirect follow, no cookie, no extra header, and no
-    helper invocation; `GIT_CONFIG_COUNT` equals the table row count.
+131. **SSH transport survives a config race** (`preflight.test.mjs`, real
+    temporary repository with a bare remote reached through a logging
+    `ssh` wrapper as the pinned executable): after the audit,
+    `core.sshCommand=<evil wrapper>` and `url.<evil>.insteadOf=<prefix>`
+    are written into `.git/config`; a push under the bound env is
+    executed by the PINNED wrapper (its log shows the pinned `-F
+    /dev/null … UserKnownHostsFile=…` argv, the evil wrapper's log is
+    empty) and lands in the pinned bare repo; `GIT_CONFIG_COUNT` equals 6
+    and row 5 pins `core.sshCommand` to the same string.
 132. **SSH-only remotes** (`preflight.test.mjs`): `https://github.com/o/r.git`
     → `remote-url-scheme`, exit 1, zero network spawns; `git@github.com:o/r.git`
     and `ssh://git@github.com/o/r.git` are accepted and canonicalize to the
