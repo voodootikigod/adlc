@@ -1310,16 +1310,33 @@ for that process), and the phase-A audit rejects ANY `http.*` /
 config outright. **`origin` is BOUND, not
 observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
-`GIT_CONFIG_COUNT=5`, `GIT_CONFIG_KEY_0=remote.origin.url` /
-`GIT_CONFIG_VALUE_0=<remoteFetchUrl>`, `GIT_CONFIG_KEY_1=remote.origin.pushurl`
-/ `GIT_CONFIG_VALUE_1=<remotePushUrl>`, `GIT_CONFIG_KEY_2=core.hooksPath`
-/ `GIT_CONFIG_VALUE_2=/dev/null`, `GIT_CONFIG_KEY_3=url.<remoteFetchUrl>.insteadOf`
-/ `GIT_CONFIG_VALUE_3=<remoteFetchUrl>`, `GIT_CONFIG_KEY_4=url.<remotePushUrl>.pushInsteadOf`
-/ `GIT_CONFIG_VALUE_4=<remotePushUrl>` — which git applies with precedence
-over every config FILE, so any process that names `origin` (including
-the immutable `scripts/preflight.mjs` and fleet's git calls) resolves it
-to the pinned URLs for the lifetime of that process regardless of what
-`.git/config` says at any instant. Entries 3–4 close the remaining
+the following env-supplied configuration table, numbered in this
+order with `GIT_CONFIG_COUNT` equal to the number of rows actually set
+(the HTTPS rows are set only for `https://` pinned URLs; the count is
+therefore 6 for SSH and 12 for HTTPS, and the test asserts the exact
+list, never a literal):
+
+| n | key | value |
+|---|---|---|
+| 0 | `remote.origin.url` | `<remoteFetchUrl>` |
+| 1 | `remote.origin.pushurl` | `<remotePushUrl>` |
+| 2 | `core.hooksPath` | `/dev/null` |
+| 3 | `url.<remoteFetchUrl>.insteadOf` | `<remoteFetchUrl>` |
+| 4 | `url.<remotePushUrl>.pushInsteadOf` | `<remotePushUrl>` |
+| 5 | `credential.helper` | `` (empty — resets the multi-valued list) followed, only if `--git-credential-helper` was given, by a second `credential.helper` row with that value |
+| 6 | `http.proxy` | `` (HTTPS only) |
+| 7 | `http.sslVerify` | `true` (HTTPS only) |
+| 8 | `http.followRedirects` | `false` (HTTPS only) |
+| 9 | `http.cookieFile` | `` (HTTPS only) |
+| 10 | `http.extraHeader` | `` (HTTPS only — resets the multi-valued list) |
+| 11 | `http.<remoteFetchUrl>.extraHeader` | `` (HTTPS only) |
+
+git applies these with precedence over every config FILE, so any process
+that names `origin` (including the immutable `scripts/preflight.mjs` and
+fleet's git calls) resolves it to the pinned URLs for the lifetime of
+that process regardless of what `.git/config` says at any instant, and
+the HTTPS safety settings likewise cannot be undone by a file edit
+during the operation. Entries 3–4 close the remaining
 TOCTOU: git rewrites a URL with the LONGEST matching `insteadOf` /
 `pushInsteadOf` key, and a key equal to the full pinned URL is by
 construction at least as long as any prefix a repo-local rewrite could
@@ -1350,10 +1367,18 @@ against `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`; without it phase A exits 1
 `repo-unbound`. Phase B then requires `autopilot.repo` in the config
 read from the pinned blob (§9.4) to EQUAL the operator-local value
 (`repo-mismatch` otherwise), so the committed config confirms but never
-defines the identity. Preflight requires
-`git remote get-url origin` AND `git remote get-url --push origin` to
-resolve (after normalizing `git@github.com:` / `https://github.com/` /
-trailing `.git`) to exactly that repo; `gh repo view <repo> --json
+defines the identity. Preflight OBSERVES the repository's own remote configuration with a
+read that the bound environment of §9.1b cannot influence — `git config
+--file <REPO_ROOT>/.git/config --get remote.origin.url` and `--get
+remote.origin.pushurl` (falling back to `url` when `pushurl` is unset),
+run WITHOUT the `GIT_CONFIG_COUNT` overlay (only the sanitization of
+§9.1b applies) — and requires both observed values to normalize (after
+`git@github.com:` / `ssh://git@github.com/` / `https://github.com/` /
+trailing `.git` canonicalization) to exactly that repo; the observed,
+canonical values are what get pinned as `remoteFetchUrl` /
+`remotePushUrl`, and every later "immediately before the operation"
+re-read uses the same `--file` form, so identity is always verified
+against the file and never against the overlay that would echo it back; `gh repo view <repo> --json
 nameWithOwner,defaultBranchRef` must return that name and default branch
 `main`; `gh api user` must return a login whose `gh api
 repos/<repo>/collaborators/<login>/permission` is `admin`, `maintain` or
@@ -1373,7 +1398,9 @@ literal as the remote argument, never with the mutable name `origin`;
 immediately before each such operation `git remote get-url [--push]
 origin` is re-read and must still normalize to the pinned value,
 otherwise the run is `orphan` (`remote-url-changed`) and nothing is
-pushed.
+pushed. The bound overlay of §9.1b is applied ONLY to processes that
+perform network operations (and to the bracketed preflight and fleet,
+which may); observation reads never carry it.
 
 9.2 (phase B) Plugin parity: the installed `adlc@adlc` plugin version
 (`~/.claude/plugins/installed_plugins.json`) equals the `version` in
@@ -2652,8 +2679,8 @@ None is trust-root tier; each is a small, separately testable diff.
     `url.<evil>.insteadOf=<prefix of pinned>` written into `.git/config`
     AFTER the audit, a push under the bound env still lands in the pinned
     bare repo and never in the evil one (assert by ref presence in each);
-    the bound env carries `GIT_CONFIG_COUNT=5` with the two identity
-    `insteadOf` entries; a post-push `ls-remote <pinned>` mismatch →
+    the bound env carries the full §9.1b table (count 6 for an SSH URL)
+    with the two identity `insteadOf` entries; a post-push `ls-remote <pinned>` mismatch →
     `oid-mismatch`.
 128. **Dry-run never needs a worktree** (`run.test.mjs`): in dry-run the
     spawn recorder shows no `git worktree add` and no fleet spawn; the
@@ -2669,6 +2696,23 @@ None is trust-root tier; each is a small, separately testable diff.
     rewrites `github.com` via `HostName` is not consulted (real `ssh -G`
     under that command prints the pinned host); a missing or `0644`
     known_hosts → `known-hosts-missing`; for an HTTPS URL the bound env
-    carries `http.proxy=`, `http.sslVerify=true`,
-    `http.followRedirects=false`, `http.extraHeader=`; a repo-local
+    carries the full 12-row table (`http.proxy=`, `http.sslVerify=true`,
+    `http.followRedirects=false`, `http.cookieFile=`, `http.extraHeader=`,
+    the credential-helper reset) and `GIT_CONFIG_COUNT=12`; a repo-local
     `http.sslVerify=false` or `core.sshCommand` → `git-config-untrusted`.
+130. **Identity is observed unoverlaid** (`preflight.test.mjs`): the
+    identity read is `git config --file <REPO_ROOT>/.git/config --get
+    remote.origin.url` with NO `GIT_CONFIG_COUNT` in its env; a
+    `.git/config` whose `remote.origin.url` names a different repository
+    → `repo-mismatch` even though a bound-env read would have returned
+    the pinned value (assert both reads in one fixture); every
+    "immediately before" re-read uses the `--file` form.
+131. **HTTPS settings survive a config race** (`preflight.test.mjs`,
+    real temporary repository served over `https://` by a local fixture):
+    after the audit, `http.sslVerify=false`, `http.proxy=<evil>`,
+    `http.followRedirects=true`, `http.cookieFile=<file>`,
+    `http.extraHeader=<hdr>` and `credential.helper=<evil>` are written
+    into `.git/config`; a push under the bound env shows (via the
+    fixture server's request log and `GIT_TRACE_CURL`) TLS verification
+    on, no proxy, no redirect follow, no cookie, no extra header, and no
+    helper invocation; `GIT_CONFIG_COUNT` equals the table row count.
