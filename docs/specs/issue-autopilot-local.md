@@ -1352,18 +1352,24 @@ host-key mismatch fails the operation, never prompts), `-o
 IdentitiesOnly=yes`, `-o BatchMode=yes`, and exactly ONE authentication
 mode resolved in phase A — and in either mode the key is BOUND to the
 `gh`-verified principal (§9.1a): phase A computes the SHA256 fingerprint
-of every candidate public key (the `--ssh-identity` file's `.pub`, or
-`ssh-add -L` over the agent), fetches the authenticated login's keys with
-`gh api user/keys`, requires at least one candidate fingerprint to
-appear there, selects that key, and the wrapper passes `-i <its public
-key file>` so ssh presents exactly that identity (with
-`IdentitiesOnly=yes` an agent-held key is still usable when its public
-key is named); no match → exit 1 `ssh-identity-unbound`, no network
-spawn. The modes: if `SSH_AUTH_SOCK` is set and names an
+of every candidate key FROM THE KEY MATERIAL THAT WILL AUTHENTICATE —
+never from a sidecar file: in explicit mode the public key is derived
+from the private key itself with `ssh-keygen -y -f <private>` (a `.pub`
+beside it is ignored, so a mismatched sidecar cannot bind the wrong
+key); in agent mode the candidates are the keys the agent actually
+holds (`ssh-add -L`) — fetches the authenticated login's keys with `gh
+api user/keys`, requires at least one candidate fingerprint to appear
+there, selects that key, and the wrapper names exactly it: explicit
+mode → `-o IdentityAgent=none -i <private key path>`; agent mode → `-o
+IdentityAgent=<socket> -i <orchestrator-written public-key file of the
+matched agent key>` (with `IdentitiesOnly=yes`, naming an agent key's
+public file makes ssh offer only that agent identity). No match → exit
+1 `ssh-identity-unbound`, no network spawn. The modes: if `SSH_AUTH_SOCK` is set and names an
 existing socket, `-o IdentityAgent=<SSH_AUTH_SOCK>` (with an optional
 `-i <file>` from `--ssh-identity` to select the key); otherwise, if
-`--ssh-identity <abs file>` is given (a regular file owned by the
-invoking uid, mode `0600`), `-o IdentityAgent=none -i <file>`; otherwise
+`--ssh-identity <abs file>` is given (a regular PRIVATE-key file owned by
+the invoking uid, mode `0600`, from which `ssh-keygen -y` succeeds),
+`-o IdentityAgent=none -i <that private key file>`; otherwise
 phase A exits 1 `ssh-auth-missing` — an `IdentityAgent=` with an empty
 value is never generated. The generated unit (§9.3a) must carry one of
 the two: `Environment=SSH_AUTH_SOCK=<abs socket>` when `init --service`
@@ -2946,3 +2952,12 @@ None is trust-root tier; each is a small, separately testable diff.
     agent offering only B → `ssh-identity-unbound`, zero network spawns;
     `--ssh-identity` whose `.pub` fingerprint is not listed →
     `ssh-identity-unbound`.
+146. **Identity binding uses the authenticating key** (`preflight.test.mjs`,
+    real `ssh-keygen`): in explicit mode the fingerprint is computed from
+    `ssh-keygen -y -f <private>` and a mismatched `.pub` sidecar beside it
+    changes nothing; the wrapper carries `IdentityAgent=none -i <private
+    path>`; in agent mode the wrapper carries `IdentityAgent=<socket> -i
+    <orchestrator-written .pub of the matched key>`; a live agentless
+    push against a bare fixture over a local `sshd` fixture succeeds with
+    the bound private key and is refused (`ssh-identity-unbound`) when
+    only an unlisted key is available (skipped loudly without `sshd`).
