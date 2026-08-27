@@ -37,6 +37,17 @@ export function loadSnapshot(filePath) {
       throw new Error(`snapshot file "${filePath}" route at index ${i} lacks non-empty string path`);
     }
   }
+  // compareSnapshots keys each side on routeKey() alone, so two entries sharing a
+  // key silently collapse to the LAST one — a changed duplicate hidden behind an
+  // unchanged duplicate reads as identical (false green). Refuse the snapshot.
+  const seen = new Set();
+  for (const [i, route] of parsed.routes.entries()) {
+    const key = routeKey(route);
+    if (seen.has(key)) {
+      throw new Error(`snapshot file "${filePath}" route at index ${i} duplicates an earlier "${key}" entry — a duplicate key would be silently collapsed by compare`);
+    }
+    seen.add(key);
+  }
   return parsed;
 }
 

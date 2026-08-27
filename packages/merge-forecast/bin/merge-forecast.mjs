@@ -58,8 +58,14 @@ Exit codes:
 // Parse numeric flags
 function parseNum(val, name, defaultVal, integer = false) {
   if (val === undefined || val === null) return defaultVal;
-  const n = integer ? parseInt(val, 10) : parseFloat(val);
-  if (isNaN(n)) opError(`--${name} must be a number, got: ${val}`);
+  // Number() over parseInt/parseFloat: those accept a numeric PREFIX and drop
+  // the rest ('1e2' → 1 as an integer, '2.9' → 2, '0.95junk' → 0.95), so a
+  // malformed flag silently changed the gate's inputs and still exited 0. The
+  // whole token must be one finite number; integer flags must be whole.
+  const text = typeof val === 'string' ? val.trim() : '';
+  const n = text === '' ? NaN : Number(text);
+  if (!Number.isFinite(n)) opError(`--${name} must be a number, got: ${val}`);
+  if (integer && !Number.isInteger(n)) opError(`--${name} must be an integer, got: ${val}`);
   return n;
 }
 

@@ -26,6 +26,37 @@ function withTickets(fn) {
 }
 
 describe('merge-forecast CLI parameter validation', () => {
+  // parseInt/parseFloat accepted a numeric PREFIX ('1e2' → 1, '2.9' → 2,
+  // '0.95junk' → 0.95) and the range checks then validated the truncated value.
+  for (const [flag, val, re] of [
+    ['--width', '2.9', /--width must be an integer/],
+    ['--width', '1e2junk', /--width must be a number/],
+    ['--co-change-limit', '2.5', /--co-change-limit must be an integer/],
+    ['--conflict-threshold', '0.95junk', /--conflict-threshold must be a number/],
+    ['--conflict-threshold', 'Infinity', /--conflict-threshold must be a number/],
+    ['--build-min', '', /--build-min must be a number/],
+    ['--merge-min', ' ', /--merge-min must be a number/],
+  ]) {
+    test(`rejects malformed numeric flag ${flag} ${JSON.stringify(val)} with exit 1`, () => {
+      withTickets((ticketsFile) => {
+        const res = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, flag, val], {
+          encoding: 'utf8', cwd: repoRoot,
+        });
+        assert.equal(res.status, 1, res.stdout + res.stderr);
+        assert.match(res.stderr, re);
+      });
+    });
+  }
+
+  test('accepts an integer written in scientific notation (--co-change-limit 1e2)', () => {
+    withTickets((ticketsFile) => {
+      const res = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, '--co-change-limit', '1e2', '--json'], {
+        encoding: 'utf8', cwd: repoRoot,
+      });
+      assert.equal(res.status, 0, res.stdout + res.stderr);
+    });
+  });
+
   test('rejects conflict-threshold > 1', () => {
     withTickets((ticketsFile) => {
       const res = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, '--conflict-threshold', '99'], {

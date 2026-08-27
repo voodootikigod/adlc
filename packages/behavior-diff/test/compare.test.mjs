@@ -19,6 +19,36 @@ function tmpDir() {
 }
 
 describe('loadSnapshot validation (unit)', () => {
+  test('rejects duplicate METHOD/path entries (compare would silently keep only the last)', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'dup.json');
+    writeFileSync(file, JSON.stringify({ routes: [
+      { method: 'POST', path: '/items', status: 400 },
+      { method: 'GET', path: '/items', status: 200 },
+      { method: 'POST', path: '/items', status: 201 },
+    ] }));
+    try {
+      assert.throws(() => loadSnapshot(file), /route at index 2 duplicates an earlier "POST \/items" entry/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('distinct METHOD/path pairs are not duplicates', () => {
+    const dir = tmpDir();
+    const file = join(dir, 'ok.json');
+    writeFileSync(file, JSON.stringify({ routes: [
+      { method: 'GET', path: '/items', status: 200 },
+      { method: 'POST', path: '/items', status: 201 },
+      { method: 'GET', path: '/items/1', status: 200 },
+    ] }));
+    try {
+      assert.equal(loadSnapshot(file).routes.length, 3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('rejects empty routes array', () => {
     const dir = tmpDir();
     const file = join(dir, 'empty.json');

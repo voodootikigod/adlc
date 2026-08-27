@@ -31,6 +31,11 @@ export function validateConfig(config) {
   if (!Array.isArray(config.routes) || config.routes.length === 0) {
     errors.push('config.routes must be a non-empty array');
   } else {
+    // Snapshots are compared by "METHOD path" alone (see compare.mjs), so two
+    // probes of the same route (e.g. different bodies) cannot both be observed —
+    // the later one silently replaces the earlier. Refuse the config up front
+    // rather than capture a snapshot compare will reject or, worse, collapse.
+    const seen = new Set();
     for (const [i, route] of config.routes.entries()) {
       if (!route || typeof route !== 'object') {
         errors.push(`config.routes[${i}] must be an object`);
@@ -41,6 +46,13 @@ export function validateConfig(config) {
       }
       if (!route.path || typeof route.path !== 'string') {
         errors.push(`config.routes[${i}].path must be a non-empty string`);
+      }
+      if (typeof route.method === 'string' && typeof route.path === 'string') {
+        const key = `${route.method.toUpperCase()} ${route.path}`;
+        if (seen.has(key)) {
+          errors.push(`config.routes[${i}] duplicates an earlier "${key}" route — duplicate routes are compared by method+path only and would silently collapse`);
+        }
+        seen.add(key);
       }
     }
   }

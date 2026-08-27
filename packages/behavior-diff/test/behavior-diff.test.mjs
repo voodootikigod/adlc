@@ -276,6 +276,19 @@ describe('validateConfig', () => {
     assert.deepEqual(errors, []);
   });
 
+  test('duplicate method+path routes return an error (case-insensitive on method)', () => {
+    const errors = validateConfig({
+      baseUrl: 'http://localhost:3000',
+      routes: [
+        { method: 'post', path: '/items', body: { a: 1 } },
+        { method: 'GET', path: '/items' },
+        { method: 'POST', path: '/items', body: { a: 2 } },
+      ],
+    });
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], /config\.routes\[2\] duplicates an earlier "POST \/items" route/);
+  });
+
   test('missing baseUrl returns error', () => {
     const errors = validateConfig({ routes: [{ method: 'GET', path: '/' }] });
     assert.ok(errors.some((e) => e.includes('baseUrl')));
