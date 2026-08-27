@@ -1333,7 +1333,7 @@ inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
 environment; the transport itself is ISOLATED, not inherited: for SSH URLs the
 orchestrator always sets `GIT_SSH` (which git executes DIRECTLY, without
 a shell, and prefers over any `core.sshCommand`) to an orchestrator-
-generated wrapper at `<REPO_ROOT>/.adlc/autopilot-runs/ssh-wrapper-<token>`
+generated wrapper at `<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/wrapper`
 — a regular file, mode `0500`, owned by the invoking uid, whose sha256
 is recorded in the status file and re-verified immediately before every
 spawn that carries it (`ssh-wrapper-tampered` otherwise), containing a
@@ -1345,7 +1345,7 @@ metacharacters are passed intact, and forwarding git's own arguments
 (`"$@"`) unchanged — the pinned `ssh` executable with
 `-F /dev/null` (no user or system `ssh_config`, so no `Host`/`HostName`/
 `ProxyCommand`/`ProxyJump`/`LocalCommand` rewrite can apply),
-`-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`
+`-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/known_hosts`
 (an orchestrator-owned file written by `init` from `gh api meta`'s
 `ssh_keys` for the pinned host and refreshed only by `init --write`; a
 host-key mismatch fails the operation, never prompts), `-o
@@ -1485,8 +1485,15 @@ against `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`; without it phase A exits 1
 `repo-unbound`. Phase B then requires `autopilot.repo` in the config
 read from the pinned blob (§9.4) to EQUAL the operator-local value
 (`repo-mismatch` otherwise), so the committed config confirms but never
-defines the identity. Preflight OBSERVES the repository's own remote configuration with a
-read that the bound environment of §9.1b cannot influence — `git config
+defines the identity. The HOST of the pinned URLs is bound to the host `gh` is authenticated
+against: `gh auth status --json` (or `gh api meta` on that host) yields
+the gh host (`github.com` or a GHES host), the SSH URL's host part must
+equal it exactly (`remote-host-mismatch` otherwise, before any network
+operation), and the pinned `known_hosts` is sourced only from that
+host's `gh api meta` — so the repository identity (§9.1a), the SSH
+endpoint and the host keys all name one host. Preflight OBSERVES the
+repository's own remote configuration with a read that the bound
+environment of §9.1b cannot influence — `git config
 --file <REPO_ROOT>/.git/config --get remote.origin.url` and `--get
 remote.origin.pushurl` (falling back to `url` when `pushurl` is unset),
 run WITHOUT the `GIT_CONFIG_COUNT` overlay (only the sanitization of
@@ -1587,12 +1594,28 @@ that validates against
 required; `query` is omitted or a string, never `null`) — §0.12. The R1
 ticket's AC1 runs that schema validation.
 
-9.4a (phase A) Pinned host keys: `<REPO_ROOT>/.adlc/autopilot-known_hosts`
-exists, is a regular file owned by the invoking uid with mode `0600`,
-and contains at least one key for the pinned remote host; absent or
-insecure → exit 1 `known-hosts-missing` (run `adlc-autopilot init
---write` to (re)create it from `gh api meta`). The file is gitignored via
-`.git/info/exclude` with the other `.adlc/autopilot-*` entries.
+9.4a (phase A) SSH material directory and revalidation: everything the
+transport depends on lives in ONE exclusive per-iteration directory
+`<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/` created with
+mode `0700` by the orchestrator (`ssh-dir-exists` if it already exists —
+never reused): the `GIT_SSH` wrapper (§9.1b), `known_hosts` (copied from
+`<REPO_ROOT>/.adlc/autopilot-known_hosts`, which `init --write` creates
+from `gh api meta` of the gh host and which must be a regular `0600`
+file owned by the invoking uid, else `known-hosts-missing`), the
+matched agent public key file in agent mode, and — in explicit mode — a
+`0600` COPY of the private key made at phase A after its fingerprint was
+bound (§9.1b), so the key that authenticates is the one that was
+verified. At creation the orchestrator records, for every file in the
+directory, its sha256, size, owner uid, mode, inode and device in the
+status file; IMMEDIATELY before every network spawn it re-`stat`s and
+re-hashes each file and requires all six to be unchanged, requires the
+directory itself to still be `0700`/owned with the same inode, and in
+agent mode re-runs `ssh-add -L` over the socket (whose inode/device are
+also recorded) and requires the bound fingerprint to still be offered;
+any difference → `ssh-material-tampered`, the run is `orphan`, nothing
+is sent. The directory is removed at the end of the iteration. All of it
+is gitignored via `.git/info/exclude` with the other `.adlc/autopilot-*`
+entries.
 
 9.5 Labels exist: `adlc:autopilot`, `adlc:autopilot-skip`,
 `adlc:needs-clarification`, `adlc:autopilot-blocked`, `adlc:autopilot-stale`,
@@ -2832,7 +2855,7 @@ None is trust-root tier; each is a small, separately testable diff.
     generated wrapper (mode `0500`, sha256 verified before the spawn);
     the wrapper's content execs the pinned `ssh` path with `-F /dev/null`,
     `StrictHostKeyChecking=yes`,
-    `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`,
+    `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-runs/ssh-<iterationToken>/known_hosts`,
     `IdentitiesOnly=yes`, `BatchMode=yes`; a `~/.ssh/config` fixture that
     rewrites `github.com` via `HostName` is not consulted (real `ssh -G`
     under that command prints the pinned host); a missing or `0644`
@@ -2961,3 +2984,17 @@ None is trust-root tier; each is a small, separately testable diff.
     push against a bare fixture over a local `sshd` fixture succeeds with
     the bound private key and is refused (`ssh-identity-unbound`) when
     only an unlisted key is available (skipped loudly without `sshd`).
+147. **SSH material revalidated before every spawn** (`preflight.test.mjs`
+    + `run.test.mjs`, real files): the per-iteration `ssh-<token>/`
+    directory is `0700` and holds the wrapper, `known_hosts`, and the
+    bound key material; replacing `known_hosts` with same-size different
+    content, `chmod 0644` on the private-key copy, swapping the file for
+    a new inode with identical bytes, or an agent that stops offering the
+    bound fingerprint → `ssh-material-tampered` immediately before the
+    spawn, zero network spawns; unchanged material → the spawn proceeds;
+    a pre-existing directory of the same name → `ssh-dir-exists`.
+148. **Remote host bound to the gh host** (`preflight.test.mjs`): with
+    `gh auth status` reporting `github.com`, `git@ghe.example.com:o/r.git`
+    → `remote-host-mismatch`; `git@github.com:o/r.git` is accepted; the
+    `known_hosts` fixture is written from `gh api meta` of that host and
+    a key for any other host is ignored.
