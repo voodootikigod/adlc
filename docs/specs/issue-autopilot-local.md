@@ -1289,9 +1289,25 @@ inherits — runs with `GIT_CONFIG_GLOBAL=/dev/null`,
 `GIT_CONFIG_PARAMETERS`, inherited `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
 `GIT_CONFIG_VALUE_*`, `http_proxy`/`https_proxy`/`all_proxy`
 (any case) and `GIT_TERMINAL_PROMPT` variable removed from the
-environment; the ONLY transport inputs are `SSH_AUTH_SOCK` (agent) and,
-if the operator sets it, `--git-ssh-command <abs path> [args]` which is
-passed as `GIT_SSH_COMMAND` verbatim. **`origin` is BOUND, not
+environment; the transport itself is ISOLATED, not inherited: for SSH URLs the
+orchestrator always sets `GIT_SSH_COMMAND` (which git prefers over any
+`core.sshCommand` in a config file) to the pinned `ssh` executable with
+`-F /dev/null` (no user or system `ssh_config`, so no `Host`/`HostName`/
+`ProxyCommand`/`ProxyJump`/`LocalCommand` rewrite can apply),
+`-o StrictHostKeyChecking=yes`, `-o UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`
+(an orchestrator-owned file written by `init` from `gh api meta`'s
+`ssh_keys` for the pinned host and refreshed only by `init --write`; a
+host-key mismatch fails the operation, never prompts), `-o
+IdentitiesOnly=yes`, `-o BatchMode=yes`, `-o IdentityAgent=<SSH_AUTH_SOCK>`
+and, if the operator gives `--ssh-identity <abs file>`, `-i <file>`;
+`--git-ssh-command` is NOT an option (a free-form command cannot be
+validated). For HTTPS URLs the env-bound configuration additionally
+carries `http.proxy=` (empty, disabling proxies), `http.sslVerify=true`,
+`http.followRedirects=false`, `http.cookieFile=` and
+`http.extraHeader=` (an empty value RESETS the multi-valued header list
+for that process), and the phase-A audit rejects ANY `http.*` /
+`https.*` / `core.sshCommand` / `core.gitProxy` key in the repo-local
+config outright. **`origin` is BOUND, not
 observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
 `GIT_CONFIG_COUNT=5`, `GIT_CONFIG_KEY_0=remote.origin.url` /
@@ -1410,6 +1426,13 @@ that validates against
 `packages/ticket-sync/schemas/adlc-config.schema.json` (`provider` is
 required; `query` is omitted or a string, never `null`) — §0.12. The R1
 ticket's AC1 runs that schema validation.
+
+9.4a (phase A) Pinned host keys: `<REPO_ROOT>/.adlc/autopilot-known_hosts`
+exists, is a regular file owned by the invoking uid with mode `0600`,
+and contains at least one key for the pinned remote host; absent or
+insecure → exit 1 `known-hosts-missing` (run `adlc-autopilot init
+--write` to (re)create it from `gh api meta`). The file is gitignored via
+`.git/info/exclude` with the other `.adlc/autopilot-*` entries.
 
 9.5 Labels exist: `adlc:autopilot`, `adlc:autopilot-skip`,
 `adlc:needs-clarification`, `adlc:autopilot-blocked`, `adlc:autopilot-stale`,
@@ -1627,7 +1650,7 @@ init    [--labels] [--service] [--write]
 ```
 Global operator-local flags: `--repo` (or `ADLC_AUTOPILOT_REPO`; required
 for `loop`/`once`), `--model`, `--adapter`, `--quota-threshold`,
-`--quota-reserve`, `--trusted-bin-dirs`, `--git-ssh-command`,
+`--quota-reserve`, `--trusted-bin-dirs`, `--ssh-identity`,
 `--git-credential-helper`. Every subcommand exits 0/1/2 and
 supports `--json`. `reset --attempts` is a journaled, crash-idempotent transaction under
 the autopilot lock: (1) write
@@ -2637,3 +2660,15 @@ None is trust-root tier; each is a small, separately testable diff.
     plan's `incomplete` list contains `fleet-dry-run-needs-worktree`; the
     read-only phase-B checks run when the baseline objects are local and
     are all `skipped` when they are not.
+129. **Isolated SSH and HTTPS transport** (`preflight.test.mjs` +
+    `run.test.mjs`): every git spawn for an SSH URL carries
+    `GIT_SSH_COMMAND` beginning with the pinned `ssh` path and containing
+    `-F /dev/null`, `StrictHostKeyChecking=yes`,
+    `UserKnownHostsFile=<REPO_ROOT>/.adlc/autopilot-known_hosts`,
+    `IdentitiesOnly=yes`, `BatchMode=yes`; a `~/.ssh/config` fixture that
+    rewrites `github.com` via `HostName` is not consulted (real `ssh -G`
+    under that command prints the pinned host); a missing or `0644`
+    known_hosts → `known-hosts-missing`; for an HTTPS URL the bound env
+    carries `http.proxy=`, `http.sslVerify=true`,
+    `http.followRedirects=false`, `http.extraHeader=`; a repo-local
+    `http.sslVerify=false` or `core.sshCommand` → `git-config-untrusted`.
