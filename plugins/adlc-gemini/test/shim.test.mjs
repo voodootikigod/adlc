@@ -24,6 +24,14 @@ test('runFromStdin: empty/blank stdin with enforcement off allows', () => {
   assert.equal(runFromStdin('', {}).allow_tool, true);
   assert.equal(runFromStdin('   ', {}).allow_tool, true);
 });
+test('runFromStdin: null/undefined raw under enforcement fails closed without throwing', () => {
+  assert.equal(runFromStdin(null, { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+  assert.equal(runFromStdin(undefined, { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
+});
+test('runFromStdin: null/undefined raw with enforcement off allows', () => {
+  assert.equal(runFromStdin(null, {}).allow_tool, true);
+  assert.equal(runFromStdin(undefined, {}).allow_tool, true);
+});
 test('runFromStdin: non-object JSON payloads under enforcement fail closed', () => {
   assert.equal(runFromStdin('null', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);
   assert.equal(runFromStdin('"hi"', { ADLC_P4_ENFORCEMENT: '1' }).allow_tool, false);

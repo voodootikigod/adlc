@@ -45,7 +45,19 @@ if (isExplicit) {
   }
 }
 
-const skillPaths = findSkills(searchRoots, repoRoot, { strict: isExplicit });
+let skillPaths;
+try {
+  skillPaths = findSkills(searchRoots, repoRoot, { strict: isExplicit });
+} catch (err) {
+  // strict mode: an explicit path that exists but is not a skills directory or
+  // SKILL.md — an operational error (exit 1), never a silent pass.
+  if (values.json) {
+    printJson({ error: 'explicit search path is not a skills directory or SKILL.md', detail: err.message });
+  } else {
+    console.error(`error: ${err.message}`);
+  }
+  process.exit(1);
+}
 
 if (skillPaths.length === 0) {
   const searchedPaths = searchRoots

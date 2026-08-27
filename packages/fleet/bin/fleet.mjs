@@ -181,18 +181,22 @@ if (!['run', 'status', 'unlock'].includes(sub)) {
 }
 }
 
-function isMain() {
-  if (!process.argv[1]) return false;
+// The file:// URL of the script Node was started with, symlinks resolved — npm's
+// .bin entries are symlinks, so argv[1] is the link while import.meta.url is the
+// real file (#786) — or null when there is no resolvable entry: a bare `node -e`
+// import has no argv[1], and a nonexistent argv[1] cannot be realpath'd.
+function entryUrl() {
+  if (!process.argv[1]) return null;
   try {
-    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+    return pathToFileURL(realpathSync(process.argv[1])).href;
   } catch {
-    return false;
+    return null;
   }
 }
 
 // Dispatch the CLI ONLY when run as the entry point. Importing this module (e.g. a unit
 // test importing runLive) must not parse argv, hit process.exit, or gateFail.
-if (isMain()) runCli();
+if (entryUrl() === import.meta.url) runCli();
 
 // Collaborators are injectable (defaulting to the real implementations) purely for
 // testability: the production call site passes no overrides, so behavior is unchanged, but a

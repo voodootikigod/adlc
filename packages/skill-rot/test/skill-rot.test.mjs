@@ -103,6 +103,28 @@ describe('findSkills', () => {
     }
   });
 
+  test('strict: an explicit FILE that is not SKILL.md throws (not silently skipped)', () => {
+    const tmp = makeTempDir();
+    try {
+      writeSkill(tmp, 'docs/README.md', '# not a skill');
+      assert.throws(() => {
+        findSkills(['docs/README.md'], tmp, { strict: true });
+      }, /not a skills directory or SKILL\.md file/);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('non-strict: an explicit FILE that is not SKILL.md is skipped', () => {
+    const tmp = makeTempDir();
+    try {
+      writeSkill(tmp, 'docs/README.md', '# not a skill');
+      assert.deepEqual(findSkills(['docs/README.md'], tmp), []);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
   test('searches multiple roots', () => {
     const tmp = makeTempDir();
     try {
@@ -159,6 +181,19 @@ describe('CLI explicit path validation', () => {
       const parsed = JSON.parse(r.stdout);
       assert.equal(parsed.error, 'explicit search path does not exist');
       assert.equal(parsed.path, 'typo-dir');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('fails with exit 1 when an explicit positional is a file that is not SKILL.md', () => {
+    const tmp = makeTempDir();
+    try {
+      writeSkill(tmp, 'docs/README.md', '# not a skill');
+      const r = spawnSync(process.execPath, [BIN, 'docs/README.md'], { cwd: tmp, encoding: 'utf8' });
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stderr, /not a skills directory or SKILL\.md file/);
+      assert.match(r.stderr, /README\.md/);
     } finally {
       cleanup(tmp);
     }

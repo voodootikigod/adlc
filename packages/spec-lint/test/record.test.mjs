@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { recordResult, GATE_NAME } from '../lib/record.mjs';
+import { record as manifestRecord } from '@adlc/gate-manifest/lib/record.mjs';
 
 const BIN = new URL('../bin/spec-lint.mjs', import.meta.url).pathname;
 const NODE = process.execPath;
@@ -110,3 +111,29 @@ test('CLI: --record with comma-containing spec path writes single valid hash to 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+
+// recordResult replaced gate-manifest's record() (whose rawFiles comma-split
+// fragmented a spec path containing a comma, #775). Everything ELSE about the
+// entry — field set, v1 signature format, file hashes, data — must be what
+// record() would have written, or a spec-lint P1 record silently changes shape
+// for every consumer that reads it.
+test('recordResult: keyed entry has the same shape and signature version as gate-manifest record()', () => {
+  const dir = tmpDir();
+  const key = 'a1'.repeat(32);
+  const specPath = join(dir, 'spec.md');
+  writeFileSync(specPath, VERIFIED_SPEC);
+  try {
+    const ours = recordResult({ ticket: 'T1', specPath, dir: join(dir, 'ours'), key });
+    const theirs = manifestRecord({
+      gate: GATE_NAME, ticket: 'T1', rawData: JSON.stringify({ verified: true }), rawFiles: specPath,
+      dir: join(dir, 'theirs'), key,
+    });
+    assert.deepEqual(Object.keys(ours).sort(), Object.keys(theirs).sort());
+    assert.equal(ours.sigVersion, theirs.sigVersion, 'signature version must not drift from record()');
+    assert.equal(typeof ours.sig, 'string');
+    assert.deepEqual(ours.files, theirs.files);
+    assert.deepEqual(ours.data, theirs.data);
+    assert.equal(ours.gate, theirs.gate);
+    assert.equal(ours.ticket, theirs.ticket);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

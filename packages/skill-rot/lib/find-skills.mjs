@@ -28,10 +28,15 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
       continue;
     }
     const stat = statSync(absRoot);
-    if (stat.isFile() && basename(absRoot) === 'SKILL.md') {
-      results.push(absRoot);
-    } else if (stat.isDirectory()) {
+    if (stat.isDirectory()) {
       collectSkills(absRoot, results);
+    } else if (stat.isFile() && basename(absRoot) === 'SKILL.md') {
+      results.push(absRoot);
+    } else if (strict) {
+      // The caller named this path and it is neither a skills directory nor a
+      // SKILL.md (a README.md, say). Skipping it silently is the same false
+      // green #768 closes for missing paths.
+      throw new Error(`not a skills directory or SKILL.md file: ${absRoot}`);
     }
   }
   return results;

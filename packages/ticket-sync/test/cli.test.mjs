@@ -170,3 +170,13 @@ test('importing ticket-sync.mjs from a process with NO argv[1] (node -e) does NO
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '', 'a bare import must not print usage');
 });
+
+// `node -e <script> bogus` puts "bogus" at argv[1]; realpathSync on it throws.
+// That must read as not-the-entry — neither dispatch nor a crash.
+test('a NONEXISTENT argv[1] resolves to "not the entry" instead of dispatching or throwing', () => {
+  const r = spawnSync(process.execPath,
+    ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(BIN).href)})`, 'definitely-not-a-file'],
+    { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '', 'a bare import must not print usage');
+});
