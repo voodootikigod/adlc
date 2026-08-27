@@ -1289,7 +1289,12 @@ releases the lock, exits 0; an in-flight fleet run is left resumable per
 §2.1). No `%h` expansion is used for paths the tests must assert
 byte-for-byte.
 
-9.4 Repo: `.adlc/config.json` exists on `origin/main` with a `fleet` block
+9.4 Repo: `.adlc/config.json` is read as `git show
+<BASE_OID>:.adlc/config.json` — the pinned baseline of this iteration,
+never the working tree, a local `main`, or a tracking ref — parses as
+JSON, validates against the schema the autopilot ships for its own
+block and against `packages/ticket-sync/schemas/adlc-config.schema.json`
+for `ticketSync`, and carries a `fleet` block
 (`gate.build`, `gate.test`, `init`, `allowedCommands`, `reviewProvider:
 "codex"`, `prosecuteFailOn`, `timeoutMinutes`) and a `ticketSync` block
 that validates against
@@ -1851,8 +1856,9 @@ None is trust-root tier; each is a small, separately testable diff.
     on PATH that record argv and create the files the real tools would):
     a full `once --issue N` run produces the worktree at `ISSUE_WT`, the
     ticket shard under `<ISSUE_WT>/.adlc/tickets/`, the ownership marker in
-    the repo's local config, a branch whose merge-base with `origin/main`
-    is `baseOid`, and a pushed head equal to the OID passed to the
+    the repo's local config, a branch whose merge-base with the recorded
+    `baseOid` IS `baseOid` (asserted with `git merge-base` against the OID
+    literal — the test never reads or sets `origin/main`), and a pushed head equal to the OID passed to the
     `record-cross-model` fake; a preflight-fake failure on the first pass
     yields a second fleet invocation carrying `--dead-end-file` and
     `--max-strikes 14`, with `adlc ticket complete` invoked exactly once,
@@ -2402,3 +2408,8 @@ None is trust-root tier; each is a small, separately testable diff.
     archives the attempt ledger, is refused without the lock, is
     idempotent on a second call, and touches no other file (fixture
     directory byte-identical apart from the ledger and archive).
+116. **Config is read from the pinned blob** (`preflight.test.mjs`): the
+    config read is `git show <baseOid>:.adlc/config.json`; a working-tree
+    `.adlc/config.json` and a local `origin/main` ref carrying different
+    (even invalid) content do not change the preflight verdict; a blob
+    that fails either schema → exit 1 `bad-config`, zero dispatches.
