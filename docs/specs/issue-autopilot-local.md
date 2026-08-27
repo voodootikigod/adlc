@@ -159,13 +159,21 @@ no `.git/info/exclude` write, no `git fetch` (the baseline OID comes from
 ownership marker, no run record, no status-file write, no `gh` mutation,
 and no manifest append; the shaping call is replaced by a deterministic
 placeholder unless `--dry-run-shape` is also passed (which spends the one
-gated Claude call and nothing else). Because dry-run may not fetch,
-phase-B checks (§9) run only if the resolved `BASE_OID` is already
-present locally (`git cat-file -e <BASE_OID>^{commit}`); otherwise the
-plan is printed with `complete: false` and `incomplete: ["baseline-not-
-local"]`, every phase-B item is reported as `skipped`, and the exit code
-is still 0 — a dry-run never claims a full plan it could not build and
-never fetches to build one. The spawn recorder in AC 10 rejects
+gated Claude call and nothing else). Because dry-run may not fetch or
+create a worktree, phase B (§9) is split for dry-run into its READ-ONLY
+checks (§9.2 plugin parity, §9.4 config schema, the §14 `spec-approval`
+binding — all `git show`/`cat-file` reads) and its one MUTATING check
+(§9.6 fleet dry-run, which needs a detached worktree): the read-only
+checks run only if the resolved `BASE_OID` is already present locally
+(`git cat-file -e <BASE_OID>^{commit}`), and §9.6 is ALWAYS reported as
+`skipped: needs-worktree` in dry-run. The plan therefore carries
+`complete: false` whenever anything was skipped, with `incomplete`
+listing every reason (`baseline-not-local`, `fleet-dry-run-needs-
+worktree`, …); `complete: true` is possible only for a dry-run that ran
+every phase-B check, which by construction never includes §9.6 — so a
+dry-run plan is always `complete: false` with an explicit skip list, and
+the exit code is still 0. A dry-run never claims a full plan and never
+mutates to build one. The spawn recorder in AC 10 rejects
 any argv that is not in the read-only set (`git ls-remote`, `git
 rev-parse`, `git cat-file`, `gh … view|list|api GET`, `adlc … --json`
 without `--write`/`--record`).
@@ -1286,16 +1294,28 @@ if the operator sets it, `--git-ssh-command <abs path> [args]` which is
 passed as `GIT_SSH_COMMAND` verbatim. **`origin` is BOUND, not
 observed:** after stripping, the orchestrator sets its OWN
 environment-supplied configuration on every git process —
-`GIT_CONFIG_COUNT=3`, `GIT_CONFIG_KEY_0=remote.origin.url` /
+`GIT_CONFIG_COUNT=5`, `GIT_CONFIG_KEY_0=remote.origin.url` /
 `GIT_CONFIG_VALUE_0=<remoteFetchUrl>`, `GIT_CONFIG_KEY_1=remote.origin.pushurl`
 / `GIT_CONFIG_VALUE_1=<remotePushUrl>`, `GIT_CONFIG_KEY_2=core.hooksPath`
-/ `GIT_CONFIG_VALUE_2=/dev/null` — which git applies with precedence
+/ `GIT_CONFIG_VALUE_2=/dev/null`, `GIT_CONFIG_KEY_3=url.<remoteFetchUrl>.insteadOf`
+/ `GIT_CONFIG_VALUE_3=<remoteFetchUrl>`, `GIT_CONFIG_KEY_4=url.<remotePushUrl>.pushInsteadOf`
+/ `GIT_CONFIG_VALUE_4=<remotePushUrl>` — which git applies with precedence
 over every config FILE, so any process that names `origin` (including
 the immutable `scripts/preflight.mjs` and fleet's git calls) resolves it
 to the pinned URLs for the lifetime of that process regardless of what
-`.git/config` says at any instant; combined with `GIT_CONFIG_GLOBAL`/
-`GIT_CONFIG_SYSTEM` = `/dev/null` and the phase-A ban on
-`url.*.insteadOf`, no configuration source can rewrite the transport. The repository-local
+`.git/config` says at any instant. Entries 3–4 close the remaining
+TOCTOU: git rewrites a URL with the LONGEST matching `insteadOf` /
+`pushInsteadOf` key, and a key equal to the full pinned URL is by
+construction at least as long as any prefix a repo-local rewrite could
+match, so an `url.*.insteadOf` written into `.git/config` between the
+phase-A audit and a network operation can no longer redirect the pinned
+literal (the identity rewrite wins). The phase-A audit still forbids
+such entries so their appearance is reported. Finally every network
+operation is VERIFIED at the endpoint, not the config: after a push,
+`git ls-remote <remotePushUrl> refs/heads/<branch>` (itself run under the
+same bound environment) must return `attestedHead` (§6.8); after a
+fetch, the fetched object's OID must equal the one `ls-remote` announced
+(§6.0). The repository-local
 `<REPO_ROOT>/.git/config` (operator-owned, never part of a PR) is
 audited in phase A: any `url.*.insteadOf` / `url.*.pushInsteadOf`,
 `core.sshCommand`, `core.gitProxy`, `http.proxy`, `https.proxy`,
@@ -1853,9 +1873,10 @@ None is trust-root tier; each is a small, separately testable diff.
 9. **Wall clock**: a fleet fake that never returns is killed at 90 minutes
    (fake timers), outcome `wall-clock`, label applied (`run.test.mjs`).
 10. **Dry-run honesty**: `adlc-autopilot once --dry-run --issue N` exits 0,
-    prints the plan — `complete: true` when the baseline objects are
-    local, otherwise `complete: false` with `baseline-not-local` and every
-    phase-B item marked `skipped` (assert both fixtures) — and the spawn
+    prints the plan with `complete: false` and an `incomplete` list that
+    always contains `fleet-dry-run-needs-worktree` (and
+    `baseline-not-local` when the objects are absent, in which case every
+    phase-B item is `skipped`; assert both fixtures), and the spawn
     recorder shows only argv from the read-only set of §2 (assert: no `git fetch`, `git worktree`, `git
     config`, `git push`, `mkdir` of the lock, `.git/info/exclude` write,
     `gh` mutation, or `--write`/`--record` flag), the filesystem fixture
@@ -2603,3 +2624,16 @@ None is trust-root tier; each is a small, separately testable diff.
     not the rewritten one; inherited `GIT_CONFIG_COUNT`/`KEY`/`VALUE`
     variables from the orchestrator's own env are dropped before the
     bound ones are set.
+127. **Identity rewrite beats prefix rewrites** (`preflight.test.mjs`,
+    real temporary repository with two bare remotes): with
+    `url.<evil>.insteadOf=<prefix of pinned>` written into `.git/config`
+    AFTER the audit, a push under the bound env still lands in the pinned
+    bare repo and never in the evil one (assert by ref presence in each);
+    the bound env carries `GIT_CONFIG_COUNT=5` with the two identity
+    `insteadOf` entries; a post-push `ls-remote <pinned>` mismatch →
+    `oid-mismatch`.
+128. **Dry-run never needs a worktree** (`run.test.mjs`): in dry-run the
+    spawn recorder shows no `git worktree add` and no fleet spawn; the
+    plan's `incomplete` list contains `fleet-dry-run-needs-worktree`; the
+    read-only phase-B checks run when the baseline objects are local and
+    are all `skipped` when they are not.
