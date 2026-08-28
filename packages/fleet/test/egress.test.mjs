@@ -376,3 +376,25 @@ test('an adapter that declares no egress hosts gets NONE — never an implicit o
   assert.equal(isAllowed(parseConnectTarget(HEAD('CONNECT api.openai.com:443 HTTP/1.1')), adapterCatalog().codex.egressHosts), false,
     'codex declares nothing yet, so under allowlist mode it reaches nothing');
 });
+
+import { HEAD_TIMEOUT_MS, MAX_CLIENTS } from '../lib/egress-proxy.mjs';
+test('a client that never finishes its CONNECT head is dropped at the head deadline, and clients beyond the cap are refused (codex r4)', async () => {
+  assert.equal(HEAD_TIMEOUT_MS, 10_000); assert.equal(MAX_CLIENTS, 64);
+  const dir = scratch('egress-bounds-');
+  const log = [];
+  const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['api.anthropic.com:443'], log: (e) => log.push(e), headTimeoutMs: 50, maxClients: 2 });
+  try {
+    const idle = net.connect(proxy.socketPath);
+    await new Promise((r) => idle.once('connect', r));
+    idle.write('CONNECT api.anthropic.com:443'); // never terminates the head
+    await new Promise((r) => idle.once('close', r));
+    assert.ok(log.some((e) => e.reason === 'head-timeout'), 'the idle client was dropped at the deadline');
+    const a = net.connect(proxy.socketPath); const b = net.connect(proxy.socketPath);
+    await Promise.all([a, b].map((s) => new Promise((r) => s.once('connect', r))));
+    await new Promise((r) => setTimeout(r, 10));
+    const c = net.connect(proxy.socketPath);
+    await new Promise((r) => c.once('close', r));
+    assert.ok(log.some((e) => e.reason === 'too-many-clients'), 'the third client is refused at the cap');
+    a.destroy(); b.destroy();
+  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+});

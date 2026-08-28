@@ -40,6 +40,13 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
     // so the carrier can name the channel that actually spent the tokens.
     recordDispatchUsage: (result, strike) => { try { deps.recordDispatchUsage?.({ ticket, result, strike }); } catch { /* evidence is best-effort */ } },
     merge: ({ remainingMs = null } = {}) => mergeMutex.runExclusive(async () => {
+      // The deadline is re-checked INSIDE the mutex: a merge queued behind another
+      // ticket's merge must not land past the wall clock on a stale budget (codex r4).
+      if (config.deadline != null) {
+        const nowMs = (deps.now ?? Date.now)();
+        if (nowMs >= config.deadline) return { ok: false, expired: true, output: 'external wall clock expired before the merge' };
+        remainingMs = Math.max(1, config.deadline - nowMs);
+      }
       // QUARANTINE: once a gate-rejected completion could not be withdrawn, the shared
       // integration branch carries an ungated commit. Nothing further may land on it —
       // no merges, no retries — and the run must not open a PR from it.
@@ -224,10 +231,28 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     // A resumed ticket continues from the strike count its reconciled status
     // carries (fleet-ext item 7 / AC4) — a resume is the SAME run, not a fresh one.
     const startStrikes = status.tickets[ticket.id]?.strikes ?? 0;
-    const wt = await deps.createWorktree({ ticket, integrationBranch });
+    let wt;
+    try {
+      wt = await deps.createWorktree({ ticket, integrationBranch });
+    } catch (e) {
+      // A setup failure is THIS ticket's outcome (codex r4): recorded, logged, and
+      // the run keeps awaiting the other in-flight tickets instead of unwinding
+      // around them with the lock released.
+      status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `worktree setup failed: ${e.message}`, reasonCode: null });
+      persist();
+      log(`${ticket.id} → failed (worktree setup failed: ${e.message})`);
+      return;
+    }
     status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: startStrikes });
     persist();
-    await deps.provision?.({ ticket, worktree: wt.path });
+    try { await deps.provision?.({ ticket, worktree: wt.path }); }
+    catch (e) {
+      status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `provisioning failed: ${e.message}`, reasonCode: null });
+      persist();
+      log(`${ticket.id} → failed (provisioning failed: ${e.message})`);
+      await deps.cleanup?.({ ticket, worktree: wt.path, state: 'failed' });
+      return;
+    }
     const outcome = await advanceTicket(
       ticket,
       buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config),

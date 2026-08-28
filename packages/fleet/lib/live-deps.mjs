@@ -143,6 +143,8 @@ export function defaultIo() {
 }
 
 const PROSECUTE_GATED_MANIFEST = BASE_MANIFEST;
+/** The pre-strike helper's own maximum (fleet-ext item 7); the remaining wall clock lowers it. */
+export const PRE_STRIKE_MAX_MS = 120_000;
 
 /** Parse `git status --porcelain --ignored -uall` output to worktree paths. */
 function parseStatusPaths(out) {
@@ -264,7 +266,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // The synthetic HOME is a bind SOURCE for bwrap — it must exist before the
       // wrapped command runs, or bwrap aborts (adversarial-review L4).
       io.mkdirp(join(worktree, '.fleet-home'));
-      const res = await io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, ...opts });
+      // A repo command is a process TREE too (a test runner forks workers): on
+      // timeout the whole group is signalled, never just the sandbox leader (codex r4).
+      const res = await io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, killGroup: true, ...opts });
       if (res.error) throw res.error;
       if (typeof res.status === 'number' && res.status !== 0) {
         const e = new Error(`command failed (exit ${res.status})`);
@@ -382,7 +386,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const [cmd, ...args] = config.preStrikeArgv;
       let res;
       try {
-        res = await io.spawnWorker(cmd, args, { cwd: repo, env: { ...(config.preStrikeEnv ?? {}) }, shell: false, timeout: 120_000 });
+        // Bounded by the smaller of the helper maximum and the run's remaining wall clock (codex r4).
+        res = await io.spawnWorker(cmd, args, { cwd: repo, env: { ...(config.preStrikeEnv ?? {}) }, shell: false, killGroup: true, timeout: Math.max(1, Math.min(PRE_STRIKE_MAX_MS, config.deadline == null ? PRE_STRIKE_MAX_MS : config.deadline - now())) });
       } catch (e) {
         return { ok: false, reason: `pre-strike command could not be spawned for ${ticket.id} strike ${strike}: ${e.message}` };
       }

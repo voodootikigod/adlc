@@ -141,3 +141,27 @@ test('spawnAsync without killGroup keeps the legacy single-process SIGTERM (byte
   assert.equal(res.timedOut, true);
   assert.deepEqual(kills, [], 'the injected group kill is never used on the legacy path — the child alone gets child.kill(SIGTERM)');
 });
+
+test('the merge re-checks the deadline INSIDE its mutex: a merge queued behind a long post-merge gate never lands past the wall clock (codex r4)', async () => {
+  const rec = newRec();
+  let t = 0; let merges = 0;
+  const deadline = 5000;
+  const d = {
+    ...deps(rec, { now: () => t }),
+    mergeToIntegration: async ({ ticket }) => { merges++; return { mergeSha: `M-${ticket.id}`, preMergeSha: 'P' }; },
+    // A's post-merge gate runs long enough to exhaust the budget while B waits on the mutex.
+    postMergeGate: async () => { t = deadline + 1; return { ok: true }; },
+  };
+  const s = await runFleet({ all: [{ ...T('A'), scope: ['a/**'] }, { ...T('B'), scope: ['b/**'] }], runId: 'r', config: { base: 'main', concurrency: 2, deadline, noPr: true }, deps: d });
+  assert.equal(merges, 1, 'exactly one merge landed (the one that entered the mutex before expiry)');
+  assert.deepEqual(Object.values(s.results).sort(), ['merged', 'paused'], `one merged, the queued one paused: ${JSON.stringify(s.results)}`);
+});
+
+test('a per-ticket worktree setup failure is that ticket\'s recorded outcome; the other in-flight ticket completes and the run returns normally (codex r4)', async () => {
+  const rec = newRec();
+  const d = { ...deps(rec), createWorktree: async ({ ticket }) => { if (ticket.id === 'A') throw new Error('worktree init exploded'); return { path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'S0' }; } };
+  const s = await runFleet({ all: [T('A'), T('B')], runId: 'r', config: { base: 'main', concurrency: 2, noPr: true }, deps: d });
+  assert.equal(s.results.A, 'failed');
+  assert.equal(s.results.B, 'merged', 'the sibling ticket ran to completion');
+  assert.match(s.tickets?.A?.reason ?? s.status?.tickets?.A?.reason ?? 'worktree setup failed', /worktree setup failed/);
+});

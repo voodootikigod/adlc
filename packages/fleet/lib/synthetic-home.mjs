@@ -23,7 +23,7 @@
 // Every fs primitive is injectable so the unit tests need no real credential file.
 
 import {
-  openSync, fstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, existsSync,
+  openSync, fstatSync, lstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, existsSync,
   constants as fsConstants,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -50,7 +50,7 @@ export const CLAUDE_JSON_KEYS = Object.freeze([
 ]);
 
 const defaultFs = Object.freeze({
-  openSync, fstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, existsSync, constants: fsConstants,
+  openSync, fstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, lstatSync, existsSync, constants: fsConstants,
 });
 
 const isStrictAncestor = (root, path) => path !== root && path.startsWith(root + sep);
@@ -161,8 +161,11 @@ export function prepareSyntheticHome({
 
   // (iv) plugin tree: must exist as a directory — a missing bind source aborts bwrap.
   const plugins = resolve(pluginsDir ?? join(home, PLUGINS_REL));
+  // lstat, never stat: a symlink planted at the plugin path would bind an arbitrary
+  // directory into the bounded plane (codex r4).
   let pluginsStat;
-  try { pluginsStat = fs.statSync(plugins); } catch { pluginsStat = null; }
+  try { pluginsStat = (fs.lstatSync ?? fs.statSync)(plugins); } catch { pluginsStat = null; }
+  if (pluginsStat?.isSymbolicLink?.()) throw new Error(`synthetic-home: plugins dir ${plugins} is a symlink; refusing to bind its target`);
   if (!pluginsStat?.isDirectory()) throw new Error(`synthetic-home: plugins dir ${plugins} is not a directory`);
 
   // (v) scratch dirs: every declared entry, resolved under HOME, created empty by the argv builder.

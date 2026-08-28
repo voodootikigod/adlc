@@ -123,6 +123,8 @@ export async function advanceTicket(ticket, effects, {
     // without consuming the strike.
     if (effects.preStrike) {
       const ps = await effects.preStrike({ ticket, strike: strikes + 1 });
+      // The helper may have consumed the budget: an expired run is wall-clock, not quota (codex r4).
+      if (expired()) return paused('external wall clock expired during the pre-strike command', REASON_CODES.WALL_CLOCK);
       if (!ps || ps.ok !== true) {
         return paused(ps?.reason ?? 'pre-strike command refused the strike', REASON_CODES.QUOTA_PAUSED);
       }
@@ -207,6 +209,8 @@ export async function advanceTicket(ticket, effects, {
 
     log(`${ticket.id} strike ${strikes}: merging`);
     const merge = await effects.merge({ ticket, remainingMs: remainingMs() });
+    // The merge re-checks the deadline INSIDE its mutex (a queued merge may have waited past it).
+    if (merge.expired) return paused('external wall clock expired before the merge', REASON_CODES.WALL_CLOCK);
     if (!merge.ok) {
       deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed', DEAD_END_MAX_CHARS));
       if (canRetry()) continue;

@@ -83,3 +83,17 @@ test('the preflight canary is bounded by the remaining wall clock, and a preflig
   assert.equal(code, 2);
   assert.equal(emitted?.reason, 'wall-clock');
 });
+
+test('the post-preflight wall-clock exit releases the preflight-held lock (codex r4)', async () => {
+  let t = 100_000; let released = 0;
+  const ov = {
+    ...overrides({ contaminated: false, results: {}, merged: 0, prCount: 0, integrationBranch: 'fleet/run-x' }),
+    preflight: async () => { t += 2 * 60_000; return { ok: true, warnings: [], sandboxSpec: { mode: 'sandbox' } }; },
+    run: async () => { throw new Error('must not run'); },
+    now: () => t,
+    release: () => { released++; },
+  };
+  const code = await runLive({ ...ARGS, config: { ...ARGS.config, wallClockMinutes: 1 } }, ov);
+  assert.equal(code, 2);
+  assert.equal(released, 1, 'the lock is released exactly once on the early exit');
+});

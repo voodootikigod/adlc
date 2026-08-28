@@ -34,6 +34,10 @@ const HEAD_TERMINATOR = '\r\n\r\n';
 // not a proxy client we serve, and buffering it unbounded would let a worker pin
 // host memory through the one socket it is allowed to touch.
 const MAX_HEAD_BYTES = 8 * 1024;
+/** A client that has not finished its CONNECT head within this window is dropped (codex r4). */
+export const HEAD_TIMEOUT_MS = 10_000;
+/** The most concurrent clients the proxy holds; the sandbox has one worker, not a fleet of them. */
+export const MAX_CLIENTS = 64;
 const IMPLICIT_PORT = 443;
 
 const REPLY = Object.freeze({
@@ -144,8 +148,16 @@ function tunnel(client, target, leftover, ctx) {
 }
 
 function handleClient(client, ctx) {
+  if (ctx.clients.size >= ctx.maxClients) {
+    ctx.log({ event: 'egress-proxy-refused', reason: 'too-many-clients', clients: ctx.clients.size });
+    client.destroy();
+    return;
+  }
   ctx.clients.add(client);
-  client.on('close', () => ctx.clients.delete(client));
+  // The head must arrive within the deadline: an idle or trickling client cannot
+  // hold a descriptor and a buffer forever.
+  const headTimer = ctx.setTimeoutFn(() => { ctx.log({ event: 'egress-proxy-refused', reason: 'head-timeout' }); client.destroy(); }, ctx.headTimeoutMs);
+  client.on('close', () => { ctx.clearTimeoutFn(headTimer); ctx.clients.delete(client); });
   client.on('error', () => client.destroy());
   let buffered = Buffer.alloc(0);
   const onHead = (chunk) => {
@@ -155,6 +167,7 @@ function handleClient(client, ctx) {
     // Decision point: stop consuming here and pause, so bytes that arrive before
     // the tunnel is up wait in the stream instead of being emitted to nobody.
     client.removeListener('data', onHead);
+    ctx.clearTimeoutFn(headTimer);
     client.pause();
     if (idx === -1) return refuse(client, ctx, NO_TARGET, REFUSAL.MALFORMED);
     const target = parseConnectTarget(buffered.subarray(0, idx + HEAD_TERMINATOR.length).toString('latin1'));
@@ -174,10 +187,10 @@ function handleClient(client, ctx) {
  * `connect(port, host)` is injectable for tests and must return a socket that
  * emits `connect`, `error` and `close`.
  */
-export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect } = {}) {
+export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect, headTimeoutMs = HEAD_TIMEOUT_MS, maxClients = MAX_CLIENTS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
   if (typeof socketPath !== 'string' || socketPath.length === 0) throw new TypeError('socketPath is required');
   const normalized = normalizeAllowlist(allowlist);
-  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect };
+  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect, headTimeoutMs, maxClients, setTimeoutFn, clearTimeoutFn };
   const server = net.createServer((client) => handleClient(client, ctx));
   const close = () => new Promise((resolve) => {
     for (const client of ctx.clients) client.destroy();

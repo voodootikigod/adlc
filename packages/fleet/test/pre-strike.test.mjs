@@ -121,3 +121,24 @@ test('no preStrikeArgv → no preStrike effect at all (legacy runs are byte-iden
   const deps = buildLiveDeps({ repo: '/repo', config: { gate: { test: 't' } }, sandboxSpec, io: fakeIo(newRec()) });
   assert.equal(deps.preStrike, undefined);
 });
+
+test('the pre-strike spawn kills its process group on timeout and is bounded by the REMAINING wall clock, never more than its 120 s maximum (codex r4)', async () => {
+  const rec = newRec();
+  const t = 1_000_000;
+  const deps = buildLiveDeps({ repo: '/repo', config: { ...config, deadline: t + 30_000 }, sandboxSpec, io: { ...fakeIo(rec), now: () => t }, reviewRunner: () => ({ ok: true, findings: [] }) });
+  await deps.preStrike({ ticket, strike: 1 });
+  const spawn = rec.spawn.find((s) => s.cmd === PRE_STRIKE_ARGV[0]);
+  assert.equal(spawn.opts.killGroup, true, 'the helper is spawned in its own process group');
+  assert.equal(spawn.opts.timeout, 30_000, 'the timeout is the remaining budget');
+  const rec2 = newRec();
+  const far = buildLiveDeps({ repo: '/repo', config: { ...config, deadline: t + 10 * 60_000 }, sandboxSpec, io: { ...fakeIo(rec2), now: () => t }, reviewRunner: () => ({ ok: true, findings: [] }) });
+  await far.preStrike({ ticket, strike: 1 });
+  assert.equal(rec2.spawn.find((s) => s.cmd === PRE_STRIKE_ARGV[0]).opts.timeout, 120_000, 'capped at the helper maximum');
+  // every repo-command (gate) spawn kills its group too
+  const rec3 = newRec();
+  const g = buildLiveDeps({ repo: '/repo', config, sandboxSpec, io: fakeIo(rec3), reviewRunner: () => ({ ok: true, findings: [] }) });
+  await g.gate({ ticket, worktree: '/wt', startSha: 'S' }).catch(() => {});
+  const gateSpawn = rec3.spawn.find((s) => s.opts?.cwd === '/wt');
+  assert.ok(gateSpawn, 'a gate command was spawned');
+  assert.equal(gateSpawn.opts.killGroup, true, 'gate commands are spawned in their own process group');
+});

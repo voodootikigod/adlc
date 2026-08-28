@@ -189,3 +189,14 @@ test('every awaited phase receives the REMAINING wall clock: gate, prosecute and
   await advanceTicket(ticket, e2, { maxStrikes: 1 });
   assert.equal(seen.unbounded, null, 'no deadline → null, never a fabricated bound');
 });
+
+test('a pre-strike command that consumes the budget → paused wall-clock (not quota-paused), zero dispatches; a merge that reports expiry → paused wall-clock (codex r4)', async () => {
+  let t = 0;
+  const e = effects({ preStrike: () => { t = 5000; return { ok: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 1000, now: () => t });
+  assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(e.calls.dispatch.length, 0);
+  const e2 = effects({ merge: () => ({ ok: false, expired: true, output: 'external wall clock expired before the merge' }) });
+  const r2 = await advanceTicket(ticket, e2, { maxStrikes: 3, deadline: 10_000, now: () => 0 });
+  assert.equal(r2.state, 'paused'); assert.equal(r2.reasonCode, REASON_CODES.WALL_CLOCK);
+});

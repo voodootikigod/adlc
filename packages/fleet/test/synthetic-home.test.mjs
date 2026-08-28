@@ -228,3 +228,11 @@ test('host settings.env NEVER reaches the worker: a settings.env carrying ADLC_M
   assert.deepEqual(stripped.sort(), ['env', 'hooks']);
   assert.ok(!JSON.stringify(kept).includes('deadbeef') && !JSON.stringify(kept).includes('ghp_x'));
 });
+
+test('a SYMLINKED plugin directory is refused (lstat, never stat): a link planted at the plugin path cannot bind its target into the bounded plane (codex r4)', () => {
+  const fs = fakeFs({ files: { [`${HOME}/.claude/settings.json`]: '{}', [`${HOME}/.claude.json`]: '{}' } });
+  fs.lstatSync = (p) => ({ isDirectory: () => true, isSymbolicLink: () => p === `${HOME}/.claude/plugins` });
+  assert.throws(() => prepare(fs), /plugins dir .* is a symlink/);
+  fs.lstatSync = (p) => ({ isDirectory: () => p === `${HOME}/.claude/plugins`, isSymbolicLink: () => false });
+  assert.ok(prepare(fs).homeBinds.some((b) => b.source === `${HOME}/.claude/plugins`), 'a real directory binds');
+});

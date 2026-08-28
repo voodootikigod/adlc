@@ -448,7 +448,7 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
       mkdirSync(join(tmp, '.home'), { recursive: true }); // bwrap bind source must exist (L4)
       const sb = new Sandbox({
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
-        exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
+        exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, killGroup: true, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
       });
       const out = await sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }), ...(canaryTimeoutMs() != null ? { timeout: canaryTimeoutMs() } : {}) });
       return { ok: String(out).includes('__fleet_canary_ok__'), output: String(out) };
@@ -471,6 +471,7 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
   // reconciled, planned or dispatched past the deadline (codex r3).
   if (deadline != null && now() >= deadline) {
     console.error('wall clock expired during preflight; nothing dispatched');
+    release(dir); // the preflight-held lock must not outlive this early exit (codex r4)
     return finish(2, { reason: REASON_CODES.WALL_CLOCK, warnings: pre.warnings });
   }
 

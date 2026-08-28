@@ -36,7 +36,7 @@ function fakeHomeFs(uid) {
     readFileSync: (p) => { if (typeof p === 'string' && p in files) return Buffer.from(files[p]); if (p in written) return written[p]; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
     closeSync: () => {},
     statSync: (p) => { if (p === `${HOME}/.claude/plugins`) return { isDirectory: () => true }; if (p in files) return { isFile: () => true, isDirectory: () => false, uid, mode: 0o100600 }; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
-    lstatSync: (p) => { if (p in files) return { isFile: () => true, isSymbolicLink: () => false, uid, mode: 0o100600 }; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
+    lstatSync: (p) => { if (p === `${HOME}/.claude/plugins`) return { isDirectory: () => true, isSymbolicLink: () => false }; if (p in files) return { isFile: () => true, isSymbolicLink: () => false, uid, mode: 0o100600 }; const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
     existsSync: (p) => p in files || p === `${HOME}/.claude/plugins`,
     mkdirSync: () => {},
     writeFileSync: (p, bytes) => { written[p] = typeof bytes === 'string' ? bytes : Buffer.from(bytes).toString('utf8'); },
