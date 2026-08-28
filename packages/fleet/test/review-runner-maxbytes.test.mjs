@@ -28,6 +28,16 @@ test('--max-bytes carries the configured limit and --allow-summary-review never 
   assert.deepEqual(args.slice(0, 5), ['--base', 'SHA', '--json', '--fail-on', 'medium'], 'the pre-existing argv prefix is unchanged');
 });
 
+test('the smallest positive limit (1 byte) is forwarded verbatim — the bound is > 0, not > 1', async () => {
+  // A limit of 1 is a deliberate "inline nothing" setting; dropping it would silently
+  // hand the reviewer its 256 KiB default instead.
+  const { calls, spawn } = recorder();
+  await makeReviewRunner({ spawn, resolveBin, maxBytes: 1, env: { PATH: '/usr/bin' } })({ worktree: '/wt', startSha: 'S' });
+  const i = calls[0].args.indexOf('--max-bytes');
+  assert.ok(i >= 0, '--max-bytes 1 is forwarded');
+  assert.equal(calls[0].args[i + 1], '1');
+});
+
 test('no maxBytes → no --max-bytes (existing argv byte-identical); a non-positive value is not forwarded', async () => {
   for (const maxBytes of [null, undefined, 0, -5, 1.5]) {
     const { calls, spawn } = recorder();

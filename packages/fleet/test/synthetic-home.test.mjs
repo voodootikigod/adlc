@@ -137,6 +137,19 @@ test('.claude.json keeps only the account record and onboarding flags, mode 0600
   assert.deepEqual(out.homeWritableFiles, [{ source: `${STAGING}/claude.json`, target: `${HOME}/.claude.json` }]);
 });
 
+test('the settings allowlist keeps EXACTLY model, permissions, env, includeCoAuthoredBy, theme and verbose — each one survives, nothing else does', () => {
+  // Pinned as literals, not derived from the constant: a shrunk allowlist would
+  // silently strip an operator setting the worker relies on (e.g. `verbose`),
+  // and a derived assertion would shrink with it.
+  const EXPECTED = ['model', 'permissions', 'env', 'includeCoAuthoredBy', 'theme', 'verbose'];
+  assert.deepEqual([...SETTINGS_KEYS], EXPECTED);
+  const host = { model: 'opus', permissions: { allow: [] }, env: { A: '1' }, includeCoAuthoredBy: false, theme: 'dark', verbose: true, hooks: { PreToolUse: [] }, mcpServers: { x: {} }, statusLine: {} };
+  const { kept, stripped } = pickAllowlisted(host, SETTINGS_KEYS);
+  assert.deepEqual(Object.keys(kept).sort(), [...EXPECTED].sort(), 'every allowlisted key present on the host is kept');
+  for (const k of EXPECTED) assert.deepEqual(kept[k], host[k], `${k} keeps its value`);
+  assert.deepEqual(stripped.sort(), ['hooks', 'mcpServers', 'statusLine']);
+});
+
 test('pickAllowlisted returns a NEW object and never mutates the host document', () => {
   const host = Object.freeze({ model: 'x', hooks: {} });
   const { kept, stripped } = pickAllowlisted(host, SETTINGS_KEYS);
