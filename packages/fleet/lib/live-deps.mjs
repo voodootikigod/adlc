@@ -72,9 +72,10 @@ function ensureLocalExclude(repoDir) {
  * into an execFileSync-shaped throw carrying `status` + `stdout` routes both
  * this path and `defaultExec` through checkFlail's single exit-code trust rule.
  */
-export function flailExec(io) {
+export function flailExec(io, remaining = null) {
   return (bin, args) => {
-    const r = io.adlc(args, { bin, maxBuffer: MAX_OUTPUT_BYTES });
+    // Bounded by the remaining wall clock when the run has one (codex r10).
+    const r = io.adlc(args, { bin, maxBuffer: MAX_OUTPUT_BYTES, ...(typeof remaining === 'function' ? { timeout: remaining() } : {}) });
     // Could not spawn at all, or no exit status to trust → unverifiable (§12).
     if (r?.error) throw r.error;
     if (typeof r?.status !== 'number') throw new Error('flail-detector did not run');
@@ -574,16 +575,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const readBytes = (p) => (io.exists(join(worktree, p)) ? io.readFile(join(worktree, p)) : undefined);
       const railsGuard = async () => {
         // Bounded by the remaining wall clock and killed as a group like every other gate phase (codex r9).
-        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree, killGroup: true, ...(remainingMs != null ? { timeout: remainingMs } : {}) });
+        const left = config.deadline != null ? Math.max(1, config.deadline - now()) : remainingMs;
+        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree, killGroup: true, ...(left != null ? { timeout: left } : {}) });
         return { ok: res.status === 0 && !res.timedOut, output: `${res.stdout ?? ''}${res.stderr ?? ''}${res.timedOut ? '\nrails-guard timed out' : ''}`, timedOut: res.timedOut === true };
       };
       return runGatePipeline(ticket, {
         sandbox: sandboxFor(worktree),
         gate: config.gate,
         env: repoCmdEnv(worktree),
-        // fleet-ext item 5: the gate commands are bounded by the run's REMAINING
-        // wall clock, so a hung build cannot outlive the advertised deadline.
+        // fleet-ext item 5: every gate command is bounded by the run's REMAINING wall
+        // clock, re-read immediately before it runs (codex r10).
         timeoutMs: remainingMs ?? undefined,
+        remaining: config.deadline != null ? () => Math.max(1, config.deadline - now()) : null,
         changedPaths,
         templates,
         listProtected,
@@ -608,7 +611,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     flail: ({ ticket }) => checkFlail(
       fleetLogPath(statusDir, repo, ticket.id),
       ticket.scope,
-      { adlcBin, exec: flailExec(io) },
+      { adlcBin, exec: flailExec(io, config.deadline != null ? () => Math.max(1, config.deadline - now()) : null) },
     ),
 
     // Rebase inside the ticket's own worktree, merge inside the integration worktree —
@@ -638,7 +641,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // ref movement DURING the build/test would be invisible and a stale passing verdict
       // would be trusted (adversarial-review round-30). The whole point of the after-gate
       // pin is to observe the branch tip AS IT WAS while the gate executed.
-      const gated = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath), { timeoutMs: remainingMs ?? undefined });
+      const gated = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath), { timeoutMs: remainingMs ?? undefined, remaining: config.deadline != null ? () => Math.max(1, config.deadline - now()) : null });
       const result = { ...gated, timedOut: (gated.results ?? []).some((r) => r.timedOut === true) };
       try {
         assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');

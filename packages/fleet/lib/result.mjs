@@ -27,6 +27,7 @@ export const RUN_REASONS = Object.freeze({
   PREFLIGHT: 'preflight',
   RESUME_REFUSED: 'resume-refused',
   DISPATCH_REFUSED: 'dispatch-refused',
+  PIPELINE_ERROR: 'pipeline-error',
 });
 
 /** Ticket ids in a deterministic (status) order whose state is not merged. */
@@ -48,6 +49,7 @@ export function summaryReason(summary) {
   if (summary.contaminated) return RUN_REASONS.QUARANTINED;
   if (summary.prOpenFailed) return RUN_REASONS.PR_OPEN_FAILED;
   if (summary.dispatchRefused) return RUN_REASONS.DISPATCH_REFUSED;
+  if (summary.pipelineError) return RUN_REASONS.PIPELINE_ERROR;
   if (summary.wallClockExpired) return REASON_CODES.WALL_CLOCK;
   for (const [, rec] of unmergedTickets(summary)) {
     if (rec.state === 'paused' || rec.state === 'failed' || rec.state === 'blocked') {

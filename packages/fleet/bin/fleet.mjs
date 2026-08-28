@@ -189,7 +189,7 @@ if (sub === 'run') {
   try {
     ticketsFile = loadPlan(join(dir, 'tickets.json'));
   } catch (e) {
-    opError(`could not load .adlc/tickets.json: ${e.message}`);
+    refuseFlags(`could not load .adlc/tickets.json: ${e.message}`);
   }
   const all = ticketsFile.tickets ?? ticketsFile;
   const onlyIds = flags.tickets ? flags.tickets.split(',').map((s) => s.trim()) : undefined;
@@ -318,7 +318,7 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
       // (b) --model is not silently dropped by an adapter that cannot carry it.
       assertAdapterCanForceModel({ adapter: config.adapter, model: config.model, adapterArgs: config.adapterArgs });
     } catch (e) {
-      opError(`fleet: ${e.message}`);
+      refuseFlags(`fleet: ${e.message}`);
     }
     return { engaged: false, seats: [] };
   }
@@ -329,7 +329,7 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
     planned = planSeats({ tickets, onlyIds, repoDir: repo, env: process.env, adlcDir: dir });
   } catch (e) {
     for (const n of e.notices ?? []) console.error(`notice: ${n}`);
-    opError(`quartermaster: ${e.message}`); // exits 1 — fail closed, no fallback channel
+    refuseFlags(`quartermaster: ${e.message}`); // exits 1 — fail closed, no fallback channel
   }
   for (const n of planned.notices) console.error(`notice: ${n}`);
 
@@ -478,6 +478,7 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
       self: selfIdentity(), probes: lockProbes(),
       railHookInstalled,
       dispatchCanary: config.canary === false ? undefined : dispatchCanary,
+      remainingMs: deadline == null ? null : () => canaryTimeout(deadline, now()),
     });
   } catch (e) {
     // A THROWN preflight still yields the one document --json promised (codex r5);

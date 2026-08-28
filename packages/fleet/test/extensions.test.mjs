@@ -393,3 +393,22 @@ test('the credential staging directory is refused when TMPDIR resolves under the
     assert.ok(pairs.includes(`--ro-bind ${realpathSync(process.execPath)}`), 'the node runtime is a single-file bind in open (non-allowlist) bounded mode');
   } finally { rmSync(wt, { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the operator\'s --adapter-command override is the EFFECTIVE command: bound and invoked by its realpath, refused when it lies under the worktree/repository (codex r10)', async () => {
+  const rec = newRec();
+  const io = { ...fakeIo(rec), resolveExecutable: (c) => (c === '/opt/claude-x/bin/claude-x' ? c : c === 'claude' ? `${HOME}/.local/bin/claude` : null) };
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-override-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, adapterCommand: '/opt/claude-x/bin/claude-x', modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 0, r.output);
+    const call = findInner(rec.spawn, '/opt/claude-x/bin/claude-x');
+    assert.ok(call, 'the override is what runs inside the plane');
+    const pairs = call.wrapper.args.map((a, i) => `${a} ${call.wrapper.args[i + 1]}`);
+    assert.ok(pairs.includes('--ro-bind /opt/claude-x/bin/claude-x'), 'and it is bound read-only');
+    const io2 = { ...fakeIo(newRec()), resolveExecutable: (c) => c };
+    const bad = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io: io2, config: { gate: { test: 't' }, timeoutMinutes: 1, adapterCommand: '/wt/T1/node_modules/.bin/claude', modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    const r2 = await bad.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r2.policyMismatch, true); assert.match(r2.output, /lies under the worktree/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

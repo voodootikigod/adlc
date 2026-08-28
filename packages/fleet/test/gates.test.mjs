@@ -71,3 +71,10 @@ test('a gate command ended by its timeout is a FAILURE carrying timedOut (never 
   assert.equal(r.results[0].timedOut, true);
   assert.match(r.results[0].output, /timed out/);
 });
+
+test('runGates re-reads the remaining budget before EVERY command: the test command gets what the build left, never the stale figure (codex r10)', async () => {
+  let left = 10_000; const seen = [];
+  const sandbox = { run: async (argv, opts) => { seen.push(opts.timeout); left -= 6_000; return 'ok'; } };
+  await runGates(sandbox, { build: 'b', test: 't' }, {}, { remaining: () => Math.max(1, left) });
+  assert.deepEqual(seen, [10_000, 4_000]);
+});

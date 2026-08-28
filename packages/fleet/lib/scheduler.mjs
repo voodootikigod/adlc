@@ -169,8 +169,11 @@ export async function advanceTicket(ticket, effects, {
     }
     if (build.exitCode !== 0 || build.timedOut) {
       deadEnds.push(fence('BUILD', build.output, DEAD_END_MAX_CHARS));
-      if (canRetry() && await consultFlail()) {
-        return fail('flail-detector diagnosed a genuine flail — skipping the next strike', REASON_CODES.FLAIL);
+      if (canRetry()) {
+        const flailed = await consultFlail();
+        // The consultation itself may have spent the budget: wall-clock outranks flail (codex r10).
+        if (expired()) return paused('external wall clock expired during the flail consultation', REASON_CODES.WALL_CLOCK);
+        if (flailed) return fail('flail-detector diagnosed a genuine flail — skipping the next strike', REASON_CODES.FLAIL);
       }
       continue;
     }
@@ -185,8 +188,10 @@ export async function advanceTicket(ticket, effects, {
       // A gate cut short by the wall clock is not the worker's failure: pause, never a strike/flail (codex r5).
       if (gate.timedOut && expired()) return paused('external wall clock expired during the gate', REASON_CODES.WALL_CLOCK);
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
-      if (canRetry() && await consultFlail()) {
-        return fail('flail-detector diagnosed a genuine flail — skipping the next strike', REASON_CODES.FLAIL);
+      if (canRetry()) {
+        const flailed = await consultFlail();
+        if (expired()) return paused('external wall clock expired during the flail consultation', REASON_CODES.WALL_CLOCK);
+        if (flailed) return fail('flail-detector diagnosed a genuine flail — skipping the next strike', REASON_CODES.FLAIL);
       }
       continue;
     }

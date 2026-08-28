@@ -92,3 +92,12 @@ test('a happy preflight returns the resolved sandbox spec and holds the lock', a
   assert.equal(r.lockHeld, true);
   assert.equal(existsSync(join(sd, LOCK_DIR)), true, 'lock held for the run');
 });
+
+test('the merge-forecast pre-run is bounded by the remaining wall clock when the run has one (codex r10)', async () => {
+  const calls = [];
+  const r = await runPreflight(base({ io: io({ adlc: (args, opts) => { calls.push({ args, opts }); return { status: 0, stdout: '{"pairs":[]}' }; } }), remainingMs: () => 4321 }));
+  assert.equal(r.ok, true);
+  const forecast = calls.find((c) => c.args[0] === 'merge-forecast');
+  assert.ok(forecast, 'merge-forecast ran');
+  assert.equal(forecast.opts?.timeout, 4321, 'with the remaining budget as its timeout');
+});

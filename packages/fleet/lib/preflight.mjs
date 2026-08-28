@@ -54,7 +54,7 @@ export function railHookProbe(railHookInstalled) {
 export async function runPreflight({
   repo, config, statusDir, io, self, probes,
   dispatchCanary, railHookInstalled = () => false,
-  platform, hasCmd,
+  platform, hasCmd, remainingMs = null,
 }) {
   const warnings = [];
 
@@ -97,7 +97,8 @@ export async function runPreflight({
   // 6. Merge-forecast pre-run — evidence, recorded into the caller's status.
   let forecast = null;
   try {
-    const r = io.adlc(['merge-forecast', '--json']);
+    // Evidence only, but bounded: a hung forecast must not outlive the run's deadline (codex r10).
+    const r = io.adlc(['merge-forecast', '--json'], typeof remainingMs === 'function' ? { timeout: remainingMs() } : {});
     if (r.stdout) forecast = JSON.parse(r.stdout);
   } catch { /* forecast is evidence, not a gate */ }
 

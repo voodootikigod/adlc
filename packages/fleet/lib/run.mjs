@@ -227,6 +227,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   let strikesConsumed = 0;
   let wallClockExpired = false;
   let dispatchRefused = false; // a sandbox policy mismatch: run-level operational refusal (codex r7)
+  let pipelineError = false; // a thrown ticket effect: run-level operational failure (codex r10)
   const expired = () => deadline != null && now() >= deadline;
 
   // Mark subset-blocked tickets up front so they are reported, not looped on.
@@ -267,21 +268,24 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       return;
     }
     let outcome;
+    // The strike the scheduler ENTERED is observed at dispatch, so a thrown effect
+    // keeps its consumed strike (codex r10) and is reported as pipeline-error.
+    const entered = { strike: startStrikes };
+    const effects = buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config);
+    const dispatchEffect = effects.dispatch;
+    effects.dispatch = (a) => { entered.strike = a.strike; return dispatchEffect(a); };
     try {
-      outcome = await advanceTicket(
-        ticket,
-        buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config),
-        { log, maxStrikes, startStrikes, initialDeadEnds, deadline, now },
-      );
+      outcome = await advanceTicket(ticket, effects, { log, maxStrikes, startStrikes, initialDeadEnds, deadline, now });
     } catch (e) {
       // A thrown effect is THIS ticket's failure (codex r8): recorded and logged; the
       // run keeps awaiting its siblings and releases the lock only when all are done.
-      outcome = { state: 'failed', strikes: status.tickets[ticket.id]?.strikes ?? startStrikes, reason: `pipeline error: ${e?.message ?? e}`, reasonCode: null };
+      outcome = { state: 'failed', strikes: entered.strike, reason: `pipeline error: ${e?.message ?? e}`, reasonCode: null, pipelineError: true };
       log(`${ticket.id} pipeline threw: ${e?.stack ?? e?.message ?? e}`);
     }
     strikesConsumed += Math.max(0, (outcome.strikes ?? startStrikes) - startStrikes);
     if (outcome.reasonCode === 'wall-clock') wallClockExpired = true;
     if (outcome.policyMismatch) dispatchRefused = true;
+    if (outcome.pipelineError) pipelineError = true;
     status = withTicket(status, ticket.id, {
       state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, reasonCode: outcome.reasonCode ?? null,
       prosecution: outcome.prosecution ?? null, review: outcome.review ?? null,
@@ -351,7 +355,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   }
 
   return {
-    integrationBranch, results, merged, prCount, prOpenFailed, dispatchRefused, status,
+    integrationBranch, results, merged, prCount, prOpenFailed, dispatchRefused, pipelineError, status,
     contaminated: runState.contaminated, contaminationReason: runState.contaminationReason,
     strikesConsumed, wallClockExpired,
   };
@@ -393,6 +397,7 @@ export function runExitCode(summary) {
   if (summary?.contaminated) return 2;
   if (summary?.prOpenFailed) return 2;
   if (summary?.dispatchRefused) return 1; // operational: the sandbox could not be built as configured
+  if (summary?.pipelineError) return 1; // operational: an effect threw
   if (summary?.wallClockExpired) return 2;
   if (pausedCount(summary?.results) > 0) return 2;
   return failedBlockedCount(summary?.results) > 0 ? 2 : 0;

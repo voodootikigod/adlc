@@ -35,7 +35,10 @@ export async function runGates(sandbox, gate, env, opts = {}) {
   for (const key of ['build', 'test']) {
     const cmd = gate?.[key];
     if (!cmd) continue;
-    const r = await runGateCommand(sandbox, cmd, env, opts);
+    // `remaining()` is re-read before EVERY command: a build that ate most of the
+    // budget leaves the test only what is left, never the stale figure (codex r10).
+    const timeoutMs = typeof opts.remaining === 'function' ? opts.remaining() : opts.timeoutMs;
+    const r = await runGateCommand(sandbox, cmd, env, { timeoutMs });
     results.push({ key, ...r });
     if (!r.ok) return { ok: false, results };
   }

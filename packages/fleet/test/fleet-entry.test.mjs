@@ -121,3 +121,11 @@ test('an invalid or unknown run flag under --json still yields exactly one resul
     assert.equal(doc.exitCode, 1);
   }
 });
+
+test('a ticket-store failure before dispatch under --json still yields one result document (codex r10)', () => {
+  const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [bin, 'run', '--json', '--no-pr'], { encoding: 'utf8', cwd: mkdtempSync(join(tmpdir(), 'fleet-nostore-')) });
+  assert.notEqual(r.status, 0);
+  let doc; try { doc = JSON.parse(r.stdout); } catch { doc = null; }
+  assert.ok(doc && typeof doc.reason === 'string', `one result document with a reason: ${r.stdout.slice(0, 200)} ${r.stderr.slice(0, 200)}`);
+});

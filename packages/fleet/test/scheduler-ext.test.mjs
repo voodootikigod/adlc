@@ -223,3 +223,10 @@ test('the scheduler hands the strike back on a policy mismatch and marks the out
   assert.equal(r.state, 'failed'); assert.equal(r.policyMismatch, true); assert.equal(r.strikes, 0);
   assert.equal(e.calls.dispatch.length, 1);
 });
+
+test('a flail consultation that consumes the budget → paused wall-clock, never a flail verdict (codex r10)', async () => {
+  let t = 0;
+  const e = effects({ dispatch: () => ({ exitCode: 1, output: 'boom', timedOut: false }), flail: () => { t = 5000; return { flail: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 1000, now: () => t });
+  assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+});

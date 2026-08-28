@@ -200,7 +200,7 @@ export function parseText(output) {
   } catch { return null; }
 }
 
-export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, model }) {
+export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, model, command = 'claude' }) {
   // §4c force half: the registry's model goes on the command line explicitly —
   // never the harness's ambient default.
   //
@@ -208,7 +208,7 @@ export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaul
   // is recovered from the document's `result` below, so downstream consumers
   // (the flail transcript, the TICKET-BLOCKED probe) see what they saw before.
   const args = ['-p', prompt, '--permission-mode', 'acceptEdits', '--output-format', 'json', ...modelArgs('--model', model)];
-  const res = await exec('claude', args, { cwd: worktree, env, timeout: timeoutMs });
+  const res = await exec(command, args, { cwd: worktree, env, timeout: timeoutMs });
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
   const stdout = `${res.stdout ?? ''}`;
   const text = parseText(stdout);

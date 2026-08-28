@@ -48,7 +48,7 @@ export function collectProtectedCandidates({ listProtected, readBytes }) {
  */
 export async function runGatePipeline(ticket, deps) {
   // 1. build/test inside the sandbox.
-  const build = await runGates(deps.sandbox, deps.gate, deps.env, { timeoutMs: deps.timeoutMs ?? null });
+  const build = await runGates(deps.sandbox, deps.gate, deps.env, { timeoutMs: deps.timeoutMs ?? null, remaining: deps.remaining ?? null });
   if (!build.ok) {
     const failed = build.results.find((r) => !r.ok);
     return { ok: false, stage: `build/test:${failed?.key ?? '?'}`, output: failed?.output ?? '', timedOut: failed?.timedOut === true };

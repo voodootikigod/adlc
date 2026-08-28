@@ -274,3 +274,16 @@ test('the rails-guard phase is bounded by the remaining wall clock, killed as a 
   assert.equal(rg.opts.timeout, 7000); assert.equal(rg.opts.killGroup, true);
   assert.equal(g.ok, false); assert.equal(g.timedOut, true); assert.equal(g.stage, 'rails-guard');
 });
+
+test('a thrown effect keeps the strike it entered and is reported run-level as pipeline-error (exit 1), never strikes-exhausted (codex r10)', async () => {
+  const rec = newRec();
+  const d = { ...deps(rec), gate: async () => { if (rec.dispatch.length === 2) throw new Error('gate exploded on strike 2'); return { ok: false, output: 'red' }; } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 3, noPr: true }, deps: d });
+  assert.equal(s.results.A, 'failed');
+  assert.equal(s.status.tickets.A.strikes, 2, 'both entered strikes are counted');
+  assert.equal(s.pipelineError, true);
+  const { runExitCode } = await import('../lib/run.mjs');
+  const { summaryReason } = await import('../lib/result.mjs');
+  assert.equal(summaryReason(s), 'pipeline-error');
+  assert.equal(runExitCode(s), 1);
+});

@@ -87,9 +87,13 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
     readOnlyPaths.push(realpathSafe(nodePath));
     // The adapter's own executable: resolved on the HOST search path to a single
     // regular file, bound read-only, and invoked by that absolute path inside.
-    const command = adapter.command ?? 'claude';
-    const executable = (io.resolveExecutable ?? resolveExecutable)(command, io.env.PATH);
-    if (!executable) throw new SandboxPolicyError(`adapter executable not found on PATH: ${command}`);
+    // The operator's --adapter-command override is the EFFECTIVE command (codex r10):
+    // an absolute path must be a regular file outside the worktree/repository; a
+    // bare name is resolved on the host search list.
+    const command = config.adapterCommand ?? adapter.command ?? 'claude';
+    const executable = command.startsWith('/') ? resolveAbsoluteExecutable(command, io) : (io.resolveExecutable ?? resolveExecutable)(command, io.env.PATH);
+    if (!executable) throw new SandboxPolicyError(`adapter executable not found${command.startsWith('/') ? '' : ' on PATH'}: ${command}`);
+    if ([worktree, repo].filter(Boolean).some((root) => executable === realpathSafe(root) || executable.startsWith(`${realpathSafe(root)}/`))) throw new SandboxPolicyError(`adapter executable ${executable} lies under the worktree or repository`);
     if (!readOnlyPaths.includes(executable)) readOnlyPaths.push(executable);
     // The documented DIRECTORY bindings: the npm/corepack trees of the node that runs
     // the worker (derived from its realpath) and any read-only entry that is such a
@@ -121,6 +125,12 @@ export function nodeToolTrees(nodePath) {
   let real; try { real = realpathSync(nodePath); } catch { return []; }
   const prefix = join(real, '..', '..');
   return ['npm', 'corepack'].map((t) => join(prefix, 'lib', 'node_modules', t)).filter((p) => { try { return statSync(p).isDirectory(); } catch { return false; } });
+}
+
+/** An absolute adapter command → its realpath when it is a regular file; null otherwise (injectable through io.resolveExecutable). */
+export function resolveAbsoluteExecutable(command, io) {
+  if (typeof io?.resolveExecutable === 'function') return io.resolveExecutable(command);
+  try { const real = realpathSync(command); return statSync(real).isFile() ? real : null; } catch { return null; }
 }
 
 /** The first regular file named `command` on the host search list, as a realpath; null when absent. */
