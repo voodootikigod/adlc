@@ -143,6 +143,7 @@ export async function ac35_shapingBounds() {
     const p = triage({ ctx: h.ctx, issue: ISSUE(), authorization: AUTHORIZED });
     for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
     assert.equal(h.kills.length, 0, 'alive before the deadline');
+    assert.equal(h.spawnsOf(PINNED.claude)[0]?.deadlineMs, DEADLINES.claude, 'the deadline is ARMED (asserted before waiting on it, so an unarmed deadline fails instead of hanging)');
     mock.timers.tick(DEADLINES.claude);
     const r = await p;
     assert.equal(r.verdict, 'OPERATIONAL'); assert.equal(r.reason, 'timeout:claude shaping');

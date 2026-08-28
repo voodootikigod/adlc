@@ -85,6 +85,7 @@ export function ac125_exampleIsValidJsonAndSchemaClean() {
   assert.equal(v.autopilot.dispatchApproval, 'owner-or-label');
   assert.equal(v.autopilot.maxRounds, 15); assert.equal(v.autopilot.wallClockMinutes, 90); assert.equal(v.autopilot.reviewMaxBytes, 262144);
   assert.equal(v.fleet.reviewProvider, 'codex');
+  assert.throws(() => validateRepoConfig({ ...example, ticketSync: { ...example.ticketSync, select: { ...example.ticketSync.select, query: null } } }, { ticketSyncSchema: TS_SCHEMA }), /bad-config/, 'the example with an invalid ticketSync fails the same schema');
   const unknownKey = { ...example, autopilot: { ...example.autopilot, bogus: 1 } };
   assert.throws(() => validateRepoConfig(unknownKey, { ticketSyncSchema: TS_SCHEMA }), (e) => e.code === 'bad-config' && /bogus/.test(e.message));
   const badMode = { ...example, autopilot: { ...example.autopilot, dispatchApproval: 'anyone' } };

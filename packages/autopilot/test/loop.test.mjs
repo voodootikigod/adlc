@@ -33,8 +33,9 @@ async function dryRun({ baselineLocal }) {
   const before = treeDigest(fx.repoRoot);
   const manifestBefore = readdirSync(join(fx.repoRoot, '.adlc', 'manifest.d')).map((f) => readFileSync(join(fx.repoRoot, '.adlc', 'manifest.d', f), 'utf8')).join('\0');
   const phaseB = baselineLocal
-    ? async () => ({ complete: false, incomplete: ['fleet-dry-run-needs-worktree'], tokenShort: false, checks: { config: 'ok', parity: 'ok' } })
-    : async () => ({ complete: false, incomplete: ['baseline-not-local', 'fleet-dry-run-needs-worktree'], tokenShort: null, checks: { config: 'skipped', parity: 'skipped', ssh: 'skipped' } });
+    // phase B reports ITS items only; the loop adds fleet-dry-run-needs-worktree itself
+    ? async () => ({ complete: false, incomplete: [], tokenShort: false, checks: { config: 'ok', parity: 'ok' } })
+    : async () => ({ complete: false, incomplete: ['baseline-not-local'], tokenShort: null, checks: { config: 'skipped', parity: 'skipped', ssh: 'skipped' } });
   const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ preflight: { phaseA: async () => {}, resolveBaseline: async () => fx.baseOid, phaseB } }), pinnedIssue: fx.issue });
   return { fx, it, before, manifestBefore };
 }

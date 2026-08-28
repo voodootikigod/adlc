@@ -18,6 +18,7 @@ function harness(handlers) {
 export async function ac49_deadlineSignalsGroupThenKills() {
   const h = harness({ '/bin/stubborn': () => ({ ignoreSigterm: true, hang: true }) });
   const p = h.spawn({ argv: ['/bin/stubborn', 'x'], cwd: '/', env: {}, deadlineMs: 50, label: 'npm ci' });
+  assert.equal(h.recorder[0].deadlineMs, 50, 'the deadline is ARMED (asserted before waiting, so an unarmed deadline fails instead of hanging)');
   const res = await p;
   assert.equal(res.timedOut, true);
   assert.equal(res.reason, 'timeout:npm ci', 'the step fails with timeout:<command>');

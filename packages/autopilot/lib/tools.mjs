@@ -30,8 +30,10 @@ export function sanitizedSearchList(pathValue, { repoRoot, trustedBinDirs = null
     if (!d || !isAbsolute(d) || !exists(d)) continue;
     let real; try { real = realpath(d); } catch { continue; }
     const parts = real.split(sep);
-    if (parts.includes('.worktrees') || parts.includes('node_modules')) continue;
-    if (repoRoot && isUnder(repoRoot, real)) continue;
+    if (!active('tools.trustAnyPath')) {
+      if (parts.includes('.worktrees') || parts.includes('node_modules')) continue;
+      if (repoRoot && isUnder(repoRoot, real)) continue;
+    }
     if (!out.includes(d)) out.push(d);
   }
   return out;

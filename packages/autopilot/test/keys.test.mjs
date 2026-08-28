@@ -44,6 +44,7 @@ export async function ac12_onlyThePinnedAdlcCarriesTheKey() {
   const base = { PATH: '/usr/bin', HOME: '/h' };
   assert.deepEqual(childEnv(base, { key: 'k', keyBearing: true }), { ...base, [MANIFEST_KEY_VAR]: 'k' });
   assert.deepEqual(childEnv({ ...base, [MANIFEST_KEY_VAR]: 'leaked' }), base, 'a non-bearing spawn never inherits the key, even from a polluted base');
+  assert.deepEqual(childEnv(base, { key: 'k', keyBearing: false }), base, 'a non-bearing spawn is never HANDED the key either');
   assert.throws(() => childEnv(base, { keyBearing: true }), /without ADLC_MANIFEST_KEY/);
   await withMutation('keys.leakKey', () => { assert.equal(childEnv(base, { key: 'k' })[MANIFEST_KEY_VAR], 'k', 'seam: every child gets the key'); });
   assert.deepEqual(keyBearingValues({ ADLC_MANIFEST_KEY: 'k'.repeat(16), GH_TOKEN: 'ghp_' + 'x'.repeat(36), FOO_SECRET: 's'.repeat(10), PATH: '/usr/bin', SHORT_KEY: 'abc' }, ['tok-1234567890']).sort(), ['ghp_' + 'x'.repeat(36), 'k'.repeat(16), 's'.repeat(10), 'tok-1234567890'].sort());

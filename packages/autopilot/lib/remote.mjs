@@ -17,20 +17,26 @@ export class RemoteError extends Error {
  * forms; throws RemoteError('remote-url-scheme') for https/other schemes and
  * ('remote-url-credentials') for any userinfo other than exactly `git`.
  */
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['remote.acceptHttps', 'remote.keepCredentials', 'remote.ignorePushUrl', 'remote.acceptAnyGhHost']);
+
 export function canonicalizeRemoteUrl(url) {
   const s = String(url ?? '').trim();
   let m;
   if ((m = /^https?:\/\//i.exec(s))) {
     // Credentials are reported before the scheme so the token never reaches a log or argv.
-    if (/^https?:\/\/[^/@]+@/i.test(s)) throw new RemoteError('remote-url-credentials', 'userinfo in URL');
+    if (!active('remote.keepCredentials') && /^https?:\/\/[^/@]+@/i.test(s)) throw new RemoteError('remote-url-credentials', 'userinfo in URL');
+    // Mutation seam `remote.acceptHttps`: an https remote is canonicalized instead of refused.
+    if (active('remote.acceptHttps')) { const h = /^https?:\/\/(?:[^/@]+@)?([^/:]+)\/(.+?)(?:\.git)?\/?$/i.exec(s); if (h) return { ...finish(h[1], h[2]), canonical: s }; }
     throw new RemoteError('remote-url-scheme', 'HTTPS remotes are not supported in v1');
   }
   if ((m = /^ssh:\/\/([^@/]+)@([^/:]+)(?::\d+)?\/(.+?)(?:\.git)?\/?$/i.exec(s))) {
-    if (m[1] !== 'git') throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);
+    if (m[1] !== 'git' && !active('remote.keepCredentials')) throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);
     return finish(m[2], m[3]);
   }
   if ((m = /^([^@:/]+)@([^:/]+):(.+?)(?:\.git)?$/i.exec(s))) {
-    if (m[1] !== 'git') throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);
+    if (m[1] !== 'git' && !active('remote.keepCredentials')) throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);
     return finish(m[2], m[3]);
   }
   throw new RemoteError('remote-url-scheme', 'unrecognized remote URL form');
@@ -50,7 +56,8 @@ export function bindRemote({ expectedRepo, observedFetchUrl, observedPushUrl }) 
   if (!expectedRepo) throw new RemoteError('repo-unbound', '--repo / ADLC_AUTOPILOT_REPO is required');
   const expected = validateRepoSpec(expectedRepo, 'repo');
   const fetch = canonicalizeRemoteUrl(observedFetchUrl);
-  const push = canonicalizeRemoteUrl(observedPushUrl ?? observedFetchUrl);
+  // Mutation seam `remote.ignorePushUrl`: the push URL is never observed (fetch stands in for it).
+  const push = canonicalizeRemoteUrl(active('remote.ignorePushUrl') ? observedFetchUrl : (observedPushUrl ?? observedFetchUrl));
   if (fetch.repo.toLowerCase() !== expected.toLowerCase()) throw new RemoteError('repo-mismatch', `origin is ${fetch.repo}, expected ${expected}`);
   if (fetch.canonical !== push.canonical) throw new RemoteError('remote-url-split', `${fetch.canonical} vs ${push.canonical}`);
   return { remoteFetchUrl: fetch.canonical, remotePushUrl: push.canonical, host: fetch.host, repo: fetch.repo };
@@ -73,6 +80,7 @@ export function verifyGhHost({ authStatusJson, host, principalLogin }) {
 
 /** The SSH host of the pinned URL must equal the gh host exactly. */
 export function assertHostMatches(remoteHost, ghHost) {
+  if (active('remote.acceptAnyGhHost')) return true;
   if (remoteHost.toLowerCase() !== String(ghHost).toLowerCase()) throw new RemoteError('remote-host-mismatch', `${remoteHost} != ${ghHost}`);
   return true;
 }

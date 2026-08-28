@@ -16,7 +16,7 @@ import { REASON_CODES_FLEET, buildFleetArgv } from './fleet-args.mjs';
 import { describeSecretHits } from './diffcheck.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal']);
+registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward']);
 
 /** Gate failures that are the ENVIRONMENT's, never the worker's: no retry can fix them. */
 export const GATE_ENVIRONMENT_CODES = Object.freeze(['gate-repo-moved', 'preflight-order-drift', 'sandbox-unavailable', 'gate-deps-missing', 'gate-repo-stale', 'remote-url-changed', 'base-object-missing']);
@@ -156,7 +156,8 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
 
     // §6.5 — ff the issue branch to the integration tip.
     ctx.records.update(n, { state: 'built' });
-    const ff = await fastForward(fleet.parsed.integrationBranch);
+    // Mutation seam `run.skipFastForward`: the issue branch is never advanced to the integration tip.
+    const ff = active('run.skipFastForward') ? { ok: true, head: await headOf() } : await fastForward(fleet.parsed.integrationBranch);
     if (!ff.ok) return terminal(failed('ff-not-fast-forward', ff.detail));
     ctx.records.update(n, { localHead: ff.head });
 

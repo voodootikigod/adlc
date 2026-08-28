@@ -38,7 +38,7 @@ export const REGISTRY = {
     { fn: 'ac32_blockGrammarFailsClosed', file: 'block.test.mjs', seam: 'block.lenientGrammar' },
   ],
   33: [{ fn: 'ac33_oneAuthorizationPredicate', file: 'select.test.mjs', seam: 'authorize.trustWriteActors' }],
-  35: [{ fn: 'ac35_shapingBounds', file: 'triage.test.mjs', seam: 'triage.noStdoutCap' }],
+  35: [{ fn: 'ac35_shapingBounds', file: 'triage.test.mjs', seam: 'spawn.noDeadline' }],
   59: [{ fn: 'ac59_durableAttemptLedger', file: 'triage.test.mjs', seam: 'attempts.ignoreStarted' }],
   79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
   85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
@@ -91,13 +91,11 @@ export const REGISTRY = {
     { fn: 'ac22_reclaimRules', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_releaseChecksToken', file: 'lock.test.mjs', seam: 'lock.releaseAnyToken' },
     { fn: 'ac22_alwaysAcquireSeamBites', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
-    { fn: 'ac22_corruptOwnerIsReclaimable', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
   ],
   23: [{ fn: 'ac23_fallbackGrammar', file: 'quota.test.mjs', seam: 'quota.lenientText' }],
   27: [{ fn: 'ac27_overshootAndReserve', file: 'quota.test.mjs', seam: 'quota.noReserve' }],
   28: [
     { fn: 'ac28_operatorLocalPrecedence', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' },
-    { fn: 'ac28_seamsBite', file: 'config.test.mjs', seam: 'config.allowRaise' },
   ],
   31: [
     { fn: 'ac31_gitSpawnClassifier', file: 'git-env.test.mjs', seam: 'gitEnv.classifierNetworkBlind' },
@@ -110,20 +108,19 @@ export const REGISTRY = {
   ],
   49: [
     { fn: 'ac49_deadlineSignalsGroupThenKills', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
-    { fn: 'ac49_retryOnlyRetryable', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
-    { fn: 'ac49_stdoutCapKillsChild', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
-    { fn: 'ac49_envIsExactlyWhatWasPassed', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
+    { fn: 'ac49_retryOnlyRetryable', file: 'deadline.test.mjs', seam: 'spawn.retryEverything' },
+    { fn: 'ac49_stdoutCapKillsChild', file: 'deadline.test.mjs', seam: 'spawn.noStdoutCap' },
+    { fn: 'ac49_envIsExactlyWhatWasPassed', file: 'deadline.test.mjs', seam: 'spawn.inheritEnv' },
   ],
-  53: [{ fn: 'ac53_repoAndPushBinding', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
-  54: [{ fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'input.acceptAnything' }],
+  53: [{ fn: 'ac53_repoAndPushBinding', file: 'remote.test.mjs', seam: 'remote.ignorePushUrl' }],
+  54: [{ fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'github.paginateAll' }],
   64: [{ fn: 'ac64_argvArrayShellFalse', file: 'deadline.test.mjs', seam: 'spawn.shellTrue' }],
   65: [{ fn: 'ac65_familyNormalization', file: 'quota.test.mjs', seam: 'quota.forceOk' }],
   68: [
     { fn: 'ac68_repoBinIsSkippedAndSystemPinned', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
     { fn: 'ac68_untrustedTool', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
-    { fn: 'ac68_trustedBinDirsNarrows', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
   ],
-  71: [{ fn: 'ac71_absolutePathsAndModes', file: 'service.test.mjs', seam: 'service.omitEnvironmentFile' }],
+  71: [{ fn: 'ac71_absolutePathsAndModes', file: 'service.test.mjs', seam: 'service.relativeWorkingDirectory' }],
   73: [
     { fn: 'ac73_issueNumberGrammar', file: 'input.test.mjs', seam: 'input.acceptAnything' },
     { fn: 'ac73_oidGrammar', file: 'input.test.mjs', seam: 'input.acceptAnything' },
@@ -132,8 +129,8 @@ export const REGISTRY = {
     { fn: 'ac73_pathComponentsAndRealpath', file: 'input.test.mjs', seam: 'input.acceptAnything' },
   ],
   74: [
-    { fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'input.acceptAnything' },
-    { fn: 'ac74_truncationCases', file: 'github.test.mjs', seam: 'input.acceptAnything' },
+    { fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'github.paginateAll' },
+    { fn: 'ac74_truncationCases', file: 'github.test.mjs', seam: 'github.paginateAll' },
   ],
   77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   87: [
@@ -151,26 +148,26 @@ export const REGISTRY = {
     { fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: 'spawn.shellTrue', noFixture: 'stdin transport has no production seam that keeps the wrapper importable; triage.promptInArgv above is the biting fixture' },
   ],
   105: [{ fn: 'ac105_structuredRedactionKeepsSchema', file: 'redact.test.mjs', seam: 'redactor.disable' }],
-  112: [{ fn: 'ac112_credentialsNeverEscape', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
+  112: [{ fn: 'ac112_credentialsNeverEscape', file: 'remote.test.mjs', seam: 'remote.keepCredentials' }],
   124: [
     { fn: 'ac124_sanitizedGitEnv', file: 'git-env.test.mjs', seam: 'gitEnv.keepInherited' },
     { fn: 'ac124_repoConfigAudit', file: 'git-env.test.mjs', seam: 'gitEnv.auditPasses' },
     { fn: 'ac124_everyGitSpawnIsSanitized', file: 'git-runner.test.mjs', seam: 'gitRunner.inheritEnv' },
     { fn: 'ac124_auditBeforeLsRemote', file: 'preflight.test.mjs', seam: 'preflight.skipConfigAudit' },
   ],
-  125: [{ fn: 'ac125_exampleIsValidJsonAndSchemaClean', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' }],
+  125: [{ fn: 'ac125_exampleIsValidJsonAndSchemaClean', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   126: [
     { fn: 'ac126_boundTableIsSevenRowsInOrder', file: 'git-env.test.mjs', seam: 'gitEnv.dropIdentityRows' },
-    { fn: 'ac126_boundEnvBeatsRewrittenFile', file: 'git-env.test.mjs', seam: 'gitEnv.dropIdentityRows' },
+    { fn: 'ac126_boundEnvBeatsRewrittenFile', file: 'git-env.test.mjs', seam: 'gitEnv.dropUrlRows' },
     { fn: 'ac126_netCarriesBoundTableOnly', file: 'git-runner.test.mjs', seam: 'gitRunner.noOverlay' },
   ],
-  132: [{ fn: 'ac132_sshOnlyForms', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
+  132: [{ fn: 'ac132_sshOnlyForms', file: 'remote.test.mjs', seam: 'remote.acceptHttps' }],
   143: [
-    { fn: 'ac143_netGitTemplateAndVerify', file: 'git-env.test.mjs', seam: 'gitEnv.auditPasses' },
+    { fn: 'ac143_netGitTemplateAndVerify', file: 'git-env.test.mjs', seam: 'gitEnv.verifyNetGitAlways' },
     { fn: 'ac143_netGitIsolatesTransport', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
   ],
   148: [
-    { fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'input.acceptAnything' },
+    { fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'remote.acceptAnyGhHost' },
     { fn: 'ac148_knownHostsFromMeta', file: 'ssh.test.mjs', seam: 'ssh.knownHostsAnyHost' },
     { fn: 'ac148_hostBindingInPhaseA', file: 'preflight.test.mjs', seam: 'preflight.skipHostBinding' },
   ],
@@ -354,26 +351,25 @@ export const REGISTRY = {
     { fn: 'ac72_p0p1RecordMechanics', file: 'create.test.mjs', seam: 'create.recordDespiteGaps' },
   ],
   30: [
-    { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.skipRevalidation' },
+    { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.budgetNotGlobal' },
   ],
   36: [
     { fn: 'ac36_verifyThenPushSequence', file: 'sequence.test.mjs', seam: 'push.skipHeadCheck' },
     { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipLease' },
   ],
   38: [
-    { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.attestWithoutHeadCheck' },
+    { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.reopenWithoutAuthorize' },
     { fn: 'ac38_reviewedEqualsAttestedEqualsPushed', file: 'review.test.mjs', seam: 'review.attestWithoutHeadCheck' },
   ],
   46: [
     { fn: 'ac46_reopenForRetry', file: 'sequence.test.mjs', seam: 'review.reopenWithoutAuthorize' },
-    { fn: 'ac46_reopenCli', file: 'reopen-cli.test.mjs', seam: 'keys.leakKey' },
     { fn: 'ac46_reopenForRetry', file: 'review.test.mjs', seam: 'review.reopenWithoutAuthorize' },
   ],
   82: [
     { fn: 'ac82_revalidationBeforeWriteAndDispatch', file: 'sequence.test.mjs', seam: 'run.skipRevalidation' },
   ],
   108: [
-    { fn: 'ac108_mirrorOutputReachesIntegrationBranch', file: 'sequence.test.mjs', seam: 'mirror.skipAncestorCheck' },
+    { fn: 'ac108_mirrorOutputReachesIntegrationBranch', file: 'sequence.test.mjs', seam: 'run.skipFastForward' },
   ],
   144: [
     { fn: 'ac144_pushSourceIsTheAttestedOid', file: 'sequence.test.mjs', seam: 'push.sourceIsBranchName' },
@@ -395,10 +391,10 @@ export const REGISTRY = {
     { fn: 'ac50_effectiveModelPropagates', file: 'quota.test.mjs', seam: 'quota.forceOk' },
   ],
   10: [
-    { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'input.acceptAnything' },
+    { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'loop.dryRunClaimsComplete' },
   ],
   128: [
-    { fn: 'ac128_dryRunNeverNeedsAWorktree', file: 'loop.test.mjs', seam: 'input.acceptAnything' },
+    { fn: 'ac128_dryRunNeverNeedsAWorktree', file: 'loop.test.mjs', seam: 'loop.dryRunOmitsWorktreeItem' },
   ],
   15: [
     { fn: 'ac15_dependencyDiscipline', file: 'deps.test.mjs', seam: 'deps.allowAnyDep' },

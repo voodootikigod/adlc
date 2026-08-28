@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['gitEnv.classifierNetworkBlind', 'gitEnv.keepInherited', 'gitEnv.auditPasses', 'gitEnv.dropIdentityRows']);
+registerSeams(['gitEnv.classifierNetworkBlind', 'gitEnv.keepInherited', 'gitEnv.auditPasses', 'gitEnv.dropIdentityRows', 'gitEnv.dropUrlRows', 'gitEnv.verifyNetGitAlways']);
 
 /** Variables removed from every git spawn (§9.1b). A name is stripped when it matches any entry. */
 export const STRIPPED_GIT_VARS = Object.freeze([
@@ -72,9 +72,12 @@ export function boundGitConfig({ remoteFetchUrl, remotePushUrl, sshWrapperPath }
     [`url.${remotePushUrl}.pushInsteadOf`, remotePushUrl],
     [`url.${remotePushUrl}.insteadOf`, remotePushUrl],
   ];
-  const rows = [
+  const urlRows = active('gitEnv.dropUrlRows') ? [] : [
     ['remote.origin.url', remoteFetchUrl],
     ['remote.origin.pushurl', remotePushUrl],
+  ];
+  const rows = [
+    ...urlRows,
     ['core.hooksPath', '/dev/null'],
     ...identityRows,
     ['core.sshCommand', shellQuote(sshWrapperPath)],
@@ -128,6 +131,8 @@ export function writeNetGit({ netGit, repoRoot, remoteFetchUrl, remotePushUrl, s
 
 /** Re-verify NET_GIT immediately before every network spawn. Returns { ok, code, detail }. */
 export function verifyNetGit({ netGit, expectedConfigSha256, repoRoot }) {
+  // Mutation seam `gitEnv.verifyNetGitAlways`: the network repository is trusted unverified.
+  if (active('gitEnv.verifyNetGitAlways')) return { ok: true, code: null, detail: null };
   const cfg = join(netGit, 'config');
   if (!existsSync(cfg)) return { ok: false, code: 'net-config-tampered', detail: 'config missing' };
   const actual = sha256(readFileSync(cfg, 'utf8'));

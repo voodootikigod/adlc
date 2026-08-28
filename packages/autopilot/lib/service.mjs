@@ -13,7 +13,7 @@ import { isAbsolute, join } from 'node:path';
 import { validateRepoSpec } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['service.omitEnvironmentFile']);
+registerSeams(['service.omitEnvironmentFile', 'service.relativeWorkingDirectory']);
 
 export const UNIT_NAME = 'adlc-autopilot.service';
 
@@ -63,7 +63,7 @@ export function renderUnit({ repoRoot, nodePath, binPath, repo, rest = '10m', ss
     '',
     '[Service]',
     'Type=simple',
-    `WorkingDirectory=${repoRoot}`,
+    `WorkingDirectory=${active('service.relativeWorkingDirectory') ? '.' : repoRoot}`,
     `ExecStart=${exec}`,
     // Mutation seam: a unit without the key file could never sign a manifest entry.
     ...(active('service.omitEnvironmentFile') ? [] : [`EnvironmentFile=${join(repoRoot, '.env.local')}`]),

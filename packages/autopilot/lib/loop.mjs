@@ -15,6 +15,9 @@ import { acquireLock, selfIdentity, defaultProbes, LockHeldError } from './lock.
 import { LABEL_FOR_STATE } from './records.mjs';
 import { buildContext } from './context.mjs';
 import { runIssue } from './run.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -100,7 +103,8 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
 
 async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
   const { selection, triage } = deps;
-  out.document.incomplete.push('fleet-dry-run-needs-worktree');
+  // Mutation seam `loop.dryRunOmitsWorktreeItem`: the plan hides that fleet's dry run needs a worktree.
+  if (!active('loop.dryRunOmitsWorktreeItem')) out.document.incomplete.push('fleet-dry-run-needs-worktree');
   const sel = await selection.select({ ctx, pinned: pinnedIssue, force });
   out.document.selection = sel;
   if (sel.picked) {
@@ -113,7 +117,8 @@ async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
   } else if (pinnedIssue != null) {
     out.exitCode = 2; out.document.excludedBy = sel.excludedRule;
   }
-  out.document.complete = false;
+  // Mutation seam `loop.dryRunClaimsComplete`: a dry run reports itself complete.
+  out.document.complete = active('loop.dryRunClaimsComplete');
   out.outcome = 'dry-run';
   return out;
 }

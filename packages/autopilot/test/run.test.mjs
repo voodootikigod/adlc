@@ -120,6 +120,7 @@ export function ac81_mirrorIsTheOnlyGitDatabase() {
   const argv = argvFor(ctx);
   assert.equal(valueOf(argv, '--model-plane-git-mirror'), `${ctx.repoRoot}/.adlc/autopilot-runs/7/mirror.git`);
   assert.ok(!valueOf(argv, '--model-plane-read-only').split(',').includes(ctx.paths.mirror(7)), 'the mirror is never in the read set');
+  assert.ok(!valueOf(argv, '--model-plane-read-only').split(',').includes(ctx.repoRoot), 'REPO_ROOT itself is never in the read set');
   assert.ok(!argv.join(' ').includes(`${ctx.repoRoot}/.git`), 'REPO_ROOT/.git appears nowhere');
   assert.ok(!argv.some((a) => a.includes('--model-plane-git-sanitize')));
 }

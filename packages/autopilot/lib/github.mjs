@@ -11,7 +11,7 @@ import { DEADLINES, withRetry } from './spawn.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['github.dropHostBinding']);
+registerSeams(['github.dropHostBinding', 'github.paginateAll', 'github.ignoreTruncation']);
 
 export const PER_PAGE = 100;
 export const MAX_PAGES = 50;
@@ -79,9 +79,15 @@ export function createGh({ spawn, gh, host, repo, env, cwd, sleep }) {
  */
 export async function listOpenIssues(ghc, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
   const issues = [];
+  // Mutation seam `github.paginateAll`: one --paginate call instead of one page per call.
+  if (active('github.paginateAll')) {
+    const all = await ghc.run(['api', '--paginate', `repos/${ghc.repo}/issues?state=open&per_page=${perPage}`], { stdoutCap: PAGE_CAP_BYTES });
+    try { return { ok: true, issues: JSON.parse(all.stdout).filter((el) => !('pull_request' in el)), pagesReached: 1 }; } catch { return { ok: false, reason: 'candidate-set-truncated', pagesReached: 0 }; }
+  }
   for (let page = 1; page <= maxPages; page++) {
     const res = await ghc.run(['api', `repos/${ghc.repo}/issues?state=open&per_page=${perPage}&page=${page}`], { stdoutCap: PAGE_CAP_BYTES });
-    if (res.status !== 0 || res.truncated) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: res.truncated ? 'page exceeded 4 MiB' : `gh exited ${res.status}` };
+    // Mutation seam `github.ignoreTruncation`: a truncated page is parsed as if complete.
+    if (res.status !== 0 || (res.truncated && !active('github.ignoreTruncation'))) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: res.truncated ? 'page exceeded 4 MiB' : `gh exited ${res.status}` };
     let arr;
     try { arr = JSON.parse(res.stdout); } catch { return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: 'page is not JSON' }; }
     if (!Array.isArray(arr)) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: 'page is not an array' };

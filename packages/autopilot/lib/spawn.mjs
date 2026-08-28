@@ -14,7 +14,9 @@
 // host-bound gh set) rather than sampling.
 
 import { spawn as cpSpawn } from 'node:child_process';
-import { active } from './mutations.mjs';
+import { active, registerSeams } from './mutations.mjs';
+
+registerSeams(['spawn.noStdoutCap', 'spawn.inheritEnv', 'spawn.retryEverything']);
 
 export const KILL_GRACE_MS = 15_000;
 export const DEFAULT_STDOUT_CAP = 4 * 1024 * 1024; // 4 MiB (§4.1, §6.6)
@@ -61,7 +63,10 @@ export function createSpawner({ recorder = null, spawnImpl = cpSpawn, kill = pro
    * @returns Promise<{ status, signal, stdout, stderr, timedOut, truncated, error, reason }>
    */
   return function spawn(req) {
-    const { argv, cwd, env = {}, stdinBytes, deadlineMs, stdoutCap = DEFAULT_STDOUT_CAP, label } = req;
+    const { argv, cwd, env: envIn = {}, stdinBytes, deadlineMs, stdoutCap: capIn = DEFAULT_STDOUT_CAP, label } = req;
+    // Mutation seams `spawn.inheritEnv` / `spawn.noStdoutCap`: the child inherits the orchestrator env / the cap is lifted.
+    const env = active('spawn.inheritEnv') ? { ...process.env, ...envIn } : envIn;
+    const stdoutCap = active('spawn.noStdoutCap') ? Number.POSITIVE_INFINITY : capIn;
     if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
       throw new TypeError('spawn: argv must be a non-empty array of strings');
     }
@@ -132,7 +137,8 @@ export async function withRetry(run, { retryable = (r) => r.status !== 0, sleep 
   let last;
   for (let i = 0; i <= backoff.length; i++) {
     last = await run(i + 1);
-    if (last.status === 0 || !retryable(last)) return last;
+    // Mutation seam `spawn.retryEverything`: the caller's retryable predicate is ignored.
+    if (last.status === 0 || (!active('spawn.retryEverything') && !retryable(last))) return last;
     if (i < backoff.length) await sleep(backoff[i]);
   }
   return last;
