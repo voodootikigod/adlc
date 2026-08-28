@@ -170,7 +170,7 @@ if (sub === 'run') {
   try { flags = parseFlags(raw.slice(1)); } catch (e) { refuseFlags(e.message); }
   let ext;
   try { ext = extensionFlags(flags); } catch (e) { refuseFlags(e.message); }
-  const config = resolveRunConfig(loadConfig(dir), {
+  const configResolved = resolveRunConfig(loadConfig(dir), {
     concurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     base: flags.base,
     disposableContainer: flags['i-am-in-a-disposable-container'] === true,
@@ -185,6 +185,9 @@ if (sub === 'run') {
     modelPlaneWritable: flags['model-plane-writable'] ?? undefined,
     ...ext,
   });
+  // A repo-configured concurrency can widen a mirror run past one worker: refuse it here too (codex r11).
+  if (configResolved.modelPlaneGit === 'mirror' && configResolved.concurrency !== 1) refuseFlags('--model-plane-git mirror requires concurrency 1 (one writable mirror per worker)');
+  const config = configResolved;
   for (const w of config.warnings) console.error(`warning: ${w}`);
 
   let ticketsFile;

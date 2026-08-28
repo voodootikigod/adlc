@@ -129,3 +129,12 @@ test('a ticket-store failure before dispatch under --json still yields one resul
   let doc; try { doc = JSON.parse(r.stdout); } catch { doc = null; }
   assert.ok(doc && typeof doc.reason === 'string', `one result document with a reason: ${r.stdout.slice(0, 200)} ${r.stderr.slice(0, 200)}`);
 });
+
+test('--model-plane-git mirror with a concurrency other than 1 is refused (one writable mirror per worker) — under --json as a dispatch-refused document (codex r11)', () => {
+  const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
+  const cwd = mkdtempSync(join(tmpdir(), 'fleet-mirror-cc-'));
+  const r = spawnSync(process.execPath, [bin, 'run', '--json', '--model-plane-git', 'mirror', '--model-plane-git-mirror', '/m/mirror.git', '--model-plane-read', 'bounded', '--model-plane-read-only', '/usr', '--concurrency', '2'], { encoding: 'utf8', cwd });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /requires concurrency 1/);
+  assert.equal(JSON.parse(r.stdout).reason, 'dispatch-refused');
+});

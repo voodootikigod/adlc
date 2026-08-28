@@ -148,3 +148,4 @@ test('fleet.reviewMaxBytes only NARROWS: a repository value above the 262144 def
   assert.ok(big.warnings.some((w) => /exceeds the maximum/.test(w)));
   assert.equal(resolveFleetConfig({ reviewMaxBytes: 1024 }).reviewMaxBytes, 1024, 'a smaller value narrows');
 });
+

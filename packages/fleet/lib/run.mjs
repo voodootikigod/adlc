@@ -253,6 +253,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       // the run keeps awaiting the other in-flight tickets instead of unwinding
       // around them with the lock released.
       status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `worktree setup failed: ${e.message}`, reasonCode: null });
+      dispatchRefused = true; // a setup failure is operational (dispatch-refused, exit 1), never strikes-exhausted (codex r11)
       persist();
       log(`${ticket.id} → failed (worktree setup failed: ${e.message})`);
       return;
@@ -262,6 +263,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     try { await deps.provision?.({ ticket, worktree: wt.path }); }
     catch (e) {
       status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `provisioning failed: ${e.message}`, reasonCode: null });
+      dispatchRefused = true;
       persist();
       log(`${ticket.id} → failed (provisioning failed: ${e.message})`);
       await deps.cleanup?.({ ticket, worktree: wt.path, state: 'failed' });

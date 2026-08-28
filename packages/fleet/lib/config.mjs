@@ -113,6 +113,8 @@ export function validateExtensionFlags(flags = {}) {
   }
   if (flags.modelPlaneGit === 'mirror') {
     if (flags.modelPlaneRead !== 'bounded') errors.push('--model-plane-git mirror requires --model-plane-read bounded');
+    // ONE writable mirror per run: concurrent untrusted workers must never share a Git
+    // database they can all write (codex r11) — enforced on the RESOLVED config in the CLI.
     if (!flags.modelPlaneGitMirror || !isAbsolute(flags.modelPlaneGitMirror)) errors.push('--model-plane-git mirror requires --model-plane-git-mirror <absolute bare repo path>');
   } else if (flags.modelPlaneGitMirror != null) {
     errors.push('--model-plane-git-mirror is only meaningful with --model-plane-git mirror');

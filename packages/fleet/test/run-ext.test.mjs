@@ -287,3 +287,13 @@ test('a thrown effect keeps the strike it entered and is reported run-level as p
   assert.equal(summaryReason(s), 'pipeline-error');
   assert.equal(runExitCode(s), 1);
 });
+
+test('a worktree-setup or provisioning failure is run-level dispatch-refused (exit 1), never strikes-exhausted (codex r11)', async () => {
+  const rec = newRec();
+  const d = { ...deps(rec), createWorktree: async () => { throw new Error('init exploded'); } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, noPr: true }, deps: d });
+  const { runExitCode } = await import('../lib/run.mjs');
+  const { summaryReason } = await import('../lib/result.mjs');
+  assert.equal(s.results.A, 'failed'); assert.equal(s.dispatchRefused, true);
+  assert.equal(summaryReason(s), 'dispatch-refused'); assert.equal(runExitCode(s), 1);
+});
