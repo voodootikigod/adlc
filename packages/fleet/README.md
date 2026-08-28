@@ -99,6 +99,11 @@ spawns its harness in headless mode on the **model plane** (network egress + its
 own auth, filesystem writes bounded — K2 + #395). Select one with the
 **operator-local** `--adapter` flag (default `claude-code`).
 
+Each adapter also declares `egressHosts` — the `host:port` pairs its harness must
+reach (the model API and its OAuth hosts). Under `--model-plane-egress
+allowlist` those are the ONLY destinations the host-side CONNECT proxy permits;
+an adapter that declares none cannot run in allowlist mode (fail closed).
+
 Each adapter also declares `homeState` — the directories and files its harness
 writes under `HOME`. That declaration IS the model-plane write grant: an adapter
 that declares nothing gets nothing outside the worktree, so a new harness fails

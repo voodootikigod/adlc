@@ -87,6 +87,14 @@ export const transports = Object.freeze({
 });
 
 /**
+ * Model-plane egress allowlist (issue-autopilot spec §6.4 "EGRESS", §14 item 13):
+ * the model API plus the OAuth refresh hosts the CLI is known to contact. Under
+ * `--model-plane-egress allowlist` these exact `host:port` pairs are the ONLY
+ * CONNECT targets the host-side proxy will open for this harness.
+ */
+export const egressHosts = Object.freeze(['api.anthropic.com:443', 'console.anthropic.com:443', 'platform.claude.com:443']);
+
+/**
  * Translate a config command string into a Claude Code permission rule. A raw
  * string allowlists NOTHING (premortem F1), so each becomes `Bash(<cmd>)`; a
  * command already carrying a `:*` wildcard is preserved.

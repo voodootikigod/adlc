@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
+import { buildBoundedModelSandbox, bridgeArgv, mirrorCreateWorktree, mirrorFetchBack, mirrorCleanup, policyFromConfig } from './extensions.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -229,6 +230,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   });
   const adlcBin = config.adlcBin ?? 'adlc';
   const now = io.now ?? (() => Date.now());
+  const boundedMode = config.modelPlaneRead === 'bounded';
+  const mirrorMode = config.modelPlaneGit === 'mirror';
+  // Per-ticket compare-and-swap baselines for the mirror fetch-back (item 12):
+  // the cut tip first, then whatever the last successful fetch-back landed.
+  const cutTips = new Map();
+  let lastPolicy = null;
   // fleet-ext item 6: the charter addendum is appended AFTER the Constraints
   // block on every strike's prompt, so the constraints keep their authority.
   const charterAddendum = config.charterAddendum ?? null;
@@ -343,7 +350,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     createWorktree: async ({ ticket, integrationBranch }) => {
-      const wt = worktrees.createWorktree(repo, ticket.id, { integrationBranch, git: repoGit });
+      // fleet-ext item 12: in mirror mode the worker's worktree belongs to the
+      // caller-supplied bare mirror; the gates run in a caller-repo worktree.
+      const wt = mirrorMode
+        ? mirrorCreateWorktree({ repo, ticketId: ticket.id, integrationBranch, mirror: config.modelPlaneGitMirror, repoGit, gitAt: io.git })
+        : worktrees.createWorktree(repo, ticket.id, { integrationBranch, git: repoGit });
+      if (mirrorMode) cutTips.set(ticket.id, wt.cutTip);
       // Initialize the worktree THROUGH the sandbox (§6.3, M1) — repo-config init
       // (npm install) runs arbitrary lifecycle code and must be contained.
       // fleet-ext item 15: with --worker-deps the caller-built tree is COPIED in
@@ -374,17 +386,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     } : undefined,
 
     // The effective model-plane policy, echoed in the --json result so a caller
-    // can assert what actually applied (fleet-ext items 9, 11–15).
-    describeSandbox: () => ({
-      readPolicy: config.modelPlaneRead ?? 'host',
-      privateTmp: config.modelPlaneRead === 'bounded',
-      gitSource: config.modelPlaneGit ?? 'shared',
-      mirror: config.modelPlaneGitMirror ?? null,
-      egress: config.modelPlaneEgress ?? 'open',
-      egressAllowlist: [],
-      homeBinds: [],
-      writableRoots: [],
-    }),
+    // can assert what actually applied (fleet-ext items 9, 11–15): what the LAST
+    // bounded dispatch actually built, else the config-derived policy.
+    describeSandbox: () => ({ ...policyFromConfig(config), ...(lastPolicy ?? {}) }),
 
     // provision is OPTIONAL per the WorkerAdapter contract (§4): only claude-code
     // writes a settings file; codex/agy/opencode/pi/cursor have none (adversarial-review A1).
@@ -404,7 +408,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       return undefined;
     },
 
-    dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
+    dispatch: async ({ ticket, worktree, strike, deadEnds = [], gateWorktree, branch }) => {
       // Strike 1 with caller-supplied dead-end material (fleet-ext item 3) is a
       // FIX prompt too: the material describes a previous round's failure.
       const prompt = (strike > 1 || deadEnds.length > 0)
@@ -436,22 +440,47 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // tells it to run -- execute with the operator's WRITES bounded to this
       // worktree. Every ladder rung contributes its state declaration, because an
       // escalation can move a later strike onto a different harness.
-      const modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
-      const res = await adapter.dispatch({
-        worktree, prompt, timeoutMs: dispatchTimeoutMs(), env,
-        // `killGroup`: the worker is a process TREE; on timeout the whole group
-        // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
-        exec: (cmd, args, opts) => modelSandbox.run([cmd, ...args], { ...opts, killGroup: true }),
-        // Operator-local binary override (A2) + non-executable data from config.
-        command: config.adapterCommand ?? undefined,
-        args: config.adapterArgs ?? undefined,
-        // §4c force half: the registry's model goes onto the command line
-        // explicitly, never the harness's ambient default. A seat always wins
-        // over `fleet.model` — the whole point of the registry is that supply is
-        // decided by the operator's file, not by run config.
-        model: seat ? seat.model : (config.model ?? undefined),
-        useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
-      });
+      //
+      // fleet-ext items 11/13/14: in BOUNDED mode the profile is the bounded
+      // model plane with a synthetic HOME (and, under allowlist egress, no
+      // network namespace but a bridge to the host-side CONNECT proxy).
+      let modelSandbox; let egress = null;
+      if (boundedMode) {
+        let built;
+        try {
+          built = await buildBoundedModelSandbox({
+            config, io, sandboxSpec, worktree, adapter, ticketId: ticket.id, statusDir: statusDir ?? join(repo, '.adlc'),
+            extraWritable: mirrorMode ? [config.modelPlaneGitMirror] : [],
+          });
+        } catch (e) {
+          return { exitCode: 1, output: e.message, timedOut: false, usageStatus: 'unreported', policyMismatch: e.code === 'sandbox-policy-mismatch' };
+        }
+        modelSandbox = built.sandbox; egress = built.egress;
+        lastPolicy = { ...built.description, gitSource: mirrorMode ? 'mirror' : 'shared', mirror: mirrorMode ? config.modelPlaneGitMirror : null };
+      } else {
+        modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
+      }
+      let res;
+      try {
+        res = await adapter.dispatch({
+          worktree, prompt, timeoutMs: dispatchTimeoutMs(), env: { ...env, ...(egress?.env ?? {}) },
+          // `killGroup`: the worker is a process TREE; on timeout the whole group
+          // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
+          exec: (cmd, args, opts) => modelSandbox.run(bridgeArgv({ egress, argv: [cmd, ...args] }), { ...opts, killGroup: true }),
+          // Operator-local binary override (A2) + non-executable data from config.
+          command: config.adapterCommand ?? undefined,
+          args: config.adapterArgs ?? undefined,
+          // §4c force half: the registry's model goes onto the command line
+          // explicitly, never the harness's ambient default. A seat always wins
+          // over `fleet.model` — the whole point of the registry is that supply is
+          // decided by the operator's file, not by run config.
+          model: seat ? seat.model : (config.model ?? undefined),
+          useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
+        });
+      } finally {
+        // The proxy lives exactly as long as the dispatch it served.
+        if (egress?.proxy) { try { await egress.proxy.close(); } catch { /* best effort */ } }
+      }
       // Persist the transcript BEFORE anything can return early, so the flail
       // consultation between strikes has something to analyze. Without this the
       // detector is handed a nonexistent path, exits 1, and every consultation
@@ -478,7 +507,20 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       write(`=== ${ticket.id} strike ${strike}${where} ===\n${res.output ?? ''}\n`);
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
-        try { worktrees.commitWorker(worktree, ticket.id, io.git(worktree)); }
+        try {
+          worktrees.commitWorker(worktree, ticket.id, io.git(worktree));
+          // fleet-ext item 12: bring the worker branch back from the mirror by
+          // compare-and-swap and refresh the gate worktree. A failure here is
+          // terminal for the run — the scheduler maps it to `mirror-fetch-failed`.
+          if (mirrorMode) {
+            const fb = mirrorFetchBack({ repo, mirror: config.modelPlaneGitMirror, workerBranch: branch, cutTip: cutTips.get(ticket.id), gatePath: gateWorktree, gitAt: io.git });
+            if (!fb.ok) {
+              write(`mirror fetch-back failed: ${fb.detail ?? fb.reason}\n`);
+              return { ...res, exitCode: 1, output: `${res.output}\nmirror fetch-back failed (${fb.step ?? '?'}): ${fb.detail ?? fb.reason}`, timedOut: false, mirrorFetchFailed: true };
+            }
+            cutTips.set(ticket.id, fb.sha);
+          }
+        }
         catch (e) {
           // This IS the failure the scheduler will act on, so it belongs in the
           // transcript the flail check analyzes — otherwise a commit failure
@@ -596,9 +638,16 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     revertCompletion: ({ toSha, shardPath, completionSha, integrationBranch, ledgerPath, raced }) =>
       revertCompletionCommit({ repo: integrationPath, toSha, shardPath, completionSha, integrationBranch, ledgerPath, raced, git: integrationGit }),
 
-    cleanup: ({ worktree, state }) => {
+    cleanup: ({ ticket, worktree, state }) => {
       // Keep failed worktrees for inspection; remove merged ones.
-      if (state === 'merged') worktrees.removeWorktree(repo, worktree, repoGit);
+      if (state === 'merged') {
+        if (mirrorMode) {
+          const id = String(ticket?.id ?? '').toLowerCase();
+          mirrorCleanup({ repo, mirror: config.modelPlaneGitMirror, path: worktree, gatePath: join(repo, '.worktrees', `fleet-${id}-gate`), repoGit, gitAt: io.git });
+        } else {
+          worktrees.removeWorktree(repo, worktree, repoGit);
+        }
+      }
       worktrees.pruneWorktrees(repo, repoGit);
     },
 

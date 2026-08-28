@@ -61,7 +61,12 @@ function capabilitiesOf(mod) {
     dirs: [...(mod.homeState?.dirs ?? [])],
     files: [...(mod.homeState?.files ?? [])],
   };
-  return { aliases, forcesModel, attestsResolvedModel, transports, homeState };
+  // §6.4 model-plane egress allowlist (item 13). Defaults to DECLARES NOTHING,
+  // fail-closed once more: under allowlist mode an adapter that names no hosts
+  // gets NO egress, so the omission is a harness that cannot reach its model API
+  // and says so, never a proxy that quietly opens every target.
+  const egressHosts = [...(mod.egressHosts ?? [])];
+  return { aliases, forcesModel, attestsResolvedModel, transports, homeState, egressHosts };
 }
 
 export function adapterCatalog() {
