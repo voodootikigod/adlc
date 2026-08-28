@@ -101,3 +101,13 @@ loudly when the host lacks them.
 None. Runtime dependencies are `@adlc/core`, `@adlc/fleet` and `@adlc/tickets`
 only; the ticket-sync config schema is read from the pinned blob and evaluated
 by `lib/schema-lite.mjs` rather than importing `@adlc/ticket-sync`.
+
+## The AC coverage gate
+
+`npm run test:gate -w packages/autopilot` runs `test/spec-coverage.test.mjs` with
+`AUTOPILOT_GATE_FULL=1`: every §16 criterion of the spec is registered
+(`test/ac-registry.mjs`), every registered function is executed, and every
+criterion's mutation fixture is proven to BITE. The execution passes take ~25
+minutes; without the variable only the static checks run (the root suite and
+the mutation gate stay fast). Run the full gate before merging a change to this
+package.

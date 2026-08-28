@@ -22,6 +22,13 @@ import { withMutation, knownSeams, clearAll, registerSeams, active } from '../li
 // The gate's own seam (AC 111/121): when active, the static checker accepts every entry.
 registerSeams(['gate.acceptHollowEntries']);
 export const MANUAL_CAP = 1;
+// The static checks always run. The two EXECUTION passes (AC 114: every registered
+// function runs; AC 121: every fixture bites) re-run the whole suite under seams
+// and take ~25 minutes, so they run when AUTOPILOT_GATE_FULL=1 (the pre-merge
+// gate: `npm run test:gate -w packages/autopilot`) and are reported as skipped
+// otherwise — the mutation gate and the root suite must not pay for them per mutant.
+export const FULL = process.env.AUTOPILOT_GATE_FULL === '1';
+const fullOnly = { skip: FULL ? false : 'execution pass runs under AUTOPILOT_GATE_FULL=1 (npm run test:gate)' };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..', '..');
@@ -51,7 +58,8 @@ export function criterionNumbers(section) {
 
 /** Every `test(<title>, [opts,] <fn>)` registration in a source: [{ title, fn }]. Titles may contain quotes of the other kinds. */
 export function registrations(src) {
-  const re = /test\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|`((?:\\.|[^`\\])*)`)\s*,(?:\s*\{[^}]*\}\s*,)?\s*([A-Za-z_$][\w$]*)\s*\)/g;
+  // The optional options argument may be an object literal or an identifier (e.g. a shared `{ skip }` constant).
+  const re = /test\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|`((?:\\.|[^`\\])*)`)\s*,(?:\s*(?:\{[^}]*\}|[A-Za-z_$][\w$]*)\s*,)?\s*([A-Za-z_$][\w$]*)\s*\)/g;
   const out = [];
   for (const m of src.matchAll(re)) out.push({ title: m[1] ?? m[2] ?? m[3], fn: m[4] });
   return out;
@@ -154,7 +162,7 @@ export async function ac114_everyRegisteredFunctionExecutes() {
   assert.equal(executed, entries.length, 'every registered function ran');
   assert.ok(knownSeams().length > 0);
 }
-test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', ac114_everyRegisteredFunctionExecutes);
+test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', fullOnly, ac114_everyRegisteredFunctionExecutes);
 
 export async function ac121_everyCriterionHasABitingFixture() {
   clearAll();
@@ -195,7 +203,7 @@ export async function ac121_everyCriterionHasABitingFixture() {
   assert.deepEqual(problems, [], problems.join('\n'));
   assert.ok(knownSeams().length > 0);
 }
-test('AC121: every registered criterion names a mutation fixture that BITES (test fails with it, passes without), or a printed noFixture reason (≤ 5)', ac121_everyCriterionHasABitingFixture);
+test('AC121: every registered criterion names a mutation fixture that BITES (test fails with it, passes without), or a printed noFixture reason (≤ 5)', fullOnly, ac121_everyCriterionHasABitingFixture);
 
 // ── self-tests (AC 111, 121): the gate is not vacuous ──
 export function ac111_gateRejectsHollowEntries() {

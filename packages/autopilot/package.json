@@ -34,7 +34,8 @@
     "@adlc/tickets": "1.11.0"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:gate": "AUTOPILOT_GATE_FULL=1 node --test test/spec-coverage.test.mjs"
   },
   "engines": {
     "node": ">=18"
