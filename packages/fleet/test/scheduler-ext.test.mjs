@@ -71,6 +71,29 @@ test('a strike cut short by the deadline (timed out while expired) pauses with w
   assert.equal(e.calls.dispatch.length, 1);
 });
 
+test('a strike that returns IN TIME but after which the deadline has passed is paused wall-clock — nothing is gated, prosecuted or merged past the clock', async () => {
+  let t = 0;
+  const calls = [];
+  const e = effects({
+    dispatch: () => { t = 5000; return { exitCode: 0, output: 'TICKET-DONE', timedOut: false }; },
+    gate: () => { calls.push('gate'); return ok; },
+  });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 4000, now: () => t });
+  assert.equal(r.state, 'paused');
+  assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.deepEqual(calls, [], 'the gate never ran');
+  // …and the same before prosecution and before the merge.
+  for (const [stage, over] of [['prosecute', { gate: () => { t = 5000; return ok; } }], ['merge', { prosecute: () => { t = 5000; return { verdict: 'pass', reason: 'clean' }; } }]]) {
+    t = 0;
+    const seen = [];
+    const ee = effects({ ...over, merge: () => { seen.push('merge'); return ok; }, prosecute: over.prosecute ?? (() => { seen.push('prosecute'); return { verdict: 'pass', reason: 'clean' }; }) });
+    const rr = await advanceTicket(ticket, ee, { maxStrikes: 3, deadline: 4000, now: () => t });
+    assert.equal(rr.state, 'paused', stage);
+    assert.equal(rr.reasonCode, REASON_CODES.WALL_CLOCK, stage);
+    assert.ok(!seen.includes('merge'), `${stage}: nothing merged past the clock`);
+  }
+});
+
 test('a per-dispatch timeout with the deadline still ahead is an ordinary failed strike (retries)', async () => {
   let n = 0;
   const e = effects({ dispatch: () => (++n === 1 ? { exitCode: 124, output: 'slow', timedOut: true } : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }) });

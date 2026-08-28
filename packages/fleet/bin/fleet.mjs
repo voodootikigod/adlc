@@ -513,7 +513,15 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
       console.error(`fleet: ${e.message}`);
       return finish(1, { runId, reason: RUN_REASONS.DISPATCH_REFUSED });
     }
-    const summary = await run({ all, runId, resume, config: runConfig, deps: { ...deps, now } });
+    let summary;
+    try {
+      summary = await run({ all, runId, resume, config: runConfig, deps: { ...deps, now } });
+    } catch (e) {
+      // A rejected pipeline (worktree creation, init, resume attachment) must still
+      // yield the ONE result document a --json caller was promised, with a reason.
+      console.error(`fleet run ${runId} failed: ${e?.stack ?? e?.message ?? e}`);
+      return finish(1, { runId, reason: RUN_REASONS.DISPATCH_REFUSED, warnings: pre.warnings });
+    }
 
     if (summary.contaminated) {
       say(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +

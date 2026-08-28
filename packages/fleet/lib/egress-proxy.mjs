@@ -17,7 +17,7 @@
 // issued it and nothing else.
 
 import net from 'node:net';
-import { chmodSync } from 'node:fs';
+import { chmodSync, unlinkSync } from 'node:fs';
 
 /** Loopback port the in-sandbox bridge listens on unless fleet says otherwise. */
 export const DEFAULT_BRIDGE_PORT = 8118;
@@ -181,7 +181,9 @@ export function startEgressProxy({ socketPath, allowlist, log = () => {}, connec
   const server = net.createServer((client) => handleClient(client, ctx));
   const close = () => new Promise((resolve) => {
     for (const client of ctx.clients) client.destroy();
-    server.close(() => resolve());
+    // The socket PATHNAME outlives the server: unlink it, or the next strike's
+    // listen on the same path fails EADDRINUSE.
+    server.close(() => { try { unlinkSync(socketPath); } catch { /* already gone */ } resolve(); });
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);

@@ -244,7 +244,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   const dispatchTimeoutMs = () => {
     const perDispatch = (config.timeoutMinutes ?? 30) * 60000;
     if (config.deadline == null) return perDispatch;
-    return Math.max(1000, Math.min(perDispatch, config.deadline - now()));
+    // The EXACT remaining budget, never padded: an expired deadline yields a
+    // 1 ms timeout (spawnAsync treats 0 as "no timeout"), i.e. immediate expiry.
+    return Math.max(1, Math.min(perDispatch, config.deadline - now()));
   };
 
   // A per-worktree Sandbox on the repo-command plane (§7.3). exec runs the
@@ -444,18 +446,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // fleet-ext items 11/13/14: in BOUNDED mode the profile is the bounded
       // model plane with a synthetic HOME (and, under allowlist egress, no
       // network namespace but a bridge to the host-side CONNECT proxy).
-      let modelSandbox; let egress = null;
+      let modelSandbox; let egress = null; let boundedCleanup = null;
       if (boundedMode) {
         let built;
         try {
           built = await buildBoundedModelSandbox({
-            config, io, sandboxSpec, worktree, adapter, ticketId: ticket.id, statusDir: statusDir ?? join(repo, '.adlc'),
+            config, io, sandboxSpec, worktree, adapter, ticketId: ticket.id,
             extraWritable: mirrorMode ? [config.modelPlaneGitMirror] : [],
           });
         } catch (e) {
           return { exitCode: 1, output: e.message, timedOut: false, usageStatus: 'unreported', policyMismatch: e.code === 'sandbox-policy-mismatch' };
         }
-        modelSandbox = built.sandbox; egress = built.egress;
+        modelSandbox = built.sandbox; egress = built.egress; boundedCleanup = built.cleanup;
         lastPolicy = { ...built.description, gitSource: mirrorMode ? 'mirror' : 'shared', mirror: mirrorMode ? config.modelPlaneGitMirror : null };
       } else {
         modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
@@ -478,8 +480,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
         });
       } finally {
-        // The proxy lives exactly as long as the dispatch it served.
-        if (egress?.proxy) { try { await egress.proxy.close(); } catch { /* best effort */ } }
+        // The proxy, its socket and the staged credential copy live exactly as
+        // long as the dispatch they served — on every exit path.
+        if (boundedCleanup) await boundedCleanup();
       }
       // Persist the transcript BEFORE anything can return early, so the flail
       // consultation between strikes has something to analyze. Without this the

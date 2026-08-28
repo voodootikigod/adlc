@@ -100,6 +100,15 @@ test('a resumed ticket continues from its recorded strikes and strikesConsumed c
   assert.equal(s.strikesConsumed, 2);
 });
 
+test('a subset-blocked ticket carries reasonCode ticket-blocked (never the strikes-exhausted fallback)', async () => {
+  const rec = newRec();
+  const all = [{ id: 'A', title: 'A', scope: ['src/a/**'], edges: [{ to: 'B' }] }, T('B')];
+  const s = await runFleet({ all, runId: 'r', config: { base: 'main', concurrency: 1, onlyIds: ['B'] }, deps: deps(rec) });
+  assert.equal(s.results.B, 'blocked');
+  assert.equal(s.status.tickets.B.reasonCode, 'ticket-blocked');
+  assert.equal(rec.dispatch.length, 0);
+});
+
 test('the per-ticket status carries reasonCode and review meta for the --json document', async () => {
   const rec = newRec();
   const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1 }, deps: deps(rec) });

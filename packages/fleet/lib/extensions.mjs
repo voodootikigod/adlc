@@ -6,7 +6,8 @@
 // primitive arrives through `io` so the composition is unit-testable.
 
 import { join, dirname } from 'node:path';
-import { realpathSync, existsSync, mkdirSync } from 'node:fs';
+import { realpathSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plane.mjs';
 import { prepareSyntheticHome } from './synthetic-home.mjs';
@@ -32,42 +33,66 @@ const realpathSafe = (p) => { try { return realpathSync(p); } catch { return p; 
  *   else `{ proxy, port, socketPath, env }`; the caller closes `proxy` after the
  *   dispatch.
  */
-export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktree, adapter, ticketId, statusDir, extraWritable = [], nodePath = process.execPath }) {
+/** Bounded mode is claude-code only: its synthetic-HOME contract (item 14) is that adapter's. */
+export const BOUNDED_ADAPTERS = Object.freeze(['claude-code']);
+
+export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktree, adapter, ticketId, extraWritable = [], nodePath = process.execPath, tmpRoot = io.env?.TMPDIR || tmpdir() }) {
   const hostHome = io.env.HOME;
   if (!hostHome) throw new SandboxPolicyError('HOME is unset; the synthetic home cannot be staged');
-  const stagingDir = join(statusDir, 'fleet-home', String(ticketId).toLowerCase());
-  const home = prepareSyntheticHome({ hostHome, stagingDir, adapter, fs: io.homeFs, uid: io.uid });
-
-  const readOnlyPaths = [...(config.modelPlaneReadOnly ?? [])];
-  const writableRoots = [...extraWritable, ...(config.modelPlaneWritable ?? [])];
-  let egress = null;
-  if (config.modelPlaneEgress === 'allowlist') {
-    const allowlist = [...(adapter.egressHosts ?? [])];
-    if (allowlist.length === 0) throw new SandboxPolicyError(`adapter ${adapter.name} declares no egressHosts; allowlist mode has nothing to permit`);
-    const socketDir = join(statusDir, 'fleet-egress', String(ticketId).toLowerCase());
-    mkdirSync(socketDir, { recursive: true, mode: 0o700 });
-    const socketPath = join(socketDir, 'proxy.sock');
-    const start = io.startEgressProxy ?? startEgressProxy;
-    const proxy = await start({ socketPath, allowlist, log: (m) => io.log?.(`egress: ${typeof m === 'string' ? m : JSON.stringify(m)}`) });
-    const port = config.egressBridgePort ?? DEFAULT_BRIDGE_PORT;
-    egress = { proxy, port, socketPath, env: egressEnv(port), allowlist: [...proxy.allowlist] };
-    writableRoots.push(socketDir);
-    // The bridge and the node that runs it must be visible inside: single-file binds.
-    readOnlyPaths.push(realpathSafe(nodePath), realpathSafe(BRIDGE_PATH));
+  if (!BOUNDED_ADAPTERS.includes(adapter?.name)) {
+    // Fail closed rather than stage the wrong harness's files: the staged
+    // credential/settings layout is claude-code's, and another adapter would
+    // start without its auth and fail in a way that looks like a model error.
+    throw new SandboxPolicyError(`bounded model plane supports ${BOUNDED_ADAPTERS.join('/')} only (adapter ${adapter?.name ?? '?'}); its synthetic-HOME contract is adapter-specific`);
   }
-  const inv = checkReadSetInvariant({
-    readOnlyPaths, writableRoots: [worktree, ...writableRoots], home: home.home,
-    homeBinds: home.homeBinds, homeScratchDirs: home.homeScratchDirs, isFile: io.isFile ?? null,
-  });
-  if (!inv.ok) throw new SandboxPolicyError(inv.violations.join('; '));
-  const sandbox = new BoundedModelSandbox({
-    backend: sandboxSpec.backend, worktree, writableRoots, readOnlyPaths,
-    home: home.home, homeBinds: home.homeBinds, homeWritableFiles: home.homeWritableFiles, homeScratchDirs: home.homeScratchDirs,
-    unshareNet: egress !== null, isFile: io.isFile,
-    exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
-  });
-  const description = { ...sandbox.describe(), egressAllowlist: egress?.allowlist ?? [], credentialSha256: home.credentialSha256 };
-  return { sandbox, description, egress };
+  // EPHEMERAL staging, OUTSIDE the repository: the credential copy lives here
+  // for exactly one dispatch and is removed by `cleanup()` on every exit path —
+  // success, failure, or a policy error raised after staging (the finding that
+  // motivated this: a deterministic copy under .adlc outlived the tmpfs it fed).
+  const stagingDir = mkdtempSync(join(tmpRoot, 'fleet-home-'));
+  let proxy = null; let socketPath = null;
+  const cleanup = async () => {
+    if (proxy) { try { await proxy.close(); } catch { /* best effort */ } proxy = null; }
+    if (socketPath) { try { rmSync(socketPath, { force: true }); } catch { /* best effort */ } }
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  };
+  try {
+    const home = prepareSyntheticHome({ hostHome, stagingDir: join(stagingDir, 'home'), adapter, fs: io.homeFs, uid: io.uid });
+    const readOnlyPaths = [...(config.modelPlaneReadOnly ?? [])];
+    const writableRoots = [...extraWritable, ...(config.modelPlaneWritable ?? [])];
+    let egress = null;
+    if (config.modelPlaneEgress === 'allowlist') {
+      const allowlist = [...(adapter.egressHosts ?? [])];
+      if (allowlist.length === 0) throw new SandboxPolicyError(`adapter ${adapter.name} declares no egressHosts; allowlist mode has nothing to permit`);
+      const socketDir = join(stagingDir, 'egress');
+      mkdirSync(socketDir, { recursive: true, mode: 0o700 });
+      socketPath = join(socketDir, 'proxy.sock');
+      rmSync(socketPath, { force: true }); // a stale socket from a crashed run would EADDRINUSE
+      const start = io.startEgressProxy ?? startEgressProxy;
+      proxy = await start({ socketPath, allowlist, log: (m) => io.log?.(`egress: ${typeof m === 'string' ? m : JSON.stringify(m)}`) });
+      const port = config.egressBridgePort ?? DEFAULT_BRIDGE_PORT;
+      egress = { proxy, port, socketPath, env: egressEnv(port), allowlist: [...proxy.allowlist] };
+      writableRoots.push(socketDir);
+      // The bridge and the node that runs it must be visible inside: single-file binds.
+      readOnlyPaths.push(realpathSafe(nodePath), realpathSafe(BRIDGE_PATH));
+    }
+    const inv = checkReadSetInvariant({
+      readOnlyPaths, writableRoots: [worktree, ...writableRoots], home: home.home,
+      homeBinds: home.homeBinds, homeScratchDirs: home.homeScratchDirs, isFile: io.isFile ?? null,
+    });
+    if (!inv.ok) throw new SandboxPolicyError(inv.violations.join('; '));
+    const sandbox = new BoundedModelSandbox({
+      backend: sandboxSpec.backend, worktree, writableRoots, readOnlyPaths,
+      home: home.home, homeBinds: home.homeBinds, homeWritableFiles: home.homeWritableFiles, homeScratchDirs: home.homeScratchDirs,
+      unshareNet: egress !== null, isFile: io.isFile,
+      exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
+    });
+    const description = { ...sandbox.describe(), egressAllowlist: egress?.allowlist ?? [], credentialSha256: home.credentialSha256 };
+    return { sandbox, description, egress, stagingDir, cleanup };
+  } catch (e) {
+    await cleanup();
+    throw e;
+  }
 }
 
 /** Wrap the worker argv in the in-sandbox bridge and add the proxy env (item 13). */

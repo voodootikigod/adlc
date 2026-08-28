@@ -86,6 +86,20 @@ async function withProxy(allowlist, fn) {
   try { return await fn(proxy, log); } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
+test('close() unlinks the socket pathname, so a second proxy on the SAME path (the next strike) can listen', async () => {
+  const dir = scratch('egress-relisten-');
+  try {
+    const path = join(dir, 'p.sock');
+    const first = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
+    assert.ok(existsSync(path), 'the socket exists while listening');
+    await first.close();
+    assert.ok(!existsSync(path), 'the pathname is unlinked on close');
+    const second = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
+    assert.ok(existsSync(path), 'a re-listen on the same path succeeds (no EADDRINUSE)');
+    await second.close();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ── 1. parsers and the allow predicate ───────────────────────────────────────
 
 test('parseConnectTarget accepts only a complete `CONNECT host:port HTTP/1.x` head, lower-casing the host', () => {

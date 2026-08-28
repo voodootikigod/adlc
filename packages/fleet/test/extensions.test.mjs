@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -113,6 +113,43 @@ test('allowlist egress: the worker is wrapped in the bridge, gets HTTPS_PROXY to
     assert.equal(d.egress, 'allowlist'); assert.deepEqual(d.egressAllowlist, io.proxies[0].allowlist);
     const bridgeBind = raw.args.some((a, i) => a === '--ro-bind' && raw.args[i + 1] === realpathSync(BRIDGE_PATH));
     assert.ok(bridgeBind, 'the bridge file is bound read-only into the sandbox');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the credential copy is staged in an EPHEMERAL directory outside the repository and removed after the dispatch — on the success path and on a policy failure', async () => {
+  const rec = newRec();
+  const io = fakeIo(rec);
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-'));
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'fleet-ext-tmproot-'));
+  try {
+    io.env = { ...io.env, TMPDIR: tmpRoot };
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'], modelPlaneEgress: 'allowlist' } });
+    await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    const w = rec.spawn[0].args;
+    const credSource = w[w.indexOf(`${HOME}/.claude/.credentials.json`) - 1];
+    assert.ok(credSource.startsWith(tmpRoot + '/fleet-home-'), `the staging source ${credSource} is under the ephemeral root, not the repo`);
+    assert.ok(!credSource.startsWith(dir), 'never under .adlc');
+    assert.equal(readdirSync(tmpRoot).length, 0, 'the staging directory (credential copy + socket) is gone after the dispatch');
+    assert.equal(io.proxies[0].closed, true);
+    // A policy failure raised AFTER staging also cleans up.
+    const deps2 = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/wt'], modelPlaneEgress: 'allowlist' } });
+    const r = await deps2.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.policyMismatch, true);
+    assert.equal(readdirSync(tmpRoot).length, 0, 'nothing staged survives a policy failure');
+    assert.equal(io.proxies[1].closed, true, 'a proxy started before the failure is closed');
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(tmpRoot, { recursive: true, force: true }); }
+});
+
+test('bounded mode is claude-code only: another adapter is sandbox-policy-mismatch before anything is staged', async () => {
+  const rec = newRec();
+  const io = fakeIo(rec);
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'], adapter: 'codex' } });
+    const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 1); assert.equal(r.policyMismatch, true); assert.match(r.output, /claude-code only/);
+    assert.equal(rec.spawn.length, 0);
+    assert.equal(Object.keys(io.homeFs.written).length, 0, 'no credential copy was staged');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

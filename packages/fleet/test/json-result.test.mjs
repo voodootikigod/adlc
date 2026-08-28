@@ -116,6 +116,16 @@ test('runLive --json: a clean run emits reason null and echoes the sandbox polic
   assert.equal(emitted[0].merged, 1);
 });
 
+test('runLive --json: a pipeline that REJECTS still emits one document (reason dispatch-refused, exit 1) and releases the lock', async () => {
+  const { emitted, ov } = live();
+  let released = false;
+  const code = await runLive(ARGS, { ...ov, run: async () => { throw new Error('worktree init exploded'); }, release: () => { released = true; } });
+  assert.equal(code, 1);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].reason, 'dispatch-refused');
+  assert.equal(released, true, 'the preflight-held lock is released on the rejection path');
+});
+
 test('runLive without --json emits no document (legacy output unchanged)', async () => {
   const { emitted, ov } = live();
   await runLive({ ...ARGS, json: false }, ov);

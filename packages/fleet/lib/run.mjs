@@ -209,7 +209,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
 
   // Mark subset-blocked tickets up front so they are reported, not looped on.
   const first = planRound(all, { statusById: statusById(status), inFlightIds: inFlightIds(status), cap, onlyIds });
-  for (const id of first.blocked) status = withTicket(status, id, { state: 'blocked', reason: 'predecessor excluded from subset' });
+  for (const id of first.blocked) status = withTicket(status, id, { state: 'blocked', reason: 'predecessor excluded from subset', reasonCode: 'ticket-blocked' });
   persist();
 
   // Event-driven concurrent pool (spec §6, §9; adversarial-review C4): admit up
@@ -280,6 +280,9 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   // cleanly — the branch itself carries a commit that failed its gate.
   if (runState.contaminated) {
     log(`FLEET QUARANTINE: ${integrationBranch} not opened as a PR — ${runState.contaminationReason}. Inspect and clean the branch manually.`);
+  } else if (wallClockExpired) {
+    // fleet-ext item 5: no PR action past the wall clock either; the resumed run publishes.
+    log(`FLEET: wall clock expired — ${integrationBranch} is not opened as a PR by this invocation (resume to continue).`);
   } else if (config.noPr === true) {
     // fleet-ext item 1: the caller owns the integration branch from here.
     if (merged > 0) log(`FLEET: --no-pr — ${integrationBranch} left for the caller (${merged} merged).`);

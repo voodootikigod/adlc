@@ -162,6 +162,10 @@ export async function advanceTicket(ticket, effects, {
       }
       continue;
     }
+    // The wall clock bounds the WHOLE run, not just dispatch: nothing gates,
+    // prosecutes or merges past it. An expired run pauses (resumable) even when
+    // the strike itself returned in time.
+    if (expired()) return paused('external wall clock expired after the strike; nothing is gated or merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: gating`);
     const gate = await effects.gate({ ticket });
@@ -177,6 +181,7 @@ export async function advanceTicket(ticket, effects, {
     // Verdict evidence ONLY — the spend rode its own entry at dispatch time.
     // Carrying it here too would double-count the call.
     effects.record?.('p4', true);
+    if (expired()) return paused('external wall clock expired after the gate; nothing is prosecuted or merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
     const pros = await effects.prosecute({ ticket });
@@ -195,6 +200,7 @@ export async function advanceTicket(ticket, effects, {
       return fail('prosecution blocking after strikes exhausted', REASON_CODES.STRIKES_EXHAUSTED);
     }
     effects.record?.('p5', true);
+    if (expired()) return paused('external wall clock expired after prosecution; nothing is merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: merging`);
     const merge = await effects.merge({ ticket });
