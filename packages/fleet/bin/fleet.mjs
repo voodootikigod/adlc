@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync } from 'node
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
-import { planRound } from '../lib/scheduler.mjs';
+import { planRound, REASON_CODES } from '../lib/scheduler.mjs';
 import { loadConfig, resolveRunConfig, validateExtensionFlags, parsePreStrike } from '../lib/config.mjs';
 import { loadStatus } from '../lib/status.mjs';
 import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
@@ -394,6 +394,11 @@ export function loadExtensionFiles(config, readFile = (p) => readFileSync(p, 'ut
   return out;
 }
 
+/** The canary's timeout: the whole remaining budget, never padded; undefined without a deadline. */
+export function canaryTimeout(deadline, nowMs) {
+  return deadline == null ? undefined : Math.max(1, deadline - nowMs);
+}
+
 export async function runLive({ repo, dir, all, config, onlyIds, json = false }, {
   io = defaultIo(),
   preflight = runPreflight,
@@ -426,9 +431,16 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     try { execFileSync('bash', ['-lc', 'test -f "$HOME/.claude/plugins/cache/adlc/adlc"/*/hooks/adlc-hook.mjs 2>/dev/null || command -v adlc >/dev/null'], { stdio: 'ignore' }); return true; }
     catch { return false; }
   };
+  // fleet-ext item 5: the external wall clock is an absolute deadline anchored at
+  // INVOCATION — before preflight, resume reconciliation and planning — so those
+  // phases spend the same budget as dispatch, gating and merge (codex r2).
+  const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
   // Canary (spec §8.0(b) / premortem F1): prove the sandbox execution plumbing on
   // a trivial command in a throwaway dir BEFORE dispatching real tickets, so a
   // broken sandbox aborts cheaply instead of failing every ticket.
+  // The canary is bounded by the run's remaining wall clock too (codex r3): a
+  // hung sandbox must not outlive the advertised deadline before the first check.
+  const canaryTimeoutMs = () => canaryTimeout(deadline, now());
   const dispatchCanary = async ({ sandboxSpec }) => {
     let tmp;
     try {
@@ -438,16 +450,12 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
         exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
       });
-      const out = await sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }) });
+      const out = await sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }), ...(canaryTimeoutMs() != null ? { timeout: canaryTimeoutMs() } : {}) });
       return { ok: String(out).includes('__fleet_canary_ok__'), output: String(out) };
     } catch (e) { return { ok: false, output: e.message }; }
     finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
   };
 
-  // fleet-ext item 5: the external wall clock is an absolute deadline anchored at
-  // INVOCATION — before preflight, resume reconciliation and planning — so those
-  // phases spend the same budget as dispatch, gating and merge (codex r2).
-  const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
   const pre = await preflight({
     repo, config, statusDir: dir, io,
     self: selfIdentity(), probes: lockProbes(),
@@ -458,6 +466,12 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
   if (!pre.ok) {
     console.error(`preflight failed: ${pre.reason}`);
     return finish(pre.exitCode ?? 1, { reason: pre.reasonCode ?? RUN_REASONS.PREFLIGHT, warnings: pre.warnings });
+  }
+  // A preflight that consumed the whole budget ends the run here: nothing is
+  // reconciled, planned or dispatched past the deadline (codex r3).
+  if (deadline != null && now() >= deadline) {
+    console.error('wall clock expired during preflight; nothing dispatched');
+    return finish(2, { reason: REASON_CODES.WALL_CLOCK, warnings: pre.warnings });
   }
 
   try {

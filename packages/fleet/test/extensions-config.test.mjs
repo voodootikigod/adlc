@@ -132,3 +132,11 @@ test('there is NO --resume flag: resumption is the status reconciliation on an i
   assert.throws(() => parseFlags(['--resume']), /resume/i);
   assert.throws(() => parseFlags(['--resume', 'run-1']), /resume/i);
 });
+
+test('--model-plane-egress allowlist without --model-plane-read bounded is REFUSED: the proxy only exists inside the bounded plane, so the host policy would report allowlist while enforcing nothing (codex r3)', () => {
+  assert.throws(() => extensionFlags(parseFlags(['--model-plane-egress', 'allowlist'])), /allowlist requires --model-plane-read bounded/);
+  assert.throws(() => extensionFlags(parseFlags(['--model-plane-egress', 'allowlist', '--model-plane-read', 'host'])), /allowlist requires --model-plane-read bounded/);
+  const ok = extensionFlags(parseFlags(['--model-plane-egress', 'allowlist', '--model-plane-read', 'bounded', '--model-plane-read-only', '/usr']));
+  assert.equal(ok.modelPlaneEgress, 'allowlist');
+  assert.equal(extensionFlags(parseFlags(['--model-plane-egress', 'open'])).modelPlaneEgress, 'open', 'open egress needs no bounded plane');
+});

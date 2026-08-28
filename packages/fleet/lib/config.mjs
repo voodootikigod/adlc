@@ -120,6 +120,13 @@ export function validateExtensionFlags(flags = {}) {
   if (flags.modelPlaneEgress != null && !MODEL_PLANE_EGRESS_MODES.includes(flags.modelPlaneEgress)) {
     errors.push(`--model-plane-egress must be one of ${MODEL_PLANE_EGRESS_MODES.join('|')}`);
   }
+  // The allowlist proxy only exists inside the bounded model plane (no network
+  // namespace + bridge); with the host read policy the sandbox grants open
+  // networking, so accepting the flag there would REPORT allowlist while
+  // enforcing nothing (codex r3). Fail closed on the combination.
+  if (flags.modelPlaneEgress === 'allowlist' && flags.modelPlaneRead !== 'bounded') {
+    errors.push('--model-plane-egress allowlist requires --model-plane-read bounded');
+  }
   if (flags.workerDeps != null && !isAbsolute(flags.workerDeps)) {
     errors.push('--worker-deps must be an absolute path');
   }
