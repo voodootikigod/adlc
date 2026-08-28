@@ -13,8 +13,7 @@ import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plan
 import { prepareSyntheticHome } from './synthetic-home.mjs';
 import { startEgressProxy, egressEnv, DEFAULT_BRIDGE_PORT } from './egress-proxy.mjs';
 import {
-  assertBareMirror, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree,
-  detachGateWorktree, removeMirrorWorktree,
+  assertBareMirror, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip,
 } from './git-mirror.mjs';
 import * as worktrees from './worktrees.mjs';
 
@@ -82,9 +81,13 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
     const executable = (io.resolveExecutable ?? resolveExecutable)(command, io.env.PATH);
     if (!executable) throw new SandboxPolicyError(`adapter executable not found on PATH: ${command}`);
     if (!readOnlyPaths.includes(executable)) readOnlyPaths.push(executable);
+    // The documented DIRECTORY bindings: the npm/corepack trees of the node that runs
+    // the worker (derived from its realpath) and any read-only entry that is such a
+    // tree — everything else that is a non-system directory stays a violation (codex r8).
+    const allowedDirs = dedupeList([...nodeToolTrees(nodePath), ...readOnlyPaths.filter((p) => NODE_TOOL_TREE_RE.test(p))]);
     const inv = checkReadSetInvariant({
       readOnlyPaths, writableRoots: [worktree, ...writableRoots], home: home.home,
-      homeBinds: home.homeBinds, homeScratchDirs: home.homeScratchDirs, isFile: io.isFile ?? null,
+      homeBinds: home.homeBinds, homeScratchDirs: home.homeScratchDirs, isFile: io.isFile ?? null, allowedDirs,
     });
     if (!inv.ok) throw new SandboxPolicyError(inv.violations.join('; '));
     const sandbox = new BoundedModelSandbox({
@@ -99,6 +102,15 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
     await cleanup();
     throw e;
   }
+}
+
+export const NODE_TOOL_TREE_RE = /\/lib\/node_modules\/(npm|corepack)$/;
+const dedupeList = (xs) => [...new Set(xs)];
+/** `<prefix>/lib/node_modules/{npm,corepack}` next to a node realpath, when present. */
+export function nodeToolTrees(nodePath) {
+  let real; try { real = realpathSync(nodePath); } catch { return []; }
+  const prefix = join(real, '..', '..');
+  return ['npm', 'corepack'].map((t) => join(prefix, 'lib', 'node_modules', t)).filter((p) => { try { return statSync(p).isDirectory(); } catch { return false; } });
 }
 
 /** The first regular file named `command` on the host search list, as a realpath; null when absent. */
@@ -125,7 +137,9 @@ export function mirrorCreateWorktree({ repo, ticketId, integrationBranch, mirror
   const path = join(repo, '.worktrees', `fleet-${id}`);
   const gatePath = join(repo, '.worktrees', `fleet-${id}-gate`);
   const startSha = repoGit('rev-parse', integrationBranch);
-  assertBareMirror({ mirror, gitAt });
+  const { baseBranch } = assertBareMirror({ mirror, gitAt });
+  // A later ticket cuts from the ADVANCED integration tip: bring it into the mirror first (codex r8).
+  refreshMirrorTip({ mirror, repo, baseBranch, sourceRef: integrationBranch, tip: startSha, gitAt });
   // fleet's own worker branch in the caller repo: detach any gate worktree that
   // has it checked out, then point it at the cut tip (this run's baseline for
   // the compare-and-swap) — never a human's branch, always `fleet/<id>`.

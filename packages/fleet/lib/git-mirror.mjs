@@ -14,8 +14,8 @@
 // non-zero exit) so tests can drive real git and record/inject failures per step.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, realpathSync, readdirSync } from 'node:fs';
+import { isAbsolute, resolve, join } from 'node:path';
 
 export const FETCHED_REF_PREFIX = 'refs/fleet/fetched/';
 
@@ -82,7 +82,32 @@ export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {
     throw new Error(`mirror ${mirror} is not a bare repository (rev-parse --is-bare-repository printed ${JSON.stringify(bare)})`);
   }
   const branches = listRefs(git, 'refs/heads/').map((r) => r.refname.slice('refs/heads/'.length));
-  return { branches };
+  // The disposable-mirror contract (codex r8): ONE base branch plus this run's
+  // `fleet/*` worker branches, no remotes, no live hooks. Anything else is a
+  // general-purpose repository the model worker must never get read-write.
+  const base = branches.filter((b) => !b.startsWith('fleet/'));
+  if (base.length !== 1) throw new Error(`mirror ${mirror} must carry exactly one base branch (found ${base.length}: ${branches.join(', ') || 'none'})`);
+  const remotes = (() => { try { return git('remote').split('\n').filter(Boolean); } catch { return []; } })();
+  if (remotes.length) throw new Error(`mirror ${mirror} carries remotes (${remotes.join(', ')}); a disposable mirror has none`);
+  const hooksDir = join(mirror, 'hooks');
+  const liveHooks = existsSync(hooksDir) ? readdirSync(hooksDir).filter((f) => !f.endsWith('.sample')) : [];
+  if (liveHooks.length) throw new Error(`mirror ${mirror} carries hooks (${liveHooks.join(', ')}); a disposable mirror has none`);
+  return { branches, baseBranch: base[0] };
+}
+
+/**
+ * Bring the mirror's base branch to `tip` from the caller repository when the
+ * mirror does not yet hold it (an integration merge advanced the tip since the
+ * mirror was cut) — a local-path fetch of exactly that ref, fast-forward only.
+ */
+export function refreshMirrorTip({ mirror, repo, baseBranch, sourceRef, tip, gitAt = defaultGit } = {}) {
+  requireArgs('refreshMirrorTip', { mirror, repo, baseBranch, sourceRef, tip }, ['mirror', 'repo', 'baseBranch', 'sourceRef', 'tip']);
+  requireOid('refreshMirrorTip', 'tip', tip);
+  const git = gitAt(mirror);
+  try { git('cat-file', '-e', `${tip}^{commit}`); return { refreshed: false }; } catch { /* not held yet */ }
+  git('-c', 'core.hooksPath=/dev/null', 'fetch', '-q', '--no-tags', repo, `refs/heads/${sourceRef}:refs/heads/${baseBranch}`);
+  try { git('cat-file', '-e', `${tip}^{commit}`); } catch (e) { throw new Error(`mirror ${mirror} still lacks ${tip} after refreshing ${baseBranch} from ${sourceRef}: ${errorText(e)}`); }
+  return { refreshed: true };
 }
 
 /**

@@ -355,3 +355,20 @@ test('allowlist egress applies the executable mapping BEFORE the bridge prefix: 
     assert.ok(!after.includes('claude'), 'the bare name never reaches the bridge');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('bounded mode accepts the documented npm/corepack DIRECTORY trees and still refuses any other non-system directory (codex r8)', async () => {
+  const rec = newRec();
+  const io = { ...fakeIo(rec), isFile: (p) => !/node_modules\/(npm|corepack)$/.test(p) && p !== '/opt/stuff' };
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-npm-'));
+  try {
+    const ok = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr', '/opt/node/lib/node_modules/npm', '/opt/node/lib/node_modules/corepack'] } });
+    const r = await ok.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 0, r.output);
+    const call = findInner(rec.spawn, `${HOME}/.local/bin/claude`);
+    const pairs = call.wrapper.args.map((a, i) => `${a} ${call.wrapper.args[i + 1]}`);
+    assert.ok(pairs.includes('--ro-bind /opt/node/lib/node_modules/npm'), 'the npm tree is bound');
+    const bad = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr', '/opt/stuff'] } });
+    const r2 = await bad.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r2.exitCode, 1); assert.equal(r2.policyMismatch, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -247,3 +247,13 @@ test('after a timeout the SIGKILL escalation reaches the process group even when
   assert.equal(r.timedOut, true);
   assert.deepEqual(kills, [[-4242, 'SIGTERM'], [-4242, 'SIGKILL']], 'the leader\'s exit does not cancel the group SIGKILL');
 });
+
+test('a THROWN ticket effect is that ticket\'s recorded failure; the sibling ticket completes and the run returns normally (codex r8)', async () => {
+  const rec = newRec();
+  const d = { ...deps(rec), gate: async () => { throw new Error('gate exploded'); } };
+  const d2 = { ...d, gate: async ({ ticket }) => { if (ticket.id === 'A') throw new Error('gate exploded'); return { ok: true }; } };
+  const s = await runFleet({ all: [{ ...T('A'), scope: ['a/**'] }, { ...T('B'), scope: ['b/**'] }], runId: 'r', config: { base: 'main', concurrency: 2, noPr: true }, deps: d2 });
+  assert.equal(s.results.A, 'failed');
+  assert.match(s.status.tickets.A.reason, /pipeline error: gate exploded/);
+  assert.equal(s.results.B, 'merged', 'the sibling ran to completion');
+});

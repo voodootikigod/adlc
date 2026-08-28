@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
-  FETCHED_REF_PREFIX, assertBareMirror, ensureWorkerBranchInRepo, cutMirrorWorktree,
+  FETCHED_REF_PREFIX, assertBareMirror, ensureWorkerBranchInRepo, cutMirrorWorktree, refreshMirrorTip,
   fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree,
   mirrorRefs, gitCommonDir,
 } from '../lib/git-mirror.mjs';
@@ -92,7 +92,7 @@ function cutWithWorkerCommit(f) {
 test('the mirror holds exactly the issue branch and only the objects reachable from BASE + issue tip; a non-bare path is refused', () => {
   const f = makeFixture();
   try {
-    assert.deepEqual(assertBareMirror({ mirror: f.mirror, gitAt }), { branches: [ISSUE_BRANCH] });
+    assert.deepEqual(assertBareMirror({ mirror: f.mirror, gitAt }), { branches: [ISSUE_BRANCH], baseBranch: ISSUE_BRANCH });
     assert.deepEqual(mirrorRefs({ mirror: f.mirror, gitAt }), [`refs/heads/${ISSUE_BRANCH}`]);
     assert.deepEqual(objectsOf(f.mirror, '--all'), objectsOf(f.repo, f.base, f.issueTip), 'no object beyond BASE + issue history crossed');
     assert.equal(hasObject(f.mirror, f.otherTip), false, 'the `other` branch tip is absent');
@@ -309,4 +309,39 @@ test('the CAS null object id is as wide as the repository object format: a SHA-2
     assert.equal(execFileSync('git', ['-C', dir, 'rev-parse', `refs/heads/${WB}`], { env, encoding: 'utf8' }).trim(), tip);
     assert.deepEqual(ensureWorkerBranchInRepo({ repo: dir, workerBranch: WB, cutTip: tip }), { created: false, sha: tip });
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the disposable-mirror contract is ENFORCED: a second base branch, a remote or a live hook is refused; fleet/* worker branches are allowed (codex r8)', () => {
+  const f = makeFixture();
+  try {
+    const g = gitAt(f.mirror);
+    g('branch', 'fleet/t9', ISSUE_BRANCH);
+    assert.equal(assertBareMirror({ mirror: f.mirror, gitAt }).baseBranch, ISSUE_BRANCH, 'worker branches do not break the contract');
+    g('branch', 'stray', ISSUE_BRANCH);
+    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /exactly one base branch/);
+    g('branch', '-D', 'stray');
+    g('remote', 'add', 'origin', f.repo);
+    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries remotes/);
+    g('remote', 'remove', 'origin');
+    writeFileSync(join(f.mirror, 'hooks', 'pre-receive'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries hooks/);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a later ticket cuts from the ADVANCED integration tip: the mirror is refreshed from the caller repository, fast-forward, still single-branch (codex r8)', () => {
+  const f = makeFixture();
+  try {
+    // the caller's integration branch moves past what the mirror holds
+    const g = gitAt(f.repo);
+    g('branch', 'fleet/run-x', ISSUE_BRANCH);
+    g('checkout', '-q', 'fleet/run-x');
+    const advanced = commitFile(f.repo, 'merged.txt', 'merged\n', 'merge of ticket 1');
+    g('checkout', '-q', ISSUE_BRANCH);
+    assert.throws(() => gitAt(f.mirror)('cat-file', '-e', `${advanced}^{commit}`), 'the mirror does not hold the advanced tip yet');
+    const r = refreshMirrorTip({ mirror: f.mirror, repo: f.repo, baseBranch: ISSUE_BRANCH, sourceRef: 'fleet/run-x', tip: advanced, gitAt });
+    assert.equal(r.refreshed, true);
+    assert.equal(gitAt(f.mirror)('rev-parse', ISSUE_BRANCH), advanced, 'the base branch fast-forwarded to the tip');
+    assert.deepEqual(mirrorRefs({ mirror: f.mirror, gitAt }), [`refs/heads/${ISSUE_BRANCH}`], 'still exactly one base branch');
+    assert.equal(refreshMirrorTip({ mirror: f.mirror, repo: f.repo, baseBranch: ISSUE_BRANCH, sourceRef: 'fleet/run-x', tip: advanced, gitAt }).refreshed, false, 'idempotent once held');
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

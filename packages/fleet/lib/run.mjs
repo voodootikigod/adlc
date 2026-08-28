@@ -266,11 +266,19 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       await deps.cleanup?.({ ticket, worktree: wt.path, state: 'failed' });
       return;
     }
-    const outcome = await advanceTicket(
-      ticket,
-      buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config),
-      { log, maxStrikes, startStrikes, initialDeadEnds, deadline, now },
-    );
+    let outcome;
+    try {
+      outcome = await advanceTicket(
+        ticket,
+        buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config),
+        { log, maxStrikes, startStrikes, initialDeadEnds, deadline, now },
+      );
+    } catch (e) {
+      // A thrown effect is THIS ticket's failure (codex r8): recorded and logged; the
+      // run keeps awaiting its siblings and releases the lock only when all are done.
+      outcome = { state: 'failed', strikes: status.tickets[ticket.id]?.strikes ?? startStrikes, reason: `pipeline error: ${e?.message ?? e}`, reasonCode: null };
+      log(`${ticket.id} pipeline threw: ${e?.stack ?? e?.message ?? e}`);
+    }
     strikesConsumed += Math.max(0, (outcome.strikes ?? startStrikes) - startStrikes);
     if (outcome.reasonCode === 'wall-clock') wallClockExpired = true;
     if (outcome.policyMismatch) dispatchRefused = true;
