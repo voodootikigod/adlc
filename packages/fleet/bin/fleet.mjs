@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 // @adlc/fleet — parallel ticket orchestration on the ADLC.
-// Exit codes (CONVENTIONS): 0 = ok · 1 = operational error · 2 = a ticket failed/blocked.
+// Exit codes (CONVENTIONS): 0 = ok · 1 = operational error · 2 = a ticket failed/blocked/paused.
 
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound } from '../lib/scheduler.mjs';
-import { loadConfig, resolveRunConfig } from '../lib/config.mjs';
+import { loadConfig, resolveRunConfig, validateExtensionFlags, parsePreStrike } from '../lib/config.mjs';
 import { loadStatus } from '../lib/status.mjs';
 import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
 import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
-import { runFleet, runExitCode, failedBlockedCount } from '../lib/run.mjs';
+import { runFleet, runExitCode, failedBlockedCount, pausedCount } from '../lib/run.mjs';
+import { resultDocument, RUN_REASONS } from '../lib/result.mjs';
 import { selfIdentity, lockProbes } from '../lib/proc.mjs';
 import {
   assertAdapterCanForceModel,
@@ -25,7 +26,7 @@ import {
   previewArgv,
   quartermasterEngaged,
 } from '../lib/quartermaster.mjs';
-import { builderPrompt } from '../lib/charters.mjs';
+import { builderPrompt, fenceDeadEnd } from '../lib/charters.mjs';
 import { getAdapter } from '../lib/adapters/index.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
@@ -36,10 +37,16 @@ Usage:
   fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
             [--adapter NAME] [--model MODEL] [--model-auth-key ENV_VAR]
             [--i-am-in-a-disposable-container] [--model-plane-writable PATH]
+            [--no-pr] [--no-complete] [--dead-end-file PATH] [--max-strikes N]
+            [--wall-clock-minutes M] [--charter-file PATH]
+            [--pre-strike-argv JSON_ARRAY --pre-strike-env JSON_OBJECT]
+            [--model-plane-read host|bounded] [--model-plane-read-only ABS,ABS,...]
+            [--model-plane-git shared|mirror] [--model-plane-git-mirror ABS_BARE_REPO]
+            [--model-plane-egress open|allowlist] [--worker-deps ABS_NODE_MODULES]
   fleet status [--json]
   fleet unlock
 
-Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked.`;
+Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked/paused (see --json "reason").`;
 
 // Exported so a test can observe that a REPEATABLE flag actually accumulates.
 // `multiple: false` does not error on a repeated flag — it silently keeps the last
@@ -60,10 +67,58 @@ export function parseFlags(args) {
       'adapter-command': { type: 'string' },
       'adapter-args': { type: 'string' },
       'model-plane-writable': { type: 'string', multiple: true },
+      // ---- autopilot extensions (issue-autopilot-local §14), all operator-local ----
+      'no-pr': { type: 'boolean' },
+      'no-complete': { type: 'boolean' },
+      'dead-end-file': { type: 'string' },
+      'max-strikes': { type: 'string' },
+      'wall-clock-minutes': { type: 'string' },
+      'charter-file': { type: 'string' },
+      'pre-strike-argv': { type: 'string' },
+      'pre-strike-env': { type: 'string' },
+      'model-plane-read': { type: 'string' },
+      'model-plane-read-only': { type: 'string' },
+      'model-plane-git': { type: 'string' },
+      'model-plane-git-mirror': { type: 'string' },
+      'model-plane-egress': { type: 'string' },
+      'worker-deps': { type: 'string' },
     },
     allowPositionals: true,
   });
   return values;
+}
+
+/** Integer-or-undefined from a string flag; a non-numeric string becomes NaN so validation rejects it. */
+function intFlag(v) {
+  if (v == null) return undefined;
+  return /^-?\d+$/.test(v) ? Number(v) : Number.NaN;
+}
+
+/**
+ * Translate parsed flags into the operator-local overrides `resolveRunConfig`
+ * accepts, validating the extension family (fleet-ext) BEFORE anything runs.
+ * Throws on an invalid value; the CLI turns that into exit 1.
+ */
+export function extensionFlags(flags) {
+  const preStrike = parsePreStrike({ argvJson: flags['pre-strike-argv'], envJson: flags['pre-strike-env'] });
+  const ext = {
+    noPr: flags['no-pr'] === true,
+    noComplete: flags['no-complete'] === true,
+    deadEndFile: flags['dead-end-file'] ?? undefined,
+    maxStrikes: intFlag(flags['max-strikes']),
+    wallClockMinutes: intFlag(flags['wall-clock-minutes']),
+    charterFile: flags['charter-file'] ?? undefined,
+    preStrikeArgv: preStrike.argv ?? undefined,
+    preStrikeEnv: preStrike.env ?? undefined,
+    modelPlaneRead: flags['model-plane-read'] ?? undefined,
+    modelPlaneReadOnly: flags['model-plane-read-only'] ? flags['model-plane-read-only'].split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    modelPlaneGit: flags['model-plane-git'] ?? undefined,
+    modelPlaneGitMirror: flags['model-plane-git-mirror'] ?? undefined,
+    modelPlaneEgress: flags['model-plane-egress'] ?? undefined,
+    workerDeps: flags['worker-deps'] ?? undefined,
+  };
+  validateExtensionFlags(ext);
+  return ext;
 }
 
 function runCli() {
@@ -102,6 +157,8 @@ if (sub === 'unlock') {
 
 if (sub === 'run') {
   const flags = parseFlags(raw.slice(1));
+  let ext;
+  try { ext = extensionFlags(flags); } catch (e) { opError(`fleet: ${e.message}`); }
   const config = resolveRunConfig(loadConfig(dir), {
     concurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     base: flags.base,
@@ -115,6 +172,7 @@ if (sub === 'run') {
     // Operator-local escape hatch for the model-plane write boundary (#395): a
     // harness whose state directory the adapter catalog has not caught up with.
     modelPlaneWritable: flags['model-plane-writable'] ?? undefined,
+    ...ext,
   });
   for (const w of config.warnings) console.error(`warning: ${w}`);
 
@@ -138,11 +196,32 @@ if (sub === 'run') {
       integrationBranch: 'fleet/run-<runId>',
       concurrency: cap,
       base: config.base,
+      // The dry-run reports the resolved base SHA when the ref resolves, so a
+      // caller pinning an OID can assert the plan is bound to it (autopilot §9.6).
+      baseSha: resolveBaseSha(config.base),
       readyNow: admit.map((t) => t.id),
       firstBatch: admit.slice(0, cap).map((t) => t.id),
       waitingOnDeps: waiting.map((t) => t.id),
       subsetBlocked: blocked,
       completedExcluded: all.length - active.length,
+      // fleet-ext item 10: the checkout the run is rooted in (cwd — a LINKED
+      // worktree reads ITS OWN .adlc/ and cuts its worktrees under itself) and
+      // the nested worktree paths the ready tickets would be cut at.
+      worktreeRoot: process.cwd(),
+      plannedWorktrees: Object.fromEntries(admit.map((t) => [t.id, join(process.cwd(), '.worktrees', `fleet-${t.id.toLowerCase()}`)])),
+      integrationWorktree: join(process.cwd(), '.worktrees', 'fleet-integration'),
+      // The effective operator-local policy, echoed so a caller can assert it
+      // BEFORE a live dispatch (fleet-ext items 11–15).
+      readPolicy: config.modelPlaneRead,
+      privateTmp: config.modelPlaneRead === 'bounded',
+      gitSource: config.modelPlaneGit,
+      mirror: config.modelPlaneGitMirror,
+      egress: config.modelPlaneEgress,
+      workerDeps: config.workerDeps,
+      maxStrikes: config.maxStrikes,
+      wallClockMinutes: config.wallClockMinutes,
+      noPr: config.noPr,
+      noComplete: config.noComplete,
     };
     // Quartermaster planning runs for BOTH output modes, BEFORE either exits.
     //
@@ -172,13 +251,19 @@ if (sub === 'run') {
     });
   } else {
     // ---- LIVE RUN: preflight → resume reconcile → runFleet ----
-    runLive({ repo: process.cwd(), dir, all, config, onlyIds }).then((code) => process.exit(code));
+    runLive({ repo: process.cwd(), dir, all, config, onlyIds, json: flags.json === true }).then((code) => process.exit(code));
   }
 }
 
 if (!['run', 'status', 'unlock'].includes(sub)) {
   gateFail(`unknown subcommand: ${sub}\n\n${USAGE}`);
 }
+}
+
+/** `git rev-parse <base>` in the cwd, or null when the ref does not resolve (dry-run is advisory). */
+function resolveBaseSha(base) {
+  try { return execFileSync('git', ['rev-parse', '--verify', `${base}^{commit}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+  catch { return null; }
 }
 
 // The file:// URL of the script Node was started with, symlinks resolved — npm's
@@ -292,7 +377,24 @@ function printQuartermasterPlan(quartermaster) {
   }
 }
 
-export async function runLive({ repo, dir, all, config, onlyIds }, {
+/**
+ * Read the caller-supplied files an extension flag names (fleet-ext items 3, 6).
+ * Returns { initialDeadEnds, charterAddendum } or throws with the offending path.
+ */
+export function loadExtensionFiles(config, readFile = (p) => readFileSync(p, 'utf8')) {
+  const out = { initialDeadEnds: [], charterAddendum: null };
+  if (config.deadEndFile) {
+    let text;
+    try { text = readFile(config.deadEndFile); } catch (e) { throw new Error(`--dead-end-file ${config.deadEndFile}: ${e.message}`); }
+    out.initialDeadEnds = [fenceDeadEnd('PRIOR_ROUND', text)];
+  }
+  if (config.charterFile) {
+    try { out.charterAddendum = readFile(config.charterFile); } catch (e) { throw new Error(`--charter-file ${config.charterFile}: ${e.message}`); }
+  }
+  return out;
+}
+
+export async function runLive({ repo, dir, all, config, onlyIds, json = false }, {
   io = defaultIo(),
   preflight = runPreflight,
   build = buildLiveDeps,
@@ -300,8 +402,23 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
   loadPrior = loadStatus,
   reconcile = reconcileRun,
   release = releaseLock,
+  now = Date.now,
+  readFile,
+  emit = printJson,
 } = {}) {
   const repoGit = io.git(repo);
+  // Human-readable lines go to stderr under --json so stdout carries exactly one document.
+  const say = json ? (m) => console.error(m) : (m) => console.log(m);
+  const finish = (code, { runId = null, summary = null, reason = null, sandbox = {}, warnings = [] } = {}) => {
+    if (json) emit(resultDocument({ runId, exitCode: code, summary, reason, sandbox, warnings }));
+    return code;
+  };
+
+  // Caller-supplied files (dead-end material, charter addendum) are read BEFORE
+  // the lock is taken so a bad path never leaves a stale lock behind.
+  let files;
+  try { files = loadExtensionFiles(config, readFile ?? ((p) => io.readFile(p))); }
+  catch (e) { console.error(`fleet: ${e.message}`); return finish(1, { reason: RUN_REASONS.PREFLIGHT }); }
 
   // Preflight (spec §8.0): resolve+require sandbox, lock, clean tree, rail-hook
   // probe, canary, merge-forecast. A failed canary aborts before real dispatch.
@@ -334,7 +451,10 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
     dispatchCanary: config.canary === false ? undefined : dispatchCanary,
   });
   for (const w of pre.warnings) console.error(`warning: ${w}`);
-  if (!pre.ok) { console.error(`preflight failed: ${pre.reason}`); return pre.exitCode ?? 1; }
+  if (!pre.ok) {
+    console.error(`preflight failed: ${pre.reason}`);
+    return finish(pre.exitCode ?? 1, { reason: pre.reasonCode ?? RUN_REASONS.PREFLIGHT, warnings: pre.warnings });
+  }
 
   try {
     // Resume reconcile (spec §6.4): if a prior status exists, classify merged
@@ -345,11 +465,11 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
     let resume;
     if (prior) {
       const rec = reconcile({ all, status: prior, repo, io });
-      if (rec.refused) { console.error(`cannot resume: ${rec.reason}`); return 1; }
+      if (rec.refused) { console.error(`cannot resume: ${rec.reason}`); return finish(1, { runId: prior.runId ?? null, reason: RUN_REASONS.RESUME_REFUSED }); }
       if (rec.resume) { resume = { status: rec.status, integrationBranch: rec.status.integrationBranch }; console.error(`resuming run ${rec.status.runId} on ${rec.status.integrationBranch}`); }
     }
 
-    const runId = resume ? resume.status.runId : `${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
+    const runId = resume ? resume.status.runId : `${new Date(now()).toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
     const baseSha = resume ? resume.status.baseSha : repoGit('rev-parse', config.base);
     // Quartermaster (operating-stack §4c, §5): resolve every ticket's seat from
     // the operator-local registry BEFORE any worker is dispatched. Fail closed —
@@ -366,7 +486,7 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
       } catch (e) {
         for (const n of e.notices ?? []) console.error(`notice: ${n}`);
         console.error(`quartermaster: ${e.message}`);
-        return 1;
+        return finish(1, { runId, reason: RUN_REASONS.DISPATCH_REFUSED });
       }
     } else {
       // Legacy dispatch — no registry seat to validate, but --model must still
@@ -375,28 +495,38 @@ export async function runLive({ repo, dir, all, config, onlyIds }, {
         assertAdapterCanForceModel({ adapter: config.adapter, model: config.model, adapterArgs: config.adapterArgs });
       } catch (e) {
         console.error(`fleet: ${e.message}`);
-        return 1;
+        return finish(1, { runId, reason: RUN_REASONS.DISPATCH_REFUSED });
       }
     }
 
-    const deps = build({ repo, config, statusDir: dir, sandboxSpec: pre.sandboxSpec, io, seats });
-    const summary = await run({
-      all, runId, resume,
-      config: { ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date().toISOString() },
-      deps,
-    });
+    // fleet-ext item 5: the external wall clock is an absolute deadline computed
+    // ONCE here, so every dispatch, gate and the scheduler agree on the instant.
+    const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
+    const runConfig = {
+      ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date(now()).toISOString(),
+      deadline, initialDeadEnds: files.initialDeadEnds, charterAddendum: files.charterAddendum,
+    };
+    let deps;
+    try {
+      deps = build({ repo, config: runConfig, statusDir: dir, sandboxSpec: pre.sandboxSpec, io, seats });
+    } catch (e) {
+      console.error(`fleet: ${e.message}`);
+      return finish(1, { runId, reason: RUN_REASONS.DISPATCH_REFUSED });
+    }
+    const summary = await run({ all, runId, resume, config: runConfig, deps: { ...deps, now } });
 
     if (summary.contaminated) {
-      console.error(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +
+      say(`\nfleet run ${runId}: QUARANTINED — ${summary.contaminationReason}.` +
         ` Branch ${summary.integrationBranch} carries an ungated change and needs manual cleanup; no PR was opened.`);
     } else {
       const failed = failedBlockedCount(summary.results);
-      console.log(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked → ${summary.integrationBranch}` +
-        `${summary.prCount ? ' (PR opened)' : ''}`);
+      const paused = pausedCount(summary.results);
+      say(`\nfleet run ${runId}: ${summary.merged} merged, ${failed} failed/blocked${paused ? `, ${paused} paused` : ''} → ${summary.integrationBranch}` +
+        `${summary.prCount ? ' (PR opened)' : ''}${summary.wallClockExpired ? ' (wall clock expired — resumable)' : ''}`);
     }
     // Exit code keys on quarantine FIRST — see runExitCode. A quarantined-no-work resume
     // must not report success just because no ticket reached a failed/blocked state.
-    return runExitCode(summary);
+    return finish(runExitCode(summary), { runId, summary, sandbox: deps.describeSandbox?.() ?? {}, warnings: pre.warnings });
   } finally {
     release(dir); // always release the preflight-held lock
   }

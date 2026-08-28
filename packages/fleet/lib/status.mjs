@@ -14,6 +14,10 @@ export const STATUS_FILE = 'fleet-status.json';
 /** Terminal + in-flight state sets used across the scheduler. */
 export const IN_FLIGHT_STATES = ['building', 'gating', 'prosecuting', 'fixing', 'merging'];
 export const TERMINAL_STATES = ['merged', 'failed', 'blocked'];
+// A ticket the pre-strike command or the external wall clock stopped BEFORE a
+// strike (fleet-ext items 5/7). Neither in flight nor terminal: a re-invocation
+// reconciles it back to pending and continues from its recorded strike count.
+export const PAUSED_STATE = 'paused';
 
 /**
  * A fresh run status. `baseSha` + `integrationBranch` anchor resume

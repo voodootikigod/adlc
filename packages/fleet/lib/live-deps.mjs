@@ -24,7 +24,7 @@ import { builderPrompt, fixPrompt } from './charters.mjs';
 import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mjs';
 import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync, cpSync, rmSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
@@ -123,6 +123,15 @@ export function defaultIo() {
       } catch { /* best effort */ }
     },
     ensureGitignore: (repoDir) => ensureLocalExclude(repoDir),
+    // fleet-ext item 15: a PLAIN copy of a caller-built dependency tree — never
+    // an npm run — replacing whatever the worktree carries. `verbatimSymlinks`
+    // keeps the workspace links (`node_modules/@adlc/<x>` → `../../packages/<x>`)
+    // relative, so they resolve inside the destination worktree.
+    copyTree: (src, dest) => {
+      rmSync(dest, { recursive: true, force: true });
+      cpSync(src, dest, { recursive: true, verbatimSymlinks: true, force: true, errorOnExist: false });
+    },
+    now: () => Date.now(),
     env: process.env,
     hasGh: () => { try { execFileSync('gh', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } },
   };
@@ -210,8 +219,26 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     reviewBin: config.reviewBin ?? 'adversarial-review',
     provider: config.reviewProvider,
     failOn: config.prosecuteFailOn,
+    // The reviewer is spawned through the same async primitive as every other
+    // child (defaultIo's spawnWorker IS spawnAsync), so the injected io observes
+    // it — the argv the trusted binary receives is asserted, not assumed.
+    spawn: (cmd, args, opts) => io.spawnWorker(cmd, args, opts),
+    // fleet-ext item 8: the repo-configured grounding limit reaches the reviewer
+    // as --max-bytes; --allow-summary-review is never passed (see review-runner).
+    maxBytes: config.reviewMaxBytes ?? null,
   });
   const adlcBin = config.adlcBin ?? 'adlc';
+  const now = io.now ?? (() => Date.now());
+  // fleet-ext item 6: the charter addendum is appended AFTER the Constraints
+  // block on every strike's prompt, so the constraints keep their authority.
+  const charterAddendum = config.charterAddendum ?? null;
+  // fleet-ext item 5: a dispatch may never outlive the external wall clock. The
+  // per-dispatch timeout is the SMALLER of the configured one and what remains.
+  const dispatchTimeoutMs = () => {
+    const perDispatch = (config.timeoutMinutes ?? 30) * 60000;
+    if (config.deadline == null) return perDispatch;
+    return Math.max(1000, Math.min(perDispatch, config.deadline - now()));
+  };
 
   // A per-worktree Sandbox on the repo-command plane (§7.3). exec runs the
   // wrapped argv via the worker-spawn primitive so tests can observe it.
@@ -319,12 +346,45 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const wt = worktrees.createWorktree(repo, ticket.id, { integrationBranch, git: repoGit });
       // Initialize the worktree THROUGH the sandbox (§6.3, M1) — repo-config init
       // (npm install) runs arbitrary lifecycle code and must be contained.
-      if (config.init) {
+      // fleet-ext item 15: with --worker-deps the caller-built tree is COPIED in
+      // before every strike (see dispatch) and the configured init never runs —
+      // the worker starts with node_modules populated and has no install path.
+      if (config.init && !config.workerDeps) {
         try { await sandboxFor(wt.path).run(['/bin/sh', '-c', config.init], { env: repoCmdEnv(wt.path) }); }
         catch (e) { throw new Error(`worktree init failed for ${ticket.id}: ${e.message}`); }
       }
       return wt;
     },
+
+    // fleet-ext item 7: the operator's pre-strike command, spawned with an argv
+    // ARRAY and no shell, with EXACTLY the environment the operator supplied —
+    // nothing from this process's env, nothing from the worker's. A non-zero
+    // exit pauses the ticket (scheduler: 'quota-paused'), never fails it.
+    preStrike: config.preStrikeArgv ? async ({ ticket, strike }) => {
+      const [cmd, ...args] = config.preStrikeArgv;
+      let res;
+      try {
+        res = await io.spawnWorker(cmd, args, { cwd: repo, env: { ...(config.preStrikeEnv ?? {}) }, shell: false, timeout: 120_000 });
+      } catch (e) {
+        return { ok: false, reason: `pre-strike command could not be spawned for ${ticket.id} strike ${strike}: ${e.message}` };
+      }
+      if (res?.error) return { ok: false, reason: `pre-strike command could not run: ${res.error.message ?? res.error}` };
+      if (res?.status === 0) return { ok: true };
+      return { ok: false, reason: `pre-strike command exited ${res?.status ?? '?'} before strike ${strike}: ${String(res?.stderr ?? '').trim().slice(0, 300)}` };
+    } : undefined,
+
+    // The effective model-plane policy, echoed in the --json result so a caller
+    // can assert what actually applied (fleet-ext items 9, 11–15).
+    describeSandbox: () => ({
+      readPolicy: config.modelPlaneRead ?? 'host',
+      privateTmp: config.modelPlaneRead === 'bounded',
+      gitSource: config.modelPlaneGit ?? 'shared',
+      mirror: config.modelPlaneGitMirror ?? null,
+      egress: config.modelPlaneEgress ?? 'open',
+      egressAllowlist: [],
+      homeBinds: [],
+      writableRoots: [],
+    }),
 
     // provision is OPTIONAL per the WorkerAdapter contract (§4): only claude-code
     // writes a settings file; codex/agy/opencode/pi/cursor have none (adversarial-review A1).
@@ -345,7 +405,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     dispatch: async ({ ticket, worktree, strike, deadEnds = [] }) => {
-      const prompt = strike > 1 ? fixPrompt(ticket, config.gate, deadEnds) : builderPrompt(ticket, config.gate);
+      // Strike 1 with caller-supplied dead-end material (fleet-ext item 3) is a
+      // FIX prompt too: the material describes a previous round's failure.
+      const prompt = (strike > 1 || deadEnds.length > 0)
+        ? fixPrompt(ticket, config.gate, deadEnds, { addendum: charterAddendum })
+        : builderPrompt(ticket, config.gate, { addendum: charterAddendum });
+      // fleet-ext item 15: the dependency tree is a plain host-side copy made
+      // before EVERY strike, so a retry never inherits a worker-written
+      // node_modules and npm never runs against worker-controlled input.
+      if (config.workerDeps) {
+        try { io.copyTree(config.workerDeps, join(worktree, 'node_modules')); }
+        catch (e) { return { exitCode: 1, output: `worker-deps copy failed: ${e.message}`, timedOut: false, usageStatus: 'unreported' }; }
+      }
       const attempt = attemptFor(ticket, strike);
       const seat = attempt?.seat ?? null;
       const adapter = adapterForSeat(ticket, seat);
@@ -367,8 +438,10 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // escalation can move a later strike onto a different harness.
       const modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
       const res = await adapter.dispatch({
-        worktree, prompt, timeoutMs: (config.timeoutMinutes ?? 30) * 60000, env,
-        exec: (cmd, args, opts) => modelSandbox.run([cmd, ...args], opts),
+        worktree, prompt, timeoutMs: dispatchTimeoutMs(), env,
+        // `killGroup`: the worker is a process TREE; on timeout the whole group
+        // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
+        exec: (cmd, args, opts) => modelSandbox.run([cmd, ...args], { ...opts, killGroup: true }),
         // Operator-local binary override (A2) + non-executable data from config.
         command: config.adapterCommand ?? undefined,
         args: config.adapterArgs ?? undefined,
@@ -452,8 +525,16 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       });
     },
 
-    prosecute: ({ ticket, worktree, startSha }) =>
-      prosecuteGate({ worktree, startSha, ticket }, { runReview: review, failOn: config.prosecuteFailOn }),
+    prosecute: async ({ ticket, worktree, startSha }) => {
+      const r = await prosecuteGate({ worktree, startSha, ticket }, { runReview: review, failOn: config.prosecuteFailOn });
+      // The revision the review judged: HEAD of the reviewed worktree at this
+      // instant (fleet-ext item 9). Best effort — a missing revision is null,
+      // never a fabricated one.
+      let revision = null;
+      try { revision = io.git(worktree)('rev-parse', 'HEAD') || null; } catch { revision = null; }
+      const verdictWord = r.review?.verdict ?? ({ pass: 'approve', block: 'needs-attention', unavailable: 'unavailable' })[r.verdict] ?? r.verdict;
+      return { ...r, review: { provider: r.review?.provider ?? config.reviewProvider ?? null, verdict: verdictWord, revision } };
+    },
 
     flail: ({ ticket }) => checkFlail(
       fleetLogPath(statusDir, repo, ticket.id),

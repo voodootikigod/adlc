@@ -30,6 +30,12 @@ its provider. Finished tickets merge sequentially into a per-run
 ```sh
 adlc fleet run [--concurrency <N>] [--dry-run] [--tickets <T1,T2>] [--base <branch>] [--json]
                [--i-am-in-a-disposable-container]
+               [--no-pr] [--no-complete] [--dead-end-file <path>] [--max-strikes <n>]
+               [--wall-clock-minutes <m>] [--charter-file <path>]
+               [--pre-strike-argv <json-array> --pre-strike-env <json-object>]
+               [--model-plane-read host|bounded] [--model-plane-read-only <abs,abs,...>]
+               [--model-plane-git shared|mirror] [--model-plane-git-mirror <abs bare repo>]
+               [--model-plane-egress open|allowlist] [--worker-deps <abs node_modules>]
 adlc fleet status [--json]
 adlc fleet unlock
 ```
@@ -41,19 +47,40 @@ adlc fleet unlock
 | `--tickets <ids>` | Restrict the run to a comma-separated ticket subset. |
 | `--base <branch>` | Base branch the integration branch is cut from (default `main`). |
 | `--i-am-in-a-disposable-container` | Operator-local override: run env-scrub-only when no OS sandbox backend is present (repo config can never set this). |
-| `--json` | Machine-readable output. |
+| `--json` | Machine-readable output: one result document on stdout with `fleetRunId`, `reason`, `review`, and the policy echo. |
+| `--no-pr` / `--no-complete` | Operator-local: leave the integration branch to the caller / leave ticket completion to the caller. |
+| `--dead-end-file <path>` | Operator-local: the file's fenced content seeds strike 1's dead-end material (a previous round's failure). |
+| `--max-strikes <n>` / `--wall-clock-minutes <m>` | Operator-local: strike cap (1..50, default 2) and an external deadline for the whole run — expiry kills the strike's process group, records `wall-clock`, exits 2, stays resumable. |
+| `--charter-file <path>` | Operator-local: appended to the builder prompt after the Constraints block. |
+| `--pre-strike-argv` + `--pre-strike-env` | Operator-local: an argv array (absolute `argv[0]`, no shell) run with exactly the given env before every strike; non-zero → `quota-paused`, resumable by an identical re-invocation (no `--resume` flag exists). |
+| `--model-plane-read bounded` + `--model-plane-read-only` | Operator-local: bounded model-plane reads (worktree + synthetic home + allowlist; single-file binds for executables) with a private tmpfs `/tmp`. |
+| `--model-plane-git mirror` + `--model-plane-git-mirror` | Operator-local: the worker's worktree is cut from a caller-supplied bare mirror and fetched back by compare-and-swap; failure → `mirror-fetch-failed`. |
+| `--model-plane-egress allowlist` | Operator-local: `--unshare-net` plus a CONNECT proxy whose only targets are the adapter's declared model hosts. |
+| `--worker-deps <abs>` | Operator-local: plain copy of a caller-built dependency tree before every strike; `init` never runs. |
 
 Configuration lives under the `fleet` key of `.adlc/config.json` (`gate`, `init`,
-`concurrency`, `base`, `prosecuteFailOn`, `reviewBin`, `allowedCommands`). A live
+`concurrency`, `base`, `prosecuteFailOn`, `reviewBin`, `reviewProvider`,
+`reviewMaxBytes`, `allowedCommands`). A live
 run requires an OS sandbox backend, the ADLC rail hook, a `claude` worker, and a
-trusted `adversarial-review` binary; it fails closed otherwise.
+trusted `adversarial-review` binary; it fails closed otherwise. Every extension
+flag above is operator-local: a value under `fleet` in the committed config is
+warned and ignored.
+
+## The reason set
+
+Under `--json` every non-zero exit carries a machine-readable `reason`, which is
+authoritative for callers (the numeric exit code is unchanged). Ticket outcomes
+are a closed set: `quota-paused`, `lock-held`, `wall-clock`, `strikes-exhausted`,
+`ticket-blocked`, `flail`, `review-unavailable`, `mirror-fetch-failed`. Run-level
+failures outside it (`quarantined`, `pr-open-failed`, `preflight`,
+`resume-refused`, `dispatch-refused`) mean a human is needed.
 
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: every dispatched ticket merged (or a clean dry-run).</span>
   <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad config, dirty tree, lock held, missing gate, no sandbox).</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2**: at least one ticket failed or was blocked.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: at least one ticket failed, was blocked, or was paused by the pre-strike command / the wall clock (see `reason`).</span>
 </div>
 
 ## Example

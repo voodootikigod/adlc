@@ -17,13 +17,20 @@ export function integrationBranchName(runId) {
  * from), never base (adversarial-review N3). Builds/gates/prosecution run
  * concurrently across tickets; the MERGE runs under `mergeMutex` so merges are
  * strictly sequential (spec §9; adversarial-review C4).
+ *
+ * `wt.gatePath` (fleet-ext item 12): in mirror mode the worker builds in a
+ * worktree of the caller-supplied bare mirror, and the gates, prosecution and
+ * merge run in a caller-repository worktree at the fetched-back branch. In shared
+ * mode both are the same path, so every existing caller is unchanged.
  */
-function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated = () => {}) {
+function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated = () => {}, config = {}) {
+  const gatePath = wt.gatePath ?? wt.path;
   return {
-    dispatch: ({ strike, deadEnds }) => deps.dispatch({ ticket, worktree: wt.path, startSha: wt.startSha, strike, deadEnds }),
-    gate: () => deps.gate({ ticket, worktree: wt.path, startSha: wt.startSha }),
-    prosecute: () => deps.prosecute({ ticket, worktree: wt.path, startSha: wt.startSha }),
-    flail: () => deps.flail({ ticket, worktree: wt.path }),
+    preStrike: deps.preStrike ? ({ strike }) => deps.preStrike({ ticket, strike }) : undefined,
+    dispatch: ({ strike, deadEnds }) => deps.dispatch({ ticket, worktree: wt.path, startSha: wt.startSha, strike, deadEnds, gateWorktree: gatePath, branch: wt.branch }),
+    gate: () => deps.gate({ ticket, worktree: gatePath, startSha: wt.startSha }),
+    prosecute: () => deps.prosecute({ ticket, worktree: gatePath, startSha: wt.startSha }),
+    flail: () => deps.flail({ ticket, worktree: gatePath }),
     // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
     record: (phase, ok, data) => { try { deps.recordGate?.({ ticket, phase, ok, data }); } catch { /* evidence is best-effort */ } },
     // §8a: one usage carrier per DISPATCH, independent of any later verdict.
@@ -37,7 +44,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       if (runState?.contaminated) {
         return { ok: false, output: `integration branch quarantined: ${runState.contaminationReason}` };
       }
-      const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch, worktree: wt.path });
+      const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch, worktree: gatePath });
       const post = await deps.postMergeGate({ ticket, integrationBranch });
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
@@ -57,6 +64,9 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         }
         return { ok: false, reverted: true, output: `post-merge gate failed; recovery=${rev.method}` };
       }
+      // fleet-ext item 2: `--no-complete` hands ticket completion to the caller.
+      // The merge landed and passed its gate; nothing else happens on the branch.
+      if (config.noComplete === true) return { ok: true };
       // Post-merge gate PASSED (T73): mark the ticket completed on the integration
       // branch so the single PR the fleet opens carries the add-only completed:true
       // annotation. Runs here — inside the merge mutex, right after the gate that
@@ -117,13 +127,16 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
  * @param all     the ticket array (already completed-filtered upstream is fine;
  *                planRound also filters completed:true)
  * @param runId   deterministic run id (caller supplies — no Date/random here)
- * @param config  effective run config (base, concurrency, onlyIds, …)
+ * @param config  effective run config (base, concurrency, onlyIds, maxStrikes,
+ *                deadline (epoch ms, fleet-ext item 5), initialDeadEnds (fenced
+ *                strings, item 3), noPr (item 1), noComplete (item 2), …)
  * @param deps    injected effects (createWorktree, dispatch, gate, prosecute,
  *                flail, mergeToIntegration, postMergeGate, revertMerge, cleanup,
- *                openPR?, log?, statusDir?)
+ *                preStrike?, openPR?, log?, statusDir?, now?)
  */
 export async function runFleet({ all, runId, config, deps, resume }) {
   const log = deps.log ?? (() => {});
+  const now = deps.now ?? Date.now;
   // Run-scoped quarantine flag. Set when a gate-rejected completion commit could not
   // be withdrawn: the shared integration branch then carries an ungated commit, so no
   // further merge may land on it and the run must never open a PR from it.
@@ -179,12 +192,20 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       status,
       contaminated: true,
       contaminationReason: runState.contaminationReason,
+      strikesConsumed: 0,
+      wallClockExpired: false,
     };
   }
 
   const cap = config.concurrency;
   const onlyIds = config.onlyIds;
+  const maxStrikes = config.maxStrikes ?? 2;
+  const deadline = config.deadline ?? null;
+  const initialDeadEnds = config.initialDeadEnds ?? [];
   const mergeMutex = createMutex();
+  let strikesConsumed = 0;
+  let wallClockExpired = false;
+  const expired = () => deadline != null && now() >= deadline;
 
   // Mark subset-blocked tickets up front so they are reported, not looped on.
   const first = planRound(all, { statusById: statusById(status), inFlightIds: inFlightIds(status), cap, onlyIds });
@@ -198,19 +219,34 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   const inFlight = new Map(); // id → Promise
 
   const startTicket = async (ticket) => {
+    // A resumed ticket continues from the strike count its reconciled status
+    // carries (fleet-ext item 7 / AC4) — a resume is the SAME run, not a fresh one.
+    const startStrikes = status.tickets[ticket.id]?.strikes ?? 0;
     const wt = await deps.createWorktree({ ticket, integrationBranch });
-    status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: 0 });
+    status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: startStrikes });
     persist();
     await deps.provision?.({ ticket, worktree: wt.path });
-    const outcome = await advanceTicket(ticket, buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated), { log });
-    status = withTicket(status, ticket.id, { state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, prosecution: outcome.prosecution ?? null });
+    const outcome = await advanceTicket(
+      ticket,
+      buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState, markContaminated, config),
+      { log, maxStrikes, startStrikes, initialDeadEnds, deadline, now },
+    );
+    strikesConsumed += Math.max(0, (outcome.strikes ?? startStrikes) - startStrikes);
+    if (outcome.reasonCode === 'wall-clock') wallClockExpired = true;
+    status = withTicket(status, ticket.id, {
+      state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, reasonCode: outcome.reasonCode ?? null,
+      prosecution: outcome.prosecution ?? null, review: outcome.review ?? null,
+    });
     persist();
     await deps.cleanup?.({ ticket, worktree: wt.path, state: outcome.state });
     log(`${ticket.id} → ${outcome.state}${outcome.reason ? ` (${outcome.reason})` : ''}`);
   };
 
   for (;;) {
-    const { admit } = planRound(all, {
+    // fleet-ext item 5: once the external wall clock has expired, nothing new is
+    // dispatched. Pending tickets stay pending — the run is left resumable.
+    if (expired()) { wallClockExpired = true; if (inFlight.size === 0) break; }
+    const { admit } = expired() ? { admit: [] } : planRound(all, {
       statusById: statusById(status),
       inFlightIds: [...inFlight.keys()],
       cap,
@@ -219,8 +255,8 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     for (const ticket of admit) {
       // Reserve the slot synchronously (mark building) BEFORE awaiting, so the
       // next planRound in this same tick sees it in flight and respects the cap
-      // and scope-overlap serialization.
-      status = withTicket(status, ticket.id, { state: 'building', strikes: 0 });
+      // and scope-overlap serialization. Keep the reconciled strike count.
+      status = withTicket(status, ticket.id, { state: 'building', strikes: status.tickets[ticket.id]?.strikes ?? 0 });
       const p = startTicket(ticket).finally(() => inFlight.delete(ticket.id));
       inFlight.set(ticket.id, p);
     }
@@ -244,6 +280,9 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   // cleanly — the branch itself carries a commit that failed its gate.
   if (runState.contaminated) {
     log(`FLEET QUARANTINE: ${integrationBranch} not opened as a PR — ${runState.contaminationReason}. Inspect and clean the branch manually.`);
+  } else if (config.noPr === true) {
+    // fleet-ext item 1: the caller owns the integration branch from here.
+    if (merged > 0) log(`FLEET: --no-pr — ${integrationBranch} left for the caller (${merged} merged).`);
   } else if (merged > 0 && deps.openPR) {
     // Trust openPR's REPORTED outcome — never fabricate success. It returns
     // { opened:false, reason } when gh is unavailable or the push / PR creation fails,
@@ -259,7 +298,11 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     }
   }
 
-  return { integrationBranch, results, merged, prCount, prOpenFailed, status, contaminated: runState.contaminated, contaminationReason: runState.contaminationReason };
+  return {
+    integrationBranch, results, merged, prCount, prOpenFailed, status,
+    contaminated: runState.contaminated, contaminationReason: runState.contaminationReason,
+    strikesConsumed, wallClockExpired,
+  };
 }
 
 /**
@@ -276,8 +319,12 @@ export async function runFleet({ all, runId, config, deps, resume }) {
  * published. Exiting 0 there would let CI or an operator script mark the fleet operation
  * complete when nothing is on a PR (adversarial-review round-33).
  *
- * @returns {0|2} 2 = quarantined, some ticket failed/blocked, OR the PR failed to open;
- *   0 = clean.
+ * A PAUSED ticket (quota / wall clock, fleet-ext) is exit 2 as well: the work did not
+ * land, and the caller resumes by re-invoking. The `reason` in the --json document tells
+ * the two apart.
+ *
+ * @returns {0|2} 2 = quarantined, some ticket failed/blocked/paused, the wall clock
+ *   expired with work pending, OR the PR failed to open; 0 = clean.
  */
 /** Count the tickets in a terminal non-success state. Shared by the exit code AND the CLI's
  *  end-of-run summary line so the two can never disagree on what "failed/blocked" means. */
@@ -285,8 +332,15 @@ export function failedBlockedCount(results) {
   return Object.values(results ?? {}).filter((s) => s === 'failed' || s === 'blocked').length;
 }
 
+/** Count the tickets left resumable by a quota pause or the external wall clock. */
+export function pausedCount(results) {
+  return Object.values(results ?? {}).filter((s) => s === 'paused').length;
+}
+
 export function runExitCode(summary) {
   if (summary?.contaminated) return 2;
   if (summary?.prOpenFailed) return 2;
+  if (summary?.wallClockExpired) return 2;
+  if (pausedCount(summary?.results) > 0) return 2;
   return failedBlockedCount(summary?.results) > 0 ? 2 : 0;
 }

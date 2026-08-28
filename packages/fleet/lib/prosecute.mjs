@@ -38,8 +38,11 @@ export async function prosecute({ worktree, startSha, ticket }, { runReview, fai
   const blocking = (result.findings ?? []).filter(
     (f) => (SEVERITY_ORDER[f.severity] ?? 0) >= threshold
   );
+  // The runner's review meta (provider, the tool's own verdict word) rides along
+  // untouched so the --json result can echo it (fleet-ext item 9).
+  const review = result.review ?? null;
   if (blocking.length > 0) {
-    return { verdict: 'block', blocking, reason: `${blocking.length} finding(s) at/above ${failOn}` };
+    return { verdict: 'block', blocking, reason: `${blocking.length} finding(s) at/above ${failOn}`, review };
   }
-  return { verdict: 'pass', blocking: [], reason: 'clean prosecution' };
+  return { verdict: 'pass', blocking: [], reason: 'clean prosecution', review };
 }

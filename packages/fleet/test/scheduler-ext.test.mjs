@@ -1,0 +1,150 @@
+// fleet-ext: the scheduler's new policy edges — pre-strike pause (item 7),
+// external wall clock (item 5), resumed strike counts (AC4), caller-supplied
+// dead-end material (item 3), configurable strike cap (item 4), and the closed
+// reasonCode vocabulary (item 9). Every effect is a deterministic stub.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { advanceTicket, reconcileResume, REASON_CODES } from '../lib/scheduler.mjs';
+
+const ticket = { id: 'T1', title: 'T1', scope: ['src/**'], edges: [] };
+const ok = { ok: true };
+function effects(over = {}) {
+  const calls = { dispatch: [], preStrike: [] };
+  return {
+    calls,
+    preStrike: over.preStrike ? (a) => { calls.preStrike.push(a); return over.preStrike(a); } : undefined,
+    // Snapshot deadEnds: the scheduler keeps ONE array it appends to, so a recorder
+    // that stored the reference would see later strikes' material retroactively.
+    dispatch: (a) => { calls.dispatch.push({ ...a, deadEnds: [...(a.deadEnds ?? [])] }); return over.dispatch ? over.dispatch(a) : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }; },
+    gate: over.gate ?? (() => ok),
+    prosecute: over.prosecute ?? (() => ({ verdict: 'pass', reason: 'clean', review: { provider: 'codex', verdict: 'approve', revision: 'R1' } })),
+    merge: over.merge ?? (() => ok),
+    flail: over.flail ?? (() => ({ flail: false })),
+  };
+}
+
+test('a refused pre-strike PAUSES the ticket before the strike: state paused, reasonCode quota-paused, zero dispatches', async () => {
+  const e = effects({ preStrike: () => ({ ok: false, reason: 'quota 52% used' }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
+  assert.equal(r.state, 'paused');
+  assert.equal(r.reasonCode, REASON_CODES.QUOTA_PAUSED);
+  assert.equal(r.strikes, 0, 'the refused strike was not consumed');
+  assert.equal(e.calls.dispatch.length, 0);
+  assert.deepEqual(e.calls.preStrike[0], { ticket, strike: 1 }, 'the helper is told which strike it gates');
+  assert.match(r.reason, /quota 52%/);
+});
+
+test('an accepting pre-strike runs before EVERY strike, including a retry', async () => {
+  let n = 0;
+  const e = effects({
+    preStrike: () => ({ ok: true }),
+    dispatch: () => (++n === 1 ? { exitCode: 1, output: 'boom', timedOut: false } : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }),
+  });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
+  assert.equal(r.state, 'merged');
+  assert.deepEqual(e.calls.preStrike.map((c) => c.strike), [1, 2]);
+});
+
+test('a pre-strike that returns nothing (not ok:true) is a refusal — fail closed', async () => {
+  const e = effects({ preStrike: () => undefined });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 2 });
+  assert.equal(r.state, 'paused');
+  assert.equal(e.calls.dispatch.length, 0);
+});
+
+test('an expired deadline BEFORE a strike pauses with wall-clock and dispatches nothing', async () => {
+  const e = effects();
+  const r = await advanceTicket(ticket, e, { maxStrikes: 2, deadline: 1000, now: () => 1000 });
+  assert.equal(r.state, 'paused');
+  assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(e.calls.dispatch.length, 0);
+});
+
+test('a strike cut short by the deadline (timed out while expired) pauses with wall-clock, not a failed strike', async () => {
+  let t = 0;
+  const e = effects({ dispatch: () => { t = 5000; return { exitCode: 124, output: '', timedOut: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 4000, now: () => t });
+  assert.equal(r.state, 'paused');
+  assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(r.strikes, 1, 'the interrupted strike is recorded so a resume continues after it');
+  assert.equal(e.calls.dispatch.length, 1);
+});
+
+test('a per-dispatch timeout with the deadline still ahead is an ordinary failed strike (retries)', async () => {
+  let n = 0;
+  const e = effects({ dispatch: () => (++n === 1 ? { exitCode: 124, output: 'slow', timedOut: true } : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 2, deadline: 10_000, now: () => 1 });
+  assert.equal(r.state, 'merged');
+  assert.equal(r.strikes, 2);
+});
+
+test('startStrikes resumes from the recorded count: maxStrikes 3 with 2 already used allows exactly one more dispatch', async () => {
+  const e = effects({ dispatch: () => ({ exitCode: 1, output: 'still broken', timedOut: false }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, startStrikes: 2 });
+  assert.equal(e.calls.dispatch.length, 1);
+  assert.equal(e.calls.dispatch[0].strike, 3, 'the resumed strike is numbered from the recorded count');
+  assert.equal(r.state, 'failed');
+  assert.equal(r.reasonCode, REASON_CODES.STRIKES_EXHAUSTED);
+  assert.equal(r.strikes, 3);
+});
+
+test('startStrikes at the cap dispatches nothing and reports strikes-exhausted', async () => {
+  const e = effects();
+  const r = await advanceTicket(ticket, e, { maxStrikes: 2, startStrikes: 2 });
+  assert.equal(e.calls.dispatch.length, 0);
+  assert.equal(r.state, 'failed');
+  assert.equal(r.reasonCode, REASON_CODES.STRIKES_EXHAUSTED);
+});
+
+test('initialDeadEnds reach the FIRST dispatch as prior-attempt material and are kept on retries', async () => {
+  let n = 0;
+  const e = effects({ dispatch: () => (++n === 1 ? { exitCode: 1, output: 'x', timedOut: false } : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }) });
+  await advanceTicket(ticket, e, { maxStrikes: 2, initialDeadEnds: ['<fenced prior round>'] });
+  assert.deepEqual(e.calls.dispatch[0].deadEnds, ['<fenced prior round>']);
+  assert.equal(e.calls.dispatch[1].deadEnds[0], '<fenced prior round>', 'the caller material stays first');
+  assert.equal(e.calls.dispatch[1].deadEnds.length, 2, 'the captured strike-1 failure is appended after it');
+});
+
+test('maxStrikes is honoured verbatim (item 4): 5 failing strikes → 5 dispatches, then strikes-exhausted', async () => {
+  const e = effects({ dispatch: () => ({ exitCode: 1, output: 'no', timedOut: false }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 5 });
+  assert.equal(e.calls.dispatch.length, 5);
+  assert.equal(r.reasonCode, REASON_CODES.STRIKES_EXHAUSTED);
+  assert.match(r.reason, /5-strike cap/);
+});
+
+test('every failure path carries its closed-enum reasonCode', async () => {
+  const cases = [
+    ['ticket-blocked', effects({ dispatch: () => ({ exitCode: 0, output: 'TICKET-BLOCKED: nope', timedOut: false, blocked: true }) }), 'blocked'],
+    ['flail', effects({ dispatch: () => ({ exitCode: 1, output: 'err', timedOut: false }), flail: () => ({ flail: true }) }), 'failed'],
+    ['review-unavailable', effects({ prosecute: () => ({ verdict: 'unavailable', reason: 'no provider' }) }), 'failed'],
+    ['strikes-exhausted', effects({ prosecute: () => ({ verdict: 'block', reason: '1 high' }) }), 'failed'],
+    ['mirror-fetch-failed', effects({ dispatch: () => ({ exitCode: 1, output: 'non-ff', timedOut: false, mirrorFetchFailed: true }) }), 'failed'],
+  ];
+  for (const [code, e, state] of cases) {
+    const r = await advanceTicket(ticket, e, { maxStrikes: 2 });
+    assert.equal(r.state, state, code);
+    assert.equal(r.reasonCode, code, `${code}: reasonCode`);
+    assert.ok(Object.values(REASON_CODES).includes(r.reasonCode), 'the code is in the closed enum');
+  }
+  // mirror-fetch-failed is terminal on the FIRST strike — no retry can help.
+  const m = cases[4][1];
+  assert.equal(m.calls.dispatch.length, 1);
+});
+
+test('review meta accumulates rounds and carries provider/verdict/revision from the prosecution', async () => {
+  let n = 0;
+  const e = effects({ prosecute: () => (++n === 1 ? { verdict: 'block', reason: '1 medium', review: { provider: 'codex', verdict: 'needs-attention', revision: 'R1' } } : { verdict: 'pass', reason: 'clean', review: { provider: 'codex', verdict: 'approve', revision: 'R2' } }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 2 });
+  assert.equal(r.state, 'merged');
+  assert.deepEqual(r.review, { provider: 'codex', verdict: 'approve', revision: 'R2', rounds: 2 });
+});
+
+test('reconcileResume returns a PAUSED ticket to pending with its strikes intact (resumable), merged-by-ancestry still wins', () => {
+  const status = { integrationBranch: 'fleet/run-1', tickets: { T1: { state: 'paused', strikes: 1, branch: 'fleet/t1', reasonCode: 'quota-paused' }, T2: { state: 'paused', strikes: 2, branch: 'fleet/t2' } } };
+  const r = reconcileResume([], status, { isAncestor: (b) => b === 'fleet/t2', integrationBranch: 'fleet/run-1' });
+  assert.equal(r.tickets.T1.state, 'pending');
+  assert.equal(r.tickets.T1.strikes, 1, 'strike count preserved across the resume');
+  assert.equal(r.tickets.T2.state, 'merged');
+});

@@ -467,6 +467,50 @@ executes arbitrary code, **the repo-command plane runs inside an OS sandbox**
   (§7.2) and the deterministic pre-merge gates (§8.3), not a replacement for
   them.
 
+### 7.4 Operator-local extensions for composing callers (issue-autopilot-local §14)
+
+An orchestrator that composes fleet one ticket at a time — the issue autopilot
+([`issue-autopilot-local.md`](./issue-autopilot-local.md)) — needs to hand fleet a
+budget, a quota gate and a containment profile, and to read a machine-readable
+outcome back. These knobs exist for that, and they follow the `adapter`/`model`
+rule exactly: **honoured from argv only; a repo-committed value under `fleet` is
+warned (`SECURITY: … operator-local … — ignored`) and ignored**, because every
+one of them decides what a run may spend, what the worker may read, or what the
+orchestrator trusts. None changes fleet's behaviour when absent.
+
+| Flag | Semantics |
+| --- | --- |
+| `--no-pr` | no run-end PR; the integration branch is the caller's |
+| `--no-complete` | no `completeTicketOnIntegration`; completion is the caller's |
+| `--dead-end-file <path>` | fenced (12 000-char cap) initial dead-end material for strike 1 |
+| `--max-strikes <n>` | strike cap, 1..50, default 2 (replaces the hard-coded two-strike constant) |
+| `--wall-clock-minutes <m>` | an ABSOLUTE deadline computed once at run start; nothing new is dispatched after it, a strike it cuts short has its process group signalled (SIGTERM, SIGKILL after 15 s), the ticket is `paused` with reason `wall-clock`, exit 2, resumable |
+| `--charter-file <path>` | appended to the builder prompt AFTER the Constraints block |
+| `--pre-strike-argv <json-array>` + `--pre-strike-env <json-object>` | run before EVERY strike (resumed ones included) with an argv array, `shell:false`, absolute `argv[0]`, and EXACTLY the given environment (`ADLC_MANIFEST_KEY` rejected); non-zero → `paused`/`quota-paused`, exit 2; an IDENTICAL re-invocation resumes through §6.4's reconciliation from the recorded strike count — there is no `--resume` flag |
+| `--model-plane-read bounded` + `--model-plane-read-only <abs,…>` | the MODEL plane uses the bounded read policy (worktree + synthetic home + allowlist) with a private empty tmpfs `/tmp` (`TMPDIR` inside it); a FILE entry is a single-file bind; requires bubblewrap (Seatbelt cannot express it — fail closed) |
+| `--model-plane-git mirror` + `--model-plane-git-mirror <abs>` | worker worktree cut from the caller's bare mirror (its only git database); fetch-back = `fetch` to `refs/fleet/fetched/<wb>` → `merge-base --is-ancestor <cutTip>` → `update-ref refs/heads/<wb> … <cutTip>` (CAS) → delete temp ref; gates/prosecution/merge then run on that branch in a caller-repo worktree exactly as in shared mode; any step failing → `mirror-fetch-failed`, ref untouched |
+| `--model-plane-egress allowlist` | `--unshare-net` for the model plane + a host-side CONNECT proxy on a unix socket allowing only the adapter's declared `egressHosts`, bridged to `127.0.0.1` inside; `HTTPS_PROXY`/`HTTP_PROXY` set, `NO_PROXY` empty |
+| `--worker-deps <abs node_modules>` | plain copy into the worker worktree before every strike; `init` never runs |
+
+`fleet.reviewMaxBytes` (repo key, default 262144) reaches the inner reviewer as
+`--max-bytes`; `--allow-summary-review` is never passed.
+
+**Result document (`--json`).** One document on stdout: `fleetRunId`,
+`exitCode`, `reason`, `results`, `strikes`, `strikesConsumed`, `review:
+{provider, verdict, revision, rounds}` (top level for a single-ticket run and per
+ticket under `tickets`), and the effective policy echo (`readPolicy`,
+`privateTmp`, `gitSource`, `mirror`, `egress`, `egressAllowlist`, `homeBinds`,
+`writableRoots`). `reason` is authoritative for callers; the exit code is
+unchanged. Ticket outcomes are the CLOSED set `quota-paused`, `lock-held`,
+`wall-clock`, `strikes-exhausted`, `ticket-blocked`, `flail`,
+`review-unavailable`, `mirror-fetch-failed`. Run-level failures outside it
+(`quarantined`, `pr-open-failed`, `preflight`, `resume-refused`,
+`dispatch-refused`) mean a human is needed, and a caller keying on the closed set
+treats them as operational errors — the right reading.
+
+A new persisted ticket state, `paused`, is neither in-flight nor terminal;
+reconciliation (§6.4) returns it to `pending` with its strike count intact.
+
 ## 8. Gate integration (which adlc gates run where)
 
 0. **Preflight (before any dispatch)**: (a) repo lock + clean-tree checks

@@ -49,10 +49,15 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
  * @param opts.timeoutMs per-review timeout
  * @returns a runReview({ worktree, startSha, ticket }) => { ok, findings?, reason? }
  */
-export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000, env: source = process.env } = {}) {
+export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000, env: source = process.env, maxBytes = null } = {}) {
   return async ({ worktree, startSha }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
+    // fleet-ext item 8: the reviewer's inline-diff grounding limit is forwarded
+    // explicitly, and `--allow-summary-review` is NEVER passed — above the limit a
+    // summary-only review silently drops every finding as ungrounded, which is a
+    // false green, not a review.
+    if (Number.isInteger(maxBytes) && maxBytes > 0) args.push('--max-bytes', String(maxBytes));
     const path = trustedPath ?? source.PATH;
     // Pre-resolve to an ABSOLUTE trusted path so exec never resolves relative to
     // cwd=worktree (M2). Fail closed if no trusted binary is found.
@@ -105,7 +110,13 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
       // A 0/2 exit but unparseable stdout means we cannot trust the verdict.
       return { ok: false, reason: 'adversarial-review output was not valid JSON — failing closed' };
     }
-    return { ok: true, findings: Array.isArray(parsed.findings) ? parsed.findings : [] };
+    return {
+      ok: true,
+      findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+      // Review meta the --json result echoes (fleet-ext item 9): the provider that
+      // judged, the tool's own verdict word, and the exit that produced it.
+      review: { provider: provider ?? parsed.provider ?? null, verdict: typeof parsed.verdict === 'string' ? parsed.verdict : (res.status === 0 ? 'approve' : 'needs-attention'), exitCode: res.status },
+    };
   };
 }
 

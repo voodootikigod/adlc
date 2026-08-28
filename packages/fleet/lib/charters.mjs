@@ -8,7 +8,7 @@ import { fence } from '@adlc/core';
 // pathological build/gate log could blow the strike-2 charter's context.
 // Tail-biased (fence()'s own behavior): the failure is almost always at the
 // end of a log, not the start.
-const DEAD_END_MAX_CHARS = 12_000;
+export const DEAD_END_MAX_CHARS = 12_000;
 
 // issue #281: a ticket body IS meant to instruct the builder — that is its
 // job, unlike dead-end logs which are pure hindsight data — so it is fenced
@@ -18,10 +18,39 @@ const DEAD_END_MAX_CHARS = 12_000;
 // authoritative over anything the fenced spec says.
 const TICKET_SPEC_MAX_CHARS = 8000;
 
-/** The builder prompt for a fresh (strike-1) dispatch. */
-export function builderPrompt(ticket, gate) {
+/**
+ * Fence caller-supplied dead-end material (fleet-ext item 3, `--dead-end-file`)
+ * exactly as the scheduler fences its own captured logs: same label discipline,
+ * same cap, so a previous round's failure handed in from outside is bounded the
+ * same way a log captured inside would be.
+ */
+export function fenceDeadEnd(label, text) {
+  return fence(label, String(text ?? ''), DEAD_END_MAX_CHARS);
+}
+
+/** The Constraints block, isolated so its position relative to an addendum is testable. */
+function constraintsBlock(ticket, gate) {
   const scope = (ticket.scope ?? []).join(', ') || '(unspecified — stay minimal)';
   const rails = (ticket.rails ?? []).join(', ');
+  return `## Constraints (non-negotiable)
+- Touch ONLY files matching: ${scope}
+${rails ? `- READ-ONLY paths (rails — never edit): ${rails}` : ''}
+- Prefer minimal diffs; never rewrite a file you can edit.
+- No new dependencies unless the spec names them.
+- Do NOT commit — the orchestrator commits.
+${gate?.build ? `- \`${gate.build}\` must exit 0` : ''}
+${gate?.test ? `- \`${gate.test}\` must exit 0` : ''}`;
+}
+
+/**
+ * The builder prompt for a fresh (strike-1) dispatch.
+ *
+ * `addendum` (fleet-ext item 6, `--charter-file`) is appended AFTER the
+ * Constraints block, so the constraints keep their authority over anything the
+ * addendum says — the same rule the fenced specification is under.
+ */
+export function builderPrompt(ticket, gate, { addendum = null } = {}) {
+  const extra = addendum ? `\n\n## Charter addendum\n${String(addendum).trim()}\n` : '';
   return `You are a build agent executing exactly ONE ticket in this worktree. Work only from what is written here plus the repository.
 
 # Ticket ${ticket.id}: ${ticket.title}
@@ -36,14 +65,7 @@ conflict in your final report.
 
 ${fence('SPEC', ticket.body ?? '', TICKET_SPEC_MAX_CHARS)}
 
-## Constraints (non-negotiable)
-- Touch ONLY files matching: ${scope}
-${rails ? `- READ-ONLY paths (rails — never edit): ${rails}` : ''}
-- Prefer minimal diffs; never rewrite a file you can edit.
-- No new dependencies unless the spec names them.
-- Do NOT commit — the orchestrator commits.
-${gate?.build ? `- \`${gate.build}\` must exit 0` : ''}
-${gate?.test ? `- \`${gate.test}\` must exit 0` : ''}
+${constraintsBlock(ticket, gate)}${extra}
 
 Run the gate commands yourself before finishing. End your reply with EXACTLY one line:
 \`TICKET-DONE\` if every acceptance criterion is implemented and gates pass, or
@@ -51,8 +73,8 @@ Run the gate commands yourself before finishing. End your reply with EXACTLY one
 }
 
 /** Strike-2 prompt: prior failure diagnostics + prosecution findings, fenced. */
-export function fixPrompt(ticket, gate, deadEnds = []) {
-  const base = builderPrompt(ticket, gate);
+export function fixPrompt(ticket, gate, deadEnds = [], { addendum = null } = {}) {
+  const base = builderPrompt(ticket, gate, { addendum });
   if (!deadEnds.length) return base;
   const fenced = deadEnds.map((d, i) => fence(`PRIOR_ATTEMPT_${i + 1}`, d, DEAD_END_MAX_CHARS)).join('\n\n');
   return `${base}

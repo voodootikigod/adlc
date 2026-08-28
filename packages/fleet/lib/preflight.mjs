@@ -72,7 +72,9 @@ export async function runPreflight({
   // 2. Repo lock — single instance, stale recovery.
   const lock = acquireLock(statusDir, self, probes);
   if (lock.refused) {
-    return { ok: false, exitCode: 1, reason: `another fleet run holds the lock (pid ${lock.owner?.pid} on ${lock.owner?.host})`, warnings, lockHeld: false };
+    // `reasonCode` is the machine-readable twin of `reason` (fleet-ext item 9):
+    // a held lock is a SKIP a caller retries later, never a failure to escalate.
+    return { ok: false, exitCode: 1, reason: `another fleet run holds the lock (pid ${lock.owner?.pid} on ${lock.owner?.host})`, reasonCode: 'lock-held', warnings, lockHeld: false };
   }
 
   // 3. Clean tree.
