@@ -152,6 +152,14 @@ function dryRunJson(repo, envOverrides = {}, extraArgs = []) {
   return { code: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '', json: parsed };
 }
 
+/** Under --json a refusal still yields ONE document — but never a success one: exitCode ≠ 0, reason dispatch-refused, nothing merged (fleet-ext, codex r10). */
+function assertRefusalDocument(json, message = 'a refusal document, never a success document') {
+  if (json === null) return; // an older CLI that printed nothing is still "no success document"
+  assert.notEqual(json.exitCode, 0, message);
+  assert.equal(json.reason, 'dispatch-refused', message);
+  assert.equal(json.merged, 0, message);
+}
+
 function dryRun(repo, envOverrides = {}, extraArgs = []) {
   // Start from an env with the registry variable REMOVED, so a developer who
   // happens to export it locally cannot make these assertions pass or fail for
@@ -282,7 +290,7 @@ test('--json fails closed on a disabled registry path instead of reporting succe
 
   const { code, stderr, json } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: join(repo, 'quartermaster.json') });
   assert.notEqual(code, 0, 'automation must not be told the run is fine');
-  assert.equal(json, null, 'no success document may be emitted');
+  assertRefusalDocument(json, 'no success document may be emitted');
   assert.match(stderr, /registry loading DISABLED/);
 });
 
@@ -295,7 +303,7 @@ test('--json fails closed on an invalid registry', () => {
 
   const { code, stderr, json } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   assert.notEqual(code, 0);
-  assert.equal(json, null);
+  assertRefusalDocument(json);
   assert.match(stderr, /rule 4/);
 });
 

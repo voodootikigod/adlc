@@ -121,6 +121,16 @@ export function extensionFlags(flags) {
   return ext;
 }
 
+// Under --json EVERY non-zero pre-dispatch exit carries one result document —
+// refused flags, a failed ticket-store load, a dry-run/quartermaster refusal
+// (codex r9/r10). Module scope: every refusal site, inside runCli or the
+// quartermaster planner, reaches it.
+function refuseFlags(message) {
+  console.error(`fleet: ${message}`);
+  if (process.argv.includes('--json')) printJson(resultDocument({ runId: null, exitCode: 1, summary: null, reason: RUN_REASONS.DISPATCH_REFUSED, sandbox: {}, warnings: [] }));
+  process.exit(1);
+}
+
 function runCli() {
 const raw = process.argv.slice(2);
 const sub = raw[0];
@@ -156,14 +166,6 @@ if (sub === 'unlock') {
 }
 
 if (sub === 'run') {
-  // Under --json EVERY non-zero exit carries one result document, including a
-  // refused flag set (codex r9): parse defensively and refuse as dispatch-refused.
-  const wantsJson = raw.includes('--json');
-  const refuseFlags = (message) => {
-    console.error(`fleet: ${message}`);
-    if (wantsJson) printJson(resultDocument({ runId: null, exitCode: 1, summary: null, reason: RUN_REASONS.DISPATCH_REFUSED, sandbox: {}, warnings: [] }));
-    process.exit(1);
-  };
   let flags;
   try { flags = parseFlags(raw.slice(1)); } catch (e) { refuseFlags(e.message); }
   let ext;
