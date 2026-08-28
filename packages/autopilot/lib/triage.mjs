@@ -62,6 +62,9 @@ export function renderClarifyComment({ findings, template, issueUrl }) {
 
 const operational = (reason, extra = {}) => ({ verdict: 'OPERATIONAL', reason, lastError: reason, ...extra });
 
+/** The CLARIFY document (sentinel + body) for findings raised OUTSIDE triage (the coldstart gaps of §6.3). */
+export function clarifyDocument({ findings, issueUrl }) { return clarify({ findings, issueUrl }); }
+
 function clarify({ findings, issueUrl, ticket = null }) {
   const template = blockSkeleton();
   return { verdict: 'CLARIFY', findings, sentinel: clarifySentinel(findings), template, body: renderClarifyComment({ findings, template, issueUrl }), ticket };

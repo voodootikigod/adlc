@@ -24,7 +24,8 @@ registerSeams([
   'gitRunner.identityRowsDropped', // the overlay omits rows 3–5 (the identity rewrites)
   'gitRunner.skipRevalidation',    // net() skips the NET_GIT / ssh / remote-URL re-checks
   'gitRunner.skipIdentityCheck',   // assertIdentity never fails
-  'gitRunner.overlayObserve',      // observe() carries the overlay (echoes the pin back)
+  'gitRunner.overlayObserve',      // observe() reads with the overlay and without --file (echoes the pin back)
+  'gitRunner.noGitSsh',            // net()/overlay carry neither GIT_SSH nor the core.sshCommand row
 ]);
 
 export class GitError extends Error {
@@ -52,6 +53,7 @@ export function createGitRunner(ctx) {
     const base = baseEnv();
     if (active('gitRunner.noOverlay')) return { ...base, GIT_SSH: ctx.ssh.wrapperPath };
     const env = networkGitEnv({ base, remoteFetchUrl: ctx.remote.remoteFetchUrl, remotePushUrl: ctx.remote.remotePushUrl, sshWrapperPath: ctx.ssh.wrapperPath });
+    if (active('gitRunner.noGitSsh')) { delete env.GIT_SSH; delete env.GIT_CONFIG_KEY_6; delete env.GIT_CONFIG_VALUE_6; env.GIT_CONFIG_COUNT = '6'; }
     if (active('gitRunner.identityRowsDropped')) {
       const { rows } = boundGitConfig({ remoteFetchUrl: ctx.remote.remoteFetchUrl, remotePushUrl: ctx.remote.remotePushUrl, sshWrapperPath: ctx.ssh.wrapperPath });
       const kept = rows.filter((_, i) => i < 3 || i > 5);
@@ -80,8 +82,11 @@ export function createGitRunner(ctx) {
   }
 
   async function observe(key) {
-    const env = active('gitRunner.overlayObserve') ? overlay() : baseEnv();
-    const res = await ctx.spawn({ argv: [git(), 'config', '--file', join(ctx.repoRoot, '.git', 'config'), '--get', key], cwd: ctx.repoRoot, env, deadlineMs: DEADLINES.git, label: `git config --get ${key}` });
+    // Mutation seam `gitRunner.overlayObserve`: the read carries the bound overlay and no --file, so it echoes the pin back.
+    const mutated = active('gitRunner.overlayObserve');
+    const env = mutated ? overlay() : baseEnv();
+    const argv = mutated ? [git(), '-C', ctx.repoRoot, 'config', '--get', key] : [git(), 'config', '--file', join(ctx.repoRoot, '.git', 'config'), '--get', key];
+    const res = await ctx.spawn({ argv, cwd: ctx.repoRoot, env, deadlineMs: DEADLINES.git, label: `git config --get ${key}` });
     if (res.status === 0) return res.stdout.trim();
     if (res.status === 1) return null;
     throw new GitError('git-failed', `git config --get ${key} exited ${res.status}`, res);

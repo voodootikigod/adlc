@@ -16,6 +16,11 @@ import { gitBaseEnv } from './git-env.mjs';
 import { lockHeldBy } from './lock.mjs';
 import { dispatchFleet, writeDeadEnd, previewFleetArgv } from './dispatch.mjs';
 import { initCommand } from './init.mjs';
+import { revalidate, cacheShapedTicket } from './revalidate.mjs';
+import { tokenRefresh, tokenMarginFor, readAccessToken } from './token-refresh.mjs';
+import { selectForLoop, placeholderTicket } from './selection.mjs';
+import { maintenanceDeps } from './maintenance.mjs';
+import { readUsage } from './quota.mjs';
 import { execFileSync } from 'node:child_process';
 
 export const CHARTER_PATH = fileURLToPath(new URL('./charter-adlc.md', import.meta.url));
@@ -56,30 +61,35 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
     env: { path: env.PATH ?? '', home: env.HOME ?? '', base: gitBaseEnv({ path: env.PATH ?? '', home: env.HOME ?? '' }), raw: env },
     pinned: {}, config: null, remote: null, netGit: paths.netGit, netGitConfigSha256: null, ssh: null, gh: null, git: null,
     baseOid: null, lock: null, charterPath: overrides.charterPath ?? CHARTER_PATH, quotaOnly,
+    // The orchestrator's own environment snapshot (never handed to a child as-is) and identity, for phase A.
+    inherited: env, uid: overrides.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0), sleep: overrides.sleep ?? null,
     readEnvFile: overrides.readEnvFile ?? ((p) => readFileSync(p, 'utf8')),
     lockHeldBy: (token) => lockHeldBy(paths.adlc, token),
     modules,
   };
-  ctx.status = modules.status.createStatusStore({ paths, lockToken: () => ctx.lock?.token ?? null, redactor });
-  ctx.quota = modules.quotaGate.createQuotaGate({ ctx, ...(overrides.quota ?? {}) });
+  ctx.status = modules.status.createStatusStore({ paths, lockToken: () => ctx.lock?.token ?? null, redactor, now });
+  const usageRead = overrides.quota?.read ?? (() => readUsage({ accessToken: readAccessToken(ctx.env.home), log, ...(overrides.quota?.readOptions ?? {}) }));
+  ctx.quota = modules.quotaGate.createQuotaGate({ read: usageRead, status: ctx.status, records, model: local?.model ?? 'opus', threshold: local?.quotaThreshold, reserve: local?.quotaReserve, now, log, ...(overrides.quota ?? {}) });
   ctx.deps = {
     preflight: modules.preflight, select: modules.select, triage: modules.triage, effects: modules.effects,
     create: modules.create, recover: modules.recover, retire: modules.retire, mirror: modules.mirror, deps: modules.deps,
     diffcheck: modules.diffcheck, gates: modules.gates, review: modules.review, push: modules.push, ci: modules.ci,
     maintain: modules.maintain, digest: modules.digest, status: ctx.status, quota: ctx.quota,
-    revalidate: overrides.revalidate ?? modules.select.revalidate,
+    selection: { select: overrides.select ?? selectForLoop, placeholderTicket },
+    revalidate: overrides.revalidate ?? revalidate,
     dispatch: overrides.dispatch ?? dispatchFleet,
     deadEnd: overrides.deadEnd ?? writeDeadEnd,
-    cleanupWorktree: overrides.cleanupWorktree ?? modules.retire.removeIssueWorktreeAfterPr,
-    cacheShapedTicket: overrides.cacheShapedTicket ?? modules.triage.cacheShapedTicket,
-    tokenRefresh: overrides.tokenRefresh ?? modules.preflight.tokenRefresh,
-    tokenMargin: overrides.tokenMargin ?? modules.preflight.tokenMargin,
+    cacheShapedTicket: overrides.cacheShapedTicket ?? cacheShapedTicket,
+    tokenRefresh: overrides.tokenRefresh ?? tokenRefresh,
+    tokenMargin: overrides.tokenMargin ?? tokenMarginFor,
+    sleep: overrides.sleep ?? null,
     fleetArgvPreview: overrides.fleetArgvPreview ?? previewFleetArgv,
     prTitlePreview: overrides.prTitlePreview ?? (({ issue, ticket }) => modules.push.prTitle({ issue: issue.number, ticket })),
     init: overrides.init ?? initCommand,
     ...(overrides.deps ?? {}),
   };
-  ctx.cleanupIteration = overrides.cleanupIteration ?? (async () => { try { await modules.preflight.cleanupIteration?.(ctx); } catch { /* best effort */ } });
+  ctx.deps.maintenanceDeps = overrides.maintenanceDeps ?? (() => maintenanceDeps({ ctx, deps: ctx.deps }));
+  ctx.cleanupIteration = overrides.cleanupIteration ?? (async () => { try { await modules.preflight.cleanupPreflight?.(ctx); } catch { /* best effort */ } });
   return ctx;
 }
 

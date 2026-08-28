@@ -20,7 +20,7 @@ export const REST_DEFAULT_MS = 10 * 60_000;
 
 /** One iteration. Returns { outcome, exitCode, document }. */
 export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) {
-  const { preflight, recover, maintain, select, triage, digest, status, quota, tokenRefresh } = deps;
+  const { preflight, recover, maintain, selection, triage, effects, digest, status, quota, tokenRefresh } = deps;
   const log = ctx.log;
   const out = { outcome: null, exitCode: 0, document: { dryRun: ctx.dryRun, incomplete: [] } };
   const sleep = (why) => { out.outcome = `sleep:${why}`; out.document.outcome = out.outcome; return out; };
@@ -41,7 +41,8 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   }
   status.write({ startsThisIteration: 0, iterationId: ctx.iterationId, baseOid: ctx.baseOid });
 
-  // §2.1 — recovery BEFORE selection.
+  // §2.1 — pending terminal effects are replayed first, then recovery BEFORE selection.
+  for (const rec of ctx.records.all()) { try { await effects.reconcilePendingEffects(ctx, rec); } catch (e) { log(`effects replay failed for issue ${rec.issue}: ${e.message}`); } }
   await recover.recover({ ctx });
 
   // §3 — the loop-head quota sample.
@@ -58,12 +59,12 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   }
 
   // §8 — open-PR maintenance (every fix round re-checks quota inside).
-  await maintain.maintainOpenPrs({ ctx });
-  const active = maintain.activePrCount(ctx.records.all(), ctx);
+  await maintain.maintainOpenPrs({ ctx, baseOid: ctx.baseOid, deps: deps.maintenanceDeps() });
+  const active = maintain.activePrCount(ctx.records.all());
   if (active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
 
   // §4 — selection.
-  const sel = await select.selectIssue({ ctx, pinned: pinnedIssue, force });
+  const sel = await selection.select({ ctx, pinned: pinnedIssue, force });
   out.document.selection = sel;
   if (!sel.picked) {
     if (pinnedIssue != null) { out.exitCode = 2; out.document.excludedBy = sel.excludedRule; return sleep(`excluded:${sel.excludedRule}`); }
@@ -92,14 +93,14 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
 }
 
 async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
-  const { select, triage } = deps;
+  const { selection, triage } = deps;
   out.document.incomplete.push('fleet-dry-run-needs-worktree');
-  const sel = await select.selectIssue({ ctx, pinned: pinnedIssue, force, readOnly: true });
+  const sel = await selection.select({ ctx, pinned: pinnedIssue, force });
   out.document.selection = sel;
   if (sel.picked) {
     const ticket = ctx.local.dryRunShape
       ? (await triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true })).ticket
-      : triage.placeholderTicket({ issue: sel.issue });
+      : selection.placeholderTicket({ issue: sel.issue });
     out.document.ticket = ticket;
     out.document.fleetArgv = deps.fleetArgvPreview({ ctx, issue: sel.picked, ticketId: 'T-<ULID>', roundsUsed: 0, wallClockUsedMs: 0 });
     out.document.prTitle = deps.prTitlePreview({ issue: sel.issue, ticket });
@@ -165,7 +166,7 @@ export async function selectCommand({ flags, env, cwd, deps: overrides = {} }) {
   const ctx = await buildContext({ flags, env, cwd, local, dryRun: true, overrides });
   await ctx.deps.preflight.phaseA(ctx);
   ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
-  const sel = await ctx.deps.select.selectIssue({ ctx, readOnly: true, top: flags.top ? Number(flags.top) : undefined });
+  const sel = await ctx.deps.selection.select({ ctx, top: flags.top ? Number(flags.top) : null });
   return { exitCode: 0, document: sel, text: sel.ranked.map((r) => `${String(r.number).padStart(6)}  ${String(r.score).padStart(5)}  ${r.excluded ?? 'eligible'}`).join('\n') };
 }
 
@@ -195,7 +196,7 @@ export async function triageCommand({ flags, env, cwd, deps: overrides = {} }) {
   const ctx = await buildContext({ flags, env, cwd, local, dryRun: true, overrides });
   await ctx.deps.preflight.phaseA(ctx);
   ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
-  const sel = await ctx.deps.select.selectIssue({ ctx, pinned: n, readOnly: true });
+  const sel = await ctx.deps.selection.select({ ctx, pinned: n });
   if (!sel.picked) return { exitCode: 2, document: { issue: n, excludedBy: sel.excludedRule }, text: `issue ${n} excluded: ${sel.excludedRule}` };
   const v = await ctx.deps.triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true });
   return { exitCode: v.verdict === 'PROCEED' ? 0 : 2, document: v, text: `triage ${n}: ${v.verdict}` };
@@ -209,8 +210,9 @@ export async function resetCommand({ flags, env, cwd, deps: overrides = {} }) {
   ctx.lock = lock;
   try {
     await ctx.deps.preflight.phaseA(ctx);
-    const r = await ctx.deps.recover.resetCommand({ ctx, issue: n, confirmDelete: flags.confirmDelete ?? null, deleteRemote: flags.deleteRemote, attempts: flags.attempts });
-    return { exitCode: r.ok ? 0 : 2, document: r, text: r.message ?? (r.ok ? 'reset ok' : `reset refused: ${r.code}`) };
+    const r = await ctx.modules.reset.resetCommand({ ctx, issue: n, confirmDelete: flags.confirmDelete ?? null, deleteRemote: flags.deleteRemote, attempts: flags.attempts });
+    const printed = Array.isArray(r.printed) ? r.printed.join('\n') : '';
+    return { exitCode: r.exitCode ?? (r.ok ? 0 : 2), document: r, text: [r.exitCode === 0 ? `reset ${n}: ${r.code ?? 'ok'}` : `reset ${n} refused: ${r.code}`, printed].filter(Boolean).join('\n') };
   } finally { lock.release(); }
 }
 

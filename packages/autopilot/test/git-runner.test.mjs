@@ -13,39 +13,9 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitRunner, GitError } from '../lib/git-runner.mjs';
-import { writeNetGit, gitBaseEnv } from '../lib/git-env.mjs';
-import { prepareSshMaterial } from '../lib/ssh.mjs';
-import { createSpawner } from '../lib/spawn.mjs';
-import { autopilotPaths } from '../lib/paths.mjs';
-import { fakeSpawnImpl } from './helpers/fake-children.mjs';
-import { PINNED, REAL, realExec, GIT_ENV, git, makeFixture, codeOf } from './helpers/preflight-ctx.mjs';
-
-/** Two bare remotes (pinned, evil), a primary repo whose origin is the pinned path, NET_GIT, real ssh material. */
-async function world({ seeded = {} } = {}) {
-  const fx = makeFixture();
-  const pinnedBare = join(fx.root, 'pinned.git'); const evilBare = join(fx.root, 'evil.git');
-  git(fx.root, ['init', '-q', '--bare', pinnedBare]); git(fx.root, ['init', '-q', '--bare', evilBare]);
-  git(fx.repoRoot, ['remote', 'set-url', 'origin', pinnedBare]);
-  const paths = autopilotPaths(fx.repoRoot);
-  const { configSha256 } = writeNetGit({ netGit: paths.netGit, repoRoot: fx.repoRoot, remoteFetchUrl: pinnedBare, remotePushUrl: pinnedBare, sshWrapperPath: '/placeholder' });
-  const recorder = [];
-  const table = { [PINNED.git]: realExec(REAL.git), [PINNED['ssh-keygen']]: REAL.sshKeygen ? realExec(REAL.sshKeygen) : (a) => ({ stdout: a[0] === '-y' ? `${fx.pubLine}\n` : 'x SHA256:AAAA c\n', status: 0 }), [PINNED['ssh-add']]: () => ({ stdout: `${fx.pubLine}\n`, status: 0 }) };
-  const { spawnImpl } = fakeSpawnImpl(table);
-  const spawn = createSpawner({ recorder, spawnImpl });
-  const ctx = {
-    repoRoot: fx.repoRoot, paths, spawn, recorder, pinned: PINNED, uid: process.getuid(),
-    env: { path: process.env.PATH, home: fx.home, base: { PATH: process.env.PATH, HOME: fx.home, LANG: 'C.UTF-8', TZ: 'UTC' } },
-    inherited: { PATH: process.env.PATH, HOME: fx.home, ...seeded },
-    netGit: paths.netGit, netGitConfigSha256: configSha256,
-    remote: { remoteFetchUrl: pinnedBare, remotePushUrl: pinnedBare, observed: { fetch: pinnedBare, push: pinnedBare } },
-    sleep: async () => {},
-  };
-  ctx.ssh = await prepareSshMaterial({ ctx, dir: join(fx.root, 'ssh-material'), mode: 'explicit', identityPath: fx.keyPath, knownHostsSource: paths.knownHosts, registeredKeys: [{ key: fx.pubLine }] });
-  const runner = createGitRunner(ctx);
-  const netSpawns = () => recorder.filter((r) => r.argv[0] === PINNED.git && r.argv[1]?.startsWith('--git-dir='));
-  const refIn = (bare, ref) => { const r = spawnSync(REAL.git, ['--git-dir=' + bare, 'rev-parse', '--verify', '-q', ref], { encoding: 'utf8', env: GIT_ENV }); return r.status === 0 ? r.stdout.trim() : null; };
-  return { fx, ctx, runner, pinnedBare, evilBare, recorder, netSpawns, refIn, cleanup: () => fx.cleanup() };
-}
+import { gitBaseEnv } from '../lib/git-env.mjs';
+import { PINNED, REAL, git, codeOf } from './helpers/preflight-ctx.mjs';
+import { world } from './helpers/preflight-world.mjs';
 
 const SEEDED = {
   GIT_SSH_COMMAND: 'evil', GIT_SSH: 'evil', GIT_PROXY_COMMAND: 'evil', GIT_ASKPASS: 'evil', SSH_ASKPASS: 'evil', GIT_CONFIG_PARAMETERS: 'evil',
@@ -100,8 +70,7 @@ test('AC126: every network git spawn env carries GIT_CONFIG_KEY_0=remote.origin.
 export async function ac127_identityRewriteBeatsPrefix() {
   const w = await world();
   try {
-    const prefix = w.pinnedBare.slice(0, w.pinnedBare.length - 'pinned.git'.length); // the directory prefix of the pinned URL
-    git(w.fx.repoRoot, ['config', `url.${w.evilBare}/.insteadOf`, prefix]); // planted AFTER the audit
+    git(w.fx.repoRoot, ['config', `url.${w.evilPrefix}.insteadOf`, w.prefix]); // a prefix rewrite of the pinned URL, planted AFTER the audit
     const env = w.runner.overlayEnv();
     assert.equal(env.GIT_CONFIG_COUNT, '7');
     assert.equal(env.GIT_CONFIG_KEY_3, `url.${w.pinnedBare}.insteadOf`); assert.equal(env.GIT_CONFIG_VALUE_3, w.pinnedBare);
@@ -109,7 +78,7 @@ export async function ac127_identityRewriteBeatsPrefix() {
     const resolved = spawnSync(REAL.git, ['-C', w.fx.repoRoot, 'ls-remote', '--get-url', w.pinnedBare], { env, encoding: 'utf8' });
     assert.equal(resolved.stdout.trim(), w.pinnedBare, 'under the bound env the full-URL identity row beats the planted prefix rewrite');
     const plain = spawnSync(REAL.git, ['-C', w.fx.repoRoot, 'ls-remote', '--get-url', w.pinnedBare], { env: gitBaseEnv({ path: process.env.PATH, home: w.fx.home }), encoding: 'utf8' });
-    assert.ok(plain.stdout.trim().startsWith(w.evilBare), 'without the identity rows the prefix rewrite redirects (the rows are load-bearing)');
+    assert.equal(plain.stdout.trim(), w.evilBare, 'without the identity rows the prefix rewrite redirects (the rows are load-bearing)');
     const head = git(w.fx.repoRoot, ['rev-parse', 'HEAD']);
     const push = await w.runner.net(['push', w.pinnedBare, `${head}:refs/heads/adlc/autopilot/issue-1`]);
     assert.equal(push.status, 0, push.stderr);

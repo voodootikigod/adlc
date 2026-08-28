@@ -31,6 +31,7 @@ registerSeams([
   'preflight.ignoreExclude',       // missing .git/info/exclude entries do not fail phase A
   'preflight.anyModelFamily',      // an underivable model family passes
   'preflight.trustInheritedTools', // tools are taken from the first PATH hit with no trust check
+  'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared
 ]);
 
 const PERM = (m) => m & 0o7777;
@@ -93,7 +94,8 @@ async function bindRepository(ctx) {
   const expectedRepo = ctx.local?.repo ?? null;
   if (!expectedRepo) throw new PreflightError('repo-unbound', '--repo / ADLC_AUTOPILOT_REPO is required before any git or gh spawn');
   const fetch = await ctx.git.observe('remote.origin.url');
-  const push = await ctx.git.observe('remote.origin.pushurl');
+  // Mutation seam `preflight.ignorePushUrl`: the observed pushurl is never compared (a split push endpoint passes).
+  const push = active('preflight.ignorePushUrl') ? null : await ctx.git.observe('remote.origin.pushurl');
   let bound;
   try { bound = bindRemote({ expectedRepo, observedFetchUrl: fetch, observedPushUrl: push ?? fetch }); }
   catch (e) { throw asPreflightError(e, 'repo-mismatch'); }

@@ -52,7 +52,9 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
   const write = (patch) => persist({ ...read(), ...patch });
   const requireLock = (what) => {
     if (active('status.noLockForOrdinal')) return;
-    if (!lockToken || !lockHeldBy(paths.adlc, lockToken)) throw new StatusError('lock-required', `${what} requires the autopilot lock`);
+    // `lockToken` may be a getter: the store is built before the lock is acquired.
+    const token = typeof lockToken === 'function' ? lockToken() : lockToken;
+    if (!token || !lockHeldBy(paths.adlc, token)) throw new StatusError('lock-required', `${what} requires the autopilot lock`);
   };
   /** Atomic increment under the lock; returns the NEW ordinal (1 for the first start). */
   const incrementStarts = () => {
