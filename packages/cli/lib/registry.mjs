@@ -33,6 +33,7 @@ export const GROUPS = [
       { name: 'flail-detector', packageName: '@adlc/flail-detector', summary: 'Detect repeated errors, scope violations, edit churn, and oversized logs.' },
       { name: 'consensus-fix', packageName: '@adlc/consensus-fix', summary: 'Fan out candidate fixes and select the gated consensus winner.' },
       { name: 'fleet', packageName: '@adlc/fleet', binName: 'adlc-fleet', summary: 'Orchestrate parallel ticket execution — dispatch ready tickets to sandboxed workers, gate, prosecute, and merge to an integration branch.' },
+      { name: 'autopilot', packageName: '@adlc/autopilot', binName: 'adlc-autopilot', summary: 'Quota-gated local issue-to-PR loop — pick a GitHub issue, shape a ticket, dispatch one sandboxed fleet run, gate, attest and open the PR (P6 stays human).' },
     ],
   },
   {

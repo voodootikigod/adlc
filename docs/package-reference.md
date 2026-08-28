@@ -7,6 +7,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 
 | Package | Binary | Role | Source |
 | --- | --- | --- | --- |
+| `@adlc/autopilot` | `adlc-autopilot` | Quota-gated local issue-to-PR loop: picks a GitHub issue, shapes an ADLC ticket, dispatches one sandboxed fleet run, runs the outer gates, attests with a cross-model review and opens the PR. Invoke as `adlc autopilot`. | [`packages/autopilot/README.md`](../packages/autopilot/README.md) |
 | `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`docs/tools/behavior-diff.md`](./tools/behavior-diff.md) |
 | `@adlc/build-gate` | `build-gate` | Denies starting a high-risk ticket's build in a degraded (context-rot) session unless an audited override is recorded. | [`packages/build-gate/README.md`](../packages/build-gate/README.md) |
 | `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`docs/tools/cli.md`](./tools/cli.md) |
@@ -98,6 +99,7 @@ Execution supervision and rails:
 - `flail-detector`
 - `consensus-fix`
 - `fleet`
+- `autopilot`
 - `runner`
   - public phase assertions are `adlc run` and `adlc accept`
 

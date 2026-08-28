@@ -1,0 +1,24 @@
+# adlc-autopilot.service — TEMPLATE. Generate the real unit with
+#   adlc autopilot init --service [--write] --repo <owner/name> [--ssh-identity <abs key>]
+# which substitutes ABSOLUTE paths (no %h) and exactly one SSH auth mode:
+# either `--ssh-identity <abs>` on ExecStart (explicit mode, no SSH_AUTH_SOCK line)
+# or `Environment=SSH_AUTH_SOCK=<abs socket>` (agent mode, no --ssh-identity).
+# Spec: docs/specs/issue-autopilot-local.md §9.3a.
+[Unit]
+Description=ADLC issue autopilot (quota-gated local issue-to-PR loop)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/ABS/PATH/TO/REPO
+ExecStart=/ABS/PATH/TO/node /ABS/PATH/TO/REPO/packages/autopilot/bin/adlc-autopilot.mjs loop --rest 10m
+EnvironmentFile=/ABS/PATH/TO/REPO/.env.local
+Environment=ADLC_AUTOPILOT_REPO=OWNER/NAME
+Environment=SSH_AUTH_SOCK=/ABS/PATH/TO/ssh-agent.sock
+Restart=on-failure
+RestartSec=60
+KillMode=control-group
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

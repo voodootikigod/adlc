@@ -5,7 +5,7 @@
     "---Spec & ticket shaping---",
     "tickets", "parallax", "spec-lint", "premortem", "coldstart", "ticket-sync", "ticket-prune",
     "---Execution supervision & rails---",
-    "preflight", "model-router", "quartermaster", "merge-forecast", "build-gate", "context-handoff", "rails-guard", "flail-detector", "consensus-fix", "runner",
+    "preflight", "model-router", "quartermaster", "merge-forecast", "build-gate", "context-handoff", "rails-guard", "flail-detector", "consensus-fix", "runner", "fleet", "autopilot",
     "---Review evidence & calibration---",
     "behavior-diff", "gate-manifest", "hollow-test", "prosecute", "review-calibration", "model-ratchet", "gate-fuzzing",
     "---Compounding defenses---",
