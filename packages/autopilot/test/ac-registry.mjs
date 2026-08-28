@@ -7,6 +7,7 @@
 // named fixture bites.
 //
 // Entry shape: { fn: '<exported name>', file: '<test file>', seam: '<module.defect>' | null, noFixture?: '<reason>' }
+//           or { manual: '<what a human does and records>' } for the spec's MANUAL criteria (AC 17 only).
 
 export const REGISTRY = {
   1: [{ fn: 'ac1_registryExecutesEveryFunction', file: 'spec-coverage.test.mjs', seam: null, noFixture: 'the gate itself; its self-tests (AC 111/114/121) are the fixture' }],
@@ -135,7 +136,11 @@ export const REGISTRY = {
     { fn: 'ac74_truncationCases', file: 'github.test.mjs', seam: 'input.acceptAnything' },
   ],
   77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
-  87: [{ fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' }],
+  87: [
+    { fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' },
+    { fn: 'ac87_ordinalIsRecordedUnderTheLock', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
+    { fn: 'ac87_reconciliationAppendsToStatusAndRecord', file: 'status.test.mjs', seam: 'status.skipQuotaAppend' },
+  ],
   88: [
     { fn: 'ac88_everyPatternIsReplacedWithItsName', file: 'redact.test.mjs', seam: 'redactor.disable' },
     { fn: 'ac88_failClosedOnThrowOrResidual', file: 'redact.test.mjs', seam: 'redactor.skipSecondPass' },
@@ -343,9 +348,106 @@ export const REGISTRY = {
   ],
   110: [
     { fn: 'ac110_pinnedRemoteUrl', file: 'recover.test.mjs', seam: 'reset.skipUrlRecheck' },
+    { fn: 'ac110_pinnedRemoteUrl', file: 'push.test.mjs', seam: 'push.useOriginName' },
   ],
   72: [
     { fn: 'ac72_p0p1RecordMechanics', file: 'create.test.mjs', seam: 'create.recordDespiteGaps' },
+  ],
+  30: [
+    { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.skipRevalidation' },
+  ],
+  36: [
+    { fn: 'ac36_verifyThenPushSequence', file: 'sequence.test.mjs', seam: 'push.skipHeadCheck' },
+    { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipHeadCheck' },
+  ],
+  38: [
+    { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.attestWithoutHeadCheck' },
+    { fn: 'ac38_reviewedEqualsAttestedEqualsPushed', file: 'review.test.mjs', seam: 'review.attestWithoutHeadCheck' },
+  ],
+  46: [
+    { fn: 'ac46_reopenForRetry', file: 'sequence.test.mjs', seam: 'review.reopenWithoutAuthorize' },
+    { fn: 'ac46_reopenCli', file: 'reopen-cli.test.mjs', seam: 'keys.leakKey' },
+    { fn: 'ac46_reopenForRetry', file: 'review.test.mjs', seam: 'review.reopenWithoutAuthorize' },
+  ],
+  82: [
+    { fn: 'ac82_revalidationBeforeWriteAndDispatch', file: 'sequence.test.mjs', seam: 'run.skipRevalidation' },
+  ],
+  108: [
+    { fn: 'ac108_mirrorOutputReachesIntegrationBranch', file: 'sequence.test.mjs', seam: 'mirror.skipAncestorCheck' },
+  ],
+  144: [
+    { fn: 'ac144_pushSourceIsTheAttestedOid', file: 'sequence.test.mjs', seam: 'push.sourceIsBranchName' },
+    { fn: 'ac144_pushSourceIsTheAttestedOid', file: 'push.test.mjs', seam: 'push.sourceIsBranchName' },
+  ],
+  9: [
+    { fn: 'ac9_wallClockKillsFleet', file: 'run.test.mjs', seam: 'dispatch.noDeadline' },
+  ],
+  95: [
+    { fn: 'ac95_privateTmpAndPerFileToolBinds', file: 'run.test.mjs', seam: 'fleetArgs.bindToolDirs' },
+  ],
+  18: [
+    { fn: 'ac18_quotaRecheckPoints', file: 'quota.test.mjs', seam: 'quota.forceOk' },
+  ],
+  39: [
+    { fn: 'ac39_coldstartIsGated', file: 'quota.test.mjs', seam: 'quota.forceOk' },
+  ],
+  50: [
+    { fn: 'ac50_effectiveModelPropagates', file: 'quota.test.mjs', seam: 'quota.forceOk' },
+  ],
+  10: [
+    { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'input.acceptAnything' },
+  ],
+  128: [
+    { fn: 'ac128_dryRunNeverNeedsAWorktree', file: 'loop.test.mjs', seam: 'input.acceptAnything' },
+  ],
+  15: [
+    { fn: 'ac15_dependencyDiscipline', file: 'deps.test.mjs', seam: 'deps.allowAnyDep' },
+  ],
+  14: [{ fn: 'ac14_registryGuards', file: 'repo-guards.test.mjs', seam: null, noFixture: 'the guard suites are external (apps/docs); no autopilot seam can make them fail' }],
+  16: [{ fn: 'ac16_gateRecordsForTheBuildTicket', file: 'repo-guards.test.mjs', seam: null, noFixture: 'the records live in this repository\'s committed manifest; the code-level approve is a PR-time process step (prosecute tier-check)' }],
+  17: [{ manual: 'live canary — `adlc-autopilot once --issue <docs issue>` produces one PR with green CI and a manifest carrying coldstart, spec-lint, cross-model-review bound to the ULID; `adlc run p5 --ticket <ULID>` exits 0 in that worktree; recorded in the PR body' }],
+  111: [{ fn: 'ac111_gateRejectsHollowEntries', file: 'spec-coverage.test.mjs', seam: 'gate.acceptHollowEntries' }],
+  114: [{ fn: 'ac114_everyRegisteredFunctionExecutes', file: 'spec-coverage.test.mjs', seam: null, noFixture: 'the executor of every registered function cannot run itself under a fixture' }],
+  121: [
+    { fn: 'ac121_everyCriterionHasABitingFixture', file: 'spec-coverage.test.mjs', seam: null, noFixture: 'the fixture checker cannot run itself under a fixture; its rules are self-tested below' },
+    { fn: 'ac121_fixtureRulesSelfTest', file: 'spec-coverage.test.mjs', seam: 'gate.acceptHollowEntries' },
+  ],
+  156: [{ fn: 'ac156_syntheticHomeContract', file: 'repo-guards.test.mjs', seam: null, noFixture: 'the contract is fleet\'s real-bwrap suite, spawned as a child test run' }],
+  6: [
+    { fn: 'ac6_prUpsertEditsOnSecondRun', file: 'pr.test.mjs', seam: 'push.alwaysCreate' },
+  ],
+  57: [
+    { fn: 'ac57_upsertHeadBinding', file: 'pr.test.mjs', seam: 'push.upsertWithoutHeadBinding' },
+  ],
+  8: [
+    { fn: 'ac8_ciFollowUpTable', file: 'ci.test.mjs', seam: 'ci.skippedIsPass' },
+  ],
+  40: [
+    { fn: 'ac40_ciBudgetIndependentOfBuildBudget', file: 'ci.test.mjs', seam: 'ci.shareBudgets' },
+  ],
+  51: [
+    { fn: 'ac51_headBindingDuringCi', file: 'ci.test.mjs', seam: 'ci.ignoreHeadBinding' },
+  ],
+  66: [
+    { fn: 'ac66_normalizationContractFromRealFixture', file: 'ci.test.mjs', seam: 'ci.missingBucketIsPass' },
+  ],
+  7: [
+    { fn: 'ac7_rebasePaths', file: 'maintain.test.mjs', seam: 'maintain.countStaleTowardCap' },
+  ],
+  48: [
+    { fn: 'ac48_carryForwardEquivalence', file: 'maintain.test.mjs', seam: 'maintain.carryForwardWithoutPatchId' },
+  ],
+  61: [
+    { fn: 'ac61_ownershipAndSelector', file: 'maintain.test.mjs', seam: 'maintain.maintainAnyState' },
+  ],
+  62: [
+    { fn: 'ac62_prLifecycle', file: 'maintain.test.mjs', seam: 'maintain.deleteRecordWithRemoteRef' },
+  ],
+  69: [
+    { fn: 'ac69_digestProtocol', file: 'digest.test.mjs', seam: 'digest.skipSentinelSearch' },
+  ],
+  44: [
+    { fn: 'ac44_diffSizeGate', file: 'review.test.mjs', seam: 'review.skipSizeGate' },
   ],
 };
 

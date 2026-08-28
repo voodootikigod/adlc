@@ -50,7 +50,8 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
   const paths = autopilotPaths(repoRoot);
   const key = overrides.key ?? env.ADLC_MANIFEST_KEY ?? null;
   const credentialToken = overrides.credentialToken ?? null;
-  const redactor = createRedactor({ secretValues: keyBearingValues(env, [credentialToken].filter(Boolean)) });
+  // The manifest key is a secret value for the redactor whether it arrived through the environment or an override.
+  const redactor = createRedactor({ secretValues: keyBearingValues(env, [credentialToken, key].filter(Boolean)) });
   const log = overrides.log ?? ((line) => { const r = redactor.redact(String(line), { withheld: '[withheld: redaction failed]' }); process.stderr.write(`${r.text}\n`); });
   const records = createRecordStore({ paths, redactor });
   const iterationToken = overrides.iterationToken ?? randomBytes(32).toString('hex');

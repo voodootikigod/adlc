@@ -17,7 +17,11 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REGISTRY } from './ac-registry.mjs';
-import { withMutation, knownSeams, clearAll } from '../lib/mutations.mjs';
+import { withMutation, knownSeams, clearAll, registerSeams, active } from '../lib/mutations.mjs';
+
+// The gate's own seam (AC 111/121): when active, the static checker accepts every entry.
+registerSeams(['gate.acceptHollowEntries']);
+export const MANUAL_CAP = 1;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..', '..');
@@ -71,6 +75,7 @@ function functionBody(src, name) {
 
 /** Static checks over one test file's SOURCE for one registered function. */
 export function staticCheck(file, fn, n) {
+  if (active('gate.acceptHollowEntries')) return [];
   const src = readFileSync(join(HERE, file), 'utf8');
   const problems = [];
   if (!new RegExp(`export\\s+(async\\s+)?function\\s+${fn}\\b`).test(src)) problems.push(`${file}: ${fn} is not an exported function`);
@@ -119,21 +124,25 @@ test('AC1: §16 at the pinned blob is contiguous from 1 and every criterion is r
 
 test('AC1: every registered function exists, is titled AC<n>:, imports lib/ and asserts on a call into it (static)', () => {
   const problems = [];
+  const manual = [];
   for (const [n, entries] of Object.entries(REGISTRY)) {
     for (const e of entries) {
+      if (e.manual) { manual.push(`AC${n}: ${e.manual}`); continue; }
       if (!existsSync(join(HERE, e.file))) { problems.push(`AC${n}: ${e.file} does not exist`); continue; }
       problems.push(...staticCheck(e.file, e.fn, Number(n)));
     }
   }
+  for (const line of manual) console.log(`manual: ${line}`);
+  assert.ok(manual.length <= MANUAL_CAP, `at most ${MANUAL_CAP} manual criterion`);
   assert.deepEqual(problems, [], problems.join('\n'));
 });
 
-test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', async () => {
+export async function ac114_everyRegisteredFunctionExecutes() {
   clearAll();
   const modules = new Map();
   let executed = 0;
   const failures = [];
-  const entries = Object.entries(REGISTRY).flatMap(([n, list]) => list.map((e) => ({ n: Number(n), ...e })));
+  const entries = Object.entries(REGISTRY).flatMap(([n, list]) => list.filter((e) => !e.manual).map((e) => ({ n: Number(n), ...e })));
   for (const e of entries) {
     if (e.file === 'spec-coverage.test.mjs') { executed++; continue; }
     if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
@@ -143,9 +152,11 @@ test('AC114: every registered function is EXECUTED here (spy count equals regist
   }
   assert.deepEqual(failures, [], failures.join('\n'));
   assert.equal(executed, entries.length, 'every registered function ran');
-});
+  assert.ok(knownSeams().length > 0);
+}
+test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', ac114_everyRegisteredFunctionExecutes);
 
-test('AC121/AC114: every registered criterion names a mutation fixture that BITES (test fails with it, passes without), or a printed noFixture reason (≤ 5)', async () => {
+export async function ac121_everyCriterionHasABitingFixture() {
   clearAll();
   const noFixture = [];
   const problems = [];
@@ -156,7 +167,9 @@ test('AC121/AC114: every registered criterion names a mutation fixture that BITE
     // reason. The cap of 5 (AC 1) is over CRITERIA that have no biting fixture at all.
     let bit = false;
     const reasons = [];
+    if (list.every((e) => e.manual)) continue;
     for (const e of list) {
+      if (e.manual) continue;
       if (e.noFixture) { reasons.push(`AC${n} (${e.fn}): ${e.noFixture}`); continue; }
       if (!e.seam) { problems.push(`AC${n}: ${e.fn} names neither a seam nor a noFixture reason`); continue; }
       if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
@@ -180,7 +193,9 @@ test('AC121/AC114: every registered criterion names a mutation fixture that BITE
   for (const line of noFixture) console.log(`noFixture: ${line}`);
   assert.ok(noFixture.length <= 5, `at most 5 noFixture criteria (have ${noFixture.length}):\n${noFixture.join('\n')}`);
   assert.deepEqual(problems, [], problems.join('\n'));
-});
+  assert.ok(knownSeams().length > 0);
+}
+test('AC121: every registered criterion names a mutation fixture that BITES (test fails with it, passes without), or a printed noFixture reason (≤ 5)', ac121_everyCriterionHasABitingFixture);
 
 // ── self-tests (AC 111, 121): the gate is not vacuous ──
 export function ac111_gateRejectsHollowEntries() {
@@ -199,6 +214,7 @@ export function ac111_gateRejectsHollowEntries() {
     const constantOnly = "import { X } from '../lib/x.mjs';\nexport function acN_c() { assert.equal(X, 1); }\ntest('AC9: x', acN_c);\n";
     require_write(tmp, constantOnly);
     assert.ok(staticCheck('.gate-self-test.tmp.mjs', 'acN_c', 9).some((p) => /no CALL/.test(p)), 'an assertion on a bare exported constant is rejected');
+    assert.ok(!active('gate.acceptHollowEntries'), 'the gate is not running in its hollow-accepting mode');
   } finally { try { require_unlink(tmp); } catch { /* none */ } }
   // Multi-number titles credit every number; quotes inside a title do not break the parser.
   assert.deepEqual(titleNumbers("AC41/90: packages/ticket-sync's `x` and \"y\""), [41, 90]);
@@ -218,5 +234,9 @@ export function ac121_fixtureRulesSelfTest() {
   const reasons = Array.from({ length: 6 }, (_, i) => `AC${i}: r`);
   assert.ok(reasons.length > 5, 'six noFixture reasons exceed the cap');
   assert.ok(readdirSync(HERE).includes('ac-registry.mjs'));
+  assert.equal(active('gate.acceptHollowEntries'), false, 'the rules are checked with the gate in its strict mode');
+  const src = "import { X } from '../lib/x.mjs';\nexport function acN_k() { assert.equal(X, 1); }\ntest('AC9: x', acN_k);\n";
+  const tmp = join(HERE, '.gate-self-test-121.tmp.mjs');
+  try { require_write(tmp, src); assert.ok(staticCheck('.gate-self-test-121.tmp.mjs', 'acN_k', 9).length > 0, 'a hollow entry is a problem'); } finally { try { require_unlink(tmp); } catch { /* none */ } }
 }
 test('AC121: an entry without a fixture and without a noFixture reason fails the gate; more than 5 reasons fail it', ac121_fixtureRulesSelfTest);

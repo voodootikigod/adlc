@@ -43,11 +43,11 @@ export function appendManifestLine(cwd, entry) {
  * @param opts.checks       () → rows for `gh pr checks` (default all blocking jobs pass)
  * @param opts.fleet        (argv, meta, fx) → custom fleet behaviour; default = one worker commit + integration branch
  */
-export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null } = {}) {
+export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null, spawner = {}, quotaRead = null, local: localOverrides = {}, dryRun = false } = {}) {
   const gh = fakeGithub({ permissions: { op: 'admin' } });
-  const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', labels: [] } };
+  const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', createdAt: '2026-08-01T10:00:00Z', labels: [], author: { login: 'op' }, authorAssociation: 'OWNER' } };
   const handlers = {};
-  const fx = createFixture({ gh, handlers });
+  const fx = createFixture({ gh, handlers, spawner });
   const { repoRoot, originPath, paths } = fx;
   // Every spawn advances the fixture clock one second, so timestamps (dead-end files, records) never collide.
   fx.hooks.push(() => fx.advance(1000));
@@ -55,6 +55,9 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   // The fixture repository at BASE_OID: the real scripts/preflight.mjs (the normative gate order), a workspace package, .adlc/ scaffolding.
   mkdirSync(join(repoRoot, 'scripts'), { recursive: true });
   cpSync(join(REPO, 'scripts', 'preflight.mjs'), join(repoRoot, 'scripts', 'preflight.mjs'));
+  cpSync(join(REPO, 'scripts', 'rails-guard-ci.mjs'), join(repoRoot, 'scripts', 'rails-guard-ci.mjs'));
+  mkdirSync(join(repoRoot, 'packages', 'rails-guard', 'lib', 'ci'), { recursive: true });
+  cpSync(join(REPO, 'packages', 'rails-guard', 'lib', 'ci', 'trust-roots.mjs'), join(repoRoot, 'packages', 'rails-guard', 'lib', 'ci', 'trust-roots.mjs'));
   mkdirSync(join(repoRoot, 'packages', 'x'), { recursive: true });
   writeFileSync(join(repoRoot, 'packages', 'x', 'package.json'), '{"name":"@adlc/x","version":"1.0.0"}\n');
   writeFileSync(join(repoRoot, 'packages', 'x', 'index.js'), 'export const x = 1;\n');
@@ -69,8 +72,14 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   // ---- fake adlc ----
   const shardPathFor = (wt, id) => join(wt, '.adlc', 'tickets', ticketFilename(id));
   const findShard = (wt) => { const dir = join(wt, '.adlc', 'tickets'); return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => join(dir, f))[0] ?? null : null; };
-  handlers[FAKE.adlc] = (args, { cwd, stdin }) => {
+  handlers[FAKE.adlc] = async (args, { cwd, stdin }) => {
     const [sub, verb] = args;
+    if (sub === 'ticket' && verb === 'create' && !args.includes('--write')) {
+      // the triage schema gate: a DRY RUN over stdin (never key-bearing, never a shard)
+      try { const doc = JSON.parse(String(stdin ?? '')); if (!doc || typeof doc.title !== 'string') return { status: 2, stderr: 'schema: title required' }; } catch (e) { return { status: 2, stderr: `schema: ${e.message}` }; }
+      return { stdout: JSON.stringify({ ticketId: 'T-<dry-run>', dryRun: true }) };
+    }
+    if (sub === 'spec-lint') return { stdout: JSON.stringify({ ok: true, findings: [] }) };
     if (sub === 'ticket' && verb === 'create') {
       const root = flag(args, '--root'); if (!root || args.includes('--dir')) return { status: 1, stderr: 'ticket create: --root required, --dir refused' };
       const doc = JSON.parse(String(stdin ?? '{}'));
@@ -115,8 +124,8 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     if (sub === 'gate-manifest' && verb === 'attest') return { stdout: 'evidence: fake' };
     if (sub === 'fleet' && verb === 'run') {
       state.fleetRuns++;
-      if (fleet) return fleet(args, { cwd }, fx, state);
-      return defaultFleet(args, { cwd }, fx, state, worker);
+      try { return await (fleet ? fleet(args, { cwd }, fx, state) : defaultFleet(args, { cwd }, fx, state, worker)); }
+      catch (e) { return { status: 1, stderr: `fleet fake threw: ${e.stack ?? e.message}` }; }
     }
     return { status: 1, stderr: `fake adlc: unhandled ${args.join(' ')}` };
   };
@@ -125,7 +134,15 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     if (String(args[0]).endsWith('spec-lint.mjs') && args.includes('--record')) { appendManifestLine(cwd, { gate: 'spec-lint', ticket: flag(args, '--ticket') }); return { stdout: '{"ok":true}' }; }
     return { stdout: '' };
   };
-  handlers[FAKE.claude] = (args, { stdin }) => ({ stdout: JSON.stringify(claudeAnswer ? claudeAnswer(args, stdin) : { result: JSON.stringify({ gaps: [] }) }) }); // eslint-disable-line no-unused-vars
+  handlers[FAKE.claude] = (args, { stdin }) => {
+    state.claudeCalls = (state.claudeCalls ?? []).concat([{ args: [...args], stdin: String(stdin ?? '') }]);
+    if (claudeAnswer) return { stdout: JSON.stringify(claudeAnswer(args, stdin, state)) };
+    if (String(stdin ?? '').includes('COLDSTART PROMPT')) return { stdout: JSON.stringify({ type: 'result', result: JSON.stringify({ gaps: [] }) }) };
+    // the shaping answer (§5.2): a ticket whose body starts with the issue URL and carries the criteria marker
+    const url = `https://github.com/o/r/issues/${state.issue.number}`;
+    const shaped = { title: state.issue.title, category: 'feature', scope: ['packages/x/**'], rails: [], edges: [], duration: 1, body: `GitHub issue: ${url}\n\n${state.issue.body}\n\n${CRITERIA_HEADING}\n- widget exists\n- tests pass\n` };
+    return { stdout: JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify(shaped) }) };
+  };
   handlers[FAKE.npm] = (args, { cwd }) => { mkdirSync(join(cwd, 'node_modules'), { recursive: true }); writeFileSync(join(cwd, 'node_modules', '.package-lock.json'), '{}'); return { stdout: '' }; };
   handlers[FAKE_TOOLS['adversarial-review']] = (args, { cwd }) => {
     const call = state.reviewCalls++;
@@ -171,6 +188,13 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
       return { stdout: JSON.stringify(doc) };
     }
     if (sub === 'issue' && verb === 'list') return { stdout: '[]' };
+    if (sub === 'api' && /^repos\/[^/]+\/[^/]+\/issues\?state=open/.test(args[1] ?? '')) {
+      const page = Number((args[1].match(/[?&]page=(\d+)/) ?? [])[1] ?? 1);
+      if (page > 1) return { stdout: '[]' };
+      const i = state.issue; const labels = (gh.labels[String(i.number)] ?? []).map((name) => ({ name }));
+      return { stdout: JSON.stringify([{ number: i.number, title: i.title, body: i.body, state: 'open', labels, milestone: null, created_at: i.createdAt, updated_at: i.updatedAt, user: { login: i.author.login }, author_association: i.authorAssociation, html_url: `https://github.com/o/r/issues/${i.number}` }]) };
+    }
+    if (sub === 'api' && args[1] === 'graphql') return { stdout: JSON.stringify({ data: { repository: { issue: { lastEditedAt: null, userContentEdits: { nodes: [] } } } } }) };
     if (sub === 'issue' && verb === 'create') { state.logIssue = 900; return { stdout: 'https://github.com/o/r/issues/900\n' }; }
     if (sub === 'run' && verb === 'list') return { stdout: '[]' };
     if (sub === 'run' && verb === 'view') return { stdout: 'log line\n' };
@@ -188,10 +212,11 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
 
   // ---- the PRODUCTION context wiring over the fixture ----
   const key = 'k'.repeat(48);
-  const local = { model: 'opus', quotaThreshold: 50, quotaReserve: 5, adapter: 'claude-code', trustedBinDirs: null, sshIdentity: null, issue: null, force: false, dryRun: false, restMs: null };
+  const local = { model: 'opus', quotaThreshold: 50, quotaReserve: 5, adapter: 'claude-code', trustedBinDirs: null, sshIdentity: null, issue: null, force: false, dryRun, restMs: null, ...localOverrides };
+  state.quotaRead = quotaRead ?? (async () => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } }));
   const ctx = await buildContext({
-    flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: repoRoot, local, dryRun: false,
-    overrides: { spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', quota: { read: async () => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map([['opus', 10]]), resetsAt: { fiveHour: null } }) }, sleep: async () => { fx.advance(1000); } },
+    flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: repoRoot, local, dryRun,
+    overrides: { spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', quota: { read: () => state.quotaRead(state) }, sleep: async () => { fx.advance(1000); } },
   });
   ctx.pinned = { ...fx.ctx.pinned, ...FAKE_TOOLS, git: GIT, 'git:realpath': GIT, node: FAKE.node, specLintBin: join(repoRoot, 'packages', 'spec-lint', 'bin', 'spec-lint.mjs') };
   ctx.remote = fx.ctx.remote;
@@ -199,7 +224,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   ctx.git = { ...fx.ctx.git, overlayEnv: () => ({}), lsRemoteOid: async (url, ref) => { const r = await fx.ctx.git.net(['ls-remote', url, ref]); const line = r.stdout.split('\n').find((l) => l.endsWith(`\t${ref}`)); return line ? line.split('\t')[0] : null; }, assertIdentity: async () => true };
   ctx.config = { autopilot: { ...AUTOPILOT_DEFAULTS, repo: 'o/r', ...config }, fleet: { gate: { build: 'npm run build', test: 'npm test' }, init: 'npm ci --ignore-scripts', base: 'main', concurrency: 1, timeoutMinutes: 30, prosecuteFailOn: 'medium', reviewProvider: 'codex', reviewMaxBytes: 262144, allowedCommands: ['adlc *'] }, ticketSync: { provider: 'github', select: { state: 'open', labels: [] } } };
   ctx.baseOid = baseOid;
-  ctx.lock = acquireLock(paths.adlc, { self: selfIdentity(), probes: defaultProbes(), now: () => fx.clock.value });
+  ctx.lock = dryRun ? null : acquireLock(paths.adlc, { self: selfIdentity(), probes: defaultProbes(), now: () => fx.clock.value });
   ctx.denylist = { globs: STATIC_EXTRAS, matches: (p) => STATIC_EXTRAS.some((g) => globMatch(g, p)) };
   ctx.charterPath = join(REPO, 'packages', 'autopilot', 'lib', 'charter-adlc.md');
 
@@ -207,7 +232,18 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   return {
     ...fx, ctx, gh, state, issue, ticket, baseOid, key,
     argvsOf: (exe) => fx.recorder.filter((r) => r.argv[0] === exe).map((r) => r.argv.slice(1)),
-    cleanup: () => { try { ctx.lock.release(); } catch { /* released */ } fx.cleanup(); },
+    /** Fake loop-level collaborators around the real selection/triage/run: `iterate` can be driven with these. */
+    loopDeps: (over = {}) => ({
+      ...ctx.deps,
+      preflight: { phaseA: async () => {}, resolveBaseline: async () => baseOid, phaseB: async () => ({ complete: true, incomplete: [], tokenShort: false, checks: {} }), ...(over.preflight ?? {}) },
+      recover: { recover: async () => ({ actions: [] }) },
+      maintain: { maintainOpenPrs: async () => ({ actions: [] }), activePrCount: () => 0 },
+      digest: { postDigest: async () => ({ ok: true, posted: false }) },
+      effects: { ...ctx.deps.effects, reconcilePendingEffects: async () => ({ replayed: [], complete: true }) },
+      maintenanceDeps: () => ({}),
+      ...over,
+    }),
+    cleanup: () => { try { ctx.lock?.release(); } catch { /* released */ } fx.cleanup(); },
   };
 }
 
@@ -225,7 +261,7 @@ export function defaultFleet(args, { cwd }, fx, state, worker = null) {
   fx.sh(['worktree', 'add', '-q', wt, '-b', integration, branch], cwd);
   if (worker) worker(wt, { round: state.fleetRuns, args });
   else { mkdirSync(join(wt, 'packages', 'x'), { recursive: true }); writeFileSync(join(wt, 'packages', 'x', 'impl.js'), `export const widget = ${state.fleetRuns};\n`); }
-  fx.sh(['add', '-A'], wt); fx.sh(['commit', '-q', '-m', `feat(x): widget (round ${state.fleetRuns})`], wt);
+  fx.sh(['add', '-A'], wt); fx.sh(['commit', '-q', '--allow-empty', '-m', `feat(x): widget (round ${state.fleetRuns})`], wt);
   fx.sh(['worktree', 'remove', '--force', wt], cwd);
   const ticketId = flag(args, '--tickets');
   return { stdout: JSON.stringify({ fleetRunId: runId, exitCode: 0, reason: null, integrationBranch: integration, readPolicy: 'bounded', gitSource: 'mirror', egress: 'allowlist', strikesConsumed: 1, merged: 1, tickets: { [ticketId]: { state: 'merged', strikes: 1 } } }) };

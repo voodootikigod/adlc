@@ -152,3 +152,87 @@ export async function ac2_forceOkSeamBites() {
   await withMutation('quota.forceOk', () => { assert.equal(gate(body({ five: 90, seven: 90 })).ok, true); });
 }
 test('AC2: the quota.forceOk seam admits a 90/90 reading (the fixture the coverage gate applies)', ac2_forceOkSeamBites);
+
+// ---- the re-check points over the REAL loop / run (AC 18, 39, 50) ----
+import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { iterate } from '../lib/loop.mjs';
+import { runIssue } from '../lib/run.mjs';
+import { FAKE } from './helpers/recover-fixture.mjs';
+
+const OK_USAGE = (scoped = {}) => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map(Object.entries({ opus: 10, sonnet: 10, ...scoped })), resetsAt: { fiveHour: null } });
+const REFUSED_USAGE = () => ({ ok: true, fiveHour: 80, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } });
+const fleetSpawns = (fx) => fx.recorder.filter((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet');
+const coldstartClaude = (fx) => (fx.state.claudeCalls ?? []).filter((c) => c.stdin.includes('COLDSTART PROMPT'));
+
+export async function ac18_quotaRecheckPoints() {
+  // (a) refused right AFTER the shaping call → zero fleet dispatches, a run record in state `shaped`.
+  let reads = 0;
+  const fx = await createSequenceFixture({ quotaRead: async () => (++reads <= 2 ? OK_USAGE() : REFUSED_USAGE()) });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.match(it.outcome, /^sleep:quota:five_hour/, JSON.stringify(it.document?.verdict));
+    assert.equal(it.document.verdict, 'PROCEED', 'the shaping call ran (its sample was the 2nd read)');
+    assert.equal(fleetSpawns(fx).length, 0, 'zero fleet dispatches');
+    assert.equal(fx.ctx.records.load(fx.issue)?.state, 'shaped', 'the shaped ticket is cached');
+    assert.ok(fx.ctx.records.load(fx.issue).ticketCache?.title, 'with the ticket');
+  } finally { fx.cleanup(); }
+  // (b) a 61-second-old result is never reused: the sampler re-reads past its 60 s TTL even without `fresh`.
+  let n = 0; let t = 1_000_000;
+  const sampler = createSampler({ read: async () => { n++; return OK_USAGE(); }, now: () => t });
+  await sampler.sample({ fresh: false }); await sampler.sample({ fresh: false });
+  assert.equal(n, 1, 'within the TTL the result is reused');
+  t += 61_000;
+  await sampler.sample({ fresh: false });
+  assert.equal(n, 2, 'a 61-second-old result is re-read');
+}
+test('AC18: a quota fake that flips to refused after the shaping call → zero fleet dispatches and a `shaped` run record; a 61-second-old sample is never reused', { timeout: 120_000 }, ac18_quotaRecheckPoints);
+
+export async function ac39_coldstartIsGated() {
+  // refused between shaping and coldstart (the coldstart gate is the first sample the RUN takes)
+  let reads = 0;
+  const fx = await createSequenceFixture({ quotaRead: async () => (++reads <= 1 ? OK_USAGE() : REFUSED_USAGE()) });
+  try {
+    await fx.ctx.quota.sample({ ordinal: 1, fresh: true }); // the loop-head sample (ok)
+    const result = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(result.state, 'shaped', JSON.stringify(result));
+    assert.equal(coldstartClaude(fx).length, 0, 'zero coldstart claude calls');
+    assert.equal(fx.ctx.records.load(fx.issue).state, 'shaped');
+    assert.equal(fleetSpawns(fx).length, 0);
+  } finally { fx.cleanup(); }
+  // a coldstart fake that stalls is killed at 5 minutes; the run record does not change
+  const timers = []; let id = 1;
+  const spawner = { setTimeoutFn: (fn, ms) => { timers.push({ id: id++, fn, ms }); return timers.at(-1).id; }, clearTimeoutFn: (i) => { const k = timers.findIndex((x) => x.id === i); if (k !== -1) timers.splice(k, 1); } };
+  const fx2 = await createSequenceFixture({ spawner, claudeAnswer: null });
+  let snapshot = null;
+  fx2.table[FAKE.claude] = (args, { stdin }) => { snapshot = JSON.stringify(fx2.ctx.records.load(fx2.issue)); return String(stdin).includes('COLDSTART PROMPT') ? { hang: true } : { stdout: '{}' }; };
+  try {
+    const p = runIssue({ ctx: fx2.ctx, deps: fx2.ctx.deps, issue: fx2.issue, ticket: fx2.ticket, revision: { updatedAt: fx2.state.issue.updatedAt }, authorization: { ok: true } });
+    let spins = 0; while (snapshot === null && spins++ < 50_000) await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    const deadline = timers.find((x) => x.ms === 5 * 60_000);
+    assert.ok(deadline, `the coldstart deadline is 5 minutes (armed: ${timers.map((x) => x.ms).join(',')})`);
+    deadline.fn();
+    const result = await p;
+    assert.equal(result.state, 'failed', JSON.stringify(result));
+    assert.match(String(result.reason), /^timeout:claude coldstart$/, 'the deadline names the command');
+    assert.equal(JSON.stringify(fx2.ctx.records.load(fx2.issue)), snapshot, 'no run record change');
+  } finally { fx2.cleanup(); }
+}
+test('AC39: a quota refusal between shaping and coldstart → zero coldstart claude calls and a cached `shaped` ticket; a stalling coldstart fake is killed at 5 minutes with no run record change', { timeout: 120_000 }, ac39_coldstartIsGated);
+
+export async function ac50_effectiveModelPropagates() {
+  for (const [model, scoped, expectRefused] of [['sonnet', { sonnet: 60 }, 'seven_day_sonnet'], ['sonnet', {}, null], ['opus', {}, null]]) {
+    const fx = await createSequenceFixture({ local: { model }, quotaRead: async () => OK_USAGE(scoped) });
+    try {
+      const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+      if (expectRefused) { assert.equal(it.outcome, `sleep:quota:${expectRefused}`, 'the gate reads the SCOPED window of the effective model'); continue; }
+      assert.equal(it.outcome, 'done', JSON.stringify(it.document?.run ?? it.outcome));
+      const claude = (fx.state.claudeCalls ?? []).map((c) => c.args);
+      assert.equal(claude.length, 2, 'the shaping and the coldstart-answer calls');
+      for (const a of claude) assert.deepEqual(a.slice(0, 3), ['-p', '--model', model]);
+      const fleet = fleetSpawns(fx)[0].argv;
+      assert.equal(fleet[fleet.indexOf('--model') + 1], model, 'the fleet argv carries the effective model');
+    } finally { fx.cleanup(); }
+  }
+}
+test('AC50: with --model sonnet the shaping argv, the coldstart-answer argv and the fleet argv all carry --model sonnet and the gate reads the Sonnet scoped window; with no override all three carry --model opus', { timeout: 240_000 }, ac50_effectiveModelPropagates);

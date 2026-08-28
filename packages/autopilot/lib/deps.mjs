@@ -182,3 +182,18 @@ export async function checkIgnoredFiles({ ctx, issue, allowedPrefixes = ['node_m
 }
 
 export const gateDepsExist = (nodeModules) => existsSync(nodeModules);
+
+/**
+ * §16 AC 15 — the package's own dependency discipline: every `dependencies`
+ * key is an `@adlc/` workspace package and `devDependencies` is absent or
+ * empty. Pure over a parsed package.json.
+ */
+export function packageDependencyDiscipline(pkg) {
+  const problems = [];
+  for (const name of Object.keys(pkg?.dependencies ?? {})) {
+    // Mutation seam `deps.allowAnyDep`: a third-party dependency passes.
+    if (!name.startsWith('@adlc/') && !active('deps.allowAnyDep')) problems.push(`dependency ${name} is not an @adlc/ package`);
+  }
+  if (pkg?.devDependencies && Object.keys(pkg.devDependencies).length > 0 && !active('deps.allowAnyDep')) problems.push(`devDependencies present: ${Object.keys(pkg.devDependencies).join(', ')}`);
+  return { ok: problems.length === 0, problems };
+}

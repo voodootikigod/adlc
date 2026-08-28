@@ -183,3 +183,19 @@ test('seam check: the deps tests fail under their registered seams', { skip: loc
     await assert.rejects(() => withMutation(seam, fn), `${fn.name} must fail under ${seam}`);
   }
 });
+
+import { readFileSync as readPkg } from 'node:fs';
+import { join as joinPkg, dirname as dirnamePkg } from 'node:path';
+import { fileURLToPath as toPath } from 'node:url';
+import { packageDependencyDiscipline } from '../lib/deps.mjs';
+
+export function ac15_dependencyDiscipline() {
+  const pkg = JSON.parse(readPkg(joinPkg(dirnamePkg(toPath(import.meta.url)), '..', 'package.json'), 'utf8'));
+  const r = packageDependencyDiscipline(pkg);
+  assert.deepEqual(r.problems, [], 'every dependency is @adlc/ and devDependencies is absent or empty');
+  assert.equal(r.ok, true);
+  assert.ok(Object.keys(pkg.dependencies).length >= 3, 'the package depends on the workspace (core, fleet, tickets)');
+  assert.equal(packageDependencyDiscipline({ dependencies: { lodash: '1' } }).ok, false, 'a third-party dependency is a problem');
+  assert.equal(packageDependencyDiscipline({ dependencies: {}, devDependencies: { x: '1' } }).ok, false, 'devDependencies are a problem');
+}
+test('AC15: every key of packages/autopilot/package.json dependencies starts with @adlc/ and devDependencies is absent or empty', ac15_dependencyDiscipline);

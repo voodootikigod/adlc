@@ -130,7 +130,9 @@ export async function upsertPr({ ctx, issue, record, attestedHead, title, body }
     if (r.status !== 0) throw new PushError('pr-upsert-failed', `gh pr edit exited ${r.status}: ${r.stderr.trim().slice(0, 300)}`, { exitCode: 1 });
     prNumber = existing;
   } else {
-    const r = await ctx.gh.run(['pr', 'create', '--base', 'main', '--head', branch, '--title', String(title), '--body-file', '-'], { stdinBytes, retries: false });
+    // The title is outward too (it comes from the shaped ticket): redacted, withheld on failure.
+    const safeTitle = ctx.redactor.redact(String(title), { withheld: `autopilot: issue #${n}` }).text;
+    const r = await ctx.gh.run(['pr', 'create', '--base', 'main', '--head', branch, '--title', safeTitle, '--body-file', '-'], { stdinBytes, retries: false });
     if (r.status !== 0) throw new PushError('pr-upsert-failed', `gh pr create exited ${r.status}: ${r.stderr.trim().slice(0, 300)}`, { exitCode: 1 });
     const m = PR_NUMBER_RE.exec(r.stdout) ?? PR_NUMBER_RE.exec(r.stderr);
     if (m) prNumber = Number(m[1]);

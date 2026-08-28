@@ -6,7 +6,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs'; // eslint-disable-line no-unused-vars
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import * as fsSync from 'node:fs';
 import { join } from 'node:path';
 import { runIssue } from '../lib/run.mjs';
 import { branchFor } from '../lib/input.mjs';
@@ -254,3 +255,30 @@ export async function ac144_pushSourceIsTheAttestedOid() {
   } finally { fx.cleanup(); }
 }
 test('AC144: the push argv is --git-dir=<NET_GIT> push --force-with-lease=… <pushUrl> <attestedHead>:refs/heads/adlc/autopilot/issue-<n>; NET_GIT has no refs/heads before or after; the bare remote equals attestedHead; moving the branch between attestation and push does not change what is pushed', { timeout: 120_000 }, ac144_pushSourceIsTheAttestedOid);
+
+export async function ac44_diffSizeGate() {
+  // reviewMaxBytes + 1 bytes of diff → round failure diff-too-large with zero reviewer calls; two consecutive → blocked.
+  const big = 'x'.repeat(400);
+  const fx = await createSequenceFixture({ config: { reviewMaxBytes: 300 }, worker: (wt, { round }) => { const { mkdirSync: mk, writeFileSync: wf } = fsSync; mk(join(wt, 'packages', 'x'), { recursive: true }); wf(join(wt, 'packages', 'x', 'impl.js'), `${big} ${round}\n`); } });
+  try {
+    const result = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(result.state, 'blocked', JSON.stringify(result));
+    assert.equal(result.reason, 'diff-too-large');
+    assert.equal(fx.recorder.filter((r) => r.argv[0] === FAKE_TOOLS['adversarial-review']).length, 0, 'zero adversarial-review calls');
+    const fleets = adlcSpawns(fx, 'fleet', 'run');
+    assert.equal(fleets.length, 2, 'two rounds: the second consecutive failure blocks');
+    assert.match(readFileSync(fleets[1].argv[fleets[1].argv.indexOf('--dead-end-file') + 1], 'utf8'), /diff-too-large/);
+  } finally { fx.cleanup(); }
+  // both reviewer argvs carry --max-bytes 262144 and never --allow-summary-review
+  const { fx: fx2, result: r2 } = await fullRun({ reviewVerdict: (call) => (call === 0 ? 'needs-attention' : 'approve') });
+  try {
+    assert.equal(r2.state, 'done');
+    const reviews = fx2.recorder.filter((r) => r.argv[0] === FAKE_TOOLS['adversarial-review']);
+    assert.equal(reviews.length, 2);
+    for (const r of reviews) {
+      assert.equal(r.argv[r.argv.indexOf('--max-bytes') + 1], '262144');
+      assert.ok(!r.argv.includes('--allow-summary-review'));
+    }
+  } finally { fx2.cleanup(); }
+}
+test('AC44: a diff of reviewMaxBytes + 1 bytes → round failure diff-too-large with zero adversarial-review calls; two consecutive → blocked; every reviewer argv carries --max-bytes 262144 and never --allow-summary-review', { timeout: 240_000 }, ac44_diffSizeGate);

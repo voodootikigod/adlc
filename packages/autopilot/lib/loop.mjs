@@ -73,7 +73,13 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   const issue = sel.picked;
 
   // §5 — triage (the shaping call re-checks quota first).
-  const verdict = await triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision });
+  let shapingSample = null;
+  const preModelCall = async () => {
+    shapingSample = await quota.sample({ ordinal: status.incrementStarts(), fresh: true });
+    return shapingSample.ok ? { ok: true } : { ok: false, reason: `quota:${shapingSample.reason}` };
+  };
+  const verdict = await triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, preModelCall });
+  if (shapingSample?.ok && typeof quota.reconcile === 'function') { try { await quota.reconcile('shaping', shapingSample, { issue }); } catch (e) { log(`shaping reconcile failed: ${e.message}`); } }
   out.document.verdict = verdict.verdict;
   if (verdict.verdict === 'CLARIFY') {
     await triage.clarifyEffects({ ctx, issue, sentinel: verdict.sentinel, body: verdict.body });

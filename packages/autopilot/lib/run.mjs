@@ -82,7 +82,14 @@ export async function runIssue({ ctx, deps, issue, ticket, revision = null, auth
       return { state: 'clarify', reason: 'coldstart-gaps', ticketId };
     }
   } catch (e) {
-    ctx.records.update(n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
+    if (e.code === 'quota-gated') {
+      // §3.2 / AC 39: the ticket is cached; the run resumes at the coldstart on a later iteration.
+      ctx.records.update(n, { state: 'shaped', ticketCache: ticket, ticketId: ticketId ?? null });
+      return { state: 'shaped', reason: 'quota-paused', ticketId: ticketId ?? null };
+    }
+    // A coldstart call ended by its deadline is an operational failure that leaves the run record untouched (AC 39).
+    const killed = e.code === 'claude-failed' || String(e.code ?? '').startsWith('timeout:');
+    if (!killed) ctx.records.update(n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
     return { state: 'failed', reason: e.code ?? 'evidence-failed', exitCode: 1, detail: e.message, ticketId: ticketId ?? null };
   }
 

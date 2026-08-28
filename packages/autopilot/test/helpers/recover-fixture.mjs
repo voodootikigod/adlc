@@ -31,7 +31,7 @@ const IDENTITY = { GIT_AUTHOR_NAME: 'ap-test', GIT_AUTHOR_EMAIL: 'ap@test.invali
  * @param opts.gh       a fakeGithub() instance (default: empty state)
  * @param opts.handlers extra fake-children handlers keyed by FAKE.* paths
  */
-export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.parse('2026-08-28T12:00:00Z') } = {}) {
+export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.parse('2026-08-28T12:00:00Z'), spawner = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ap-recover-'));
   const repoRoot = join(root, 'repo');
   const originPath = join(root, 'origin.git');
@@ -66,7 +66,9 @@ export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.par
   const table = { ...handlers };
   const fake = fakeSpawnImpl(table);
   const spawnImpl = (exe, args, opts) => (table[exe] ? fake.spawnImpl(exe, args, opts) : cpSpawn(exe, args, opts));
-  const inner = createSpawner({ recorder, spawnImpl });
+  // `kill` reaches the FAKE children too (a hung fake exits on SIGTERM like a real one); `spawner`: extra createSpawner options (injectable timers).
+  const kill = (pid, signal) => { try { fake.kill(pid, signal); } catch { process.kill(pid, signal); } };
+  const inner = createSpawner({ recorder, spawnImpl, kill, ...spawner });
   const spawn = (req) => { for (const h of hooks) h(req); return inner(req); };
   table[FAKE.gh] = gh.handler;
   if (!table[FAKE.npm]) table[FAKE.npm] = () => ({ stdout: '' });

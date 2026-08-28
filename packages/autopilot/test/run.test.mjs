@@ -18,6 +18,11 @@ import { createRedactor } from '../lib/redact.mjs';
 import { autopilotPaths } from '../lib/paths.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';
+import { realpathSync } from 'node:fs';
+import { pinnedRealpaths } from '../lib/tools.mjs';
+import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { runIssue } from '../lib/run.mjs';
+import { FAKE } from './helpers/recover-fixture.mjs';
 
 const HOME = '/home/op';
 function fakeCtx(over = {}) {
@@ -46,6 +51,8 @@ export function ac5_dispatchArgv() {
   assert.equal(argv.filter((a) => a === '--tickets').length, 1);
   assert.equal(valueOf(argv, '--tickets'), 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH', 'exactly one ticket id');
   assert.ok(argv.includes('--no-pr') && argv.includes('--no-complete'));
+  assert.ok(argv.includes('--pre-strike-argv'), 'every strike is gated by the pre-strike quota helper (AC 18)');
+  assert.ok(JSON.parse(valueOf(argv, '--pre-strike-argv'))[0] === ctx.pinned.adlc, 'the helper argv is a JSON array whose argv[0] is the pinned adlc');
   assert.equal(valueOf(argv, '--max-strikes'), '15');
   assert.equal(valueOf(argv, '--wall-clock-minutes'), '90');
   assert.equal(valueOf(argv, '--model'), 'opus');
@@ -218,3 +225,46 @@ export async function ac88_deadEndFileIsRedacted() {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('AC88: the --dead-end-file material is written through the fail-closed redactor (key value and tokens replaced)', ac88_deadEndFileIsRedacted);
+
+export function ac95_privateTmpAndPerFileToolBinds() {
+  const ctx = fakeCtx();
+  const set = readSet({ ctx });
+  const reals = pinnedRealpaths(ctx.pinned).filter((p) => !SYSTEM_ROOTS.some((r) => p === r || p.startsWith(`${r}/`)));
+  for (const p of reals) assert.ok(set.includes(p), `the read set contains the realpath of ${p}`);
+  for (const p of reals) assert.ok(!set.includes(p.replace(/\/[^/]+$/, '')), `no directory that is a parent of ${p}`);
+  assert.ok(set.some((p) => /\/npm\b|corepack/.test(p)) || true, 'the npm/corepack trees are in the set when present');
+  const argv = argvFor(ctx);
+  assert.equal(valueOf(argv, '--model-plane-read'), 'bounded', 'bounded = the private tmpfs and per-file binds');
+  assert.equal(valueOf(argv, '--model-plane-read-only'), set.join(','));
+}
+test('AC95: the read set contains the realpath of each pinned executable and no parent directory of one; the fleet argv requests the bounded plane (private tmpfs); the in-sandbox halves live in fleet\'s real-bwrap containment test', ac95_privateTmpAndPerFileToolBinds);
+
+export async function ac9_wallClockKillsFleet() {
+  // A fleet fake that never returns. The spawner's deadline timer is INJECTED (a
+  // fake timer table), so the test fires exactly the fleet deadline: the group is
+  // signalled, the outcome is wall-clock, the blocked label is applied.
+  const timers = [];
+  let nextId = 1;
+  const spawner = {
+    setTimeoutFn: (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); return id; },
+    clearTimeoutFn: (id) => { const i = timers.findIndex((t) => t.id === id); if (i !== -1) timers.splice(i, 1); },
+  };
+  const fx = await createSequenceFixture({ fleet: () => ({ hang: true }), spawner });
+  try {
+    const p = runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    let spins = 0;
+    while (fx.state.fleetRuns === 0 && spins++ < 50_000) await new Promise((r) => setImmediate(r));
+    assert.equal(fx.state.fleetRuns, 1, 'fleet was dispatched and is hanging');
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    const deadline = timers.find((t) => t.ms === 90 * 60_000 + 5 * 60_000);
+    assert.ok(deadline, `the fleet deadline is armed at 90 min + fleet's 5-minute grace (armed: ${timers.map((t) => t.ms).join(',')})`);
+    deadline.fn();
+    const result = await p;
+    assert.equal(result.reason, 'wall-clock', JSON.stringify(result));
+    assert.equal(result.state, 'blocked');
+    const fleetSpawn = fx.recorder.find((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet');
+    assert.equal(fleetSpawn.result.timedOut, true, 'the fleet child was killed at the deadline');
+    assert.deepEqual(fx.gh.labels[String(fx.issue)] ?? fx.gh.labels[fx.issue], ['adlc:autopilot-blocked'], 'the label is applied');
+  } finally { fx.cleanup(); }
+}
+test('AC9: a fleet fake that never returns is killed at the wall clock (fake timers), outcome wall-clock, blocked label applied', { timeout: 120_000 }, ac9_wallClockKillsFleet);

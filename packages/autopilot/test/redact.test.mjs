@@ -101,3 +101,54 @@ export function ac99_chunkedRedactionCatchesStraddlingSecret() {
   assert.equal(redactStream(['x'], leaky).text, WITHHELD_DEAD_END);
 }
 test('AC99: a secret straddling a 64 KiB chunk boundary is still redacted and only the last 64 KiB is kept', ac99_chunkedRedactionCatchesStraddlingSecret);
+
+// ---- AC 91: outward redaction on every exit path, over the real writers ----
+import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { applyTerminalEffects } from '../lib/effects.mjs';
+import { postDigest } from '../lib/digest.mjs';
+import { writeDeadEnd } from '../lib/dispatch.mjs';
+import { upsertPr } from '../lib/push.mjs';
+import { newRecord } from '../lib/records.mjs';
+import { STATUS_FREE_TEXT_FIELDS } from '../lib/status.mjs';
+import { branchFor } from '../lib/input.mjs';
+import { readFileSync as readOut, existsSync as existsOut } from 'node:fs';
+import { FAKE } from './helpers/recover-fixture.mjs';
+
+export async function ac91_outwardRedactionOnEveryExitPath() {
+  const fx = await createSequenceFixture();
+  try {
+    const n = fx.issue; const key = fx.key;
+    const secrets = [...Object.values(SAMPLES), key];
+    const payload = `findings:\n${secrets.map((s) => `token ${s} leaked`).join('\n')}\n`;
+    const rec = { ...newRecord({ issue: n, token: 'a'.repeat(64), baseOid: fx.baseOid, branch: branchFor(n), stagingBranch: null, stagingPath: null, finalPath: fx.paths.issueWorktree(n) }), state: 'blocked', creationPhase: null, reasonText: payload, lastError: payload, prNumber: null };
+    fx.ctx.records.save(rec);
+    // every outward writer, fed the payload
+    await applyTerminalEffects({ ctx: fx.ctx, record: fx.ctx.records.load(n), outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: '<!-- adlc-autopilot:blocked test -->', body: payload, label: 'adlc:autopilot-blocked' });
+    await postDigest({ ctx: fx.ctx, record: fx.ctx.records.load(n), outcome: { state: 'blocked', reason: payload } });
+    fx.ctx.status.write(Object.fromEntries(STATUS_FREE_TEXT_FIELDS.map((k) => [k, payload])));
+    const deadEnd = await writeDeadEnd({ ctx: fx.ctx, issue: n, text: payload });
+    fx.sh(['push', '-q', fx.originPath, `${fx.baseOid}:refs/heads/${branchFor(n)}`]);
+    fx.ctx.records.update(n, { attestedHead: fx.baseOid, lastPushedOid: fx.baseOid });
+    await upsertPr({ ctx: fx.ctx, issue: n, record: fx.ctx.records.load(n), attestedHead: fx.baseOid, title: `t ${key}`, body: payload });
+    // nothing outward carries a secret
+    const outward = [];
+    for (const r of fx.recorder.filter((r) => r.argv[0] === FAKE.gh)) outward.push(r.argv.join(' '), String(r.stdinBytes ?? ''));
+    outward.push(readOut(fx.paths.statusFile, 'utf8'), readOut(fx.paths.record(n), 'utf8'), readOut(deadEnd, 'utf8'));
+    const sources = ['gh', 'gh', 'status', 'record', 'dead-end'];
+    for (const s of secrets) outward.forEach((text, i) => assert.ok(!text.includes(s), `secret ${s.slice(0, 12)}… appears in outward text #${i} (${sources[Math.min(i, 4)] ?? 'gh'}): ${text.slice(0, 200)}`));
+    assert.ok(readOut(fx.paths.record(n), 'utf8').includes('[REDACTED'), 'the record carries the redaction marker in its free-text fields');
+    // a redactor failure withholds the WHOLE body while the label is still applied
+    // The fail-closed contract lives in createRedactor: an implementation that throws yields ok:false + the withheld sentinel.
+    const failing = createRedactor({ secretValues: [key], impl: () => { throw new Error('redactor exploded'); } });
+    const ctx2 = { ...fx.ctx, redactor: failing };
+    fx.gh.labels[String(n)] = [];
+    fx.ctx.records.update(n, { effects: {} });
+    await applyTerminalEffects({ ctx: ctx2, record: fx.ctx.records.load(n), outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: '<!-- adlc-autopilot:blocked withheld -->', body: payload, label: 'adlc:autopilot-blocked' });
+    const comment = fx.recorder.filter((r) => r.argv[0] === FAKE.gh && r.argv[1] === 'issue' && r.argv[2] === 'comment').at(-1);
+    assert.ok(comment, 'a comment was still posted');
+    assert.ok(String(comment.stdinBytes).includes(WITHHELD_BODY), 'its body is the withheld sentinel');
+    for (const s of secrets) assert.ok(!String(comment.stdinBytes).includes(s));
+    assert.deepEqual(fx.gh.labels[String(n)], ['adlc:autopilot-blocked'], 'the label is applied regardless');
+  } finally { fx.cleanup(); }
+}
+test('AC91: for every outward writer (terminal comment, digest, status file, run record, dead-end file, PR body) a payload carrying every SECRET_PATTERNS entry and the key is redacted; a redactor failure replaces the whole body with the withheld sentinel while the label is still applied', { timeout: 120_000 }, ac91_outwardRedactionOnEveryExitPath);
