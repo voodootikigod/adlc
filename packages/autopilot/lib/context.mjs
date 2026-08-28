@@ -15,6 +15,7 @@ import { createRecordStore } from './records.mjs';
 import { gitBaseEnv } from './git-env.mjs';
 import { lockHeldBy } from './lock.mjs';
 import { dispatchFleet, writeDeadEnd, previewFleetArgv } from './dispatch.mjs';
+import { initCommand } from './init.mjs';
 import { execFileSync } from 'node:child_process';
 
 export const CHARTER_PATH = fileURLToPath(new URL('./charter-adlc.md', import.meta.url));
@@ -75,7 +76,7 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
     tokenMargin: overrides.tokenMargin ?? modules.preflight.tokenMargin,
     fleetArgvPreview: overrides.fleetArgvPreview ?? previewFleetArgv,
     prTitlePreview: overrides.prTitlePreview ?? (({ issue, ticket }) => modules.push.prTitle({ issue: issue.number, ticket })),
-    init: overrides.init ?? modules.labels.initCommand,
+    init: overrides.init ?? initCommand,
     ...(overrides.deps ?? {}),
   };
   ctx.cleanupIteration = overrides.cleanupIteration ?? (async () => { try { await modules.preflight.cleanupIteration?.(ctx); } catch { /* best effort */ } });
