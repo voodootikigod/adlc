@@ -8,17 +8,20 @@
 // lookup on a cold path.
 //
 // Seams are process-wide (the gate runs the registered test functions in the
-// same process), so they live on globalThis under one namespaced key.
+// same process), so they live on globalThis under one namespaced key. Every
+// module REGISTERS the seams it consults at import time (`registerSeams`), so a
+// typo in a seam name is a hard error at the first `active()` call and the
+// coverage gate can list the complete seam vocabulary from the registry.
 
 const KEY = '__adlcAutopilotMutations';
 
-function set() {
-  if (!globalThis[KEY]) globalThis[KEY] = new Set();
+function state() {
+  if (!globalThis[KEY]) globalThis[KEY] = { active: new Set(), known: new Set() };
   return globalThis[KEY];
 }
 
-/** The documented seam names. Adding a seam = adding a line here AND a check in lib/. */
-export const SEAMS = Object.freeze([
+/** The seams the foundation modules consult; other modules register their own. */
+export const FOUNDATION_SEAMS = Object.freeze([
   'input.acceptAnything',        // grammar validators accept every value
   'spawn.noDeadline',            // the spawn wrapper never arms its deadline
   'spawn.shellTrue',             // the spawn wrapper records shell:true (argv safety)
@@ -38,18 +41,34 @@ export const SEAMS = Object.freeze([
   'paths.allowLinkedWorktree',   // a linked worktree is accepted as REPO_ROOT
 ]);
 
+/** Register seam names a module consults. Idempotent; returns the names. */
+export function registerSeams(names) {
+  const s = state();
+  for (const n of names) {
+    if (typeof n !== 'string' || !/^[a-z][a-zA-Z0-9-]*\.[a-zA-Z][a-zA-Z0-9-]*$/.test(n)) throw new Error(`invalid seam name: ${n}`);
+    s.known.add(n);
+  }
+  return names;
+}
+registerSeams(FOUNDATION_SEAMS);
+
+/** Every seam registered so far (the coverage gate's vocabulary). */
+export function knownSeams() { return [...state().known].sort(); }
+
 export function active(name) {
-  if (!SEAMS.includes(name)) throw new Error(`unknown mutation seam: ${name}`);
-  return set().has(name);
+  const s = state();
+  if (!s.known.has(name)) throw new Error(`unknown mutation seam: ${name}`);
+  return s.active.has(name);
 }
 
-export function enable(name) { if (!SEAMS.includes(name)) throw new Error(`unknown mutation seam: ${name}`); set().add(name); }
-export function disable(name) { set().delete(name); }
-export function clearAll() { set().clear(); }
+export function enable(name) { const s = state(); if (!s.known.has(name)) throw new Error(`unknown mutation seam: ${name}`); s.active.add(name); }
+export function disable(name) { state().active.delete(name); }
+export function clearAll() { state().active.clear(); }
+export function activeSeams() { return [...state().active]; }
 
 /** Run `fn` with `name` enabled, restoring the previous state afterwards. */
 export async function withMutation(name, fn) {
-  const had = set().has(name);
+  const had = state().active.has(name);
   enable(name);
   try { return await fn(); } finally { if (!had) disable(name); }
 }
