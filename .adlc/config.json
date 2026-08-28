@@ -1,0 +1,26 @@
+{
+  "fleet": {
+    "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
+    "init": "npm ci --ignore-scripts",
+    "concurrency": 1,
+    "base": "main",
+    "timeoutMinutes": 30,
+    "prosecuteFailOn": "medium",
+    "reviewProvider": "codex",
+    "reviewMaxBytes": 262144,
+    "allowedCommands": ["npm test", "npm run build:*", "node --test *", "node scripts/*", "adlc *"]
+  },
+  "autopilot": {
+    "restMinutes": 10,
+    "maxOpenPrs": 5,
+    "maxRounds": 15,
+    "wallClockMinutes": 90,
+    "ciFixRounds": 2,
+    "ciWatchMinutes": 30,
+    "reviewMaxBytes": 262144,
+    "repo": "voodootikigod/adlc",
+    "dispatchApproval": "owner-or-label",
+    "protectedPathsExtra": []
+  },
+  "ticketSync": { "provider": "github", "select": { "state": "open", "labels": [] } }
+}
