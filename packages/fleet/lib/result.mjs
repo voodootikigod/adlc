@@ -47,6 +47,7 @@ export function summaryReason(summary) {
   if (!summary) return null;
   if (summary.contaminated) return RUN_REASONS.QUARANTINED;
   if (summary.prOpenFailed) return RUN_REASONS.PR_OPEN_FAILED;
+  if (summary.dispatchRefused) return RUN_REASONS.DISPATCH_REFUSED;
   if (summary.wallClockExpired) return REASON_CODES.WALL_CLOCK;
   for (const [, rec] of unmergedTickets(summary)) {
     if (rec.state === 'paused' || rec.state === 'failed' || rec.state === 'blocked') {

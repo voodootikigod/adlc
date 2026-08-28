@@ -145,6 +145,13 @@ export async function advanceTicket(ticket, effects, {
     // property of the ATTEMPT (#401): the recorder has to name the channel this
     // particular call ran on, and only the strike identifies which rung that was.
     effects.recordDispatchUsage?.(build, strikes);
+    if (build.policyMismatch) {
+      // The sandbox could not be BUILT (unsupported adapter, missing executable, an
+      // invalid read set): deterministic, the operator's to fix, never a strike or
+      // a flail (codex r7). The strike it would have been is handed back.
+      strikes -= 1;
+      return { ...fail(`sandbox policy mismatch: ${build.output ?? ''}`.trim(), null), policyMismatch: true };
+    }
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the next strike.
       return { state: 'blocked', strikes, reason: 'worker emitted TICKET-BLOCKED', reasonCode: REASON_CODES.TICKET_BLOCKED, deadEnds, gatePassed, prosecution, review };

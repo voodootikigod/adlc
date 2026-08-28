@@ -30,6 +30,7 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
     kill = process.kill,
+    spawnImpl = cpSpawn, // injectable for tests that drive a fake leader
     ...spawnOpts
   } = opts;
   return new Promise((resolve) => {
@@ -38,7 +39,7 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     const stdin = spawnOpts.input !== undefined ? 'pipe' : 'ignore';
     let child;
     try {
-      child = cpSpawn(cmd, args, { ...spawnOpts, detached: killGroup ? true : spawnOpts.detached, stdio: [stdin, 'pipe', 'pipe'] });
+      child = spawnImpl(cmd, args, { ...spawnOpts, detached: killGroup ? true : spawnOpts.detached, stdio: [stdin, 'pipe', 'pipe'] });
     } catch (error) {
       resolve({ error, status: null, stdout: '', stderr: '' });
       return;
@@ -54,11 +55,13 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     let graceTimer;
     if (child.stdout) { child.stdout.setEncoding('utf8'); child.stdout.on('data', (d) => { stdout += d; }); }
     if (child.stderr) { child.stderr.setEncoding('utf8'); child.stderr.on('data', (d) => { stderr += d; }); }
+    let groupKilled = false;
+    const killTheGroup = () => { if (groupKilled) return; groupKilled = true; signalGroup(child.pid, 'SIGKILL', kill); };
     const terminate = () => {
       timedOut = true;
       if (killGroup && child.pid) {
         signalGroup(child.pid, 'SIGTERM', kill);
-        graceTimer = setTimeoutFn(() => signalGroup(child.pid, 'SIGKILL', kill), killGraceMs);
+        graceTimer = setTimeoutFn(killTheGroup, killGraceMs);
       } else {
         try { child.kill('SIGTERM'); } catch { /* already gone */ }
       }
@@ -68,6 +71,10 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     child.on('error', (error) => { clear(); resolve({ error, status: null, stdout, stderr, timedOut }); });
     child.on('close', (status, signal) => {
       clear();
+      // The leader may exit on SIGTERM while a descendant lives on: after a timeout
+      // the whole GROUP gets the SIGKILL now, not a grace timer the close just
+      // cancelled (codex r7).
+      if (timedOut && killGroup && child.pid) killTheGroup();
       resolve({ status, signal, stdout, stderr, timedOut: timedOut || signal === 'SIGTERM' });
     });
   });

@@ -378,7 +378,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // before every strike (see dispatch) and the configured init never runs —
       // the worker starts with node_modules populated and has no install path.
       if (config.init && !config.workerDeps) {
-        try { await sandboxFor(wt.path).run(['/bin/sh', '-c', config.init], { env: repoCmdEnv(wt.path) }); }
+        // Bounded by the remaining wall clock like every other repo command (codex r7).
+        try { await sandboxFor(wt.path).run(['/bin/sh', '-c', config.init], { env: repoCmdEnv(wt.path), timeout: dispatchTimeoutMs() }); }
         catch (e) { throw new Error(`worktree init failed for ${ticket.id}: ${e.message}`); }
       }
       return wt;

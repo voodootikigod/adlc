@@ -100,3 +100,12 @@ test('a NONEXISTENT argv[1] resolves to "not the entry" instead of dispatching o
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '', 'a bare import must not print usage');
 });
+
+import { loadExtensionFiles as loadExt, MAX_EXTENSION_FILE_BYTES } from '../bin/fleet.mjs';
+test('caller-supplied files must be REGULAR and bounded: a FIFO and an oversize file are refused before anything else runs (codex r7)', () => {
+  const readFile = () => 'material';
+  assert.equal(loadExt({ charterFile: '/c' }, readFile, () => ({ isFile: () => true, size: 10 })).charterAddendum, 'material');
+  assert.throws(() => loadExt({ charterFile: '/fifo' }, readFile, () => ({ isFile: () => false, size: 0 })), /not a regular file/);
+  assert.throws(() => loadExt({ deadEndFile: '/huge' }, readFile, () => ({ isFile: () => true, size: MAX_EXTENSION_FILE_BYTES + 1 })), /exceeds/);
+  assert.throws(() => loadExt({ deadEndFile: '/missing' }, readFile, () => { throw new Error('ENOENT'); }), /ENOENT/);
+});

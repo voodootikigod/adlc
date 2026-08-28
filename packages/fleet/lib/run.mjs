@@ -226,6 +226,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   const mergeMutex = createMutex();
   let strikesConsumed = 0;
   let wallClockExpired = false;
+  let dispatchRefused = false; // a sandbox policy mismatch: run-level operational refusal (codex r7)
   const expired = () => deadline != null && now() >= deadline;
 
   // Mark subset-blocked tickets up front so they are reported, not looped on.
@@ -272,6 +273,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     );
     strikesConsumed += Math.max(0, (outcome.strikes ?? startStrikes) - startStrikes);
     if (outcome.reasonCode === 'wall-clock') wallClockExpired = true;
+    if (outcome.policyMismatch) dispatchRefused = true;
     status = withTicket(status, ticket.id, {
       state: outcome.state, strikes: outcome.strikes, reason: outcome.reason, reasonCode: outcome.reasonCode ?? null,
       prosecution: outcome.prosecution ?? null, review: outcome.review ?? null,
@@ -341,7 +343,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   }
 
   return {
-    integrationBranch, results, merged, prCount, prOpenFailed, status,
+    integrationBranch, results, merged, prCount, prOpenFailed, dispatchRefused, status,
     contaminated: runState.contaminated, contaminationReason: runState.contaminationReason,
     strikesConsumed, wallClockExpired,
   };
@@ -382,6 +384,7 @@ export function pausedCount(results) {
 export function runExitCode(summary) {
   if (summary?.contaminated) return 2;
   if (summary?.prOpenFailed) return 2;
+  if (summary?.dispatchRefused) return 1; // operational: the sandbox could not be built as configured
   if (summary?.wallClockExpired) return 2;
   if (pausedCount(summary?.results) > 0) return 2;
   return failedBlockedCount(summary?.results) > 0 ? 2 : 0;

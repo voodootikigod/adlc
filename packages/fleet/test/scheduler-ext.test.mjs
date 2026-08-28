@@ -216,3 +216,10 @@ test('deadline-caused timeouts pause wall-clock instead of becoming strikes/flai
   const r3 = await advanceTicket(ticket, e3, { maxStrikes: 1, deadline: 1_000_000, now: () => 0 });
   assert.equal(r3.state, 'failed');
 });
+
+test('the scheduler hands the strike back on a policy mismatch and marks the outcome (codex r7)', async () => {
+  const e = effects({ dispatch: () => ({ exitCode: 1, output: 'sandbox policy: unsupported adapter', timedOut: false, policyMismatch: true }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
+  assert.equal(r.state, 'failed'); assert.equal(r.policyMismatch, true); assert.equal(r.strikes, 0);
+  assert.equal(e.calls.dispatch.length, 1);
+});

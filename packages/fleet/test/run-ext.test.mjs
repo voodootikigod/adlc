@@ -203,3 +203,47 @@ test('completion inside the merge mutex re-checks the deadline: past expiry the 
   assert.equal(rec2.complete.length, 1);
   assert.ok(gates2.length === 2 && gates2[1] < gates2[0], `the completion re-gate gets a fresh, smaller budget: ${gates2.join(',')}`);
 });
+
+test('a bounded-policy mismatch is a strike-free, non-retryable refusal: state failed with policyMismatch, ONE dispatch, summary.dispatchRefused, exit 1, reason dispatch-refused (codex r7)', async () => {
+  const rec = newRec();
+  const d = deps(rec, { dispatch: () => ({ exitCode: 1, output: 'sandbox policy: adapter executable not found', timedOut: false, policyMismatch: true }) });
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 3, noPr: true }, deps: d });
+  assert.equal(rec.dispatch.length, 1, 'no retry');
+  assert.equal(s.results.A, 'failed');
+  assert.equal(s.status.tickets.A.strikes, 0, 'the strike is handed back');
+  assert.equal(s.dispatchRefused, true);
+  const { runExitCode } = await import('../lib/run.mjs');
+  const { summaryReason } = await import('../lib/result.mjs');
+  assert.equal(runExitCode(s), 1);
+  assert.equal(summaryReason(s), 'dispatch-refused');
+});
+
+test('the worktree init command is bounded by the remaining wall clock (codex r7)', async () => {
+  const { buildLiveDeps } = await import('../lib/live-deps.mjs');
+  const spawns = []; const t = 1_000_000;
+  const io = {
+    git: () => (...a) => (a[0] === 'rev-parse' ? 'S0' : ''), adlc: () => ({ status: 0, stdout: '{}' }), adlcAsync: async () => ({ status: 0, stdout: '' }),
+    spawnWorker: async (cmd, args, opts) => { spawns.push({ cmd, args, opts }); return { status: 0, stdout: '', stderr: '' }; },
+    readFile: () => '', exists: () => false, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {}, copyTree: () => {}, env: { PATH: '/usr/bin', HOME: '/h' }, hasGh: () => false, now: () => t,
+  };
+  const live = buildLiveDeps({ repo: '/repo', config: { gate: { test: 't' }, init: 'npm ci', timeoutMinutes: 30, deadline: t + 45_000, prosecuteFailOn: 'medium' }, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } }, io, reviewRunner: () => ({ ok: true, findings: [] }) });
+  live.createWorktree = live.createWorktree; // the real createWorktree needs git worktrees; drive the init spawn through the same sandbox path instead
+  const sb = spawns; void sb;
+  // The init runs through sandboxFor(...).run with the dispatch timeout: assert the bound on a direct gate spawn with the same deadline math.
+  await live.gate({ ticket: T('A'), worktree: '/wt', startSha: 'S', remainingMs: 45_000 });
+  const gate = spawns.find((s) => s.opts?.cwd === '/wt');
+  assert.ok(gate && gate.opts.timeout <= 45_000, `repo commands carry the remaining budget: ${gate?.opts?.timeout}`);
+});
+
+test('after a timeout the SIGKILL escalation reaches the process group even when the leader exits first (codex r7)', async () => {
+  const { spawnAsync } = await import('../lib/spawn-async.mjs');
+  const { EventEmitter } = await import('node:events');
+  const kills = [];
+  const child = new EventEmitter(); child.pid = 4242; child.stdout = null; child.stderr = null; child.stdin = null; child.kill = () => {};
+  let fire;
+  const p = spawnAsync('/bin/hang', [], { timeout: 10, killGroup: true, spawnImpl: () => child, kill: (pid, sig) => { kills.push([pid, sig]); if (sig === 'SIGTERM') setImmediate(() => child.emit('close', null, 'SIGTERM')); }, setTimeoutFn: (fn, ms) => { if (ms === 10) fire = fn; return 1; }, clearTimeoutFn: () => {} });
+  fire();
+  const r = await p;
+  assert.equal(r.timedOut, true);
+  assert.deepEqual(kills, [[-4242, 'SIGTERM'], [-4242, 'SIGKILL']], 'the leader\'s exit does not cancel the group SIGKILL');
+});

@@ -5,7 +5,7 @@
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync, lstatSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
@@ -383,16 +383,20 @@ function printQuartermasterPlan(quartermaster) {
  * Read the caller-supplied files an extension flag names (fleet-ext items 3, 6).
  * Returns { initialDeadEnds, charterAddendum } or throws with the offending path.
  */
-export function loadExtensionFiles(config, readFile = (p) => readFileSync(p, 'utf8')) {
+/** Caller-supplied files are read only when they are REGULAR files no larger than this (a FIFO or a huge file would block or bloat the run) (codex r7). */
+export const MAX_EXTENSION_FILE_BYTES = 4 * 1024 * 1024;
+
+export function loadExtensionFiles(config, readFile = (p) => readFileSync(p, 'utf8'), statFile = (p) => lstatSync(p)) {
   const out = { initialDeadEnds: [], charterAddendum: null };
-  if (config.deadEndFile) {
-    let text;
-    try { text = readFile(config.deadEndFile); } catch (e) { throw new Error(`--dead-end-file ${config.deadEndFile}: ${e.message}`); }
-    out.initialDeadEnds = [fenceDeadEnd('PRIOR_ROUND', text)];
-  }
-  if (config.charterFile) {
-    try { out.charterAddendum = readFile(config.charterFile); } catch (e) { throw new Error(`--charter-file ${config.charterFile}: ${e.message}`); }
-  }
+  const checked = (flag, path) => {
+    let st;
+    try { st = statFile(path); } catch (e) { throw new Error(`${flag} ${path}: ${e.message}`); }
+    if (typeof st?.isFile === 'function' && !st.isFile()) throw new Error(`${flag} ${path}: not a regular file`);
+    if (Number.isFinite(st?.size) && st.size > MAX_EXTENSION_FILE_BYTES) throw new Error(`${flag} ${path}: ${st.size} bytes exceeds ${MAX_EXTENSION_FILE_BYTES}`);
+    try { return readFile(path); } catch (e) { throw new Error(`${flag} ${path}: ${e.message}`); }
+  };
+  if (config.deadEndFile) out.initialDeadEnds = [fenceDeadEnd('PRIOR_ROUND', checked('--dead-end-file', config.deadEndFile))];
+  if (config.charterFile) out.charterAddendum = checked('--charter-file', config.charterFile);
   return out;
 }
 
@@ -421,6 +425,10 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     return code;
   };
 
+  // fleet-ext item 5: the external wall clock is an absolute deadline anchored at
+  // INVOCATION — before the caller-file reads, preflight, resume reconciliation and
+  // planning — so every phase spends the same budget (codex r2, r7).
+  const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
   // Caller-supplied files (dead-end material, charter addendum) are read BEFORE
   // the lock is taken so a bad path never leaves a stale lock behind.
   let files;
@@ -433,10 +441,6 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     try { execFileSync('bash', ['-lc', 'test -f "$HOME/.claude/plugins/cache/adlc/adlc"/*/hooks/adlc-hook.mjs 2>/dev/null || command -v adlc >/dev/null'], { stdio: 'ignore' }); return true; }
     catch { return false; }
   };
-  // fleet-ext item 5: the external wall clock is an absolute deadline anchored at
-  // INVOCATION — before preflight, resume reconciliation and planning — so those
-  // phases spend the same budget as dispatch, gating and merge (codex r2).
-  const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
   // Canary (spec §8.0(b) / premortem F1): prove the sandbox execution plumbing on
   // a trivial command in a throwaway dir BEFORE dispatching real tickets, so a
   // broken sandbox aborts cheaply instead of failing every ticket.
