@@ -29,7 +29,10 @@ export async function revalidate({ ctx, issue, revision = null, beforeDispatch =
     let prs;
     try { prs = await ctx.gh.json(['pr', 'list', '--head', branchFor(n), '--state', 'open', '--json', 'number']); }
     catch (e) { return changed('pr-list-unreadable', e.message); }
-    if (Array.isArray(prs) && prs.length) return changed('open-pr', `#${prs[0].number}`);
+    // The run's OWN pull request (opened by §6.8, being fixed by §6.9) is not "a new open PR".
+    const own = ctx.records.load(n)?.prNumber ?? null;
+    const foreign = (Array.isArray(prs) ? prs : []).filter((p) => p?.number !== own);
+    if (foreign.length) return changed('open-pr', `#${foreign[0].number}`);
   }
   if (beforeDispatch) {
     const margin = tokenMarginFor({ ctx, wallClockMs: wallClockMs ?? (ctx.config?.autopilot?.wallClockMinutes ?? 90) * 60_000 });

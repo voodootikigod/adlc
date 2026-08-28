@@ -43,9 +43,9 @@ export function appendManifestLine(cwd, entry) {
  * @param opts.checks       () → rows for `gh pr checks` (default all blocking jobs pass)
  * @param opts.fleet        (argv, meta, fx) → custom fleet behaviour; default = one worker commit + integration branch
  */
-export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [] } = {}) {
+export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null } = {}) {
   const gh = fakeGithub({ permissions: { op: 'admin' } });
-  const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', labels: [] } };
+  const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', labels: [] } };
   const handlers = {};
   const fx = createFixture({ gh, handlers });
   const { repoRoot, originPath, paths } = fx;
@@ -96,12 +96,14 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
       if (expect !== sha256(readFileSync(shard, 'utf8'))) return { status: 2, stderr: 'HASH_MISMATCH' };
       if (!args.includes('--authorize') && cur.completed) return { status: 2, stderr: 'AUTHORIZATION_REQUIRED' };
       const next = JSON.parse(String(stdin ?? '{}'));
+      state.updates.push({ before: cur, stdin: next, args: [...args] });
       writeFileSync(shard, `${JSON.stringify({ ...next, id: cur.id }, null, 2)}\n`);
       appendManifestLine(root, { gate: 'ticket-update', ticket: cur.id });
       return { stdout: twoDocs({ ticketId: cur.id }, { applied: true, storeHash: 's3', ticketHash: sha256(readFileSync(shard, 'utf8')) }) };
     }
     if (sub === 'coldstart') {
       if (args.includes('--record-verdict')) { appendManifestLine(cwd, { gate: 'coldstart', ticket: args[1], verdict: 'PROCEED' }); return { stdout: '{"recorded":true}' }; }
+      onColdstart?.(state, fx);
       return { stdout: `COLDSTART PROMPT for ${args[1]}\n` };
     }
     if (sub === 'prosecute' && verb === 'record-cross-model') {
@@ -109,7 +111,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
       state.recordCrossModel = (state.recordCrossModel ?? []).concat([{ argv: [...args], head: fx.sh(['rev-parse', 'HEAD'], cwd) }]);
       return { stdout: JSON.stringify({ ok: true, data: { revision: `rev-${state.recordCrossModel.length}` } }) };
     }
-    if (sub === 'gate-manifest' && verb === 'verify') return { stdout: '{"ok":true}' };
+    if (sub === 'gate-manifest' && verb === 'verify') { onManifestVerify?.(cwd, state, fx); return { stdout: '{"ok":true}' }; }
     if (sub === 'gate-manifest' && verb === 'attest') return { stdout: 'evidence: fake' };
     if (sub === 'fleet' && verb === 'run') {
       state.fleetRuns++;
@@ -125,8 +127,10 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   };
   handlers[FAKE.claude] = (args, { stdin }) => ({ stdout: JSON.stringify(claudeAnswer ? claudeAnswer(args, stdin) : { result: JSON.stringify({ gaps: [] }) }) }); // eslint-disable-line no-unused-vars
   handlers[FAKE.npm] = (args, { cwd }) => { mkdirSync(join(cwd, 'node_modules'), { recursive: true }); writeFileSync(join(cwd, 'node_modules', '.package-lock.json'), '{}'); return { stdout: '' }; };
-  handlers[FAKE_TOOLS['adversarial-review']] = () => {
-    const v = reviewVerdict(state.reviewCalls++);
+  handlers[FAKE_TOOLS['adversarial-review']] = (args, { cwd }) => {
+    const call = state.reviewCalls++;
+    reviewerSideEffect?.(cwd, call, fx);
+    const v = reviewVerdict(call);
     if (v === 'unavailable') return { status: 1, stderr: 'reviewer unavailable' };
     return { status: v === 'approve' ? 0 : 2, stdout: JSON.stringify({ verdict: v, findings: v === 'approve' ? [] : [{ severity: 'high', title: 'planted finding', file: 'packages/x/impl.js' }] }) };
   };
@@ -156,6 +160,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
       return { stdout: JSON.stringify({ number: pr.number, state: pr.state, headRefOid: fx.remoteOid(pr.head), baseRefName: pr.baseRefName, mergeStateStatus: 'CLEAN', headRefName: pr.head }) };
     }
     if (sub === 'pr' && verb === 'checks') {
+      state.checkPolls++;
       const rows = checks ? checks(state) : ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (ubuntu-latest, 20)'].map((name) => ({ name, state: 'SUCCESS', bucket: 'pass', workflow: 'ci' }));
       return { status: rows.every((r) => r.bucket === 'pass') ? 0 : 8, stdout: JSON.stringify(rows) };
     }
