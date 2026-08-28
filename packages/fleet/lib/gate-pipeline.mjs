@@ -73,7 +73,7 @@ export async function runGatePipeline(ticket, deps) {
   // 4. rails-guard (delegated to the adlc CLI in the live builder).
   if (deps.railsGuard) {
     const rg = await deps.railsGuard();
-    if (!rg.ok) return { ok: false, stage: 'rails-guard', output: rg.output ?? 'rail touched' };
+    if (!rg.ok) return { ok: false, stage: 'rails-guard', output: rg.output ?? 'rail touched', timedOut: rg.timedOut === true };
   }
 
   return { ok: true, stage: 'passed', output: '' };

@@ -257,3 +257,20 @@ test('a THROWN ticket effect is that ticket\'s recorded failure; the sibling tic
   assert.match(s.status.tickets.A.reason, /pipeline error: gate exploded/);
   assert.equal(s.results.B, 'merged', 'the sibling ran to completion');
 });
+
+test('the rails-guard phase is bounded by the remaining wall clock, killed as a group, and its timeout is a timedOut gate failure (codex r9)', async () => {
+  const { buildLiveDeps } = await import('../lib/live-deps.mjs');
+  const calls = [];
+  const io = {
+    git: () => (...a) => (a[0] === 'rev-parse' ? 'S0' : ''), adlc: () => ({ status: 0, stdout: '{}' }),
+    adlcAsync: async (args, opts) => { calls.push({ args, opts }); return { status: null, signal: 'SIGTERM', stdout: '', stderr: '', timedOut: true }; },
+    spawnWorker: async () => ({ status: 0, stdout: '', stderr: '' }),
+    readFile: () => '', exists: () => false, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {}, copyTree: () => {}, env: { PATH: '/usr/bin', HOME: '/h' }, hasGh: () => false,
+  };
+  const live = buildLiveDeps({ repo: '/repo', config: { gate: {}, prosecuteFailOn: 'medium', timeoutMinutes: 1 }, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } }, io, reviewRunner: () => ({ ok: true, findings: [] }) });
+  const g = await live.gate({ ticket: T('A'), worktree: '/wt', startSha: 'S0', remainingMs: 7000 });
+  const rg = calls.find((c) => c.args[0] === 'rails-guard');
+  assert.ok(rg, 'rails-guard ran');
+  assert.equal(rg.opts.timeout, 7000); assert.equal(rg.opts.killGroup, true);
+  assert.equal(g.ok, false); assert.equal(g.timedOut, true); assert.equal(g.stage, 'rails-guard');
+});

@@ -35,7 +35,7 @@ const realpathSafe = (p) => { try { return realpathSync(p); } catch { return p; 
 /** Bounded mode is claude-code only: its synthetic-HOME contract (item 14) is that adapter's. */
 export const BOUNDED_ADAPTERS = Object.freeze(['claude-code']);
 
-export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktree, adapter, ticketId, extraWritable = [], nodePath = process.execPath, tmpRoot = io.env?.TMPDIR || tmpdir() }) {
+export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktree, adapter, ticketId, extraWritable = [], nodePath = process.execPath, tmpRoot = io.env?.TMPDIR || tmpdir(), repo = null }) {
   const hostHome = io.env.HOME;
   if (!hostHome) throw new SandboxPolicyError('HOME is unset; the synthetic home cannot be staged');
   if (!BOUNDED_ADAPTERS.includes(adapter?.name)) {
@@ -49,6 +49,13 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
   // success, failure, or a policy error raised after staging (the finding that
   // motivated this: a deterministic copy under .adlc outlived the tmpfs it fed).
   const stagingDir = mkdtempSync(join(tmpRoot, 'fleet-home-'));
+  // The staged credential must never sit where the worker can write: not under the
+  // worktree, the repository, the mirror or any writable root (a TMPDIR pointing
+  // into the worktree would hand the secret to the model plane) (codex r9).
+  const forbidden = [worktree, repo, ...extraWritable, ...(config.modelPlaneWritable ?? [])].filter(Boolean).map((p) => realpathSafe(p));
+  const stagingReal = realpathSafe(stagingDir);
+  const inside = forbidden.find((root) => stagingReal === root || stagingReal.startsWith(`${root}/`));
+  if (inside) { rmSync(stagingDir, { recursive: true, force: true }); throw new SandboxPolicyError(`credential staging directory ${stagingReal} lies under the writable root ${inside}; set TMPDIR outside the repository and every writable root`); }
   let proxy = null; let socketPath = null;
   const cleanup = async () => {
     if (proxy) { try { await proxy.close(); } catch { /* best effort */ } proxy = null; }
@@ -72,9 +79,12 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
       const port = config.egressBridgePort ?? DEFAULT_BRIDGE_PORT;
       egress = { proxy, port, socketPath, env: egressEnv(port), allowlist: [...proxy.allowlist] };
       writableRoots.push(socketDir);
-      // The bridge and the node that runs it must be visible inside: single-file binds.
-      readOnlyPaths.push(realpathSafe(nodePath), realpathSafe(BRIDGE_PATH));
+      // The bridge must be visible inside: a single-file bind.
+      readOnlyPaths.push(realpathSafe(BRIDGE_PATH));
     }
+    // The node runtime is bound in EVERY bounded mode: a harness launcher that is
+    // a node script needs its interpreter whether or not egress is bridged (codex r9).
+    readOnlyPaths.push(realpathSafe(nodePath));
     // The adapter's own executable: resolved on the HOST search path to a single
     // regular file, bound read-only, and invoked by that absolute path inside.
     const command = adapter.command ?? 'claude';

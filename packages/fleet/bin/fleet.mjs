@@ -156,9 +156,18 @@ if (sub === 'unlock') {
 }
 
 if (sub === 'run') {
-  const flags = parseFlags(raw.slice(1));
+  // Under --json EVERY non-zero exit carries one result document, including a
+  // refused flag set (codex r9): parse defensively and refuse as dispatch-refused.
+  const wantsJson = raw.includes('--json');
+  const refuseFlags = (message) => {
+    console.error(`fleet: ${message}`);
+    if (wantsJson) printJson(resultDocument({ runId: null, exitCode: 1, summary: null, reason: RUN_REASONS.DISPATCH_REFUSED, sandbox: {}, warnings: [] }));
+    process.exit(1);
+  };
+  let flags;
+  try { flags = parseFlags(raw.slice(1)); } catch (e) { refuseFlags(e.message); }
   let ext;
-  try { ext = extensionFlags(flags); } catch (e) { opError(`fleet: ${e.message}`); }
+  try { ext = extensionFlags(flags); } catch (e) { refuseFlags(e.message); }
   const config = resolveRunConfig(loadConfig(dir), {
     concurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     base: flags.base,

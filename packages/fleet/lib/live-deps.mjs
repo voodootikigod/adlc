@@ -467,7 +467,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         let built;
         try {
           built = await buildBoundedModelSandbox({
-            config, io, sandboxSpec, worktree, adapter, ticketId: ticket.id,
+            config, io, sandboxSpec, worktree, adapter, ticketId: ticket.id, repo,
             extraWritable: mirrorMode ? [config.modelPlaneGitMirror] : [],
           });
         } catch (e) {
@@ -573,8 +573,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       };
       const readBytes = (p) => (io.exists(join(worktree, p)) ? io.readFile(join(worktree, p)) : undefined);
       const railsGuard = async () => {
-        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree });
-        return { ok: res.status === 0, output: `${res.stdout ?? ''}${res.stderr ?? ''}` };
+        // Bounded by the remaining wall clock and killed as a group like every other gate phase (codex r9).
+        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree, killGroup: true, ...(remainingMs != null ? { timeout: remainingMs } : {}) });
+        return { ok: res.status === 0 && !res.timedOut, output: `${res.stdout ?? ''}${res.stderr ?? ''}${res.timedOut ? '\nrails-guard timed out' : ''}`, timedOut: res.timedOut === true };
       };
       return runGatePipeline(ticket, {
         sandbox: sandboxFor(worktree),

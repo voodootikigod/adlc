@@ -372,3 +372,24 @@ test('bounded mode accepts the documented npm/corepack DIRECTORY trees and still
     assert.equal(r2.exitCode, 1); assert.equal(r2.policyMismatch, true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('the credential staging directory is refused when TMPDIR resolves under the worktree (or any writable root); the node runtime is bound in bounded OPEN mode too (codex r9)', async () => {
+  const rec = newRec();
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), 'fleet-ext-wt-')));
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-stage-'));
+  try {
+    const io = fakeIo(rec); io.env = { ...io.env, TMPDIR: wt };
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    const r = await deps.dispatch({ ticket, worktree: wt, startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 1); assert.equal(r.policyMismatch, true);
+    assert.match(r.output, /staging directory .* lies under the writable root/);
+    assert.deepEqual(readdirSync(wt).filter((f) => f.startsWith('fleet-home-')), [], 'nothing staged is left under the worktree');
+    const rec2 = newRec();
+    const io2 = fakeIo(rec2);
+    const ok = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io: io2, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    await ok.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    const call = findInner(rec2.spawn, `${HOME}/.local/bin/claude`);
+    const pairs = call.wrapper.args.map((a, i) => `${a} ${call.wrapper.args[i + 1]}`);
+    assert.ok(pairs.includes(`--ro-bind ${realpathSync(process.execPath)}`), 'the node runtime is a single-file bind in open (non-allowlist) bounded mode');
+  } finally { rmSync(wt, { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }); }
+});

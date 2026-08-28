@@ -109,3 +109,15 @@ test('caller-supplied files must be REGULAR and bounded: a FIFO and an oversize 
   assert.throws(() => loadExt({ deadEndFile: '/huge' }, readFile, () => ({ isFile: () => true, size: MAX_EXTENSION_FILE_BYTES + 1 })), /exceeds/);
   assert.throws(() => loadExt({ deadEndFile: '/missing' }, readFile, () => { throw new Error('ENOENT'); }), /ENOENT/);
 });
+
+test('an invalid or unknown run flag under --json still yields exactly one result document with reason dispatch-refused (codex r9)', () => {
+  const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
+  for (const argv of [['run', '--json', '--max-strikes', '0'], ['run', '--json', '--no-such-flag']]) {
+    const r = spawnSync(process.execPath, [bin, ...argv], { encoding: 'utf8', cwd: mkdtempSync(join(tmpdir(), 'fleet-flags-')) });
+    assert.equal(r.status, 1, `${argv.join(' ')}: exit 1`);
+    let doc; try { doc = JSON.parse(r.stdout); } catch { doc = null; }
+    assert.ok(doc && typeof doc === 'object', `exactly one (pretty-printed) document on stdout: ${r.stdout.slice(0, 200)}`);
+    assert.equal(doc.reason, 'dispatch-refused');
+    assert.equal(doc.exitCode, 1);
+  }
+});
