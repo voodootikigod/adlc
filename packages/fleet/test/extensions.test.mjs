@@ -105,7 +105,7 @@ test('allowlist egress: the worker is wrapped in the bridge, gets HTTPS_PROXY to
     assert.equal(inner[0], process.execPath, 'the pinned node runs the bridge');
     assert.equal(inner[1], BRIDGE_PATH);
     assert.equal(inner[2], '--socket'); assert.ok(inner[3].endsWith('proxy.sock')); assert.equal(inner[4], '--port'); assert.equal(inner[5], '8118'); assert.equal(inner[6], '--');
-    assert.equal(inner[7], 'claude', 'then the worker');
+    assert.equal(inner[7], `${HOME}/.local/bin/claude`, 'then the worker, by its bound absolute path (codex r6)');
     assert.ok(raw.args.includes('--unshare-net'));
     assert.equal(raw.opts.env.HTTPS_PROXY, 'http://127.0.0.1:8118'); assert.equal(raw.opts.env.HTTP_PROXY, 'http://127.0.0.1:8118'); assert.equal(raw.opts.env.NO_PROXY, '');
     assert.equal(io.proxies.length, 1);
@@ -336,5 +336,22 @@ test('bounded mode resolves the adapter executable on the host, binds it read-on
     assert.equal(r2.exitCode, 1);
     assert.equal(r2.policyMismatch, true);
     assert.match(r2.output, /adapter executable not found/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('allowlist egress applies the executable mapping BEFORE the bridge prefix: the bridge spawns the bound absolute path (codex r6)', async () => {
+  const rec = newRec();
+  const io = fakeIo(rec);
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-bridge-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'], modelPlaneEgress: 'allowlist' } });
+    const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 0, r.output);
+    const call = rec.spawn.find((s) => [s.cmd, ...s.args].some((a) => String(a).endsWith('egress-bridge.mjs')));
+    assert.ok(call, 'the bridge wraps the worker');
+    const argv = [call.cmd, ...call.args];
+    const after = argv.slice(argv.lastIndexOf('--') + 1);
+    assert.equal(after[0], `${HOME}/.local/bin/claude`, `the bridge target is the absolute executable: ${after.join(' ')}`);
+    assert.ok(!after.includes('claude'), 'the bare name never reaches the bridge');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

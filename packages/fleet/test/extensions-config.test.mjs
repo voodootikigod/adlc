@@ -140,3 +140,11 @@ test('--model-plane-egress allowlist without --model-plane-read bounded is REFUS
   assert.equal(ok.modelPlaneEgress, 'allowlist');
   assert.equal(extensionFlags(parseFlags(['--model-plane-egress', 'open'])).modelPlaneEgress, 'open', 'open egress needs no bounded plane');
 });
+
+import { resolveRunConfig as resolveFleetConfig, DEFAULTS as FLEET_DEFAULTS } from '../lib/config.mjs';
+test('fleet.reviewMaxBytes only NARROWS: a repository value above the 262144 default is refused with a warning and the default applies (codex r6)', () => {
+  const big = resolveFleetConfig({ reviewMaxBytes: 10 * 1024 * 1024 });
+  assert.equal(big.reviewMaxBytes, FLEET_DEFAULTS.reviewMaxBytes);
+  assert.ok(big.warnings.some((w) => /exceeds the maximum/.test(w)));
+  assert.equal(resolveFleetConfig({ reviewMaxBytes: 1024 }).reviewMaxBytes, 1024, 'a smaller value narrows');
+});

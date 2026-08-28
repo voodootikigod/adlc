@@ -79,6 +79,14 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       // fleet-ext item 2: `--no-complete` hands ticket completion to the caller.
       // The merge landed and passed its gate; nothing else happens on the branch.
       if (config.noComplete === true) return { ok: true };
+      // The completion is a further commit: it must not start past the deadline, and
+      // its re-gate gets a FRESH remaining budget (codex r6). Past expiry the merge
+      // stands (it landed within budget) and the ticket is merged-not-completed.
+      if (config.deadline != null) {
+        const nowMs = (deps.now ?? Date.now)();
+        if (nowMs >= config.deadline) return { ok: true, completed: false, output: 'external wall clock expired before completion; merged, not marked completed' };
+        remainingMs = Math.max(1, config.deadline - nowMs);
+      }
       // Post-merge gate PASSED (T73): mark the ticket completed on the integration
       // branch so the single PR the fleet opens carries the add-only completed:true
       // annotation. Runs here — inside the merge mutex, right after the gate that
@@ -93,7 +101,8 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         // withdraw ONLY the completion commit (the shipped merge below it stays) and
         // degrade to the pre-T73 status quo: merged, not marked completed.
         if (completion?.completed && completion.preCompletionSha) {
-          const recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs });
+          const fresh = config.deadline != null ? Math.max(1, config.deadline - (deps.now ?? Date.now)()) : remainingMs;
+          const recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs: fresh });
           if (!recheck.ok) {
             // The completion commit FAILED the gate, so it must come off the branch.
             // Withdrawal failing is NOT a degradation we may swallow: the branch would

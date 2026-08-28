@@ -240,9 +240,14 @@ export class BoundedModelSandbox {
     return roots.some((r) => isUnder(r, p));
   }
 
+  /** A bare adapter command name → its bound absolute realpath; other argv untouched. */
+  mapCommand(argv) {
+    const [cmd, ...rest] = argv;
+    return Object.hasOwn(this.commandMap, cmd) ? [this.commandMap[cmd], ...rest] : argv;
+  }
+
   wrap(innerArgv) {
-    const [cmd, ...rest] = innerArgv;
-    const mapped = Object.hasOwn(this.commandMap, cmd) ? [this.commandMap[cmd], ...rest] : innerArgv;
+    const mapped = this.mapCommand(innerArgv);
     return buildBoundedModelPlaneArgv({
       worktree: this.worktree, writableRoots: this.writableRoots, readOnlyPaths: this.readOnlyPaths,
       home: this.home, homeBinds: this.homeBinds, homeWritableFiles: this.homeWritableFiles,

@@ -483,7 +483,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           worktree, prompt, timeoutMs: dispatchTimeoutMs(), env: { ...env, ...(egress?.env ?? {}) },
           // `killGroup`: the worker is a process TREE; on timeout the whole group
           // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
-          exec: (cmd, args, opts) => modelSandbox.run(bridgeArgv({ egress, argv: [cmd, ...args] }), { ...opts, killGroup: true }),
+          // The executable mapping is applied BEFORE the bridge prefix, so the bridge
+          // spawns the bound absolute path, never a bare name PATH cannot find (codex r6).
+          exec: (cmd, args, opts) => modelSandbox.run(bridgeArgv({ egress, argv: modelSandbox.mapCommand ? modelSandbox.mapCommand([cmd, ...args]) : [cmd, ...args] }), { ...opts, killGroup: true }),
           // Operator-local binary override (A2) + non-executable data from config.
           command: config.adapterCommand ?? undefined,
           args: config.adapterArgs ?? undefined,

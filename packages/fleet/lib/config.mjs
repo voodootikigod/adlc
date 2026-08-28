@@ -195,7 +195,9 @@ export function resolveRunConfig(config = {}, flags = {}) {
   // reviewer. A non-positive or non-integer value falls back to the default.
   let reviewMaxBytes = DEFAULTS.reviewMaxBytes;
   if (config.reviewMaxBytes != null) {
-    if (isPosInt(config.reviewMaxBytes)) reviewMaxBytes = config.reviewMaxBytes;
+    // The key only NARROWS: a repository cannot widen the reviewer's grounding payload above the default (codex r6).
+    if (isPosInt(config.reviewMaxBytes) && config.reviewMaxBytes <= DEFAULTS.reviewMaxBytes) reviewMaxBytes = config.reviewMaxBytes;
+    else if (isPosInt(config.reviewMaxBytes)) warnings.push(`warning: .adlc/config.json fleet.reviewMaxBytes ${config.reviewMaxBytes} exceeds the maximum ${DEFAULTS.reviewMaxBytes} — using ${DEFAULTS.reviewMaxBytes}.`);
     else warnings.push(`warning: .adlc/config.json fleet.reviewMaxBytes is not a positive integer — using ${DEFAULTS.reviewMaxBytes}.`);
   }
   return {

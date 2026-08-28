@@ -188,3 +188,18 @@ test('a timed-out repo command (status null) is a gate FAILURE, never an empty s
   assert.equal(g.ok, false);
   assert.equal(g.timedOut, true);
 });
+
+test('completion inside the merge mutex re-checks the deadline: past expiry the merge stands, completion is skipped, and the re-gate gets a FRESH budget (codex r6)', async () => {
+  const rec = newRec();
+  let t = 0; const gates = [];
+  const d = { ...deps(rec, { now: () => t }), postMergeGate: async ({ remainingMs }) => { gates.push(remainingMs); t = 6000; return { ok: true }; } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000, noPr: true }, deps: d });
+  assert.equal(s.results.A, 'merged', 'the merge landed within budget');
+  assert.equal(rec.complete.length, 0, 'no completion commit past the deadline');
+  const rec2 = newRec();
+  let t2 = 0; const gates2 = [];
+  const d2 = { ...deps(rec2, { now: () => t2 }), postMergeGate: async ({ remainingMs }) => { gates2.push(remainingMs); t2 += 1000; return { ok: true }; } };
+  await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 10_000, noPr: true }, deps: d2 });
+  assert.equal(rec2.complete.length, 1);
+  assert.ok(gates2.length === 2 && gates2[1] < gates2[0], `the completion re-gate gets a fresh, smaller budget: ${gates2.join(',')}`);
+});
