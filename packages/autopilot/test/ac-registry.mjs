@@ -55,6 +55,7 @@ export const REGISTRY = {
   140: [
     { fn: 'ac140_denylistDerivesFromTrustRootLists', file: 'denylist.test.mjs', seam: 'denylist.staticOnly' },
     { fn: 'ac140_scopeIntersectionIsConservative', file: 'denylist.test.mjs', seam: 'denylist.allowShrink' },
+    { fn: 'ac140_denylistInDiffCheck', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipDenylist' },
   ],
   150: [{ fn: 'ac150_corruptArchiveLineIsQuarantined', file: 'triage.test.mjs', seam: 'attempts.skipQuarantine' }],
   155: [{ fn: 'ac155_authorizationBindsRevision', file: 'select.test.mjs', seam: 'authorize.ignoreEdits' }],
@@ -66,6 +67,7 @@ export const REGISTRY = {
   24: [
     { fn: 'ac24_derivedPathsAreAbsoluteUnderRoot', file: 'paths.test.mjs', seam: 'input.acceptAnything' },
     { fn: 'ac24_linkedWorktreeRefused', file: 'paths.test.mjs', seam: 'paths.allowLinkedWorktree' },
+    { fn: 'ac24_pathResolution', file: 'create.test.mjs', seam: 'create.cwdRepoRoot' },
   ],
   25: [{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal' }],
   41: [
@@ -79,7 +81,10 @@ export const REGISTRY = {
   103: [{ fn: 'ac103_preStrikeMinimalEnv', file: 'run.test.mjs', seam: 'fleetArgs.leakEnvToHelper' }],
   113: [{ fn: 'ac113_systemRootException', file: 'run.test.mjs', seam: 'fleetArgs.bindToolDirs' }],
   152: [{ fn: 'ac152_and_162_argv', file: 'run.test.mjs', seam: 'fleetArgs.openEgress' }],
-  162: [{ fn: 'ac152_and_162_argv', file: 'run.test.mjs', seam: 'fleetArgs.openEgress' }],
+  162: [
+    { fn: 'ac152_and_162_argv', file: 'run.test.mjs', seam: 'fleetArgs.openEgress' },
+    { fn: 'ac162_workerDepsBuilt', file: 'deps.test.mjs', seam: 'deps.useOperatorHome' },
+  ],
   22: [
     { fn: 'ac22_twoStartersOneWins', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_reclaimRules', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
@@ -104,7 +109,6 @@ export const REGISTRY = {
   ],
   49: [
     { fn: 'ac49_deadlineSignalsGroupThenKills', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
-    { fn: 'ac49_deadlineTableIsTheSpecTable', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
     { fn: 'ac49_retryOnlyRetryable', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
     { fn: 'ac49_stdoutCapKillsChild', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
     { fn: 'ac49_envIsExactlyWhatWasPassed', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
@@ -214,6 +218,7 @@ export const REGISTRY = {
   ],
   20: [
     { fn: 'ac20_baselineFailureIsUnresolved', file: 'preflight.test.mjs', seam: 'preflight.ignoreFetchFailure' },
+    { fn: 'ac20_gateSpawnsCarryBaseOid', file: 'gates.test.mjs', seam: 'gates.spawnPreflightAlways' },
   ],
   86: [
     { fn: 'ac86_parityReadsBaseline', file: 'preflight.test.mjs', seam: 'preflight.parityFromWorkingTree' },
@@ -242,6 +247,105 @@ export const REGISTRY = {
   ],
   154: [
     { fn: 'ac154_assumptionsBound', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipAssumptions' },
+  ],
+  34: [
+    { fn: 'ac34_actualDiffCheckScopeManifestSymlink', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipManifestAppendOnly' },
+  ],
+  55: [
+    { fn: 'ac55_ticketSnapshot', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipTicketSnapshot' },
+  ],
+  76: [
+    { fn: 'ac76_secretScanFailClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipSecretScan' },
+  ],
+  98: [
+    { fn: 'ac98_criteriaDocTracked', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipCriteriaHash' },
+    { fn: 'ac98_criteriaDocumentIsTracked', file: 'create.test.mjs', seam: 'create.untrackedCriteria' },
+  ],
+  100: [
+    { fn: 'ac100_foreignManifestLines', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipForeignLineCheck' },
+  ],
+  52: [
+    { fn: 'ac52_dependencyDiffCheck', file: 'deps.test.mjs', seam: 'deps.ignoreScripts' },
+  ],
+  56: [
+    { fn: 'ac56_lockfileCanonical', file: 'deps.test.mjs', seam: 'lockfile.ignoreResolved' },
+  ],
+  75: [
+    { fn: 'ac75_exactNameGuard', file: 'deps.test.mjs', seam: 'deps.allowAnyDep' },
+  ],
+  157: [
+    { fn: 'ac157_gateInstallSanitized', file: 'deps.test.mjs', seam: 'deps.allowOnlineGate' },
+    { fn: 'ac157_sandboxDepsResolve', file: 'gates.test.mjs', seam: 'gates.skipDepsBind' },
+  ],
+  84: [
+    { fn: 'ac84_workerMirror', file: 'mirror.test.mjs', seam: 'mirror.keepRemote' },
+  ],
+  94: [
+    { fn: 'ac94_mirrorOutsideWorktree', file: 'mirror.test.mjs', seam: 'mirror.keepStale' },
+  ],
+  106: [
+    { fn: 'ac106_fetchBack', file: 'mirror.test.mjs', seam: 'mirror.skipAncestorCheck' },
+  ],
+  161: [
+    { fn: 'ac161_gateMirror', file: 'mirror.test.mjs', seam: 'mirror.skipVerify' },
+  ],
+  122: [
+    { fn: 'ac122_bracket', file: 'gates.test.mjs', seam: 'gates.skipBracket' },
+  ],
+  135: [
+    { fn: 'ac135_trackingRefVerified', file: 'gates.test.mjs', seam: 'gates.skipSnapshotCheck' },
+  ],
+  141: [
+    { fn: 'ac141_trackingRefNeverClobbered', file: 'gates.test.mjs', seam: 'gates.clobberTrackingRef' },
+  ],
+  149: [
+    { fn: 'ac149_gatesSandboxedArgv', file: 'gates.test.mjs', seam: 'gates.allowNetwork' },
+    { fn: 'ac149_realBwrapGates', file: 'gates.test.mjs', seam: 'gates.skipSnapshotCheck' },
+  ],
+  21: [
+    { fn: 'ac21_recoveryTableRows', file: 'recover.test.mjs', seam: 'recover.deleteRecordDespiteRemoteRef' },
+  ],
+  29: [
+    { fn: 'ac29_ownershipCheckedDeletion', file: 'recover.test.mjs', seam: 'retire.skipMarkerCheck' },
+  ],
+  42: [
+    { fn: 'ac42_remotePendingResettable', file: 'recover.test.mjs', seam: 'reset.leaselessDelete' },
+  ],
+  43: [
+    { fn: 'ac43_rearmVsRetire', file: 'recover.test.mjs', seam: 'recover.retireInsteadOfRearm' },
+  ],
+  45: [
+    { fn: 'ac45_orphanResetAuthorization', file: 'recover.test.mjs', seam: 'reset.markerOptional' },
+  ],
+  58: [
+    { fn: 'ac58_oidMismatchWithoutPr', file: 'recover.test.mjs', seam: 'recover.rearmWithoutPr' },
+  ],
+  63: [
+    { fn: 'ac63_leaseGuardedRemoteDeleteIsOperatorOnly', file: 'recover.test.mjs', seam: 'reset.skipFreshnessCheck' },
+  ],
+  67: [
+    { fn: 'ac67_authorizedUnlabel', file: 'recover.test.mjs', seam: 'recover.trustAnyUnlabel' },
+  ],
+  70: [
+    { fn: 'ac70_localDeletionRevalidation', file: 'recover.test.mjs', seam: 'retire.skipTipCheck' },
+  ],
+  92: [
+    { fn: 'ac92_detachBeforeRefDelete', file: 'recover.test.mjs', seam: 'retire.noDetach' },
+  ],
+  93: [
+    { fn: 'ac93_crashSafeCreation', file: 'recover.test.mjs', seam: 'create.repairIgnoresTipMove' },
+  ],
+  104: [
+    { fn: 'ac104_stagedCreation', file: 'recover.test.mjs', seam: 'create.skipStaging' },
+  ],
+  107: [
+    { fn: 'ac107_creationPhasesJournaled', file: 'recover.test.mjs', seam: 'create.phaseAfterGit' },
+  ],
+  110: [
+    { fn: 'ac110_pinnedRemoteUrl', file: 'recover.test.mjs', seam: 'reset.skipUrlRecheck' },
+  ],
+  72: [
+    { fn: 'ac72_p0p1RecordMechanics', file: 'create.test.mjs', seam: 'create.recordDespiteGaps' },
   ],
 };
 

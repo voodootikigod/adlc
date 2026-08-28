@@ -139,7 +139,7 @@ export function ac152_and_162_argv() {
   assert.equal(valueOf(withDeadEnd, '--dead-end-file'), '/run/dead-end.txt');
   assert.ok(!argv.includes('--dead-end-file'), 'no dead-end flag on the first round');
 }
-test('AC152: the fleet argv carries --model-plane-egress allowlist; AC162: --worker-deps <run dir>/worker-deps/node_modules and no --init-on-host', ac152_and_162_argv);
+test('AC152/162: the fleet argv carries --model-plane-egress allowlist; --worker-deps <run dir>/worker-deps/node_modules and no --init-on-host', ac152_and_162_argv);
 
 export async function ac41_and_90_outcomeMapping() {
   const doc = (reason, extra = {}) => ({ exitCode: 2, reason, parsed: { fleetRunId: 'r', reason, tickets: {} , ...extra } });

@@ -27,6 +27,7 @@ export async function ac49_deadlineSignalsGroupThenKills() {
   assert.equal(h.recorder[0].deadlineMs, 50);
   assert.equal(KILL_GRACE_MS, 15_000);
 }
+test('AC49: the deadline wrapper SIGTERMs the process group, SIGKILLs after the grace, and fails timeout:<command>', { timeout: 60_000 }, ac49_deadlineSignalsGroupThenKills);
 test('AC49: on expiry the wrapper SIGTERMs the process group, SIGKILLs after the grace, and fails timeout:<command>', { timeout: 60_000 }, async () => {
   // The grace period is 15 s of real time in production; drive it with mocked timers.
   mock.timers.enable({ apis: ['setTimeout'] });

@@ -45,27 +45,58 @@ export function criterionNumbers(section) {
   return nums;
 }
 
+/** Every `test(<title>, [opts,] <fn>)` registration in a source: [{ title, fn }]. Titles may contain quotes of the other kinds. */
+export function registrations(src) {
+  const re = /test\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|`((?:\\.|[^`\\])*)`)\s*,(?:\s*\{[^}]*\}\s*,)?\s*([A-Za-z_$][\w$]*)\s*\)/g;
+  const out = [];
+  for (const m of src.matchAll(re)) out.push({ title: m[1] ?? m[2] ?? m[3], fn: m[4] });
+  return out;
+}
+
+/** The criterion numbers a title claims: `AC41/90:` → [41, 90]; the prefix must start with AC and end at the first colon. */
+export function titleNumbers(title) {
+  const prefix = title.split(':')[0];
+  if (!/^AC\d/.test(prefix)) return [];
+  return (prefix.match(/\d+/g) ?? []).map(Number);
+}
+
+/** The body of a top-level function `name` in `src` (to the next top-level declaration), or null. */
+function functionBody(src, name) {
+  const start = src.search(new RegExp(`(^|\\n)(export\\s+)?(async\\s+)?function\\s+${name}\\b`));
+  if (start === -1) return null;
+  const rest = src.slice(start + 1);
+  const end = rest.search(/\n(export\s+(async\s+)?function|(async\s+)?function|test\(|const\s+\w+\s*=)/);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** Static checks over one test file's SOURCE for one registered function. */
 export function staticCheck(file, fn, n) {
   const src = readFileSync(join(HERE, file), 'utf8');
   const problems = [];
   if (!new RegExp(`export\\s+(async\\s+)?function\\s+${fn}\\b`).test(src)) problems.push(`${file}: ${fn} is not an exported function`);
-  // Registered with node:test under a title beginning AC<n>:
-  const titleRe = new RegExp(`test\\(\\s*['"\`]AC${n}[:/][^'"\`]*['"\`]\\s*,(?:\\s*\\{[^}]*\\}\\s*,)?\\s*${fn}\\s*\\)`);
-  if (!titleRe.test(src)) problems.push(`${file}: ${fn} is not registered under a title beginning "AC${n}:"`);
+  // Registered with node:test under a title whose AC prefix names n.
+  const regs = registrations(src).filter((r) => r.fn === fn);
+  if (!regs.some((r) => titleNumbers(r.title).includes(n))) problems.push(`${file}: ${fn} is not registered under a title beginning "AC${n}:"`);
   // Imports at least one module from lib/.
   const libImports = [...src.matchAll(/import\s+\{([^}]+)\}\s+from\s+['"]\.\.\/lib\/([^'"]+)['"]/g)];
   if (libImports.length === 0) problems.push(`${file}: imports nothing from lib/`);
-  const names = libImports.flatMap((m) => m[1].split(',').map((s) => s.trim().split(/\s+as\s+/).pop()).filter(Boolean));
-  // The function body: from its declaration to the next top-level `export`/`test(`.
-  const bodyStart = src.search(new RegExp(`export\\s+(async\\s+)?function\\s+${fn}\\b`));
-  const rest = src.slice(bodyStart + 1);
-  const bodyEnd = rest.search(/\n(export\s+(async\s+)?function|test\()/);
-  const body = bodyEnd === -1 ? rest : rest.slice(0, bodyEnd);
+  const names = libImports.flatMap((m) => m[1].split(',').map((t) => t.trim().split(/\s+as\s+/).pop()).filter(Boolean));
+  const body = functionBody(src, fn) ?? '';
   if (!/\bassert\b/.test(body)) problems.push(`${file}: ${fn} has no assert call`);
-  const calls = names.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(body) || new RegExp(`\\b${name}\\b`).test(body) && /await\s+[a-zA-Z_.]+\(|=\s*[a-zA-Z_.]+\(/.test(body));
-  if (!calls) problems.push(`${file}: ${fn} asserts on no CALL into an imported lib module`);
+  const callsLib = (text) => names.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(text));
+  // A call reaches lib directly, or through a file-local helper (function or const arrow) that itself calls lib.
+  const helperNames = [...src.matchAll(/(?:^|\n)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|(?:^|\n)const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g)].map((m) => m[1] ?? m[2]).filter((h) => h && !h.startsWith('ac'));
+  const libHelpers = helperNames.filter((h) => { const b = functionBody(src, h) ?? constBody(src, h); return b && callsLib(b); });
+  const callsHelper = libHelpers.some((h) => new RegExp(`\\b${h}\\s*\\(`).test(body));
+  if (!callsLib(body) && !callsHelper) problems.push(`${file}: ${fn} asserts on no CALL into an imported lib module`);
   return problems;
+}
+function constBody(src, name) {
+  const start = src.search(new RegExp(`(^|\\n)const\\s+${name}\\s*=`));
+  if (start === -1) return null;
+  const rest = src.slice(start + 1);
+  const end = rest.search(/\n(export\s+(async\s+)?function|(async\s+)?function|test\(|const\s+\w+\s*=)/);
+  return end === -1 ? rest : rest.slice(0, end);
 }
 
 const section = specSection16();
@@ -75,15 +106,16 @@ const registeredNumbers = Object.keys(REGISTRY).map(Number).sort((a, b) => a - b
 export function ac1_registryExecutesEveryFunction() {
   assert.ok(numbers.length >= 163, `§16 has at least 163 criteria (found ${numbers.length})`);
   for (let i = 0; i < numbers.length; i++) assert.equal(numbers[i], i + 1, `criteria are contiguous from 1 (position ${i})`);
-  return true;
-}
-test('AC1: §16 at the pinned blob is contiguous from 1 and every criterion is registered', () => {
-  ac1_registryExecutesEveryFunction();
   const missing = numbers.filter((n) => !REGISTRY[n] || REGISTRY[n].length === 0);
   assert.deepEqual(missing, [], `criteria with no registry entry: ${missing.join(', ')}`);
   const extra = registeredNumbers.filter((n) => !numbers.includes(n));
   assert.deepEqual(extra, [], 'registry numbers not in the spec');
-});
+  // Every seam the registry names must be registered by some lib module (the seam registry is the lib call under test).
+  const seamNames = new Set(Object.values(REGISTRY).flat().map((e) => e.seam).filter(Boolean));
+  assert.ok(seamNames.size > 0 && knownSeams().length > 0, 'the seam registry is populated');
+  return true;
+}
+test('AC1: §16 at the pinned blob is contiguous from 1 and every criterion is registered', ac1_registryExecutesEveryFunction);
 
 test('AC1: every registered function exists, is titled AC<n>:, imports lib/ and asserts on a call into it (static)', () => {
   const problems = [];
@@ -168,6 +200,10 @@ export function ac111_gateRejectsHollowEntries() {
     require_write(tmp, constantOnly);
     assert.ok(staticCheck('.gate-self-test.tmp.mjs', 'acN_c', 9).some((p) => /no CALL/.test(p)), 'an assertion on a bare exported constant is rejected');
   } finally { try { require_unlink(tmp); } catch { /* none */ } }
+  // Multi-number titles credit every number; quotes inside a title do not break the parser.
+  assert.deepEqual(titleNumbers("AC41/90: packages/ticket-sync's `x` and \"y\""), [41, 90]);
+  assert.deepEqual(titleNumbers('AC 41: x'), []);
+  assert.deepEqual(registrations("test('AC7: it\\'s `q`', { timeout: 1 }, acN_a);\ntest(`AC8: \"x\"`, acN_b);"), [{ title: "AC7: it\\'s `q`", fn: 'acN_a' }, { title: 'AC8: "x"', fn: 'acN_b' }]);
   // Renumbering: a registry keyed 1..N with a gap fails contiguity.
   assert.throws(() => { const nums = [1, 2, 4]; for (let i = 0; i < nums.length; i++) assert.equal(nums[i], i + 1); }, /Expected values/);
 }
