@@ -23,6 +23,9 @@ test('running fleet.mjs directly DISPATCHES the CLI (--help prints usage)', () =
   const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /fleet — parallel ADLC ticket orchestration/, 'the entry-point guard dispatches when run directly');
+  // The documented exit-code contract is part of the CLI's interface (CONVENTIONS rule 4):
+  // 0 = ok, 1 = operational error, 2 = a ticket failed/blocked/paused.
+  assert.match(r.stdout, /Exit codes: 0 ok · 1 operational error · 2 a ticket failed\/blocked\/paused \(see --json "reason"\)\./);
 });
 
 // ── the argv slice is a real boundary (#530 mutation gate) ───────────────────

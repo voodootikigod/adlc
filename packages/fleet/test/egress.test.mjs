@@ -279,6 +279,21 @@ test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 3
   assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
 });
 
+test('the bridge relays SIGINT too (fleet stops a run with either signal) and exits 128+2', { timeout: 30_000 }, async () => {
+  // Both forwarded signals are load-bearing: a bridge that relayed only SIGTERM
+  // would leave a worker running past a Ctrl-C / SIGINT stop.
+  const bridgePort = await freePort();
+  const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  for (let i = 0; i < 100; i += 1) {
+    const up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
+    if (up) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  child.kill('SIGINT');
+  const status = await new Promise((r) => child.once('exit', (code) => r(code)));
+  assert.equal(status, 130, 'the child died of SIGINT (128+2), so that is what the bridge reports');
+});
+
 test('the bridge exits 1 and never spawns the command when its port is already taken', { timeout: 30_000 }, async () => {
   // A worker started with HTTPS_PROXY pointing at a port the bridge does not own
   // would talk to whatever IS there; refusing to start is the only safe outcome.

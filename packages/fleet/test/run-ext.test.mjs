@@ -123,8 +123,12 @@ test('spawnAsync killGroup: a SIGTERM-ignoring child tree is ended by SIGKILL to
 });
 
 test('spawnAsync without killGroup keeps the legacy single-process SIGTERM (byte-identical default)', async () => {
+  // The injected `kill` records AND really signals, so a defaulted-on group kill
+  // (the mutant) is observed as a recorded negative-pid signal rather than as a
+  // hung test — and a SIGTERM-honouring child ends either way.
   const kills = [];
-  const res = await spawnAsync(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { timeout: 100, kill: (pid, sig) => kills.push({ pid, sig }), encoding: 'utf8' });
+  const realKill = (pid, sig) => { kills.push({ pid, sig }); process.kill(pid, sig); };
+  const res = await spawnAsync(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { timeout: 100, killGraceMs: 100, kill: realKill, encoding: 'utf8' });
   assert.equal(res.timedOut, true);
-  assert.equal(kills.length, 0, 'the injected group kill is never used on the legacy path');
+  assert.deepEqual(kills, [], 'the injected group kill is never used on the legacy path — the child alone gets child.kill(SIGTERM)');
 });
