@@ -25,7 +25,7 @@ export async function runGateCommand(sandbox, command, env, { timeoutMs = null }
     const output = await sandbox.run(argv, timeoutMs ? { env, timeout: timeoutMs } : { env });
     return { ok: true, output: String(output ?? '') };
   } catch (e) {
-    return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}` };
+    return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}`, timedOut: e?.timedOut === true };
   }
 }
 

@@ -197,7 +197,7 @@ export function buildBoundedModelPlaneArgv({
 export class BoundedModelSandbox {
   constructor({
     backend, worktree, writableRoots = [], readOnlyPaths = [], home, homeBinds = [], homeWritableFiles = [],
-    homeScratchDirs = [], tmpDir = `${PRIVATE_TMP}/fleet-tmp`, unshareNet = false, exec, isFile = defaultIsFile,
+    homeScratchDirs = [], tmpDir = `${PRIVATE_TMP}/fleet-tmp`, unshareNet = false, exec, isFile = defaultIsFile, commandMap = {},
   } = {}) {
     if (backend?.name !== 'bubblewrap') {
       throw new Error(`bounded model plane requires bubblewrap (got ${backend?.name ?? 'no backend'})`);
@@ -213,6 +213,10 @@ export class BoundedModelSandbox {
     this.tmpDir = tmpDir;
     this.unshareNet = unshareNet;
     this._exec = exec;
+    // Bare command names the adapter invokes (`claude`) → the absolute realpath bound
+    // read-only inside: with the host root absent and HOME a tmpfs, PATH lookup
+    // inside the plane cannot find a HOME-installed executable (codex r5).
+    this.commandMap = { ...commandMap };
     this._isFile = isFile;
     // Build once: a bad home bind or TMPDIR should fail at construction, not mid-dispatch.
     this.wrap([]);
@@ -237,11 +241,13 @@ export class BoundedModelSandbox {
   }
 
   wrap(innerArgv) {
+    const [cmd, ...rest] = innerArgv;
+    const mapped = Object.hasOwn(this.commandMap, cmd) ? [this.commandMap[cmd], ...rest] : innerArgv;
     return buildBoundedModelPlaneArgv({
       worktree: this.worktree, writableRoots: this.writableRoots, readOnlyPaths: this.readOnlyPaths,
       home: this.home, homeBinds: this.homeBinds, homeWritableFiles: this.homeWritableFiles,
       homeScratchDirs: this.homeScratchDirs, tmpDir: this.tmpDir, unshareNet: this.unshareNet, isFile: this._isFile,
-    }, innerArgv);
+    }, mapped);
   }
 
   /** Execute `innerArgv` inside the sandbox; the whole option bag is forwarded (timeout, input, env). */

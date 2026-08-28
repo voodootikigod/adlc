@@ -251,7 +251,9 @@ if (sub === 'run') {
     });
   } else {
     // ---- LIVE RUN: preflight → resume reconcile → runFleet ----
-    runLive({ repo: process.cwd(), dir, all, config, onlyIds, json: flags.json === true }).then((code) => process.exit(code));
+    runLive({ repo: process.cwd(), dir, all, config, onlyIds, json: flags.json === true })
+      .then((code) => process.exit(code))
+      .catch((e) => { console.error(`fleet: ${e?.stack ?? e?.message ?? e}`); if (flags.json === true) printJson(resultDocument({ runId: null, exitCode: 1, summary: null, reason: RUN_REASONS.DISPATCH_REFUSED, sandbox: {}, warnings: [] })); process.exit(1); });
   }
 }
 
@@ -456,12 +458,21 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
   };
 
-  const pre = await preflight({
-    repo, config, statusDir: dir, io,
-    self: selfIdentity(), probes: lockProbes(),
-    railHookInstalled,
-    dispatchCanary: config.canary === false ? undefined : dispatchCanary,
-  });
+  let pre;
+  try {
+    pre = await preflight({
+      repo, config, statusDir: dir, io,
+      self: selfIdentity(), probes: lockProbes(),
+      railHookInstalled,
+      dispatchCanary: config.canary === false ? undefined : dispatchCanary,
+    });
+  } catch (e) {
+    // A THROWN preflight still yields the one document --json promised (codex r5);
+    // the lock is released only if this process is the recorded owner.
+    console.error(`preflight threw: ${e?.stack ?? e?.message ?? e}`);
+    if (readLockOwner(dir)?.pid === process.pid) release(dir);
+    return finish(1, { reason: RUN_REASONS.PREFLIGHT });
+  }
   for (const w of pre.warnings) console.error(`warning: ${w}`);
   if (!pre.ok) {
     console.error(`preflight failed: ${pre.reason}`);
@@ -553,6 +564,10 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     // Exit code keys on quarantine FIRST — see runExitCode. A quarantined-no-work resume
     // must not report success just because no ticket reached a failed/blocked state.
     return finish(runExitCode(summary), { runId, summary, sandbox: deps.describeSandbox?.() ?? {}, warnings: pre.warnings });
+  } catch (e) {
+    // Resume reconciliation, base resolution or planning threw: one document, reason dispatch-refused.
+    console.error(`fleet: ${e?.stack ?? e?.message ?? e}`);
+    return finish(1, { reason: RUN_REASONS.DISPATCH_REFUSED, warnings: pre.warnings });
   } finally {
     release(dir); // always release the preflight-held lock
   }

@@ -63,3 +63,11 @@ test('runGates forwards a remaining-wall-clock bound to the sandbox as `timeout`
   await runGates(sandbox, { build: 'b' }, {});
   assert.ok(!('timeout' in seen[0]), 'no bound → no timeout key at all');
 });
+
+test('a gate command ended by its timeout is a FAILURE carrying timedOut (never an empty success) (codex r5)', async () => {
+  const sandbox = { run: async () => { const e = new Error('command timed out after 5 ms'); e.timedOut = true; e.stdout = 'partial'; throw e; } };
+  const r = await runGates(sandbox, { build: 'b' }, {}, { timeoutMs: 5 });
+  assert.equal(r.ok, false);
+  assert.equal(r.results[0].timedOut, true);
+  assert.match(r.results[0].output, /timed out/);
+});

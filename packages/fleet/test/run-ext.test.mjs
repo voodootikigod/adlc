@@ -165,3 +165,26 @@ test('a per-ticket worktree setup failure is that ticket\'s recorded outcome; th
   assert.equal(s.results.B, 'merged', 'the sibling ticket ran to completion');
   assert.match(s.tickets?.A?.reason ?? s.status?.tickets?.A?.reason ?? 'worktree setup failed', /worktree setup failed/);
 });
+
+test('a post-merge gate cut short by the wall clock withdraws the merge and PAUSES the ticket (codex r5)', async () => {
+  const rec = newRec();
+  let t = 0; const reverts = [];
+  const d = { ...deps(rec, { now: () => t }), postMergeGate: async () => { t = 5001; return { ok: false, output: 'timed out', timedOut: true }; }, revertMerge: async (a) => { reverts.push(a); return { ok: true, method: 'reset' }; } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000, noPr: true }, deps: d });
+  assert.equal(reverts.length, 1, 'the merge was withdrawn');
+  assert.equal(s.results.A, 'paused');
+});
+
+test('a timed-out repo command (status null) is a gate FAILURE, never an empty success (codex r5)', async () => {
+  const { buildLiveDeps } = await import('../lib/live-deps.mjs');
+  const spawns = [];
+  const io = {
+    git: () => () => 'SHA', adlc: () => ({ status: 0, stdout: '{}' }), adlcAsync: async () => ({ status: 0, stdout: '' }),
+    spawnWorker: async (cmd, args, opts) => { spawns.push({ cmd, args, opts }); return { status: null, signal: 'SIGTERM', stdout: 'partial', stderr: '', timedOut: true }; },
+    readFile: () => '', exists: () => false, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {}, copyTree: () => {}, env: { PATH: '/usr/bin', HOME: '/h' }, hasGh: () => false,
+  };
+  const live = buildLiveDeps({ repo: '/repo', config: { gate: { test: 'npm test' }, prosecuteFailOn: 'medium', timeoutMinutes: 1 }, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } }, io, reviewRunner: () => ({ ok: true, findings: [] }) });
+  const g = await live.gate({ ticket: T('A'), worktree: '/wt', startSha: 'S', remainingMs: 5 });
+  assert.equal(g.ok, false);
+  assert.equal(g.timedOut, true);
+});

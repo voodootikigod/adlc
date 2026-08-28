@@ -57,6 +57,9 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       const post = await deps.postMergeGate({ ticket, integrationBranch, remainingMs });
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
+        // A post-merge gate cut short by the wall clock: the merge is withdrawn and the
+        // ticket PAUSES (resumable), never a strike (codex r5).
+        if (rev.ok && post.timedOut && config.deadline != null && (deps.now ?? Date.now)() >= config.deadline) return { ok: false, expired: true, output: 'external wall clock expired during the post-merge gate; merge withdrawn' };
         // revertMerge returns { ok: false, method: 'refused' } when it cannot safely
         // undo the merge (HEAD moved and `git revert` also failed). That leaves the
         // GATE-REJECTED merge on the shared branch — the same hazard a failed completion

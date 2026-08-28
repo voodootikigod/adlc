@@ -97,6 +97,7 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
     } catch (e) {
       return { ok: false, reason: `adversarial-review spawn failed: ${e.message}` };
     }
+    if (res.timedOut) return { ok: false, timedOut: true, reason: 'adversarial-review timed out — failing closed' };
     if (res.error) {
       // ENOENT here means the TRUSTED review binary is not installed — fail
       // closed rather than silently skipping prosecution.

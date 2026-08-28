@@ -175,6 +175,8 @@ export async function advanceTicket(ticket, effects, {
     log(`${ticket.id} strike ${strikes}: gating`);
     const gate = await effects.gate({ ticket, remainingMs: remainingMs() });
     if (!gate.ok) {
+      // A gate cut short by the wall clock is not the worker's failure: pause, never a strike/flail (codex r5).
+      if (gate.timedOut && expired()) return paused('external wall clock expired during the gate', REASON_CODES.WALL_CLOCK);
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
       if (canRetry() && await consultFlail()) {
         return fail('flail-detector diagnosed a genuine flail — skipping the next strike', REASON_CODES.FLAIL);
@@ -194,6 +196,7 @@ export async function advanceTicket(ticket, effects, {
     reviewRounds += 1;
     review = { ...(pros.review ?? {}), verdict: pros.review?.verdict ?? pros.verdict, rounds: reviewRounds };
     if (pros.verdict === 'unavailable') {
+      if (pros.timedOut && expired()) return paused('external wall clock expired during prosecution', REASON_CODES.WALL_CLOCK);
       // Cannot prove safety → must not merge, retrying build won't help.
       effects.record?.('p5', false);
       return fail(`prosecution unavailable (fail closed): ${pros.reason}`, REASON_CODES.REVIEW_UNAVAILABLE);

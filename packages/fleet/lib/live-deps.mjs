@@ -270,6 +270,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // timeout the whole group is signalled, never just the sandbox leader (codex r4).
       const res = await io.spawnWorker(argv[0], argv.slice(1), { cwd: worktree, killGroup: true, ...opts });
       if (res.error) throw res.error;
+      if (res.timedOut) {
+        // A timed-out child reports status null — that is a FAILURE with its own
+        // marker, never an empty success (codex r5).
+        const e = new Error(`command timed out${opts?.timeout ? ` after ${opts.timeout} ms` : ''}`);
+        e.stdout = res.stdout; e.stderr = res.stderr; e.timedOut = true; throw e;
+      }
       if (typeof res.status === 'number' && res.status !== 0) {
         const e = new Error(`command failed (exit ${res.status})`);
         e.stdout = res.stdout; e.stderr = res.stderr; throw e;
@@ -628,7 +634,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // ref movement DURING the build/test would be invisible and a stale passing verdict
       // would be trusted (adversarial-review round-30). The whole point of the after-gate
       // pin is to observe the branch tip AS IT WAS while the gate executed.
-      const result = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath), { timeoutMs: remainingMs ?? undefined });
+      const gated = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath), { timeoutMs: remainingMs ?? undefined });
+      const result = { ...gated, timedOut: (gated.results ?? []).some((r) => r.timedOut === true) };
       try {
         assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');
         if (integrationGit('rev-parse', 'HEAD') !== gatedSha) {

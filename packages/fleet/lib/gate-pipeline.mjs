@@ -51,7 +51,7 @@ export async function runGatePipeline(ticket, deps) {
   const build = await runGates(deps.sandbox, deps.gate, deps.env, { timeoutMs: deps.timeoutMs ?? null });
   if (!build.ok) {
     const failed = build.results.find((r) => !r.ok);
-    return { ok: false, stage: `build/test:${failed?.key ?? '?'}`, output: failed?.output ?? '' };
+    return { ok: false, stage: `build/test:${failed?.key ?? '?'}`, output: failed?.output ?? '', timedOut: failed?.timedOut === true };
   }
 
   // 2. ticket-local scope check (tracked diff).

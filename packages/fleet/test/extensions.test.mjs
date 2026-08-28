@@ -53,6 +53,8 @@ function fakeIo(rec, { uid = 1000, isFile = () => true, homeFs } = {}) {
     spawnWorker: async (cmd, args, opts) => { rec.spawn.push({ cmd, args, opts }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
     readFile: () => '', exists: () => false, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {}, copyTree: () => {},
     env: { PATH: '/usr/bin', HOME }, hasGh: () => false, uid, isFile, homeFs: homeFs ?? fakeHomeFs(uid),
+    // the adapter executable as the HOST resolves it (a real file outside the plane's tmpfs HOME)
+    resolveExecutable: (command) => (command === 'claude' ? `${HOME}/.local/bin/claude` : null),
     startEgressProxy: async ({ socketPath, allowlist }) => { const p = { socketPath, allowlist: [...allowlist], refused: [], closed: false, close: async () => { p.closed = true; } }; proxies.push(p); return p; },
   };
 }
@@ -66,8 +68,8 @@ test('bounded reads: the worker runs under a bwrap profile with --tmpfs /tmp, a 
     const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr', '/lib', `${HOME}/.local/bin/claude`] } });
     const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
     assert.equal(r.exitCode, 0);
-    const call = findInner(rec.spawn, 'claude');
-    assert.ok(call, 'the worker was spawned');
+    const call = findInner(rec.spawn, `${HOME}/.local/bin/claude`);
+    assert.ok(call, 'the worker was spawned by the resolved ABSOLUTE path of the adapter executable (codex r5)');
     const w = call.wrapper.args;
     assert.equal(call.wrapper.cmd, 'bwrap');
     const pairs = w.map((a, i) => `${a} ${w[i + 1]}`);
@@ -311,4 +313,28 @@ test('AC78 (real bwrap): a worker commit inside the bounded sandbox lands in the
 test('unwrapAll helper still recovers the inner argv through the bridge prefix (test-helper contract)', () => {
   const calls = unwrapAll([{ cmd: 'bwrap', args: ['--tmpfs', '/tmp', '--', process.execPath, BRIDGE_PATH, '--socket', 's', '--port', '8118', '--', 'claude', '-p'] }]);
   assert.equal(calls[0].cmd, process.execPath);
+});
+
+test('bounded mode resolves the adapter executable on the host, binds it read-only as a single file and invokes it by that absolute path even when the caller did not list it; an unresolvable executable is sandbox-policy-mismatch (codex r5)', async () => {
+  const rec = newRec();
+  const io = fakeIo(rec);
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-exe-'));
+  try {
+    // the operator lists ONLY system roots: the executable still gets in, through the host resolution
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 0, r.output);
+    const call = findInner(rec.spawn, `${HOME}/.local/bin/claude`);
+    assert.ok(call, 'invoked by the absolute realpath, never a bare name');
+    const w = call.wrapper.args;
+    const pairs = w.map((a, i) => `${a} ${w[i + 1]}`);
+    assert.ok(pairs.includes(`--ro-bind ${HOME}/.local/bin/claude`), 'a single-file read-only bind of the executable');
+    assert.ok(!pairs.includes(`--ro-bind ${HOME}/.local/bin`), 'its parent directory is not exposed');
+    const io2 = { ...fakeIo(newRec()), resolveExecutable: () => null };
+    const deps2 = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io: io2, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr'] } });
+    const r2 = await deps2.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r2.exitCode, 1);
+    assert.equal(r2.policyMismatch, true);
+    assert.match(r2.output, /adapter executable not found/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -97,3 +97,14 @@ test('the post-preflight wall-clock exit releases the preflight-held lock (codex
   assert.equal(code, 2);
   assert.equal(released, 1, 'the lock is released exactly once on the early exit');
 });
+
+test('--json is total for a THROWN preflight (reason preflight, no lock release when this process is not the owner) and for a thrown reconciliation (dispatch-refused, lock released) (codex r5)', async () => {
+  let emitted = null; let released = 0;
+  const ov = { ...overrides({}), preflight: async () => { throw new Error('preflight exploded'); }, emit: (d) => { emitted = d; }, release: () => { released++; } };
+  const code = await runLive({ ...ARGS, json: true }, ov);
+  assert.equal(code, 1); assert.equal(emitted?.reason, 'preflight'); assert.equal(released, 0, 'no lock is held after a thrown preflight');
+  let emitted2 = null; let released2 = 0;
+  const ov2 = { ...overrides({}), loadPrior: () => ({ runId: 'r-old' }), reconcile: () => { throw new Error('status corrupt'); }, emit: (d) => { emitted2 = d; }, release: () => { released2++; } };
+  const code2 = await runLive({ ...ARGS, json: true }, ov2);
+  assert.equal(code2, 1); assert.equal(emitted2?.reason, 'dispatch-refused'); assert.equal(released2, 1, 'the preflight-held lock is released');
+});

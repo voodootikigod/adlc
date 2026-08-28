@@ -33,7 +33,7 @@ export async function prosecute({ worktree, startSha, ticket }, { runReview, fai
   if (!result || result.ok === false) {
     // Provider unreachable / review could not complete → fail closed (F3): a
     // fleet that cannot prosecute must not auto-merge.
-    return { verdict: 'unavailable', blocking: [], reason: result?.reason ?? 'review provider unreachable; failing closed' };
+    return { verdict: 'unavailable', blocking: [], reason: result?.reason ?? 'review provider unreachable; failing closed', timedOut: result?.timedOut === true };
   }
   const blocking = (result.findings ?? []).filter(
     (f) => (SEVERITY_ORDER[f.severity] ?? 0) >= threshold

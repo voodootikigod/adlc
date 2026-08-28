@@ -6,7 +6,7 @@
 // primitive arrives through `io` so the composition is unit-testable.
 
 import { join, dirname } from 'node:path';
-import { realpathSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { realpathSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plane.mjs';
@@ -76,6 +76,12 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
       // The bridge and the node that runs it must be visible inside: single-file binds.
       readOnlyPaths.push(realpathSafe(nodePath), realpathSafe(BRIDGE_PATH));
     }
+    // The adapter's own executable: resolved on the HOST search path to a single
+    // regular file, bound read-only, and invoked by that absolute path inside.
+    const command = adapter.command ?? 'claude';
+    const executable = (io.resolveExecutable ?? resolveExecutable)(command, io.env.PATH);
+    if (!executable) throw new SandboxPolicyError(`adapter executable not found on PATH: ${command}`);
+    if (!readOnlyPaths.includes(executable)) readOnlyPaths.push(executable);
     const inv = checkReadSetInvariant({
       readOnlyPaths, writableRoots: [worktree, ...writableRoots], home: home.home,
       homeBinds: home.homeBinds, homeScratchDirs: home.homeScratchDirs, isFile: io.isFile ?? null,
@@ -84,15 +90,26 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
     const sandbox = new BoundedModelSandbox({
       backend: sandboxSpec.backend, worktree, writableRoots, readOnlyPaths,
       home: home.home, homeBinds: home.homeBinds, homeWritableFiles: home.homeWritableFiles, homeScratchDirs: home.homeScratchDirs,
-      unshareNet: egress !== null, isFile: io.isFile,
+      unshareNet: egress !== null, isFile: io.isFile, commandMap: { [command]: executable },
       exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
     });
-    const description = { ...sandbox.describe(), egressAllowlist: egress?.allowlist ?? [], credentialSha256: home.credentialSha256 };
+    const description = { ...sandbox.describe(), egressAllowlist: egress?.allowlist ?? [], credentialSha256: home.credentialSha256, adapterExecutable: executable };
     return { sandbox, description, egress, stagingDir, cleanup };
   } catch (e) {
     await cleanup();
     throw e;
   }
+}
+
+/** The first regular file named `command` on the host search list, as a realpath; null when absent. */
+export function resolveExecutable(command, pathValue) {
+  if (typeof command !== 'string' || command.includes('/')) return null;
+  for (const dir of String(pathValue ?? '').split(':')) {
+    if (!dir || !dir.startsWith('/')) continue;
+    const candidate = join(dir, command);
+    try { const real = realpathSync(candidate); if (statSync(real).isFile()) return real; } catch { /* next */ }
+  }
+  return null;
 }
 
 /** Wrap the worker argv in the in-sandbox bridge and add the proxy env (item 13). */

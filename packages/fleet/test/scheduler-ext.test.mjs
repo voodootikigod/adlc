@@ -200,3 +200,19 @@ test('a pre-strike command that consumes the budget → paused wall-clock (not q
   const r2 = await advanceTicket(ticket, e2, { maxStrikes: 3, deadline: 10_000, now: () => 0 });
   assert.equal(r2.state, 'paused'); assert.equal(r2.reasonCode, REASON_CODES.WALL_CLOCK);
 });
+
+test('deadline-caused timeouts pause wall-clock instead of becoming strikes/flail/review-unavailable: a timed-out gate and a timed-out prosecution past the deadline (codex r5)', async () => {
+  let t = 0; const flail = [];
+  const e = effects({ gate: () => { t = 5000; return { ok: false, output: 'timed out', timedOut: true }; }, flail: () => { flail.push(1); return { flail: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 1000, now: () => t });
+  assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(flail.length, 0, 'no flail consultation'); assert.equal(e.calls.dispatch.length, 1, 'no retry strike');
+  let t2 = 0;
+  const e2 = effects({ prosecute: () => { t2 = 5000; return { verdict: 'unavailable', reason: 'adversarial-review timed out', timedOut: true }; } });
+  const r2 = await advanceTicket(ticket, e2, { maxStrikes: 3, deadline: 1000, now: () => t2 });
+  assert.equal(r2.state, 'paused'); assert.equal(r2.reasonCode, REASON_CODES.WALL_CLOCK);
+  // the same failures WITHOUT an expired deadline keep their ordinary meaning
+  const e3 = effects({ gate: () => ({ ok: false, output: 'timed out', timedOut: true }) });
+  const r3 = await advanceTicket(ticket, e3, { maxStrikes: 1, deadline: 1_000_000, now: () => 0 });
+  assert.equal(r3.state, 'failed');
+});
