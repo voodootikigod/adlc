@@ -62,7 +62,8 @@ export async function pushAttested({ ctx, issue, attestedHead, expectedRemoteOid
 /** The remote.origin.url observed at preflight must still be observed now (AC 110). */
 export async function remoteUrlUnchanged(ctx) {
   if (active('push.skipRemoteUrlCheck')) return true;
-  const expected = ctx.remote?.observedFetchUrl;
+  // Phase A records the raw observed URL under remote.observed.fetch (git-runner's field); the flat alias is kept for callers that set it.
+  const expected = ctx.remote?.observed?.fetch ?? ctx.remote?.observedFetchUrl;
   if (expected == null || typeof ctx.git.observe !== 'function') return true;
   const observed = await ctx.git.observe('remote.origin.url');
   return observed === expected;

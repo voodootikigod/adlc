@@ -139,7 +139,7 @@ export const REGISTRY = {
   87: [
     { fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' },
     { fn: 'ac87_ordinalIsRecordedUnderTheLock', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
-    { fn: 'ac87_reconciliationAppendsToStatusAndRecord', file: 'status.test.mjs', seam: 'status.skipQuotaAppend' },
+    { fn: 'ac87_reconciliationAppendsToStatusAndRecord', file: 'status.test.mjs', seam: 'quota-gate.skipRecordAppend' },
   ],
   88: [
     { fn: 'ac88_everyPatternIsReplacedWithItsName', file: 'redact.test.mjs', seam: 'redactor.disable' },
@@ -358,7 +358,7 @@ export const REGISTRY = {
   ],
   36: [
     { fn: 'ac36_verifyThenPushSequence', file: 'sequence.test.mjs', seam: 'push.skipHeadCheck' },
-    { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipHeadCheck' },
+    { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipLease' },
   ],
   38: [
     { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.attestWithoutHeadCheck' },
@@ -438,7 +438,7 @@ export const REGISTRY = {
     { fn: 'ac48_carryForwardEquivalence', file: 'maintain.test.mjs', seam: 'maintain.carryForwardWithoutPatchId' },
   ],
   61: [
-    { fn: 'ac61_ownershipAndSelector', file: 'maintain.test.mjs', seam: 'maintain.maintainAnyState' },
+    { fn: 'ac61_ownershipAndSelector', file: 'maintain.test.mjs', seam: 'maintain.skipProvenance' },
   ],
   62: [
     { fn: 'ac62_prLifecycle', file: 'maintain.test.mjs', seam: 'maintain.deleteRecordWithRemoteRef' },
@@ -449,6 +449,20 @@ export const REGISTRY = {
   44: [
     { fn: 'ac44_diffSizeGate', file: 'review.test.mjs', seam: 'review.skipSizeGate' },
   ],
+  130: [
+    { fn: 'ac130_identityObservedUnoverlaid', file: 'preflight-transport.test.mjs', seam: 'gitRunner.overlayObserve' },
+  ],
+  131: [
+    { fn: 'ac131_sshTransportSurvivesConfigRace', file: 'preflight-transport.test.mjs', seam: 'gitRunner.noGitSsh' },
+  ],
+  137: [
+    { fn: 'ac137_splitPushUrlIsRefused', file: 'preflight-transport.test.mjs', seam: 'preflight.ignorePushUrl' },
+  ],
+  142: [
+    { fn: 'ac142_fetchAndPushUrlsAreOneString', file: 'preflight-transport.test.mjs', seam: 'gitRunner.identityRowsDropped' },
+  ],
+  91: [{ fn: 'ac91_outwardRedactionOnEveryExitPath', file: 'redact.test.mjs', seam: 'redactor.disable' }],
+  160: [{ fn: 'ac160_verifySpawnCarriesTheKey', file: 'manifest-verify.test.mjs', seam: 'diffcheck.skipManifestVerify' }],
 };
 
 /** The critical set for which the mutation-fixture check is mandatory (AC 114): quota, authorization, redaction, retirement, attestation. */
