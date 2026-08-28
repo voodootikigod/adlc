@@ -240,7 +240,7 @@ export async function ac144_pushSourceIsTheAttestedOid() {
     assert.equal(heads(), '', 'NET_GIT has no refs/heads before');
     // The head check is disabled ONLY to observe the push source: the branch moves after attestation, the push still names the OID.
     const result = await withMutation('push.skipHeadCheck', () => runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } }));
-    assert.equal(result.state, 'done', JSON.stringify(result));
+    assert.equal(result.state, 'done', `${JSON.stringify(result)} record=${JSON.stringify({ lastError: fx.ctx.records.load(fx.issue)?.lastError, reasonText: fx.ctx.records.load(fx.issue)?.reasonText })}`);
     const record = fx.ctx.records.load(n);
     const push = pushSpawns(fx)[0];
     assert.ok(push, 'a NET_GIT push was recorded');
