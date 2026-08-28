@@ -120,10 +120,12 @@ test('AC121/AC114: every registered criterion names a mutation fixture that BITE
   const seams = new Set(knownSeams());
   const modules = new Map();
   for (const [n, list] of Object.entries(REGISTRY)) {
-    // One biting fixture per criterion suffices; every entry must name a seam or a reason.
+    // One biting fixture per criterion suffices; every entry must name a seam or a
+    // reason. The cap of 5 (AC 1) is over CRITERIA that have no biting fixture at all.
     let bit = false;
+    const reasons = [];
     for (const e of list) {
-      if (e.noFixture) { noFixture.push(`AC${n} (${e.fn}): ${e.noFixture}`); continue; }
+      if (e.noFixture) { reasons.push(`AC${n} (${e.fn}): ${e.noFixture}`); continue; }
       if (!e.seam) { problems.push(`AC${n}: ${e.fn} names neither a seam nor a noFixture reason`); continue; }
       if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
       const fn = modules.get(e.file)[e.fn];
@@ -139,7 +141,9 @@ test('AC121/AC114: every registered criterion names a mutation fixture that BITE
       clearAll();
       if (threw) bit = true; else problems.push(`AC${n}: ${e.fn} still passes with fixture ${e.seam} applied — the fixture does not bite`);
     }
-    if (!bit && !list.some((e) => e.noFixture)) problems.push(`AC${n}: no biting fixture`);
+    if (!bit) {
+      if (reasons.length) noFixture.push(...reasons); else problems.push(`AC${n}: no biting fixture`);
+    }
   }
   for (const line of noFixture) console.log(`noFixture: ${line}`);
   assert.ok(noFixture.length <= 5, `at most 5 noFixture criteria (have ${noFixture.length}):\n${noFixture.join('\n')}`);

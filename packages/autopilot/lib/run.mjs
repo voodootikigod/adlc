@@ -29,7 +29,9 @@ export const BLOCKING_REASONS = FLEET_BLOCKING_REASONS;
 
 /** Remaining build budget (§7): strikes and wall clock are ONE counter each per run. */
 export function remainingBudget(record, config) {
-  const strikes = Math.max(0, config.maxRounds - (record.roundsUsed ?? 0));
+  // Mutation seam `run.budgetNotGlobal`: rounds consumed by earlier phases are forgotten.
+  const used = active('run.budgetNotGlobal') ? 0 : (record.roundsUsed ?? 0);
+  const strikes = Math.max(0, config.maxRounds - used);
   const wallClockMs = Math.max(0, config.wallClockMinutes * 60_000 - (record.wallClockUsedMs ?? 0));
   return { strikes, wallClockMinutes: Math.floor(wallClockMs / 60_000), wallClockMs };
 }

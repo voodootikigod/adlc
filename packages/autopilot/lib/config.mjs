@@ -10,7 +10,9 @@
 
 import { validateAgainst } from './schema-lite.mjs';
 import { validateModel, validateRepoSpec, InputError } from './input.mjs';
-import { active } from './mutations.mjs';
+import { active, registerSeams } from './mutations.mjs';
+
+registerSeams(['config.skipTicketSyncSchema']);
 
 export const DISPATCH_APPROVAL_MODES = Object.freeze(['owner-or-label', 'label-only', 'trusted-authors']);
 export const ALLOWED_WORKSPACE_DEPS = Object.freeze(['@adlc/core', '@adlc/fleet', '@adlc/tickets']);
@@ -71,9 +73,10 @@ export function validateRepoConfig(doc, { ticketSyncSchema }) {
   if (doc.fleet.reviewProvider !== 'codex') throw new ConfigError('bad-config', 'fleet.reviewProvider must be "codex"');
   if (!doc.ticketSync) throw new ConfigError('bad-config', 'ticketSync block missing');
   if (!ticketSyncSchema) throw new ConfigError('bad-config', 'ticket-sync schema unavailable at the pinned baseline');
-  const tsErrs = validateAgainst(ticketSyncSchema, { ticketSync: doc.ticketSync }, '$');
+  // Mutation seam `config.skipTicketSyncSchema`: the ticketSync block goes unvalidated.
+  const tsErrs = active('config.skipTicketSyncSchema') ? [] : validateAgainst(ticketSyncSchema, { ticketSync: doc.ticketSync }, '$');
   if (tsErrs.length) throw new ConfigError('bad-config', tsErrs.join('; '));
-  if (doc.ticketSync.select && 'query' in doc.ticketSync.select && typeof doc.ticketSync.select.query !== 'string') {
+  if (!active('config.skipTicketSyncSchema') && doc.ticketSync.select && 'query' in doc.ticketSync.select && typeof doc.ticketSync.select.query !== 'string') {
     throw new ConfigError('bad-config', 'ticketSync.select.query must be omitted or a string, never null');
   }
   const autopilot = { ...AUTOPILOT_DEFAULTS, ...raw, allowedWorkspaceDeps: raw.allowedWorkspaceDeps ?? [...ALLOWED_WORKSPACE_DEPS] };

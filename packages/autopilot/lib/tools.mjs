@@ -10,6 +10,9 @@
 import { existsSync, statSync, realpathSync, constants } from 'node:fs';
 import { isAbsolute, join, dirname, sep, delimiter } from 'node:path';
 import { isUnder } from './input.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['tools.trustAnyPath']);
 
 export const REQUIRED_TOOLS = Object.freeze(['adlc', 'bwrap', 'claude', 'codex', 'adversarial-review', 'gh', 'git', 'ssh', 'ssh-add', 'ssh-keygen', 'npm', 'node']);
 export const KEY_BEARING_TOOL = 'adlc';
@@ -39,6 +42,8 @@ export function sanitizedSearchList(pathValue, { repoRoot, trustedBinDirs = null
  * `stat` is injectable (tests fixture another uid / group-writable ancestors).
  */
 export function checkTrustedPath(realPath, { uid, stat = statSync }) {
+  // Mutation seam `tools.trustAnyPath`: ownership/writability is never checked.
+  if (active('tools.trustAnyPath')) return { ok: true };
   let p = realPath;
   for (;;) {
     let st;
@@ -69,7 +74,7 @@ export function pinToolchain({ pathValue, repoRoot, uid, trustedBinDirs = null, 
     let real;
     try { real = realpath(found); } catch (e) { throw new ToolError(`untrusted-tool:${name}`, e.message); }
     const parts = real.split(sep);
-    if (parts.includes('.worktrees') || parts.includes('node_modules') || (repoRoot && isUnder(repoRoot, real))) {
+    if (!active('tools.trustAnyPath') && (parts.includes('.worktrees') || parts.includes('node_modules') || (repoRoot && isUnder(repoRoot, real)))) {
       throw new ToolError(`untrusted-tool:${name}`, `${real} resolves under a rejected directory`);
     }
     const trust = checkTrustedPath(real, { uid, stat });

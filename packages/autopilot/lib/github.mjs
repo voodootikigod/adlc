@@ -9,6 +9,9 @@
 
 import { DEADLINES, withRetry } from './spawn.mjs';
 import { validateIssueNumber } from './input.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['github.dropHostBinding']);
 
 export const PER_PAGE = 100;
 export const MAX_PAGES = 50;
@@ -41,6 +44,8 @@ export function createGh({ spawn, gh, host, repo, env, cwd, sleep }) {
   function argvFor(args) {
     const [sub] = args;
     const out = [gh, ...args];
+    // Mutation seam `github.dropHostBinding`: gh is spawned with cwd inference only.
+    if (active('github.dropHostBinding')) return out;
     if (sub === 'api' || sub === 'auth') {
       if (!args.includes('--hostname')) out.push('--hostname', host);
     } else if (REPO_SUBCOMMANDS.has(sub) && !args.includes('--repo')) {
@@ -128,12 +133,19 @@ export async function permissionOf(ghc, login) {
 }
 export const isMaintainer = (perm) => perm === 'admin' || perm === 'maintain';
 
+/** A mutating gh command prints a URL, not JSON: check the exit status only. */
+async function mutate(ghc, args, opts) {
+  const res = await ghc.run(args, opts);
+  if (res.status !== 0) throw new GhError('gh-failed', `${args.join(' ')} exited ${res.status}: ${String(res.stderr ?? '').trim().slice(0, 300)}`, res);
+  return res;
+}
+
 /** Idempotent label add / remove (read first, mutate only when needed). */
 export async function ensureLabel(ghc, n, label, { present }) {
   const cur = await viewIssue(ghc, n, ['labels']);
   const has = (cur.labels ?? []).some((l) => l.name === label);
-  if (present && !has) { await ghc.json(['issue', 'edit', String(n), '--add-label', label]); return { mutated: true }; }
-  if (!present && has) { await ghc.json(['issue', 'edit', String(n), '--remove-label', label]); return { mutated: true }; }
+  if (present && !has) { await mutate(ghc, ['issue', 'edit', String(n), '--add-label', label]); return { mutated: true }; }
+  if (!present && has) { await mutate(ghc, ['issue', 'edit', String(n), '--remove-label', label]); return { mutated: true }; }
   return { mutated: false };
 }
 
@@ -141,6 +153,6 @@ export async function ensureLabel(ghc, n, label, { present }) {
 export async function ensureComment(ghc, n, sentinel, body) {
   const comments = await ghc.json(['api', `repos/${ghc.repo}/issues/${validateIssueNumber(n)}/comments?per_page=100`]);
   if (Array.isArray(comments) && comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return { posted: false };
-  await ghc.json(['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}` });
+  await mutate(ghc, ['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}` });
   return { posted: true };
 }

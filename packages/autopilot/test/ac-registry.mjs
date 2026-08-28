@@ -15,9 +15,51 @@ export const REGISTRY = {
     { fn: 'ac2_endpointHeadersAndFallback', file: 'quota.test.mjs', seam: 'quota.forceOk' },
     { fn: 'ac2_forceOkSeamBites', file: 'quota.test.mjs', seam: 'quota.forceOk' },
   ],
+  3: [{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
+  4: [
+    { fn: 'ac4_gateFailuresClarifyWithFindingsAndTemplate', file: 'triage.test.mjs', seam: 'triage.acceptRootWildcard' },
+    { fn: 'ac4_clarifyEffectsReconcileAgainstGithub', file: 'triage.test.mjs', seam: 'effects.trustRecord' },
+    { fn: 'ac4_terminalEffectsReconcileIndependently', file: 'terminal-effects.test.mjs', seam: 'effects.skipIntent' },
+    { fn: 'ac4_intentPersistedBeforeEffects', file: 'terminal-effects.test.mjs', seam: 'effects.skipIntent' },
+    { fn: 'ac4_redactionFailureWithholdsBodyKeepsLabel', file: 'terminal-effects.test.mjs', seam: 'redactor.disable' },
+    { fn: 'ac4_labelOnGithubAbsentFromRecord', file: 'terminal-effects.test.mjs', seam: 'effects.trustRecord' },
+  ],
   5: [{ fn: 'ac5_dispatchArgv', file: 'run.test.mjs', seam: 'fleetArgs.dropNoPr' }],
+  11: [
+    { fn: 'ac11_missingLabelsNamesTheAbsentOnes', file: 'labels.test.mjs', seam: 'labels.ignoreMissing' },
+    { fn: 'ac11_ensureLabelsCreatesIdempotently', file: 'labels.test.mjs', seam: 'labels.skipCreate' },
+    { fn: 'ac11_redFixturesPerItem', file: 'preflight.test.mjs', seam: 'preflight.skipKeyFileCheck' },
+  ],
+  19: [{ fn: 'ac19_pinnedIssueHonorsExclusions', file: 'select.test.mjs', seam: 'select.forceLiftsAll' }],
+  26: [{ fn: 'ac26_trustedBlockSkipsShapingButGatesStillRun', file: 'triage.test.mjs', seam: 'triage.skipDenylist' }],
+  32: [
+    { fn: 'ac32_trustedBlockAssembly', file: 'triage.test.mjs', seam: 'triage.shapeTrustedBlock' },
+    { fn: 'ac32_blockGrammarFailsClosed', file: 'block.test.mjs', seam: 'block.lenientGrammar' },
+  ],
+  33: [{ fn: 'ac33_oneAuthorizationPredicate', file: 'select.test.mjs', seam: 'authorize.trustWriteActors' }],
+  35: [{ fn: 'ac35_shapingBounds', file: 'triage.test.mjs', seam: 'triage.noStdoutCap' }],
+  59: [{ fn: 'ac59_durableAttemptLedger', file: 'triage.test.mjs', seam: 'attempts.ignoreStarted' }],
+  79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
+  85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
+  96: [{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
+  97: [{ fn: 'ac97_selectionTimeRemoteCheck', file: 'select.test.mjs', seam: 'select.skipRemoteRefCheck' }],
+  101: [{ fn: 'ac101_bodyOnlyModelInput', file: 'triage.test.mjs', seam: 'triage.fetchComments' }],
+  109: [{ fn: 'ac109_labelRemovalRevokes', file: 'select.test.mjs', seam: 'authorize.ignoreUnlabel' }],
+  115: [
+    { fn: 'ac115_resetAttemptsGrammar', file: 'triage.test.mjs', seam: 'attempts.resetWithoutLock' },
+    { fn: 'ac115_resetIsTheExitFromShapingFailed', file: 'triage.test.mjs', seam: 'attempts.noArchive' },
+  ],
+  118: [{ fn: 'ac118_archivePrecedesPruning', file: 'triage.test.mjs', seam: 'attempts.pruneOnReset' }],
+  123: [{ fn: 'ac123_crashIdempotentReset', file: 'triage.test.mjs', seam: 'attempts.skipJournal' }],
+  134: [{ fn: 'ac134_framedArchiveRecovery', file: 'triage.test.mjs', seam: 'attempts.acceptTruncatedTail' }],
+  140: [
+    { fn: 'ac140_denylistDerivesFromTrustRootLists', file: 'denylist.test.mjs', seam: 'denylist.staticOnly' },
+    { fn: 'ac140_scopeIntersectionIsConservative', file: 'denylist.test.mjs', seam: 'denylist.allowShrink' },
+  ],
+  150: [{ fn: 'ac150_corruptArchiveLineIsQuarantined', file: 'triage.test.mjs', seam: 'attempts.skipQuarantine' }],
+  155: [{ fn: 'ac155_authorizationBindsRevision', file: 'select.test.mjs', seam: 'authorize.ignoreEdits' }],
   12: [
-    { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: 'keys.leakKey', noFixture: 'the allowlist constant has no runtime seam; the full-sequence half (sequence.test.mjs) carries keys.leakKey' },
+    { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: 'keys.leakKey', noFixture: 'the allowlist constant has no runtime seam; the sibling entry carries keys.leakKey' },
     { fn: 'ac12_onlyThePinnedAdlcCarriesTheKey', file: 'keys.test.mjs', seam: 'keys.leakKey' },
   ],
   13: [{ fn: 'ac13_unitShape', file: 'service.test.mjs', seam: 'service.omitEnvironmentFile' }],
@@ -25,7 +67,7 @@ export const REGISTRY = {
     { fn: 'ac24_derivedPathsAreAbsoluteUnderRoot', file: 'paths.test.mjs', seam: 'input.acceptAnything' },
     { fn: 'ac24_linkedWorktreeRefused', file: 'paths.test.mjs', seam: 'paths.allowLinkedWorktree' },
   ],
-  25: [{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal', noFixture: 'remainingBudget is pure; the round-consumption seam run.budgetNotGlobal is exercised by sequence.test.mjs' }],
+  25: [{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal' }],
   41: [
     { fn: 'ac41_and_90_outcomeMapping', file: 'run.test.mjs', seam: 'run.acceptUnknownReason' },
     { fn: 'ac41_dispatchParsesResultAndResume', file: 'run.test.mjs', seam: 'dispatch.keyInFleetEnv' },
@@ -45,13 +87,16 @@ export const REGISTRY = {
     { fn: 'ac22_alwaysAcquireSeamBites', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_corruptOwnerIsReclaimable', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
   ],
-  23: [{ fn: 'ac23_fallbackGrammar', file: 'quota.test.mjs', seam: 'quota.lenientSchema', noFixture: 'the fallback grammar is a pure parser whose only seam (quota.lenientSchema) is on the endpoint path' }],
+  23: [{ fn: 'ac23_fallbackGrammar', file: 'quota.test.mjs', seam: 'quota.lenientText' }],
   27: [{ fn: 'ac27_overshootAndReserve', file: 'quota.test.mjs', seam: 'quota.noReserve' }],
   28: [
     { fn: 'ac28_operatorLocalPrecedence', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' },
     { fn: 'ac28_seamsBite', file: 'config.test.mjs', seam: 'config.allowRaise' },
   ],
-  31: [{ fn: 'ac31_gitSpawnClassifier', file: 'git-env.test.mjs', seam: 'input.acceptAnything', noFixture: 'the classifier is pure; the spawn-list half of AC 31 (sequence.test.mjs) carries the fixture' }],
+  31: [
+    { fn: 'ac31_gitSpawnClassifier', file: 'git-env.test.mjs', seam: 'gitEnv.classifierNetworkBlind' },
+    { fn: 'ac31_baselineByOid', file: 'preflight.test.mjs', seam: 'preflight.fetchByName' },
+  ],
   37: [{ fn: 'ac37_thresholdCeiling', file: 'config.test.mjs', seam: 'config.acceptAnyThreshold' }],
   47: [
     { fn: 'ac47_strictSchemaAndNoScopedLimit', file: 'quota.test.mjs', seam: 'quota.lenientSchema' },
@@ -85,30 +130,119 @@ export const REGISTRY = {
     { fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'input.acceptAnything' },
     { fn: 'ac74_truncationCases', file: 'github.test.mjs', seam: 'input.acceptAnything' },
   ],
-  77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys', noFixture: 'the ticketSync schema check has no seam of its own; a schema-lite defect is exercised by AC 125' }],
+  77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   87: [{ fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' }],
   88: [
     { fn: 'ac88_everyPatternIsReplacedWithItsName', file: 'redact.test.mjs', seam: 'redactor.disable' },
     { fn: 'ac88_failClosedOnThrowOrResidual', file: 'redact.test.mjs', seam: 'redactor.skipSecondPass' },
   ],
   99: [{ fn: 'ac99_chunkedRedactionCatchesStraddlingSecret', file: 'redact.test.mjs', seam: 'redactor.disable' }],
-  102: [{ fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: 'spawn.shellTrue', noFixture: 'stdin transport has no production seam that keeps the wrapper importable; argv safety (AC 64) covers the adjacent defect' }],
+  102: [
+    { fn: 'ac102_promptTransport', file: 'triage.test.mjs', seam: 'triage.promptInArgv' },
+    { fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: 'spawn.shellTrue', noFixture: 'stdin transport has no production seam that keeps the wrapper importable; triage.promptInArgv above is the biting fixture' },
+  ],
   105: [{ fn: 'ac105_structuredRedactionKeepsSchema', file: 'redact.test.mjs', seam: 'redactor.disable' }],
   112: [{ fn: 'ac112_credentialsNeverEscape', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
   124: [
     { fn: 'ac124_sanitizedGitEnv', file: 'git-env.test.mjs', seam: 'gitEnv.keepInherited' },
     { fn: 'ac124_repoConfigAudit', file: 'git-env.test.mjs', seam: 'gitEnv.auditPasses' },
+    { fn: 'ac124_everyGitSpawnIsSanitized', file: 'git-runner.test.mjs', seam: 'gitRunner.inheritEnv' },
+    { fn: 'ac124_auditBeforeLsRemote', file: 'preflight.test.mjs', seam: 'preflight.skipConfigAudit' },
   ],
   125: [{ fn: 'ac125_exampleIsValidJsonAndSchemaClean', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' }],
   126: [
     { fn: 'ac126_boundTableIsSevenRowsInOrder', file: 'git-env.test.mjs', seam: 'gitEnv.dropIdentityRows' },
     { fn: 'ac126_boundEnvBeatsRewrittenFile', file: 'git-env.test.mjs', seam: 'gitEnv.dropIdentityRows' },
+    { fn: 'ac126_netCarriesBoundTableOnly', file: 'git-runner.test.mjs', seam: 'gitRunner.noOverlay' },
   ],
   132: [{ fn: 'ac132_sshOnlyForms', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
-  143: [{ fn: 'ac143_netGitTemplateAndVerify', file: 'git-env.test.mjs', seam: 'gitEnv.auditPasses' }],
-  148: [{ fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'input.acceptAnything' }],
-  153: [{ fn: 'ac68_untrustedTool', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' }],
+  143: [
+    { fn: 'ac143_netGitTemplateAndVerify', file: 'git-env.test.mjs', seam: 'gitEnv.auditPasses' },
+    { fn: 'ac143_netGitIsolatesTransport', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
+  ],
+  148: [
+    { fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'input.acceptAnything' },
+    { fn: 'ac148_knownHostsFromMeta', file: 'ssh.test.mjs', seam: 'ssh.knownHostsAnyHost' },
+    { fn: 'ac148_hostBindingInPhaseA', file: 'preflight.test.mjs', seam: 'preflight.skipHostBinding' },
+  ],
+  153: [
+    { fn: 'ac68_untrustedTool', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
+    { fn: 'ac153_pinnedSshTools', file: 'ssh.test.mjs', seam: 'ssh.unpinnedTools' },
+    { fn: 'ac153_untrustedSshAdd', file: 'preflight.test.mjs', seam: 'preflight.trustInheritedTools' },
+  ],
   163: [{ fn: 'ac163_everyGhSpawnIsHostBound', file: 'github.test.mjs', seam: 'github.dropHostBinding' }],
+  136: [
+    { fn: 'ac136_authModeExclusive', file: 'ssh.test.mjs', seam: 'ssh.preferAgentWhenAmbiguous' },
+    { fn: 'ac136_modesInPhaseA', file: 'preflight.test.mjs', seam: 'ssh.acceptInsecureIdentity' },
+  ],
+  145: [
+    { fn: 'ac145_keyMatchRule', file: 'ssh.test.mjs', seam: 'ssh.acceptFirstCandidate' },
+    { fn: 'ac145_paginatedKeysInPhaseA', file: 'preflight.test.mjs', seam: 'ssh.acceptFirstCandidate' },
+  ],
+  129: [
+    { fn: 'ac129_wrapperTemplate', file: 'ssh.test.mjs', seam: 'ssh.wrapperOmitOptions' },
+    { fn: 'ac129_knownHostsAndWrapperOnNetSpawn', file: 'preflight.test.mjs', seam: 'ssh.acceptAnyKnownHosts' },
+  ],
+  139: [
+    { fn: 'ac139_wrapperOddPathsRealSsh', file: 'ssh.test.mjs', seam: 'ssh.noShellQuote' },
+  ],
+  146: [
+    { fn: 'ac146_bindingUsesCopy', file: 'ssh.test.mjs', seam: 'ssh.fingerprintOriginal' },
+  ],
+  147: [
+    { fn: 'ac147_revalidation', file: 'ssh.test.mjs', seam: 'ssh.skipRevalidation' },
+    { fn: 'ac147_netRevalidatesMaterialBeforeSpawn', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
+  ],
+  151: [
+    { fn: 'ac151_explicitKeyIsCopy', file: 'ssh.test.mjs', seam: 'ssh.wrapperNamesOriginal' },
+  ],
+  159: [
+    { fn: 'ac159_dryRunDirOutsideRepo', file: 'ssh.test.mjs', seam: 'ssh.dryRunUnderRepo' },
+    { fn: 'ac159_dryRunTransport', file: 'preflight.test.mjs', seam: 'ssh.dryRunUnderRepo' },
+  ],
+  127: [
+    { fn: 'ac127_identityRewriteBeatsPrefix', file: 'git-runner.test.mjs', seam: 'gitRunner.identityRowsDropped' },
+  ],
+  138: [
+    { fn: 'ac138_identityAssertion', file: 'git-runner.test.mjs', seam: 'gitRunner.skipIdentityCheck' },
+  ],
+  119: [
+    { fn: 'ac119_identityIsOperatorLocal', file: 'preflight.test.mjs', seam: 'preflight.trustBlobRepo' },
+  ],
+  117: [
+    { fn: 'ac117_phasesAreOrdered', file: 'preflight.test.mjs', seam: 'preflight.phaseBWithoutBaseline' },
+  ],
+  20: [
+    { fn: 'ac20_baselineFailureIsUnresolved', file: 'preflight.test.mjs', seam: 'preflight.ignoreFetchFailure' },
+  ],
+  86: [
+    { fn: 'ac86_parityReadsBaseline', file: 'preflight.test.mjs', seam: 'preflight.parityFromWorkingTree' },
+  ],
+  116: [
+    { fn: 'ac116_configFromBlob', file: 'preflight.test.mjs', seam: 'preflight.trustWorkingTreeConfig' },
+  ],
+  120: [
+    { fn: 'ac120_fleetDryRunWorktree', file: 'preflight.test.mjs', seam: 'preflight.keepPreflightWorktree' },
+  ],
+  133: [
+    { fn: 'ac133_fleetDryRunBoundToOid', file: 'preflight.test.mjs', seam: 'preflight.acceptAnyBaseSha' },
+  ],
+  158: [
+    { fn: 'ac158_tokenMargin', file: 'preflight.test.mjs', seam: 'preflight.ignoreTokenMargin' },
+  ],
+  80: [
+    { fn: 'ac80_newestApprovalHashPinned', file: 'preflight-spec.test.mjs', seam: 'specApproval.oldestWins' },
+  ],
+  83: [
+    { fn: 'ac83_realRunnerGate', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipRunnerGate' },
+    { fn: 'ac83_contentHashNeverBlobOid', file: 'preflight-spec.test.mjs', seam: 'preflight.acceptBlobOidAsSpecHash' },
+  ],
+  89: [
+    { fn: 'ac89_mergeIdentity', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipMergeIdentity' },
+  ],
+  154: [
+    { fn: 'ac154_assumptionsBound', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipAssumptions' },
+  ],
 };
 
 /** The critical set for which the mutation-fixture check is mandatory (AC 114): quota, authorization, redaction, retirement, attestation. */

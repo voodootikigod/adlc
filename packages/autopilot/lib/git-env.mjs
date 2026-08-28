@@ -13,6 +13,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['gitEnv.classifierNetworkBlind', 'gitEnv.keepInherited', 'gitEnv.auditPasses', 'gitEnv.dropIdentityRows']);
 
 /** Variables removed from every git spawn (§9.1b). A name is stripped when it matches any entry. */
 export const STRIPPED_GIT_VARS = Object.freeze([
@@ -26,6 +29,8 @@ const STRIPPED_PREFIXES = Object.freeze(['GIT_CONFIG_', 'GIT_TRACE', 'GIT_ATTR_'
 const STRIPPED_CI = Object.freeze(['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'ftp_proxy']);
 
 export function isStrippedGitVar(name) {
+  // Mutation seam `gitEnv.keepInherited`: nothing is stripped.
+  if (active('gitEnv.keepInherited')) return false;
   if (name.startsWith('GIT_')) {
     // EVERY GIT_* variable inherited from the orchestrator's own environment is removed.
     return true;
@@ -62,13 +67,16 @@ export function shellQuote(s) { return `'${String(s).replace(/'/g, "'\\''")}'`; 
  * operations (and the bracketed preflight/fleet); observation reads never carry it.
  */
 export function boundGitConfig({ remoteFetchUrl, remotePushUrl, sshWrapperPath }) {
+  const identityRows = active('gitEnv.dropIdentityRows') ? [] : [
+    [`url.${remoteFetchUrl}.insteadOf`, remoteFetchUrl],
+    [`url.${remotePushUrl}.pushInsteadOf`, remotePushUrl],
+    [`url.${remotePushUrl}.insteadOf`, remotePushUrl],
+  ];
   const rows = [
     ['remote.origin.url', remoteFetchUrl],
     ['remote.origin.pushurl', remotePushUrl],
     ['core.hooksPath', '/dev/null'],
-    [`url.${remoteFetchUrl}.insteadOf`, remoteFetchUrl],
-    [`url.${remotePushUrl}.pushInsteadOf`, remotePushUrl],
-    [`url.${remotePushUrl}.insteadOf`, remotePushUrl],
+    ...identityRows,
     ['core.sshCommand', shellQuote(sshWrapperPath)],
   ];
   const env = { GIT_CONFIG_COUNT: String(rows.length) };
@@ -91,7 +99,8 @@ export function auditRepoConfig(listOutput) {
   for (const line of String(listOutput ?? '').split('\n')) {
     if (!line.trim()) continue;
     const key = line.split('=')[0].trim();
-    if (FORBIDDEN_KEY_RE.test(key)) offending.push(key);
+    // Mutation seam `gitEnv.auditPasses`: forbidden keys are not reported.
+    if (!active('gitEnv.auditPasses') && FORBIDDEN_KEY_RE.test(key)) offending.push(key);
   }
   return { ok: offending.length === 0, offending, code: offending.length ? 'git-config-untrusted' : null };
 }
@@ -141,6 +150,7 @@ export function classifyGitSpawn(argv) {
   const cIdx = argv.indexOf('-C');
   const verbIdx = argv.findIndex((a, i) => i > 0 && !a.startsWith('-') && (cIdx === -1 || i !== cIdx + 1));
   const verb = verbIdx === -1 ? null : argv[verbIdx];
-  const network = ['ls-remote', 'fetch', 'push'].includes(verb);
+  // Mutation seam `gitEnv.classifierNetworkBlind`: the recorder cannot tell a network op apart.
+  const network = !active('gitEnv.classifierNetworkBlind') && ['ls-remote', 'fetch', 'push'].includes(verb);
   return { verb, network, gitDir: gitDirArg ? gitDirArg.slice('--git-dir='.length) : null, cwdArg: cIdx === -1 ? null : argv[cIdx + 1], remoteArg: network ? argv.slice(verbIdx + 1).find((a) => !a.startsWith('-')) ?? null : null };
 }

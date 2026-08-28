@@ -12,7 +12,9 @@
 // parser and the family normalizer take data and return data; the network and
 // the subprocess are injected.
 
-import { active } from './mutations.mjs';
+import { active, registerSeams } from './mutations.mjs';
+
+registerSeams(['quota.lenientText']);
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 export const BETA_HEADER = 'oauth-2025-04-20';
@@ -145,7 +147,8 @@ export function parseUsageText(text) {
   if (distinct(sessions) > 1) return unknown('duplicate session lines disagree');
   if (distinct(weeks) > 1) return unknown('duplicate weekly lines disagree');
   const fiveHour = Number(sessions[0][1]); const sevenDay = Number(weeks[0][1]);
-  if (fiveHour > 100 || sevenDay > 100) return unknown('value above 100');
+  // Mutation seam `quota.lenientText`: an out-of-range percentage is accepted.
+  if (!active('quota.lenientText') && (fiveHour > 100 || sevenDay > 100)) return unknown('value above 100');
   const scoped = new Map();
   for (const m of allMatches(SCOPED_RE, text)) {
     if (m[1] === 'all models') continue;
