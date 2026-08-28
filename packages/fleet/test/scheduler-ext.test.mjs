@@ -171,3 +171,21 @@ test('reconcileResume returns a PAUSED ticket to pending with its strikes intact
   assert.equal(r.tickets.T1.strikes, 1, 'strike count preserved across the resume');
   assert.equal(r.tickets.T2.state, 'merged');
 });
+
+test('every awaited phase receives the REMAINING wall clock: gate, prosecute and merge get remainingMs ≤ deadline − now, and null without a deadline (codex r2)', async () => {
+  let t = 1000;
+  const seen = {};
+  const e = effects({
+    gate: ({ remainingMs }) => { seen.gate = remainingMs; t += 100; return ok; },
+    prosecute: ({ remainingMs }) => { seen.prosecute = remainingMs; t += 100; return { verdict: 'pass', reason: 'clean' }; },
+    merge: ({ remainingMs }) => { seen.merge = remainingMs; return ok; },
+  });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 1, deadline: 2000, now: () => t });
+  assert.equal(r.state, 'merged');
+  assert.equal(seen.gate, 1000);
+  assert.equal(seen.prosecute, 900);
+  assert.equal(seen.merge, 800);
+  const e2 = effects({ gate: ({ remainingMs }) => { seen.unbounded = remainingMs; return ok; } });
+  await advanceTicket(ticket, e2, { maxStrikes: 1 });
+  assert.equal(seen.unbounded, null, 'no deadline → null, never a fabricated bound');
+});

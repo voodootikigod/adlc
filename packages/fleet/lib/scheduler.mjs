@@ -90,6 +90,9 @@ export async function advanceTicket(ticket, effects, {
   let reviewRounds = 0;
   const canRetry = () => strikes < maxStrikes;
   const expired = () => deadline != null && now() >= deadline;
+  // The remaining budget handed to every awaited phase (gate, prosecution, merge),
+  // so none of them can run past the deadline; null when there is no deadline.
+  const remainingMs = () => (deadline == null ? null : Math.max(1, deadline - now()));
 
   const fail = (reason, reasonCode) => ({ state: 'failed', strikes, reason, reasonCode, deadEnds, gatePassed, prosecution, review });
   const paused = (reason, reasonCode) => ({ state: 'paused', strikes, reason, reasonCode, deadEnds, gatePassed, prosecution, review });
@@ -168,7 +171,7 @@ export async function advanceTicket(ticket, effects, {
     if (expired()) return paused('external wall clock expired after the strike; nothing is gated or merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: gating`);
-    const gate = await effects.gate({ ticket });
+    const gate = await effects.gate({ ticket, remainingMs: remainingMs() });
     if (!gate.ok) {
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
       if (canRetry() && await consultFlail()) {
@@ -184,7 +187,7 @@ export async function advanceTicket(ticket, effects, {
     if (expired()) return paused('external wall clock expired after the gate; nothing is prosecuted or merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
-    const pros = await effects.prosecute({ ticket });
+    const pros = await effects.prosecute({ ticket, remainingMs: remainingMs() });
     prosecution = pros.verdict;
     reviewRounds += 1;
     review = { ...(pros.review ?? {}), verdict: pros.review?.verdict ?? pros.verdict, rounds: reviewRounds };
@@ -203,7 +206,7 @@ export async function advanceTicket(ticket, effects, {
     if (expired()) return paused('external wall clock expired after prosecution; nothing is merged past it', REASON_CODES.WALL_CLOCK);
 
     log(`${ticket.id} strike ${strikes}: merging`);
-    const merge = await effects.merge({ ticket });
+    const merge = await effects.merge({ ticket, remainingMs: remainingMs() });
     if (!merge.ok) {
       deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed', DEAD_END_MAX_CHARS));
       if (canRetry()) continue;

@@ -52,3 +52,14 @@ test('checkFlail FAILS OPEN on any error (§12 backstop)', async () => {
   assert.equal(r.flail, false);
   assert.equal(r.failedOpen, true);
 });
+
+test('runGates forwards a remaining-wall-clock bound to the sandbox as `timeout` and passes nothing when unbounded (fleet-ext item 5, codex r2)', async () => {
+  const seen = [];
+  const sandbox = { run: async (argv, opts) => { seen.push(opts); return 'ok'; } };
+  await runGates(sandbox, { build: 'b', test: 't' }, { PATH: '/usr/bin' }, { timeoutMs: 1234 });
+  assert.deepEqual(seen.map((o) => o.timeout), [1234, 1234], 'both gate commands carry the bound');
+  assert.deepEqual(seen[0].env, { PATH: '/usr/bin' });
+  seen.length = 0;
+  await runGates(sandbox, { build: 'b' }, {});
+  assert.ok(!('timeout' in seen[0]), 'no bound → no timeout key at all');
+});

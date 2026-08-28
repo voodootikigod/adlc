@@ -36,8 +36,14 @@ export const SETTINGS_REL = '.claude/settings.json';
 export const PLUGINS_REL = '.claude/plugins';
 export const CLAUDE_JSON_REL = '.claude.json';
 
-/** Host settings keys that may reach the worker. `hooks`/`mcpServers` are NOT here. */
-export const SETTINGS_KEYS = Object.freeze(['model', 'permissions', 'env', 'includeCoAuthoredBy', 'theme', 'verbose']);
+/**
+ * Host settings keys that may reach the worker: model and permission settings
+ * (spec §9.3(ii)). `hooks`/`mcpServers` are NOT here, and neither is `env`: it is
+ * a second channel into the worker's process environment that the ambient
+ * scrubber never sees, so a host `settings.env` carrying ADLC_MANIFEST_KEY or
+ * GH_TOKEN would re-enter the sandbox through the staged file.
+ */
+export const SETTINGS_KEYS = Object.freeze(['model', 'permissions', 'includeCoAuthoredBy', 'theme', 'verbose']);
 /** Host `~/.claude.json` keys that may reach the worker: the account record and onboarding flags only. */
 export const CLAUDE_JSON_KEYS = Object.freeze([
   'oauthAccount', 'hasCompletedOnboarding', 'userID', 'installMethod', 'autoUpdates', 'theme', 'numStartups', 'hasSeenTasksHint',

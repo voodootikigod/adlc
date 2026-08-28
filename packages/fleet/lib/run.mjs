@@ -28,8 +28,10 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
   return {
     preStrike: deps.preStrike ? ({ strike }) => deps.preStrike({ ticket, strike }) : undefined,
     dispatch: ({ strike, deadEnds }) => deps.dispatch({ ticket, worktree: wt.path, startSha: wt.startSha, strike, deadEnds, gateWorktree: gatePath, branch: wt.branch }),
-    gate: () => deps.gate({ ticket, worktree: gatePath, startSha: wt.startSha }),
-    prosecute: () => deps.prosecute({ ticket, worktree: gatePath, startSha: wt.startSha }),
+    // `remainingMs` (fleet-ext item 5): the run's remaining wall clock, forwarded so
+    // every awaited phase is bounded by the advertised deadline, not just dispatch.
+    gate: ({ remainingMs = null } = {}) => deps.gate({ ticket, worktree: gatePath, startSha: wt.startSha, remainingMs }),
+    prosecute: ({ remainingMs = null } = {}) => deps.prosecute({ ticket, worktree: gatePath, startSha: wt.startSha, remainingMs }),
     flail: () => deps.flail({ ticket, worktree: gatePath }),
     // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
     record: (phase, ok, data) => { try { deps.recordGate?.({ ticket, phase, ok, data }); } catch { /* evidence is best-effort */ } },
@@ -37,7 +39,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
     // `strike` identifies WHICH rung of the F8 ladder that dispatch ran on (#401),
     // so the carrier can name the channel that actually spent the tokens.
     recordDispatchUsage: (result, strike) => { try { deps.recordDispatchUsage?.({ ticket, result, strike }); } catch { /* evidence is best-effort */ } },
-    merge: () => mergeMutex.runExclusive(async () => {
+    merge: ({ remainingMs = null } = {}) => mergeMutex.runExclusive(async () => {
       // QUARANTINE: once a gate-rejected completion could not be withdrawn, the shared
       // integration branch carries an ungated commit. Nothing further may land on it —
       // no merges, no retries — and the run must not open a PR from it.
@@ -45,7 +47,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         return { ok: false, output: `integration branch quarantined: ${runState.contaminationReason}` };
       }
       const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch, worktree: gatePath });
-      const post = await deps.postMergeGate({ ticket, integrationBranch });
+      const post = await deps.postMergeGate({ ticket, integrationBranch, remainingMs });
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
         // revertMerge returns { ok: false, method: 'refused' } when it cannot safely
@@ -81,7 +83,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         // withdraw ONLY the completion commit (the shipped merge below it stays) and
         // degrade to the pre-T73 status quo: merged, not marked completed.
         if (completion?.completed && completion.preCompletionSha) {
-          const recheck = await deps.postMergeGate({ ticket, integrationBranch });
+          const recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs });
           if (!recheck.ok) {
             // The completion commit FAILED the gate, so it must come off the branch.
             // Withdrawal failing is NOT a degradation we may swallow: the branch would

@@ -46,11 +46,16 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
  * @param opts.trustedPath PATH used to resolve reviewBin (default the orchestrator's)
  * @param opts.provider  optional --provider passthrough (e.g. 'codex', 'openai')
  * @param opts.failOn    passed through to the CLI's deterministic gate (default medium)
- * @param opts.timeoutMs per-review timeout
+ * @param opts.timeoutMs per-review timeout; a per-call `timeoutMs` (the run's remaining wall clock) can only LOWER it
  * @returns a runReview({ worktree, startSha, ticket }) => { ok, findings?, reason? }
  */
+/** The effective review timeout: the configured one, lowered (never raised) by a per-call bound. */
+export function boundedTimeout(base, call) {
+  return Number.isFinite(call) && call > 0 ? Math.max(1, Math.min(base, Math.floor(call))) : base;
+}
+
 export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000, env: source = process.env, maxBytes = null } = {}) {
-  return async ({ worktree, startSha }) => {
+  return async ({ worktree, startSha, timeoutMs: callTimeoutMs = null }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
     // fleet-ext item 8: the reviewer's inline-diff grounding limit is forwarded
@@ -88,7 +93,7 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
 
     let res;
     try {
-      res = await spawn(bin, args, { cwd: worktree, env, encoding: 'utf8', timeout: timeoutMs });
+      res = await spawn(bin, args, { cwd: worktree, env, encoding: 'utf8', timeout: boundedTimeout(timeoutMs, callTimeoutMs) });
     } catch (e) {
       return { ok: false, reason: `adversarial-review spawn failed: ${e.message}` };
     }

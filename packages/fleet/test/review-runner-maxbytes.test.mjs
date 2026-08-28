@@ -81,3 +81,19 @@ test('the live deps forward config.reviewMaxBytes into the runner (the whole pat
   assert.equal(r.verdict, 'pass');
   assert.deepEqual(r.review, { provider: 'codex', verdict: 'approve', revision: 'SHA' }, 'review meta carries provider, verdict word and the reviewed revision');
 });
+
+import { boundedTimeout } from '../lib/review-runner.mjs';
+
+test('a per-call timeoutMs (the remaining wall clock) LOWERS the review timeout and never raises it (fleet-ext item 5, codex r2)', async () => {
+  assert.equal(boundedTimeout(600000, 5000), 5000);
+  assert.equal(boundedTimeout(600000, 9e9), 600000, 'a larger bound never raises the configured timeout');
+  assert.equal(boundedTimeout(600000, null), 600000);
+  assert.equal(boundedTimeout(600000, 0), 600000, 'a non-positive bound is ignored');
+  assert.equal(boundedTimeout(600000, 0.4), 1, 'a sub-millisecond remainder still bounds');
+  const { calls, spawn } = recorder();
+  const run = makeReviewRunner({ spawn, resolveBin, timeoutMs: 600000, env: { PATH: '/usr/bin' } });
+  await run({ worktree: '/wt', startSha: 'S', timeoutMs: 4321 });
+  assert.equal(calls[0].opts.timeout, 4321);
+  await run({ worktree: '/wt', startSha: 'S' });
+  assert.equal(calls[1].opts.timeout, 600000);
+});

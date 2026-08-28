@@ -88,3 +88,12 @@ test('integration: a worker tampering .adlc/tickets.json cannot merge (C1 end-to
   assert.equal(summary.results.T1, 'failed', 'a tampered trust root must fail the ticket');
   assert.equal(merges.length, 0, 'a tampered ticket must never reach merge');
 });
+
+import { runGatePipeline as runGatePipelineBounded } from '../lib/gate-pipeline.mjs';
+test('runGatePipeline hands deps.timeoutMs to the build/test gate as the sandbox timeout (codex r2)', async () => {
+  const seen = [];
+  const sandbox = { run: async (argv, opts) => { seen.push(opts.timeout); return ''; } };
+  const r = await runGatePipelineBounded({ id: 'T', scope: ['**'] }, { sandbox, gate: { build: 'b' }, env: {}, changedPaths: [], templates: new Map(), listProtected: () => [], readBytes: () => undefined, timeoutMs: 777 });
+  assert.equal(r.ok, true);
+  assert.deepEqual(seen, [777]);
+});

@@ -137,17 +137,17 @@ test('.claude.json keeps only the account record and onboarding flags, mode 0600
   assert.deepEqual(out.homeWritableFiles, [{ source: `${STAGING}/claude.json`, target: `${HOME}/.claude.json` }]);
 });
 
-test('the settings allowlist keeps EXACTLY model, permissions, env, includeCoAuthoredBy, theme and verbose — each one survives, nothing else does', () => {
+test('the settings allowlist keeps EXACTLY model, permissions, includeCoAuthoredBy, theme and verbose — each one survives, nothing else (env included) does', () => {
   // Pinned as literals, not derived from the constant: a shrunk allowlist would
   // silently strip an operator setting the worker relies on (e.g. `verbose`),
   // and a derived assertion would shrink with it.
-  const EXPECTED = ['model', 'permissions', 'env', 'includeCoAuthoredBy', 'theme', 'verbose'];
+  const EXPECTED = ['model', 'permissions', 'includeCoAuthoredBy', 'theme', 'verbose'];
   assert.deepEqual([...SETTINGS_KEYS], EXPECTED);
   const host = { model: 'opus', permissions: { allow: [] }, env: { A: '1' }, includeCoAuthoredBy: false, theme: 'dark', verbose: true, hooks: { PreToolUse: [] }, mcpServers: { x: {} }, statusLine: {} };
   const { kept, stripped } = pickAllowlisted(host, SETTINGS_KEYS);
   assert.deepEqual(Object.keys(kept).sort(), [...EXPECTED].sort(), 'every allowlisted key present on the host is kept');
   for (const k of EXPECTED) assert.deepEqual(kept[k], host[k], `${k} keeps its value`);
-  assert.deepEqual(stripped.sort(), ['hooks', 'mcpServers', 'statusLine']);
+  assert.deepEqual(stripped.sort(), ['env', 'hooks', 'mcpServers', 'statusLine']);
 });
 
 test('pickAllowlisted returns a NEW object and never mutates the host document', () => {
@@ -216,4 +216,15 @@ test('every write in the module targets the staging dir; the source has no write
   prepare(fs);
   for (const w of [...fs.writes, ...fs.chmods]) assert.ok(w.path.startsWith(`${STAGING}/`), `${w.path} is not under the staging dir`);
   assert.ok(!fs.opened.some((o) => o.flags & (constants.O_WRONLY | constants.O_RDWR)), 'zero writable opens');
+});
+
+test('host settings.env NEVER reaches the worker: a settings.env carrying ADLC_MANIFEST_KEY / GH_TOKEN is stripped with hooks and mcpServers (codex r2)', () => {
+  // `env` is a second channel into the worker process environment that the
+  // ambient scrubber never sees; the staged settings file must not carry it.
+  assert.ok(!SETTINGS_KEYS.includes('env'), 'env is not allowlisted');
+  const host = { model: 'opus', env: { ADLC_MANIFEST_KEY: 'deadbeef', GH_TOKEN: 'ghp_x', HARMLESS: '1' }, hooks: {} };
+  const { kept, stripped } = pickAllowlisted(host, SETTINGS_KEYS);
+  assert.deepEqual(kept, { model: 'opus' });
+  assert.deepEqual(stripped.sort(), ['env', 'hooks']);
+  assert.ok(!JSON.stringify(kept).includes('deadbeef') && !JSON.stringify(kept).includes('ghp_x'));
 });

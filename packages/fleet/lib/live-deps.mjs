@@ -24,7 +24,7 @@ import { builderPrompt, fixPrompt } from './charters.mjs';
 import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mjs';
 import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync, cpSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync, cpSync, rmSync, lstatSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
@@ -112,6 +112,10 @@ export function defaultIo() {
     spawnWorker: (cmd, args, opts) => spawnAsync(cmd, args, { encoding: 'utf8', ...opts }),
     readFile: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
+    // fleet-ext item 13: the bounded read invariant admits a pinned FILE under the
+    // synthetic HOME only when this predicate attests it. lstat, never stat: a
+    // symlink is not a regular file, so a link planted under HOME is refused.
+    isFile: (p) => { try { return lstatSync(p).isFile(); } catch { return false; } },
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
     writeJson: (p, obj) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(obj, null, 2) + '\n'); },
     // Best-effort: losing a transcript line must never fail a build. A missing
@@ -541,7 +545,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       return { ...res, blocked: /TICKET-BLOCKED/.test(res.output) };
     },
 
-    gate: ({ ticket, worktree, startSha }) => {
+    gate: ({ ticket, worktree, startSha, remainingMs = null }) => {
       const wtGit = io.git(worktree);
       const changedPaths = wtGit('diff', '--name-only', `${startSha}..HEAD`).split('\n').map((s) => s.trim()).filter(Boolean);
       // Authoritative templates = the startSha-committed version of each manifest file.
@@ -562,6 +566,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         sandbox: sandboxFor(worktree),
         gate: config.gate,
         env: repoCmdEnv(worktree),
+        // fleet-ext item 5: the gate commands are bounded by the run's REMAINING
+        // wall clock, so a hung build cannot outlive the advertised deadline.
+        timeoutMs: remainingMs ?? undefined,
         changedPaths,
         templates,
         listProtected,
@@ -570,8 +577,10 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       });
     },
 
-    prosecute: async ({ ticket, worktree, startSha }) => {
-      const r = await prosecuteGate({ worktree, startSha, ticket }, { runReview: review, failOn: config.prosecuteFailOn });
+    prosecute: async ({ ticket, worktree, startSha, remainingMs = null }) => {
+      // fleet-ext item 5: the reviewer is bounded by the remaining wall clock too.
+      const runReview = (args) => review({ ...args, timeoutMs: remainingMs ?? undefined });
+      const r = await prosecuteGate({ worktree, startSha, ticket }, { runReview, failOn: config.prosecuteFailOn });
       // The revision the review judged: HEAD of the reviewed worktree at this
       // instant (fleet-ext item 9). Best effort — a missing revision is null,
       // never a fabricated one.
@@ -596,7 +605,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       integrationGit,
     }),
 
-    postMergeGate: async ({ integrationBranch }) => {
+    postMergeGate: async ({ integrationBranch, remainingMs = null }) => {
       // Gate inside the integration worktree — no checkout, nothing shared. The branch
       // identity and SHA are pinned either side: the worktree removes the
       // external-interference class, and these assertions keep the verdict provably
@@ -614,7 +623,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // ref movement DURING the build/test would be invisible and a stale passing verdict
       // would be trusted (adversarial-review round-30). The whole point of the after-gate
       // pin is to observe the branch tip AS IT WAS while the gate executed.
-      const result = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath));
+      const result = await runGates(sandboxFor(integrationPath), config.gate, repoCmdEnv(integrationPath), { timeoutMs: remainingMs ?? undefined });
       try {
         assertOnBranch(integrationGit, integrationBranch, 'after gating', 'trust the gate');
         if (integrationGit('rev-parse', 'HEAD') !== gatedSha) {

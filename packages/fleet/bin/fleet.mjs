@@ -444,6 +444,10 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     finally { if (tmp) try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } }
   };
 
+  // fleet-ext item 5: the external wall clock is an absolute deadline anchored at
+  // INVOCATION — before preflight, resume reconciliation and planning — so those
+  // phases spend the same budget as dispatch, gating and merge (codex r2).
+  const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
   const pre = await preflight({
     repo, config, statusDir: dir, io,
     self: selfIdentity(), probes: lockProbes(),
@@ -499,9 +503,8 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
       }
     }
 
-    // fleet-ext item 5: the external wall clock is an absolute deadline computed
-    // ONCE here, so every dispatch, gate and the scheduler agree on the instant.
-    const deadline = config.wallClockMinutes ? now() + config.wallClockMinutes * 60_000 : null;
+    // fleet-ext item 5: `deadline` was computed ONCE at invocation (above), so
+    // preflight, every dispatch, gate and the scheduler agree on the instant.
     const runConfig = {
       ...config, baseSha, sandboxMode: pre.sandboxSpec.mode, onlyIds, startedAt: new Date(now()).toISOString(),
       deadline, initialDeadEnds: files.initialDeadEnds, charterAddendum: files.charterAddendum,

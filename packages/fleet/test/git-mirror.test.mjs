@@ -287,3 +287,26 @@ test('removeMirrorWorktree deregisters the worker worktree from the mirror and t
     assert.deepEqual(mirrorRefs({ mirror: f.mirror, gitAt }).sort(), [`refs/heads/${ISSUE_BRANCH}`, `refs/heads/${WB}`], 'the branch stays in the mirror for forensics');
   } finally { f.cleanup(); }
 });
+
+import { zeroOidFor } from '../lib/git-mirror.mjs';
+
+test('the CAS null object id is as wide as the repository object format: a SHA-256 caller repository gets its worker branch created (codex r2)', () => {
+  assert.equal(zeroOidFor('a'.repeat(40)), '0'.repeat(40));
+  assert.equal(zeroOidFor('b'.repeat(64)), '0'.repeat(64));
+  let supported = true;
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-sha256-'));
+  try {
+    try { execFileSync('git', ['init', '-q', '--object-format=sha256', '-b', 'main', dir], { env, stdio: 'pipe' }); }
+    catch { supported = false; }
+    if (!supported) { assert.ok(true, 'git without sha256 support: width rule asserted above'); return; }
+    writeFileSync(join(dir, 'f'), 'x\n');
+    execFileSync('git', ['-C', dir, 'add', 'f'], { env, stdio: 'pipe' });
+    execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'seed'], { env, stdio: 'pipe' });
+    const tip = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { env, encoding: 'utf8' }).trim();
+    assert.equal(tip.length, 64, 'a SHA-256 tip');
+    const r = ensureWorkerBranchInRepo({ repo: dir, workerBranch: WB, cutTip: tip });
+    assert.deepEqual(r, { created: true, sha: tip });
+    assert.equal(execFileSync('git', ['-C', dir, 'rev-parse', `refs/heads/${WB}`], { env, encoding: 'utf8' }).trim(), tip);
+    assert.deepEqual(ensureWorkerBranchInRepo({ repo: dir, workerBranch: WB, cutTip: tip }), { created: false, sha: tip });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

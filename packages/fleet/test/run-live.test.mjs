@@ -49,3 +49,17 @@ test('runLive returns the preflight exit code when preflight fails (no run dispa
   assert.equal(code, 1, 'a failed preflight returns its exit code');
   assert.equal(ran, false, 'and never dispatches the run');
 });
+
+test('the whole-run deadline is anchored at INVOCATION, before preflight: slow preflight spends the wall clock instead of resetting it (codex r2)', async () => {
+  let t = 100_000;
+  let seenConfig = null;
+  const ov = {
+    ...overrides({ contaminated: false, results: {}, merged: 0, prCount: 0, integrationBranch: 'fleet/run-x' }),
+    preflight: async () => { t += 5 * 60_000; return { ok: true, warnings: [], sandboxSpec: { mode: 'sandbox' } }; },
+    run: async (cfg) => { seenConfig = cfg.config; return { contaminated: false, results: {}, merged: 0, prCount: 0, integrationBranch: 'fleet/run-x' }; },
+    now: () => t,
+  };
+  await runLive({ ...ARGS, config: { ...ARGS.config, wallClockMinutes: 1 } }, ov);
+  assert.ok(seenConfig, 'the run was dispatched');
+  assert.equal(seenConfig.deadline, 100_000 + 60_000, 'deadline = invocation + wallClockMinutes, not after-preflight + wallClockMinutes');
+});

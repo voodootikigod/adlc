@@ -20,7 +20,8 @@ import { isAbsolute, resolve } from 'node:path';
 export const FETCHED_REF_PREFIX = 'refs/fleet/fetched/';
 
 /** The "ref must not exist yet" old-value for `git update-ref` (works for SHA-1 and SHA-256 repos). */
-const ZERO_OID = '0'.repeat(40);
+/** The null object id of the repository's object format: as wide as the tip it guards (40 for SHA-1, 64 for SHA-256). */
+export const zeroOidFor = (oid) => '0'.repeat(String(oid).length);
 const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 export function defaultGit(dir) {
@@ -97,7 +98,7 @@ export function ensureWorkerBranchInRepo({ repo, workerBranch, cutTip, gitAt = d
   const ref = `refs/heads/${workerBranch}`;
   const existing = refSha(git, ref);
   if (existing) return { created: false, sha: existing };
-  git('update-ref', ref, cutTip, ZERO_OID);
+  git('update-ref', ref, cutTip, zeroOidFor(cutTip));
   return { created: true, sha: cutTip };
 }
 
