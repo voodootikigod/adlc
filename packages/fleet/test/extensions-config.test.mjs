@@ -136,7 +136,7 @@ test('there is NO --resume flag: resumption is the status reconciliation on an i
 test('--model-plane-egress allowlist without --model-plane-read bounded is REFUSED: the proxy only exists inside the bounded plane, so the host policy would report allowlist while enforcing nothing (codex r3)', () => {
   assert.throws(() => extensionFlags(parseFlags(['--model-plane-egress', 'allowlist'])), /allowlist requires --model-plane-read bounded/);
   assert.throws(() => extensionFlags(parseFlags(['--model-plane-egress', 'allowlist', '--model-plane-read', 'host'])), /allowlist requires --model-plane-read bounded/);
-  const ok = extensionFlags(parseFlags(['--model-plane-egress', 'allowlist', '--model-plane-read', 'bounded', '--model-plane-read-only', '/usr']));
+  const ok = extensionFlags(parseFlags(['--model-plane-egress', 'allowlist', '--model-plane-read', 'bounded', '--model-plane-read-only', '/usr', '--model-plane-git', 'mirror', '--model-plane-git-mirror', '/m/mirror.git']));
   assert.equal(ok.modelPlaneEgress, 'allowlist');
   assert.equal(extensionFlags(parseFlags(['--model-plane-egress', 'open'])).modelPlaneEgress, 'open', 'open egress needs no bounded plane');
 });
@@ -149,3 +149,8 @@ test('fleet.reviewMaxBytes only NARROWS: a repository value above the 262144 def
   assert.equal(resolveFleetConfig({ reviewMaxBytes: 1024 }).reviewMaxBytes, 1024, 'a smaller value narrows');
 });
 
+
+test('--model-plane-read bounded requires --model-plane-git mirror: a shared-git worktree cannot reach its common .git inside the plane (codex r12)', () => {
+  assert.throws(() => extensionFlags(parseFlags(['--model-plane-read', 'bounded', '--model-plane-read-only', '/usr'])), /bounded requires --model-plane-git mirror/);
+  assert.equal(extensionFlags(parseFlags(['--model-plane-read', 'bounded', '--model-plane-read-only', '/usr', '--model-plane-git', 'mirror', '--model-plane-git-mirror', '/m/mirror.git'])).modelPlaneRead, 'bounded');
+});

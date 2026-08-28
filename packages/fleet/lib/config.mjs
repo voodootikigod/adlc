@@ -111,6 +111,10 @@ export function validateExtensionFlags(flags = {}) {
   if (flags.modelPlaneGit != null && !MODEL_PLANE_GIT_MODES.includes(flags.modelPlaneGit)) {
     errors.push(`--model-plane-git must be one of ${MODEL_PLANE_GIT_MODES.join('|')}`);
   }
+  // A bounded plane binds only the worktree and the listed roots: a SHARED-git worktree's
+  // `.git` file points at the repository's common directory outside every bind, so git
+  // could not run inside. Bounded reads therefore require the mirror (codex r12).
+  if (flags.modelPlaneRead === 'bounded' && flags.modelPlaneGit !== 'mirror') errors.push('--model-plane-read bounded requires --model-plane-git mirror (a shared-git worktree cannot reach its .git inside the plane)');
   if (flags.modelPlaneGit === 'mirror') {
     if (flags.modelPlaneRead !== 'bounded') errors.push('--model-plane-git mirror requires --model-plane-read bounded');
     // ONE writable mirror per run: concurrent untrusted workers must never share a Git

@@ -161,9 +161,9 @@ test('a per-ticket worktree setup failure is that ticket\'s recorded outcome; th
   const rec = newRec();
   const d = { ...deps(rec), createWorktree: async ({ ticket }) => { if (ticket.id === 'A') throw new Error('worktree init exploded'); return { path: `/wt/${ticket.id}`, branch: `fleet/${ticket.id.toLowerCase()}`, startSha: 'S0' }; } };
   const s = await runFleet({ all: [T('A'), T('B')], runId: 'r', config: { base: 'main', concurrency: 2, noPr: true }, deps: d });
-  assert.equal(s.results.A, 'failed');
+  assert.equal(s.results.A, 'pending', 'left pending for the next invocation, never re-admitted by this run');
   assert.equal(s.results.B, 'merged', 'the sibling ticket ran to completion');
-  assert.match(s.tickets?.A?.reason ?? s.status?.tickets?.A?.reason ?? 'worktree setup failed', /worktree setup failed/);
+  assert.match(s.status.tickets.A.reason, /worktree setup failed/);
 });
 
 test('a post-merge gate cut short by the wall clock withdraws the merge and PAUSES the ticket (codex r5)', async () => {
@@ -294,6 +294,6 @@ test('a worktree-setup or provisioning failure is run-level dispatch-refused (ex
   const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, noPr: true }, deps: d });
   const { runExitCode } = await import('../lib/run.mjs');
   const { summaryReason } = await import('../lib/result.mjs');
-  assert.equal(s.results.A, 'failed'); assert.equal(s.dispatchRefused, true);
+  assert.equal(s.results.A, 'pending', 'retryable on the next invocation'); assert.equal(s.dispatchRefused, true);
   assert.equal(summaryReason(s), 'dispatch-refused'); assert.equal(runExitCode(s), 1);
 });

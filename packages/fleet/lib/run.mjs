@@ -240,6 +240,9 @@ export async function runFleet({ all, runId, config, deps, resume }) {
   // prosecute pipelines CONCURRENTLY, and re-plan whenever any ticket finishes.
   // Only the merge phase is serialized (via mergeMutex inside buildEffects).
   const inFlight = new Map(); // id → Promise
+  // Tickets whose setup was refused in THIS run: left pending on disk for the next
+  // invocation, never re-admitted by this run's planner (codex r12).
+  const refusedThisRun = new Set();
 
   const startTicket = async (ticket) => {
     // A resumed ticket continues from the strike count its reconciled status
@@ -252,8 +255,12 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       // A setup failure is THIS ticket's outcome (codex r4): recorded, logged, and
       // the run keeps awaiting the other in-flight tickets instead of unwinding
       // around them with the lock released.
-      status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `worktree setup failed: ${e.message}`, reasonCode: null });
-      dispatchRefused = true; // a setup failure is operational (dispatch-refused, exit 1), never strikes-exhausted (codex r11)
+      // Left PENDING, not failed: a transient setup failure must be re-attempted by the
+      // next identical invocation once its cause is fixed (codex r12); the run still
+      // reports dispatch-refused (exit 1) so nobody mistakes it for a clean finish.
+      status = withTicket(status, ticket.id, { state: 'pending', strikes: startStrikes, reason: `worktree setup failed: ${e.message}`, reasonCode: null });
+      refusedThisRun.add(ticket.id);
+      dispatchRefused = true;
       persist();
       log(`${ticket.id} → failed (worktree setup failed: ${e.message})`);
       return;
@@ -262,7 +269,8 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     persist();
     try { await deps.provision?.({ ticket, worktree: wt.path }); }
     catch (e) {
-      status = withTicket(status, ticket.id, { state: 'failed', strikes: startStrikes, reason: `provisioning failed: ${e.message}`, reasonCode: null });
+      status = withTicket(status, ticket.id, { state: 'pending', strikes: startStrikes, reason: `provisioning failed: ${e.message}`, reasonCode: null });
+      refusedThisRun.add(ticket.id);
       dispatchRefused = true;
       persist();
       log(`${ticket.id} → failed (provisioning failed: ${e.message})`);
@@ -301,7 +309,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     // fleet-ext item 5: once the external wall clock has expired, nothing new is
     // dispatched. Pending tickets stay pending — the run is left resumable.
     if (expired()) { wallClockExpired = true; if (inFlight.size === 0) break; }
-    const { admit } = expired() ? { admit: [] } : planRound(all, {
+    const { admit } = expired() ? { admit: [] } : planRound(all.filter((t) => !refusedThisRun.has(t.id)), {
       statusById: statusById(status),
       inFlightIds: [...inFlight.keys()],
       cap,
