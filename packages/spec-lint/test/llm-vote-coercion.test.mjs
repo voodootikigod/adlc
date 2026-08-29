@@ -38,16 +38,32 @@ describe('validateVacuousPayload', () => {
   it('throws when vacuous field is missing', () => {
     assert.throws(
       () => validateVacuousPayload({ result: 'ok' }, 3),
-      /vacuous.*missing|missing.*vacuous/i,
+      /missing/i,
     );
   });
 
-  it('throws when vacuous is null', () => {
-    assert.throws(() => validateVacuousPayload({ vacuous: null }, 3), /vacuous/i);
+  it('throws "missing" (not "must be an array") when vacuous is explicitly null', () => {
+    // Distinguishes the missing-field guard from the array-type guard: a
+    // mutated `||` -> `&&` on the missing-field check would let this fall
+    // through to the array-type check instead, which ALSO throws but with a
+    // different message — this assertion pins which guard actually fired.
+    assert.throws(() => validateVacuousPayload({ vacuous: null }, 3), /missing/i);
   });
 
-  it('throws when vacuous is a string, not an array', () => {
-    assert.throws(() => validateVacuousPayload({ vacuous: 'none' }, 3), /array/i);
+  it('throws "must be an array" (not "missing") when vacuous is a non-array value', () => {
+    assert.throws(() => validateVacuousPayload({ vacuous: 'none' }, 3), /must be an array/i);
+  });
+
+  it('throws when the whole payload is not an object (a bare string)', () => {
+    // Distinguishes the top-level shape guard from every guard that assumes
+    // `parsed` is already an object — a mutated `||` -> `&&` here would let
+    // a bare-string response (typeof !== 'object', not null, not an array)
+    // pass through this guard unnoticed.
+    assert.throws(() => validateVacuousPayload('just a string', 3), /missing/i);
+  });
+
+  it('throws when the whole payload is a bare number', () => {
+    assert.throws(() => validateVacuousPayload(42, 3), /missing/i);
   });
 
   it('throws when an entry is non-numeric', () => {
