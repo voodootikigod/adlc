@@ -229,3 +229,17 @@ export async function ac76_everySecretLiteralIsScanned() {
   finally { fx.cleanup(); }
 }
 test('AC76: the actual-diff secret scan covers every orchestrator secret literal (credential token included), never only the manifest key', { timeout: 120_000 }, ac76_everySecretLiteralIsScanned);
+
+export async function ac140_unloadedDenylistFailsClosed() {
+  // A caller that runs the actual-diff check before the protected-path list is loaded gets a violation, never a silent skip.
+  const f = fixture();
+  try {
+    const head = f.commit({ 'packages/foo/lib/a.mjs': 'export const a = 3;\n' });
+    const loaded = await f.check(head);
+    assert.equal(loaded.ok, true, JSON.stringify(loaded));
+    f.ctx.denylist = null;
+    const unloaded = await f.check(head);
+    assert.equal(unloaded.ok, false); assert.equal(unloaded.code, 'denylist-unloaded', JSON.stringify(unloaded));
+  } finally { f.cleanup(); }
+}
+test('AC140: the actual-diff check FAILS CLOSED when no protected-path denylist is loaded (code denylist-unloaded) — the rule can never be skipped by call order', ac140_unloadedDenylistFailsClosed);

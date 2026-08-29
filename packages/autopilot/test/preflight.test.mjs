@@ -369,3 +369,23 @@ export async function ac148_freshContextIsPinned() {
   } finally { fx.cleanup(); }
 }
 test('AC148: phase A pins the toolchain on a FRESH context (pinned:{} + inherited PATH) — the re-entrance guard keys on concrete pins, never on object truthiness', ac148_freshContextIsPinned);
+
+export async function ac128_dryRunRunsTheRealPreflight() {
+  // The dry run goes through the REAL phase A, baseline and phase B and performs no mutation:
+  // no worktree, no fleet dispatch, an incomplete report that names what needs a worktree.
+  const fx = makeFixture();
+  try {
+    const ctx = buildCtx(fx, { dryRun: true });
+    await phaseA(ctx);
+    const oid = await resolveBaseline(ctx);
+    const b = await phaseB(ctx, { dryRun: true });
+    assert.equal(b.complete, false);
+    assert.ok(b.incomplete.includes('fleet-dry-run-needs-worktree'), JSON.stringify(b.incomplete));
+    assert.ok(b.checks.token, 'the credential margin was still computed');
+    assert.ok(!ctx.recorder.some((r) => r.argv[0] === PINNED.adlc && r.argv[1] === 'fleet'), 'zero fleet spawns in a dry run');
+    assert.ok(!ctx.recorder.some((r) => r.argv.includes('worktree') && r.argv.includes('add')), 'zero worktrees created in a dry run');
+    assert.equal(git(fx.repoRoot, ['worktree', 'list']).split('\n').length, 1, 'the repository has only its main worktree');
+    assert.ok(oid);
+  } finally { fx.cleanup(); }
+}
+test('AC128: a dry run exercises the REAL phase A, baseline and phase B and performs no mutation (no worktree, no fleet dispatch), reporting what needs a worktree', ac128_dryRunRunsTheRealPreflight);

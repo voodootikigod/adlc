@@ -14,10 +14,11 @@ import { validateIssueNumber, InputError } from './input.mjs';
 import { acquireLock, selfIdentity, defaultProbes, LockHeldError } from './lock.mjs';
 import { LABEL_FOR_STATE } from './records.mjs';
 import { buildContext } from './context.mjs';
+import { loadDenylist } from './selection.mjs';
 import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
 import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest']);
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest', 'loop.maintainWithoutDenylist']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -64,7 +65,10 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
     if (!q.ok) return sleep(`quota:${q.reason}`);
   }
 
-  // §8 — open-PR maintenance (every fix round re-checks quota inside).
+  // §8 — open-PR maintenance (every fix round re-checks quota inside). The protected-path
+  // denylist is loaded FIRST: maintenance's actual-diff checks need it before selection does.
+  // Mutation seam `loop.maintainWithoutDenylist`: maintenance runs before the list is loaded.
+  if (!seam('loop.maintainWithoutDenylist')) ctx.denylist = ctx.denylist ?? await (deps.selection.loadDenylist ?? loadDenylist)({ ctx });
   await maintain.maintainOpenPrs({ ctx, baseOid: ctx.baseOid, deps: deps.maintenanceDeps() });
   const active = maintain.activePrCount(ctx.records.all());
   if (active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
@@ -75,7 +79,7 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
     out.document.resume = { action: resumable.action, issue: resumable.issue };
     const result = await resumeRun({ ctx, deps, action: resumable.action, issue: resumable.issue });
     out.document.run = result;
-    await digest.postDigest({ ctx, record: ctx.records.load(resumable.issue), outcome: result });
+    await digest.postDigest({ ctx, record: ctx.records.load(resumable.issue), issue: resumable.issue, outcome: result });
     out.outcome = `resumed:${result.state}`;
     out.exitCode = result.state === 'blocked' ? 2 : 0;
     return out;
@@ -110,7 +114,7 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   // §6–§7 — the run.
   const result = await runIssue({ ctx, deps, issue, ticket: verdict.ticket, revision: sel.revision, authorization: sel.authorization });
   out.document.run = result;
-  await digest.postDigest({ ctx, record: ctx.records.load(issue), outcome: result });
+  await digest.postDigest({ ctx, record: ctx.records.load(issue), issue, outcome: result });
   out.outcome = result.state;
   out.exitCode = result.state === 'blocked' ? 2 : 0;
   return out;

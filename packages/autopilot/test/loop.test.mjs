@@ -196,3 +196,17 @@ export async function ac10_restHonoursCommittedMinutes() {
   } finally { fx.cleanup(); }
 }
 test('AC10: the loop cadence is the COMMITTED autopilot.restMinutes (reported by the iteration), lowered by --rest, never a fixed 10 minutes', { timeout: 120_000 }, ac10_restHonoursCommittedMinutes);
+
+export async function ac140_maintenanceRunsWithTheDenylistLoaded() {
+  // §8 maintenance runs BEFORE selection: the loop loads the denylist first so maintenance's diff checks have it.
+  const fx = await createSequenceFixture();
+  try {
+    fx.ctx.denylist = null;
+    let seen = 'unset';
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ maintain: { maintainOpenPrs: async ({ ctx }) => { seen = typeof ctx.denylist?.matches; return { actions: [] }; }, activePrCount: () => 0 } }), pinnedIssue: fx.issue });
+    assert.equal(seen, 'function', 'maintenance saw a loaded denylist (matches function)');
+    assert.equal(it.outcome, 'done', JSON.stringify(it.document?.run ?? it.outcome));
+    assert.ok(fx.ctx.denylist.matches('scripts/rails-guard-ci.mjs'), 'the loaded list is the real §4.2 list');
+  } finally { fx.cleanup(); }
+}
+test('AC140: the loop loads the protected-path denylist BEFORE §8 maintenance runs, so a maintenance fix round can never skip the protected-path rule', { timeout: 120_000 }, ac140_maintenanceRunsWithTheDenylistLoaded);

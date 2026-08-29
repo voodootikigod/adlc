@@ -88,3 +88,18 @@ export async function ac69_digestProtocol() {
   } finally { cleanup(root); }
 }
 test('AC69: a gh failure after the post leaves digestPosted:false and the next iteration finds the sentinel and posts nothing; a closed log issue is replaced and cached; two open → lowest + digest-issue-ambiguous', ac69_digestProtocol);
+
+export async function ac69_digestSurvivesANullRecord() {
+  // A run dropped before its record existed still gets a digest; nothing dereferences the missing record.
+  const root = scratch('ap-digest-null');
+  try {
+    const gh = fakeGithub({ issues: { 20: { state: 'OPEN', labels: [LOG_LABEL] } } });
+    const ctx = buildCtx({ repoRoot: root, handlers: { [FAKE.gh]: gh.handler } });
+    const r = await postDigest({ ctx, record: null, issue: 7, outcome: { state: 'dropped', reason: 'revalidation-changed', detail: 'issue-updated' } });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.posted, true, 'the summary was posted');
+    assert.ok(Object.values(gh.state.comments).flat().some((c) => /dropped/.test(c)), 'the digest names the outcome');
+    assert.equal(ctx.records.load(7), null, 'no record was conjured');
+  } finally { cleanup(root); }
+}
+test('AC69: the digest is posted for a run dropped BEFORE its record existed (null record) — the summary is never lost to a crash', ac69_digestSurvivesANullRecord);

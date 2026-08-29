@@ -59,6 +59,8 @@ export const REGISTRY = {
   123: [{ fn: 'ac123_crashIdempotentReset', file: 'triage.test.mjs', seam: 'attempts.skipJournal' }],
   134: [{ fn: 'ac134_framedArchiveRecovery', file: 'triage.test.mjs', seam: 'attempts.acceptTruncatedTail' }],
   140: [
+    { fn: 'ac140_maintenanceRunsWithTheDenylistLoaded', file: 'loop.test.mjs', seam: 'loop.maintainWithoutDenylist' },
+    { fn: 'ac140_unloadedDenylistFailsClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.allowUnloadedDenylist' },
     { fn: 'ac140_denylistDerivesFromTrustRootLists', file: 'denylist.test.mjs', seam: 'denylist.staticOnly' },
     { fn: 'ac140_scopeIntersectionIsConservative', file: 'denylist.test.mjs', seam: 'denylist.allowShrink' },
     { fn: 'ac140_denylistInDiffCheck', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipDenylist' },
@@ -77,6 +79,7 @@ export const REGISTRY = {
     { fn: 'ac24_pathResolution', file: 'create.test.mjs', seam: 'create.cwdRepoRoot' },
   ],
   25: [
+    { fn: 'ac25_abandonedRoundIsSettled', file: 'run.test.mjs', seam: 'run.refundAbandonedRound' },
     { fn: 'ac25_budgetChargedBeforeDispatch', file: 'run.test.mjs', seam: 'run.chargeAfterDispatch' },{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal' }],
   41: [
     { fn: 'ac41_and_90_outcomeMapping', file: 'run.test.mjs', seam: 'run.acceptUnknownReason' },
@@ -415,6 +418,7 @@ export const REGISTRY = {
     { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'loop.dryRunClaimsComplete' },
   ],
   128: [
+    { fn: 'ac128_dryRunRunsTheRealPreflight', file: 'preflight.test.mjs', seam: 'preflight.dryRunDispatches' },
     { fn: 'ac128_dryRunNeverNeedsAWorktree', file: 'loop.test.mjs', seam: 'loop.dryRunOmitsWorktreeItem' },
   ],
   15: [
@@ -461,6 +465,7 @@ export const REGISTRY = {
     { fn: 'ac62_prLifecycle', file: 'maintain.test.mjs', seam: 'maintain.deleteRecordWithRemoteRef' },
   ],
   69: [
+    { fn: 'ac69_digestSurvivesANullRecord', file: 'digest.test.mjs', seam: 'digest.requireRecord' },
     { fn: 'ac69_digestProtocol', file: 'digest.test.mjs', seam: 'digest.skipSentinelSearch' },
   ],
   44: [

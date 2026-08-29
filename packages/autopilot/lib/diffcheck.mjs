@@ -39,6 +39,7 @@ registerSeams([
   'diffcheck.skipDenylist',           // (ii) is not run
   'diffcheck.allowBinary',
   'diffcheck.scanKeyOnly',
+  'diffcheck.allowUnloadedDenylist',
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -209,6 +210,10 @@ export async function actualDiffCheck({ ctx, issue, record, baseOid, head, scope
     if (path === criteriaPath) { await checkCriteria({ ctx, cwd, head, record, path, violations }); continue; }
     if (path.startsWith(shardPrefix) && SHARD_RE.test(path)) { sawShard = true; continue; }
     if (MANIFEST_RE.test(path)) { sawManifest = true; await checkManifestSegment({ ctx, cwd, baseOid, head, record, path, status, violations }); continue; }
+    // No loaded denylist is a violation in itself (codex r4 B1): the protected-path rule can never be
+    // silently skipped because a caller (maintenance) ran before selection loaded the list.
+    // Mutation seam `diffcheck.allowUnloadedDenylist`: an absent denylist skips the rule.
+    if (!active('diffcheck.skipDenylist') && !active('diffcheck.allowUnloadedDenylist') && typeof ctx.denylist?.matches !== 'function') { violations.push({ path, code: 'denylist-unloaded' }); continue; }
     if (!active('diffcheck.skipDenylist') && ctx.denylist?.matches(path)) { violations.push({ path, code: 'protected-path' }); continue; }
     if (!scopeMatches(scope, path)) violations.push({ path, code: 'out-of-scope' });
   }

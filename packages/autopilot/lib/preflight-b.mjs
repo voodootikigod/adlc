@@ -30,7 +30,8 @@ registerSeams([
   'preflight.trustBlobRepo',          // a differing autopilot.repo in the blob rebinds the identity
   'preflight.ignoreTokenMargin',      // tokenShort is never reported
   'preflight.acceptAnyBaseSha',       // the fleet dry-run's baseSha is not compared
-  'preflight.keepPreflightWorktree',  // the temporary worktree is not removed
+  'preflight.keepPreflightWorktree',  // the temporary worktree is not removed,
+  'preflight.dryRunDispatches',
 ]);
 
 const PLUGIN_KEY = 'adlc@adlc';
@@ -163,7 +164,8 @@ export async function phaseB(ctx, { dryRun = ctx.dryRun === true, ticketId = ctx
   try { creds = readHostFile(ctx, CREDENTIALS_REL); } catch { creds = null; }
   const margin = tokenMargin({ credentialsText: creds, now: now(), wallClockMs });
   checks.token = margin;
-  if (dryRun) {
+  // Mutation seam `preflight.dryRunDispatches`: a dry run falls through to the worktree + fleet dry run (a mutation).
+  if (dryRun && !active('preflight.dryRunDispatches')) {
     if (isBuild) checks.specApproval = (await checkSpecApproval({ ctx, oid, ticketId, runnerCwd: null })).checks;
     else checks.specApproval = 'skipped: not-build-ticket';
     if (isBuild) incomplete.push('runner-gate-needs-worktree');

@@ -19,6 +19,7 @@ import { registerSeams, active } from './mutations.mjs';
 registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
   'run.chargeAfterDispatch',
   'run.staleEvidenceOnRetry',
+  'run.refundAbandonedRound',
 ]);
 
 /** Gate failures that are the ENVIRONMENT's, never the worker's: no retry can fix them. */
@@ -149,14 +150,19 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
     // `roundStartedAt`) so a crash mid-dispatch cannot hand the next process a fresh budget
     // (codex r3 B4); the settlement below replaces the provisional charge with the actual one.
     // Mutation seam `run.chargeAfterDispatch`: the budget is charged only when the dispatch returns.
-    const provisional = charge && !active('run.chargeAfterDispatch') ? { roundsUsed: (rec.roundsUsed ?? 0) + 1, roundStartedAt: started } : {};
+    // A round left in flight by a crash (roundStartedAt set, never settled) is charged up to NOW
+    // before this round is booked — resuming never refunds dispatch time (codex r4 B2).
+    // Mutation seam `run.refundAbandonedRound`: the abandoned round's time is dropped.
+    const abandonedMs = charge && !active('run.refundAbandonedRound') && typeof rec.roundStartedAt === 'number' ? Math.max(0, started - rec.roundStartedAt) : 0;
+    const usedBefore = (rec.wallClockUsedMs ?? 0) + abandonedMs;
+    const provisional = charge && !active('run.chargeAfterDispatch') ? { roundsUsed: (rec.roundsUsed ?? 0) + 1, roundStartedAt: started, wallClockUsedMs: usedBefore } : {};
     ctx.records.update(n, { state: 'dispatched', integrationStart: await ctx.git.localOut(issueWt, ['rev-parse', branch]), fleetArgv: argv, ...provisional });
     const fleet = await deps.dispatch({ ctx, issue: n, argv, cwd: issueWt, deadlineMs: budget.wallClockMs + 5 * 60_000 });
     const elapsed = ctx.now() - started;
     const strikes = Math.max(1, Number(fleet.parsed?.strikesConsumed) || 1);
     ctx.records.update(n, {
       fleetRunId: fleet.parsed?.fleetRunId ?? rec.fleetRunId ?? null, lastFleetResult: fleet.parsed ?? null, roundStartedAt: null,
-      ...(charge ? { wallClockUsedMs: (rec.wallClockUsedMs ?? 0) + elapsed, roundsUsed: (rec.roundsUsed ?? 0) + strikes } : {}),
+      ...(charge ? { wallClockUsedMs: usedBefore + elapsed, roundsUsed: (rec.roundsUsed ?? 0) + strikes } : {}),
     });
     // A PAUSED run (quota / wall clock) must resume as the same fleet run: a fresh
     // fleetRunId after a pause means fleet silently restarted instead of resuming.

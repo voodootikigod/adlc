@@ -287,3 +287,22 @@ export async function ac25_budgetChargedBeforeDispatch() {
   } finally { fx.cleanup(); }
 }
 test('AC25: the §7 budget is charged BEFORE the dispatch — after a crash mid-dispatch the record shows one round used and a running clock', { timeout: 120_000 }, ac25_budgetChargedBeforeDispatch);
+
+export async function ac25_abandonedRoundIsSettled() {
+  // A round left in flight by a crash (roundStartedAt set) is charged up to the next round's start — never refunded.
+  const fx = await createSequenceFixture();
+  try {
+    const first = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(first.state, 'done');
+    const before = fx.ctx.records.load(fx.issue).wallClockUsedMs ?? 0;
+    const crashedAt = fx.clock.value - 7 * 60_000;
+    fx.ctx.records.update(fx.issue, { state: 'quota-paused', attestedHead: null, roundStartedAt: crashedAt });
+    const { resumeRun } = await import('../lib/run.mjs');
+    const r = await resumeRun({ ctx: fx.ctx, deps: fx.ctx.deps, action: 'resume-dispatch', issue: fx.issue });
+    assert.ok(['done', 'ci-watch', 'ci-red', 'oid-mismatch', 'blocked'].includes(r.state), JSON.stringify(r));
+    const rec = fx.ctx.records.load(fx.issue);
+    assert.ok(rec.wallClockUsedMs >= before + 7 * 60_000, `the 7 minutes the crashed round had consumed are charged (${rec.wallClockUsedMs} vs ${before})`);
+    assert.equal(rec.roundStartedAt, null, 'the resumed round is settled');
+  } finally { fx.cleanup(); }
+}
+test('AC25: resuming after a crash mid-dispatch charges the abandoned round\'s in-flight time to the budget (never a refund)', { timeout: 120_000 }, ac25_abandonedRoundIsSettled);

@@ -137,10 +137,65 @@ export async function ac146_bindingUsesCopy() {
     assert.equal(readFileSync(m3.identityPubPath, 'utf8'), `${canonicalKeyLine(fx.pubLine)}\n`);
     assert.match(readFileSync(m3.wrapperPath, 'utf8'), /IdentityAgent="[^"]+\/sock"' -i '[^']+\/m3\/identity\.pub'/);
     assert.equal(codeOfSync(() => resolveAuthMode({ sshIdentity: fx.keyPath, sshAuthSock: sock, socketExists: () => true })), 'ssh-mode-ambiguous');
-    skip('no local sshd fixture: the live agentless push clause of AC 146 did not run');
+    // The live clause: a REAL agentless push through the generated wrapper against a local sshd.
+    // A fresh operator key for the live clause (the swap case above replaced the fixture's key file).
+    const liveKey = join(fx.root, 'live_key'); spawnSync(REAL.sshKeygen, ['-t', 'ed25519', '-N', '', '-q', '-C', 'live@laptop', '-f', liveKey]);
+    const livePub = readFileSync(`${liveKey}.pub`, 'utf8').trim();
+    await withLocalSshd(fx, livePub, async ({ port, hostLine, user }) => {
+      writeFileSync(fx.paths.knownHosts, `${hostLine}\n`);
+      const ctx4 = sshCtx(fx, { agentLines: [livePub] });
+      const m4 = await prep(ctx4, fx, join(fx.root, 'm4'), { identityPath: liveKey, registeredKeys: [{ id: 9, key: livePub }] });
+      const bare = join(fx.root, 'live.git'); spawnSync('git', ['init', '-q', '--bare', bare]);
+      const src = join(fx.root, 'live-src'); mkdirSync(src);
+      const g = (args) => spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: src, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+      g(['init', '-q', '-b', 'main']); writeFileSync(join(src, 'f.txt'), 'live\n'); g(['add', '-A']); g(['commit', '-q', '-m', 'live']);
+      const head = g(['rev-parse', 'HEAD']).stdout.trim();
+      const push = spawnSync('git', ['push', '-q', `ssh://${user}@127.0.0.1:${port}${bare}`, 'HEAD:refs/heads/live'], { cwd: src, encoding: 'utf8', env: { ...process.env, GIT_SSH: m4.wrapperPath, SSH_AUTH_SOCK: '' } });
+      assert.equal(push.status, 0, `the live agentless push over the generated wrapper succeeds: ${push.stderr}`);
+      assert.equal(spawnSync('git', ['--git-dir', bare, 'rev-parse', 'refs/heads/live'], { encoding: 'utf8' }).stdout.trim(), head, 'the bare remote holds the pushed commit');
+      assert.match(readFileSync(m4.wrapperPath, 'utf8'), /IdentityAgent=none/, 'the push was agentless by construction');
+    });
   } finally { fx.cleanup(); }
 }
 test('AC146: explicit mode copies the key (O_NOFOLLOW, 0600) BEFORE fingerprinting from the copy; a mismatched .pub sidecar or a swapped original changes nothing; agent mode writes only the matched key to identity.pub', ac146_bindingUsesCopy);
+
+
+/**
+ * A local, unprivileged sshd for the live clause of AC 146: random loopback port, its own host key,
+ * the fixture's operator key in authorized_keys, key auth only. Skips loudly when sshd is absent
+ * or cannot start (the rest of the criterion still ran).
+ */
+async function withLocalSshd(fx, authorizedPub, fn) {
+  const SSHD = '/usr/sbin/sshd';
+  if (!existsSync(SSHD) || !REAL.sshKeygen) return skip('no sshd / ssh-keygen: the live agentless push clause of AC 146 did not run');
+  const dir = join(fx.root, 'sshd'); mkdirSync(dir, { recursive: true });
+  spawnSync(REAL.sshKeygen, ['-t', 'ed25519', '-N', '', '-q', '-f', join(dir, 'host_key')]);
+  writeFileSync(join(dir, 'authorized_keys'), `${authorizedPub}\n`, { mode: 0o600 });
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  writeFileSync(join(dir, 'sshd_config'), [`Port ${port}`, 'ListenAddress 127.0.0.1', `HostKey ${join(dir, 'host_key')}`, `AuthorizedKeysFile ${join(dir, 'authorized_keys')}`,
+    'StrictModes no', 'PasswordAuthentication no', 'KbdInteractiveAuthentication no', 'UsePAM no', 'PidFile none', 'LogLevel ERROR'].join('\n') + '\n');
+  const { spawn } = await import('node:child_process');
+  const os = await import('node:os');
+  const net = await import('node:net');
+  const child = spawn(SSHD, ['-D', '-e', '-f', join(dir, 'sshd_config')], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = ''; child.stderr.on('data', (d) => { err += d; });
+  let exited = false; child.on('exit', () => { exited = true; });
+  const up = await new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      if (exited) return resolve(false);
+      if (Date.now() - started > 8000) return resolve(false);
+      const sock = net.connect(port, '127.0.0.1');
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('error', () => { sock.destroy(); setTimeout(tick, 100); });
+    };
+    tick();
+  });
+  if (!up) { try { child.kill('SIGTERM'); } catch { /* gone */ } return skip(`local sshd did not start (${err.trim().slice(0, 200)}): the live agentless push clause of AC 146 did not run`); }
+  const hostPub = readFileSync(join(dir, 'host_key.pub'), 'utf8').trim().split(' ').slice(0, 2).join(' ');
+  try { return await fn({ port, hostLine: `[127.0.0.1]:${port} ${hostPub}`, user: os.userInfo().username }); }
+  finally { try { child.kill('SIGTERM'); } catch { /* gone */ } }
+}
 
 export async function ac147_revalidation() {
   const fx = makeFixture();

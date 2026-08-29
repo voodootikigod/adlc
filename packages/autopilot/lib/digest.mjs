@@ -9,11 +9,13 @@
 
 import { ensureComment } from './github.mjs';
 import { WITHHELD_BODY } from './redact.mjs';
+import { validateIssueNumber } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'digest.skipSentinelSearch',   // the comment is posted without searching for the sentinel
-  'digest.postWithoutIntent',    // digestPosted:false is not persisted before the post
+  'digest.postWithoutIntent',    // digestPosted:false is not persisted before the post,
+  'digest.requireRecord',
 ]);
 
 export const LOG_LABEL = 'adlc:autopilot-log';
@@ -23,6 +25,9 @@ export const runSentinel = (runId) => `<!-- adlc-autopilot:run ${runId} -->`;
 const ISSUE_NUMBER_RE = /\/issues\/(\d+)\b/;
 
 /** The digest text (free text → the caller redacts). */
+/** The run result as one line: a string outcome verbatim, an object as `state (reason)`. */
+const renderOutcome = (o) => (typeof o === 'string' ? o : (o && typeof o === 'object' && o.state ? `${o.state}${o.reason ? ` (${o.reason})` : ''}` : null));
+
 export function digestBody({ record, outcome, prUrl = null, quota = null }) {
   const steps = Array.isArray(record?.quotaSteps) ? record.quotaSteps : [];
   const first = steps[0]?.before ?? quota?.before ?? null; const last = steps[steps.length - 1]?.after ?? quota?.after ?? null;
@@ -31,7 +36,7 @@ export function digestBody({ record, outcome, prUrl = null, quota = null }) {
   return [
     `**Autopilot run** — issue #${record?.issue ?? '?'}`,
     `- ticket: ${record?.ticketId ?? 'n/a'}`,
-    `- outcome: ${outcome ?? record?.state ?? 'unknown'}`,
+    `- outcome: ${renderOutcome(outcome) ?? record?.state ?? 'unknown'}`,
     `- PR: ${prUrl ?? (record?.prNumber ? `#${record.prNumber}` : 'none')}`,
     `- rounds: ${record?.roundsUsed ?? 0} (CI fix rounds: ${record?.ciRoundsUsed ?? 0}), minutes: ${minutes}`,
     `- quota before/after: ${fmt(first)} → ${fmt(last)}`,
@@ -66,10 +71,16 @@ export async function locateLogIssue({ ctx }) {
 /**
  * Post the digest for a run. Never throws; returns { ok, posted, logIssue, reported }.
  */
-export async function postDigest({ ctx, record, outcome, prUrl = null, quota = null }) {
-  const n = record.issue;
+export async function postDigest({ ctx, record: given, outcome, issue = null, prUrl = null, quota = null }) {
+  // A run dropped BEFORE its record existed (a pre-creation revalidation drop) still gets its
+  // digest; nothing here dereferences a missing record (codex r4 B3).
+  // Mutation seam `digest.requireRecord`: a null record throws (the summary is lost).
+  if (!given && active('digest.requireRecord')) throw new TypeError('postDigest: record is required');
+  const n = given?.issue ?? (issue != null ? validateIssueNumber(issue) : null);
+  if (n == null) return { ok: false, posted: false, error: 'no issue for the digest', reported: [] };
+  const record = given ?? { issue: n, state: typeof outcome === 'string' ? outcome : (outcome?.state ?? 'dropped') };
   if (record.digestPosted === true) return { ok: true, posted: false, reason: 'already-posted', reported: [] };
-  const runId = record.runId ?? record.digestRunId ?? `issue-${n}-${String(record.token ?? '').slice(0, 12)}`;
+  const runId = record.runId ?? record.digestRunId ?? `issue-${n}-${String(record.token ?? '').slice(0, 12) || 'norecord'}`;
   const sentinel = runSentinel(runId);
   try {
     if (!active('digest.postWithoutIntent') && ctx.records.load(n)) ctx.records.update(n, { digestPosted: false, digestRunId: runId });
