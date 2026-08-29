@@ -5,7 +5,7 @@
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync, lstatSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync, lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
@@ -400,13 +400,34 @@ function printQuartermasterPlan(quartermaster) {
 /** Caller-supplied files are read only when they are REGULAR files no larger than this (a FIFO or a huge file would block or bloat the run) (codex r7). */
 export const MAX_EXTENSION_FILE_BYTES = 4 * 1024 * 1024;
 
-export function loadExtensionFiles(config, readFile = (p) => readFileSync(p, 'utf8'), statFile = (p) => lstatSync(p)) {
+/**
+ * Read an operator file through ONE descriptor: open without following a symlink and without
+ * blocking (a FIFO is refused, never waited on), fstat THAT descriptor (regular file, size within
+ * the bound) and read at most the bound from it — no window between the check and the read
+ * (codex r17 #1).
+ */
+export function readBoundedFile(path, max = MAX_EXTENSION_FILE_BYTES, { openSync: open = openSync, fstatSync: fstat = fstatSync, readSync: read = readSync, closeSync: close = closeSync } = {}) {
+  const fd = open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    const st = fstat(fd);
+    if (!st.isFile()) throw new Error('not a regular file');
+    if (st.size > max) throw new Error(`${st.size} bytes exceeds ${max}`);
+    const buf = Buffer.alloc(max + 1);
+    let total = 0;
+    for (;;) {
+      const n = read(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+      if (total > max) throw new Error(`more than ${max} bytes (the file grew while it was read)`);
+      if (total === buf.length) break;
+    }
+    return buf.subarray(0, total).toString('utf8');
+  } finally { try { close(fd); } catch { /* already closed */ } }
+}
+
+export function loadExtensionFiles(config, readFile = (p) => readBoundedFile(p)) {
   const out = { initialDeadEnds: [], charterAddendum: null };
   const checked = (flag, path) => {
-    let st;
-    try { st = statFile(path); } catch (e) { throw new Error(`${flag} ${path}: ${e.message}`); }
-    if (typeof st?.isFile === 'function' && !st.isFile()) throw new Error(`${flag} ${path}: not a regular file`);
-    if (Number.isFinite(st?.size) && st.size > MAX_EXTENSION_FILE_BYTES) throw new Error(`${flag} ${path}: ${st.size} bytes exceeds ${MAX_EXTENSION_FILE_BYTES}`);
     try { return readFile(path); } catch (e) { throw new Error(`${flag} ${path}: ${e.message}`); }
   };
   if (config.deadEndFile) out.initialDeadEnds = [fenceDeadEnd('PRIOR_ROUND', checked('--dead-end-file', config.deadEndFile))];

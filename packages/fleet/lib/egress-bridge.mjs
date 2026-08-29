@@ -112,12 +112,17 @@ export function childExitCode(code, signal) {
  * code the bridge should propagate once the child is gone.
  */
 export async function runBridge({ socketPath, port, command, spawnFn = spawn, connect = net.connect, proc = process }) {
-  const server = await startBridgeServer({ socketPath, port, connect });
-  const [cmd, ...args] = command;
-  const child = spawnFn(cmd, args, { stdio: 'inherit', env: proc.env });
-  const relay = (signal) => () => { if (child.exitCode === null) child.kill(signal); };
+  // The relays are installed BEFORE the server and the spawn: a stop signal that lands during
+  // the start-up window is held and delivered to the child the moment it exists, never lost
+  // (and never lets the bridge die of the signal with the child about to be spawned).
+  let child = null; let pending = null;
+  const relay = (signal) => () => { if (!child) { pending = signal; return; } if (child.exitCode === null) child.kill(signal); };
   const relays = FORWARDED_SIGNALS.map((signal) => [signal, relay(signal)]);
   for (const [signal, handler] of relays) proc.on(signal, handler);
+  const server = await startBridgeServer({ socketPath, port, connect });
+  const [cmd, ...args] = command;
+  child = spawnFn(cmd, args, { stdio: 'inherit', env: proc.env });
+  if (pending) child.kill(pending);
   const detach = () => { for (const [signal, handler] of relays) proc.removeListener(signal, handler); };
   try {
     return await new Promise((resolve, reject) => {

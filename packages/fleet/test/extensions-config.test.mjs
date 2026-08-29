@@ -154,3 +154,27 @@ test('--model-plane-read bounded requires --model-plane-git mirror: a shared-git
   assert.throws(() => extensionFlags(parseFlags(['--model-plane-read', 'bounded', '--model-plane-read-only', '/usr'])), /bounded requires --model-plane-git mirror/);
   assert.equal(extensionFlags(parseFlags(['--model-plane-read', 'bounded', '--model-plane-read-only', '/usr', '--model-plane-git', 'mirror', '--model-plane-git-mirror', '/m/mirror.git'])).modelPlaneRead, 'bounded');
 });
+
+test('readBoundedFile reads through ONE descriptor: a FIFO is refused without blocking, a symlink is refused, an oversized file is refused, a file that grows past the bound while read is refused', async () => {
+  const { readBoundedFile, MAX_EXTENSION_FILE_BYTES } = await import('../bin/fleet.mjs');
+  const { mkdtempSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-bounded-'));
+  try {
+    const ok = join(dir, 'ok.md'); writeFileSync(ok, 'hello\n');
+    assert.equal(readBoundedFile(ok), 'hello\n');
+    const fifo = join(dir, 'pipe'); execFileSync('mkfifo', [fifo]);
+    assert.throws(() => readBoundedFile(fifo), /not a regular file/, 'a FIFO is refused (the open never blocks)');
+    const link = join(dir, 'link.md'); symlinkSync(ok, link);
+    assert.throws(() => readBoundedFile(link), /ELOOP|symbolic/i, 'a symlink is not followed');
+    const big = join(dir, 'big.md'); writeFileSync(big, 'x'.repeat(2049));
+    assert.throws(() => readBoundedFile(big, 2048), /exceeds 2048/);
+    // Growth during the read: fstat says 10 bytes, the reads return more.
+    let calls = 0;
+    const fakeRead = (fd, buf, off, len) => { calls++; if (calls > 3) return 0; buf.fill(0x61, off, off + Math.min(len, 8)); return Math.min(len, 8); };
+    assert.throws(() => readBoundedFile(ok, 10, { readSync: fakeRead }), /grew while it was read/);
+    assert.ok(MAX_EXTENSION_FILE_BYTES >= 1024 * 1024);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

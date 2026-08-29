@@ -282,12 +282,15 @@ test('the bridge forwards its loopback port to the proxy end to end and exits wi
 test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 30_000 }, async () => {
   const bridgePort = await freePort();
   const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
-  // Wait until the loopback port answers — that is the moment the child has been spawned.
-  for (let i = 0; i < 100; i += 1) {
-    const up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
-    if (up) break;
-    await new Promise((r) => setTimeout(r, 50));
+  // Wait until the loopback port answers — that is the moment the child has been spawned. A loaded
+  // host may take seconds to start two node processes: wait up to 20 s and FAIL LOUDLY if it never
+  // listens, instead of signalling a bridge that is not up yet.
+  let up = false;
+  for (let i = 0; i < 400 && !up; i += 1) {
+    up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
+    if (!up) await new Promise((r) => setTimeout(r, 50));
   }
+  assert.equal(up, true, 'the bridge listened within 20 s');
   child.kill('SIGTERM');
   const status = await new Promise((r) => child.once('exit', (code) => r(code)));
   assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
@@ -451,4 +454,23 @@ test('a CONNECT head larger than the limit is refused (403 malformed-head) even 
     assert.deepEqual(dialed, [], 'nothing dialled');
     assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.MALFORMED), JSON.stringify(proxy.refused));
   } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a stop signal that lands during the bridge start-up window is HELD and delivered to the child once spawned (never lost, never kills the bridge alone)', async () => {
+  const { runBridge } = await import('../lib/egress-bridge.mjs');
+  const { EventEmitter } = await import('node:events');
+  const fakeProc = new EventEmitter(); fakeProc.env = { PATH: process.env.PATH };
+  const dir = scratch('egress-bridge-hold-');
+  const killed = [];
+  const fakeChild = new EventEmitter(); fakeChild.exitCode = null; fakeChild.kill = (sig) => { killed.push(sig); fakeChild.exitCode = 143; process.nextTick(() => fakeChild.emit('exit', null, 'SIGTERM')); };
+  let spawned = false;
+  const spawnFn = () => { spawned = true; return fakeChild; };
+  const p = runBridge({ socketPath: join(dir, 'x.sock'), port: await (async () => { const s = net.createServer(); await new Promise((r) => s.listen(0, '127.0.0.1', r)); const port = s.address().port; await new Promise((r) => s.close(r)); return port; })(), command: ['/bin/true'], spawnFn, proc: fakeProc });
+  // The signal arrives before the spawn: the relay is already installed and holds it.
+  assert.equal(spawned, false); fakeProc.emit('SIGTERM');
+  const code = await p;
+  assert.equal(spawned, true, 'the child was spawned');
+  assert.deepEqual(killed, ['SIGTERM'], 'the held signal was delivered to the child');
+  assert.equal(code, 143);
+  rmSync(dir, { recursive: true, force: true });
 });
