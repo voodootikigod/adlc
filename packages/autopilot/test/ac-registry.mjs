@@ -326,6 +326,7 @@ export const REGISTRY = {
   ],
   84: [
     { fn: 'ac84_workerMirror', file: 'mirror.test.mjs', seam: 'mirror.keepRemote' },
+    { fn: 'ac84_workerMirror', file: 'mirror.test.mjs', seam: 'mirror.cloneTags' },
   ],
   94: [
     { fn: 'ac94_mirrorOutsideWorktree', file: 'mirror.test.mjs', seam: 'mirror.keepStale' },
@@ -353,6 +354,7 @@ export const REGISTRY = {
   21: [
     { fn: 'ac21_recoveryTableRows', file: 'recover.test.mjs', seam: 'recover.deleteRecordDespiteRemoteRef' },
     { fn: 'ac21_resumableRunsAreResumed', file: 'loop.test.mjs', seam: 'loop.ignoreRecoveryActions' },
+    { fn: 'ac21_resumableRunsAreResumed', file: 'loop.test.mjs', seam: 'loop.capBeforeResume' },
   ],
   29: [
     { fn: 'ac29_unlabelEventRecordedAfterTheEffect', file: 'recover.test.mjs', seam: 'recover.recordEventBeforeEffect' },

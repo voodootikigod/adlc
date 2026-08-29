@@ -23,6 +23,9 @@ function fixture() {
   const commitIn = (dir, files, msg) => { writeFiles(dir, files); return commitAll(dir, msg); };
   // Noise the mirrors must never carry: another local branch and a dangling commit.
   git(root, ['branch', 'other', baseOid]);
+  // A tag reachable from the branch (this repository's main carries release tags): a single-branch
+  // clone would fetch it and the mirror's exact-ref check would refuse the mirror (agy r3 c5).
+  git(root, ['tag', 'v0.0.0-base', baseOid]);
   const tree = git(root, ['rev-parse', `${baseOid}^{tree}`]);
   const dangling = git(root, ['commit-tree', tree, '-m', 'dangling']);
   git(root, ['checkout', '-q', 'other']); const otherTip = commitIn(root, { 'other.txt': 'x\n' }, 'other'); git(root, ['checkout', '-q', 'main']);
@@ -47,7 +50,7 @@ export async function ac84_workerMirror() {
     assert.equal(f.has(mirror, f.otherTip), false, "the other branch's commit is absent"); assert.equal(f.has(mirror, f.dangling), false, 'the dangling commit is absent');
     assert.equal(f.has(f.root, f.dangling), true, 'control: the dangling commit exists in REPO_ROOT');
     const clone = gitSpawns(f.ctx).find((a) => a.includes('clone'));
-    assert.deepEqual(clone.filter((a) => a.startsWith('--')), ['--bare', '--no-local', '--single-branch', '--branch']);
+    assert.deepEqual(clone.filter((a) => a.startsWith('--')), ['--bare', '--no-local', '--single-branch', '--no-tags', '--branch']);
   } finally { f.cleanup(); }
 }
 test('AC84: the worker mirror has exactly the issue branch, only core.* config, no hooks, and exactly the objects reachable from BASE_OID + the branch (a planted extra branch and dangling commit are absent)', ac84_workerMirror);

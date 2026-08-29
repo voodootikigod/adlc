@@ -18,7 +18,7 @@ import { loadDenylist } from './selection.mjs';
 import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
 import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest', 'loop.maintainWithoutDenylist', 'loop.dryRunSkipsQuotaGate']);
+registerSeams(['loop.capBeforeResume', 'loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest', 'loop.maintainWithoutDenylist', 'loop.dryRunSkipsQuotaGate']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -71,7 +71,10 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   if (!seam('loop.maintainWithoutDenylist')) ctx.denylist = ctx.denylist ?? await (deps.selection.loadDenylist ?? loadDenylist)({ ctx });
   await maintain.maintainOpenPrs({ ctx, baseOid: ctx.baseOid, deps: deps.maintenanceDeps() });
   const active = maintain.activePrCount(ctx.records.all());
-  if (active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
+  // The PR cap throttles NEW work only: a resumable run is in flight already, and gating it behind the
+  // cap would strand it forever on a repository at the limit (agy r3 c4). Mutation seam
+  // `loop.capBeforeResume`: the cap is checked before the resume branch.
+  if (seam('loop.capBeforeResume') && active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
 
   // §2.1 — a resumable run continues BEFORE any new selection (its worktree/branch would
   // otherwise exclude its own issue forever). One resume per iteration, then the rest.
@@ -84,6 +87,8 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
     out.exitCode = result.state === 'blocked' ? 2 : 0;
     return out;
   }
+
+  if (active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
 
   // §4 — selection.
   const sel = await selection.select({ ctx, pinned: pinnedIssue, force });

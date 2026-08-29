@@ -137,7 +137,10 @@ export async function ac21_resumableRunsAreResumed() {
     const rec = { ...newRecord({ issue: n, token: 'e'.repeat(64), baseOid: fx.baseOid, branch: branchFor(n), stagingBranch: null, stagingPath: null, finalPath: fx.paths.issueWorktree(n), issueRevision: { updatedAt: fx.state.issue.updatedAt }, ticketCache: fx.ticket }), state: 'shaped', creationPhase: null };
     fx.ctx.records.save(rec);
     const recover = await import('../lib/recover.mjs');                      // the REAL classifier (the fixture stubs it to no actions)
+    // The PR cap throttles NEW work only: with the cap already reached the in-flight run still resumes (agy r3 c4).
+    fx.ctx.config = { ...fx.ctx.config, autopilot: { ...fx.ctx.config.autopilot, maxOpenPrs: 0 } };
     const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ recover }), pinnedIssue: null });
+    assert.notEqual(it.outcome, 'sleep:pr-cap', 'a resumable run is not starved by the PR cap');
     assert.deepEqual(it.document.resume, { action: 'resume-shaped', issue: n }, 'recovery classified the row and the loop consumed it');
     assert.equal(it.outcome, 'resumed:done', JSON.stringify(it.document.run));
     assert.equal(fx.ctx.records.load(n).state, 'done');

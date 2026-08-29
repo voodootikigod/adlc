@@ -21,6 +21,7 @@ import { ensureTrackingRef } from './gate-repo.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
+  'mirror.cloneTags',         // the worker mirror clone fetches the tags reachable from the branch (agy r3)
   'mirror.keepRemote',        // the clone's remote.* / non-core config is left in place
   'mirror.keepStale',         // an existing mirror is reused instead of recreated
   'mirror.skipVerify',        // the gate mirror is not verified (tips, ref set, object set)
@@ -81,7 +82,10 @@ export async function createWorkerMirror({ ctx, issue }) {
     rmSync(mirror, { recursive: true, force: true });
   }
   mkdirSync(ctx.paths.runDir(n), { recursive: true });
-  await must(ctx, ctx.repoRoot, [...NO_HOOKS, 'clone', '-q', '--bare', '--no-local', '--single-branch', '--branch', branch, ctx.repoRoot, mirror], 'mirror-clone-failed');
+  // `--no-tags`: a single-branch clone still fetches every tag reachable from the branch, and this
+  // repository carries release tags on main — the exact-ref check below would refuse every mirror
+  // (agy r3 c5). Mutation seam `mirror.cloneTags`: tags come along.
+  await must(ctx, ctx.repoRoot, [...NO_HOOKS, 'clone', '-q', '--bare', '--no-local', '--single-branch', ...(active('mirror.cloneTags') ? [] : ['--no-tags']), '--branch', branch, ctx.repoRoot, mirror], 'mirror-clone-failed');
   if (!active('mirror.keepRemote')) {
     await must(ctx, mirror, ['remote', 'remove', 'origin'], 'mirror-config');
     await unsetNonCoreConfig({ ctx, dir: mirror });
@@ -131,7 +135,7 @@ export async function cloneGateRepo({ ctx, issue, k, attestedHead, baseOid }) {
   const runDir = ctx.paths.runDir(n);
   const path = join(runDir, `gate-repo-${k}`);
   rmSync(path, { recursive: true, force: true });
-  await must(ctx, runDir, [...NO_HOOKS, 'clone', '-q', '--no-hardlinks', '--single-branch', '--branch', branchFor(n), gate, path], 'gate-repo-clone');
+  await must(ctx, runDir, [...NO_HOOKS, 'clone', '-q', '--no-hardlinks', '--single-branch', '--no-tags', '--branch', branchFor(n), gate, path], 'gate-repo-clone');
   await must(ctx, path, ['remote', 'remove', 'origin'], 'gate-repo-config');
   await unsetNonCoreConfig({ ctx, dir: path });
   emptyHooks(join(path, '.git'));
