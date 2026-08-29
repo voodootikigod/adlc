@@ -535,3 +535,17 @@ test('every declared grant is actually honoured when the path exists', () => {
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('canWrite: a read-only entry under HOME or the private tmp (an attested file leaf) is NOT writable, though its parent root is (agy fleet r7 c1)', async () => {
+  const { BoundedModelSandbox, PRIVATE_TMP } = await import('../lib/bounded-model-plane.mjs');
+  const home = '/tmp/fleet-home-x/home';
+  const s = new BoundedModelSandbox({
+    backend: { name: 'bubblewrap' }, worktree: '/wt', writableRoots: [], home,
+    readOnlyPaths: ['/usr', `${home}/pinned.json`, `${PRIVATE_TMP}/ro-tool`], homeBinds: [], homeWritableFiles: [], homeScratchDirs: [],
+    exec: async () => ({ status: 0, stdout: '', stderr: '' }),
+  });
+  assert.equal(s.canWrite(`${home}/scratch.txt`), true, 'HOME itself is writable');
+  assert.equal(s.canWrite(`${home}/pinned.json`), false, 'a read-only leaf under HOME is not');
+  assert.equal(s.canWrite(`${PRIVATE_TMP}/ro-tool`), false, 'a read-only leaf under the private tmp is not');
+  assert.equal(s.canWrite(`${PRIVATE_TMP}/x`), true, 'the private tmp otherwise is');
+});

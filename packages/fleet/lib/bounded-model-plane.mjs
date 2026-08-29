@@ -238,6 +238,9 @@ export class BoundedModelSandbox {
   canWrite(path) {
     const p = norm(path);
     if (bindTargets(this.homeBinds).some((t) => isUnder(t, p))) return false;
+    // A read-only entry inside HOME or the private tmp (an attested file leaf) is bound read-only
+    // over the writable root; the predicate says so too (agy fleet r7 c1).
+    if (this.readOnlyPaths.some((r) => isUnder(r, p))) return false;
     const roots = [this.worktree, ...this.writableRoots, this.home, PRIVATE_TMP, '/dev'];
     return roots.some((r) => isUnder(r, p));
   }

@@ -51,6 +51,8 @@ export function resolveTrustedBin(bin, pathStr, worktree) {
  */
 /** The effective review timeout: the configured one, lowered (never raised) by a per-call bound. */
 export function boundedTimeout(base, call) {
+  // A non-positive bound means "no bound" (codex r2 contract, pinned by test); an EXPIRED budget
+  // never reaches here as 0 — every scheduler remainder is floored at 1 ms (agy fleet r7 c3 declined).
   return Number.isFinite(call) && call > 0 ? Math.max(1, Math.min(base, Math.floor(call))) : base;
 }
 
