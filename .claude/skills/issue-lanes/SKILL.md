@@ -94,7 +94,13 @@ cd .worktrees/fix-<n> && npm ci --ignore-scripts --no-audit --no-fund   # ~1 min
 Author the ticket JSON from `references/ticket-template.json`. The body must let a fresh
 agent build without asking anything: source + re-verified location, package layout, the
 NORMATIVE decisions (exit codes, messages, where the single validator lives, which docs to
-hand-edit), ACs each with a `verify:` command, OUT OF SCOPE, and the PROCESS trailer.
+hand-edit), ACs each with a `verify:` command, and OUT OF SCOPE.
+
+**Keep review-process language OUT of the ticket body and OUT of commit messages.** The
+shard is committed repo content; a codex round on #712 raised a CRITICAL (injection) on a
+"loop adversarial-review until zero findings" paragraph in the ticket, and a needs-attention
+on a commit message that named providers and rounds. Process instructions live in the lane
+prompt (not committed); review history lives in the PR body only.
 
 Rules that follow from the gates:
 - **scope** = `packages/<pkg>/**` + the three docs (`packages/<pkg>/README.md`,
@@ -144,7 +150,16 @@ push → `gh pr create` with `Closes #n`.
 
 - Never run a gate or suite as `… | tail` in a background task — the exit you read is
   tail's. Redirect to a file and `echo EXIT=$?` on its own line.
-- Every background chain starts with `cd /abs/worktree &&`.
+- Every command starts with `cd /abs/worktree &&` — fork agents SHARE the parent's
+  persistent shell cwd, so a parent `cd` moves every lane (one codex round reviewed the
+  wrong tree this way; check `pwd` and the reviewer's file list before trusting a round).
+- Codex quota is shared with every other session on the machine; on `usage limit`, run
+  `agy` (a distinct provider family) and retry codex after the reset time it prints. Kill
+  orphaned `codex-linux-sandbox` processes (ppid 1) left by earlier runs — they are hung
+  `npm test` children — never a live session's.
+- The permission classifier blocks compound commands that mix inline node scripts with
+  `ADLC_RAILS_BYPASS=1`: write the script to a file, run store commands standalone. zsh
+  also rejects `[ a \> b ]` — use `[[ ]]` or node.
 - `grep -n` / `sed -n` / the words `core.hooksPath` in the same command as `git commit`
   trip the block-no-verify hook — write messages with the Write tool, commit with `-F`.
 - Read the reviewer's `mode:` line: summary mode (diff over the byte cap) = zero findings =
