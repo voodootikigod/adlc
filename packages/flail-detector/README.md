@@ -37,7 +37,7 @@ flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n
 | Code | Meaning |
 |------|---------|
 | `0` | Gate passes — no flail signals detected (clean) |
-| `1` | Operational error — file not found, bad argument, or **`could-not-analyze`**: the log had nothing to analyze (no non-empty lines, or `--scope` given but no file path could be extracted). Never a pass — nothing is recorded even with `--record`. |
+| `1` | Operational error — file not found, bad argument, or **`could-not-analyze`**: the log had nothing to analyze (no non-empty lines). Never a pass — nothing is recorded even with `--record`. |
 | `2` | Gate fails — one or more flail signals triggered |
 
 ## Signals
@@ -124,9 +124,8 @@ Machine-readable (`--json`):
 }
 ```
 
-When the log has nothing to analyze — it is empty or whitespace-only, or
-`--scope` was given but no line yields a file path — the verdict is
-`could-not-analyze` and the exit code is 1, not 0:
+When the log has nothing to analyze — it is empty or whitespace-only — the
+verdict is `could-not-analyze` and the exit code is 1, not 0:
 
 ```json
 {
@@ -141,6 +140,13 @@ In text mode the same outcome prints `flail-detector: could not analyze — <rea
 to stderr. It is an operational outcome, never a pass: a supervisor pointed at a log
 path that was never written must not get a green P4 gate, and `--record` writes no
 `flail-check` entry for it (issue #622).
+
+Scope is deliberately not part of this decision: a well-behaved session may contain
+no writes at all, and supervisors such as `@adlc/fleet` pass the ticket's `--scope`
+on every consult — so a log with lines but no extractable file path is analyzed
+normally (repeated-error, size and budget signals still fire; the scope signals
+simply have nothing to flag). Under-extraction of paths from real logs is issue
+#623's domain.
 
 ## Examples
 

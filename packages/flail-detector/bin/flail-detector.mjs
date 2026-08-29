@@ -68,9 +68,8 @@ Signals detected:
 Output:
   verdict: 'flail' | 'clean' | 'could-not-analyze'
   On flail: recommendation block — "Kill the session. Append these dead-ends..."
-  could-not-analyze: the log had nothing to analyze (no non-empty lines, or
-                     --scope given but no file path could be extracted). This
-                     is an operational outcome, never a pass: nothing is
+  could-not-analyze: the log had nothing to analyze (no non-empty lines).
+                     This is an operational outcome, never a pass: nothing is
                      recorded even with --record, and the exit code is 1.
 
 Exit codes:
@@ -154,7 +153,7 @@ const { lines, bytes } = parseLog(raw);
 // an operational outcome BEFORE analyze()/--record so a never-written log path
 // can never mint P4 evidence. Exit 1, like any other operational error.
 
-const analyzability = assessAnalyzability({ lines, scopes });
+const analyzability = assessAnalyzability({ lines });
 if (!analyzability.ok) {
   if (values.json) {
     printJson({ verdict: 'could-not-analyze', reasons: analyzability.reasons, bytes, signals: [] });

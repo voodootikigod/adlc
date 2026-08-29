@@ -9,40 +9,30 @@
 // nobody analyzed. "Nothing to analyze" is an operational state, not a verdict:
 // this module names it so the CLI can refuse to record and exit 1.
 //
+// Scope is deliberately NOT part of this decision. A well-behaved session may
+// contain no writes at all, and a supervisor (e.g. @adlc/fleet) passes the
+// ticket's --scope on every consult — so "lines but no extractable path" is a
+// normal clean log, not an unanalyzable one: repeated-error, size and budget
+// signals still run on it and the scope signals simply have nothing to flag.
+// Under-extraction of paths from real logs is issue #623's domain.
+//
 // Pure and deterministic; never mutates its inputs.
-
-import { extractPath } from './signals.mjs';
 
 export const REASON_NO_LINES =
   'log has no non-empty lines (empty or whitespace-only file)';
-export const REASON_NO_SCOPE_PATHS =
-  '--scope was given but no file path could be extracted from the log — scope analysis would be vacuous';
 
 /**
- * Assess whether the parsed log carries enough signal to be analyzed.
+ * Assess whether the parsed log carries anything to analyze.
  *
- * Not analyzable when:
- *   (a) the log has zero non-empty lines, or
- *   (b) `scopes` is non-empty and no line yields a file path through the SAME
- *       extractor the scope-violation / edit-churn signals use — so the scope
- *       analysis those signals would perform is vacuous, not clean.
- *
- * Both reasons are reported when both apply.
+ * Not analyzable when the log has zero non-empty lines (empty or
+ * whitespace-only file).
  *
  * @param {object} opts
  * @param {string[]} opts.lines - text lines from parseLog
- * @param {string[]} [opts.scopes] - glob patterns from --scope (empty/absent = no scope check)
  * @returns {{ ok: boolean, reasons: string[] }}
  */
-export function assessAnalyzability({ lines, scopes = [] }) {
+export function assessAnalyzability({ lines }) {
   const nonEmpty = lines.filter((line) => typeof line === 'string' && line.trim().length > 0);
-  const scopeRequested = Array.isArray(scopes) && scopes.length > 0;
-  const anyPath = scopeRequested && nonEmpty.some((line) => extractPath(line) !== null);
-
-  const reasons = [
-    ...(nonEmpty.length === 0 ? [REASON_NO_LINES] : []),
-    ...(scopeRequested && !anyPath ? [REASON_NO_SCOPE_PATHS] : []),
-  ];
-
+  const reasons = nonEmpty.length === 0 ? [REASON_NO_LINES] : [];
   return { ok: reasons.length === 0, reasons };
 }
