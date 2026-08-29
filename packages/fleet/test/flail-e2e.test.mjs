@@ -254,7 +254,7 @@ test('a commit failure reaches the transcript the flail check analyzes', async (
   const io = makeIo('worker ok\n');
   io.git = () => (...args) => {
     if (args[0] === 'rev-parse') return 'SHA';
-    if (args[0] === 'commit') throw new Error('nothing to commit');
+    if (args.includes('commit')) throw new Error('nothing to commit');
     return '';
   };
   const deps = buildLiveDeps({ repo: '/repo', config, statusDir, sandboxSpec, reviewRunner: () => ({ ok: true, findings: [] }), io });

@@ -461,3 +461,26 @@ test('a POISONED mirror is refused before any host git runs inside it: assertBar
     assert.equal(again.ok, true, JSON.stringify(again));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('assertWorktreeLink: a mirror worktree whose .git link was rewritten to another gitdir, replaced by a symlink, or removed is refused; the genuine link passes', async () => {
+  const { assertWorktreeLink } = await import('../lib/git-mirror.mjs');
+  const { symlinkSync, unlinkSync, readFileSync: rf } = await import('node:fs');
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const link = join(a.path, '.git');
+    const genuine = rf(link, 'utf8');
+    assert.ok(assertWorktreeLink({ path: a.path, gitDirRoot: mirror }).gitdir.startsWith(realpathSync(join(mirror, 'worktrees'))), 'the genuine link points into the mirror');
+    const evil = join(root, 'evil.git'); sh(root, 'init', '-q', '--bare', evil);
+    writeFileSync(link, `gitdir: ${evil}\n`);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /outside/, 'a link to a foreign gitdir is refused');
+    writeFileSync(link, `gitdir: ${join(repo, '.git')}\n`);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /outside/, 'a link to the CALLER repository is refused too');
+    unlinkSync(link); symlinkSync(join(mirror, 'worktrees'), link);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /not a regular file/, 'a symlinked .git is refused');
+    unlinkSync(link);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /missing/, 'a missing .git is refused (git would walk up to an enclosing repository)');
+    writeFileSync(link, genuine);
+    assert.ok(assertWorktreeLink({ path: a.path, gitDirRoot: mirror }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

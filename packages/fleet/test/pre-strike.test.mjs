@@ -157,3 +157,16 @@ test('the pre-strike helper is spawned with a 1 MiB per-stream output budget (it
     assert.equal(PRE_STRIKE_MAX_OUTPUT_BYTES, 1024 * 1024);
   } finally { rmSync(statusDir, { recursive: true, force: true }); }
 });
+
+test('the host-side commit of the worker output runs git with the host-safe overrides (fs monitor, hook path and ssh command disabled) on every invocation', async () => {
+  const { HOST_SAFE_GIT_FLAGS } = await import('../lib/git-mirror.mjs');
+  const rec = newRec();
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-hostsafe-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', config, statusDir, sandboxSpec, reviewRunner: null, seats: null, io: fakeIo(rec) });
+    await deps.dispatch({ ticket, worktree: '/repo/.worktrees/fleet-T1', strike: 1, branch: 'fleet/t1' });
+    const commitCalls = rec.git.filter((args) => args.includes('commit') || args.includes('add'));
+    assert.ok(commitCalls.length >= 2, `add + commit ran: ${JSON.stringify(rec.git).slice(0, 300)}`);
+    for (const args of commitCalls) assert.deepEqual(args.slice(0, HOST_SAFE_GIT_FLAGS.length), [...HOST_SAFE_GIT_FLAGS], `host-safe overrides lead the argv: ${JSON.stringify(args)}`);
+  } finally { rmSync(statusDir, { recursive: true, force: true }); }
+});

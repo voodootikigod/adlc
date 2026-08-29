@@ -325,7 +325,7 @@ test('a commit failure after a successful call PRESERVES the parsed usage', asyn
   // The routine way to reach this path: the worker succeeded but produced
   // nothing committable, so the commit errors.
   io.git = () => (...args) => {
-    if (args[0] === 'commit') throw new Error('nothing to commit, working tree clean');
+    if (args.includes('commit')) throw new Error('nothing to commit, working tree clean');
     if (args[0] === 'rev-parse') return 'SHA';
     return '';
   };
@@ -412,7 +412,7 @@ test('a commit failure is reported as a FAILURE, not as a timeout', async () => 
   const io = fakeIo(rec, env);
   io.spawnWorker = async () => ({ status: 0, stdout: '{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":54,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}', stderr: '' });
   io.git = () => (...args) => {
-    if (args[0] === 'commit') throw new Error('nothing to commit, working tree clean');
+    if (args.includes('commit')) throw new Error('nothing to commit, working tree clean');
     if (args[0] === 'rev-parse') return 'SHA';
     return '';
   };

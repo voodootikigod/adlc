@@ -126,18 +126,19 @@ function refuse(client, ctx, target, reason) {
   client.end(REPLY.forbidden);
 }
 
-/** True for loopback, link-local, private, CGNAT, multicast, unspecified and reserved addresses (v4, v6, v4-mapped). */
+const v4ToInt = (ip) => ip.split('.').reduce((n, o) => (n * 256) + Number(o), 0);
+const inCidr4 = (ip, net4, bits) => (bits === 0 ? true : Math.floor(v4ToInt(ip) / 2 ** (32 - bits)) === Math.floor(v4ToInt(net4) / 2 ** (32 - bits)));
+/** IANA special-purpose IPv4 space (RFC 6890 and successors): nothing here is a public model endpoint. */
+export const NON_PUBLIC_V4 = Object.freeze([
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
+  ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+]);
+
+/** True for loopback, link-local, private, CGNAT, multicast, unspecified, documentation and reserved addresses (v4, v6, v4-mapped, 6to4/NAT64/Teredo-embedded). */
 export function isPublicAddress(ip) {
   const v = net.isIP(ip);
-  if (v === 4) {
-    const [a, b] = ip.split('.').map(Number);
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false;
-    return true;
-  }
+  if (v === 4) return !NON_PUBLIC_V4.some(([net4, bits]) => inCidr4(ip, net4, bits));
   if (v === 6) {
     const low = ip.toLowerCase();
     const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
@@ -146,6 +147,11 @@ export function isPublicAddress(ip) {
     if (/^f[cd]/.test(low)) return false;            // fc00::/7 unique local
     if (/^fe[89ab]/.test(low)) return false;         // fe80::/10 link-local
     if (/^ff/.test(low)) return false;               // multicast
+    if (/^2001:db8:/.test(low)) return false;        // documentation
+    if (/^100:(0:0:0:|:)/.test(low) || low.startsWith('100::')) return false; // discard-only
+    if (/^2002:/.test(low)) return false;            // 6to4 (embeds an IPv4 the proxy cannot vet)
+    if (/^2001:0?:/.test(low) || /^2001::/.test(low)) return false; // Teredo (obfuscated embedded IPv4)
+    if (/^64:ff9b:/.test(low)) return false;         // NAT64 well-known prefix (embedded IPv4)
     return true;
   }
   return false;
@@ -208,6 +214,11 @@ function handleClient(client, ctx) {
     buffered = Buffer.concat([buffered, chunk]);
     const idx = buffered.indexOf(HEAD_TERMINATOR);
     if (idx === -1 && buffered.length <= MAX_HEAD_BYTES) return;
+    // A head larger than the limit is refused whether or not its terminator arrived (codex r15 #2).
+    if (idx === -1 || idx + HEAD_TERMINATOR.length > MAX_HEAD_BYTES) {
+      client.removeListener('data', onHead); ctx.clearTimeoutFn(headTimer); client.pause();
+      return refuse(client, ctx, NO_TARGET, REFUSAL.MALFORMED);
+    }
     // Decision point: stop consuming here and pause, so bytes that arrive before
     // the tunnel is up wait in the stream instead of being emitted to nobody.
     client.removeListener('data', onHead);

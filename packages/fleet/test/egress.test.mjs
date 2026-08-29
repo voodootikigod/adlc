@@ -403,8 +403,8 @@ import { PassThrough } from 'node:stream';
 import { isPublicAddress, resolveVettedAddress, REFUSAL as EGRESS_REFUSAL } from '../lib/egress-proxy.mjs';
 
 test('isPublicAddress: loopback, RFC1918, link-local, CGNAT, multicast, unspecified, ULA and v4-mapped private are NOT public; ordinary unicast is', () => {
-  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1']) assert.equal(isPublicAddress(ip), false, ip);
-  for (const ip of ['93.184.216.34', '172.32.0.1', '8.8.8.8', '2606:4700::1111', '::ffff:93.184.216.34']) assert.equal(isPublicAddress(ip), true, ip);
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '192.0.0.8', '192.0.2.1', '192.88.99.1', '198.18.0.1', '198.19.255.255', '198.51.100.7', '203.0.113.9', '240.0.0.1', '255.255.255.255', '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '::ffff:192.0.2.1', '2001:db8::1', '2002:c000:0204::1', '64:ff9b::7f00:1', '2001::1', '100::1']) assert.equal(isPublicAddress(ip), false, ip);
+  for (const ip of ['93.184.216.34', '172.32.0.1', '8.8.8.8', '198.17.0.1', '198.20.0.1', '192.0.3.1', '2606:4700::1111', '2a00:1450::1', '::ffff:93.184.216.34']) assert.equal(isPublicAddress(ip), true, ip);
   assert.equal(isPublicAddress('not-an-ip'), false);
 });
 
@@ -431,5 +431,18 @@ test('the proxy dials the VETTED address of an allowlisted name and refuses (403
     assert.match(ok.status, /^HTTP\/1\.1 200/, `established: ${ok.status}`);
     assert.deepEqual(dialed, ['93.184.216.34:443'], 'the tunnel dials the vetted ADDRESS, not the name');
     ok.socket.destroy();
+  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a CONNECT head larger than the limit is refused (403 malformed-head) even when its terminator arrives — the size limit is not bypassable by terminating the head', async () => {
+  const dir = scratch('egress-bighead-');
+  const dialed = [];
+  const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['api.example:443'], connect: (port, host) => { dialed.push(host); const s = new PassThrough(); process.nextTick(() => s.emit('connect')); return s; }, lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
+  try {
+    const big = `CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\nX-Pad: ${'p'.repeat(9000)}\r\n\r\n`;
+    const r = await request({ path: proxy.socketPath }, big);
+    assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
+    assert.deepEqual(dialed, [], 'nothing dialled');
+    assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.MALFORMED), JSON.stringify(proxy.refused));
   } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
 });

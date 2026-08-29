@@ -14,7 +14,7 @@
 // non-zero exit) so tests can drive real git and record/inject failures per step.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, realpathSync, readdirSync } from 'node:fs';
+import { existsSync, realpathSync, readdirSync, lstatSync, readFileSync } from 'node:fs';
 import { isAbsolute, resolve, join } from 'node:path';
 
 export const FETCHED_REF_PREFIX = 'refs/fleet/fetched/';
@@ -112,6 +112,28 @@ export function assertMirrorConfigPristine({ mirror, gitAt = defaultGit } = {}) 
   const liveHooks = existsSync(hooksDir) ? readdirSync(hooksDir).filter((f) => !f.endsWith('.sample')) : [];
   if (liveHooks.length) throw new Error(`mirror ${mirror} is poisoned: live hooks (${liveHooks.join(', ')})`);
   return { keys };
+}
+
+/**
+ * A linked worktree's `.git` is a FILE the worker can rewrite (`gitdir: /anything`), which would make
+ * the host's next git command inside the worktree honour a git directory of the worker's choosing.
+ * Before the host runs git there, the link must be a regular file naming a directory under
+ * `<gitDirRoot>/worktrees/` (the mirror, or the caller repository's .git) — codex r15 #1.
+ */
+export function assertWorktreeLink({ path, gitDirRoot } = {}) {
+  requireArgs('assertWorktreeLink', { path, gitDirRoot }, ['path', 'gitDirRoot']);
+  const link = join(path, '.git');
+  let st;
+  try { st = lstatSync(link); } catch (e) { throw new Error(`worktree ${path}: .git is missing (${errorText(e)}); refusing to run git there`); }
+  if (!st.isFile()) throw new Error(`worktree ${path}: .git is not a regular file; refusing to run git there`);
+  const text = readFileSync(link, 'utf8').trim();
+  const m = /^gitdir:\s*(.+)$/.exec(text);
+  if (!m) throw new Error(`worktree ${path}: .git does not name a gitdir; refusing to run git there`);
+  const target = isAbsolute(m[1]) ? m[1] : resolve(path, m[1]);
+  let real; let rootReal;
+  try { real = realpathSync(target); rootReal = realpathSync(join(gitDirRoot, 'worktrees')); } catch (e) { throw new Error(`worktree ${path}: gitdir ${target} is unreadable (${errorText(e)})`); }
+  if (real !== rootReal && !real.startsWith(rootReal + '/')) throw new Error(`worktree ${path}: .git points at ${real}, outside ${rootReal}; refusing to run git there`);
+  return { gitdir: real };
 }
 
 export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {

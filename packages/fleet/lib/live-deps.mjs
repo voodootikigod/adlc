@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
+import { assertWorktreeLink, assertMirrorConfigPristine, HOST_SAFE_GIT_FLAGS } from './git-mirror.mjs';
 import { buildBoundedModelSandbox, bridgeArgv, mirrorCreateWorktree, mirrorFetchBack, mirrorCleanup, policyFromConfig } from './extensions.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
@@ -532,7 +533,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
         try {
-          worktrees.commitWorker(worktree, ticket.id, io.git(worktree));
+          // The host is about to run git INSIDE the worker's worktree (codex r15 #1): the worktree's
+          // `.git` link must still point into the expected git directory, the mirror (if any) must be
+          // pristine, and the commands carry the host-safe overrides. A failure is a strike, never a run.
+          if (existsSync(worktree)) assertWorktreeLink({ path: worktree, gitDirRoot: mirrorMode ? config.modelPlaneGitMirror : join(repo, '.git') });
+          if (mirrorMode) assertMirrorConfigPristine({ mirror: config.modelPlaneGitMirror, gitAt: io.git });
+          const hostGit = io.git(worktree);
+          worktrees.commitWorker(worktree, ticket.id, (...args) => hostGit(...HOST_SAFE_GIT_FLAGS, ...args));
           // fleet-ext item 12: bring the worker branch back from the mirror by
           // compare-and-swap and refresh the gate worktree. A failure here is
           // terminal for the run — the scheduler maps it to `mirror-fetch-failed`.
