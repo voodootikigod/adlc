@@ -74,6 +74,12 @@ describe('assessAnalyzability (AC6)', () => {
     assert.deepEqual(r, { ok: true, reasons: [] });
   });
 
+  test('a single non-whitespace character is a non-empty line', () => {
+    assert.deepEqual(assessAnalyzability({ lines: ['x'], scopes: [] }), { ok: true, reasons: [] });
+    assert.deepEqual(assessAnalyzability({ lines: [' x '], scopes: [] }), { ok: true, reasons: [] });
+    assert.equal(assessAnalyzability({ lines: ['x'], scopes: ['src/**'] }).ok, false);
+  });
+
   test('scopes undefined is treated as no scope', () => {
     const r = assessAnalyzability({ lines: ['Build started'] });
     assert.deepEqual(r, { ok: true, reasons: [] });
@@ -219,9 +225,12 @@ describe('CLI: could-not-analyze outcome', () => {
     assert.equal(JSON.parse(r.stdout).verdict, 'flail');
   });
 
-  test('--help documents the could-not-analyze outcome', () => {
+  test('--help documents could-not-analyze as an exit-1 operational outcome', () => {
     const r = runBin(['--help'], dir);
     assert.equal(r.status, 0);
-    assert.match(r.stdout, /could-not-analyze/);
+    assert.match(r.stdout, /verdict: 'flail' \| 'clean' \| 'could-not-analyze'/);
+    // the exit-code table must file could-not-analyze under 1, matching the CLI
+    assert.match(r.stdout, /^\s+1\s+operational error \(.*could-not-analyze\)$/m);
+    assert.doesNotMatch(r.stdout, /^\s+[02]\s+.*could-not-analyze/m);
   });
 });
