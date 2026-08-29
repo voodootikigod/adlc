@@ -103,6 +103,11 @@ on a commit message that named providers and rounds. Process instructions live i
 prompt (not committed); review history lives in the PR body only.
 
 Rules that follow from the gates:
+- **Find the consumers before deciding behaviour.** `grep -rln "<pkg-name>\|<bin-name>" packages/*/lib plugins/*/` —
+  a package's exit codes are a contract other packages parse. #622's ticket added an
+  exit-1 reason (scope given, no extractable paths) that turned every fleet consult into a
+  fail-open, because fleet passes `--scope` on every call; CI's root suite caught it, the
+  lane's package segment could not. Name the consumers' test files in the ACs.
 - **scope** = `packages/<pkg>/**` + the three docs (`packages/<pkg>/README.md`,
   `docs/tools/<pkg>.md`, `apps/docs/content/docs/toolkit/<pkg>.mdx` — hand-maintained
   mirrors, never regenerated).
