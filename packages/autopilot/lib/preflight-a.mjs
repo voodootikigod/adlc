@@ -31,7 +31,8 @@ registerSeams([
   'preflight.ignoreExclude',       // missing .git/info/exclude entries do not fail phase A
   'preflight.anyModelFamily',      // an underivable model family passes
   'preflight.trustInheritedTools', // tools are taken from the first PATH hit with no trust check
-  'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared
+  'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared,
+  'preflight.skipPinWhenPathSet',
 ]);
 
 const PERM = (m) => m & 0o7777;
@@ -77,7 +78,13 @@ export function checkExclude({ repoRoot, readFile = (p) => readFileSync(p, 'utf8
 }
 
 function pinTools(ctx) {
-  if (ctx.pinned && ctx.env.path) return;
+  // Re-entrance guard on CONCRETE pins, never on object truthiness: a fresh context
+  // starts with `pinned: {}` and the inherited PATH and must still be pinned (codex r2 B1).
+  // Mutation seam `preflight.skipPinWhenPathSet`: the truthiness guard (pinning never runs).
+  const pinnedAlready = active('preflight.skipPinWhenPathSet')
+    ? Boolean(ctx.pinned && ctx.env.path)
+    : Boolean(ctx.pinned?.gh && ctx.pinned?.git && ctx.pinned?.adlc && ctx.env.path);
+  if (pinnedAlready) return;
   const uid = ctx.uid ?? process.getuid();
   let r;
   const opts = { pathValue: ctx.inherited?.PATH ?? '', repoRoot: ctx.repoRoot, uid, trustedBinDirs: ctx.local?.trustedBinDirs ?? null, ...(ctx.toolchain ?? {}) };

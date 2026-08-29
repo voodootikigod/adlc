@@ -210,3 +210,22 @@ export async function ac76_binaryBlobsFailClosed() {
   } finally { f.cleanup(); }
 }
 test('AC76: a binary blob added in scope fails the actual-diff check closed (binary-file) — its bytes cannot be secret-scanned', ac76_binaryBlobsFailClosed);
+
+export async function ac76_everySecretLiteralIsScanned() {
+  // The actual-diff secret scan receives EVERY key-bearing literal the context knows (not only the manifest key).
+  const f = fixture();
+  try {
+    const token = 'plain-credential-value-0123456789abcdef';       // matches no SECRET_PATTERN: only the literal list can catch it
+    f.ctx.secretValues = [f.ctx.key, token];
+    const hit = await f.check(f.commit({ 'packages/foo/lib/a.mjs': `export const a = '${token}';\n` }));
+    assert.equal(hit.code, 'secret-in-diff', JSON.stringify(hit));
+    assert.ok(hit.secretHits.some((h) => h.pattern === 'orchestrator secret value'), 'the hit names the literal class');
+    assert.ok(!JSON.stringify(hit).includes(token), 'the literal itself never appears in the result');
+  } finally { f.cleanup(); }
+  // The production wiring: buildContext exposes the same literal set the redactor uses (credential token included).
+  const { createSequenceFixture } = await import('./helpers/sequence-fixture.mjs');
+  const fx = await createSequenceFixture();
+  try { assert.ok(Array.isArray(fx.ctx.secretValues) && fx.ctx.secretValues.includes('fake-access-token'), 'the credential token is in ctx.secretValues'); }
+  finally { fx.cleanup(); }
+}
+test('AC76: the actual-diff secret scan covers every orchestrator secret literal (credential token included), never only the manifest key', { timeout: 120_000 }, ac76_everySecretLiteralIsScanned);

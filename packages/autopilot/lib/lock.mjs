@@ -7,10 +7,15 @@
 // a losing racer's rename fails and it exits 1 `lock-held`. Release checks the
 // token before removing.
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync } from 'node:fs';
+
+registerSeams(['lock.twoStepPublish']);
+
+/** The fs surface `acquireLock` publishes through (injectable so a test can record the ORDER of the steps). */
+export const LOCK_FS = Object.freeze({ mkdirSync, mkdtempSync, writeFileSync, renameSync, rmSync });
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { active } from './mutations.mjs';
+import { registerSeams, active } from './mutations.mjs';
 
 export const LOCK_DIR_NAME = 'autopilot.lock';
 export const OWNER_FILE = 'owner.json';
@@ -23,10 +28,10 @@ export class LockHeldError extends Error {
 
 export const ownerPath = (lockDir) => join(lockDir, OWNER_FILE);
 
-function writeAtomic(path, data) {
+function writeAtomic(path, data, fsx = LOCK_FS) {
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
-  renameSync(tmp, path);
+  fsx.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+  fsx.renameSync(tmp, path);
 }
 
 export function readOwner(lockDir) {
@@ -55,7 +60,8 @@ export function isStale(owner, { now = Date.now(), pidAlive, pidStartTimeOf }) {
  * Acquire. Returns { token, lockDir, heartbeat(), release() }; throws LockHeldError.
  * `self` = { pid, pidStartTime }; `probes` as in isStale.
  */
-export function acquireLock(adlcDir, { self, probes, now = Date.now, token = randomBytes(32).toString('hex') } = {}) {
+export function acquireLock(adlcDir, { self, probes, now = Date.now, token = randomBytes(32).toString('hex'), fsImpl = null } = {}) {
+  const fsx = fsImpl ? { ...LOCK_FS, ...fsImpl } : LOCK_FS;
   const lockDir = join(adlcDir, LOCK_DIR_NAME);
   const existing = readOwner(lockDir);
   if (existing || existsSync(lockDir)) {
@@ -63,19 +69,36 @@ export function acquireLock(adlcDir, { self, probes, now = Date.now, token = ran
     if (!active('lock.alwaysAcquire') && !isStale(existing, { now: now(), ...probes })) throw new LockHeldError(existing);
     // Reclaim atomically: exactly one racer's rename succeeds.
     const quarantine = `${lockDir}.stale-${token}`;
-    try { renameSync(lockDir, quarantine); rmSync(quarantine, { recursive: true, force: true }); }
+    try { fsx.renameSync(lockDir, quarantine); fsx.rmSync(quarantine, { recursive: true, force: true }); }
     catch (e) { if (e.code !== 'ENOENT') throw new LockHeldError(readOwner(lockDir)); }
   }
-  try { mkdirSync(lockDir, { recursive: false }); }
-  catch (e) { if (e.code === 'EEXIST') throw new LockHeldError(readOwner(lockDir)); throw e; }
   const owner = { pid: self.pid, pidStartTime: self.pidStartTime ?? null, token, heartbeatAt: new Date(now()).toISOString() };
-  writeAtomic(ownerPath(lockDir), owner);
+  if (active('lock.twoStepPublish')) {
+    // Mutation seam `lock.twoStepPublish`: the directory appears BEFORE its owner file (the gap a
+    // concurrent acquirer reads as "no owner" and reclaims).
+    try { fsx.mkdirSync(lockDir, { recursive: false }); }
+    catch (e) { if (e.code === 'EEXIST') throw new LockHeldError(readOwner(lockDir)); throw e; }
+    writeAtomic(ownerPath(lockDir), owner, fsx);
+  } else {
+    // Atomic publish (codex r2 A6): the owner file is written into a private staging
+    // directory FIRST and the directory is renamed into place, so the lock directory is
+    // never visible without its owner. `rename` onto an existing non-empty directory
+    // fails, so exactly one publisher wins a race.
+    const staging = fsx.mkdtempSync(`${lockDir}.new-`);
+    writeAtomic(ownerPath(staging), owner, fsx);
+    try { fsx.renameSync(staging, lockDir); }
+    catch (e) {
+      fsx.rmSync(staging, { recursive: true, force: true });
+      if (['ENOTEMPTY', 'EEXIST', 'EBUSY', 'EPERM'].includes(e.code)) throw new LockHeldError(readOwner(lockDir));
+      throw e;
+    }
+  }
   return {
     token, lockDir,
     heartbeat() {
       const cur = readOwner(lockDir);
       if (!cur || cur.token !== token) return false;
-      writeAtomic(ownerPath(lockDir), { ...cur, heartbeatAt: new Date(now()).toISOString() });
+      writeAtomic(ownerPath(lockDir), { ...cur, heartbeatAt: new Date(now()).toISOString() }, fsx);
       return true;
     },
     release() { return releaseLock(lockDir, token); },

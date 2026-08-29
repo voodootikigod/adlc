@@ -86,3 +86,26 @@ export function ac22_corruptOwnerIsReclaimable() {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('AC22: a lock directory with an unreadable owner file is stale and reclaimed atomically', ac22_corruptOwnerIsReclaimable);
+
+export async function ac22_lockPublishIsAtomic() {
+  // The lock directory must never be visible without its owner file: the owner is written into a
+  // private staging directory and the directory is renamed into place (one publisher wins a race).
+  const { LOCK_FS } = await import('../lib/lock.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'ap-lock-atomic-'));
+  try {
+    const calls = [];
+    const rec = (name) => (...a) => { calls.push([name, ...a.slice(0, 2).map(String)]); return LOCK_FS[name](...a); };
+    const fsImpl = { mkdirSync: rec('mkdirSync'), mkdtempSync: rec('mkdtempSync'), writeFileSync: rec('writeFileSync'), renameSync: rec('renameSync'), rmSync: rec('rmSync') };
+    const lock = acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW, fsImpl });
+    const lockDir = join(dir, LOCK_DIR_NAME);
+    assert.ok(!calls.some(([n, p]) => n === 'mkdirSync' && p === lockDir), `the lock directory is never created empty: ${JSON.stringify(calls)}`);
+    const publish = calls.findIndex(([n, , to]) => n === 'renameSync' && to === lockDir);
+    const ownerWrite = calls.findIndex(([n, p]) => n === 'writeFileSync' && p.includes('.new-') && p.includes('owner.json'));
+    assert.ok(publish > 0 && ownerWrite >= 0 && ownerWrite < publish, `the owner file is written into staging BEFORE the publish rename: ${JSON.stringify(calls)}`);
+    assert.equal(readOwner(lockDir)?.token, lock.token, 'the published directory carries our owner');
+    assert.ok(!existsSync(calls[publish][1]), 'the staging directory is gone after the publish');
+    assert.throws(() => acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW }), LockHeldError, 'a second acquirer is refused by the published directory');
+    lock.release();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+test('AC22: the lock is PUBLISHED atomically — owner file staged first, directory renamed into place; no mkdir of the lock directory ever happens', ac22_lockPublishIsAtomic);

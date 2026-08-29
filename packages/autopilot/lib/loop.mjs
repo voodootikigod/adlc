@@ -17,7 +17,7 @@ import { buildContext } from './context.mjs';
 import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
 import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions']);
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -137,6 +137,16 @@ async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
   return out;
 }
 
+/**
+ * The read-only commands (status/select/triage) run phase A on a dry-run context, which
+ * stages temporary SSH material; it is released here, on every exit path (codex r2 B3).
+ * Mutation seam `loop.leakDryRunSsh`: the material is left behind.
+ */
+async function releaseDryRun(ctx) {
+  if (seam('loop.leakDryRunSsh')) return;
+  await ctx.cleanupIteration?.();
+}
+
 /** `once`: exactly one iteration. */
 export async function runOnce({ flags, env, cwd, deps: overrides = {} }) {
   const local = resolveOperatorLocal(flags, env);
@@ -182,6 +192,7 @@ export async function statusCommand({ flags, env, cwd, deps: overrides = {} }) {
   const doc = ctx.status.read() ?? {};
   let preflight = null;
   try { await ctx.deps.preflight.phaseA(ctx); preflight = { ok: true }; } catch (e) { preflight = { ok: false, code: e.code ?? 'error', message: e.message }; }
+  finally { await releaseDryRun(ctx); }
   const document = { ...doc, preflight, records: ctx.records.all().map((r) => ({ issue: r.issue, state: r.state, prNumber: r.prNumber ?? null, label: LABEL_FOR_STATE[r.state] ?? null })) };
   return { exitCode: 0, document, text: JSON.stringify(document, null, 2) };
 }
@@ -189,10 +200,12 @@ export async function statusCommand({ flags, env, cwd, deps: overrides = {} }) {
 export async function selectCommand({ flags, env, cwd, deps: overrides = {} }) {
   const local = resolveOperatorLocal(flags, env);
   const ctx = await buildContext({ flags, env, cwd, local, dryRun: true, overrides });
-  await ctx.deps.preflight.phaseA(ctx);
-  ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
-  const sel = await ctx.deps.selection.select({ ctx, top: flags.top ? Number(flags.top) : null });
-  return { exitCode: 0, document: sel, text: sel.ranked.map((r) => `${String(r.number).padStart(6)}  ${String(r.score).padStart(5)}  ${r.excluded ?? 'eligible'}`).join('\n') };
+  try {
+    await ctx.deps.preflight.phaseA(ctx);
+    ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
+    const sel = await ctx.deps.selection.select({ ctx, top: flags.top ? Number(flags.top) : null });
+    return { exitCode: 0, document: sel, text: sel.ranked.map((r) => `${String(r.number).padStart(6)}  ${String(r.score).padStart(5)}  ${r.excluded ?? 'eligible'}`).join('\n') };
+  } finally { await releaseDryRun(ctx); }
 }
 
 /** `quota` — also the pre-strike helper form (§3.2) when --iteration/--start-ordinal are given. */
@@ -219,12 +232,14 @@ export async function triageCommand({ flags, env, cwd, deps: overrides = {} }) {
   const local = resolveOperatorLocal(flags, env);
   const n = validateIssueNumber(flags.issue, 'issue');
   const ctx = await buildContext({ flags, env, cwd, local, dryRun: true, overrides });
-  await ctx.deps.preflight.phaseA(ctx);
-  ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
-  const sel = await ctx.deps.selection.select({ ctx, pinned: n });
-  if (!sel.picked) return { exitCode: 2, document: { issue: n, excludedBy: sel.excludedRule }, text: `issue ${n} excluded: ${sel.excludedRule}` };
-  const v = await ctx.deps.triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true });
-  return { exitCode: v.verdict === 'PROCEED' ? 0 : 2, document: v, text: `triage ${n}: ${v.verdict}` };
+  try {
+    await ctx.deps.preflight.phaseA(ctx);
+    ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
+    const sel = await ctx.deps.selection.select({ ctx, pinned: n });
+    if (!sel.picked) return { exitCode: 2, document: { issue: n, excludedBy: sel.excludedRule }, text: `issue ${n} excluded: ${sel.excludedRule}` };
+    const v = await ctx.deps.triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true });
+    return { exitCode: v.verdict === 'PROCEED' ? 0 : 2, document: v, text: `triage ${n}: ${v.verdict}` };
+  } finally { await releaseDryRun(ctx); }
 }
 
 export async function resetCommand({ flags, env, cwd, deps: overrides = {} }) {

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { iterate } from '../lib/loop.mjs';
+import { iterate, statusCommand } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { FAKE, GIT } from './helpers/recover-fixture.mjs';
@@ -141,3 +141,36 @@ export async function ac21_resumableRunsAreResumed() {
   } finally { fx2.cleanup(); }
 }
 test('AC21: recovery\'s resume actions are consumed by the loop — a shaped run resumes before selection and a dispatched run resumes at its rounds without a second ticket write', { timeout: 240_000 }, ac21_resumableRunsAreResumed);
+
+export async function ac19_corruptAttemptLedgerFailsClosed() {
+  // An unreadable attempts ledger is treated as the shaping cap reached: the issue is excluded, never admitted.
+  const { writeFileSync } = await import('node:fs');
+  const fx = await createSequenceFixture();
+  try {
+    writeFileSync(fx.paths.attempts(fx.issue), '{ not json');
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.notEqual(it.outcome, 'done', `a corrupt ledger never admits the issue (${it.outcome})`);
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet'), 'zero fleet dispatches');
+    assert.ok(fx.logs.some((l) => /attempts ledger unreadable/.test(l)), 'the refusal is logged with its cause');
+  } finally { fx.cleanup(); }
+}
+test('AC19: a CORRUPT attempts ledger fails closed — the issue is excluded as if the shaping cap were reached, with zero dispatches', { timeout: 120_000 }, ac19_corruptAttemptLedgerFailsClosed);
+
+export async function ac136_readOnlyCommandsReleaseSshMaterial() {
+  // status/select/triage run phase A on a dry-run context (temporary SSH material); it is released on every exit path.
+  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fx = await createSequenceFixture();
+  try {
+    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-')); writeFileSync(join(parent, 'material'), 'fake');
+    const deps = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; } } } };
+    const args = { flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps };
+    const r = await statusCommand(args);
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.document.preflight?.ok, true, JSON.stringify(r.document.preflight));
+    assert.ok(!existsSync(parent), 'the temporary SSH material staged by phase A is removed before the command returns');
+    assert.equal((await statusCommand(args)).exitCode, 0, 'a second invocation (material already gone) is still clean');
+  } finally { fx.cleanup(); }
+}
+test('AC136: the read-only commands (status/select/triage) release the dry-run SSH material phase A staged, on every exit path', { timeout: 120_000 }, ac136_readOnlyCommandsReleaseSshMaterial);

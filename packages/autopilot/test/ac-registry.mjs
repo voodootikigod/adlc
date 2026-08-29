@@ -33,7 +33,8 @@ export const REGISTRY = {
     { fn: 'ac11_ensureLabelsCreatesIdempotently', file: 'labels.test.mjs', seam: 'labels.skipCreate' },
     { fn: 'ac11_redFixturesPerItem', file: 'preflight.test.mjs', seam: 'preflight.skipKeyFileCheck' },
   ],
-  19: [{ fn: 'ac19_pinnedIssueHonorsExclusions', file: 'select.test.mjs', seam: 'select.forceLiftsAll' }],
+  19: [
+    { fn: 'ac19_corruptAttemptLedgerFailsClosed', file: 'loop.test.mjs', seam: 'selection.failOpenAttempts' },{ fn: 'ac19_pinnedIssueHonorsExclusions', file: 'select.test.mjs', seam: 'select.forceLiftsAll' }],
   26: [{ fn: 'ac26_trustedBlockSkipsShapingButGatesStillRun', file: 'triage.test.mjs', seam: 'triage.skipDenylist' }],
   32: [
     { fn: 'ac32_trustedBlockAssembly', file: 'triage.test.mjs', seam: 'triage.shapeTrustedBlock' },
@@ -45,7 +46,8 @@ export const REGISTRY = {
   79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
   85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
   96: [{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
-  97: [{ fn: 'ac97_selectionTimeRemoteCheck', file: 'select.test.mjs', seam: 'select.skipRemoteRefCheck' }],
+  97: [
+    { fn: 'ac97_tombstoneBeforeUnlink', file: 'records.test.mjs', seam: 'records.unlinkBeforeTombstone' },{ fn: 'ac97_selectionTimeRemoteCheck', file: 'select.test.mjs', seam: 'select.skipRemoteRefCheck' }],
   101: [{ fn: 'ac101_bodyOnlyModelInput', file: 'triage.test.mjs', seam: 'triage.fetchComments' }],
   109: [{ fn: 'ac109_labelRemovalRevokes', file: 'select.test.mjs', seam: 'authorize.ignoreUnlabel' }],
   115: [
@@ -89,6 +91,7 @@ export const REGISTRY = {
     { fn: 'ac162_workerDepsBuilt', file: 'deps.test.mjs', seam: 'deps.useOperatorHome' },
   ],
   22: [
+    { fn: 'ac22_lockPublishIsAtomic', file: 'lock.test.mjs', seam: 'lock.twoStepPublish' },
     { fn: 'ac22_twoStartersOneWins', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_reclaimRules', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_releaseChecksToken', file: 'lock.test.mjs', seam: 'lock.releaseAnyToken' },
@@ -170,6 +173,7 @@ export const REGISTRY = {
     { fn: 'ac143_netGitIsolatesTransport', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
   ],
   148: [
+    { fn: 'ac148_freshContextIsPinned', file: 'preflight.test.mjs', seam: 'preflight.skipPinWhenPathSet' },
     { fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'remote.acceptAnyGhHost' },
     { fn: 'ac148_knownHostsFromMeta', file: 'ssh.test.mjs', seam: 'ssh.knownHostsAnyHost' },
     { fn: 'ac148_hostBindingInPhaseA', file: 'preflight.test.mjs', seam: 'preflight.skipHostBinding' },
@@ -181,6 +185,7 @@ export const REGISTRY = {
   ],
   163: [{ fn: 'ac163_everyGhSpawnIsHostBound', file: 'github.test.mjs', seam: 'github.dropHostBinding' }],
   136: [
+    { fn: 'ac136_readOnlyCommandsReleaseSshMaterial', file: 'loop.test.mjs', seam: 'loop.leakDryRunSsh' },
     { fn: 'ac136_authModeExclusive', file: 'ssh.test.mjs', seam: 'ssh.preferAgentWhenAmbiguous' },
     { fn: 'ac136_modesInPhaseA', file: 'preflight.test.mjs', seam: 'ssh.acceptInsecureIdentity' },
   ],
@@ -244,6 +249,7 @@ export const REGISTRY = {
     { fn: 'ac80_newestApprovalHashPinned', file: 'preflight-spec.test.mjs', seam: 'specApproval.oldestWins' },
   ],
   83: [
+    { fn: 'ac83_unsignedApprovalIsRefused', file: 'preflight-spec.test.mjs', seam: 'specApproval.acceptUnsigned' },
     { fn: 'ac83_realRunnerGate', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipRunnerGate' },
     { fn: 'ac83_contentHashNeverBlobOid', file: 'preflight-spec.test.mjs', seam: 'preflight.acceptBlobOidAsSpecHash' },
     { fn: 'ac83_specApprovalRequiresKeyedVerify', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipSignedVerify' },
@@ -261,6 +267,7 @@ export const REGISTRY = {
     { fn: 'ac55_ticketSnapshot', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipTicketSnapshot' },
   ],
   76: [
+    { fn: 'ac76_everySecretLiteralIsScanned', file: 'diffcheck.test.mjs', seam: 'diffcheck.scanKeyOnly' },
     { fn: 'ac76_secretScanFailClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipSecretScan' },
     { fn: 'ac76_binaryBlobsFailClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.allowBinary' },
   ],

@@ -5,6 +5,9 @@
 // preflight builds. Everything lives under one mkdtemp; call `fx.cleanup()`.
 
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { signEntry } from '@adlc/gate-manifest/lib/sign.mjs';
+/** The manifest key the fixture's .env.local carries; entries are signed with it unless `signEntries:false`. */
+export const FIXTURE_MANIFEST_KEY = '0123456789abcdef0123456789abcdef';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -80,7 +83,7 @@ export function approvalRecord({ ticket = BUILD_TICKET, specHash, items, seq = 3
  * @param opts.pluginVersion  version committed in plugin.json (installed defaults to the same)
  * @param opts.manifest       array of manifest entries for the spec segment (default: lint+premortem+approval)
  */
-export function makeFixture({ repo = 'o/r', originUrl = 'git@github.com:o/r.git', pluginVersion = '1.11.0', installedVersion = pluginVersion, installedShape = 'object', specText = FIXTURE_SPEC, manifest = null, manifestLayout = 'segment', config = null, credentialsExpiresInMs = 8 * 3_600_000, now = Date.now() } = {}) {
+export function makeFixture({ signEntries = true, repo = 'o/r', originUrl = 'git@github.com:o/r.git', pluginVersion = '1.11.0', installedVersion = pluginVersion, installedShape = 'object', specText = FIXTURE_SPEC, manifest = null, manifestLayout = 'segment', config = null, credentialsExpiresInMs = 8 * 3_600_000, now = Date.now() } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ap-preflight-'));
   const repoRoot = join(root, 'repo');
   const home = join(root, 'home');
@@ -101,7 +104,7 @@ export function makeFixture({ repo = 'o/r', originUrl = 'git@github.com:o/r.git'
   ];
   // `segment`: a manifest.d segment (what this repository uses); `root`: the flat manifest.jsonl (readable by
   // the real `adlc run p1` from a DETACHED checkout, which refuses committed segments without a branch identity).
-  write(manifestLayout === 'root' ? '.adlc/manifest.jsonl' : '.adlc/manifest.d/spec-fixture-01M0Z3K7XHDGH94J0E7WT2RSQA.jsonl', entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  write(manifestLayout === 'root' ? '.adlc/manifest.jsonl' : '.adlc/manifest.d/spec-fixture-01M0Z3K7XHDGH94J0E7WT2RSQA.jsonl', entries.map((e) => JSON.stringify(signEntries && !e.sig ? { ...e, sig: signEntry(FIXTURE_MANIFEST_KEY, e) } : e)).join('\n') + '\n');
   git(repoRoot, ['add', '-A']);
   git(repoRoot, ['commit', '-q', '-m', 'baseline']);
   const baseOid = git(repoRoot, ['rev-parse', 'HEAD']);

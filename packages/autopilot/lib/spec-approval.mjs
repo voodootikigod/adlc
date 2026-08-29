@@ -26,6 +26,7 @@ registerSeams([
   'specApproval.skipAssumptions',       // the §11.1 assumptions binding is skipped
   'preflight.acceptBlobOidAsSpecHash',  // the git blob OID of the spec is accepted as spec_hash
   'specApproval.skipSignedVerify',
+  'specApproval.acceptUnsigned',
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -153,6 +154,12 @@ export async function checkSpecApproval({ ctx, oid, ticketId, runnerCwd = null }
   const entries = await readManifestAtBaseline(ctx, oid);
   const record = newestSpecApproval(entries, ticketId);
   if (!record) throw new PreflightError('spec-approval-stale', `no spec-approval record for ${ticketId} at ${oid}`);
+  // The record itself must be SIGNED: `verify --allow-legacy-unsigned` tolerates an honest
+  // unsigned PREFIX, which for a never-signed manifest is the whole chain (codex r2 A5).
+  // Mutation seam `specApproval.acceptUnsigned`: an unsigned record is accepted.
+  if (!active('specApproval.acceptUnsigned') && !(typeof record.sig === 'string' && record.sig.length > 0)) {
+    throw new PreflightError('spec-approval-unsigned', `newest spec-approval for ${ticketId} (${record.segment ?? 'root'} seq ${record.seq ?? '?'}) carries no signature`);
+  }
   const data = record.data ?? {};
   const contentHash = sha256(specText);
   let expected = contentHash;

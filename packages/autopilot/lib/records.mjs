@@ -5,10 +5,12 @@
 // Free-text fields pass through the structured redactor; identifiers never do.
 
 import { writeFileSync, readFileSync, existsSync, renameSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+
+registerSeams(['records.unlinkBeforeTombstone']);
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { redactRecord } from './redact.mjs';
-import { active } from './mutations.mjs';
+import { registerSeams, active } from './mutations.mjs';
 
 export const STATES = Object.freeze([
   'creating', 'clarify', 'shaped', 'dispatched', 'quota-paused', 'built', 'attested', 'pushed', 'pr-open',
@@ -73,8 +75,17 @@ export function createRecordStore({ paths, redactor, now = () => new Date().toIS
   const remove = (issue, { lastPushedOid = null } = {}) => {
     const cur = load(issue);
     const p = paths.record(issue);
+    const stone = { issue, lastPushedOid: lastPushedOid ?? cur?.lastPushedOid ?? null, deletedAt: now() };
+    if (active('records.unlinkBeforeTombstone')) {
+      // Mutation seam `records.unlinkBeforeTombstone`: the record is gone before the tombstone is durable.
+      if (existsSync(p)) unlinkSync(p);
+      writeAtomicJson(paths.tombstone(issue), stone);
+      return cur;
+    }
+    // Tombstone FIRST (codex r2 A8): a crash between the two steps leaves the tombstone
+    // (its lastPushedOid feeds the canonical deletion rule), never a silent gap.
+    writeAtomicJson(paths.tombstone(issue), stone);
     if (existsSync(p)) unlinkSync(p);
-    writeAtomicJson(paths.tombstone(issue), { issue, lastPushedOid: lastPushedOid ?? cur?.lastPushedOid ?? null, deletedAt: now() });
     return cur;
   };
   const tombstone = (issue) => readJson(paths.tombstone(issue));

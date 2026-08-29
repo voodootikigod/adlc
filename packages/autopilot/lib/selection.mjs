@@ -11,6 +11,9 @@ import { hardExclusions, selectIssue, scoreIssue } from './select.mjs';
 import { buildDenylist } from './denylist.mjs';
 import { parseBlock } from './block.mjs';
 import { createAttemptStore } from './attempts.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['selection.failOpenAttempts']);
 import { showAtBaseline, PreflightError } from './preflight-common.mjs';
 import { branchFor, validateIssueNumber } from './input.mjs';
 
@@ -64,7 +67,7 @@ export async function selectForLoop({ ctx, pinned = null, force = false, top = n
   // Stage 1: the cheap rules over every candidate (no per-issue I/O).
   const cheap = (issue) => hardExclusions({
     issue, authorization: { ok: true }, openPrs: Array.isArray(openPrs) ? openPrs : [], localBranches, remoteRefExists: false,
-    records: ctx.records, scopeBlock: scopeBlockOf(issue.body), denylist, attempts: safeFailed(attempts, issue.number),
+    records: ctx.records, scopeBlock: scopeBlockOf(issue.body), denylist, attempts: safeFailed(attempts, issue.number, ctx.log),
   });
   const stage1 = await selectIssue({ candidates, evaluate: (issue) => ({ exclusions: cheap(issue), ...scoreIssue(issue, ctx.now()) }), pinned, force, now: ctx.now });
   if (stage1.reason === 'issue-not-found') return { picked: null, issue: null, authorization: null, revision: null, excludedRule: 'issue-not-found', ranked: [], reason: stage1.reason };
@@ -96,7 +99,17 @@ export async function selectForLoop({ ctx, pinned = null, force = false, top = n
   };
 }
 
-function safeFailed(attempts, n) { try { return attempts.failedWithin24h(n); } catch { return 0; } }
+function safeFailed(attempts, n, log = null) {
+  try { return attempts.failedWithin24h(n); }
+  catch (e) {
+    // Mutation seam `selection.failOpenAttempts`: a corrupt ledger counts as zero attempts (the cap is bypassed).
+    if (active('selection.failOpenAttempts')) return 0;
+    // Fail CLOSED (codex r2 A7): an unreadable ledger is treated as the cap reached — the
+    // issue is excluded (`shaping-failed`) until the operator repairs or resets the ledger.
+    log?.(`issue ${n}: attempts ledger unreadable (${e.code ?? 'error'}: ${e.message}); treated as the shaping cap reached`);
+    return Number.POSITIVE_INFINITY;
+  }
+}
 
 async function evaluateFully({ ctx, gh, cfg, issue, openPrs, localBranches, denylist, attempts }) {
   const n = issue.number;
@@ -106,7 +119,7 @@ async function evaluateFully({ ctx, gh, cfg, issue, openPrs, localBranches, deny
   try { remoteRefExists = (await ctx.git.lsRemoteOid(ctx.remote.remotePushUrl, `refs/heads/${branchFor(n)}`)) != null; } catch { remoteRefExists = undefined; }
   const exclusions = hardExclusions({
     issue, authorization, openPrs: Array.isArray(openPrs) ? openPrs : [], localBranches, remoteRefExists,
-    records: ctx.records, scopeBlock: scopeBlockOf(issue.body), denylist, attempts: safeFailed(attempts, n),
+    records: ctx.records, scopeBlock: scopeBlockOf(issue.body), denylist, attempts: safeFailed(attempts, n, ctx.log),
   });
   return { authorization, exclusions };
 }

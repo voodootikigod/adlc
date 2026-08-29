@@ -348,3 +348,24 @@ export async function ac159_dryRunTransport() {
   } finally { fx.cleanup(); }
 }
 test('AC159: under --dry-run the ls-remote spawns GIT_SSH wrapper lives under mkdtemp in $XDG_RUNTIME_DIR, names no REPO_ROOT path, ignores a stale ssh-*/known_hosts and ~/.ssh/config, <runs> is unchanged, and the directory is gone at exit', ac159_dryRunTransport);
+
+export async function ac148_freshContextIsPinned() {
+  // A production context starts with `pinned: {}` (truthy) and the inherited PATH; phase A must still pin.
+  const fx = makeFixture();
+  try {
+    const { dirname } = await import('node:path');
+    const sys = dirname(PINNED.gh);                                        // the fake tools' directory
+    const real = ['git', 'ssh', 'ssh-add', 'ssh-keygen'];                  // pinned to their REAL binaries (phase A spawns them)
+    const fake = ['adlc', 'bwrap', 'claude', 'codex', 'adversarial-review', 'gh', 'npm', 'node'];
+    const realDirs = [...new Set(real.map((n) => dirname(PINNED[n])))];
+    const exists = (p) => p === sys || realDirs.includes(p) || fake.some((n) => p === join(sys, n)) || real.some((n) => p === PINNED[n]);
+    const ctx = buildCtx(fx, { inherited: { PATH: [sys, ...realDirs].join(':') }, toolchain: { exists, realpath: (p) => p, stat: () => ({ uid: process.getuid(), mode: 0o755 }) } });
+    ctx.pinned = {}; ctx.env.path = process.env.PATH ?? '/usr/bin';   // a production context before phase A: truthy `pinned`, PATH set
+    await phaseA(ctx);
+    assert.equal(ctx.pinned.gh, PINNED.gh, 'phase A pinned gh on a fresh context');
+    assert.equal(ctx.pinned.adlc, PINNED.adlc, 'phase A pinned adlc on a fresh context');
+    assert.equal(ctx.pinned.git, PINNED.git, 'git resolved to its real binary');
+    assert.ok(ctx.recorder.every((r) => r.argv[0].startsWith('/')), 'every spawn after pinning uses an absolute pinned path');
+  } finally { fx.cleanup(); }
+}
+test('AC148: phase A pins the toolchain on a FRESH context (pinned:{} + inherited PATH) — the re-entrance guard keys on concrete pins, never on object truthiness', ac148_freshContextIsPinned);

@@ -180,3 +180,23 @@ export async function ac83_specApprovalRequiresKeyedVerify() {
   assert.equal(skipped.ok, true, 'the seam bites');
 }
 test('AC83: spec approval runs the KEYED gate-manifest verify over the baseline checkout before accepting the record; a failing verification is spec-approval-unverified', ac83_specApprovalRequiresKeyedVerify);
+
+export async function ac83_unsignedApprovalIsRefused() {
+  // `verify --allow-legacy-unsigned` tolerates an honest unsigned PREFIX — for a never-signed
+  // manifest that is the whole chain — so the approval ENTRY itself must carry a signature.
+  const fx = makeFixture({ signEntries: false });
+  try {
+    const ctx = buildCtx(fx); await phaseA(ctx);
+    const oid = await resolveBaseline(ctx);
+    assert.equal(await codeOf(() => checkSpecApproval({ ctx, oid, ticketId: BUILD_TICKET })), 'spec-approval-unsigned', 'an unsigned approval record is refused');
+    assert.equal(dispatches(ctx), 0);
+  } finally { fx.cleanup(); }
+  const ok = makeFixture();
+  try {
+    const ctx = buildCtx(ok); await phaseA(ctx);
+    const oid = await resolveBaseline(ctx);
+    const r = await checkSpecApproval({ ctx, oid, ticketId: BUILD_TICKET });
+    assert.ok(r, 'the signed record passes');
+  } finally { ok.cleanup(); }
+}
+test('AC83: the newest spec-approval record must itself be SIGNED — an unsigned record is spec-approval-unsigned even when the chain verifies as a legacy prefix; the signed fixture passes', ac83_unsignedApprovalIsRefused);

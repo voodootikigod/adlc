@@ -38,6 +38,7 @@ registerSeams([
   'diffcheck.skipCriteriaHash',       // the criteria document is accepted without its hash check
   'diffcheck.skipDenylist',           // (ii) is not run
   'diffcheck.allowBinary',
+  'diffcheck.scanKeyOnly',
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -186,7 +187,7 @@ export async function actualDiffCheck({ ctx, issue, record, baseOid, head, scope
   const range = `${baseOid}...${head}`;
 
   if (!active('diffcheck.skipSecretScan')) {
-    const secretHits = scanAddedLinesForSecrets(await gitOut(ctx, cwd, ['diff', range]), { secretValues: ctx.secretValues ?? [ctx.key] });
+    const secretHits = scanAddedLinesForSecrets(await gitOut(ctx, cwd, ['diff', range]), { secretValues: active('diffcheck.scanKeyOnly') ? [ctx.key] : (ctx.secretValues ?? [ctx.key]) });   // seam `diffcheck.scanKeyOnly`: only the manifest key is scanned for
     if (secretHits.length) return { ok: false, code: 'secret-in-diff', paths: [...new Set(secretHits.map((h) => h.file))], violations: [], secretHits };
   }
 
