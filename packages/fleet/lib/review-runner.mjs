@@ -54,7 +54,9 @@ export function boundedTimeout(base, call) {
   return Number.isFinite(call) && call > 0 ? Math.max(1, Math.min(base, Math.floor(call))) : base;
 }
 
-export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = 600000, env: source = process.env, maxBytes = null } = {}) {
+/** The reviewer's own budget; a remaining wall clock only ever SHRINKS it (agy fleet3 c3). */
+export const DEFAULT_REVIEW_TIMEOUT_MS = 600000;
+export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = DEFAULT_REVIEW_TIMEOUT_MS, env: source = process.env, maxBytes = null } = {}) {
   return async ({ worktree, startSha, timeoutMs: callTimeoutMs = null }) => {
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);

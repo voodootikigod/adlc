@@ -210,3 +210,13 @@ test('runFleet driven by live deps advances a ticket build→gate→prosecute→
   // not fabricate a PR count from that (round-31).
   assert.equal(summary.prCount, 0, 'no gh → openPR reports not-opened → prCount stays 0, not fabricated');
 });
+
+test('prosecute bounds the reviewer by the SMALLER of its own budget and the remaining wall clock: a long remainder never widens it, a short one shrinks it, none leaves the default (agy fleet3 c3)', async () => {
+  const { DEFAULT_REVIEW_TIMEOUT_MS } = await import('../lib/review-runner.mjs');
+  const seen = [];
+  const deps = makeDeps(newRec(), { reviewRunner: (ctx) => { seen.push(ctx?.timeoutMs); return { ok: true, findings: [] }; } });
+  await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP', remainingMs: 5000 });
+  await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP', remainingMs: DEFAULT_REVIEW_TIMEOUT_MS * 6 });
+  await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
+  assert.deepEqual(seen, [5000, DEFAULT_REVIEW_TIMEOUT_MS, undefined]);
+});

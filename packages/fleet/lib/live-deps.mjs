@@ -19,7 +19,7 @@ import { usageEvidence } from './adapters/usage.mjs';
 import { transportCredential, transportEvidence } from './adapters/transport-credential.mjs';
 import { ladderAdapters, seatForAttempt } from './quartermaster.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
-import { makeReviewRunner } from './review-runner.mjs';
+import { makeReviewRunner, DEFAULT_REVIEW_TIMEOUT_MS } from './review-runner.mjs';
 import { builderPrompt, fixPrompt } from './charters.mjs';
 import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mjs';
 import { BASE_MANIFEST } from './protected-paths.mjs';
@@ -613,7 +613,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
     prosecute: async ({ ticket, worktree, startSha, remainingMs = null }) => {
       // fleet-ext item 5: the reviewer is bounded by the remaining wall clock too.
-      const runReview = (args) => review({ ...args, timeoutMs: remainingMs ?? undefined });
+      // The SMALLER of the reviewer's own budget and what remains — a long remaining wall clock never
+      // widens the reviewer's timeout, and a short one bounds it (agy fleet3 c3).
+      const runReview = (args) => review({ ...args, timeoutMs: remainingMs != null ? Math.min(remainingMs, DEFAULT_REVIEW_TIMEOUT_MS) : undefined });
       const r = await prosecuteGate({ worktree, startSha, ticket }, { runReview, failOn: config.prosecuteFailOn });
       // The revision the review judged: HEAD of the reviewed worktree at this
       // instant (fleet-ext item 9). Best effort — a missing revision is null,
