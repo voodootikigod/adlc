@@ -6,6 +6,7 @@ import { ticketHash } from '@adlc/tickets';
 import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
 import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
 import { findCachedVerdict } from './cache.mjs';
+import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from './normalize-gaps.mjs';
 
 /**
  * Build a checkTicket function bound to specific complete/extractJson
@@ -30,7 +31,10 @@ export function buildCheckTicket(completeFn, extractJsonFn, tier = 'cheap') {
       onUsage: (u) => { usage = u; },
     });
     const parsed = extractJsonFn(raw);
-    const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
+    // Issue #594: a well-formed reply of the WRONG shape is "could not read the
+    // verdict", never "no gaps". normalizeGaps throws; the caller's operational
+    // error path (exit 1) reports it. A bare top-level array is recovered.
+    const gaps = normalizeGaps(parsed);
     return { id: ticket.id, gaps, usage };
   };
 }
@@ -53,13 +57,15 @@ export function buildCheckTicket(completeFn, extractJsonFn, tier = 'cheap') {
 export async function checkTicket(ticket, tier = 'cheap') {
   const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
   if (mockEnv !== undefined && process.env.NODE_ENV === 'test') {
-    let parsed = {};
+    // The seam fails closed exactly like the real path (issue #594): an
+    // unparseable or shape-deviant mock is an unreadable verdict, not `[]`.
+    let parsed;
     try {
       parsed = JSON.parse(mockEnv);
     } catch (e) {
-      // Ignored: fallback to {}
+      throw new Error(`${UNREADABLE_VERDICT_PREFIX} ADLC_GATE_MOCK_RESPONSE is not valid JSON (${e.message})`);
     }
-    const gaps = Array.isArray(parsed?.gaps) ? parsed.gaps : [];
+    const gaps = normalizeGaps(parsed);
     // No real LLM call was made — nothing to report (never fabricate usage),
     // and `mocked: true` tells the caller never to cache this result either
     // (issue #278): a mocked verdict must not be able to shadow, or later

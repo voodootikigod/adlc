@@ -135,7 +135,10 @@ let results;
 try {
   results = await checkAll(targets, tier, { force, maxAgeMs, dir: undefined });
 } catch (err) {
-  opError(`LLM call failed: ${err.message}`);
+  // Covers provider/network failures AND an unreadable verdict (issue #594 —
+  // `coldstart: unreadable executability verdict — …`): both mean the audit
+  // did not produce a verdict, so neither may read as a pass.
+  opError(`could not obtain an executability verdict: ${err.message}`);
 }
 
 // ── Record usage + cache evidence (issues #272, #278) ───────────────────────

@@ -413,14 +413,14 @@ describe('gate checkTicket / checkAll (unit, no network)', () => {
     assert.equal(capturedOpts.system, SYSTEM_PROMPT);
   });
 
-  test('checkTicket treats missing/invalid gaps field as empty array', async () => {
+  test('checkTicket rejects a verdict with no gaps array — never coerced to zero gaps (issue #594)', async () => {
+    // Pre-#594 this case resolved with gaps: [] and the gate printed [PASS].
     const stubComplete = async () => '{"result":"ok"}';
     const stubExtractJson = (text) => JSON.parse(text);
     const checkTicketWith = buildCheckTicket(stubComplete, stubExtractJson);
 
     const ticket = { id: 'T4', title: 'Refactor' };
-    const result = await checkTicketWith(ticket);
-    assert.deepEqual(result.gaps, []);
+    await assert.rejects(() => checkTicketWith(ticket), /unreadable executability verdict/);
   });
 
   test('checkTicket propagates errors thrown by completeFn', async () => {
@@ -432,8 +432,8 @@ describe('gate checkTicket / checkAll (unit, no network)', () => {
     await assert.rejects(() => checkTicketWith(ticket), /network failure/);
   });
 
-  test('checkTicket handles invalid JSON in ADLC_GATE_MOCK_RESPONSE gracefully', async () => {
-    // Save original env
+  test('checkTicket rejects invalid JSON in ADLC_GATE_MOCK_RESPONSE — the seam fails closed like the real path (issue #594)', async () => {
+    // Pre-#594 an unparseable mock silently became {} → gaps: [] → [PASS].
     const origEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
     const origNodeEnv = process.env.NODE_ENV;
 
@@ -444,17 +444,13 @@ describe('gate checkTicket / checkAll (unit, no network)', () => {
     const { checkTicket } = await import('../lib/gate.mjs');
 
     const ticket = { id: 'T_INVALID', title: 'Test invalid JSON' };
-    let result;
     try {
-      result = await checkTicket(ticket);
+      await assert.rejects(() => checkTicket(ticket), /unreadable executability verdict/);
     } finally {
       // Restore env
       process.env.ADLC_GATE_MOCK_RESPONSE = origEnv;
       process.env.NODE_ENV = origNodeEnv;
     }
-
-    assert.equal(result.id, 'T_INVALID');
-    assert.deepEqual(result.gaps, []);
   });
 
   test('checkAll runs checkTicket for every ticket in order', async () => {

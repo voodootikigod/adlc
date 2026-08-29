@@ -67,6 +67,21 @@ never applies to `--prompt-only` or the `ADLC_GATE_MOCK_RESPONSE` test seam.
 | `1` | Operational error — bad input, unknown ticket id, missing file, no provider |
 | `2` | Gate fails — one or more tickets have gaps |
 
+### Verdict shapes — what counts as "readable"
+
+The auditor is asked to reply `{"gaps": [...]}`. A **bare array**
+(`[{"what": …, "why_blocking": …}]` — the most common model deviation) is
+accepted as the gaps list, and a string entry is wrapped as
+`{"what": "<text>", "why_blocking": "unspecified"}`. **Anything else is not a
+pass**: `{}`, `{"result": "ok"}`, `{"blockers": [...]}`, `{"gaps": null}`,
+`{"gaps": "two gaps found"}`, or an entry without a string `what` makes
+coldstart exit `1` with `coldstart: unreadable executability verdict — …` — the
+tool could not read the verdict, so it reports an operational error, records
+nothing, and never caches. A previously cached entry whose stored `gaps` is not
+a readable list is skipped rather than served as a hit (issue #594). The
+`ADLC_GATE_MOCK_RESPONSE` test seam follows the same rule: an unparseable or
+shape-deviant mock is exit `1`, not `[]`.
+
 ---
 
 ## Examples

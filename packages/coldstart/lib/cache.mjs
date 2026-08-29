@@ -7,6 +7,7 @@
 // ledger and to ticketHash().
 
 import { ticketHash as computeTicketHash } from '@adlc/tickets';
+import { normalizeGaps } from './normalize-gaps.mjs';
 
 export const GATE_NAME = 'coldstart';
 
@@ -51,7 +52,16 @@ export function findCachedVerdict(entries, { ticketHash, model, maxAgeMs = null,
       const ageMs = now - Date.parse(entry.ts);
       if (!Number.isFinite(ageMs) || ageMs > maxAgeMs) continue;
     }
-    return { gaps: Array.isArray(cache.gaps) ? cache.gaps : [] };
+    // Issue #594: a stored verdict whose gaps are not a readable list must never
+    // be served as a clean cache hit. It is skipped (the walk continues to an
+    // older readable entry, else the caller re-audits) rather than coerced to [].
+    let gaps;
+    try {
+      gaps = normalizeGaps(cache.gaps);
+    } catch {
+      continue;
+    }
+    return { gaps };
   }
   return null;
 }

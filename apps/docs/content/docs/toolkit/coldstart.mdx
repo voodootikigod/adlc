@@ -39,6 +39,10 @@ adlc coldstart --all [options]
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more tickets have gaps (printed per ticket).</span>
 </div>
 
+### Verdict shapes
+
+The auditor is asked to reply `{"gaps": [...]}`. A **bare array** (`[{"what": …, "why_blocking": …}]`, the most common model deviation) is accepted as the gaps list, and a string entry is wrapped as `{"what": "<text>", "why_blocking": "unspecified"}`. Anything else is **not a pass**: `{}`, `{"result": "ok"}`, `{"blockers": [...]}`, `{"gaps": null}`, `{"gaps": "two gaps found"}`, or an entry without a string `what` exits `1` with `coldstart: unreadable executability verdict — …` — the verdict could not be read, so nothing is recorded or cached, and a previously cached entry with an unreadable `gaps` is skipped rather than served (issue #594).
+
 ## Example
 
 ```sh
