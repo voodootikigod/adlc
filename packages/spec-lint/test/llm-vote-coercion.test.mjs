@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
-import { validateVacuousPayload, detectVacuous } from '../lib/llm.mjs';
+import { validateVacuousPayload, detectVacuous, shouldUseMockResponse } from '../lib/llm.mjs';
 import { applyLlmDemotion } from '../lib/classify.mjs';
 
 const FIXTURES = new URL('./fixtures/', import.meta.url).pathname;
@@ -191,6 +191,37 @@ describe('detectVacuous with injected complete/extractJson', () => {
     const result = await detectVacuous([], 'cheap', { completeFn: stubComplete, extractJsonFn: JSON.parse });
     assert.deepEqual(result, { vacuous: [], reason: {} });
     assert.equal(called, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shouldUseMockResponse — the three-way mock-gating decision, unit-tested
+// directly for every combination so no real network call is ever at risk.
+// ---------------------------------------------------------------------------
+
+describe('shouldUseMockResponse', () => {
+  it('true only when completeFn is undefined AND mockEnv is set AND nodeEnv is test', () => {
+    assert.equal(shouldUseMockResponse({ completeFn: undefined, mockEnv: '{}', nodeEnv: 'test' }), true);
+  });
+
+  it('false when completeFn was explicitly injected, even if mock env + test are set', () => {
+    assert.equal(shouldUseMockResponse({ completeFn: async () => '{}', mockEnv: '{}', nodeEnv: 'test' }), false);
+  });
+
+  it('false when mockEnv is unset, even with no completeFn and nodeEnv=test', () => {
+    // The dangerous case: without this guard a production call (no injected
+    // completeFn, mockEnv unset) under a mutated `||` would wrongly "mock" a
+    // real request with an undefined response.
+    assert.equal(shouldUseMockResponse({ completeFn: undefined, mockEnv: undefined, nodeEnv: 'test' }), false);
+  });
+
+  it('false when nodeEnv is not "test", even with no completeFn and mockEnv set', () => {
+    assert.equal(shouldUseMockResponse({ completeFn: undefined, mockEnv: '{}', nodeEnv: 'production' }), false);
+    assert.equal(shouldUseMockResponse({ completeFn: undefined, mockEnv: '{}', nodeEnv: undefined }), false);
+  });
+
+  it('false when both completeFn is injected AND the env conditions are absent', () => {
+    assert.equal(shouldUseMockResponse({ completeFn: async () => '{}', mockEnv: undefined, nodeEnv: undefined }), false);
   });
 });
 

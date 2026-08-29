@@ -90,6 +90,19 @@ export function validateVacuousPayload(parsed, verifiedCount) {
 }
 
 /**
+ * Decide whether detectVacuous should serve ADLC_GATE_MOCK_RESPONSE instead of
+ * making a real LLM call. Extracted as a pure function so the three-way gate
+ * (no injected completeFn, mock env set, running under NODE_ENV=test) is
+ * directly unit-testable without ever risking a real network call.
+ *
+ * @param {{ completeFn: Function|undefined, mockEnv: string|undefined, nodeEnv: string|undefined }} args
+ * @returns {boolean}
+ */
+export function shouldUseMockResponse({ completeFn, mockEnv, nodeEnv }) {
+  return completeFn === undefined && mockEnv !== undefined && nodeEnv === 'test';
+}
+
+/**
  * Call the LLM to detect vacuous verification methods.
  *
  * @param {Array<{line:number, text:string}>} verifiedCriteria
@@ -113,7 +126,7 @@ export async function detectVacuous(verifiedCriteria, tier = 'cheap', opts = {})
   // lint.mjs process end to end (flag parsing -> detectVacuous -> validation
   // -> opError's exit code) without a network call or a second mock mechanism.
   const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
-  const useMock = completeFn === undefined && mockEnv !== undefined && process.env.NODE_ENV === 'test';
+  const useMock = shouldUseMockResponse({ completeFn, mockEnv, nodeEnv: process.env.NODE_ENV });
   const resolvedCompleteFn = useMock ? async () => mockEnv : (completeFn ?? complete);
 
   const prompt = buildVacuousPrompt(verifiedCriteria);
