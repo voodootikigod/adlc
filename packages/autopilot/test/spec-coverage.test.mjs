@@ -226,6 +226,9 @@ export async function ac114_everyRegisteredFunctionExecutes() {
 }
 test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', fullOnly, ac114_everyRegisteredFunctionExecutes);
 
+/** An entry naming both a seam and a `noFixture` reason: the reason short-circuits the gate, so the seam is decorative. */
+export const decorativeSeam = (e) => Boolean(e.seam && e.noFixture);
+
 export async function ac121_everyCriterionHasABitingFixture() {
   clearAll();
   const noFixture = [];
@@ -240,6 +243,7 @@ export async function ac121_everyCriterionHasABitingFixture() {
     if (list.every((e) => e.manual)) continue;
     for (const e of list) {
       if (e.manual) continue;
+      if (decorativeSeam(e)) { problems.push(`AC${n}: ${e.fn} names BOTH a seam (${e.seam}) and a noFixture reason — the seam would never be exercised (codex T1 r8)`); continue; }
       if (e.noFixture) { reasons.push(`AC${n} (${e.fn}): ${e.noFixture}`); continue; }
       if (!e.seam) { problems.push(`AC${n}: ${e.fn} names neither a seam nor a noFixture reason`); continue; }
       const why = hostSkip(e);
@@ -312,6 +316,12 @@ export async function ac121_fixtureRulesSelfTest() {
   assert.deepEqual(missing, ['AC1']);
   const reasons = Array.from({ length: 6 }, (_, i) => `AC${i}: r`);
   assert.ok(reasons.length > 5, 'six noFixture reasons exceed the cap');
+  // A seam next to a reason is decorative (the reason short-circuits the check): a problem, never coverage.
+  assert.equal(decorativeSeam({ fn: 'a', file: 'x', seam: 'm.d', noFixture: 'r' }), true);
+  assert.equal(decorativeSeam({ fn: 'a', file: 'x', seam: null, noFixture: 'r' }), false);
+  assert.equal(decorativeSeam({ fn: 'a', file: 'x', seam: 'm.d' }), false);
+  const { REGISTRY: real } = await import('./ac-registry.mjs');
+  assert.deepEqual(Object.values(real).flat().filter(decorativeSeam).map((e) => e.fn), [], 'no registered entry carries a decorative seam');
   assert.ok(readdirSync(HERE).includes('ac-registry.mjs'));
   assert.equal(active('gate.acceptHollowEntries'), false, 'the rules are checked with the gate in its strict mode');
   // Host requirements: an entry requiring an absent capability is skipped LOUDLY in both passes, never executed or failed.

@@ -1,7 +1,11 @@
 // The AC registry (spec AC 1, 111, 114, 121): an EXPLICIT map from every §16
 // criterion number to one or more exported test functions, each with the
-// mutation seam that makes it fail (or a `noFixture` reason, capped at 5 in
-// total). spec-coverage.test.mjs is the gate that turns this map into a proof:
+// mutation seam that makes it fail, or a `noFixture` reason — never both (a
+// seam next to a reason would never be exercised). The gate caps CRITERIA that
+// have no biting fixture at all at 5 (today AC 1, 14, 16, 114, 156 — the gate's
+// own passes and the externally-proven criteria); a reason on an entry whose
+// sibling entry bites is informational and does not count toward the cap.
+// spec-coverage.test.mjs is the gate that turns this map into a proof:
 // it parses §16 at the pinned blob, executes every function here, checks each
 // registered test's title and its production seam statically, and asserts the
 // named fixture bites.
@@ -76,7 +80,7 @@ export const REGISTRY = {
   155: [
     { fn: 'ac155_editHistoryCoversEveryPage', file: 'github.test.mjs', seam: 'github.firstEditsPageOnly' },{ fn: 'ac155_authorizationBindsRevision', file: 'select.test.mjs', seam: 'authorize.ignoreEdits' }],
   12: [
-    { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: 'keys.leakKey', noFixture: 'the allowlist constant has no runtime seam; the sibling entry carries keys.leakKey' },
+    { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: null, noFixture: 'the allowlist constant has no runtime seam; the sibling entry carries keys.leakKey' },
     { fn: 'ac12_onlyThePinnedAdlcCarriesTheKey', file: 'keys.test.mjs', seam: 'keys.leakKey' },
   ],
   13: [{ fn: 'ac13_unitShape', file: 'service.test.mjs', seam: 'service.omitEnvironmentFile' }],
@@ -174,7 +178,7 @@ export const REGISTRY = {
   99: [{ fn: 'ac99_chunkedRedactionCatchesStraddlingSecret', file: 'redact.test.mjs', seam: 'redactor.disable' }],
   102: [
     { fn: 'ac102_promptTransport', file: 'triage.test.mjs', seam: 'triage.promptInArgv' },
-    { fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: 'spawn.shellTrue', noFixture: 'stdin transport has no production seam that keeps the wrapper importable; triage.promptInArgv above is the biting fixture' },
+    { fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: null, noFixture: 'stdin transport has no production seam that keeps the wrapper importable; triage.promptInArgv above is the biting fixture' },
   ],
   105: [{ fn: 'ac105_structuredRedactionKeepsSchema', file: 'redact.test.mjs', seam: 'redactor.disable' }],
   112: [{ fn: 'ac112_credentialsNeverEscape', file: 'remote.test.mjs', seam: 'remote.keepCredentials' }],

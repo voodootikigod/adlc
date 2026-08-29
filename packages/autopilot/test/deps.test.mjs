@@ -49,8 +49,10 @@ const LOCKS = (() => {
     return head.error ? { error: head.error } : { base: base.text, head: head.text };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 })();
-const lockSkip = LOCKS.error ? `SKIPPED LOUDLY: npm cannot generate the lockfile offline — ${LOCKS.error.split('\n')[0]}` : false;
-if (lockSkip) console.error(`deps.test.mjs: ${lockSkip}`);
+// The lockfile fixture is MANDATORY: a failed generation FAILS AC56 and the seam check
+// (never a skip — a silent skip would pass the suite without testing AC56; codex T1 r8).
+const lockError = LOCKS.error ? `npm cannot generate the lockfile offline — ${LOCKS.error.split('\n')[0]}` : null;
+if (lockError) console.error(`deps.test.mjs: ${lockError} (AC56 FAILS: the fixture is mandatory)`);
 
 function fixture(extraFiles = {}) {
   const { root, baseOid } = makeRepo({ files: { ...WORKSPACE, ...(LOCKS.base ? { 'package-lock.json': LOCKS.base } : {}), ...extraFiles } });
@@ -81,6 +83,7 @@ export async function ac52_dependencyDiffCheck() {
 test('AC52: left-pad → third-party-dep, @adlc/core passes, a changed scripts.test fails, an unexpected ignored file in ISSUE_WT → ignored-file-drift', ac52_dependencyDiffCheck);
 
 export async function ac56_lockfileCanonical() {
+  assert.equal(lockError, null, lockError ?? '');
   const base = parseLockfile(LOCKS.base); const head = parseLockfile(LOCKS.head);
   assert.ok(base && head, 'both real lockfiles parse');
   const mutate = (fn) => { const doc = JSON.parse(LOCKS.base); fn(doc.packages); return doc; };
@@ -96,7 +99,7 @@ export async function ac56_lockfileCanonical() {
   const argv = sanitizedNpmArgv({ npm: REAL_NPM, userconfig: '/rc', offline: false });
   for (const flag of ['--ignore-scripts', '--no-audit', '--no-fund']) assert.ok(argv.includes(flag), flag);
 }
-test('AC56: registry additions, a changed resolved/integrity or a removed entry → lockfile-drift; a hand-built AND the real npm-generated packages/autopilot workspace link pass; npm ci carries --ignore-scripts --no-audit --no-fund', { skip: lockSkip }, ac56_lockfileCanonical);
+test('AC56: registry additions, a changed resolved/integrity or a removed entry → lockfile-drift; a hand-built AND the real npm-generated packages/autopilot workspace link pass; npm ci carries --ignore-scripts --no-audit --no-fund', ac56_lockfileCanonical);
 
 export async function ac75_exactNameGuard() {
   const base = JSON.parse(pkg('@adlc/foo'));
@@ -111,7 +114,8 @@ export async function ac75_exactNameGuard() {
   assert.equal(compareLockfiles(lock, registry, { allowed: ALLOWED }).code, 'lockfile-drift', 'node_modules/@adlc/core with a registry resolved URL');
   const link = { lockfileVersion: 3, packages: { ...lock.packages, 'node_modules/@adlc/core': { resolved: 'packages/core', link: true } } };
   assert.equal(compareLockfiles(lock, link, { allowed: ALLOWED }).ok, true, 'the workspace link form passes');
-  if (!lockSkip) {
+  assert.equal(lockError, null, lockError ?? '');
+  {
     const f = fixture();
     try {
       const r = await f.check({ 'packages/foo/package.json': pkg('@adlc/foo', { dependencies: { '@adlc/spec-lint': '*' } }) });
@@ -178,7 +182,8 @@ export async function ac162_workerDepsBuilt() {
 }
 test('AC162: worker-deps is a clone at BASE_OID from the mirror with the ONE sanitized registry-capable npm ci (no --offline, never under the worker worktree even on a retry with a worker-written .npmrc); a failed build → init-failed', ac162_workerDepsBuilt);
 
-test('seam check: the deps tests fail under their registered seams', { skip: lockSkip }, async () => {
+test('seam check: the deps tests fail under their registered seams', async () => {
+  assert.equal(lockError, null, lockError ?? '');
   for (const [seam, fn] of [['deps.ignoreScripts', ac52_dependencyDiffCheck], ['lockfile.ignoreResolved', ac56_lockfileCanonical], ['deps.allowAnyDep', ac75_exactNameGuard], ['deps.allowOnlineGate', ac157_gateInstallSanitized], ['deps.useOperatorHome', ac162_workerDepsBuilt]]) {
     await assert.rejects(() => withMutation(seam, fn), `${fn.name} must fail under ${seam}`);
   }
