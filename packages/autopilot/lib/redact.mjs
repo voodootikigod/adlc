@@ -9,7 +9,11 @@
 // budget, or its output still matches a pattern on a second pass, the caller
 // gets the withheld sentinel and never the raw text.
 
-import { active } from './mutations.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams([
+  'redact.carryUnredacted', // agy r1
+]);
 
 export const WITHHELD_DEAD_END = '[dead-end material withheld: redaction failed]';
 export const WITHHELD_BODY = '[withheld: redaction failed — see local status]';
@@ -135,7 +139,12 @@ export function redactStream(chunks, redactor, { keepChars = CHUNK_BYTES } = {})
     if (!r.ok) { ok = false; break; }
     // Everything except the overlap window is final; the window is re-scanned with the next chunk.
     const finalPart = r.text.slice(0, Math.max(0, r.text.length - CHUNK_OVERLAP));
-    carry = text.slice(Math.max(0, text.length - CHUNK_OVERLAP));
+    // The carry is the tail of the REDACTED text, in the same coordinates as `finalPart`: a
+  // length-changing redaction inside the overlap zone otherwise duplicates (expansion) or
+  // drops (contraction) the offset difference across iterations (agy r1 c6). Re-redacting
+  // already-redacted text is idempotent — a replacement token matches no secret pattern.
+  // Mutation seam `redact.carryUnredacted`: the carry is cut from the unredacted text.
+  carry = active('redact.carryUnredacted') ? text.slice(Math.max(0, text.length - CHUNK_OVERLAP)) : r.text.slice(Math.max(0, r.text.length - CHUNK_OVERLAP));
     tail = (tail + finalPart).slice(-keepChars);
   }
   if (!ok) return { ok: false, text: WITHHELD_DEAD_END };

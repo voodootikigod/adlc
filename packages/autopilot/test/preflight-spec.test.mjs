@@ -116,6 +116,9 @@ export async function ac89_mergeIdentity() {
       ['the approver names a different login', { pulls: merged('someone-else') }],
     ];
     for (const [name, gh] of cases) { r = await run(gh); assert.equal(r.c, 'spec-approval-unbound', name); assert.equal(dispatches(r.ctx), 0, `${name}: zero dispatches`); }
+    // A commit in TWO merged PRs (a stack): a mismatch on the first is not a verdict — the second matches.
+    r = await run({ pulls: [...merged('someone-else'), { ...merged('octo')[0], number: 8 }], permission: 'maintain' });
+    assert.equal(r.c, null, 'a later merged PR merged by the approver still binds the approval'); assert.equal(dispatches(r.ctx), 1);
     const argv = r.ctx.recorder.find((x) => x.argv[0] === PINNED.gh && /commits\/[0-9a-f]{40}\/pulls/.test(x.argv[2])).argv;
     assert.equal(argv[2], `repos/o/r/commits/${fx.baseOid}/pulls`, 'the commit that introduced the spec blob is resolved to its PR');
   } finally { fx.cleanup(); }

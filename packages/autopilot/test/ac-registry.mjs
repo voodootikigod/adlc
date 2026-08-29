@@ -83,7 +83,8 @@ export const REGISTRY = {
     { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: null, noFixture: 'the allowlist constant has no runtime seam; the sibling entry carries keys.leakKey' },
     { fn: 'ac12_onlyThePinnedAdlcCarriesTheKey', file: 'keys.test.mjs', seam: 'keys.leakKey' },
   ],
-  13: [{ fn: 'ac13_unitShape', file: 'service.test.mjs', seam: 'service.omitEnvironmentFile' }],
+  13: [
+    { fn: 'ac13_restTokenValidated', file: 'service.test.mjs', seam: 'service.acceptAnyRest' },{ fn: 'ac13_unitShape', file: 'service.test.mjs', seam: 'service.omitEnvironmentFile' }],
   24: [
     { fn: 'ac24_derivedPathsAreAbsoluteUnderRoot', file: 'paths.test.mjs', seam: 'input.acceptAnything' },
     { fn: 'ac24_linkedWorktreeRefused', file: 'paths.test.mjs', seam: 'paths.allowLinkedWorktree' },
@@ -175,7 +176,8 @@ export const REGISTRY = {
     { fn: 'ac88_everyPatternIsReplacedWithItsName', file: 'redact.test.mjs', seam: 'redactor.disable' },
     { fn: 'ac88_failClosedOnThrowOrResidual', file: 'redact.test.mjs', seam: 'redactor.skipSecondPass' },
   ],
-  99: [{ fn: 'ac99_chunkedRedactionCatchesStraddlingSecret', file: 'redact.test.mjs', seam: 'redactor.disable' }],
+  99: [
+    { fn: 'ac99_overlapZoneRedactionKeepsOffsets', file: 'redact.test.mjs', seam: 'redact.carryUnredacted' },{ fn: 'ac99_chunkedRedactionCatchesStraddlingSecret', file: 'redact.test.mjs', seam: 'redactor.disable' }],
   102: [
     { fn: 'ac102_promptTransport', file: 'triage.test.mjs', seam: 'triage.promptInArgv' },
     { fn: 'ac102_promptOnStdinNeverArgv', file: 'deadline.test.mjs', seam: null, noFixture: 'stdin transport has no production seam that keeps the wrapper importable; triage.promptInArgv above is the biting fixture' },
@@ -285,6 +287,7 @@ export const REGISTRY = {
     { fn: 'ac83_specApprovalRequiresKeyedVerify', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipSignedVerify' },
   ],
   89: [
+    { fn: 'ac89_mergeIdentity', file: 'preflight-spec.test.mjs', seam: 'specApproval.firstMergedPrOnly' },
     { fn: 'ac89_mergeIdentity', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipMergeIdentity' },
   ],
   154: [

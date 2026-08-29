@@ -27,6 +27,7 @@ registerSeams([
   'preflight.acceptBlobOidAsSpecHash',  // the git blob OID of the spec is accepted as spec_hash
   'specApproval.skipSignedVerify',
   'specApproval.acceptUnsigned',
+  'specApproval.firstMergedPrOnly', // agy r1
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -123,6 +124,7 @@ export async function mergeIdentity({ ctx, oid, approver }) {
   if (!Array.isArray(pulls) || pulls.length === 0) return { ok: false, detail: `no pull request introduced ${sha}` };
   const merged = pulls.filter((p) => p && typeof p.merged_at === 'string' && p.merged_at && p.merged_by && typeof p.merged_by.login === 'string');
   if (merged.length === 0) return { ok: false, detail: `no MERGED pull request introduced ${sha}` };
+  let mismatch = null;
   for (const pr of merged) {
     const login = pr.merged_by.login;
     const perm = await permissionOf(ctx.gh, login);
@@ -131,9 +133,13 @@ export async function mergeIdentity({ ctx, oid, approver }) {
     try { const u = await ctx.gh.json(['api', `users/${encodeURIComponent(login)}`]); email = typeof u?.email === 'string' ? u.email : null; } catch { /* e-mail is optional */ }
     const a = String(approver ?? '').trim();
     if (a && (a === login || (email && a.toLowerCase() === email.toLowerCase()))) return { ok: true, login, pr: pr.number, sha };
-    return { ok: false, detail: `PR #${pr.number} was merged by ${login} (${perm}); the record's approver "${a}" names neither that login nor its e-mail` };
+    // A commit can sit in more than one merged PR (a stack): a mismatch on one is not a verdict
+    // until every merged PR was inspected (agy r1 c8). The first mismatch is the detail reported.
+    mismatch ??= { ok: false, detail: `PR #${pr.number} was merged by ${login} (${perm}); the record's approver "${a}" names neither that login nor its e-mail` };
+    // Mutation seam `specApproval.firstMergedPrOnly`: the first mismatch refuses outright.
+    if (active('specApproval.firstMergedPrOnly')) return mismatch;
   }
-  return { ok: false, detail: `no merged pull request for ${sha} was merged by an admin/maintain login` };
+  return mismatch ?? { ok: false, detail: `no merged pull request for ${sha} was merged by an admin/maintain login` };
 }
 
 /** `adlc gate-manifest verify --dir <cwd>/.adlc --allow-legacy-unsigned`, KEY-BEARING (§9.3): the only spawn that may see the key here. */

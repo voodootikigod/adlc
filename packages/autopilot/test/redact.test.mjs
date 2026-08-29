@@ -7,7 +7,7 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { createRedactor, redactRecord, redactStream, SECRET_PATTERNS, WITHHELD_DEAD_END, WITHHELD_BODY, CHUNK_BYTES } from '../lib/redact.mjs';
+import { createRedactor, redactRecord, redactStream, SECRET_PATTERNS, WITHHELD_DEAD_END, WITHHELD_BODY, CHUNK_BYTES, CHUNK_OVERLAP } from '../lib/redact.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 
 /** One sample that matches each pattern, by name. */
@@ -152,3 +152,20 @@ export async function ac91_outwardRedactionOnEveryExitPath() {
   } finally { fx.cleanup(); }
 }
 test('AC91: for every outward writer (terminal comment, digest, status file, run record, dead-end file, PR body) a payload carrying every SECRET_PATTERNS entry and the key is redacted; a redactor failure replaces the whole body with the withheld sentinel while the label is still applied', { timeout: 120_000 }, ac91_outwardRedactionOnEveryExitPath);
+
+export function ac99_overlapZoneRedactionKeepsOffsets() {
+  // A length-CHANGING redaction inside the overlap zone of chunk 1: the streamed output must equal the
+  // whole-text redaction (no duplicated or dropped characters across the chunk boundary).
+  const { redact } = createRedactor({});
+  const token = SAMPLES['GitHub token'];
+  // The secret STRADDLES the carry boundary of chunk 1 (CHUNK_BYTES - CHUNK_OVERLAP): its head is in the
+  // emitted part, its tail in the carry — the exact shape where an unredacted carry leaks the tail.
+  const whole = 'a'.repeat(CHUNK_BYTES - CHUNK_OVERLAP - 20) + ' ' + token + ' ' + 'b'.repeat(CHUNK_OVERLAP + 3000) + ' end';
+  const chunks = [whole.slice(0, CHUNK_BYTES), whole.slice(CHUNK_BYTES)];
+  const expected = redact(whole).text.slice(-CHUNK_BYTES);
+  const r = redactStream(chunks, { redact }, { keepChars: CHUNK_BYTES });
+  assert.equal(r.ok, true);
+  assert.ok(!r.text.includes(token));
+  assert.equal(r.text, expected, 'streamed redaction is offset-exact against the whole-text redaction');
+}
+test('AC99: a length-changing redaction inside the overlap zone neither duplicates nor drops characters across the chunk boundary', ac99_overlapZoneRedactionKeepsOffsets);

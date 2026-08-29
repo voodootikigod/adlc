@@ -102,7 +102,9 @@ export function validateUsageBody(body) {
 /** The canonical no-scoped-limit predicate (AC 47), stated over the RAW body. */
 export function noScopedLimit(body, family) {
   const key = `seven_day_${family}`;
-  const sibling = !(key in body) || body[key] === null;
+  // A nullish or primitive body has no scoped key at all (never a TypeError from `in`; agy r1 c6).
+  const obj = body !== null && typeof body === 'object' ? body : {};
+  const sibling = !(key in obj) || obj[key] === null;
   const inLimits = Array.isArray(body?.limits) && body.limits.some((e) => familyOf(e?.scope?.model?.display_name) === family);
   return sibling && !inLimits;
 }

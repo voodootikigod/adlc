@@ -13,7 +13,9 @@ import { isAbsolute, join } from 'node:path';
 import { validateRepoSpec } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['service.omitEnvironmentFile', 'service.relativeWorkingDirectory']);
+registerSeams(['service.omitEnvironmentFile', 'service.relativeWorkingDirectory',
+  'service.acceptAnyRest', // agy r1
+]);
 
 export const UNIT_NAME = 'adlc-autopilot.service';
 
@@ -55,6 +57,9 @@ export function renderUnit({ repoRoot, nodePath, binPath, repo, rest = '10m', ss
   if (/[\s%]/.test(repoRoot + nodePath + binPath + (sshIdentity ?? '') + (sshAuthSock ?? ''))) {
     throw new ServiceError('bad-unit-path', 'unit paths may not contain whitespace or % (systemd would expand or split them)');
   }
+  // `rest` is interpolated into ExecStart like the paths: one duration token, nothing systemd
+  // could split or expand (agy r1 c8). Mutation seam `service.acceptAnyRest`: unvalidated.
+  if (!active('service.acceptAnyRest') && !/^[0-9]+(ms|s|m|h)?$/.test(String(rest))) throw new ServiceError('bad-rest', `--rest must be a duration token like 10m, got ${JSON.stringify(String(rest)).slice(0, 40)}`);
   const exec = `${nodePath} ${binPath} loop --rest ${rest}${sshIdentity ? ` --ssh-identity ${sshIdentity}` : ''}`;
   const lines = [
     '[Unit]',

@@ -39,3 +39,12 @@ export function ac71_absolutePathsAndModes() {
   assert.match(installInstructions({ unitPath: '/x' }), new RegExp(`enable --now ${UNIT_NAME}`));
 }
 test('AC71: WorkingDirectory/ExecStart/EnvironmentFile are absolute and literal; explicit vs agent mode is exclusive; a missing .adlc/config.json is bad-working-directory', ac71_absolutePathsAndModes);
+
+export function ac13_restTokenValidated() {
+  const ok = renderUnit({ ...base, sshAuthSock: '/run/user/1000/ssh-agent.sock', rest: '15m' });
+  assert.match(ok, /--rest 15m/);
+  for (const bad of ['10m\nExecStartPre=/bin/evil', '10m --dangerous', '10 m', '', 'ten']) {
+    assert.throws(() => renderUnit({ ...base, sshAuthSock: '/run/user/1000/ssh-agent.sock', rest: bad }), /bad-rest/, JSON.stringify(bad));
+  }
+}
+test('AC13: the --rest token is validated before it reaches ExecStart — no directive or flag injection through it', ac13_restTokenValidated);

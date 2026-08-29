@@ -91,6 +91,7 @@ export function ac47_strictSchemaAndNoScopedLimit() {
   // The canonical predicate over the RAW body.
   const noLimit = body({ limits: [scopedEntry('Sonnet', 5)], extra: { seven_day_opus: null } });
   assert.equal(noScopedLimit(noLimit, 'opus'), true);
+  for (const bad of [null, undefined, 7, 'x']) assert.equal(typeof noScopedLimit(bad, 'opus'), 'boolean', `a ${bad} body never throws`);
   assert.equal(gate(noLimit).windows.scoped, null, 'no scoped limit → the gate reads no scoped window');
   const malformedOpus = body({ limits: [{ kind: 'weekly', scope: { model: { display_name: 'Opus' } } }] });
   assert.equal(validateUsageBody(malformedOpus).reason, QUOTA_UNKNOWN, 'a present-but-malformed Opus entry is quota-unknown, never "no limit"');

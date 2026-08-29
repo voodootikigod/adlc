@@ -9,7 +9,7 @@ import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { buildFleetArgv, preStrikeArgv, preStrikeEnv, readSet, PRE_STRIKE_ENV_KEYS, REASON_CODES_FLEET, SYSTEM_ROOTS } from '../lib/fleet-args.mjs';
 import { outcomeFor, remainingBudget } from '../lib/run.mjs';
 import { dispatchFleet, parseFleetResult, writeDeadEnd } from '../lib/dispatch.mjs';
@@ -233,7 +233,15 @@ export function ac95_privateTmpAndPerFileToolBinds() {
   const reals = pinnedRealpaths(ctx.pinned).filter((p) => !SYSTEM_ROOTS.some((r) => p === r || p.startsWith(`${r}/`)));
   for (const p of reals) assert.ok(set.includes(p), `the read set contains the realpath of ${p}`);
   for (const p of reals) assert.ok(!set.includes(p.replace(/\/[^/]+$/, '')), `no directory that is a parent of ${p}`);
-  assert.ok(set.some((p) => /\/npm\b|corepack/.test(p)) || true, 'the npm/corepack trees are in the set when present');
+  // Never `|| true` (agy r1 c17): the npm/corepack trees are asserted whenever the pinned node's prefix has them.
+  // Pin the RUNNING node (its prefix carries the real npm/corepack trees) so the assertion is load-bearing.
+  const realNode = realpathSync(process.execPath);
+  const realCtx = { ...ctx, pinned: { ...ctx.pinned, node: realNode, 'node:realpath': realNode } };
+  const realSet = readSet({ ctx: realCtx });
+  const prefix = dirname(dirname(realNode));
+  const trees = ['npm', 'corepack'].map((t) => join(prefix, 'lib', 'node_modules', t)).filter((t) => existsSync(t));
+  assert.ok(trees.length > 0, `the running node's prefix ${prefix} carries a tool tree (npm ships with node)`);
+  for (const t of trees) assert.ok(realSet.includes(t), `the ${t} tree is in the read set`);
   const argv = argvFor(ctx);
   assert.equal(valueOf(argv, '--model-plane-read'), 'bounded', 'bounded = the private tmpfs and per-file binds');
   assert.equal(valueOf(argv, '--model-plane-read-only'), set.join(','));
