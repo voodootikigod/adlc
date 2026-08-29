@@ -26,7 +26,7 @@ adlc preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 
 | Flag | Description |
 | --- | --- |
-| `--test-cmd "CMD"` | Run `CMD` via `sh -c`; expect exit 0. Output tail shown on failure. |
+| `--test-cmd "CMD"` | Run `CMD` via `sh -c`; expect exit 0. Output tail shown on failure. A passed-but-empty value (e.g. an unset `$TEST_CMD`) is rejected with exit 1 — `--test-cmd requires a non-empty command` — never silently skipped. |
 | `--gh` | Run `gh auth status`; expect exit 0. |
 | `--llm` | Call `detectProvider()` and assert non-null. No API call is made; reports which provider was found. |
 | `--worktrees` | Run a `git worktree add --detach … HEAD` then remove cycle. |
@@ -35,6 +35,13 @@ adlc preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 With no flags, the four required checks (`bash`, `git`, `write`, `branch`) run.
 Each optional flag adds a check that becomes required for that run. Every check
 that creates a side effect cleans up in a `finally` block.
+
+A `--test-cmd` that is passed but empty or whitespace-only (what
+`preflight --test-cmd "$TEST_CMD"` produces in CI when the variable is unset)
+is neither skipped nor run: it is an operational error — preflight prints
+`error: --test-cmd requires a non-empty command …` to stderr, prints nothing on
+stdout (no table, no verdict, no `--json` document), and exits 1. A requested
+check that cannot run must never look like a pass.
 
 ## Exit codes
 

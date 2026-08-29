@@ -3,7 +3,7 @@
 // Usage: preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 
 import { parseArgs, printJson } from '@adlc/core';
-import { runChecks } from '../lib/runner.mjs';
+import { runChecks, isBlankTestCmd, EMPTY_TEST_CMD_MESSAGE } from '../lib/runner.mjs';
 import { renderTable, renderVerdict, computeVerdict } from '../lib/render.mjs';
 
 const { values: flags } = parseArgs({
@@ -15,6 +15,17 @@ const { values: flags } = parseArgs({
     json:        { type: 'boolean', default: false },
   },
 });
+
+// A --test-cmd that was passed but is empty/whitespace (the `--test-cmd
+// "$TEST_CMD"` with an unset variable case, #712) is a USER INPUT error:
+// reject it here, before runChecks, so it is reported as such (exit 1, nothing
+// on stdout — a --json reader must never see a verdict document for a run
+// that refused to start) and not as the generic "internal error" the catch
+// below would attach to the library's own guard.
+if (isBlankTestCmd(flags['test-cmd'])) {
+  console.error(`error: ${EMPTY_TEST_CMD_MESSAGE}`);
+  process.exit(1);
+}
 
 let results;
 try {

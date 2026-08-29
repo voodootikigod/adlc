@@ -56,7 +56,7 @@ preflight --test-cmd "npm test" --gh --llm --worktrees
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--test-cmd "CMD"` | string | Run CMD via `sh -c`, expect exit 0. Tail of output shown on failure. |
+| `--test-cmd "CMD"` | string | Run CMD via `sh -c`, expect exit 0. Tail of output shown on failure. A passed-but-empty value (e.g. an unset `$TEST_CMD`) is rejected with exit 1 — `--test-cmd requires a non-empty command` — never silently skipped. |
 | `--gh` | boolean | Run `gh auth status`; expect exit 0. |
 | `--llm` | boolean | Call `detectProvider()` and assert it is non-null. No API call made. Reports which provider was found. |
 | `--worktrees` | boolean | `git worktree add --detach .worktrees/preflight-test HEAD` then remove. |
@@ -92,6 +92,12 @@ preflight --test-cmd "npm test" --gh --llm --worktrees
 
 Note: optional checks that are NOT requested are not run and cannot fail.
 When a flag like `--gh` is passed, that check becomes required for this run.
+A `--test-cmd` that is passed but empty or whitespace-only (what
+`preflight --test-cmd "$TEST_CMD"` produces in CI when the variable is unset)
+is neither skipped nor run: it is an operational error — preflight prints
+`error: --test-cmd requires a non-empty command …` to stderr, prints nothing on
+stdout (no table, no verdict, no `--json` document), and exits 1. A requested
+check that cannot run must never look like a pass.
 
 ## Output
 
