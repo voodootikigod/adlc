@@ -105,3 +105,16 @@ test('a dead-end already produced by scheduler.mjs\'s own fence() (already cappe
   const prompt = fixPrompt(ticket(), {}, [alreadyCapped]);
   assert.ok(prompt.length < 30_000, 'a second fence pass over already-capped content must not re-expand it');
 });
+
+test('fixPrompt keeps a pre-fenced dead end INTACT at the cap: the inner opening marker survives the attempt fence (agy r1 c1)', async () => {
+  const { fenceDeadEnd, DEAD_END_MAX_CHARS, capFor } = await import('../lib/charters.mjs');
+  const inner = fenceDeadEnd('PRIOR_ROUND', 'x'.repeat(DEAD_END_MAX_CHARS));
+  assert.ok(inner.startsWith('<<UNTRUSTED:PRIOR_ROUND:'));
+  const p = fixPrompt({ id: 'T1', title: 't', body: 'b', scope: ['a/**'] }, { test: 't' }, [inner]);
+  assert.ok(p.includes(inner), 'the whole inner block, opener included, is embedded');
+  assert.ok(p.includes('<<UNTRUSTED:PRIOR_ATTEMPT_1:'), 'wrapped by the attempt fence');
+  assert.ok(!p.includes('PRIOR_ATTEMPT_1 (truncated'), 'not truncated');
+  assert.equal(capFor('plain text'), DEAD_END_MAX_CHARS, 'raw text keeps the plain cap');
+  const raw = fixPrompt({ id: 'T1', title: 't', body: 'b', scope: ['a/**'] }, { test: 't' }, ['y'.repeat(DEAD_END_MAX_CHARS + 10)]);
+  assert.ok(raw.includes('PRIOR_ATTEMPT_1 (truncated'), 'over-cap raw text is still capped');
+});

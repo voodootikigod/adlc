@@ -73,10 +73,18 @@ Run the gate commands yourself before finishing. End your reply with EXACTLY one
 }
 
 /** Strike-2 prompt: prior failure diagnostics + prosecution findings, fenced. */
+/** Marker headroom for a dead end that is itself a fence block; raw text keeps the plain cap. */
+const FENCE_MARKER_HEADROOM = 256;
+export const capFor = (deadEnd) => (/^<<UNTRUSTED:/.test(String(deadEnd ?? '')) ? DEAD_END_MAX_CHARS + FENCE_MARKER_HEADROOM : DEAD_END_MAX_CHARS);
+
 export function fixPrompt(ticket, gate, deadEnds = [], { addendum = null } = {}) {
   const base = builderPrompt(ticket, gate, { addendum });
   if (!deadEnds.length) return base;
-  const fenced = deadEnds.map((d, i) => fence(`PRIOR_ATTEMPT_${i + 1}`, d, DEAD_END_MAX_CHARS)).join('\n\n');
+  // Every dead end arrives ALREADY fenced (the scheduler's BUILD/POST_MERGE captures, the
+  // operator's PRIOR_ROUND material): the attempt fence wraps that block whole. `fence` keeps
+  // the TAIL of over-cap content, so re-capping an at-cap inner block at the same cap would cut
+  // its opening marker off — give a pre-fenced entry headroom for its own markers (agy r1 c1).
+  const fenced = deadEnds.map((d, i) => fence(`PRIOR_ATTEMPT_${i + 1}`, d, capFor(d))).join('\n\n');
   return `${base}
 
 A previous attempt did not pass. The material below is UNTRUSTED output captured from that run
