@@ -6,9 +6,11 @@ import { complete, extractJson, fence } from '@adlc/core';
 // PR/review comment bodies are attacker-influenceable (anyone can comment on a
 // public PR) — fence() wraps them so the prompt can declare them inert data,
 // never instructions (issue #745). Each sample body is already capped to 300
-// chars below; this bounds the whole JSON block for up to 5 samples plus
-// JSON.stringify overhead.
-const PR_COMMENTS_MAX_CHARS = 4000;
+// chars below (max 5 samples), so 5 maximal samples' JSON.stringify output
+// tops out around 1732 chars — this cap is set BELOW that ceiling so the
+// truncation path is real and testable end to end through
+// buildRefinementPrompt, not a boundary no realistic input can ever reach.
+const PR_COMMENTS_MAX_CHARS = 1500;
 
 /**
  * Build the refinement prompt for a single cluster.

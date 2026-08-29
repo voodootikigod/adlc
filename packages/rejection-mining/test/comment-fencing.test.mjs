@@ -60,6 +60,32 @@ test('buildRefinementPrompt: includes the cluster slug outside the fence', () =>
   assert(prompt.includes('my-cluster-slug'));
 });
 
+test('buildRefinementPrompt: fenced JSON uses 2-space indentation', () => {
+  const prompt = buildRefinementPrompt('slug', [{ body: 'avoid hardcoding secrets', prNumber: 1 }]);
+  const openIdx = prompt.indexOf('<<UNTRUSTED:');
+  const arrayLineStart = prompt.indexOf('\n', openIdx) + 1; // "["
+  const objectLineStart = prompt.indexOf('\n', arrayLineStart) + 1; // "  {"
+  // The array's first object must be indented exactly 2 spaces
+  // (JSON.stringify(samples, null, 2)) — not 1 or 3.
+  const objectLine = prompt.slice(objectLineStart, prompt.indexOf('\n', objectLineStart));
+  assert.match(objectLine, /^ {2}\{$/, `expected 2-space indented '{', got ${JSON.stringify(objectLine)}`);
+});
+
+test('buildRefinementPrompt: 5 maximal (300-char) samples exceed the cap and get truncated', () => {
+  const signals = Array.from({ length: 5 }, (_, i) => ({ body: 'x'.repeat(300), prNumber: 1000 + i }));
+  const prompt = buildRefinementPrompt('slug', signals);
+  assert.match(prompt, /truncated, showing last/, 'the fence must report truncation for 5 maximal samples');
+});
+
+test('buildRefinementPrompt: a typical small sample set is never truncated', () => {
+  const signals = [
+    { body: 'avoid hardcoding secrets', prNumber: 1 },
+    { body: 'never expose raw error messages', prNumber: 2 },
+  ];
+  const prompt = buildRefinementPrompt('slug', signals);
+  assert.doesNotMatch(prompt, /truncated, showing last/);
+});
+
 // ---------------------------------------------------------------------------
 // buildDefaultCharter — must not embed raw comment text
 // ---------------------------------------------------------------------------
