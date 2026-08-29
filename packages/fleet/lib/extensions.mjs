@@ -13,7 +13,7 @@ import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plan
 import { prepareSyntheticHome } from './synthetic-home.mjs';
 import { startEgressProxy, egressEnv, DEFAULT_BRIDGE_PORT } from './egress-proxy.mjs';
 import {
-  assertBareMirror, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip,
+  assertBareMirror, assertMirrorConfigPristine, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip,
 } from './git-mirror.mjs';
 import * as worktrees from './worktrees.mjs';
 
@@ -175,6 +175,10 @@ export function mirrorCreateWorktree({ repo, ticketId, integrationBranch, mirror
  * refresh the gate worktree. Returns { ok, sha } or { ok:false, reason, detail }.
  */
 export function mirrorFetchBack({ repo, mirror, workerBranch, cutTip, gatePath, gitAt }) {
+  // The worker had read-write access to the mirror: its config/hooks are re-checked BEFORE the
+  // host runs any git against it (codex r14 #1). A poisoned mirror is a terminal fetch failure.
+  try { assertMirrorConfigPristine({ mirror, gitAt }); }
+  catch (e) { return { ok: false, reason: 'mirror-fetch-failed', step: 'mirror-pristine', detail: e.message }; }
   detachGateWorktree({ path: gatePath, gitAt });
   const fb = fetchBackWorkerBranch({ repo, mirror, workerBranch, cutTip, gitAt });
   if (!fb.ok) return fb;
@@ -192,7 +196,11 @@ export function mirrorFetchBack({ repo, mirror, workerBranch, cutTip, gatePath, 
 }
 
 export function mirrorCleanup({ repo, mirror, path, gatePath, repoGit, gitAt }) {
-  removeMirrorWorktree({ mirror, path, gitAt });
+  // Never run git inside a poisoned mirror, even to clean up: drop the worktree directory only.
+  let pristine = true;
+  try { assertMirrorConfigPristine({ mirror, gitAt }); } catch { pristine = false; }
+  if (pristine) removeMirrorWorktree({ mirror, path, gitAt });
+  else if (existsSync(path)) rmSync(path, { recursive: true, force: true });
   if (existsSync(gatePath)) worktrees.removeWorktree(repo, gatePath, repoGit);
   worktrees.pruneWorktrees(repo, repoGit);
 }

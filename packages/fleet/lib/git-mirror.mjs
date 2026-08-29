@@ -72,6 +72,48 @@ function refSha(git, fullRef) {
 }
 
 /** Throws unless `mirror` is a bare repository; returns its branch names. */
+/**
+ * The only config keys a disposable mirror ever carries (the bare-repository boilerplate).
+ * The worker has read-write access to the mirror's git directory in mirror mode, and the
+ * HOST later runs git inside it (worktree add/remove/prune, fetch): a `core.fsmonitor`,
+ * `core.hooksPath`, `filter.*.smudge`, `core.sshCommand`, `include.path`, … planted in that
+ * config would execute as the host user. A positive allowlist, never a deny-list (codex r14 #1).
+ */
+export const MIRROR_CONFIG_ALLOWED_KEYS = Object.freeze([
+  'core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates',
+  'core.ignorecase', 'core.precomposeunicode', 'core.symlinks',
+]);
+
+/** Host git invocations INSIDE the mirror carry these, whatever the mirror's own config says. */
+export const HOST_SAFE_GIT_FLAGS = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false']);
+
+/**
+ * Refuse a mirror whose `config` carries any key outside the allowlist, any `config.worktree`
+ * under `worktrees/`, or any live hook. Reads the config as a FILE (`git config --file`), which
+ * never consults hooks or fsmonitor, so this check is safe to run on a poisoned mirror.
+ */
+export function assertMirrorConfigPristine({ mirror, gitAt = defaultGit } = {}) {
+  requireArgs('assertMirrorConfigPristine', { mirror }, ['mirror']);
+  const git = gitAt(mirror);
+  const configPath = join(mirror, 'config');
+  let listing = '';
+  if (existsSync(configPath)) {
+    try { listing = git('config', '--file', configPath, '--list', '--name-only'); }
+    catch (e) { throw new Error(`mirror ${mirror} config is unreadable (${errorText(e)}): the mirror is refused`); }
+  }
+  const keys = listing.split('\n').map((k) => k.trim().toLowerCase()).filter(Boolean);
+  const foreign = keys.filter((k) => !MIRROR_CONFIG_ALLOWED_KEYS.includes(k));
+  if (foreign.length) throw new Error(`mirror ${mirror} is poisoned: config carries ${foreign.join(', ')} (a disposable mirror sets only ${MIRROR_CONFIG_ALLOWED_KEYS.join(', ')})`);
+  const worktreesDir = join(mirror, 'worktrees');
+  if (existsSync(worktreesDir)) {
+    for (const w of readdirSync(worktreesDir)) if (existsSync(join(worktreesDir, w, 'config.worktree'))) throw new Error(`mirror ${mirror} is poisoned: worktrees/${w}/config.worktree exists`);
+  }
+  const hooksDir = join(mirror, 'hooks');
+  const liveHooks = existsSync(hooksDir) ? readdirSync(hooksDir).filter((f) => !f.endsWith('.sample')) : [];
+  if (liveHooks.length) throw new Error(`mirror ${mirror} is poisoned: live hooks (${liveHooks.join(', ')})`);
+  return { keys };
+}
+
 export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {
   requireArgs('assertBareMirror', { mirror }, ['mirror']);
   const git = gitAt(mirror);
@@ -92,6 +134,7 @@ export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {
   const hooksDir = join(mirror, 'hooks');
   const liveHooks = existsSync(hooksDir) ? readdirSync(hooksDir).filter((f) => !f.endsWith('.sample')) : [];
   if (liveHooks.length) throw new Error(`mirror ${mirror} carries hooks (${liveHooks.join(', ')}); a disposable mirror has none`);
+  assertMirrorConfigPristine({ mirror, gitAt });
   return { branches, baseBranch: base[0] };
 }
 
@@ -105,7 +148,7 @@ export function refreshMirrorTip({ mirror, repo, baseBranch, sourceRef, tip, git
   requireOid('refreshMirrorTip', 'tip', tip);
   const git = gitAt(mirror);
   try { git('cat-file', '-e', `${tip}^{commit}`); return { refreshed: false }; } catch { /* not held yet */ }
-  git('-c', 'core.hooksPath=/dev/null', 'fetch', '-q', '--no-tags', repo, `refs/heads/${sourceRef}:refs/heads/${baseBranch}`);
+  git(...HOST_SAFE_GIT_FLAGS, 'fetch', '-q', '--no-tags', repo, `refs/heads/${sourceRef}:refs/heads/${baseBranch}`);
   try { git('cat-file', '-e', `${tip}^{commit}`); } catch (e) { throw new Error(`mirror ${mirror} still lacks ${tip} after refreshing ${baseBranch} from ${sourceRef}: ${errorText(e)}`); }
   return { refreshed: true };
 }
@@ -144,10 +187,10 @@ export function cutMirrorWorktree({ mirror, workerBranch, path, cutTip, gitAt = 
     throw new Error(`cut tip ${cutTip} is not a commit the mirror ${mirror} holds (${errorText(e)}); ` +
       'the mirror carries only the pinned baseline and the issue branch');
   }
-  try { git('worktree', 'remove', '--force', path); } catch { /* not a registered worktree */ }
-  try { git('worktree', 'prune'); } catch { /* best effort */ }
+  try { git(...HOST_SAFE_GIT_FLAGS, 'worktree', 'remove', '--force', path); } catch { /* not a registered worktree */ }
+  try { git(...HOST_SAFE_GIT_FLAGS, 'worktree', 'prune'); } catch { /* best effort */ }
   try { git('branch', '-D', workerBranch); } catch { /* no stale branch */ }
-  git('worktree', 'add', '-b', workerBranch, path, cutTip);
+  git(...HOST_SAFE_GIT_FLAGS, 'worktree', 'add', '-b', workerBranch, path, cutTip);
   return { path, branch: workerBranch, startSha: cutTip };
 }
 
@@ -254,8 +297,8 @@ export function detachGateWorktree({ path, gitAt = defaultGit } = {}) {
 export function removeMirrorWorktree({ mirror, path, gitAt = defaultGit } = {}) {
   requireArgs('removeMirrorWorktree', { mirror, path }, ['mirror', 'path']);
   const git = gitAt(mirror);
-  try { git('worktree', 'remove', '--force', path); } catch { /* already gone or never registered */ }
-  try { git('worktree', 'prune'); } catch { /* best effort */ }
+  try { git(...HOST_SAFE_GIT_FLAGS, 'worktree', 'remove', '--force', path); } catch { /* already gone or never registered */ }
+  try { git(...HOST_SAFE_GIT_FLAGS, 'worktree', 'prune'); } catch { /* best effort */ }
   return { path, removed: !existsSync(path) };
 }
 

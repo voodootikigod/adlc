@@ -17,6 +17,7 @@
 // issued it and nothing else.
 
 import net from 'node:net';
+import dns from 'node:dns';
 import { chmodSync, unlinkSync } from 'node:fs';
 
 /** Loopback port the in-sandbox bridge listens on unless fleet says otherwise. */
@@ -27,6 +28,7 @@ export const REFUSAL = Object.freeze({
   MALFORMED: 'malformed-head',
   METHOD: 'method-not-connect',
   NOT_ALLOWED: 'not-allowlisted',
+  PRIVATE: 'private-destination',
 });
 
 const HEAD_TERMINATOR = '\r\n\r\n';
@@ -124,8 +126,50 @@ function refuse(client, ctx, target, reason) {
   client.end(REPLY.forbidden);
 }
 
+/** True for loopback, link-local, private, CGNAT, multicast, unspecified and reserved addresses (v4, v6, v4-mapped). */
+export function isPublicAddress(ip) {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    return true;
+  }
+  if (v === 6) {
+    const low = ip.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
+    if (mapped) return isPublicAddress(mapped[1]);
+    if (low === '::1' || low === '::') return false;
+    if (/^f[cd]/.test(low)) return false;            // fc00::/7 unique local
+    if (/^fe[89ab]/.test(low)) return false;         // fe80::/10 link-local
+    if (/^ff/.test(low)) return false;               // multicast
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve an allowlisted host to the ONE address the tunnel will dial. Every address the name
+ * resolves to must be public — a name under the worker's control (DNS rebinding) cannot reach
+ * loopback, link-local or RFC1918 space through the proxy (codex r14 #2). An IP LITERAL in the
+ * allowlist is the operator's explicit intent and is dialled as written. The tunnel then dials the
+ * vetted ADDRESS, never re-resolving the name.
+ */
+export async function resolveVettedAddress(host, lookup) {
+  if (net.isIP(host)) return host;
+  const found = await lookup(host, { all: true });
+  const addrs = (Array.isArray(found) ? found : [found]).map((a) => (typeof a === 'string' ? a : a?.address)).filter(Boolean);
+  if (addrs.length === 0) throw new Error(`${host} resolved to no address`);
+  const bad = addrs.find((a) => !isPublicAddress(a));
+  if (bad) throw new Error(`${host} resolves to a non-public address (${bad})`);
+  return addrs[0];
+}
+
 function tunnel(client, target, leftover, ctx) {
-  const upstream = ctx.connect(target.port, target.host);
+  const upstream = ctx.connect(target.port, target.address ?? target.host);
   let established = false;
   upstream.on('error', () => {
     // Before the tunnel is up the client is still waiting on an HTTP reply, so it
@@ -174,7 +218,11 @@ function handleClient(client, ctx) {
     if (!target) return refuse(client, ctx, NO_TARGET, REFUSAL.MALFORMED);
     if (target.method !== 'CONNECT') return refuse(client, ctx, target, REFUSAL.METHOD);
     if (!isAllowed(target, ctx.allowlist)) return refuse(client, ctx, target, REFUSAL.NOT_ALLOWED);
-    tunnel(client, target, buffered.subarray(idx + HEAD_TERMINATOR.length), ctx);
+    resolveVettedAddress(target.host, ctx.lookup).then(
+      (address) => { if (!client.destroyed) tunnel(client, { ...target, address }, buffered.subarray(idx + HEAD_TERMINATOR.length), ctx); },
+      (e) => { ctx.log({ event: 'egress-proxy-refused', reason: REFUSAL.PRIVATE, host: target.host, detail: e.message }); refuse(client, ctx, target, REFUSAL.PRIVATE); },
+    );
+    return undefined;
   };
   client.on('data', onHead);
 }
@@ -187,10 +235,10 @@ function handleClient(client, ctx) {
  * `connect(port, host)` is injectable for tests and must return a socket that
  * emits `connect`, `error` and `close`.
  */
-export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect, headTimeoutMs = HEAD_TIMEOUT_MS, maxClients = MAX_CLIENTS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
+export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect, lookup = dns.promises.lookup, headTimeoutMs = HEAD_TIMEOUT_MS, maxClients = MAX_CLIENTS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
   if (typeof socketPath !== 'string' || socketPath.length === 0) throw new TypeError('socketPath is required');
   const normalized = normalizeAllowlist(allowlist);
-  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect, headTimeoutMs, maxClients, setTimeoutFn, clearTimeoutFn };
+  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect, lookup, headTimeoutMs, maxClients, setTimeoutFn, clearTimeoutFn };
   const server = net.createServer((client) => handleClient(client, ctx));
   const close = () => new Promise((resolve) => {
     for (const client of ctx.clients) client.destroy();

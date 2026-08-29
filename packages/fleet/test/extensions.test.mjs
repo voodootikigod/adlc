@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { buildLiveDeps } from '../lib/live-deps.mjs';
 import { advanceTicket } from '../lib/scheduler.mjs';
 import { BRIDGE_PATH, mirrorCreateWorktree, mirrorFetchBack } from '../lib/extensions.mjs';
+import { assertBareMirror, assertMirrorConfigPristine } from '../lib/git-mirror.mjs';
 import { detectBackend } from '../lib/sandbox.mjs';
 import { BoundedModelSandbox } from '../lib/bounded-model-plane.mjs';
 import { findInner, unwrapAll } from './helpers/worker-calls.mjs';
@@ -430,5 +431,33 @@ test('mirrorFetchBack rolls the compare-and-swap BACK when the gate worktree can
     assert.equal(again.ok, true, 'the retry against the SAME cut tip lands (no wedge)');
     assert.equal(sh(repo, 'rev-parse', a.branch), again.sha);
     assert.ok(existsSync(join(a.gatePath, 'w.txt')), 'the gate worktree is attached on the fetched-back branch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a POISONED mirror is refused before any host git runs inside it: assertBareMirror throws, mirrorFetchBack returns mirror-fetch-failed step mirror-pristine with the branch untouched and no fetch, and a pristine mirror passes', () => {
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    writeFileSync(join(a.path, 'w.txt'), '1\n'); sh(a.path, 'add', '-A'); sh(a.path, 'commit', '-q', '-m', 'w1');
+    // The worker plants a smudge filter in the mirror's config (would run as the host user on the next checkout).
+    sh(mirror, 'config', '--file', join(mirror, 'config'), 'filter.evil.smudge', 'touch /tmp/pwned-by-mirror');
+    const fb = mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt });
+    assert.equal(fb.ok, false); assert.equal(fb.reason, 'mirror-fetch-failed'); assert.equal(fb.step, 'mirror-pristine');
+    assert.match(fb.detail, /poisoned.*filter\.evil\.smudge/);
+    assert.equal(sh(repo, 'rev-parse', a.branch), a.cutTip, 'the caller branch never moved');
+    assert.equal(sh(repo, 'for-each-ref', 'refs/fleet/fetched'), '', 'no fetch was attempted');
+    assert.ok(!existsSync('/tmp/pwned-by-mirror'), 'nothing executed');
+    sh(mirror, 'config', '--file', join(mirror, 'config'), '--unset', 'filter.evil.smudge');
+    for (const [k, v] of [['core.fsmonitor', '/tmp/evil-monitor'], ['core.hookspath', '/tmp/evil-hooks'], ['core.sshcommand', '/tmp/evil-ssh'], ['include.path', '/tmp/evil-include']]) {
+      sh(mirror, 'config', '--file', join(mirror, 'config'), k, v);
+      assert.throws(() => assertBareMirror({ mirror, gitAt }), /poisoned/, `${k} is refused at run start`);
+      sh(mirror, 'config', '--file', join(mirror, 'config'), '--unset', k);
+    }
+    writeFileSync(join(mirror, 'hooks', 'post-checkout'), '#!/bin/sh\ntouch /tmp/pwned-by-hook\n');
+    assert.throws(() => assertMirrorConfigPristine({ mirror, gitAt }), /poisoned: live hooks/);
+    rmSync(join(mirror, 'hooks', 'post-checkout'));
+    assert.ok(assertBareMirror({ mirror, gitAt }).baseBranch, 'the pristine mirror passes');
+    const again = mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt });
+    assert.equal(again.ok, true, JSON.stringify(again));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
