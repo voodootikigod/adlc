@@ -77,3 +77,14 @@ export function ac68_trustedBinDirsNarrows() {
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 test('AC68: --trusted-bin-dirs restricts the search to the given directories and the child PATH is that list', ac68_trustedBinDirsNarrows);
+
+export async function ac68_pinnedPathIsTheRealpath() {
+  const { pinToolchain } = await import('../lib/tools.mjs');
+  const uid = process.getuid();
+  const names = ['adlc', 'bwrap', 'claude', 'codex', 'adversarial-review', 'gh', 'git', 'ssh', 'ssh-add', 'ssh-keygen', 'npm', 'node'];
+  const r = pinToolchain({ pathValue: '/opt/links', repoRoot: null, uid, exists: (p) => p === '/opt/links' || p === '/opt/real' || names.some((n) => p === `/opt/links/${n}` || p === `/opt/real/${n}`), realpath: (p) => p.replace('/opt/links/', '/opt/real/'), stat: () => ({ uid, mode: 0o755 }) });
+  assert.equal(r.pinned.gh, '/opt/real/gh', 'the pinned executable is the REALPATH, never the symlink that could be re-pointed later');
+  assert.equal(r.pinned['gh:found'], '/opt/links/gh'); assert.equal(r.pinned['gh:realpath'], '/opt/real/gh');
+  for (const n of names) assert.ok(String(r.pinned[n]).startsWith('/opt/real/'), n);
+}
+test('AC68: every pinned tool path is the resolved REALPATH (a symlink on the search list is recorded but never the executable that is spawned or bound)', ac68_pinnedPathIsTheRealpath);

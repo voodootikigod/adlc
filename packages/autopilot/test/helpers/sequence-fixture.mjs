@@ -43,7 +43,7 @@ export function appendManifestLine(cwd, entry) {
  * @param opts.checks       () → rows for `gh pr checks` (default all blocking jobs pass)
  * @param opts.fleet        (argv, meta, fx) → custom fleet behaviour; default = one worker commit + integration branch
  */
-export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null, spawner = {}, quotaRead = undefined, local: localOverrides = {}, dryRun = false, flags = {}, fetchImpl = null } = {}) {
+export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, onComplete = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null, spawner = {}, quotaRead = undefined, local: localOverrides = {}, dryRun = false, flags = {}, fetchImpl = null } = {}) {
   const gh = fakeGithub({ permissions: { op: 'admin' } });
   const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', createdAt: '2026-08-01T10:00:00Z', labels: [], author: { login: 'op' }, authorAssociation: 'OWNER' } };
   const handlers = {};
@@ -97,6 +97,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
       if (verb === 'show') return { stdout: JSON.stringify({ ticket: cur, ticketHash: sha256(readFileSync(shard, 'utf8')), storeHash: 's1' }) };
       if (verb === 'complete') {
         state.completeCalls++;
+        onComplete?.(root, state);                                                // a hook BEFORE the shard is completed (its file lands in the completion commit)
         writeFileSync(shard, `${JSON.stringify({ ...cur, completed: true }, null, 2)}\n`);
         appendManifestLine(root, { gate: 'ticket-complete', ticket: cur.id });
         return { stdout: twoDocs({ ticketId: cur.id }, { applied: true, storeHash: 's2', ticketHash: sha256(readFileSync(shard, 'utf8')) }) };

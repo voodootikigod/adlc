@@ -22,6 +22,7 @@ registerSeams([
   'review.attestWithoutHeadCheck', // 7b/7c run without the HEAD/clean/manifest-only assertions
   'review.reopenWithoutAuthorize', // the reopen update omits --authorize,
   'review.approveOnExitZero',
+  'review.trustDocumentOverStatus',
 ]);
 
 export const MANIFEST_PATH_RE = /^\.adlc\/manifest\.d\/[^/]+\.jsonl$/;
@@ -151,7 +152,11 @@ export async function finalReview({ ctx, issue, cwd, baseOid }) {
   else if (r.status === 0) verdict = active('review.approveOnExitZero') ? 'approve' : (documented === 'approve' ? 'approve' : documented ? 'needs-attention' : 'unavailable');
   else if (r.status === 2) verdict = 'needs-attention';
   else verdict = 'unavailable';
-  if (verdict !== 'unavailable' && documented && documented !== verdict) verdict = documented === 'approve' ? 'approve' : 'needs-attention';
+  // A document that disagrees with the exit code is an inconsistent reviewer: never upgraded to
+  // approve, only downgraded (codex r7 B3). Seam `review.trustDocumentOverStatus`: the document wins.
+  if (verdict !== 'unavailable' && documented && documented !== verdict) {
+    verdict = active('review.trustDocumentOverStatus') ? (documented === 'approve' ? 'approve' : 'needs-attention') : (documented === 'approve' ? 'unavailable' : 'needs-attention');
+  }
   const after = await headOf(ctx, cwd);
   if (after !== head || !(await isClean(ctx, cwd))) throw new ReviewError('oid-mismatch', 'tree moved during the final review');
   return { verdict, findings: Array.isArray(doc?.findings) ? doc.findings : [], reviewedHead: head, reason: r.reason ?? null, raw: doc };

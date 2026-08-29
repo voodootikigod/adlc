@@ -14,12 +14,14 @@
 import { validateIssueNumber, branchFor } from './input.mjs';
 import { REASON_CODES_FLEET, buildFleetArgv } from './fleet-args.mjs';
 import { describeSecretHits } from './diffcheck.mjs';
+import { ticketFilename } from '@adlc/tickets';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
   'run.chargeAfterDispatch',
   'run.staleEvidenceOnRetry',
   'run.refundAbandonedRound',
+  'run.trustCompletionDiff',
 ]);
 
 /** Gate failures that are the ENVIRONMENT's, never the worker's: no retry can fix them. */
@@ -228,7 +230,19 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       try { await deps.review.completeTicket({ ctx, cwd: issueWt, ticketId, issue: n }); }
       catch (e) { return terminal(failed(e.code ?? 'ticket-complete-failed', e.message)); }
     }
-    ctx.records.update(n, { completedOnce: true, localHead: await headOf() });
+    // The outer gates ran on `head`; the completion commit is the ONLY difference the pushed tree
+    // may carry, and it may touch nothing but the ticket shard (codex r7 B2).
+    // Mutation seam `run.trustCompletionDiff`: the completion diff is not inspected.
+    const afterCompletion = await headOf();
+    if (afterCompletion !== head && !active('run.trustCompletionDiff')) {
+      const changed = (await ctx.git.localOut(issueWt, ['diff', '--name-only', head, afterCompletion])).split('\n').map((l) => l.trim()).filter(Boolean);
+      // The completion commit carries the shard and the orchestrator's own manifest record; nothing else.
+      const shard = `.adlc/tickets/${ticketFilename(ticketId)}`;
+      const allowed = (p) => p === shard || /^\.adlc\/manifest(\.d\/[^/]+)?\.jsonl$/.test(p);
+      const foreign = changed.filter((p) => !allowed(p));
+      if (foreign.length) return terminal(failed('completion-diff-unexpected', `the completion commit touched ${foreign.join(', ')}; only the ticket shard may change after the gates`));
+    }
+    ctx.records.update(n, { completedOnce: true, localHead: afterCompletion });
 
     // §6.7a — size gate → final review; §6.7b attest — on the exact tree that is pushed.
     let rr;

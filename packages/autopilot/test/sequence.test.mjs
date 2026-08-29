@@ -327,3 +327,33 @@ export async function ac72_coldstartClarifyRetiresCleanly() {
   } finally { fx.cleanup(); }
 }
 test('AC72: a coldstart CLARIFY retires the run cleanly — the autopilot\'s own uncommitted ticket files never orphan a run that has not dispatched', { timeout: 120_000 }, ac72_coldstartClarifyRetiresCleanly);
+
+export async function ac36_completionDiffIsOnlyTheShard() {
+  // Between the outer gates and the push only the ticket-completion commit may exist, and it may touch only the ticket shard.
+  // A completion step that commits MORE than the shard (the real one adds only the shard; this is the threat model).
+  const fx = await createSequenceFixture();
+  const real = fx.ctx.deps.review.completeTicket;
+  const deps = { ...fx.ctx.deps, review: { ...fx.ctx.deps.review, completeTicket: async (a) => {
+    const out = await real(a);
+    fsSync.mkdirSync(join(a.cwd, 'packages', 'x'), { recursive: true }); fsSync.writeFileSync(join(a.cwd, 'packages', 'x', 'sneaky.js'), 'after gates\n');
+    fx.sh(['add', '-A'], a.cwd); fx.sh(['commit', '-q', '--amend', '--no-edit'], a.cwd);
+    return out;
+  } } };
+  try {
+    const r = await runIssue({ ctx: fx.ctx, deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.notEqual(r.state, 'done', `a tree that differs from the gated tree by more than the shard never ships: ${JSON.stringify(r)}`);
+    assert.equal(pushSpawns(fx).length, 0, 'nothing was pushed');
+  } finally { fx.cleanup(); }
+}
+test('AC36: the pushed tree differs from the GATED tree by nothing but the ticket shard — a content change slipped in after the gates fails the round and nothing is pushed', { timeout: 240_000 }, ac36_completionDiffIsOnlyTheShard);
+
+export async function ac38_inconsistentReviewerIsUnavailable() {
+  // Exit 2 with a document that says approve: an inconsistent reviewer is never an approval.
+  const fx = await createSequenceFixture({ reviewVerdict: () => ({ status: 2, stdout: JSON.stringify({ verdict: 'approve', findings: [] }) }) });
+  try {
+    const r = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.notEqual(r.state, 'done', JSON.stringify(r));
+    assert.equal(pushSpawns(fx).length, 0, 'nothing was pushed');
+  } finally { fx.cleanup(); }
+}
+test('AC38: a reviewer whose exit code and document disagree (exit 2, document approve) is never converted into an approval', { timeout: 240_000 }, ac38_inconsistentReviewerIsUnavailable);

@@ -47,11 +47,13 @@ test('AC49: on expiry the wrapper SIGTERMs the process group, SIGKILLs after the
   } finally { mock.timers.reset(); }
 });
 test('AC49: (real timers) a SIGTERM-ignoring child is ended by SIGKILL to the group', { timeout: 30_000 }, async () => {
-  // KILL_GRACE_MS is 15 s; this variant just proves the real-timer path resolves.
+  // KILL_GRACE_MS is 15 s; this variant proves the real-timer path resolves — and that a leader which
+  // dies on SIGTERM still gets the GROUP SIGKILL at once (a descendant may have survived it).
   const h = harness({ '/bin/stubborn': () => ({ ignoreSigterm: false, hang: true }) });
   const res = await h.spawn({ argv: ['/bin/stubborn'], cwd: '/', env: {}, deadlineMs: 20, label: 'x' });
   assert.equal(res.timedOut, true);
-  assert.deepEqual(h.kills.map((k) => k.signal), ['SIGTERM']);
+  assert.deepEqual(h.kills.map((k) => k.signal), ['SIGTERM', 'SIGKILL'], 'the group is SIGKILLed when the leader exits before the grace');
+  assert.ok(h.kills.every((k) => k.pid < 0));
 });
 
 export function ac49_deadlineTableIsTheSpecTable() {
@@ -124,3 +126,28 @@ export async function ac49_envIsExactlyWhatWasPassed() {
   } finally { delete process.env.ADLC_AUTOPILOT_TEST_LEAK; }
 }
 test('AC49: a child receives exactly the env the caller built — never process.env', ac49_envIsExactlyWhatWasPassed);
+
+export async function ac49_descendantsDieWithTheGroup() {
+  // The leader dies on SIGTERM; a grandchild that ignores TERM must not outlive the deadline — the whole GROUP is SIGKILLed.
+  const { createSpawner } = await import('../lib/spawn.mjs');
+  const { mkdtempSync, readFileSync, rmSync, existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'ap-group-kill-'));
+  const pidfile = join(dir, 'grandchild.pid');
+  try {
+    const spawn = createSpawner({ recorder: [] });
+    // The grandchild is its OWN process (an exec'd sh whose $$ is itself), ignoring TERM; the leader is a plain sleep.
+    // The grandchild closes its stdio (a real daemon does), so the leader's close fires as soon as the leader dies.
+    const script = `(trap '' TERM; exec sh -c 'trap "" TERM; echo $$ > ${pidfile}; exec sleep 60' >/dev/null 2>&1 </dev/null) & exec sleep 60`;
+    const res = await spawn({ argv: ['/bin/sh', '-c', script], cwd: dir, env: { PATH: process.env.PATH }, deadlineMs: 500, label: 'tree' });
+    assert.equal(res.timedOut, true);
+    assert.ok(existsSync(pidfile), 'the grandchild recorded its pid');
+    const pid = Number(readFileSync(pidfile, 'utf8').trim());
+    let alive = true;
+    for (let i = 0; i < 40 && alive; i++) { try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
+    if (alive) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+    assert.equal(alive, false, 'the TERM-ignoring grandchild was killed with the group (the leader exiting first did not cancel it)');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+test('AC49: (real processes) a grandchild that ignores SIGTERM dies with the process group at the deadline even though the leader exits first', { timeout: 30_000 }, ac49_descendantsDieWithTheGroup);

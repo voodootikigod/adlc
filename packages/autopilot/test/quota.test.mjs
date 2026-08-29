@@ -244,6 +244,8 @@ export async function ac2_productionReaderHasATransport() {
   try {
     const q = await fx.ctx.quota.sample({ ordinal: 1, fresh: true });
     assert.equal(endpointCalls, 1, 'the endpoint was called with the credential token');
+    assert.ok(!fx.logs.join('\n').includes('fake-access-token'), 'the bearer value never reaches the log');
+    assert.ok(!JSON.stringify(q).includes('fake-access-token'), 'nor the sample');
     assert.equal(q.ok, true, JSON.stringify(q));
   } finally { fx.cleanup(); }
   const fallbackText = 'Your subscription\nCurrent session: 7% used\nCurrent week (all models): 9% used\n';

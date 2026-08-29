@@ -20,6 +20,7 @@ export const REGISTRY = {
   3: [
     { fn: 'ac3_openPrsCoverEveryPage', file: 'github.test.mjs', seam: 'github.firstPrPageOnly' },{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
   4: [
+    { fn: 'ac4_prCommentSearchCoversEveryPage', file: 'github.test.mjs', seam: 'github.paginateAll' },
     { fn: 'ac4_commentPostIsNeverRetriedBlind', file: 'github.test.mjs', seam: 'github.retryComments' },
     { fn: 'ac4_gateFailuresClarifyWithFindingsAndTemplate', file: 'triage.test.mjs', seam: 'triage.acceptRootWildcard' },
     { fn: 'ac4_clarifyEffectsReconcileAgainstGithub', file: 'triage.test.mjs', seam: 'effects.trustRecord' },
@@ -48,6 +49,7 @@ export const REGISTRY = {
   79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
   85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
   96: [
+    { fn: 'ac96_fenceIsNotForgeable', file: 'triage.test.mjs', seam: 'triage.deterministicFence' },
     { fn: 'ac96_shapingContractIsEnforced', file: 'triage.test.mjs', seam: 'shaping.lenientContract' },
     { fn: 'ac96_shapedTicketTextIsRedacted', file: 'triage.test.mjs', seam: 'triage.trustShapedText' },{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
   97: [
@@ -125,6 +127,7 @@ export const REGISTRY = {
     { fn: 'ac47_lenientSchemaSeamBites', file: 'quota.test.mjs', seam: 'quota.lenientSchema' },
   ],
   49: [
+    { fn: 'ac49_descendantsDieWithTheGroup', file: 'deadline.test.mjs', seam: 'spawn.noGroupKillOnClose' },
     { fn: 'ac49_deadlineSignalsGroupThenKills', file: 'deadline.test.mjs', seam: 'spawn.noDeadline' },
     { fn: 'ac49_retryOnlyRetryable', file: 'deadline.test.mjs', seam: 'spawn.retryEverything' },
     { fn: 'ac49_stdoutCapKillsChild', file: 'deadline.test.mjs', seam: 'spawn.noStdoutCap' },
@@ -136,6 +139,7 @@ export const REGISTRY = {
   65: [
     { fn: 'ac65_familyMappersAgree', file: 'quota.test.mjs', seam: 'preflight.substringFamily' },{ fn: 'ac65_familyNormalization', file: 'quota.test.mjs', seam: 'quota.forceOk' }],
   68: [
+    { fn: 'ac68_pinnedPathIsTheRealpath', file: 'tools.test.mjs', seam: 'tools.pinSymlinkPath' },
     { fn: 'ac68_repoBinIsSkippedAndSystemPinned', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
     { fn: 'ac68_untrustedTool', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
   ],
@@ -188,6 +192,7 @@ export const REGISTRY = {
     { fn: 'ac143_netGitIsolatesTransport', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
   ],
   148: [
+    { fn: 'ac148_netGitShaRestoredFromStatus', file: 'preflight.test.mjs', seam: 'preflight.neverRestoreNetGitSha' },
     { fn: 'ac148_freshContextIsPinned', file: 'preflight.test.mjs', seam: 'preflight.skipPinWhenPathSet' },
     { fn: 'ac148_ghHostBinding', file: 'remote.test.mjs', seam: 'remote.acceptAnyGhHost' },
     { fn: 'ac148_knownHostsFromMeta', file: 'ssh.test.mjs', seam: 'ssh.knownHostsAnyHost' },
@@ -384,10 +389,12 @@ export const REGISTRY = {
     { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.budgetNotGlobal' },
   ],
   36: [
+    { fn: 'ac36_completionDiffIsOnlyTheShard', file: 'sequence.test.mjs', seam: 'run.trustCompletionDiff' },
     { fn: 'ac36_verifyThenPushSequence', file: 'sequence.test.mjs', seam: 'push.skipHeadCheck' },
     { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipLease' },
   ],
   38: [
+    { fn: 'ac38_inconsistentReviewerIsUnavailable', file: 'sequence.test.mjs', seam: 'review.trustDocumentOverStatus' },
     { fn: 'ac38_retryRefreshesEvidence', file: 'sequence.test.mjs', seam: 'run.staleEvidenceOnRetry' },
     { fn: 'ac38_malformedReviewIsUnavailable', file: 'sequence.test.mjs', seam: 'review.approveOnExitZero' },
     { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.reopenWithoutAuthorize' },
@@ -414,6 +421,7 @@ export const REGISTRY = {
     { fn: 'ac95_privateTmpAndPerFileToolBinds', file: 'run.test.mjs', seam: 'fleetArgs.bindToolDirs' },
   ],
   18: [
+    { fn: 'ac18_dryRunShapingIsQuotaGated', file: 'loop.test.mjs', seam: 'loop.dryRunSkipsQuotaGate' },
     { fn: 'ac18_quotaRecheckPoints', file: 'quota.test.mjs', seam: 'quota.forceOk' },
   ],
   39: [

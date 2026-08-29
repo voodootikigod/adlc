@@ -141,7 +141,7 @@ const registeredNumbers = Object.keys(REGISTRY).map(Number).sort((a, b) => a - b
 export function hostSkip(entry, { backend = detectBackend() } = {}) {
   if (!entry?.requires) return false;
   if (entry.requires === 'bubblewrap') return backend?.name === 'bubblewrap' ? false : `requires bubblewrap; host has ${backend?.name ?? 'no sandbox backend'}`;
-  return `requires unknown capability ${JSON.stringify(entry.requires)}`;
+  throw new Error(`registry entry ${entry.fn ?? '?'} requires an unknown capability ${JSON.stringify(entry.requires)} — only 'bubblewrap' is known`);
 }
 
 /**
@@ -160,7 +160,11 @@ export function approvedSpecRevision({ ref = 'HEAD' } = {}) {
   const key = process.env.ADLC_MANIFEST_KEY && process.env.ADLC_MANIFEST_KEY.length >= 16 ? process.env.ADLC_MANIFEST_KEY : null;
   const present = typeof newest?.sig === 'string' && newest.sig.length > 0;
   const verified = key && newest ? verifyEntrySig(key, newest) : null;   // null = no key on this host (CI carries it)
-  if (present && verified === null) console.log('note: the spec-approval signature is present but NOT verified on this host (no ADLC_MANIFEST_KEY); CI verifies it');
+  if (present && verified === null) {
+    // On CI the key is mandatory: an unverified signature there is a gate failure, not a note.
+    if (process.env.CI) throw new Error('the spec-approval signature cannot be verified: ADLC_MANIFEST_KEY is not available to this CI job (it must be)');
+    console.log('note: the spec-approval signature is present but NOT verified on this host (no ADLC_MANIFEST_KEY); CI verifies it');
+  }
   return { newest, specHash, approved: newest?.data?.spec_hash === specHash, signed: present && verified !== false, verified };
 }
 function requireCrypto() { return cryptoModule; }
@@ -311,7 +315,7 @@ export async function ac121_fixtureRulesSelfTest() {
   assert.equal(hostSkip({ fn: 'x', requires: 'bubblewrap' }, { backend: null }), 'requires bubblewrap; host has no sandbox backend');
   assert.equal(hostSkip({ fn: 'x', requires: 'bubblewrap' }, { backend: { name: 'bubblewrap' } }), false);
   assert.equal(hostSkip({ fn: 'x' }, { backend: null }), false);
-  assert.match(String(hostSkip({ fn: 'x', requires: 'warp-drive' }, { backend: null })), /unknown capability/);
+  assert.throws(() => hostSkip({ fn: 'x', requires: 'warp-drive' }, { backend: null }), /unknown capability/, 'an unknown capability is a registry error, never a skip');
   const src = "import { X } from '../lib/x.mjs';\nexport function acN_k() { assert.equal(X, 1); }\ntest('AC9: x', acN_k);\n";
   const tmp = join(HERE, '.gate-self-test-121.tmp.mjs');
   try { require_write(tmp, src); assert.ok((await staticCheck('.gate-self-test-121.tmp.mjs', 'acN_k', 9)).length > 0, 'a hollow entry is a problem'); } finally { try { require_unlink(tmp); } catch { /* none */ } }

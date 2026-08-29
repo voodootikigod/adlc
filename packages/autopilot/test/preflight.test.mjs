@@ -389,3 +389,23 @@ export async function ac128_dryRunRunsTheRealPreflight() {
   } finally { fx.cleanup(); }
 }
 test('AC128: a dry run exercises the REAL phase A, baseline and phase B and performs no mutation (no worktree, no fleet dispatch), reporting what needs a worktree', ac128_dryRunRunsTheRealPreflight);
+
+export async function ac148_netGitShaRestoredFromStatus() {
+  // `init` persists the NET_GIT config hash in the status file; a fresh context must restore it before verifying.
+  const { createStatusStore } = await import('../lib/status.mjs');
+  const { createRedactor } = await import('../lib/redact.mjs');
+  const fx = makeFixture();
+  try {
+    const ctx = buildCtx(fx);
+    ctx.status = createStatusStore({ paths: fx.paths, lockToken: () => null, redactor: createRedactor({}) });
+    ctx.status.write({ netGitConfigSha256: fx.netGitSha });
+    ctx.netGitConfigSha256 = null;                                   // a production context before phase A
+    await phaseA(ctx);
+    assert.equal(ctx.netGitConfigSha256, fx.netGitSha, 'phase A restored the persisted hash and verified NET_GIT against it');
+    const bare = buildCtx(fx);
+    bare.status = createStatusStore({ paths: fx.paths, lockToken: () => null, redactor: createRedactor({}) });
+    bare.status.write({ netGitConfigSha256: 'f'.repeat(64) }); bare.netGitConfigSha256 = null;
+    assert.equal(await codeOf(() => phaseA(bare)), 'net-config-tampered', 'a persisted hash that differs from the file is still refused');
+  } finally { fx.cleanup(); }
+}
+test('AC148: phase A restores the NET_GIT config hash `init` persisted (a fresh context starts with none) and verifies against it; a differing hash is still net-config-tampered', ac148_netGitShaRestoredFromStatus);

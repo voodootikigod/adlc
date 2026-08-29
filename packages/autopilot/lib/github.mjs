@@ -199,6 +199,18 @@ export async function ensureLabel(ghc, n, label, { present }) {
 }
 
 /** Post a comment only if no comment carries `sentinel` (searched via the API, never the record). */
+/** True when a comment carrying `sentinel` exists on the issue/PR conversation — EVERY page (bounded), fail closed. */
+export async function hasComment(ghc, n, sentinel, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
+  for (let page = 1; page <= maxPages; page++) {
+    const comments = await ghc.json(['api', `repos/${ghc.repo}/issues/${validateIssueNumber(n)}/comments?per_page=${perPage}&page=${page}`]);
+    if (!Array.isArray(comments)) throw new GhError('gh-bad-json', 'comments page is not an array');
+    if (comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return true;
+    if (comments.length < perPage || active('github.paginateAll')) return false;
+    if (page === maxPages && !active('github.ignoreTruncation')) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
+  }
+  return false;
+}
+
 export async function ensureComment(ghc, n, sentinel, body, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
   // The sentinel search covers EVERY page (bounded); an unreadable page fails closed —
   // a duplicate terminal comment is worse than a retried one.

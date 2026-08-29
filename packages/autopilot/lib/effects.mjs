@@ -12,7 +12,7 @@
 // Comment bodies pass through the fail-closed redactor with the BODY sentinel
 // on failure; the label is applied regardless, so a quarantine is never silent.
 
-import { ensureComment, ensureLabel, GhError } from './github.mjs';
+import { ensureComment, ensureLabel, GhError, hasComment } from './github.mjs';
 import { WITHHELD_BODY } from './redact.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { active, registerSeams } from './mutations.mjs';
@@ -37,9 +37,8 @@ async function commentOn(gh, target, sentinel, body, { skipRead = false } = {}) 
   const n = validateIssueNumber(target.number, target.kind);
   if (target.kind === 'issue' && !skipRead) return ensureComment(gh, n, sentinel, body);
   if (!skipRead) {
-    // PR conversation comments ARE issue comments in the API.
-    const comments = await gh.json(['api', `repos/${gh.repo}/issues/${n}/comments?per_page=100`]);
-    if (Array.isArray(comments) && comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return { posted: false };
+    // PR conversation comments ARE issue comments in the API: the same bounded, every-page search.
+    if (await hasComment(gh, n, sentinel)) return { posted: false };
   }
   const args = [target.kind, 'comment', String(n), '--body-file', '-'];
   const res = await gh.run(args, { stdinBytes: `${sentinel}\n${body}` });

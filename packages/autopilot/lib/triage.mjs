@@ -9,7 +9,7 @@
 // passes the fail-closed redactor first. The gate chain then runs for every
 // ticket regardless of how it was obtained; findings → CLARIFY.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fence } from '@adlc/core';
@@ -34,6 +34,7 @@ registerSeams([
   'triage.noStdoutCap',       // the shaping spawn has no 64 KiB stdout cap,
   'triage.trustShapedText',
   'triage.dryRunChargesAttempts',
+  'triage.deterministicFence',
 ]);
 
 export const CLARIFY_LABEL = LABEL_FOR_STATE.clarify;
@@ -76,7 +77,10 @@ function clarify({ findings, issueUrl, ticket = null }) {
 async function shapingCall({ ctx, n, url, title, body, bodyOnly, store, preModelCall }) {
   if (store.shapingExcluded(n)) return { ok: false, reason: 'shaping-failed' };
   if (preModelCall) { const g = await preModelCall('shaping'); if (g && g.ok === false) return { ok: false, reason: g.reason ?? 'model-call-refused' }; }
-  const fenced = fence('github-issue', `Title: ${title}\n\n${body}`, ISSUE_BODY_FENCE_CAP);
+  // The fence label carries a per-call nonce: the tag derived from the capped LENGTH alone is
+  // computable by whoever wrote the issue (codex r7 A3). Seam `triage.deterministicFence`.
+  const label = active('triage.deterministicFence') ? 'github-issue' : `github-issue-${randomBytes(8).toString('hex')}`;
+  const fenced = fence(label, `Title: ${title}\n\n${body}`, ISSUE_BODY_FENCE_CAP);
   const prompt = SHAPING_PROMPT({ issueUrl: url, fencedBody: fenced, constraints: bodyOnly ? [...BODY_ONLY_CONSTRAINTS] : [] });
   const attempt = store.beginAttempt(n, 'shaping'); // durable `started` BEFORE the spawn
   const cwd = join(ctx.paths.runDir(n), 'shaping');

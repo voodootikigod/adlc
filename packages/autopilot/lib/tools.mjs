@@ -12,7 +12,9 @@ import { isAbsolute, join, dirname, sep, delimiter } from 'node:path';
 import { isUnder } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['tools.trustAnyPath']);
+registerSeams(['tools.trustAnyPath',
+  'tools.pinSymlinkPath',
+]);
 
 export const REQUIRED_TOOLS = Object.freeze(['adlc', 'bwrap', 'claude', 'codex', 'adversarial-review', 'gh', 'git', 'ssh', 'ssh-add', 'ssh-keygen', 'npm', 'node']);
 export const KEY_BEARING_TOOL = 'adlc';
@@ -81,7 +83,10 @@ export function pinToolchain({ pathValue, repoRoot, uid, trustedBinDirs = null, 
     }
     const trust = checkTrustedPath(real, { uid, stat });
     if (!trust.ok) throw new ToolError(`untrusted-tool:${name}`, trust.detail);
-    pinned[name] = found;
+    // The REALPATH is what is spawned and bound: the search-list path may be a symlink that is
+    // re-pointed after pinning (codex r7 A4). Seam `tools.pinSymlinkPath`: the symlink path is pinned.
+    pinned[name] = active('tools.pinSymlinkPath') ? found : real;
+    pinned[`${name}:found`] = found;
     pinned[`${name}:realpath`] = real;
   }
   const major = Number(String(nodeVersion).replace(/^v/, '').split('.')[0]);

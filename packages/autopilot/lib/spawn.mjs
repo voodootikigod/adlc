@@ -16,7 +16,9 @@
 import { spawn as cpSpawn } from 'node:child_process';
 import { active, registerSeams } from './mutations.mjs';
 
-registerSeams(['spawn.noStdoutCap', 'spawn.inheritEnv', 'spawn.retryEverything']);
+registerSeams(['spawn.noStdoutCap', 'spawn.inheritEnv', 'spawn.retryEverything',
+  'spawn.noGroupKillOnClose',
+]);
 
 export const KILL_GRACE_MS = 15_000;
 export const DEFAULT_STDOUT_CAP = 4 * 1024 * 1024; // 4 MiB (§4.1, §6.6)
@@ -91,12 +93,12 @@ export function createSpawner({ recorder = null, spawnImpl = cpSpawn, kill = pro
       const out = []; let outBytes = 0;
       const err = []; let errBytes = 0;
       let timedOut = false; let truncated = false; let settled = false;
-      let timer = null; let grace = null;
+      let timer = null; let grace = null; let graceFired = false;
       const terminate = (why) => {
         if (why === 'timeout') timedOut = true; else truncated = true;
         if (child.pid) {
           signalGroup(child.pid, 'SIGTERM', kill);
-          grace = setTimeoutFn(() => signalGroup(child.pid, 'SIGKILL', kill), KILL_GRACE_MS);
+          grace = setTimeoutFn(() => { graceFired = true; signalGroup(child.pid, 'SIGKILL', kill); }, KILL_GRACE_MS);
         }
       };
       if (armDeadline) timer = setTimeoutFn(() => terminate('timeout'), deadlineMs);
@@ -118,12 +120,18 @@ export function createSpawner({ recorder = null, spawnImpl = cpSpawn, kill = pro
         resolve(payload);
       };
       child.on('error', (error) => finish({ error, status: null, signal: null, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), timedOut, truncated, reason: `spawn-failed:${name}` }));
-      child.on('close', (status, signal) => finish({
+      child.on('close', (status, signal) => {
+        // The leader may exit on SIGTERM while a descendant lives on: after a deadline the whole
+        // GROUP gets the SIGKILL now, not a grace timer that `finish` is about to cancel (codex r7 A2).
+        // Mutation seam `spawn.noGroupKillOnClose`: the grace timer is simply cancelled.
+        if (timedOut && child.pid && !graceFired && !active('spawn.noGroupKillOnClose')) signalGroup(child.pid, 'SIGKILL', kill);
+        finish({
         status, signal,
         stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'),
         timedOut, truncated, error: null,
         reason: timedOut ? `timeout:${name}` : truncated ? `stdout-cap:${name}` : null,
-      }));
+        });
+      });
     });
   };
 }

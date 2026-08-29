@@ -233,3 +233,15 @@ export async function ac10_dryRunThroughRunOnce() {
   } finally { fx.cleanup(); }
 }
 test('AC10: a dry run through the PUBLIC runOnce takes no lock, reports dryRun:true, dispatches nothing and releases its temporary material on exit', { timeout: 120_000 }, ac10_dryRunThroughRunOnce);
+
+export async function ac18_dryRunShapingIsQuotaGated() {
+  // --dry-run-shape makes a MODEL call: it passes the quota start gate like the loop's shaping call does.
+  const fx = await createSequenceFixture({ dryRun: true, local: { dryRunShape: true }, quotaRead: async () => ({ ok: false, reason: 'five_hour', fiveHour: 99, sevenDay: 10, scoped: new Map(), resetsAt: { fiveHour: null } }) });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.document.dryRun, true);
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.claude && r.argv.includes('-p')), 'no shaping call while the quota refuses');
+    assert.ok(!it.document.ticket, 'no shaped ticket was produced');
+  } finally { fx.cleanup(); }
+}
+test('AC18: a dry-run shaping call is quota-gated — with the window refused no model call is made and no shaped ticket appears in the plan', { timeout: 120_000 }, ac18_dryRunShapingIsQuotaGated);

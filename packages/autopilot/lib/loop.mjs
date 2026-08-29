@@ -18,7 +18,7 @@ import { loadDenylist } from './selection.mjs';
 import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
 import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest', 'loop.maintainWithoutDenylist']);
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest', 'loop.maintainWithoutDenylist', 'loop.dryRunSkipsQuotaGate']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -128,7 +128,7 @@ async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
   out.document.selection = sel;
   if (sel.picked) {
     const ticket = ctx.local.dryRunShape
-      ? (await triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true })).ticket
+      ? (await triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true, preModelCall: quotaGateForModelCalls(ctx) })).ticket
       : selection.placeholderTicket({ issue: sel.issue });
     out.document.ticket = ticket;
     out.document.fleetArgv = deps.fleetArgvPreview({ ctx, issue: sel.picked, ticketId: 'T-<ULID>', roundsUsed: 0, wallClockUsedMs: 0 });
@@ -171,6 +171,19 @@ export async function runOnce({ flags, env, cwd, deps: overrides = {} }) {
     if (lock) lock.release();
     await ctx.cleanupIteration?.();
   }
+}
+
+/**
+ * The quota start gate for a MODEL call made outside the run loop (dry-run shaping, the triage
+ * command): a refused window refuses the call — a dry run must not spend quota the loop would
+ * have refused (codex r7 B1). Seam `loop.dryRunSkipsQuotaGate`.
+ */
+function quotaGateForModelCalls(ctx) {
+  if (seam('loop.dryRunSkipsQuotaGate')) return null;
+  return async (what) => {
+    const q = await ctx.quota.sample({ ordinal: 1, fresh: true });
+    return q.ok ? { ok: true } : { ok: false, reason: `quota:${q.reason}${what ? ` (${what})` : ''}` };
+  };
 }
 
 /**
@@ -252,7 +265,7 @@ export async function triageCommand({ flags, env, cwd, deps: overrides = {} }) {
     ctx.baseOid = await ctx.deps.preflight.resolveBaseline(ctx);
     const sel = await ctx.deps.selection.select({ ctx, pinned: n });
     if (!sel.picked) return { exitCode: 2, document: { issue: n, excludedBy: sel.excludedRule }, text: `issue ${n} excluded: ${sel.excludedRule}` };
-    const v = await ctx.deps.triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true });
+    const v = await ctx.deps.triage.triage({ ctx, issue: sel.issue, authorization: sel.authorization, revision: sel.revision, dryRun: true, preModelCall: quotaGateForModelCalls(ctx) });
     return { exitCode: v.verdict === 'PROCEED' ? 0 : 2, document: v, text: `triage ${n}: ${v.verdict}` };
   } finally { await releaseDryRun(ctx); }
 }

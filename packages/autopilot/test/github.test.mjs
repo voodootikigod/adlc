@@ -5,7 +5,7 @@
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner } from '../lib/spawn.mjs';
-import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES, issueBodyEdits, listOpenPrs } from '../lib/github.mjs';
+import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES, issueBodyEdits, listOpenPrs, hasComment } from '../lib/github.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';
 
 function harness(handler, { host = 'github.com', repo = 'o/r' } = {}) {
@@ -152,3 +152,13 @@ export async function ac3_openPrsCoverEveryPage() {
   assert.equal(bad.ok, false);
 }
 test('AC3: the open-PR exclusion set is read across EVERY page (bounded) and fails closed when truncated — never a silent 100-entry cap', ac3_openPrsCoverEveryPage);
+
+export async function ac4_prCommentSearchCoversEveryPage() {
+  // The PR conversation search (terminal effects on a PR) is the same bounded every-page search as the issue one.
+  const ghc = { repo: 'o/r', json: async (args) => { const page = Number(/[?&]page=(\d+)/.exec(args[1])[1]); const per = Number(/per_page=(\d+)/.exec(args[1])[1]); return page === 1 ? Array.from({ length: per }, (_, i) => ({ body: `noise ${i}` })) : (page === 2 ? [{ body: 'x <!-- s --> y' }] : []); } };
+  assert.equal(await hasComment(ghc, 9, '<!-- s -->', { perPage: 3 }), true, 'a sentinel on page 2 is found');
+  assert.equal(await hasComment(ghc, 9, '<!-- absent -->', { perPage: 3 }), false);
+  const src = await import('node:fs').then((m) => m.readFileSync(new URL('../lib/effects.mjs', import.meta.url), 'utf8'));
+  assert.match(src, /hasComment\(gh, n, sentinel\)/, 'the PR-comment effect goes through the shared paged search');
+}
+test('AC4: the PR-conversation sentinel search covers every page (bounded) — a sentinel on page 2 is found, and the terminal effects use that shared search', ac4_prCommentSearchCoversEveryPage);

@@ -35,6 +35,7 @@ registerSeams([
   'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared,
   'preflight.skipPinWhenPathSet',
   'preflight.substringFamily',
+  'preflight.neverRestoreNetGitSha',
 ]);
 
 const PERM = (m) => m & 0o7777;
@@ -149,6 +150,10 @@ async function auditConfig(ctx) {
   if (list.status !== 0) throw new PreflightError('git-config-untrusted', 'repo-local config unreadable');
   const audit = auditRepoConfig(list.stdout);
   if (!audit.ok) throw new PreflightError('git-config-untrusted', audit.offending.join(', '));
+  // The expected NET_GIT config hash is the one `init` persisted in the status file; a fresh
+  // context starts with null and would otherwise refuse every run (codex r7 A1).
+  // Mutation seam `preflight.neverRestoreNetGitSha`: the persisted hash is never restored.
+  if (ctx.netGitConfigSha256 == null && !active('preflight.neverRestoreNetGitSha')) ctx.netGitConfigSha256 = ctx.status?.read?.()?.netGitConfigSha256 ?? null;
   const net = verifyNetGit({ netGit: ctx.netGit, expectedConfigSha256: ctx.netGitConfigSha256, repoRoot: ctx.repoRoot });
   if (!net.ok) throw new PreflightError(net.code, net.detail);
 }
