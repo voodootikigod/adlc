@@ -204,12 +204,13 @@ test('completion inside the merge mutex re-checks the deadline: past expiry the 
   assert.ok(gates2.length === 2 && gates2[1] < gates2[0], `the completion re-gate gets a fresh, smaller budget: ${gates2.join(',')}`);
 });
 
-test('a bounded-policy mismatch is a strike-free, non-retryable refusal: state failed with policyMismatch, ONE dispatch, summary.dispatchRefused, exit 1, reason dispatch-refused (codex r7)', async () => {
+test('a bounded-policy mismatch is a strike-free refusal: state PAUSED (resumable) with policyMismatch, ONE dispatch, summary.dispatchRefused, exit 1, reason dispatch-refused (codex r7)', async () => {
   const rec = newRec();
   const d = deps(rec, { dispatch: () => ({ exitCode: 1, output: 'sandbox policy: adapter executable not found', timedOut: false, policyMismatch: true }) });
   const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 3, noPr: true }, deps: d });
   assert.equal(rec.dispatch.length, 1, 'no retry');
-  assert.equal(s.results.A, 'failed');
+  assert.equal(s.results.A, 'paused', 'resumable once the operator fixes the policy (codex r24 #1)');
+  assert.equal(s.status.tickets.A.reasonCode, null);
   assert.equal(s.status.tickets.A.strikes, 0, 'the strike is handed back');
   assert.equal(s.dispatchRefused, true);
   const { runExitCode } = await import('../lib/run.mjs');
@@ -377,4 +378,17 @@ test('a completion re-gate that fails once the wall clock has passed withdraws t
   assert.equal(s2.results.A, 'merged'); assert.equal(reverts2.length, 0, 'a completion gated within budget is kept');
   assert.equal(s2.wallClockExpired, true, 'but the run still reports wall-clock');
   assert.equal(rec2.openPR.length, 0, 'and publishes nothing');
+});
+
+test('a completion re-gate that THROWS is a red re-gate: the completion commit is withdrawn (merged, not completed); when it cannot be withdrawn the branch is quarantined and no PR opens (codex r24 #2)', async () => {
+  const rec = newRec(); const reverts = [];
+  const d = { ...deps(rec), postMergeGate: async () => { if (rec.complete.length) throw new Error('gate runner crashed'); return { ok: true }; }, revertCompletion: async (a) => { reverts.push(a); } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1 }, deps: d });
+  assert.equal(s.results.A, 'merged'); assert.equal(reverts.length, 1, 'the unvalidated completion commit came off the branch');
+  assert.equal(s.contaminated, undefined ?? s.contaminated, 'no quarantine when the withdrawal succeeded'); assert.ok(!s.contaminated);
+  assert.equal(rec.openPR.length, 1, 'the shipped merge below it is still published');
+  const rec2 = newRec();
+  const d2 = { ...deps(rec2), postMergeGate: async () => { if (rec2.complete.length) throw new Error('gate runner crashed'); return { ok: true }; }, revertCompletion: async () => { throw new Error('reset refused'); } };
+  const s2 = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 1 }, deps: d2 });
+  assert.equal(s2.contaminated, true, 'a completion that cannot be withdrawn quarantines the branch'); assert.equal(rec2.openPR.length, 0);
 });

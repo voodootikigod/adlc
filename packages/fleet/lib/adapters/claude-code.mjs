@@ -13,7 +13,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnAsync } from '../spawn-async.mjs';
-import { modelArgs } from './_shared.mjs';
+import { modelArgs, TRUNCATED_NOTE } from './_shared.mjs';
 import { UNREPORTED, normalizeUsage, reported } from './usage.mjs';
 
 export const name = 'claude-code';
@@ -212,10 +212,13 @@ export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaul
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
   const stdout = `${res.stdout ?? ''}`;
   const text = parseText(stdout);
+  const status = typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1);
   return {
-    exitCode: typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1),
-    output: text === null ? `${stdout}${res.stderr ?? ''}` : `${text}${res.stderr ?? ''}`,
+    // A truncated stream is never a success (codex r24 #4): its document may be the part cut off.
+    exitCode: res.truncated === true && status === 0 ? 1 : status,
+    output: `${res.truncated === true ? TRUNCATED_NOTE : ''}${text === null ? `${stdout}${res.stderr ?? ''}` : `${text}${res.stderr ?? ''}`}`,
     timedOut,
+    ...(res.truncated === true ? { truncated: true } : {}),
     ...parseUsage(stdout),
   };
 }

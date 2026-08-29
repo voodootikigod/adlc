@@ -220,7 +220,10 @@ test('deadline-caused timeouts pause wall-clock instead of becoming strikes/flai
 test('the scheduler hands the strike back on a policy mismatch and marks the outcome (codex r7)', async () => {
   const e = effects({ dispatch: () => ({ exitCode: 1, output: 'sandbox policy: unsupported adapter', timedOut: false, policyMismatch: true }) });
   const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
-  assert.equal(r.state, 'failed'); assert.equal(r.policyMismatch, true); assert.equal(r.strikes, 0);
+  assert.equal(r.state, 'paused', 'a deterministic, operator-fixable refusal is PAUSED (resumable), never terminal (codex r24 #1)'); assert.equal(r.reasonCode, null, 'no §14 code: policyMismatch is the marker'); assert.equal(r.policyMismatch, true); assert.equal(r.strikes, 0);
+  const { reconcileResume } = await import('../lib/scheduler.mjs');
+  const rec = reconcileResume([ticket], { integrationBranch: 'adlc/x', tickets: { [ticket.id]: { state: r.state, strikes: r.strikes, reasonCode: r.reasonCode } } }, { isAncestor: () => false });
+  assert.equal(rec.tickets[ticket.id].state, 'pending', 'resume reconciliation re-dispatches it once the operator fixed the policy');
   assert.equal(e.calls.dispatch.length, 1);
 });
 

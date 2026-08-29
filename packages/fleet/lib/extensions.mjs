@@ -13,7 +13,7 @@ import { BoundedModelSandbox, checkReadSetInvariant, SYSTEM_ROOTS } from './boun
 import { prepareSyntheticHome } from './synthetic-home.mjs';
 import { startEgressProxy, egressEnv, DEFAULT_BRIDGE_PORT } from './egress-proxy.mjs';
 import {
-  assertBareMirror, assertMirrorConfigPristine, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip, HOST_SAFE_GIT_FLAGS } from './git-mirror.mjs';
+  assertBareMirror, assertMirrorConfigPristine, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip, HOST_SAFE_GIT_FLAGS, worktreesHoldingBranch } from './git-mirror.mjs';
 import * as worktrees from './worktrees.mjs';
 
 export const BRIDGE_PATH = fileURLToPath(new URL('./egress-bridge.mjs', import.meta.url));
@@ -181,7 +181,13 @@ export function mirrorCreateWorktree({ repo, ticketId, integrationBranch, mirror
   // the compare-and-swap) — never a human's branch, always `fleet/<id>`.
   detachGateWorktree({ path: gatePath, gitAt });
   const existing = ensureWorkerBranchInRepo({ repo, workerBranch, cutTip: startSha, gitAt });
-  if (!existing.created && existing.sha !== startSha) repoGit('update-ref', `refs/heads/${workerBranch}`, startSha, existing.sha);
+  if (!existing.created && existing.sha !== startSha) {
+    // The gate worktree was detached above; ANY other worktree holding the branch (a human
+    // recovery checkout, a stale one) must not have its pointer moved underneath it (codex r24 #3).
+    const holders = worktreesHoldingBranch({ repo, branch: workerBranch, except: gatePath, gitAt });
+    if (holders.length) throw new Error(`worker branch ${workerBranch} is checked out in ${holders.join(', ')}; refusing to move it — remove or detach that worktree first`);
+    repoGit('update-ref', `refs/heads/${workerBranch}`, startSha, existing.sha);
+  }
   cutMirrorWorktree({ mirror, workerBranch, path, cutTip: startSha, gitAt });
   return { path, branch: workerBranch, startSha, gatePath, mirror, cutTip: startSha };
 }

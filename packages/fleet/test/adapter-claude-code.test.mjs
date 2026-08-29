@@ -65,3 +65,14 @@ test('dispatch maps a timeout to a failed-strike outcome (AC4)', async () => {
   assert.equal(res.timedOut, true);
   assert.notEqual(res.exitCode, 0, 'a timeout must be a non-zero (failed) outcome');
 });
+
+test('claude-code: a truncated result stream is a FAILED strike (exit 1, truncation note) even when the process exited 0 (codex r24 #4)', async () => {
+  const res = await dispatch({
+    worktree: '/wt',
+    prompt: 'build ticket T42',
+    timeoutMs: 60000,
+    env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T42', ANTHROPIC_API_KEY: 'sk' },
+    exec: () => ({ status: 0, stdout: '{"type":"result","result":"TICKET-DONE"', stderr: '', truncated: true }),
+  });
+  assert.equal(res.exitCode, 1); assert.equal(res.truncated, true); assert.match(res.output, /truncated; the result is not trusted/);
+});

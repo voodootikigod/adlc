@@ -152,9 +152,12 @@ export async function advanceTicket(ticket, effects, {
     if (build.policyMismatch) {
       // The sandbox could not be BUILT (unsupported adapter, missing executable, an
       // invalid read set): deterministic, the operator's to fix, never a strike or
-      // a flail (codex r7). The strike it would have been is handed back.
+      // a flail (codex r7). The strike it would have been is handed back, and the
+      // ticket is PAUSED, not failed: resume reconciliation skips failed tickets, so a
+      // terminal state would make the operator's fix unreachable (codex r24 #1).
       strikes -= 1;
-      return { ...fail(`sandbox policy mismatch: ${build.output ?? ''}`.trim(), null), policyMismatch: true };
+      // `reasonCode` stays null: §14's closed set has no code for it; `policyMismatch` is the marker.
+      return { ...paused(`sandbox policy mismatch: ${build.output ?? ''}`.trim(), null), policyMismatch: true };
     }
     if (build.blocked) {
       // The ticket is wrong, not the agent — do not burn the next strike.

@@ -73,7 +73,7 @@ authoritative for callers (the numeric exit code is unchanged). Ticket outcomes
 are a closed set: `quota-paused`, `lock-held`, `wall-clock`, `strikes-exhausted`,
 `ticket-blocked`, `flail`, `review-unavailable`, `mirror-fetch-failed`. Run-level
 failures outside it (`quarantined`, `pr-open-failed`, `preflight`,
-`resume-refused`, `dispatch-refused`) mean a human is needed.
+`resume-refused`, `dispatch-refused`) mean a human is needed; a `dispatch-refused` ticket is left paused (strike handed back) and resumes once the sandbox policy is fixed.
 
 ## Exit codes
 

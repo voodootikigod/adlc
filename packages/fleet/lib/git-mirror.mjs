@@ -284,6 +284,29 @@ export function fetchBackWorkerBranch({ repo, mirror, workerBranch, cutTip, gitA
   return { ok: true, sha };
 }
 
+/**
+ * The worktrees (other than `except`) that have `refs/heads/<branch>` checked out, from
+ * `git worktree list --porcelain` (`worktree <path>` … `branch <ref>` stanzas). Moving a
+ * branch pointer under a live worktree leaves its index and tree behind HEAD (codex r24 #3).
+ */
+export function worktreesHoldingBranch({ repo, branch, except = null, gitAt = defaultGit } = {}) {
+  requireArgs('worktreesHoldingBranch', { repo, branch }, ['repo', 'branch']);
+  const listing = gitAt(repo)('worktree', 'list', '--porcelain');
+  const exceptReal = except && existsSync(except) ? realpathSync(except) : null;
+  const holders = [];
+  let current = null;
+  for (const line of listing.split('\n')) {
+    if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
+    else if (line.startsWith('branch ') && current !== null) {
+      if (line.slice('branch '.length) === `refs/heads/${branch}`) {
+        let real = current; try { real = realpathSync(current); } catch { /* keep the listed path */ }
+        if (!exceptReal || real !== exceptReal) holders.push(current);
+      }
+    } else if (line === '') current = null;
+  }
+  return holders;
+}
+
 function isWorktreeOf(repoGit, path) {
   if (!existsSync(path)) return false;
   const want = realpathSync(path);

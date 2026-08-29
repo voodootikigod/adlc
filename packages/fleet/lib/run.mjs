@@ -138,7 +138,12 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
           // withdraw the completion and degrade to the pre-T73 status quo: merged, not
           // marked completed.
           const fresh = config.deadline != null ? Math.max(1, config.deadline - (deps.now ?? Date.now)()) : remainingMs;
-          const recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs: fresh });
+          // A re-gate that THROWS is a gate with no verdict — handled exactly like a red one
+          // (withdraw the completion; a failed withdrawal quarantines), never left to the outer
+          // catch, which would return success with the commit still on the branch (codex r24 #2).
+          let recheck;
+          try { recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs: fresh }); }
+          catch (gateError) { recheck = { ok: false, threw: true, output: `post-completion gate threw: ${gateError?.message ?? gateError}` }; }
           if (!recheck.ok) {
             const quarantined = await withdrawCompletion(completion, 'a gate-rejected completion commit');
             if (quarantined) return quarantined;

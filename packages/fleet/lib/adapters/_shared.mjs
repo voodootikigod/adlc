@@ -30,9 +30,16 @@ export function defaultExec(cmd, args, opts) {
 /** Map a spawn result to the adapter contract: { exitCode, output, timedOut }. */
 export function mapResult(res) {
   const timedOut = res.signal === 'SIGTERM' || res.killed === true || res.timedOut === true;
+  const status = typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1);
   return {
-    exitCode: typeof res.status === 'number' ? res.status : (timedOut ? 124 : 1),
-    output: `${res.stdout ?? ''}${res.stderr ?? ''}`,
+    // Output cut at the byte cap is NOT a verdict: the completion marker or result document
+    // may be in the part that was dropped, so a truncated result is a failed strike (codex r24 #4).
+    exitCode: res.truncated === true && status === 0 ? 1 : status,
+    output: `${res.truncated === true ? TRUNCATED_NOTE : ''}${res.stdout ?? ''}${res.stderr ?? ''}`,
     timedOut,
+    ...(res.truncated === true ? { truncated: true } : {}),
   };
 }
+
+/** Prefixed to a truncated worker's output so the transcript says why the strike failed. */
+export const TRUNCATED_NOTE = '[fleet] worker output exceeded the byte cap and was truncated; the result is not trusted\n';

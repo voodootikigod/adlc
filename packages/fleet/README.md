@@ -262,7 +262,8 @@ retry later, the rest are terminal for the ticket). Run-level failures that are
 NOT ticket outcomes — `quarantined`, `pr-open-failed`, `preflight`,
 `resume-refused`, `dispatch-refused` — use the same key but sit outside that
 set, so a caller keying on the closed enum treats them as an operational error
-needing a human, which is the right reading.
+needing a human, which is the right reading. A `dispatch-refused` ticket is left PAUSED
+with its strike handed back: fix the sandbox policy and resume.
 
 ## Exit codes
 

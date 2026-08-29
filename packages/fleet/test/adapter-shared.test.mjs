@@ -55,3 +55,11 @@ test('fence tag is length-derived so forged inner END markers cannot predict it'
   assert.ok(prompt.includes(`<<END:PRIOR_ATTEMPT_1:${tag}>>`));
   assert.ok(!forgedLog.includes(tag), 'content must not be able to predict the length-derived fence tag');
 });
+
+test('mapResult: output cut at the byte cap is NEVER a success — exit 1 with the truncation note, and `truncated` carried (codex r24 #4)', async () => {
+  const { TRUNCATED_NOTE } = await import('../lib/adapters/_shared.mjs');
+  const r = mapResult({ status: 0, stdout: 'TICKET-DO', stderr: '', truncated: true });
+  assert.equal(r.exitCode, 1); assert.equal(r.truncated, true); assert.ok(r.output.startsWith(TRUNCATED_NOTE)); assert.ok(r.output.endsWith('TICKET-DO'));
+  assert.equal(mapResult({ status: 3, stdout: '', stderr: '', truncated: true }).exitCode, 3, 'a real non-zero status is kept');
+  assert.equal(mapResult({ status: 0, stdout: 'x', stderr: '' }).truncated, undefined, 'untouched when not truncated');
+});

@@ -506,7 +506,9 @@ unchanged. Ticket outcomes are the CLOSED set `quota-paused`, `lock-held`,
 `review-unavailable`, `mirror-fetch-failed`. Run-level failures outside it
 (`quarantined`, `pr-open-failed`, `preflight`, `resume-refused`,
 `dispatch-refused`) mean a human is needed, and a caller keying on the closed set
-treats them as operational errors — the right reading.
+treats them as operational errors — the right reading. A `dispatch-refused` run
+leaves the refused ticket PAUSED with its strike handed back: fix the sandbox
+policy (adapter, executable, read set) and resume.
 
 A new persisted ticket state, `paused`, is neither in-flight nor terminal;
 reconciliation (§6.4) returns it to `pending` with its strike count intact.

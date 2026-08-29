@@ -293,11 +293,17 @@ test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 3
   }
   try {
     assert.equal(up, true, 'the bridge listened within 20 s');
+    // The INNER worker must be provably alive before the signal: wait for its pidfile (a loaded
+    // host can take a second to boot the second node), so the relay is exercised for real.
+    let inner = 0;
+    for (let i = 0; i < 400 && !inner; i += 1) {
+      try { inner = Number(readFileSync(pidfile, 'utf8').trim()); } catch { await new Promise((r) => setTimeout(r, 50)); }
+    }
+    assert.ok(inner > 1, 'the inner worker started (pidfile) within 20 s');
     child.kill('SIGTERM');
     const status = await new Promise((r) => child.once('exit', (code) => r(code)));
     assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
     // The INNER child (the worker) is gone too — the bridge relayed the signal, it did not just die itself.
-    const inner = Number(readFileSync(pidfile, 'utf8').trim());
     let alive = true; for (let i = 0; i < 40 && alive; i++) { try { process.kill(inner, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
     if (alive) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
     assert.equal(alive, false, 'the inner worker process was terminated with the bridge');

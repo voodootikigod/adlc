@@ -609,3 +609,27 @@ test('the production bridge wiring composes end to end on the host: bridgeArgv +
     assert.deepEqual(proxy.refused.map((r) => r.host), ['example.com'], 'the proxy recorded the refused host');
   } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('mirrorCreateWorktree refuses to move fleet/<id> while ANOTHER worktree has it checked out (a human recovery checkout keeps its branch); a detached one is fine (codex r24 #3)', () => {
+  const { root, repo, mirror } = mirrorFixture();
+  const human = join(root, 'human-wt');
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    writeFileSync(join(a.path, 'w.txt'), '1\n'); sh(a.path, 'add', '-A'); sh(a.path, 'commit', '-q', '-m', 'w1');
+    const fb = mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt });
+    assert.equal(fb.ok, true);
+    // Advance the integration branch PAST the fetched-back tip, so the re-cut must MOVE fleet/t1.
+    const advanced = sh(repo, 'commit-tree', `${fb.sha}^{tree}`, '-p', fb.sha, '-m', 'advance');
+    sh(repo, 'update-ref', 'refs/heads/adlc/autopilot/issue-7', advanced);
+    sh(mirror, 'fetch', '-q', repo, '+refs/heads/adlc/autopilot/issue-7:refs/heads/adlc/autopilot/issue-7');
+    // The gate worktree still holds the branch from the first cut; the re-cut would detach it
+    // itself. Detach it here so the operator can check the worker branch out to look at it.
+    sh(a.gatePath, 'checkout', '-q', '--detach');
+    sh(repo, 'worktree', 'add', '-q', human, 'fleet/t1');
+    assert.throws(() => mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt }), /checked out in .*human-wt.*refusing to move/);
+    assert.equal(sh(repo, 'rev-parse', 'fleet/t1'), fb.sha, 'the branch pointer was NOT moved under the human worktree');
+    sh(human, 'checkout', '-q', '--detach');
+    const b = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    assert.equal(b.cutTip, advanced); assert.equal(sh(repo, 'rev-parse', 'fleet/t1'), advanced, 'once detached, the re-cut proceeds and moves the branch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
