@@ -467,7 +467,8 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
   // Caller-supplied files (dead-end material, charter addendum) are read BEFORE
   // the lock is taken so a bad path never leaves a stale lock behind.
   let files;
-  try { files = loadExtensionFiles(config, readFile ?? ((p) => io.readFile(p))); }
+  // The production reader is the bounded single-descriptor one (never the plain io.readFile) — codex r19 #2.
+  try { files = loadExtensionFiles(config, readFile ?? undefined); }
   catch (e) { console.error(`fleet: ${e.message}`); return finish(1, { reason: RUN_REASONS.PREFLIGHT }); }
 
   // Preflight (spec §8.0): resolve+require sandbox, lock, clean tree, rail-hook

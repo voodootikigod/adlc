@@ -20,12 +20,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { detectBackend } from '../lib/sandbox.mjs';
+import { probeBwrap } from './helpers/bwrap-probe.mjs';
 import { SYSTEM_ROOTS, BoundedModelSandbox, checkReadSetInvariant } from '../lib/bounded-model-plane.mjs';
 import { prepareSyntheticHome } from '../lib/synthetic-home.mjs';
 import * as claudeCode from '../lib/adapters/claude-code.mjs';
 
 const backend = detectBackend();
-const bwrapSkip = backend?.name === 'bubblewrap' ? false : `bounded model plane needs bubblewrap; host has ${backend?.name ?? 'no sandbox backend'}`;
+const bwrapProbe = probeBwrap();
+const bwrapSkip = bwrapProbe.ok ? false : `bounded model plane needs a USABLE bubblewrap; ${bwrapProbe.reason}`;
 const SH = '/usr/bin/sh';
 const CRED = '{"claudeAiOauth":{"accessToken":"dummy-token","expiresAt":1}}';
 

@@ -500,3 +500,17 @@ test('assertWorktreeLink refuses a .git link redirected to a SIBLING worktree\'s
     assert.ok(assertWorktreeLink({ path: b.path, gitDirRoot: mirror }), 'B itself is fine');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a second ticket\'s mirror worktree sees ONLY the base branch and its own fleet/<id>: the previous ticket\'s fleet/* branch is dropped from the mirror before the cut', () => {
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    writeFileSync(join(a.path, 'w.txt'), '1\n'); sh(a.path, 'add', '-A'); sh(a.path, 'commit', '-q', '-m', 'w1');
+    assert.equal(mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt }).ok, true);
+    const b = mirrorCreateWorktree({ repo, ticketId: 'T2', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const heads = sh(mirror, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/').split('\n').filter(Boolean).sort();
+    assert.deepEqual(heads, ['adlc/autopilot/issue-7', 'fleet/t2'], `the mirror carries the base branch and T2 only: ${heads.join(', ')}`);
+    assert.equal(sh(repo, 'rev-parse', 'fleet/t1').length, 40, "T1's branch still lives in the caller repository");
+    assert.ok(b.path);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

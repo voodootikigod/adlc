@@ -139,3 +139,16 @@ test('--model-plane-git mirror with a concurrency other than 1 is refused (one w
   assert.match(r.stderr, /requires concurrency 1/);
   assert.equal(JSON.parse(r.stdout).reason, 'dispatch-refused');
 });
+
+test('the production path reads extension files through the bounded single-descriptor reader (a FIFO is refused, never the plain io.readFile)', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-prod-'));
+  try {
+    const fifo = join(dir, 'charter.fifo'); execFileSync('mkfifo', [fifo]);
+    // No injected reader: the default (production) reader must refuse the FIFO without blocking.
+    assert.throws(() => loadExt({ charterFile: fifo }), /not a regular file/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -157,7 +157,11 @@ export function mirrorCreateWorktree({ repo, ticketId, integrationBranch, mirror
   const path = join(repo, '.worktrees', `fleet-${id}`);
   const gatePath = join(repo, '.worktrees', `fleet-${id}-gate`);
   const startSha = repoGit('rev-parse', integrationBranch);
-  const { baseBranch } = assertBareMirror({ mirror, gitAt });
+  const { baseBranch, branches } = assertBareMirror({ mirror, gitAt });
+  // The worker gets the mirror read-write: OTHER tickets' `fleet/*` branches (already fetched back
+  // into the caller repository) are dropped from it first, so the worker sees only the base branch
+  // and its own branch (codex r19 #3).
+  for (const b of branches) if (b.startsWith('fleet/') && b !== workerBranch) { try { gitAt(mirror)('update-ref', '-d', `refs/heads/${b}`); } catch { /* already gone */ } }
   // A later ticket cuts from the ADVANCED integration tip: bring it into the mirror first (codex r8).
   refreshMirrorTip({ mirror, repo, baseBranch, sourceRef: integrationBranch, tip: startSha, gitAt });
   // fleet's own worker branch in the caller repo: detach any gate worktree that
