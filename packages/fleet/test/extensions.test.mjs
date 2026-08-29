@@ -633,3 +633,23 @@ test('mirrorCreateWorktree refuses to move fleet/<id> while ANOTHER worktree has
     assert.equal(b.cutTip, advanced); assert.equal(sh(repo, 'rev-parse', 'fleet/t1'), advanced, 'once detached, the re-cut proceeds and moves the branch');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('assertBareMirror vets the mirror config BEFORE any other host git runs inside it, and every probe carries the host-safe overrides (agy fleet r8 c2)', () => {
+  const { root, mirror } = mirrorFixture();
+  try {
+    const calls = [];
+    const recordingGitAt = (cwd) => (...args) => { calls.push({ cwd, args }); return gitAt(cwd)(...args); };
+    assertBareMirror({ mirror, gitAt: recordingGitAt });
+    assert.ok(calls.length >= 3, `probes ran (${calls.length})`);
+    assert.ok(calls[0].args.includes('config') && calls[0].args.includes('--file'), `the FIRST git call is the config vet, got: ${calls[0].args.join(' ')}`);
+    for (const c of calls) {
+      assert.equal(c.cwd, mirror);
+      assert.ok(c.args.includes('core.hooksPath=/dev/null') && c.args.includes('core.fsmonitor=false') && c.args.includes('core.sshCommand=/bin/false'), `host-safe overrides on: ${c.args.join(' ')}`);
+    }
+    // A poisoned config is refused by that first call: no probe ever runs after it.
+    sh(mirror, 'config', 'core.fsmonitor', '/tmp/evil-monitor');
+    const before = calls.length;
+    assert.throws(() => assertBareMirror({ mirror, gitAt: recordingGitAt }), /poisoned/);
+    assert.equal(calls.length, before + 1, 'exactly the config vet ran, nothing after it');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

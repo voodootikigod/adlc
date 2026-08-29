@@ -98,7 +98,8 @@ export function assertMirrorConfigPristine({ mirror, gitAt = defaultGit } = {}) 
   const configPath = join(mirror, 'config');
   let listing = '';
   if (existsSync(configPath)) {
-    try { listing = git('config', '--file', configPath, '--list', '--name-only'); }
+    // `--file` reads ONLY that file; the host-safe overrides ride along so even this read never honours the mirror's own directives.
+    try { listing = git(...HOST_SAFE_GIT_FLAGS, 'config', '--file', configPath, '--list', '--name-only'); }
     catch (e) { throw new Error(`mirror ${mirror} config is unreadable (${errorText(e)}): the mirror is refused`); }
   }
   const keys = listing.split('\n').map((k) => k.trim().toLowerCase()).filter(Boolean);
@@ -154,7 +155,10 @@ export function assertWorktreeLink({ path, gitDirRoot } = {}) {
 
 export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {
   requireArgs('assertBareMirror', { mirror }, ['mirror']);
-  const git = gitAt(mirror);
+  // The config is vetted BEFORE any other host git runs inside the mirror (a worker had it
+  // read-write), and every probe carries the host-safe overrides regardless (agy fleet r8 c2).
+  assertMirrorConfigPristine({ mirror, gitAt });
+  const git = (...args) => gitAt(mirror)(...HOST_SAFE_GIT_FLAGS, ...args);
   let bare;
   try { bare = git('rev-parse', '--is-bare-repository'); }
   catch (e) { throw new Error(`mirror ${mirror} is not a git repository: ${errorText(e)}`); }
@@ -172,7 +176,6 @@ export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {
   const hooksDir = join(mirror, 'hooks');
   const liveHooks = existsSync(hooksDir) ? readdirSync(hooksDir).filter((f) => !f.endsWith('.sample')) : [];
   if (liveHooks.length) throw new Error(`mirror ${mirror} carries hooks (${liveHooks.join(', ')}); a disposable mirror has none`);
-  assertMirrorConfigPristine({ mirror, gitAt });
   return { branches, baseBranch: base[0] };
 }
 
