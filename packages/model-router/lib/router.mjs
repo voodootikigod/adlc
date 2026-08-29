@@ -12,13 +12,14 @@ import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';
 import { activeTickets } from './active-tickets.mjs';
+import { assertFloor, DEFAULT_FLOOR } from './floor.mjs';
 
 /**
  * Run the model routing pipeline.
  *
  * @param {object} opts
  * @param {string} [opts.ticketsPath] - path to tickets.json
- * @param {number} [opts.floor=0.2] - rail density floor
+ * @param {number} [opts.floor=0.2] - rail density floor, in (0, 1] — 0 is rejected (#697)
  * @param {string} [opts.adlcDir] - override .adlc dir (for tests)
  * @returns {{ assignments, p3Findings, ticketErrors, skippedLedger }}
  *   or throws with a message suitable for opError()
@@ -26,9 +27,13 @@ import { activeTickets } from './active-tickets.mjs';
 export async function runRouter(opts = {}) {
   const {
     ticketsPath,
-    floor = 0.2,
+    floor = DEFAULT_FLOOR,
     adlcDir = ADLC_DIR,
   } = opts;
+
+  // Before anything is read: an empty store returns early below, and a
+  // disabling floor must never ride that early return to exit 0 (#697).
+  assertFloor(floor);
 
   // Load tickets, then drop completed (tombstoned) tickets: a finished ticket
   // must not be assigned a model or gated as open backlog.

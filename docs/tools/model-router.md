@@ -35,7 +35,7 @@ model-router [--tickets <path>] [--floor <number>] [--json]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
-| `--floor <0-1>` | `0.2` | Minimum rail density for cheap-tier assignment |
+| `--floor <n>` | `0.2` | Minimum rail density for cheap-tier assignment. `n` must be greater than 0 and at most 1 — the range is `(0, 1]`. `0` is rejected with exit 1 because it would disable the P3 rail-density gate (every ticket would pass and unrailed tickets would leave frontier, #697). |
 | `--json` | off | Machine-readable JSON output (for orchestrators) |
 
 ## Output
@@ -74,7 +74,7 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
 | Code | Meaning |
 |------|---------|
 | `0` | All tickets assigned; gate passes |
-| `1` | Operational error (bad tickets file, JSON parse error, cycle in DAG) |
+| `1` | Operational error (bad tickets file, JSON parse error, cycle in DAG, or `--floor` outside `(0, 1]` — `0` is refused, not treated as "no minimum") |
 | `2` | Gate fails: one or more non-frontier-category tickets have `railDensity < floor` |
 
 ## Assignment rules (ADLC D1)

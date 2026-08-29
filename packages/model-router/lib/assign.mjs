@@ -22,6 +22,7 @@
 
 import { railDensity as computeRailDensity } from './density.mjs';
 import { bestTierFromPriors } from './priors.mjs';
+import { assertFloor, DEFAULT_FLOOR } from './floor.mjs';
 
 const FRONTIER_CATEGORIES = new Set(['contract', 'spec', 'architecture']);
 
@@ -63,10 +64,11 @@ function resolveBudget(ticket, tier, mode) {
  * @param {object} ticket
  * @param {number} float - CPM float for this ticket
  * @param {object} priors - { global, byCategory } from buildPriors()
- * @param {number} floor - rail density floor (default 0.2)
+ * @param {number} floor - rail density floor (default 0.2); must be in (0, 1] — see floor.mjs
  * @returns {{ id, tier, mode, railDensity, float, budget, reason }}
  */
-export function assignTicket(ticket, float, priors, floor = 0.2) {
+export function assignTicket(ticket, float, priors, floor = DEFAULT_FLOOR) {
+  assertFloor(floor);
   const density = computeRailDensity(ticket);
   const id = ticket.id;
 
@@ -132,7 +134,10 @@ export function assignTicket(ticket, float, priors, floor = 0.2) {
  * @param {number} floor
  * @returns {Array<{ id, tier, mode, railDensity, float, budget, reason }>}
  */
-export function assignAll(tickets, cpmResult, priors, floor = 0.2) {
+export function assignAll(tickets, cpmResult, priors, floor = DEFAULT_FLOOR) {
+  // Validated here as well as per ticket: an EMPTY ticket list must not let a
+  // disabling floor through unnoticed (#697).
+  assertFloor(floor);
   return tickets.map((ticket) => {
     const float = cpmResult.floats[ticket.id] ?? 0;
     return assignTicket(ticket, float, priors, floor);

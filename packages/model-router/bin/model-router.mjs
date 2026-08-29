@@ -8,18 +8,57 @@
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { runRouter } from '../lib/router.mjs';
 import { formatTable } from '../lib/format.mjs';
+import { assertFloor, DEFAULT_FLOOR, FLOOR_RANGE_MESSAGE, parseFloor } from '../lib/floor.mjs';
 
-const { values } = parseArgs({
-  options: {
-    tickets: { type: 'string' },
-    floor: { type: 'string' },
-    json: { type: 'boolean', default: false },
-  },
-});
+/**
+ * The raw token that followed `--floor` on the command line, or undefined.
+ * Read only when parseArgs has already refused the invocation, so the value
+ * never reached `values.floor` — e.g. `--floor -0`, which node's parseArgs
+ * rejects as ambiguous before any validator runs.
+ */
+function rawFloorToken(argv) {
+  return argv.includes('--floor') ? argv[argv.indexOf('--floor') + 1] : undefined;
+}
 
-const floor = values.floor !== undefined ? parseFloat(values.floor) : 0.2;
-if (isNaN(floor) || floor < 0 || floor > 1) {
-  opError(`--floor must be a number between 0 and 1, got: ${values.floor}`);
+/**
+ * node's parseArgs throws on a dash-leading value after a space (`--floor -0`,
+ * `--floor -1`: "argument is ambiguous"), a missing value (`--floor`), and an
+ * unknown option. Left uncaught that is a stack trace with exit 1 — an operator
+ * could not tell a bad floor from a broken tool, and a floor-shaped failure never
+ * reached the range error the flag documents (#697 review). Route every parse
+ * failure through opError; a floor-shaped one carries the range message and the
+ * raw token, plus the `--floor=<n>` spelling parseArgs accepts for negatives.
+ */
+function parseFlags(argv) {
+  try {
+    return parseArgs({
+      args: argv,
+      options: {
+        tickets: { type: 'string' },
+        floor: { type: 'string' },
+        json: { type: 'boolean', default: false },
+      },
+    }).values;
+  } catch (err) {
+    if (!String(err?.code ?? '').startsWith('ERR_PARSE_ARGS')) throw err;
+    const reason = String(err.message).split('\n')[0];
+    if (/--floor/.test(reason)) {
+      const raw = rawFloorToken(argv);
+      opError(`${FLOOR_RANGE_MESSAGE}; got: ${raw === undefined ? '(missing)' : raw} (${reason}; write --floor=<n> for a dash-leading value)`);
+    }
+    opError(reason);
+  }
+}
+
+const values = parseFlags(process.argv.slice(2));
+
+// (0, 1] only. `--floor 0` used to be accepted and silently disabled the P3
+// gate — every ticket set exited 0 and unrailed tickets left frontier (#697).
+const floor = values.floor !== undefined ? parseFloor(values.floor) : DEFAULT_FLOOR;
+try {
+  assertFloor(floor, values.floor);
+} catch (err) {
+  opError(err.message);
 }
 
 let result;

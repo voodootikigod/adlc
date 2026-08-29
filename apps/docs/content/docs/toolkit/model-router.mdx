@@ -29,7 +29,7 @@ adlc model-router [--tickets <path>] [--floor <number>] [--json]
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
-| `--floor <0-1>` | `0.2` | Minimum rail density for cheap-tier assignment; below it a ticket is forced to frontier and flagged as a P3 finding. |
+| `--floor <n>` | `0.2` | Minimum rail density for cheap-tier assignment; below it a ticket is forced to frontier and flagged as a P3 finding. `n` must be greater than 0 and at most 1 — `0` is rejected (exit 1) because it would disable the gate entirely. |
 | `--json` | off | Machine-readable output: `{ assignments, p3Findings }`. |
 
 Assignment is rule-based: `contract`/`spec`/`architecture` categories (or any
@@ -41,7 +41,7 @@ ladder up on gate failure.
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. All tickets assigned.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad tickets file, JSON parse error, cycle in the DAG).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad tickets file, JSON parse error, cycle in the DAG, or `--floor` outside `(0, 1]` — `0` is refused, never a silent kill switch).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more non-frontier-category tickets fall below the rail-density floor.</span>
 </div>
 
