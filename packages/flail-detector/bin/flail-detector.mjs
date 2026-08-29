@@ -8,6 +8,7 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { parseLog } from '../lib/parse-log.mjs';
 import { analyze } from '../lib/analyze.mjs';
+import { assessAnalyzability } from '../lib/analyzability.mjs';
 import { formatResult } from '../lib/format.mjs';
 
 // ---------------------------------------------------------------------------
@@ -65,12 +66,16 @@ Signals detected:
   budget          --spent-tokens > --budget (only when both given)
 
 Output:
-  verdict: 'flail' | 'clean'
+  verdict: 'flail' | 'clean' | 'could-not-analyze'
   On flail: recommendation block — "Kill the session. Append these dead-ends..."
+  could-not-analyze: the log had nothing to analyze (no non-empty lines, or
+                     --scope given but no file path could be extracted). This
+                     is an operational outcome, never a pass: nothing is
+                     recorded even with --record, and the exit code is 1.
 
 Exit codes:
   0  clean (gate passes)
-  1  operational error (file not found, bad arguments)
+  1  operational error (file not found, bad arguments, could-not-analyze)
   2  flail detected (gate fails)
 
 ADLC phase: C6 / P4 supervisor
@@ -141,6 +146,24 @@ try {
 }
 
 const { lines, bytes } = parseLog(raw);
+
+// ---------------------------------------------------------------------------
+// Refuse to "analyze" nothing (issue #622)
+// ---------------------------------------------------------------------------
+// A log with nothing to look at is not clean — it is unanalyzed. Report it as
+// an operational outcome BEFORE analyze()/--record so a never-written log path
+// can never mint P4 evidence. Exit 1, like any other operational error.
+
+const analyzability = assessAnalyzability({ lines, scopes });
+if (!analyzability.ok) {
+  if (values.json) {
+    printJson({ verdict: 'could-not-analyze', reasons: analyzability.reasons, bytes, signals: [] });
+  } else {
+    console.error(`flail-detector: could not analyze — ${analyzability.reasons.join('; ')}`);
+  }
+  process.exit(1);
+}
+
 const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens, budget });
 
 // ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n
 | `--max-bytes <n>` | _(no limit)_ | Trigger the **size** signal when the log file exceeds n bytes. |
 | `--spent-tokens <n>` | _(none)_ | Measured token spend for this ticket (e.g. from `adlc spend --ticket <id> --json`). Must be given with `--budget`. |
 | `--budget <n>` | _(none)_ | The ticket's declared token budget (`ticket.budget`, or `model-router`'s emitted per-ticket `budget`). Triggers the **budget** signal when `--spent-tokens` exceeds it. Must be given with `--spent-tokens` — either alone is a usage error. |
-| `--record` | off | On a clean verdict, append a `flail-check` entry to `.adlc/manifest.jsonl` (ADLC P4 evidence — see [`runner`](./runner.md)). Never writes on a `flail` verdict. |
+| `--record` | off | On a clean verdict, append a `flail-check` entry to `.adlc/manifest.jsonl` (ADLC P4 evidence — see [`runner`](./runner.md)). Never writes on a `flail` verdict, and never on a `could-not-analyze` outcome (issue #622). |
 | `--ticket <id>` | _(none)_ | Ticket to scope the recorded manifest entry to. Optional — recorded as `null` when omitted, same as [`rails-guard --record`](./rails-guard.md). |
 | `--json` | off | Machine-readable JSON output for orchestrators. |
 | `--help` | — | Print help and exit 0. |
@@ -56,7 +56,7 @@ flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n
 | Code | Meaning |
 |------|---------|
 | `0` | Gate passes — no flail signals detected (clean) |
-| `1` | Operational error — file not found, bad argument |
+| `1` | Operational error — file not found, bad argument, or **`could-not-analyze`**: the log had nothing to analyze (no non-empty lines, or `--scope` given but no file path could be extracted). Never a pass — nothing is recorded even with `--record`. |
 | `2` | Gate fails — one or more flail signals triggered |
 
 ## Signals
@@ -143,6 +143,24 @@ Machine-readable (`--json`):
   "recommendation": "Kill the session. Append these dead-ends to the ticket: ..."
 }
 ```
+
+When the log has nothing to analyze — it is empty or whitespace-only, or
+`--scope` was given but no line yields a file path — the verdict is
+`could-not-analyze` and the exit code is 1, not 0:
+
+```json
+{
+  "verdict": "could-not-analyze",
+  "reasons": ["log has no non-empty lines (empty or whitespace-only file)"],
+  "bytes": 0,
+  "signals": []
+}
+```
+
+In text mode the same outcome prints `flail-detector: could not analyze — <reasons>`
+to stderr. It is an operational outcome, never a pass: a supervisor pointed at a log
+path that was never written must not get a green P4 gate, and `--record` writes no
+`flail-check` entry for it (issue #622).
 
 ## Examples
 

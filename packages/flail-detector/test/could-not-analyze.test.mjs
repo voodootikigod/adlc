@@ -1,0 +1,227 @@
+// test/could-not-analyze.test.mjs — issue #622: an empty or unusable log is
+// "could not analyze" (exit 1, never recorded), not CLEAN (exit 0, recorded as
+// P4 evidence). Covers the exported decision function directly and the CLI
+// end to end, including the --record path against an isolated .adlc dir.
+
+import { test, describe, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+import { readEntries, ADLC_DIR } from '../../core/index.mjs';
+import { assessAnalyzability } from '../lib/analyzability.mjs';
+import { parseLog } from '../lib/parse-log.mjs';
+
+const BIN = fileURLToPath(new URL('../bin/flail-detector.mjs', import.meta.url));
+
+function runBin(args, cwd) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' });
+}
+
+function manifestEntryCount(dir) {
+  const adlcDir = join(dir, ADLC_DIR);
+  return existsSync(join(adlcDir, 'manifest.jsonl'))
+    ? readEntries('manifest', adlcDir).entries.length
+    : 0;
+}
+
+// ---------------------------------------------------------------------------
+// AC6 — the decision function, tested directly
+// ---------------------------------------------------------------------------
+
+describe('assessAnalyzability (AC6)', () => {
+  test('zero lines is not analyzable', () => {
+    const r = assessAnalyzability({ lines: [], scopes: [] });
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons.length, 1);
+    assert.match(r.reasons[0], /no non-empty lines/);
+  });
+
+  test('whitespace-only lines are not analyzable', () => {
+    const r = assessAnalyzability({ lines: ['', '   ', '\t'], scopes: [] });
+    assert.equal(r.ok, false);
+    assert.match(r.reasons[0], /no non-empty lines/);
+  });
+
+  test('--scope with no extractable file path is not analyzable, reason names scope', () => {
+    const r = assessAnalyzability({ lines: ['Build started', 'Done in 2.3s'], scopes: ['src/**'] });
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons.length, 1);
+    assert.match(r.reasons[0], /scope/);
+    assert.doesNotMatch(r.reasons[0], /no non-empty lines/);
+  });
+
+  test('empty log with --scope reports BOTH reasons', () => {
+    const r = assessAnalyzability({ lines: ['  '], scopes: ['src/**'] });
+    assert.equal(r.ok, false);
+    assert.equal(r.reasons.length, 2);
+    assert.match(r.reasons[0], /no non-empty lines/);
+    assert.match(r.reasons[1], /scope/);
+  });
+
+  test('--scope with an extractable path (in or out of scope) is analyzable', () => {
+    const inScope = assessAnalyzability({ lines: ['Writing src/a.mjs'], scopes: ['src/**'] });
+    const outScope = assessAnalyzability({ lines: ['Writing lib/a.mjs'], scopes: ['src/**'] });
+    assert.deepEqual(inScope, { ok: true, reasons: [] });
+    assert.deepEqual(outScope, { ok: true, reasons: [] });
+  });
+
+  test('non-empty lines with no --scope are analyzable even without paths', () => {
+    const r = assessAnalyzability({ lines: ['Build started', 'Done.'], scopes: [] });
+    assert.deepEqual(r, { ok: true, reasons: [] });
+  });
+
+  test('scopes undefined is treated as no scope', () => {
+    const r = assessAnalyzability({ lines: ['Build started'] });
+    assert.deepEqual(r, { ok: true, reasons: [] });
+  });
+
+  test('uses the same path extractor as the signals (file_path JSON form counts)', () => {
+    const r = assessAnalyzability({ lines: ['{"file_path":"src/x.mjs"}'], scopes: ['src/**'] });
+    assert.equal(r.ok, true);
+  });
+
+  test('does not mutate its inputs', () => {
+    const lines = ['Writing src/a.mjs', ''];
+    const scopes = ['src/**'];
+    assessAnalyzability({ lines, scopes });
+    assert.deepEqual(lines, ['Writing src/a.mjs', '']);
+    assert.deepEqual(scopes, ['src/**']);
+  });
+
+  test('a JSONL log whose objects carry no text/file targets parses to zero lines', () => {
+    const { lines } = parseLog('{"a":1}\n{"b":2}\n');
+    assert.deepEqual(lines, []);
+    assert.equal(assessAnalyzability({ lines, scopes: [] }).ok, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI — AC1..AC5
+// ---------------------------------------------------------------------------
+
+describe('CLI: could-not-analyze outcome', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flail-detector-cna-'));
+  });
+
+  after(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  test('AC1: empty log exits 1 with "could not analyze" on stderr, nothing on stdout', () => {
+    const f = join(dir, 'empty.log');
+    writeFileSync(f, '');
+    const r = runBin([f], dir);
+    assert.equal(r.status, 1, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.match(r.stderr, /flail-detector: could not analyze — /);
+    assert.match(r.stderr, /no non-empty lines/);
+    assert.equal(r.stdout, '');
+    assert.doesNotMatch(r.stderr, /CLEAN/);
+  });
+
+  test('AC2: whitespace-only log with --json prints one could-not-analyze document, exits 1', () => {
+    const f = join(dir, 'ws.log');
+    const content = '  \n\t\n\n';
+    writeFileSync(f, content);
+    const r = runBin([f, '--json'], dir);
+    assert.equal(r.status, 1, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    const docs = r.stdout.trim().split('\n').filter((l) => l.trim().length > 0);
+    // exactly one JSON document (pretty-printed spans lines; it must parse as a whole)
+    const parsed = JSON.parse(r.stdout);
+    assert.ok(docs.length >= 1);
+    assert.equal(parsed.verdict, 'could-not-analyze');
+    assert.ok(Array.isArray(parsed.reasons) && parsed.reasons.length > 0, 'reasons must be non-empty');
+    assert.deepEqual(parsed.signals, []);
+    assert.equal(parsed.bytes, Buffer.byteLength(content, 'utf8'));
+    assert.equal(r.stderr, '');
+  });
+
+  test('AC3: --scope on a log with lines but no file path exits 1 naming scope; same log without --scope is CLEAN exit 0', () => {
+    const f = join(dir, 'prose.log');
+    writeFileSync(f, 'Build started\nRunning tests\nAll tests passed.\n');
+
+    const scoped = runBin([f, '--scope', 'src/**'], dir);
+    assert.equal(scoped.status, 1, `stdout: ${scoped.stdout} stderr: ${scoped.stderr}`);
+    assert.match(scoped.stderr, /could not analyze/);
+    assert.match(scoped.stderr, /scope/);
+    assert.equal(scoped.stdout, '');
+
+    const scopedJson = runBin([f, '--scope', 'src/**', '--json'], dir);
+    assert.equal(scopedJson.status, 1);
+    const parsed = JSON.parse(scopedJson.stdout);
+    assert.equal(parsed.verdict, 'could-not-analyze');
+    assert.equal(parsed.reasons.length, 1);
+    assert.match(parsed.reasons[0], /scope/);
+
+    const unscoped = runBin([f], dir);
+    assert.equal(unscoped.status, 0, `stdout: ${unscoped.stdout} stderr: ${unscoped.stderr}`);
+    assert.match(unscoped.stdout, /flail-detector: CLEAN/);
+  });
+
+  test('AC3b: --scope on a log WITH a file path still analyzes (in-scope clean, out-of-scope flail)', () => {
+    const f = join(dir, 'paths.log');
+    writeFileSync(f, 'Writing src/a.mjs\nDone.\n');
+    const clean = runBin([f, '--scope', 'src/**'], dir);
+    assert.equal(clean.status, 0, clean.stderr);
+    const flail = runBin([f, '--scope', 'lib/**'], dir);
+    assert.equal(flail.status, 2, flail.stderr);
+  });
+
+  test('AC4: --record --ticket T1 on an empty log appends nothing to the manifest', () => {
+    const f = join(dir, 'empty-record.log');
+    writeFileSync(f, '');
+    const beforeCount = manifestEntryCount(dir);
+
+    const r = runBin([f, '--record', '--ticket', 'T1'], dir);
+    assert.equal(r.status, 1, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.equal(manifestEntryCount(dir), beforeCount, 'could-not-analyze must never mint P4 evidence');
+
+    const rj = runBin([f, '--record', '--ticket', 'T1', '--json'], dir);
+    assert.equal(rj.status, 1);
+    assert.equal(manifestEntryCount(dir), beforeCount);
+  });
+
+  test('AC4b: --record on a --scope vacuous log appends nothing', () => {
+    const f = join(dir, 'prose-record.log');
+    writeFileSync(f, 'Build started\nDone.\n');
+    const beforeCount = manifestEntryCount(dir);
+    const r = runBin([f, '--scope', 'src/**', '--record', '--ticket', 'T1'], dir);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(manifestEntryCount(dir), beforeCount);
+  });
+
+  test('AC5 (regression): non-empty clean log is CLEAN exit 0 and --record still appends a flail-check entry', () => {
+    const f = join(dir, 'clean.log');
+    writeFileSync(f, 'Build started\nDone in 2.3s\nAll tests passed.\n');
+    const beforeCount = manifestEntryCount(dir);
+
+    const r = runBin([f, '--record', '--ticket', 'T1'], dir);
+    assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
+    assert.match(r.stdout, /flail-detector: CLEAN/);
+    assert.equal(manifestEntryCount(dir), beforeCount + 1, 'a genuinely analyzed clean log still records');
+
+    const { entries } = readEntries('manifest', join(dir, ADLC_DIR));
+    const entry = entries[entries.length - 1];
+    assert.equal(entry.type, 'flail-check');
+    assert.equal(entry.verdict, 'clean');
+    assert.equal(entry.ticket, 'T1');
+  });
+
+  test('AC5b (regression): a real flail is still exit 2, never could-not-analyze', () => {
+    const f = join(dir, 'flail.log');
+    writeFileSync(f, 'Error: cannot connect\nError: cannot connect\n');
+    const r = runBin([f, '--json'], dir);
+    assert.equal(r.status, 2);
+    assert.equal(JSON.parse(r.stdout).verdict, 'flail');
+  });
+
+  test('--help documents the could-not-analyze outcome', () => {
+    const r = runBin(['--help'], dir);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /could-not-analyze/);
+  });
+});

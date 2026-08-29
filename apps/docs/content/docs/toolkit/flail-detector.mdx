@@ -38,7 +38,7 @@ adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-byt
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: clean. No flail signals detected, the session may continue.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (log file not found, bad argument).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (log file not found, bad argument), or `could-not-analyze`: the log had nothing to analyze — no non-empty lines, or `--scope` given but no file path could be extracted. Never a pass, and never recorded as P4 evidence (issue #622).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: flail. One or more signals triggered; kill the session and append the dead-ends to the ticket.</span>
 </div>
 
