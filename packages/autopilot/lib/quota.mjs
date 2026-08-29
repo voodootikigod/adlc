@@ -14,7 +14,7 @@
 
 import { active, registerSeams } from './mutations.mjs';
 
-registerSeams(['quota.lenientText']);
+registerSeams(['quota.lenientText', 'quota.unknownFamilyCollides']);
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 export const BETA_HEADER = 'oauth-2025-04-20';
@@ -75,7 +75,10 @@ export function validateUsageBody(body) {
       const v = validateLimitEntry(entry);
       // Mutation seam `quota.lenientSchema`: a malformed entry is skipped instead of refusing.
       if (!v.ok) { if (active('quota.lenientSchema')) continue; return unknown(v.detail); }
-      if (v.family === null) continue;
+      // An entry whose model is no known family is IGNORED (parseUsageText does the same): two such
+      // models with different percents must not collide under one key and refuse the whole body (agy r4 c6).
+      // Mutation seam `quota.unknownFamilyCollides`: unknown families are keyed together.
+      if (v.family === null || (v.family === 'unknown' && !active('quota.unknownFamilyCollides'))) continue;
       if (scoped.has(v.family) && scoped.get(v.family) !== v.percent) return unknown(`duplicate scoped entries for ${v.family} with different percent`);
       scoped.set(v.family, v.percent);
     }

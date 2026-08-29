@@ -159,3 +159,31 @@ export async function ac87_orchestratorWritesNeverClobberHelperOrdinals() {
   } finally { cleanup(root); }
 }
 test('AC87: the orchestrator\'s status writes and a helper process\'s ordinal increments interleave without losing an update (every persist is under the file mutex)', { timeout: 60_000 }, ac87_orchestratorWritesNeverClobberHelperOrdinals);
+
+export async function ac87_recordQuotaUnderTheMutex() {
+  // A second PROCESS holds the mutex, bumps the file, releases: recordQuota must wait and re-read, never
+  // persist a snapshot taken before the mutex (agy r4 c8).
+  const { mkdtempSync, rmSync, existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const root = mkdtempSync(join(tmpdir(), 'ap-status-mutex-'));
+  try {
+    const paths = autopilotPaths(root);
+    mkdirSync(paths.runsDir ?? join(root, '.adlc', 'autopilot-runs'), { recursive: true });
+    const store = createStatusStore({ paths, lockToken: () => null });
+    store.write({});
+    const holder = spawn(process.execPath, ['-e', `
+      const fs = require('node:fs'); const file = process.argv[1]; const dir = file + '.mutex';
+      fs.mkdirSync(dir);
+      setTimeout(() => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.holderMark = 1; fs.writeFileSync(file, JSON.stringify(d)); fs.rmdirSync(dir); }, 250);
+    `, paths.statusFile], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.ok(existsSync(`${paths.statusFile}.mutex`), 'the other process holds the mutex');
+    store.recordQuota('sample', null, { five: 1 });
+    await new Promise((resolve) => holder.once('exit', resolve));
+    assert.equal(store.read().holderMark, 1, 'the bump that landed while the mutex was held survives the quota record');
+    assert.equal(store.read().quotaSteps.length, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+test('AC87: recordQuota is one read-modify-write under the cross-process mutex — a bump landing while another process holds it is never clobbered', { timeout: 20_000 }, ac87_recordQuotaUnderTheMutex);

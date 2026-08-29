@@ -133,6 +133,7 @@ export const REGISTRY = {
   37: [{ fn: 'ac37_thresholdCeiling', file: 'config.test.mjs', seam: 'config.acceptAnyThreshold' }],
   47: [
     { fn: 'ac47_strictSchemaAndNoScopedLimit', file: 'quota.test.mjs', seam: 'quota.lenientSchema' },
+    { fn: 'ac47_strictSchemaAndNoScopedLimit', file: 'quota.test.mjs', seam: 'quota.unknownFamilyCollides' },
     { fn: 'ac47_lenientSchemaSeamBites', file: 'quota.test.mjs', seam: 'quota.lenientSchema' },
   ],
   49: [
@@ -166,6 +167,7 @@ export const REGISTRY = {
   ],
   77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   87: [
+    { fn: 'ac87_recordQuotaUnderTheMutex', file: 'status.test.mjs', seam: 'status.quotaOutsideMutex' },
     { fn: 'ac87_orchestratorWritesNeverClobberHelperOrdinals', file: 'status.test.mjs', seam: 'status.noFileMutex' },
     { fn: 'ac87_ordinalIsBumpedFromSeparateProcesses', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
     { fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' },

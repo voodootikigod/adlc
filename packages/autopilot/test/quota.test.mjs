@@ -90,6 +90,9 @@ export function ac47_strictSchemaAndNoScopedLimit() {
   }
   // The canonical predicate over the RAW body.
   const noLimit = body({ limits: [scopedEntry('Sonnet', 5)], extra: { seven_day_opus: null } });
+  // Entries for models of NO known family are ignored: two of them at different percents never collide (agy r4 c6).
+  const twoUnknown = body({ limits: [scopedEntry('Sonnet', 5), scopedEntry('Zeta', 10), scopedEntry('Omega', 20)] });
+  assert.equal(validateUsageBody(twoUnknown).ok, true, 'unknown-family entries are ignored, never a duplicate-scoped refusal');
   assert.equal(noScopedLimit(noLimit, 'opus'), true);
   for (const bad of [null, undefined, 7, 'x']) assert.equal(typeof noScopedLimit(bad, 'opus'), 'boolean', `a ${bad} body never throws`);
   assert.equal(gate(noLimit).windows.scoped, null, 'no scoped limit → the gate reads no scoped window');

@@ -19,6 +19,7 @@ registerSeams([
   'status.noLockForOrdinal',   // incrementStarts no longer requires the lock
   'status.skipQuotaAppend',    // recordQuota drops the per-step entry,
   'status.noFileMutex',
+  'status.quotaOutsideMutex', // recordQuota snapshots the file before taking the mutex (agy r4)
 ]);
 
 /** A cross-process mutex for the status file: an atomic `mkdir`, spun with short sleeps, stale after 30 s. */
@@ -102,11 +103,17 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
   const pinUrls = ({ remoteFetchUrl, remotePushUrl, host, repo } = {}) => write({ pinnedUrls: { remoteFetchUrl, remotePushUrl, host, repo } });
   /** §3.4 reconciliation entry: appended per step (bounded) and mirrored into `quota`. */
   const recordQuota = (step, before, after, { threshold = null, overshoot = null, delta = null } = {}) => {
-    const cur = read();
-    const entry = { step, before, after, delta, overshoot, threshold, at: iso() };
-    const quotaSteps = active('status.skipQuotaAppend') ? (cur.quotaSteps ?? []) : [...(cur.quotaSteps ?? []), entry].slice(-MAX_QUOTA_STEPS);
-    persist({ ...cur, quotaSteps, quota: { ...(cur.quota ?? {}), ...(after ?? {}), checkedAt: entry.at } });
-    return entry;
+    // ONE read-modify-write under the cross-process mutex: a snapshot taken outside it would
+    // clobber a helper's ordinal bump landing in between (agy r4 c8).
+    // Mutation seam `status.quotaOutsideMutex`: the snapshot is read before the mutex is taken.
+    const early = active('status.quotaOutsideMutex') ? read() : null;
+    return locked(() => {
+      const cur = early ?? read();
+      const entry = { step, before, after, delta, overshoot, threshold, at: iso() };
+      const quotaSteps = active('status.skipQuotaAppend') ? (cur.quotaSteps ?? []) : [...(cur.quotaSteps ?? []), entry].slice(-MAX_QUOTA_STEPS);
+      persist({ ...cur, quotaSteps, quota: { ...(cur.quota ?? {}), ...(after ?? {}), checkedAt: entry.at } });
+      return entry;
+    });
   };
   return { read, write, incrementStarts, resetStarts, pinTools, pinUrls, recordQuota, path: paths.statusFile };
 }
