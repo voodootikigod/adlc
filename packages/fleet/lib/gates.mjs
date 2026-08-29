@@ -22,7 +22,8 @@ export async function runGateCommand(sandbox, command, env, { timeoutMs = null }
   try {
     // fleet-ext item 5: an optional bound (the run's remaining wall clock) reaches
     // the sandbox as `timeout`, which the exec layer enforces on the child.
-    const output = await sandbox.run(argv, timeoutMs ? { env, timeout: timeoutMs } : { env });
+    // A budget of 0 is an EXPIRED budget, never "no timeout" (spawnAsync reads 0 as unbounded; agy fleet r9 c2).
+    const output = await sandbox.run(argv, timeoutMs != null ? { env, timeout: Math.max(1, timeoutMs) } : { env });
     return { ok: true, output: String(output ?? '') };
   } catch (e) {
     return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}`, timedOut: e?.timedOut === true };

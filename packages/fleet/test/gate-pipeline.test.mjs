@@ -97,3 +97,16 @@ test('runGatePipeline hands deps.timeoutMs to the build/test gate as the sandbox
   assert.equal(r.ok, true);
   assert.deepEqual(seen, [777]);
 });
+
+test('a gate command whose remaining budget is 0 runs with a 1 ms timeout — never unbounded (spawnAsync reads 0 as "no timeout"; agy fleet r9 c2)', async () => {
+  const seen = [];
+  const sandbox = new Sandbox({
+    mode: SANDBOX_MODES.SANDBOX, backend: { name: 'bubblewrap' }, worktree: '/wt', syntheticHome: '/wt/.home',
+    exec: (argv, opts) => { seen.push(opts ?? {}); return 'ok'; },
+  });
+  await runGatePipeline(ticket, { sandbox, gate: { build: 'true' }, env: {}, changedPaths: [], templates: templates(), listProtected: () => [], readBytes: () => '', remaining: () => 0 });
+  await runGatePipeline(ticket, { sandbox, gate: { build: 'true' }, env: {}, changedPaths: [], templates: templates(), listProtected: () => [], readBytes: () => '', timeoutMs: 0 });
+  await runGatePipeline(ticket, { sandbox, gate: { build: 'true' }, env: {}, changedPaths: [], templates: templates(), listProtected: () => [], readBytes: () => '', timeoutMs: 5000 });
+  const timeouts = seen.map((o) => o.timeout);
+  assert.deepEqual(timeouts.slice(0, 3), [1, 1, 5000], `0 → 1 ms, 5000 kept (got ${JSON.stringify(timeouts)})`);
+});

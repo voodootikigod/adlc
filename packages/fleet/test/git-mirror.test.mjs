@@ -321,10 +321,10 @@ test('the disposable-mirror contract is ENFORCED: a second base branch, a remote
     assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /exactly one base branch/);
     g('branch', '-D', 'stray');
     g('remote', 'add', 'origin', f.repo);
-    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries remotes/);
+    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries remotes|poisoned: config carries remote\./, 'a remote is refused — by the config vet that now runs first (remote.* keys) or by the remote probe');
     g('remote', 'remove', 'origin');
     writeFileSync(join(f.mirror, 'hooks', 'pre-receive'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries hooks/);
+    assert.throws(() => assertBareMirror({ mirror: f.mirror, gitAt }), /carries hooks|poisoned: live hooks/, 'a live hook is refused — by the vet that now runs first, or by the hooks probe');
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

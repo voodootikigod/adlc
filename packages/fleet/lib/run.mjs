@@ -149,10 +149,12 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
             if (quarantined) return quarantined;
             deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
             if (pastDeadline()) return { ok: true, completed: false, expiredAfterMerge: true, output: 'external wall clock expired during the completion re-gate; completion withdrawn (merged, not marked completed)' };
+            return { ok: true, completed: false, output: 'completion withdrawn after a red re-gate (merged, not marked completed)' };
           } else if (pastDeadline()) {
             // Landed and gated within budget; only the return crossed the deadline.
             return { ok: true, completed: true, expiredAfterMerge: true, output: 'external wall clock expired after completion; merged and completed, not published by this invocation' };
           }
+          return { ok: true, completed: true };
         }
       } catch (error) {
         // A completion that failed but left its evidence append behind is NOT a
