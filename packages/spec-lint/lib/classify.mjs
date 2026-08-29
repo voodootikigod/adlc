@@ -154,8 +154,16 @@ export function classifyAll(criteria) {
  * @returns {Array}  New array with demoted entries.
  */
 export function applyLlmDemotion(classified, llmResult, verifiedIndices) {
+  // Defensive guard (issue #774): llm.mjs's validateVacuousPayload should
+  // already guarantee `vacuous` is a numeric-index array before this is ever
+  // called, but a wrong-shaped payload reaching this function from any
+  // caller — present or future — must fail loudly rather than silently
+  // iterate over an empty/undefined set.
+  if (!Array.isArray(llmResult?.vacuous)) {
+    throw new Error(`applyLlmDemotion: llmResult.vacuous must be an array, got ${typeof llmResult?.vacuous}`);
+  }
   const result = classified.map(c => ({ ...c }));
-  const vacuousSet = new Set(llmResult.vacuous ?? []);
+  const vacuousSet = new Set(llmResult.vacuous);
 
   for (const [subIdx, origIdx] of verifiedIndices.entries()) {
     if (vacuousSet.has(subIdx)) {
