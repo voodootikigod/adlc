@@ -255,12 +255,12 @@ test('a host with NO ~/.claude/plugins (a fresh install) still gets a synthetic 
     writeFileSync(join(hostHome, '.claude', 'settings.json'), '{}');
     writeFileSync(join(hostHome, '.claude.json'), '{}');
     const adapter = { name: 'claude-code', homeState: { dirs: [], files: [] } };
-    const h = prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage1'), adapter, uid: 1000 });
+    const h = prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage1'), adapter, uid: process.getuid() });
     assert.ok(!h.homeBinds.some((b) => b.target.endsWith('.claude/plugins')), 'no plugins bind when the host has no plugins tree');
     writeFileSync(join(hostHome, '.claude', 'plugins'), 'not a dir');
-    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage2'), adapter, uid: 1000 }), /not a directory/);
+    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage2'), adapter, uid: process.getuid() }), /not a directory/);
     rmSync(join(hostHome, '.claude', 'plugins')); symlinkSync(root, join(hostHome, '.claude', 'plugins'));
-    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage3'), adapter, uid: 1000 }), /symlink/);
+    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage3'), adapter, uid: process.getuid() }), /symlink/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -277,11 +277,11 @@ test('re-staging into a directory that already holds a read-only staged file doe
     writeFileSync(join(hostHome, '.claude.json'), '{}');
     const adapter = { name: 'claude-code', homeState: { dirs: [], files: [] } };
     const stagingDir = join(root, 'stage');
-    const first = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: 1000 });
+    const first = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: process.getuid() });
     const settings = first.homeBinds.find((b) => b.target.endsWith('settings.json')).source;
     assert.equal(statSync(settings).mode & 0o777, 0o400, 'staged read-only');
     writeFileSync(join(hostHome, '.claude', 'settings.json'), JSON.stringify({ model: 2 }));
-    const second = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: 1000 });
+    const second = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: process.getuid() });
     const settings2 = second.homeBinds.find((b) => b.target.endsWith('settings.json')).source;
     assert.equal(settings2, settings);
     assert.match(readFileSync(settings2, 'utf8'), /"model":\s*2/, 'the re-staged content is the new host content');
