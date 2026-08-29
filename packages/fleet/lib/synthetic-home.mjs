@@ -159,14 +159,18 @@ export function prepareSyntheticHome({
   const stagedClaudeJson = join(staging, 'claude.json');
   stage(fs, stagedClaudeJson, JSON.stringify(claudeKept, null, 2) + '\n', 0o600);
 
-  // (iv) plugin tree: must exist as a directory — a missing bind source aborts bwrap.
+  // (iv) plugin tree: bound read-only when the host HAS one. A fresh install has no
+  // ~/.claude/plugins at all — that is not an error, it is simply no bind (a missing bind
+  // source would abort bwrap, so an absent tree is omitted rather than named; agy r2 c4).
+  // Something present but not a directory (a file, a symlink) is still refused: lstat,
+  // never stat — a symlink planted at the plugin path would bind an arbitrary directory
+  // into the bounded plane (codex r4).
   const plugins = resolve(pluginsDir ?? join(home, PLUGINS_REL));
-  // lstat, never stat: a symlink planted at the plugin path would bind an arbitrary
-  // directory into the bounded plane (codex r4).
   let pluginsStat;
   try { pluginsStat = (fs.lstatSync ?? fs.statSync)(plugins); } catch { pluginsStat = null; }
   if (pluginsStat?.isSymbolicLink?.()) throw new Error(`synthetic-home: plugins dir ${plugins} is a symlink; refusing to bind its target`);
-  if (!pluginsStat?.isDirectory()) throw new Error(`synthetic-home: plugins dir ${plugins} is not a directory`);
+  if (pluginsStat && !pluginsStat.isDirectory()) throw new Error(`synthetic-home: plugins dir ${plugins} is not a directory`);
+  const pluginBinds = pluginsStat ? [{ source: plugins, target: join(home, PLUGINS_REL) }] : [];
 
   // (v) scratch dirs: every declared entry, resolved under HOME, created empty by the argv builder.
   const homeScratchDirs = homeStateOf(adapter).dirs.map((d) => resolveScratchDir(home, d));
@@ -176,7 +180,7 @@ export function prepareSyntheticHome({
     homeBinds: [
       { source: stagedCredential, target: join(home, CREDENTIAL_REL) },
       { source: stagedSettings, target: join(home, SETTINGS_REL) },
-      { source: plugins, target: join(home, PLUGINS_REL) },
+      ...pluginBinds,
     ],
     homeWritableFiles: [{ source: stagedClaudeJson, target: join(home, CLAUDE_JSON_REL) }],
     homeScratchDirs,

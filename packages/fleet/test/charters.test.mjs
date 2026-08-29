@@ -115,6 +115,8 @@ test('fixPrompt keeps a pre-fenced dead end INTACT at the cap: the inner opening
   assert.ok(p.includes('<<UNTRUSTED:PRIOR_ATTEMPT_1:'), 'wrapped by the attempt fence');
   assert.ok(!p.includes('PRIOR_ATTEMPT_1 (truncated'), 'not truncated');
   assert.equal(capFor('plain text'), DEAD_END_MAX_CHARS, 'raw text keeps the plain cap');
+  const { FENCE_OPENER } = await import('../lib/charters.mjs');
+  assert.ok(inner.startsWith(FENCE_OPENER) && FENCE_OPENER.length > 0, `the opener is what fence() emits (${JSON.stringify(FENCE_OPENER)})`);
   const raw = fixPrompt({ id: 'T1', title: 't', body: 'b', scope: ['a/**'] }, { test: 't' }, ['y'.repeat(DEAD_END_MAX_CHARS + 10)]);
   assert.ok(raw.includes('PRIOR_ATTEMPT_1 (truncated'), 'over-cap raw text is still capped');
 });

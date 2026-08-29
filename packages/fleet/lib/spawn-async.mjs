@@ -42,8 +42,11 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     // via `opts.input`. Long prompts on stdin also avoid ARG_MAX limits.
     const stdin = spawnOpts.input !== undefined ? 'pipe' : 'ignore';
     let child;
+    // `timeout` is OURS: node's own spawn timeout would SIGTERM the leader alone and race
+    // the group termination below (agy r2 c4). It never reaches the underlying spawn.
+    const { timeout: _ownTimeout, ...forSpawn } = spawnOpts;
     try {
-      child = spawnImpl(cmd, args, { ...spawnOpts, detached: killGroup ? true : spawnOpts.detached, stdio: [stdin, 'pipe', 'pipe'] });
+      child = spawnImpl(cmd, args, { ...forSpawn, detached: killGroup ? true : spawnOpts.detached, stdio: [stdin, 'pipe', 'pipe'] });
     } catch (error) {
       resolve({ error, status: null, stdout: '', stderr: '' });
       return;

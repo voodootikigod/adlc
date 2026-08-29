@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runFleet, runExitCode, pausedCount } from '../lib/run.mjs';
 import { spawnAsync } from '../lib/spawn-async.mjs';
+import { EventEmitter } from 'node:events';
 
 const T = (id) => ({ id, title: id, scope: [`src/${id}/**`], edges: [] });
 
@@ -391,4 +392,13 @@ test('a completion re-gate that THROWS is a red re-gate: the completion commit i
   const d2 = { ...deps(rec2), postMergeGate: async () => { if (rec2.complete.length) throw new Error('gate runner crashed'); return { ok: true }; }, revertCompletion: async () => { throw new Error('reset refused'); } };
   const s2 = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 1 }, deps: d2 });
   assert.equal(s2.contaminated, true, 'a completion that cannot be withdrawn quarantines the branch'); assert.equal(rec2.openPR.length, 0);
+});
+
+test('spawnAsync never hands `timeout` to the underlying spawn: node\'s own leader-only SIGTERM must not race the group termination (agy r2 c4)', async () => {
+  const seen = [];
+  const child = new EventEmitter(); child.pid = 4242; child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const p = spawnAsync('/bin/x', [], { timeout: 5000, killGroup: true, spawnImpl: (cmd, args, o) => { seen.push(o); return child; }, kill: () => {}, setTimeoutFn: () => 1, clearTimeoutFn: () => {} });
+  child.emit('close', 0, null);
+  await p;
+  assert.equal(seen.length, 1); assert.ok(!('timeout' in seen[0]), 'timeout stripped'); assert.equal(seen[0].detached, true);
 });

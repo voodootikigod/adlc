@@ -75,7 +75,9 @@ Run the gate commands yourself before finishing. End your reply with EXACTLY one
 /** Strike-2 prompt: prior failure diagnostics + prosecution findings, fenced. */
 /** Marker headroom for a dead end that is itself a fence block; raw text keeps the plain cap. */
 const FENCE_MARKER_HEADROOM = 256;
-export const capFor = (deadEnd) => (/^<<UNTRUSTED:/.test(String(deadEnd ?? '')) ? DEAD_END_MAX_CHARS + FENCE_MARKER_HEADROOM : DEAD_END_MAX_CHARS);
+/** The opener `fence` actually emits (derived from the producer, never a hand-written literal). */
+export const FENCE_OPENER = fence('L', '', 0).split('L')[0];
+export const capFor = (deadEnd) => (String(deadEnd ?? '').startsWith(FENCE_OPENER) ? DEAD_END_MAX_CHARS + FENCE_MARKER_HEADROOM : DEAD_END_MAX_CHARS);
 
 export function fixPrompt(ticket, gate, deadEnds = [], { addendum = null } = {}) {
   const base = builderPrompt(ticket, gate, { addendum });

@@ -175,8 +175,14 @@ test('homeBinds are exactly three targets under HOME in the documented order: cr
   assert.deepEqual(pinned.homeBinds[2], { source: '/opt/plugins', target: `${HOME}/.claude/plugins` });
 });
 
-test('a missing plugin tree is refused (a missing bind source would abort bwrap mid-dispatch)', () => {
-  assert.throws(() => prepare(fakeFs({ dirs: [] })), /plugins dir .* is not a directory/);
+test('a plugin path that exists but is NOT a directory is refused; an ABSENT plugin tree (a fresh install) is simply not bound — no missing bind source for bwrap to abort on (agy r2 c4)', () => {
+  assert.throws(() => prepare(fakeFs({ dirs: [] })), /plugins dir .* is not a directory/, 'present-but-not-a-directory');
+  const fs = fakeFs({ dirs: [] });
+  const inner = fs.statSync;
+  fs.statSync = (p) => { if (p === `${HOME}/.claude/plugins`) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return inner(p); };
+  const out = prepare(fs);
+  assert.ok(!out.homeBinds.some((b) => b.target === `${HOME}/.claude/plugins`), 'absent tree → no plugins bind');
+  assert.equal(out.homeBinds.length, 2, 'the credential and settings binds are still there');
 });
 
 test('scratch dirs cover EVERY homeState.dirs entry of the claude-code adapter, resolved under HOME', () => {
@@ -235,4 +241,25 @@ test('a SYMLINKED plugin directory is refused (lstat, never stat): a link plante
   assert.throws(() => prepare(fs), /plugins dir .* is a symlink/);
   fs.lstatSync = (p) => ({ isDirectory: () => p === `${HOME}/.claude/plugins`, isSymbolicLink: () => false });
   assert.ok(prepare(fs).homeBinds.some((b) => b.source === `${HOME}/.claude/plugins`), 'a real directory binds');
+});
+
+test('a host with NO ~/.claude/plugins (a fresh install) still gets a synthetic home — no plugins bind, nothing thrown; a symlink or a file at that path is still refused (agy r2 c4)', async () => {
+  const { prepareSyntheticHome } = await import('../lib/synthetic-home.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'fleet-sh-noplugins-'));
+  try {
+    const hostHome = join(root, 'home'); mkdirSync(join(hostHome, '.claude'), { recursive: true });
+    writeFileSync(join(hostHome, '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":"x"}}', { mode: 0o600 });
+    writeFileSync(join(hostHome, '.claude', 'settings.json'), '{}');
+    writeFileSync(join(hostHome, '.claude.json'), '{}');
+    const adapter = { name: 'claude-code', homeState: { dirs: [], files: [] } };
+    const h = prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage1'), adapter, uid: 1000 });
+    assert.ok(!h.homeBinds.some((b) => b.target.endsWith('.claude/plugins')), 'no plugins bind when the host has no plugins tree');
+    writeFileSync(join(hostHome, '.claude', 'plugins'), 'not a dir');
+    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage2'), adapter, uid: 1000 }), /not a directory/);
+    rmSync(join(hostHome, '.claude', 'plugins')); symlinkSync(root, join(hostHome, '.claude', 'plugins'));
+    assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage3'), adapter, uid: 1000 }), /symlink/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
