@@ -123,8 +123,10 @@ export function createSpawner({ recorder = null, spawnImpl = cpSpawn, kill = pro
       child.on('close', (status, signal) => {
         // The leader may exit on SIGTERM while a descendant lives on: after a deadline the whole
         // GROUP gets the SIGKILL now, not a grace timer that `finish` is about to cancel (codex r7 A2).
+        // And a leader that exits NORMALLY after forking a background helper must not leave it
+        // running past the call (fleet codex r23 #1): the group dies with its leader on EVERY exit.
         // Mutation seam `spawn.noGroupKillOnClose`: the grace timer is simply cancelled.
-        if (timedOut && child.pid && !graceFired && !active('spawn.noGroupKillOnClose')) signalGroup(child.pid, 'SIGKILL', kill);
+        if (child.pid && !graceFired && !active('spawn.noGroupKillOnClose')) signalGroup(child.pid, 'SIGKILL', kill);
         finish({
         status, signal,
         stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'),

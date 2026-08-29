@@ -148,6 +148,16 @@ export async function ac49_descendantsDieWithTheGroup() {
     for (let i = 0; i < 40 && alive; i++) { try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
     if (alive) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
     assert.equal(alive, false, 'the TERM-ignoring grandchild was killed with the group (the leader exiting first did not cancel it)');
+    // A leader that exits NORMALLY (status 0) after forking a survivor takes it with it too (fleet codex r23 #1).
+    rmSync(pidfile, { force: true });
+    const normal = `(trap '' TERM; exec sh -c 'trap "" TERM; echo $$ > ${pidfile}; exec sleep 60' >/dev/null 2>&1 </dev/null) & sleep 0.2; exit 0`;
+    const res2 = await spawn({ argv: ['/bin/sh', '-c', normal], cwd: dir, env: { PATH: process.env.PATH }, deadlineMs: 10_000, label: 'tree' });
+    assert.equal(res2.status, 0); assert.equal(res2.timedOut, false);
+    const pid2 = Number(readFileSync(pidfile, 'utf8').trim());
+    let alive2 = true;
+    for (let i = 0; i < 40 && alive2; i++) { try { process.kill(pid2, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive2 = false; } }
+    if (alive2) { try { process.kill(pid2, 'SIGKILL'); } catch { /* gone */ } }
+    assert.equal(alive2, false, 'a survivor of a NORMAL exit is gone once the call resolved');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('AC49: (real processes) a grandchild that ignores SIGTERM dies with the process group at the deadline even though the leader exits first', { timeout: 30_000 }, ac49_descendantsDieWithTheGroup);
