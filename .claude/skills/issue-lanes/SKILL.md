@@ -135,9 +135,15 @@ The lane sequence the prompt enforces: P2 `adlc coldstart <id> --prompt-only` (s
 P4 red test file first, RED, implement, GREEN, package suite, docs → P3 `adlc rails-guard
 --base origin/main --ticket <id>` → P5 `scripts/mutation-gate.mjs origin/main --max 12` then
 `--max 80`, `scripts/run-tests.mjs <pkg>`, the three ledger/comment guards, then the
-cross-model loop `adversarial-review --base origin/main --provider codex --timeout 600`
-until a round has exit 0 AND zero findings AND no warnings (cap 8) → commit (`-F file`) →
-push → `gh pr create` with `Closes #n`.
+cross-model loop `adversarial-review --base origin/main --provider agy --model
+gemini-3.7-flash-medium --timeout 600` until a round has exit 0 AND zero findings AND no
+warnings (cap 8) → commit (`-F file`) → push → `gh pr create` with `Closes #n`.
+
+**Reviewer of record: `agy` (Antigravity, Gemini family) on `gemini-3.7-flash-medium`;
+codex is the fallback.** The model is also pinned globally in
+`~/.config/adversarial-review/config.json` (`defaults.models["cli:agy"]`), so a bare
+`--provider agy` picks it up; `agy models` lists the ids. Attest an agy review with
+`--provider gemini` (family token) — distinct from the `anthropic` author.
 
 ## 4b. The cross-model attestation (key-holder step — expect it)
 
@@ -184,8 +190,8 @@ positive; see the ceremony memory for the forgery table if a reviewer must be an
 - Every command starts with `cd /abs/worktree &&` — fork agents SHARE the parent's
   persistent shell cwd, so a parent `cd` moves every lane (one codex round reviewed the
   wrong tree this way; check `pwd` and the reviewer's file list before trusting a round).
-- Codex quota is shared with every other session on the machine; on `usage limit`, run
-  `agy` (a distinct provider family) and retry codex after the reset time it prints. Kill
+- Provider quotas are shared with every other session on the machine; on a `usage limit`
+  from agy, fall back to codex (a different family) and retry agy after the reset it prints. Kill
   orphaned `codex-linux-sandbox` processes (ppid 1) left by earlier runs — they are hung
   `npm test` children — never a live session's.
 - The permission classifier blocks compound commands that mix inline node scripts with
