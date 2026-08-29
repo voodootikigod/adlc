@@ -15,6 +15,7 @@ export const REGISTRY = {
     { fn: 'ac2_quotaMatrix', file: 'quota.test.mjs', seam: 'quota.forceOk' },
     { fn: 'ac2_endpointHeadersAndFallback', file: 'quota.test.mjs', seam: 'quota.forceOk' },
     { fn: 'ac2_forceOkSeamBites', file: 'quota.test.mjs', seam: 'quota.forceOk' },
+    { fn: 'ac2_productionReaderHasATransport', file: 'quota.test.mjs', seam: 'context.noUsageTransport' },
   ],
   3: [{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
   4: [
@@ -24,6 +25,7 @@ export const REGISTRY = {
     { fn: 'ac4_intentPersistedBeforeEffects', file: 'terminal-effects.test.mjs', seam: 'effects.skipIntent' },
     { fn: 'ac4_redactionFailureWithholdsBodyKeepsLabel', file: 'terminal-effects.test.mjs', seam: 'redactor.disable' },
     { fn: 'ac4_labelOnGithubAbsentFromRecord', file: 'terminal-effects.test.mjs', seam: 'effects.trustRecord' },
+    { fn: 'ac4_commentSearchCoversEveryPage', file: 'github.test.mjs', seam: 'github.paginateAll' },
   ],
   5: [{ fn: 'ac5_dispatchArgv', file: 'run.test.mjs', seam: 'fleetArgs.dropNoPr' }],
   11: [
@@ -96,6 +98,7 @@ export const REGISTRY = {
   27: [{ fn: 'ac27_overshootAndReserve', file: 'quota.test.mjs', seam: 'quota.noReserve' }],
   28: [
     { fn: 'ac28_operatorLocalPrecedence', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' },
+    { fn: 'ac28_loweringIsApplied', file: 'loop.test.mjs', seam: 'config.allowRaise' },
   ],
   31: [
     { fn: 'ac31_gitSpawnClassifier', file: 'git-env.test.mjs', seam: 'gitEnv.classifierNetworkBlind' },
@@ -243,6 +246,7 @@ export const REGISTRY = {
   83: [
     { fn: 'ac83_realRunnerGate', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipRunnerGate' },
     { fn: 'ac83_contentHashNeverBlobOid', file: 'preflight-spec.test.mjs', seam: 'preflight.acceptBlobOidAsSpecHash' },
+    { fn: 'ac83_specApprovalRequiresKeyedVerify', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipSignedVerify' },
   ],
   89: [
     { fn: 'ac89_mergeIdentity', file: 'preflight-spec.test.mjs', seam: 'specApproval.skipMergeIdentity' },
@@ -258,6 +262,7 @@ export const REGISTRY = {
   ],
   76: [
     { fn: 'ac76_secretScanFailClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipSecretScan' },
+    { fn: 'ac76_binaryBlobsFailClosed', file: 'diffcheck.test.mjs', seam: 'diffcheck.allowBinary' },
   ],
   98: [
     { fn: 'ac98_criteriaDocTracked', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipCriteriaHash' },
@@ -306,6 +311,7 @@ export const REGISTRY = {
   ],
   21: [
     { fn: 'ac21_recoveryTableRows', file: 'recover.test.mjs', seam: 'recover.deleteRecordDespiteRemoteRef' },
+    { fn: 'ac21_resumableRunsAreResumed', file: 'loop.test.mjs', seam: 'loop.ignoreRecoveryActions' },
   ],
   29: [
     { fn: 'ac29_ownershipCheckedDeletion', file: 'recover.test.mjs', seam: 'retire.skipMarkerCheck' },

@@ -25,6 +25,7 @@ registerSeams([
   'specApproval.skipMergeIdentity',     // the GitHub merge-identity binding is skipped
   'specApproval.skipAssumptions',       // the §11.1 assumptions binding is skipped
   'preflight.acceptBlobOidAsSpecHash',  // the git blob OID of the spec is accepted as spec_hash
+  'specApproval.skipSignedVerify',
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -134,6 +135,17 @@ export async function mergeIdentity({ ctx, oid, approver }) {
   return { ok: false, detail: `no merged pull request for ${sha} was merged by an admin/maintain login` };
 }
 
+/** `adlc gate-manifest verify --dir <cwd>/.adlc --allow-legacy-unsigned`, KEY-BEARING (§9.3): the only spawn that may see the key here. */
+export async function verifySignedManifest({ ctx, cwd, adlcDir = join(cwd, '.adlc') }) {
+  if (active('specApproval.skipSignedVerify')) return { ok: true, detail: 'skipped' };
+  const res = await ctx.spawn({
+    argv: [ctx.pinned.adlc, 'gate-manifest', 'verify', '--dir', adlcDir, '--allow-legacy-unsigned'],
+    cwd, env: childEnv(ctx.env.base, { key: ctx.key, keyBearing: true }), deadlineMs: DEADLINES.adlcRecorder, label: 'gate-manifest verify (spec approval)',
+  });
+  if (res.status === 0) return { ok: true, detail: null };
+  return { ok: false, detail: `gate-manifest verify exited ${res.status ?? res.reason}: ${String(res.stderr ?? res.stdout ?? '').trim().slice(0, 300)}` };
+}
+
 /** The complete §14 binding for the build ticket. Throws PreflightError on any mismatch. */
 export async function checkSpecApproval({ ctx, oid, ticketId, runnerCwd = null }) {
   const specText = await showAtBaseline(ctx, oid, SPEC_PATH);
@@ -152,10 +164,15 @@ export async function checkSpecApproval({ ctx, oid, ticketId, runnerCwd = null }
   if (typeof data.spec_hash !== 'string' || data.spec_hash !== expected) throw new PreflightError('spec-approval-stale', `spec_hash ${data.spec_hash ?? 'absent'} != sha256(content) ${contentHash}`);
   const checks = { specHash: contentHash, record: { segment: record.segment, seq: record.seq ?? null, ts: record.ts ?? null } };
   if (runnerCwd) {
+    // The approval record must sit on a manifest whose signatures VERIFY under the
+    // operator's key — a hash-chain-only manifest could carry a forged approval.
+    const verified = await verifySignedManifest({ ctx, cwd: runnerCwd });
+    if (!verified.ok) throw new PreflightError('spec-approval-unverified', verified.detail);
+    checks.signedVerify = 'ok';
     const gate = await runnerGate({ ctx, ticketId, cwd: runnerCwd });
     if (!gate.ok) throw new PreflightError('spec-approval-stale', gate.detail);
     checks.runnerGate = 'ok';
-  } else checks.runnerGate = 'skipped: needs-worktree';
+  } else { checks.runnerGate = 'skipped: needs-worktree'; checks.signedVerify = 'skipped: needs-worktree'; }
   const identity = await mergeIdentity({ ctx, oid, approver: data.approver });
   if (!identity.ok) throw new PreflightError('spec-approval-unbound', identity.detail);
   checks.mergedBy = identity.login;

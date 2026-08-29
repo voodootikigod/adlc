@@ -3,7 +3,7 @@
 // the source TEXT of the two trust-root lists as the pinned blob would supply
 // them, unioned with the static extras, and only ever extended by config.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { buildDenylist, parseTrustRootList, scopeIntersects, intersectingPairs, globsIntersect, stripComments, STATIC_EXTRAS, TRUST_ROOTS_IDENT, REPO_ROOTS_IDENT } from '../lib/denylist.mjs';
 import { denylistSources, syntheticSources } from './helpers/select-fixtures.mjs';

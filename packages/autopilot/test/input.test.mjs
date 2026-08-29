@@ -2,7 +2,7 @@
 // `bad-input:<field>` before any side effect, a branch name is only ever
 // constructed, and a constructed path that escapes REPO_ROOT is refused.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';

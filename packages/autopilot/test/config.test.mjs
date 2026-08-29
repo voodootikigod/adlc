@@ -2,7 +2,7 @@
 // the threshold ceiling, the ticketSync block validated with ticket-sync's own
 // schema, and the §13 example read out of the committed spec.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

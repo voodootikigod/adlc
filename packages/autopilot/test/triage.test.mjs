@@ -2,7 +2,7 @@
 // ticket AC5 — triage (shaping, trusted block, gate chain, CLARIFY effects) and
 // the durable attempt ledger with its journaled `reset --attempts`.
 
-import { test, mock } from 'node:test';
+import { test, mock } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';

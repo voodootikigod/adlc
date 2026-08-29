@@ -4,7 +4,7 @@
 // key. The full-sequence half (every spawn of a `once` run classified) lives in
 // sequence.test.mjs once the orchestrator is assembled.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { KEY_BEARING_ARGV, isKeyBearing, spawnIsKeyBearing, classifySpawn, childEnv, keyBearingValues, MANIFEST_KEY_VAR } from '../lib/keys.mjs';
 import { withMutation } from '../lib/mutations.mjs';

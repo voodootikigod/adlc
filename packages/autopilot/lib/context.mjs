@@ -21,6 +21,9 @@ import { tokenRefresh, tokenMarginFor, readAccessToken } from './token-refresh.m
 import { selectForLoop, placeholderTicket } from './selection.mjs';
 import { maintenanceDeps } from './maintenance.mjs';
 import { readUsage } from './quota.mjs';
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['context.noUsageTransport']);
 import { execFileSync } from 'node:child_process';
 
 export const CHARTER_PATH = fileURLToPath(new URL('./charter-adlc.md', import.meta.url));
@@ -69,7 +72,16 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
     modules,
   };
   ctx.status = modules.status.createStatusStore({ paths, lockToken: () => ctx.lock?.token ?? null, redactor, now });
-  const usageRead = overrides.quota?.read ?? (() => readUsage({ accessToken: readAccessToken(ctx.env.home), log, ...(overrides.quota?.readOptions ?? {}) }));
+  // The production usage reader: the endpoint over the runtime's fetch, then the
+  // §3.3 fallback — the pinned `claude -p "/usage" --output-format json` on the host.
+  const usageFallback = async () => {
+    if (!ctx.pinned?.claude) throw new Error('claude is not pinned yet (phase A has not run)');
+    const res = await ctx.spawn({ argv: [ctx.pinned.claude, '-p', '/usage', '--output-format', 'json'], cwd: ctx.paths.runsDir, env: { PATH: ctx.env.path, HOME: ctx.env.home }, deadlineMs: 60_000, stdoutCap: 64 * 1024, label: 'claude /usage' });
+    if (res.status !== 0) throw new Error(`claude /usage exited ${res.status ?? res.reason}`);
+    try { const doc = JSON.parse(res.stdout); return typeof doc?.result === 'string' ? doc.result : res.stdout; } catch { return res.stdout; }
+  };
+  // Mutation seam `context.noUsageTransport`: the reader is built without a transport (every sample is quota-unknown).
+  const usageRead = overrides.quota?.read ?? (() => readUsage({ ...(active('context.noUsageTransport') ? {} : { fetchImpl: overrides.fetchImpl ?? globalThis.fetch, fallback: usageFallback }), accessToken: readAccessToken(ctx.env.home), log, ...(overrides.quota?.readOptions ?? {}) }));
   ctx.quota = modules.quotaGate.createQuotaGate({ read: usageRead, status: ctx.status, records, model: local?.model ?? 'opus', threshold: local?.quotaThreshold, reserve: local?.quotaReserve, now, log, ...(overrides.quota ?? {}) });
   ctx.deps = {
     preflight: modules.preflight, select: modules.select, triage: modules.triage, effects: modules.effects,

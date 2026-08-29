@@ -3,7 +3,7 @@
 // network repository NET_GIT. The spawn-list halves (every recorded git spawn
 // carries these) are asserted in the sequence suites.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

@@ -2,7 +2,7 @@
 // line-anchored absolute paths, EnvironmentFile, Restart=on-failure,
 // KillMode=control-group, no %h, no inline key, exactly one SSH auth mode.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { renderUnit, assertWorkingDirectory, execStartArgv, installInstructions, ServiceError, UNIT_NAME } from '../lib/service.mjs';
 

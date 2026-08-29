@@ -3,7 +3,7 @@
 // `npm install --package-lock-only`), the exact-name guard, and the two
 // sanitized host-side installs (worker-deps online-capable, gate-deps offline).
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';

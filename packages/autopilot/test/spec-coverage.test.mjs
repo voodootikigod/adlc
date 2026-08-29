@@ -17,6 +17,11 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REGISTRY } from './ac-registry.mjs';
+import { GATE_EXEC_KEY } from './helpers/node-test.mjs';
+
+// The execution passes import the test files to call their functions directly;
+// those files must not ALSO register their tests here (see helpers/node-test.mjs).
+globalThis[GATE_EXEC_KEY] = true;
 import { withMutation, knownSeams, clearAll, registerSeams, active } from '../lib/mutations.mjs';
 
 // The gate's own seam (AC 111/121): when active, the static checker accepts every entry.

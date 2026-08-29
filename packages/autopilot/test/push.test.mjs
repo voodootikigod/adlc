@@ -5,7 +5,7 @@
 // repositories with a local bare remote — the push source is the attested OID
 // from NET_GIT, which has no refs/heads before or after.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';

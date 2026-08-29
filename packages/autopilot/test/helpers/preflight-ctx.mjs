@@ -170,6 +170,7 @@ export function adlcHandler(fx, { override = () => undefined } = {}) {
   return (args, o) => {
     const r = override(args, o); if (r !== undefined) return r;
     if (args[0] === 'run' && args[1] === 'p1') return { stdout: JSON.stringify({ ok: true }), status: 0 };
+    if (args[0] === 'gate-manifest' && args[1] === 'verify') return { stdout: JSON.stringify({ ok: true }), status: 0 };
     if (args[0] === 'fleet') { const i = args.indexOf('--base'); return { stdout: JSON.stringify({ baseSha: args[i + 1] }), status: 0 }; }
     return { stdout: '', stderr: `unhandled adlc ${args.join(' ')}`, status: 1 };
   };

@@ -2,7 +2,7 @@
 // exits 1 not-main-worktree), every derived path is absolute under REPO_ROOT,
 // and the four exclude entries are the documented ones.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

@@ -3,7 +3,7 @@
 // revalidation. Real `ssh -G` / `ssh-keygen` when present (skipped loudly
 // otherwise); every child goes through the spawn wrapper's recorder.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, chmodSync, statSync, existsSync, copyFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

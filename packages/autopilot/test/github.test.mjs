@@ -2,7 +2,7 @@
 // enumeration. The full-sequence classification (every gh spawn in a `once`
 // run) is asserted in keys.test / sequence.test.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner } from '../lib/spawn.mjs';
 import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES } from '../lib/github.mjs';
@@ -93,3 +93,14 @@ export async function ac4_idempotentEffects() {
   assert.deepEqual(await ensureLabel(g2, 7, 'adlc:needs-clarification', { present: true }), { mutated: true });
 }
 test('AC4: comment and label effects are reconciled against GitHub independently — both present → zero mutating calls', ac4_idempotentEffects);
+
+export async function ac4_commentSearchCoversEveryPage() {
+  const pages = { 1: Array.from({ length: 100 }, (_, i) => ({ body: `c${i}` })), 2: [{ body: 'x <!-- adlc-autopilot:blocked s --> y' }] };
+  const { recorder, ghc } = harness((args) => { const p = Number((args[1].match(/[?&]page=(\d+)/) ?? [])[1] ?? 1); return { stdout: JSON.stringify(pages[p] ?? []) }; });
+  const r = await ensureComment(ghc, 7, '<!-- adlc-autopilot:blocked s -->', 'body');
+  assert.equal(r.posted, false, 'the sentinel on page 2 is found — no duplicate comment');
+  assert.equal(recorder.filter((x) => x.argv.some((a) => /comments\?per_page=100&page=2/.test(a))).length, 1);
+  const { ghc: broken } = harness((args) => (/comments/.test(args[1]) ? { status: 1, stderr: 'HTTP 500' } : { stdout: '{}' }));
+  await assert.rejects(() => ensureComment(broken, 7, '<!-- s -->', 'body'), /gh-failed/, 'an unreadable page fails closed: nothing is posted');
+}
+test('AC4: the terminal-comment sentinel search covers every bounded page and fails closed when a page is unreadable', ac4_commentSearchCoversEveryPage);

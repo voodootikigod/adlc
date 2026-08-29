@@ -2,7 +2,7 @@
 // `missingLabels` names the absent labels for `labels-missing`, `ensureLabels`
 // creates each one idempotently; the `once` exit 1 lives in preflight.test).
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner } from '../lib/spawn.mjs';
 import { createGh } from '../lib/github.mjs';

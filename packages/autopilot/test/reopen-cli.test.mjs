@@ -4,7 +4,7 @@
 // WITHOUT --authorize exits 2 with AUTHORIZATION_REQUIRED. The reopen is the
 // key-bearing call of AC 12, so the child gets the manifest key.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

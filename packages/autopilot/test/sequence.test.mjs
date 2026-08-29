@@ -4,7 +4,7 @@
 // argv and create the files the real tools would, and assertions on the
 // repository, the origin and the recorded argv — never on module internals.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import * as fsSync from 'node:fs';

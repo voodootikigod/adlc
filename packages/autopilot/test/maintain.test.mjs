@@ -4,7 +4,7 @@
 // — a full retry round when the patch-id changed, one conflict-fix round, then
 // stale), the open-PR cap, and the MERGED/CLOSED lifecycle.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

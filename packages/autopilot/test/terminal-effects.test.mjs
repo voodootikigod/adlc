@@ -6,7 +6,7 @@
 // withholds the body but still applies the label. Table-driven over the six
 // outcomes (clarify, blocked, stale, ci-red, oid-mismatch, pr-closed).
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { applyTerminalEffects, reconcilePendingEffects, pendingEffects, TERMINAL_OUTCOMES } from '../lib/effects.mjs';
 import { createRedactor, WITHHELD_BODY } from '../lib/redact.mjs';

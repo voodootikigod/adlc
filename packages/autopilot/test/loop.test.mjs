@@ -1,12 +1,13 @@
 // Dry-run honesty (AC 10) and "dry-run never needs a worktree" (AC 128) over
 // the REAL iterate(): phase A/B faked, selection + triage real, fake tools.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { iterate } from '../lib/loop.mjs';
+import { runIssue } from '../lib/run.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { FAKE, GIT } from './helpers/recover-fixture.mjs';
 
@@ -91,3 +92,52 @@ export async function ac128_dryRunNeverNeedsAWorktree() {
   }
 }
 test('AC128: in dry-run the recorder shows no git worktree add and no fleet spawn; the plan lists fleet-dry-run-needs-worktree; the read-only phase-B checks run when the baseline objects are local and are all skipped when they are not', { timeout: 120_000 }, ac128_dryRunNeverNeedsAWorktree);
+
+export async function ac28_loweringIsApplied() {
+  // --max-rounds 3 against the committed 15 → the first fleet argv carries --max-strikes 3; a raise is refused.
+  const fx = await createSequenceFixture({ flags: { maxRounds: '3' } });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.outcome, 'done', JSON.stringify(it.document?.run ?? it.outcome));
+    const fleet = fx.recorder.find((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet');
+    assert.equal(fleet.argv[fleet.argv.indexOf('--max-strikes') + 1], '3', 'the lowered budget is the effective one');
+    assert.equal(fx.ctx.config.autopilot.maxRounds, 3);
+  } finally { fx.cleanup(); }
+  const fx2 = await createSequenceFixture({ flags: { maxRounds: '20' } });
+  try {
+    await assert.rejects(() => iterate({ ctx: fx2.ctx, deps: fx2.loopDeps(), pinnedIssue: fx2.issue }), /may be lowered by the CLI but not raised/);
+  } finally { fx2.cleanup(); }
+}
+test('AC28: the operator lowering flags are APPLIED to the committed config in phase B (--max-rounds 3 → --max-strikes 3); a raise is refused', { timeout: 120_000 }, ac28_loweringIsApplied);
+
+export async function ac21_resumableRunsAreResumed() {
+  // A `shaped` record with a cached ticket and no worktree (the quota refused before creation) is resumed BEFORE selection.
+  const fx = await createSequenceFixture();
+  try {
+    const { newRecord } = await import('../lib/records.mjs');
+    const { branchFor } = await import('../lib/input.mjs');
+    const n = fx.issue;
+    const rec = { ...newRecord({ issue: n, token: 'e'.repeat(64), baseOid: fx.baseOid, branch: branchFor(n), stagingBranch: null, stagingPath: null, finalPath: fx.paths.issueWorktree(n), issueRevision: { updatedAt: fx.state.issue.updatedAt }, ticketCache: fx.ticket }), state: 'shaped', creationPhase: null };
+    fx.ctx.records.save(rec);
+    const recover = await import('../lib/recover.mjs');                      // the REAL classifier (the fixture stubs it to no actions)
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ recover }), pinnedIssue: null });
+    assert.deepEqual(it.document.resume, { action: 'resume-shaped', issue: n }, 'recovery classified the row and the loop consumed it');
+    assert.equal(it.outcome, 'resumed:done', JSON.stringify(it.document.run));
+    assert.equal(fx.ctx.records.load(n).state, 'done');
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.gh && String(r.argv[2] ?? '').includes('issues?state=open')), 'no new selection ran');
+  } finally { fx.cleanup(); }
+  // A `dispatched` record with a worktree resumes at the rounds (no second ticket write).
+  const fx2 = await createSequenceFixture();
+  try {
+    const n = fx2.issue;
+    const first = await runIssue({ ctx: fx2.ctx, deps: fx2.ctx.deps, issue: n, ticket: fx2.ticket, revision: { updatedAt: fx2.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(first.state, 'done');
+    fx2.ctx.records.update(n, { state: 'quota-paused', attestedHead: null });   // the run's OWN open PR stays exempt from revalidation
+    const before = fx2.recorder.filter((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'ticket' && r.argv[2] === 'create').length;
+    const { resumeRun } = await import('../lib/run.mjs');
+    const r = await resumeRun({ ctx: fx2.ctx, deps: fx2.ctx.deps, action: 'resume-dispatch', issue: n });
+    assert.ok(['done', 'ci-watch', 'ci-red', 'oid-mismatch', 'blocked'].includes(r.state), JSON.stringify(r));
+    assert.equal(fx2.recorder.filter((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'ticket' && x.argv[2] === 'create').length, before, 'no second ticket write on resume');
+  } finally { fx2.cleanup(); }
+}
+test('AC21: recovery\'s resume actions are consumed by the loop — a shaped run resumes before selection and a dispatched run resumes at its rounds without a second ticket write', { timeout: 240_000 }, ac21_resumableRunsAreResumed);

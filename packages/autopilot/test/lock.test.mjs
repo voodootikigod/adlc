@@ -3,7 +3,7 @@
 // with a stale heartbeat is NOT; a reused pid with a different start time is;
 // release with the wrong token is refused.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

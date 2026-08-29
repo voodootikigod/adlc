@@ -19,6 +19,7 @@ import {
   PLUGIN_JSON_PATH, CONFIG_PATH, TICKET_SYNC_SCHEMA_PATH, INSTALLED_PLUGINS_REL, CREDENTIALS_REL, TOKEN_MARGIN_MS,
 } from './preflight-common.mjs';
 import { checkSpecApproval } from './spec-approval.mjs';
+import { applyLowering } from './config.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
@@ -110,7 +111,9 @@ async function pinnedConfig(ctx, oid) {
     if (active('preflight.trustBlobRepo')) ctx.local = { ...ctx.local, repo: blobRepo };
     else throw new PreflightError('repo-mismatch', `pinned autopilot.repo ${blobRepo} != operator-local ${ctx.local.repo}`);
   }
-  ctx.config = config;
+  // The operator's lower-only flags (--max-rounds, --wall-clock-minutes, --max-open-prs, …)
+  // narrow the committed budgets here, at the point the committed config becomes effective (AC 28).
+  ctx.config = { ...config, autopilot: applyLowering(config.autopilot, ctx.flags ?? {}) };
   return config;
 }
 

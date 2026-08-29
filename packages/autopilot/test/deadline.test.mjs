@@ -3,7 +3,7 @@
 // GROUP (SIGTERM, SIGKILL 15 s later), a closed stdin unless the caller passes
 // bytes, and a stdout cap that kills the child. Fake children, fake clock.
 
-import { test, mock } from 'node:test';
+import { test, mock } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner, DEADLINES, KILL_GRACE_MS, withRetry, RETRY_BACKOFF_MS } from '../lib/spawn.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';

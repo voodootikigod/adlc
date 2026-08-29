@@ -43,7 +43,7 @@ export function appendManifestLine(cwd, entry) {
  * @param opts.checks       () → rows for `gh pr checks` (default all blocking jobs pass)
  * @param opts.fleet        (argv, meta, fx) → custom fleet behaviour; default = one worker commit + integration branch
  */
-export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null, spawner = {}, quotaRead = null, local: localOverrides = {}, dryRun = false } = {}) {
+export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, reviewVerdict = () => 'approve', checks = null, fleet = null, worker = null, claudeAnswer = null, config = {}, prsOpenAtStart = [], onManifestVerify = null, reviewerSideEffect = null, onColdstart = null, spawner = {}, quotaRead = undefined, local: localOverrides = {}, dryRun = false, flags = {}, fetchImpl = null } = {}) {
   const gh = fakeGithub({ permissions: { op: 'admin' } });
   const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', createdAt: '2026-08-01T10:00:00Z', labels: [], author: { login: 'op' }, authorAssociation: 'OWNER' } };
   const handlers = {};
@@ -213,10 +213,11 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   // ---- the PRODUCTION context wiring over the fixture ----
   const key = 'k'.repeat(48);
   const local = { model: 'opus', quotaThreshold: 50, quotaReserve: 5, adapter: 'claude-code', trustedBinDirs: null, sshIdentity: null, issue: null, force: false, dryRun, restMs: null, ...localOverrides };
-  state.quotaRead = quotaRead ?? (async () => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } }));
+  // quotaRead: undefined → the fixture's always-ok reader; null → the PRODUCTION reader (fetchImpl + claude fallback); a function → that reader.
+  state.quotaRead = quotaRead === null ? null : (quotaRead ?? (async () => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } })));
   const ctx = await buildContext({
-    flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: repoRoot, local, dryRun,
-    overrides: { spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', quota: { read: () => state.quotaRead(state) }, sleep: async () => { fx.advance(1000); } },
+    flags, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: repoRoot, local, dryRun,
+    overrides: { spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', ...(state.quotaRead ? { quota: { read: () => state.quotaRead(state) } } : {}), ...(fetchImpl ? { fetchImpl } : {}), sleep: async () => { fx.advance(1000); } },
   });
   ctx.pinned = { ...fx.ctx.pinned, ...FAKE_TOOLS, git: GIT, 'git:realpath': GIT, node: FAKE.node, specLintBin: join(repoRoot, 'packages', 'spec-lint', 'bin', 'spec-lint.mjs') };
   ctx.remote = fx.ctx.remote;
@@ -235,7 +236,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     /** Fake loop-level collaborators around the real selection/triage/run: `iterate` can be driven with these. */
     loopDeps: (over = {}) => ({
       ...ctx.deps,
-      preflight: { phaseA: async () => {}, resolveBaseline: async () => baseOid, phaseB: async () => ({ complete: true, incomplete: [], tokenShort: false, checks: {} }), ...(over.preflight ?? {}) },
+      preflight: { phaseA: async () => {}, resolveBaseline: async () => baseOid, phaseB: async () => { const { applyLowering } = await import('../../lib/config.mjs'); ctx.config = { ...ctx.config, autopilot: applyLowering(ctx.config.autopilot, ctx.flags ?? {}) }; return { complete: true, incomplete: [], tokenShort: false, checks: {} }; }, ...(over.preflight ?? {}) },
       recover: { recover: async () => ({ actions: [] }) },
       maintain: { maintainOpenPrs: async () => ({ actions: [] }), activePrCount: () => 0 },
       digest: { postDigest: async () => ({ ok: true, posted: false }) },

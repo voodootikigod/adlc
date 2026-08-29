@@ -3,7 +3,7 @@
 // document, against a REAL temporary git repository (recover-fixture.mjs)
 // with adlc / claude / npm / spec-lint faked by pinned path.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

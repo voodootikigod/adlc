@@ -5,7 +5,7 @@
 // their schema. The outward WRITERS (comments, digest, dead-end file) are
 // asserted in their own suites; this file owns the redactor's contract.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createRedactor, redactRecord, redactStream, SECRET_PATTERNS, WITHHELD_DEAD_END, WITHHELD_BODY, CHUNK_BYTES } from '../lib/redact.mjs';
 import { withMutation } from '../lib/mutations.mjs';

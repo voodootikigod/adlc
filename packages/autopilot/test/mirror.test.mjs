@@ -2,7 +2,7 @@
 // the explicit fetch-back sequence, and the gate mirror + per-gate clone, all
 // over REAL temporary git repositories.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

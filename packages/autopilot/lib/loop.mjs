@@ -14,10 +14,10 @@ import { validateIssueNumber, InputError } from './input.mjs';
 import { acquireLock, selfIdentity, defaultProbes, LockHeldError } from './lock.mjs';
 import { LABEL_FOR_STATE } from './records.mjs';
 import { buildContext } from './context.mjs';
-import { runIssue } from './run.mjs';
-import { registerSeams, active } from './mutations.mjs';
+import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
+import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem']);
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -46,7 +46,9 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
 
   // §2.1 — pending terminal effects are replayed first, then recovery BEFORE selection.
   for (const rec of ctx.records.all()) { try { await effects.reconcilePendingEffects(ctx, rec); } catch (e) { log(`effects replay failed for issue ${rec.issue}: ${e.message}`); } }
-  await recover.recover({ ctx });
+  const recovered = await recover.recover({ ctx });
+  // Mutation seam `loop.ignoreRecoveryActions`: recovery's classification is discarded (the stranding defect).
+  const resumable = seam('loop.ignoreRecoveryActions') ? null : (recovered?.actions ?? []).find((a) => RESUME_ACTIONS.includes(a.action));
 
   // §3 — the loop-head quota sample.
   let q = await quota.sample({ ordinal: 1, fresh: true });
@@ -65,6 +67,18 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   await maintain.maintainOpenPrs({ ctx, baseOid: ctx.baseOid, deps: deps.maintenanceDeps() });
   const active = maintain.activePrCount(ctx.records.all());
   if (active >= ctx.config.autopilot.maxOpenPrs) return sleep('pr-cap');
+
+  // §2.1 — a resumable run continues BEFORE any new selection (its worktree/branch would
+  // otherwise exclude its own issue forever). One resume per iteration, then the rest.
+  if (resumable && (pinnedIssue == null || pinnedIssue === resumable.issue)) {
+    out.document.resume = { action: resumable.action, issue: resumable.issue };
+    const result = await resumeRun({ ctx, deps, action: resumable.action, issue: resumable.issue });
+    out.document.run = result;
+    await digest.postDigest({ ctx, record: ctx.records.load(resumable.issue), outcome: result });
+    out.outcome = `resumed:${result.state}`;
+    out.exitCode = result.state === 'blocked' ? 2 : 0;
+    return out;
+  }
 
   // §4 — selection.
   const sel = await selection.select({ ctx, pinned: pinnedIssue, force });
@@ -104,7 +118,7 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
 async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
   const { selection, triage } = deps;
   // Mutation seam `loop.dryRunOmitsWorktreeItem`: the plan hides that fleet's dry run needs a worktree.
-  if (!active('loop.dryRunOmitsWorktreeItem')) out.document.incomplete.push('fleet-dry-run-needs-worktree');
+  if (!seam('loop.dryRunOmitsWorktreeItem')) out.document.incomplete.push('fleet-dry-run-needs-worktree');
   const sel = await selection.select({ ctx, pinned: pinnedIssue, force });
   out.document.selection = sel;
   if (sel.picked) {
@@ -118,7 +132,7 @@ async function dryRunPlan({ ctx, deps, pinnedIssue, force, out }) {
     out.exitCode = 2; out.document.excludedBy = sel.excludedRule;
   }
   // Mutation seam `loop.dryRunClaimsComplete`: a dry run reports itself complete.
-  out.document.complete = active('loop.dryRunClaimsComplete');
+  out.document.complete = seam('loop.dryRunClaimsComplete');
   out.outcome = 'dry-run';
   return out;
 }

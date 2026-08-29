@@ -37,6 +37,7 @@ registerSeams([
   'diffcheck.skipTicketSnapshot',     // the shard is accepted without the snapshot hash check
   'diffcheck.skipCriteriaHash',       // the criteria document is accepted without its hash check
   'diffcheck.skipDenylist',           // (ii) is not run
+  'diffcheck.allowBinary',
 ]);
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -189,6 +190,10 @@ export async function actualDiffCheck({ ctx, issue, record, baseOid, head, scope
     if (secretHits.length) return { ok: false, code: 'secret-in-diff', paths: [...new Set(secretHits.map((h) => h.file))], violations: [], secretHits };
   }
 
+  // A binary blob carries no `+` lines for the secret scan to read: it is refused outright
+  // (`binary-file`) unless the mutation seam allows it.
+  const numstat = await gitOut(ctx, cwd, ['diff', '--numstat', '--no-renames', range]);
+  const binaries = numstat.split('\n').filter((l) => /^-\t-\t/.test(l)).map((l) => l.split('\t')[2]);
   const nameStatus = await gitOut(ctx, cwd, ['diff', '--name-status', '--no-renames', range]);
   const entries = nameStatus.split('\n').filter(Boolean).map((l) => { const [status, path] = l.split('\t'); return { status: status[0], path }; });
   const changed = entries.map((e) => e.path);
@@ -198,6 +203,7 @@ export async function actualDiffCheck({ ctx, issue, record, baseOid, head, scope
   let sawShard = false; let sawManifest = false;
 
   for (const { status, path } of entries) {
+    if (!active('diffcheck.allowBinary') && binaries.includes(path)) { violations.push({ path, code: 'binary-file' }); continue; }
     if (path === '.adlc/findings.jsonl') { violations.push({ path, code: 'findings-ledger-written' }); continue; }
     if (path === criteriaPath) { await checkCriteria({ ctx, cwd, head, record, path, violations }); continue; }
     if (path.startsWith(shardPrefix) && SHARD_RE.test(path)) { sawShard = true; continue; }

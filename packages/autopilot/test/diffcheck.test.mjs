@@ -4,7 +4,7 @@
 // lines with the real chain verifier behind the key-bearing `gate-manifest
 // verify` spawn, symlink escape, and the fail-closed secret scan.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { rmSync, symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -193,3 +193,20 @@ test('seam check: the AC34/55/98/100/140/76 tests fail under their registered se
     await assert.rejects(() => withMutation(seam, fn), `${fn.name} must fail under ${seam}`);
   }
 });
+
+export async function ac76_binaryBlobsFailClosed() {
+  const f = fixture();
+  try {
+    const blob = Buffer.concat([Buffer.from('PNG'), Buffer.from('AKIA' + 'ABCDEFGHIJKLMNOP'), Buffer.alloc(64, 0)]);
+    const { writeFileSync: wf, mkdirSync: mk } = await import('node:fs');
+    const { join: j } = await import('node:path');
+    f.reset(); mk(j(f.wt, 'packages', 'foo', 'lib'), { recursive: true }); wf(j(f.wt, 'packages', 'foo', 'lib', 'blob.bin'), blob);
+    const head = commitAll(f.wt, 'binary');
+    const r = await f.check(head);
+    assert.equal(r.ok, false); assert.equal(r.code, 'binary-file', 'a binary addition cannot be secret-scanned → refused by name');
+    assert.ok(r.paths.includes('packages/foo/lib/blob.bin'));
+    const allowed = await withMutation('diffcheck.allowBinary', () => f.check(head));
+    assert.equal(allowed.ok, true, 'the seam lets the blob through — the fixture bites');
+  } finally { f.cleanup(); }
+}
+test('AC76: a binary blob added in scope fails the actual-diff check closed (binary-file) — its bytes cannot be secret-scanned', ac76_binaryBlobsFailClosed);

@@ -5,7 +5,7 @@
 // inside the sandbox against a fixture GATE_REPO. The real-bwrap parts SKIP
 // LOUDLY without `bwrap`.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

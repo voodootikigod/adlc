@@ -3,7 +3,7 @@
 // confirms; a closed cached log issue is replaced; two open ones → the lowest
 // + `digest-issue-ambiguous`.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { postDigest, locateLogIssue, runSentinel, LOG_LABEL } from '../lib/digest.mjs';
 import { withMutation } from '../lib/mutations.mjs';

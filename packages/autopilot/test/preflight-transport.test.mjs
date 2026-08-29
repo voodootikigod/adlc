@@ -4,7 +4,7 @@
 // pinned ssh), and the fetch/push URLs are byte-identical after
 // canonicalization or the run is remote-url-split.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';

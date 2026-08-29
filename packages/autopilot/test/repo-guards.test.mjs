@@ -2,7 +2,7 @@
 // the docs registry guard suites, the build ticket's gate records in this
 // repository's manifest, and fleet's synthetic-HOME contract suite.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';

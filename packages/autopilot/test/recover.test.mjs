@@ -3,7 +3,7 @@
 // `reset`, against REAL temporary git repositories with a bare `origin`
 // (recover-fixture.mjs). gh is faked (recover-gh.mjs); git is real.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

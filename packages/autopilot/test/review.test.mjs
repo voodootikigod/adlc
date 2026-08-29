@@ -2,7 +2,7 @@
 // §6.6 reopen-for-retry (fake `adlc` for the argv/stdin contract, then the
 // REAL `adlc ticket` binary against a temporary sharded store).
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

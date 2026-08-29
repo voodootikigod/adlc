@@ -5,7 +5,7 @@
 // the argv requests. Fake deps everywhere; the collaborators' own suites prove
 // their behaviour.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';

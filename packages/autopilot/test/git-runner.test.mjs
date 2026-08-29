@@ -6,7 +6,7 @@
 // the pinned SSH URLs (lib/remote.mjs rejects file paths, so the runner is
 // driven with an explicit { remoteFetchUrl, remotePushUrl }).
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

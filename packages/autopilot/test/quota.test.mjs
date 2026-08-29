@@ -3,7 +3,7 @@
 // reserve ordinal and overshoot bookkeeping. The loop-level re-check points
 // (AC 18/39/50/158) live with the loop suites.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import {
   familyOf, validateUsageBody, noScopedLimit, evaluate, parseUsageText, readUsage, createSampler, thresholdFor, reconcile,
@@ -236,3 +236,25 @@ export async function ac50_effectiveModelPropagates() {
   }
 }
 test('AC50: with --model sonnet the shaping argv, the coldstart-answer argv and the fleet argv all carry --model sonnet and the gate reads the Sonnet scoped window; with no override all three carry --model opus', { timeout: 240_000 }, ac50_effectiveModelPropagates);
+
+export async function ac2_productionReaderHasATransport() {
+  // The DEFAULT context reader: the endpoint over the runtime fetch with the credential's token; a 401 falls back to the pinned `claude -p "/usage"`.
+  let endpointCalls = 0;
+  const fx = await createSequenceFixture({ quotaRead: null, fetchImpl: async (url, opts) => { endpointCalls++; assert.match(url, /api\.anthropic\.com\/api\/oauth\/usage/); assert.equal(opts.headers.Authorization, 'Bearer fake-access-token'); return { status: 200, json: async () => ({ five_hour: { utilization: 12, resets_at: '2026-08-28T13:00:00Z' }, seven_day: { utilization: 20, resets_at: '2026-09-03T00:00:00Z' } }) }; } });
+  try {
+    const q = await fx.ctx.quota.sample({ ordinal: 1, fresh: true });
+    assert.equal(endpointCalls, 1, 'the endpoint was called with the credential token');
+    assert.equal(q.ok, true, JSON.stringify(q));
+  } finally { fx.cleanup(); }
+  const fallbackText = 'Your subscription\nCurrent session: 7% used\nCurrent week (all models): 9% used\n';
+  assert.equal(parseUsageText(fallbackText).ok, true, 'the fallback text is valid under the usage-text grammar');
+  const fx2 = await createSequenceFixture({ quotaRead: null, fetchImpl: async () => ({ status: 401 }), claudeAnswer: (args) => (args.includes('/usage') ? { type: 'result', result: fallbackText } : { type: 'result', result: JSON.stringify({ gaps: [] }) }) });
+  try {
+    const q = await fx2.ctx.quota.sample({ ordinal: 1, fresh: true });
+    assert.equal(q.ok, true, JSON.stringify(q));
+    const call = (fx2.state.claudeCalls ?? []).find((c) => c.args.includes('/usage'));
+    assert.ok(call, 'the fallback spawned the pinned claude with /usage');
+    assert.deepEqual(call.args, ['-p', '/usage', '--output-format', 'json']);
+  } finally { fx2.cleanup(); }
+}
+test('AC2: the production quota reader has a transport — the endpoint over fetch with the credential token, then the pinned claude -p /usage fallback on 401', { timeout: 120_000 }, ac2_productionReaderHasATransport);

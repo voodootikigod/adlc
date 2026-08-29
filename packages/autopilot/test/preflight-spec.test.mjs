@@ -4,7 +4,8 @@
 // including the test that THIS repository's committed approval satisfies its
 // own binding.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
+import { withMutation } from '../lib/mutations.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -164,3 +165,18 @@ export async function ac154_assumptionsBound() {
   try { const ctx = buildCtx(good); const r = await full(ctx); assert.equal(r.checks.specApproval.assumptionsHash, assumptionsHash(good.items)); assert.equal(dispatches(ctx), 1); } finally { good.cleanup(); }
 }
 test('AC154: the §11.1 extractor is pure (fixture for the current section); a record whose assumptions_hash or approved_assumptions differ → spec-approval-assumptions-stale with zero dispatches; a matching one passes; THIS repositorys committed spec and newest spec-approval satisfy the real comparison', ac154_assumptionsBound);
+
+export async function ac83_specApprovalRequiresKeyedVerify() {
+  const { verifySignedManifest } = await import('../lib/spec-approval.mjs');
+  const spawns = [];
+  const ctx = { pinned: { adlc: '/fake/adlc' }, env: { base: { PATH: '/usr/bin', HOME: '/h' } }, key: 'k'.repeat(48), spawn: async (req) => { spawns.push(req); return { status: req.argv.includes('--dir') && spawns.length === 1 ? 0 : 1, stdout: '', stderr: 'forged' }; } };
+  const ok = await verifySignedManifest({ ctx, cwd: '/wt' });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(spawns[0].argv, ['/fake/adlc', 'gate-manifest', 'verify', '--dir', '/wt/.adlc', '--allow-legacy-unsigned']);
+  assert.equal(spawns[0].env.ADLC_MANIFEST_KEY, 'k'.repeat(48), 'the verify spawn is KEY-BEARING');
+  const bad = await verifySignedManifest({ ctx, cwd: '/wt' });
+  assert.equal(bad.ok, false); assert.match(bad.detail, /forged/);
+  const skipped = await withMutation('specApproval.skipSignedVerify', () => verifySignedManifest({ ctx, cwd: '/wt' }));
+  assert.equal(skipped.ok, true, 'the seam bites');
+}
+test('AC83: spec approval runs the KEYED gate-manifest verify over the baseline checkout before accepting the record; a failing verification is spec-approval-unverified', ac83_specApprovalRequiresKeyedVerify);

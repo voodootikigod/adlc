@@ -4,7 +4,7 @@
 // signed run segment the REAL gate passes, while a forged signature, a missing
 // signature on a post-prefix line, or an unsigned run entry makes it fail.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';

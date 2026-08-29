@@ -12,6 +12,7 @@
 // every failure routes through ONE outcome mapping (§6.10). This module holds
 // the ORDER and the budgets; the steps live in lib/round.mjs.
 
+import { existsSync } from 'node:fs';
 import { validateIssueNumber, validateOid } from './input.mjs';
 import { FLEET_BLOCKING_REASONS } from './fleet-args.mjs';
 import { createRunSteps, outcomeFor, gapsToFindings } from './round.mjs';
@@ -47,12 +48,16 @@ async function settleCi({ ctx, deps, steps, issue: n, ci, prNumber }) {
   }
 }
 
+/** Recovery's run-owned actions (§2.1) → where the run continues. */
+export const RESUME_ENTRY = Object.freeze({ 'resume-shaped': 'evidence', 'resume-dispatch': 'rounds', 'resume-attest': 'rounds', 'upsert-pr': 'push', 'evaluate-ci': 'ci' });
+export const RESUME_ACTIONS = Object.freeze(Object.keys(RESUME_ENTRY));
+
 /**
- * Drive one issue through §6. `deps` is the composed module set (lib/context.mjs).
+ * Drive one issue through §6 from the start: revalidation, staged creation,
+ * then everything `continueRun` owns. `deps` is the composed module set.
  */
 export async function runIssue({ ctx, deps, issue, ticket, revision = null, authorization = null }) {
   const n = validateIssueNumber(issue);
-  const cfg = ctx.config.autopilot;
   const record = () => ctx.records.load(n);
 
   // §6.0a — revalidation immediately before step 1.
@@ -68,32 +73,67 @@ export async function runIssue({ ctx, deps, issue, ticket, revision = null, auth
     if (record()) ctx.records.update(n, { lastError: `${code}: ${e.message}` });
     return { state: code.startsWith('orphan') ? 'orphan' : 'failed', reason: code, exitCode: 1, detail: e.message };
   }
+  // The shaped ticket rides the record from here on: every resume path needs its scope.
+  ctx.records.update(n, { ticketCache: ticket, issueRevision: revision ?? record()?.issueRevision ?? null });
+  return continueRun({ ctx, deps, issue: n, ticket, revision, authorization, from: 'evidence' });
+}
 
-  // §6.2 — the signed ticket write; §6.3 — P0/P1 evidence.
-  let ticketId;
-  try {
-    const written = await deps.create.writeTicket({ ctx, issue: n, ticket });
-    ticketId = written.ticketId;
-    const evidence = await deps.create.recordEvidence({ ctx, issue: n, ticketId, ticket });
-    if (evidence.verdict === 'CLARIFY') {
-      const doc = deps.triage.clarifyDocument({ findings: gapsToFindings(evidence.gaps), issueUrl: deps.triage.issueUrlFor(ctx, n) });
-      await deps.triage.clarifyEffects({ ctx, issue: n, sentinel: doc.sentinel, body: doc.body, revision });
-      await deps.retire.retireRun({ ctx, record: record() });
-      return { state: 'clarify', reason: 'coldstart-gaps', ticketId };
+/**
+ * Resume a run recovery classified (§2.1): `resume-shaped` (a cached ticket,
+ * possibly without a worktree yet), `resume-dispatch`/`resume-attest` (a
+ * created run whose rounds continue), `upsert-pr` (pushed, PR not bound yet)
+ * and `evaluate-ci` (an open PR whose CI is still being watched).
+ */
+export async function resumeRun({ ctx, deps, action, issue }) {
+  const n = validateIssueNumber(issue);
+  const rec = ctx.records.load(n);
+  const from = RESUME_ENTRY[action];
+  if (!rec || !from) return { state: 'unchanged', reason: `not-resumable:${action}` };
+  const ticket = rec.ticketCache;
+  if (!ticket) { ctx.records.update(n, { lastError: 'resume: no cached ticket on the record' }); return { state: 'unchanged', reason: 'resume-no-ticket' }; }
+  const revision = rec.issueRevision ?? null;
+  const authorization = { ok: true, resumed: true };
+  if (from === 'evidence' && !existsSync(ctx.paths.issueWorktree(n))) return runIssue({ ctx, deps, issue: n, ticket, revision, authorization });
+  return continueRun({ ctx, deps, issue: n, ticket, revision, authorization, from });
+}
+
+/**
+ * The run from one of its entry points: 'evidence' (ticket write + P0/P1
+ * evidence), 'rounds' (§6.4–§6.7 under the global budget), 'push' (§6.8 over
+ * the recorded attested head), 'ci' (§6.9 over the recorded PR).
+ */
+export async function continueRun({ ctx, deps, issue, ticket, revision = null, authorization = null, from = 'evidence' }) {
+  const n = validateIssueNumber(issue);
+  const cfg = ctx.config.autopilot;
+  const record = () => ctx.records.load(n);
+  let ticketId = record()?.ticketId ?? null;
+
+  if (from === 'evidence') {
+    // §6.2 — the signed ticket write (once); §6.3 — P0/P1 evidence.
+    try {
+      if (!ticketId) { const written = await deps.create.writeTicket({ ctx, issue: n, ticket }); ticketId = written.ticketId; }
+      const evidence = await deps.create.recordEvidence({ ctx, issue: n, ticketId, ticket });
+      if (evidence.verdict === 'CLARIFY') {
+        const doc = deps.triage.clarifyDocument({ findings: gapsToFindings(evidence.gaps), issueUrl: deps.triage.issueUrlFor(ctx, n) });
+        await deps.triage.clarifyEffects({ ctx, issue: n, sentinel: doc.sentinel, body: doc.body, revision });
+        await deps.retire.retireRun({ ctx, record: record() });
+        return { state: 'clarify', reason: 'coldstart-gaps', ticketId };
+      }
+    } catch (e) {
+      if (e.code === 'quota-gated') {
+        // §3.2 / AC 39: the ticket is cached; the run resumes at the coldstart on a later iteration.
+        ctx.records.update(n, { state: 'shaped', ticketCache: ticket, ticketId: ticketId ?? null });
+        return { state: 'shaped', reason: 'quota-paused', ticketId: ticketId ?? null };
+      }
+      // A coldstart call ended by its deadline is an operational failure that leaves the run record untouched (AC 39).
+      const killed = e.code === 'claude-failed' || String(e.code ?? '').startsWith('timeout:');
+      if (!killed) ctx.records.update(n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
+      return { state: 'failed', reason: e.code ?? 'evidence-failed', exitCode: 1, detail: e.message, ticketId: ticketId ?? null };
     }
-  } catch (e) {
-    if (e.code === 'quota-gated') {
-      // §3.2 / AC 39: the ticket is cached; the run resumes at the coldstart on a later iteration.
-      ctx.records.update(n, { state: 'shaped', ticketCache: ticket, ticketId: ticketId ?? null });
-      return { state: 'shaped', reason: 'quota-paused', ticketId: ticketId ?? null };
-    }
-    // A coldstart call ended by its deadline is an operational failure that leaves the run record untouched (AC 39).
-    const killed = e.code === 'claude-failed' || String(e.code ?? '').startsWith('timeout:');
-    if (!killed) ctx.records.update(n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
-    return { state: 'failed', reason: e.code ?? 'evidence-failed', exitCode: 1, detail: e.message, ticketId: ticketId ?? null };
   }
+  if (!ticketId) return { state: 'unchanged', reason: 'resume-no-ticket-id' };
 
-  // The worker mirror + worker-deps are built once per run, before dispatch.
+  // The worker mirror + worker-deps are (re)built before dispatch, and the step set needs them for CI fix rounds too.
   let mirror; let workerDeps;
   try {
     mirror = await deps.mirror.createWorkerMirror({ ctx, issue: n });
@@ -102,26 +142,35 @@ export async function runIssue({ ctx, deps, issue, ticket, revision = null, auth
     ctx.records.update(n, { lastError: `${e.code ?? 'init-failed'}: ${e.message}` });
     return { state: 'failed', reason: e.code ?? 'init-failed', exitCode: 1, detail: e.message, ticketId };
   }
-
   const steps = createRunSteps({ ctx, deps, issue: n, ticket, ticketId, mirror, workerDeps, revision, authorization });
 
-  // §6.4–§6.7 — rounds under ONE global budget (§7).
-  let deadEndFile = null;
   let produced = null;
-  for (;;) {
-    const budget = remainingBudget(record(), cfg);
-    if (budget.strikes === 0 || budget.wallClockMinutes === 0) return { ...(await steps.block('strikes-exhausted', 'build budget exhausted', deadEndFile)), ticketId };
-    const r = await steps.round({ budget, deadEndFile, chargeGlobal: true });
-    if (r.status === 'terminal') return { ...r.result, ticketId };
-    if (r.status === 'retry') { deadEndFile = r.deadEndFile; continue; }
-    produced = r;
-    break;
+  if (from === 'evidence' || from === 'rounds') {
+    // §6.4–§6.7 — rounds under ONE global budget (§7).
+    let deadEndFile = null;
+    for (;;) {
+      const budget = remainingBudget(record(), cfg);
+      if (budget.strikes === 0 || budget.wallClockMinutes === 0) return { ...(await steps.block('strikes-exhausted', 'build budget exhausted', deadEndFile)), ticketId };
+      const r = await steps.round({ budget, deadEndFile, chargeGlobal: true });
+      if (r.status === 'terminal') return { ...r.result, ticketId };
+      if (r.status === 'retry') { deadEndFile = r.deadEndFile; continue; }
+      produced = r;
+      break;
+    }
+  } else {
+    const rec = record();
+    if (!rec.attestedHead) return { state: 'unchanged', reason: 'resume-no-attested-head', ticketId };
+    produced = { attested: { attestedHead: rec.attestedHead, revision: rec.attestRevision ?? null }, review: { verdict: 'approve', findings: [], reviewedHead: rec.reviewedHead ?? rec.attestedHead } };
   }
 
-  // §6.8 — verify → push → verify → PR upsert.
-  const opened = await steps.pushAndOpen({ attested: produced.attested, review: produced.review });
-  if (opened.status === 'terminal') return { ...opened.result, ticketId };
-  const prNumber = opened.prNumber;
+  let prNumber = record()?.prNumber ?? null;
+  if (from !== 'ci') {
+    // §6.8 — verify → push → verify → PR upsert.
+    const opened = await steps.pushAndOpen({ attested: produced.attested, review: produced.review });
+    if (opened.status === 'terminal') return { ...opened.result, ticketId };
+    prNumber = opened.prNumber;
+  }
+  if (prNumber == null) return { state: 'unchanged', reason: 'resume-no-pr', ticketId };
 
   // §6.9 — CI follow-up. Each fix round runs ONE more round on the CI budget
   // (never the build budget) and pushes a fresh attestation.

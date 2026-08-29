@@ -4,7 +4,7 @@
 // untrusted-tool:adlc, --trusted-bin-dirs narrows the search, and ssh-add /
 // ssh-keygen are pinned like everything else.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';

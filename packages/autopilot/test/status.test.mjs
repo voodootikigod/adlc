@@ -4,7 +4,7 @@
 // alike) under the autopilot lock, and the reserve applies from ordinal 2.
 // The quota-gate reconciliation appends to the status file AND the run record.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { createStatusStore } from '../lib/status.mjs';

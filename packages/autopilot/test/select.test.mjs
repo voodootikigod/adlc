@@ -6,7 +6,7 @@
 // ONLY for a trusted-class author excluded solely because the mode's approval
 // label was never applied; every other failure is `not-authorized`.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';

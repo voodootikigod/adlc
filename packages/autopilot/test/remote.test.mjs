@@ -1,6 +1,6 @@
 // AC 53 / 112 / 130 / 132 / 137 / 142 / 148 — remote identity binding.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { canonicalizeRemoteUrl, bindRemote, verifyGhHost, assertHostMatches, assertPrincipalAuthorized, RemoteError } from '../lib/remote.mjs';
 

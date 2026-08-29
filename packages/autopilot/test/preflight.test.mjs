@@ -4,7 +4,7 @@
 // the shared spawn recorder. The §14 spec-approval binding is in
 // preflight-spec.test.mjs.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, chmodSync, symlinkSync, unlinkSync, mkdirSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';

@@ -2,7 +2,7 @@
 // exactly one well-formed sentinel pair parses to its fields with the prose
 // preserved; every ambiguity fails closed with line-named errors and NO block.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { parseBlock, serializeBlock, stripBlock, blockSkeleton, validateBlockFields, CATEGORIES, SUPPORTED_BLOCK_VERSION } from '../lib/block.mjs';
 import { withMutation } from '../lib/mutations.mjs';

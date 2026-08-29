@@ -3,7 +3,7 @@
 // (PR #900), the fix-round precedence, the independent CI budget, and head
 // binding on every poll.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

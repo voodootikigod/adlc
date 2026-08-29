@@ -4,7 +4,7 @@
 // between the post-push check and the upsert → zero gh mutations; a PR whose
 // head differs right after creation → oid-mismatch naming the PR.
 
-import { test } from 'node:test';
+import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { pushAndUpsert, prBody, prTitle, evidenceBlock } from '../lib/push.mjs';
 import { withMutation } from '../lib/mutations.mjs';
