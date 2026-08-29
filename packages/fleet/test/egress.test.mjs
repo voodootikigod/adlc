@@ -290,10 +290,12 @@ test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 3
     up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
     if (!up) await new Promise((r) => setTimeout(r, 50));
   }
-  assert.equal(up, true, 'the bridge listened within 20 s');
-  child.kill('SIGTERM');
-  const status = await new Promise((r) => child.once('exit', (code) => r(code)));
-  assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
+  try {
+    assert.equal(up, true, 'the bridge listened within 20 s');
+    child.kill('SIGTERM');
+    const status = await new Promise((r) => child.once('exit', (code) => r(code)));
+    assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
+  } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } }
 });
 
 test('the bridge relays SIGINT too (fleet stops a run with either signal) and exits 128+2', { timeout: 30_000 }, async () => {
@@ -473,4 +475,16 @@ test('a stop signal that lands during the bridge start-up window is HELD and del
   assert.deepEqual(killed, ['SIGTERM'], 'the held signal was delivered to the child');
   assert.equal(code, 143);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('a resolver that never answers does not hold the client: the CONNECT is refused (403, dns-timeout) at the lookup deadline and nothing is dialled', async () => {
+  const dir = scratch('egress-dns-hang-');
+  const dialed = [];
+  const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['slow.example:443'], connect: (port, host) => { dialed.push(host); const s = new PassThrough(); process.nextTick(() => s.emit('connect')); return s; }, lookup: () => new Promise(() => {}), dnsTimeoutMs: 100 });
+  try {
+    const r = await request({ path: proxy.socketPath }, 'CONNECT slow.example:443 HTTP/1.1\r\nHost: slow.example:443\r\n\r\n');
+    assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
+    assert.deepEqual(dialed, []);
+    assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.DNS_TIMEOUT), JSON.stringify(proxy.refused));
+  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
 });

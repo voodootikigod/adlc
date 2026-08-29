@@ -141,7 +141,15 @@ export function assertWorktreeLink({ path, gitDirRoot } = {}) {
   let backReal = null; let pathReal = null;
   try { backReal = realpathSync(dirname(back)); pathReal = realpathSync(path); } catch { backReal = null; }
   if (backReal === null || backReal !== pathReal) throw new Error(`worktree ${path}: .git points at ${real}, which belongs to ${back}; refusing to run git there`);
-  return { gitdir: real };
+  // The gitdir's `commondir` (writable by the worker) must still name the expected root: a rewritten
+  // commondir would make host git use another repository's objects, refs and config (codex r21 #2).
+  let common = null;
+  try { common = readFileSync(join(real, 'commondir'), 'utf8').trim(); } catch { common = null; }
+  if (!common) throw new Error(`worktree ${path}: gitdir ${real} has no commondir; refusing to run git there`);
+  let commonReal = null;
+  try { commonReal = realpathSync(resolve(real, common)); } catch { commonReal = null; }
+  if (commonReal === null || commonReal !== realpathSync(gitDirRoot)) throw new Error(`worktree ${path}: commondir ${common} resolves to ${commonReal ?? '?'}, not ${gitDirRoot}; refusing to run git there`);
+  return { gitdir: real, commondir: commonReal };
 }
 
 export function assertBareMirror({ mirror, gitAt = defaultGit } = {}) {

@@ -29,7 +29,11 @@ export const REFUSAL = Object.freeze({
   METHOD: 'method-not-connect',
   NOT_ALLOWED: 'not-allowlisted',
   PRIVATE: 'private-destination',
+  DNS_TIMEOUT: 'dns-timeout',
 });
+
+/** How long a name lookup may take before the CONNECT is refused (a hanging resolver never holds a client). */
+export const DNS_TIMEOUT_MS = 10_000;
 
 const HEAD_TERMINATOR = '\r\n\r\n';
 // A CONNECT head is a request line plus a handful of headers. Anything larger is
@@ -268,9 +272,14 @@ function handleClient(client, ctx) {
     if (!target) return refuse(client, ctx, NO_TARGET, REFUSAL.MALFORMED);
     if (target.method !== 'CONNECT') return refuse(client, ctx, target, REFUSAL.METHOD);
     if (!isAllowed(target, ctx.allowlist)) return refuse(client, ctx, target, REFUSAL.NOT_ALLOWED);
-    resolveVettedAddress(target.host, ctx.lookup).then(
-      (address) => { if (!client.destroyed) tunnel(client, { ...target, address }, buffered.subarray(idx + HEAD_TERMINATOR.length), ctx); },
-      (e) => { ctx.log({ event: 'egress-proxy-refused', reason: REFUSAL.PRIVATE, host: target.host, detail: e.message }); refuse(client, ctx, target, REFUSAL.PRIVATE); },
+    let dnsTimer = null;
+    const bounded = Promise.race([
+      resolveVettedAddress(target.host, ctx.lookup),
+      new Promise((_, reject) => { dnsTimer = ctx.setTimeoutFn(() => reject(Object.assign(new Error(`lookup of ${target.host} exceeded ${ctx.dnsTimeoutMs} ms`), { code: 'dns-timeout' })), ctx.dnsTimeoutMs); }),
+    ]);
+    bounded.then(
+      (address) => { ctx.clearTimeoutFn(dnsTimer); if (!client.destroyed) tunnel(client, { ...target, address }, buffered.subarray(idx + HEAD_TERMINATOR.length), ctx); },
+      (e) => { ctx.clearTimeoutFn(dnsTimer); const reason = e?.code === 'dns-timeout' ? REFUSAL.DNS_TIMEOUT : REFUSAL.PRIVATE; ctx.log({ event: 'egress-proxy-refused', reason, host: target.host, detail: e.message }); refuse(client, ctx, target, reason); },
     );
     return undefined;
   };
@@ -285,10 +294,10 @@ function handleClient(client, ctx) {
  * `connect(port, host)` is injectable for tests and must return a socket that
  * emits `connect`, `error` and `close`.
  */
-export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect, lookup = dns.promises.lookup, headTimeoutMs = HEAD_TIMEOUT_MS, maxClients = MAX_CLIENTS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
+export function startEgressProxy({ socketPath, allowlist, log = () => {}, connect = net.connect, lookup = dns.promises.lookup, headTimeoutMs = HEAD_TIMEOUT_MS, maxClients = MAX_CLIENTS, dnsTimeoutMs = DNS_TIMEOUT_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
   if (typeof socketPath !== 'string' || socketPath.length === 0) throw new TypeError('socketPath is required');
   const normalized = normalizeAllowlist(allowlist);
-  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect, lookup, headTimeoutMs, maxClients, setTimeoutFn, clearTimeoutFn };
+  const ctx = { allowlist: normalized.map((e) => `${e.host}:${e.port}`), refused: [], clients: new Set(), log, connect, lookup, headTimeoutMs, maxClients, dnsTimeoutMs, setTimeoutFn, clearTimeoutFn };
   const server = net.createServer((client) => handleClient(client, ctx));
   const close = () => new Promise((resolve) => {
     for (const client of ctx.clients) client.destroy();

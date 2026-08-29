@@ -308,3 +308,22 @@ test('a cleanup that THROWS is recorded on its ticket and logged; the run contin
   assert.match(String(s.status.tickets.A.cleanupFailed), /device busy/, 'the cleanup failure is recorded on the ticket');
   assert.equal(s.status.tickets.B.cleanupFailed, undefined);
 });
+
+test('a post-merge gate that THROWS withdraws the merge like a red gate (a strike, not a merged ticket); when the merge cannot be withdrawn the integration branch is quarantined and no PR opens', async () => {
+  const rec = newRec();
+  const d = deps(rec);
+  const reverts = [];
+  d.postMergeGate = async () => { throw new Error('gate runner crashed'); };
+  d.revertMerge = async (a) => { reverts.push(a); return { ok: true, method: 'reset' }; };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, maxStrikes: 1 }, deps: d });
+  assert.equal(reverts.length, 1, 'the merge was withdrawn');
+  assert.notEqual(s.results.A, 'merged', `never reported merged: ${s.results.A}`);
+  const rec2 = newRec();
+  const d2 = deps(rec2);
+  d2.postMergeGate = async () => { throw new Error('gate runner crashed'); };
+  d2.revertMerge = async () => ({ ok: false, method: 'refused', reason: 'HEAD moved; revert refused' });
+  const s2 = await runFleet({ all: [T('A'), T('B')], runId: 'r2', config: { base: 'main', concurrency: 1, maxStrikes: 1 }, deps: d2 });
+  assert.notEqual(s2.results.A, 'merged');
+  assert.equal(rec2.openPR.length, 0, 'no PR opens from a quarantined branch');
+  assert.equal(s2.merged, 0); assert.equal(s2.results.B, 'failed', 'the sibling ticket is refused on the quarantined branch');
+});

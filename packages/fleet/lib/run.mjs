@@ -54,7 +54,15 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
         return { ok: false, output: `integration branch quarantined: ${runState.contaminationReason}` };
       }
       const { mergeSha, preMergeSha } = await deps.mergeToIntegration({ ticket, branch: wt.branch, integrationBranch, worktree: gatePath });
-      const post = await deps.postMergeGate({ ticket, integrationBranch, remainingMs });
+      let post;
+      try { post = await deps.postMergeGate({ ticket, integrationBranch, remainingMs }); }
+      catch (e) {
+        // A post-merge gate that THREW is a gate with no verdict: the merge is withdrawn exactly as
+        // for a red gate; if it cannot be withdrawn the branch is quarantined (codex r21 #1).
+        const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
+        if (!rev.ok) { const reason = rev.reason ?? `post-merge gate threw (${e.message}) and the merge could not be safely withdrawn (${rev.method}) on ${integrationBranch}`; markContaminated(reason); return { ok: false, output: `${reason}; integration branch quarantined` }; }
+        return { ok: false, reverted: true, output: `post-merge gate threw: ${e.message}; recovery=${rev.method}` };
+      }
       if (!post.ok) {
         const rev = await deps.revertMerge({ integrationBranch, mergeSha, preMergeSha });
         // A post-merge gate cut short by the wall clock: the merge is withdrawn and the

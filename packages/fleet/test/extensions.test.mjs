@@ -514,3 +514,20 @@ test('a second ticket\'s mirror worktree sees ONLY the base branch and its own f
     assert.ok(b.path);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('assertWorktreeLink refuses a gitdir whose commondir was rewritten to another repository (the worker can write it; host git would use foreign objects/config)', async () => {
+  const { assertWorktreeLink } = await import('../lib/git-mirror.mjs');
+  const { readFileSync: rf } = await import('node:fs');
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const link = assertWorktreeLink({ path: a.path, gitDirRoot: mirror });
+    assert.equal(link.commondir, realpathSync(mirror));
+    const cdFile = join(link.gitdir, 'commondir'); const orig = rf(cdFile, 'utf8');
+    const evil = join(root, 'evil.git'); sh(root, 'init', '-q', '--bare', evil);
+    writeFileSync(cdFile, `${evil}\n`);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /commondir .* not/, 'a foreign commondir is refused');
+    writeFileSync(cdFile, orig);
+    assert.ok(assertWorktreeLink({ path: a.path, gitDirRoot: mirror }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
