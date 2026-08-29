@@ -56,6 +56,12 @@ parallax --route "question" --context spec.md --context arch.md
 | `--prompt-only` | false | Print exact prompts, exit 0 — no API key needed |
 | `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` (all three modes) |
 
+`--context` file content (route mode) and ticket bodies (edge mode) are repository-controlled
+— anyone who can open a PR against this repo, or add a ticket, controls them. Both are treated
+as **untrusted data**: they are wrapped in an unguessable fence before being embedded in a
+prompt, with a standing directive telling the model the fenced content is data to analyze,
+never an instruction to follow, even if it reads like one.
+
 ---
 
 ## Exit codes
