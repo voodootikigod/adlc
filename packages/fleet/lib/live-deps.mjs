@@ -146,6 +146,8 @@ export function defaultIo() {
 const PROSECUTE_GATED_MANIFEST = BASE_MANIFEST;
 /** The pre-strike helper's own maximum (fleet-ext item 7); the remaining wall clock lowers it. */
 export const PRE_STRIKE_MAX_MS = 120_000;
+/** The pre-strike helper's output budget per stream (its result is a status line, not a transcript). */
+export const PRE_STRIKE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** Parse `git status --porcelain --ignored -uall` output to worktree paths. */
 function parseStatusPaths(out) {
@@ -395,7 +397,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       let res;
       try {
         // Bounded by the smaller of the helper maximum and the run's remaining wall clock (codex r4).
-        res = await io.spawnWorker(cmd, args, { cwd: repo, env: { ...(config.preStrikeEnv ?? {}) }, shell: false, killGroup: true, timeout: Math.max(1, Math.min(PRE_STRIKE_MAX_MS, config.deadline == null ? PRE_STRIKE_MAX_MS : config.deadline - now())) });
+        res = await io.spawnWorker(cmd, args, { cwd: repo, env: { ...(config.preStrikeEnv ?? {}) }, shell: false, killGroup: true, maxOutputBytes: PRE_STRIKE_MAX_OUTPUT_BYTES, timeout: Math.max(1, Math.min(PRE_STRIKE_MAX_MS, config.deadline == null ? PRE_STRIKE_MAX_MS : config.deadline - now())) });
       } catch (e) {
         return { ok: false, reason: `pre-strike command could not be spawned for ${ticket.id} strike ${strike}: ${e.message}` };
       }

@@ -48,3 +48,15 @@ test('does not block the event loop — a timer fires while the child runs', asy
   clearTimeout(t);
   assert.equal(tickedDuringChild, true, 'the event loop kept running while the child was alive (#164)');
 });
+
+test('output accumulation is BOUNDED: past maxOutputBytes the rest is dropped (truncated:true), the child still runs to completion, and the default cap is generous', async () => {
+  const r = await spawnAsync('/bin/sh', ['-c', 'head -c 300000 /dev/zero | tr "\\0" x; echo; echo done-on-stderr 1>&2'], { maxOutputBytes: 1000 });
+  assert.equal(r.status, 0, 'the child is never blocked or killed by the cap');
+  assert.equal(r.stdout.length, 1000, 'stdout is cut at the cap');
+  assert.equal(r.truncated, true);
+  assert.equal(r.stderr, 'done-on-stderr\n', 'the other stream is intact (it stayed under the cap)');
+  const small = await spawnAsync('/bin/sh', ['-c', 'head -c 20000 /dev/zero | tr "\\0" y']);
+  assert.equal(small.stdout.length, 20000); assert.equal(small.truncated, false, 'the default cap does not touch ordinary output');
+  const { DEFAULT_MAX_OUTPUT_BYTES } = await import('../lib/spawn-async.mjs');
+  assert.ok(DEFAULT_MAX_OUTPUT_BYTES >= 8 * 1024 * 1024, 'the default is a memory guard, not a transcript limit');
+});

@@ -178,7 +178,16 @@ export function mirrorFetchBack({ repo, mirror, workerBranch, cutTip, gatePath, 
   detachGateWorktree({ path: gatePath, gitAt });
   const fb = fetchBackWorkerBranch({ repo, mirror, workerBranch, cutTip, gitAt });
   if (!fb.ok) return fb;
-  ensureGateWorktree({ repo, path: gatePath, workerBranch, gitAt });
+  // The gate worktree must attach for the swap to stand (codex r13 #1): a failure here rolls
+  // the branch ref back to `cutTip` (reverse compare-and-swap) so `ok:false ⇒ ref untouched`
+  // holds and the next strike's CAS against the recorded cut tip still matches.
+  try { ensureGateWorktree({ repo, path: gatePath, workerBranch, gitAt }); }
+  catch (e) {
+    let rollback = 'branch rolled back to the cut tip';
+    try { gitAt(repo)('update-ref', `refs/heads/${workerBranch}`, cutTip, fb.sha); }
+    catch (r) { rollback = `ROLLBACK FAILED (${r.message}); branch left at ${fb.sha}`; }
+    return { ok: false, reason: 'mirror-fetch-failed', step: 'gate-worktree', detail: `gate-worktree: ${e.message}; ${rollback}` };
+  }
   return fb;
 }
 

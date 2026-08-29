@@ -412,3 +412,23 @@ test('the operator\'s --adapter-command override is the EFFECTIVE command: bound
     assert.equal(r2.policyMismatch, true); assert.match(r2.output, /lies under the worktree/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('mirrorFetchBack rolls the compare-and-swap BACK when the gate worktree cannot attach: ok:false step gate-worktree, the branch ref is at the cut tip again, and a retry with the same cut tip succeeds', () => {
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    writeFileSync(join(a.path, 'w.txt'), '1\n'); sh(a.path, 'add', '-A'); sh(a.path, 'commit', '-q', '-m', 'w1');
+    let failures = 0;
+    const failingGit = (dir) => (...args) => { if (args[0] === 'worktree' && args[1] === 'add') { failures++; throw new Error('disk full'); } return gitAt(dir)(...args); };
+    const fb = mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt: failingGit });
+    assert.equal(fb.ok, false); assert.equal(fb.reason, 'mirror-fetch-failed'); assert.equal(fb.step, 'gate-worktree');
+    assert.match(fb.detail, /disk full.*rolled back/);
+    assert.equal(failures, 1);
+    assert.equal(sh(repo, 'rev-parse', a.branch), a.cutTip, 'the caller branch ref is back at the cut tip (ok:false ⇒ ref untouched)');
+    assert.equal(sh(repo, 'for-each-ref', 'refs/fleet/fetched'), '', 'no temp ref lingers');
+    const again = mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt });
+    assert.equal(again.ok, true, 'the retry against the SAME cut tip lands (no wedge)');
+    assert.equal(sh(repo, 'rev-parse', a.branch), again.sha);
+    assert.ok(existsSync(join(a.gatePath, 'w.txt')), 'the gate worktree is attached on the fetched-back branch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

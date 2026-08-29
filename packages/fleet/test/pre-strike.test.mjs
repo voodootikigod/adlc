@@ -142,3 +142,18 @@ test('the pre-strike spawn kills its process group on timeout and is bounded by 
   assert.ok(gateSpawn, 'a gate command was spawned');
   assert.equal(gateSpawn.opts.killGroup, true, 'gate commands are spawned in their own process group');
 });
+
+test('the pre-strike helper is spawned with a 1 MiB per-stream output budget (its result is a status line, never an unbounded transcript)', async () => {
+  const { PRE_STRIKE_MAX_OUTPUT_BYTES } = await import('../lib/live-deps.mjs');
+  const rec = newRec();
+  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-prestrike-cap-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', config, statusDir, sandboxSpec, reviewRunner: null, seats: null, io: fakeIo(rec) });
+    const r = await deps.preStrike({ ticket, strike: 1 });
+    assert.equal(r.ok, true);
+    const spawn = rec.spawn.find((x) => x.cmd === PRE_STRIKE_ARGV[0]);
+    assert.ok(spawn, 'the helper was spawned');
+    assert.equal(spawn.opts.maxOutputBytes, PRE_STRIKE_MAX_OUTPUT_BYTES, 'the budget is passed to the spawn');
+    assert.equal(PRE_STRIKE_MAX_OUTPUT_BYTES, 1024 * 1024);
+  } finally { rmSync(statusDir, { recursive: true, force: true }); }
+});

@@ -42,3 +42,15 @@ test('failOn severity is configurable', async () => {
   assert.equal((await prosecute(ctx, { runReview: () => ({ ok: true, findings }), failOn: 'high' })).verdict, 'pass');
   assert.equal((await prosecute(ctx, { runReview: () => ({ ok: true, findings }), failOn: 'medium' })).verdict, 'block');
 });
+
+test('unavailable verdict carries timedOut ONLY when the runner reported timedOut:true (the wall-clock pause key)', async () => {
+  const ctx = { worktree: '/tmp/wt', startSha: 'abc', ticket: { id: 'T1' } };
+  const timed = await prosecute(ctx, { runReview: () => ({ ok: false, reason: 'deadline', timedOut: true }) });
+  assert.equal(timed.verdict, 'unavailable');
+  assert.equal(timed.timedOut, true, 'a timed-out review is reported as such (scheduler → wall-clock pause)');
+  for (const result of [{ ok: false, reason: 'no provider' }, { ok: false, reason: 'x', timedOut: false }, { ok: false, reason: 'x', timedOut: 'yes' }, null]) {
+    const r = await prosecute(ctx, { runReview: () => result });
+    assert.equal(r.verdict, 'unavailable');
+    assert.equal(r.timedOut, false, `not timed out for ${JSON.stringify(result)}: a strike, never a pause`);
+  }
+});

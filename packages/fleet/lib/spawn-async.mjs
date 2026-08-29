@@ -17,6 +17,9 @@
 import { spawn as cpSpawn } from 'node:child_process';
 
 export const DEFAULT_KILL_GRACE_MS = 15_000;
+/** Output accumulated per stream before the rest is DROPPED (codex r13 #3): a chatty child
+ * cannot exhaust the orchestrator. Callers with a smaller budget pass `maxOutputBytes`. */
+export const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 /** Signal a process group (negative pid) without throwing on an already-gone group. */
 function signalGroup(pid, signal, kill = process.kill) {
@@ -27,6 +30,7 @@ export function spawnAsync(cmd, args = [], opts = {}) {
   const {
     killGroup = false,
     killGraceMs = DEFAULT_KILL_GRACE_MS,
+    maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
     kill = process.kill,
@@ -50,11 +54,21 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     }
     let stdout = '';
     let stderr = '';
+    let truncated = false;
+    const cap = Number.isFinite(maxOutputBytes) && maxOutputBytes > 0 ? maxOutputBytes : null;
+    // Keep reading (the child is never blocked on a full pipe); drop what exceeds the cap.
+    const take = (buf, d) => {
+      if (cap == null) return buf + d;
+      if (buf.length >= cap) { truncated = true; return buf; }
+      const room = cap - buf.length;
+      if (d.length > room) { truncated = true; return buf + d.slice(0, room); }
+      return buf + d;
+    };
     let timedOut = false;
     let timer;
     let graceTimer;
-    if (child.stdout) { child.stdout.setEncoding('utf8'); child.stdout.on('data', (d) => { stdout += d; }); }
-    if (child.stderr) { child.stderr.setEncoding('utf8'); child.stderr.on('data', (d) => { stderr += d; }); }
+    if (child.stdout) { child.stdout.setEncoding('utf8'); child.stdout.on('data', (d) => { stdout = take(stdout, d); }); }
+    if (child.stderr) { child.stderr.setEncoding('utf8'); child.stderr.on('data', (d) => { stderr = take(stderr, d); }); }
     let groupKilled = false;
     const killTheGroup = () => { if (groupKilled) return; groupKilled = true; signalGroup(child.pid, 'SIGKILL', kill); };
     const terminate = () => {
@@ -68,14 +82,14 @@ export function spawnAsync(cmd, args = [], opts = {}) {
     };
     if (spawnOpts.timeout) timer = setTimeoutFn(terminate, spawnOpts.timeout);
     const clear = () => { if (timer) clearTimeoutFn(timer); if (graceTimer) clearTimeoutFn(graceTimer); };
-    child.on('error', (error) => { clear(); resolve({ error, status: null, stdout, stderr, timedOut }); });
+    child.on('error', (error) => { clear(); resolve({ error, status: null, stdout, stderr, timedOut, truncated }); });
     child.on('close', (status, signal) => {
       clear();
       // The leader may exit on SIGTERM while a descendant lives on: after a timeout
       // the whole GROUP gets the SIGKILL now, not a grace timer the close just
       // cancelled (codex r7).
       if (timedOut && killGroup && child.pid) killTheGroup();
-      resolve({ status, signal, stdout, stderr, timedOut: timedOut || signal === 'SIGTERM' });
+      resolve({ status, signal, stdout, stderr, timedOut: timedOut || signal === 'SIGTERM', truncated });
     });
   });
 }
