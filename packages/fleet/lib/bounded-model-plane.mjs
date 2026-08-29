@@ -161,7 +161,9 @@ export function buildBoundedModelPlaneArgv({
   const homeN = norm(home);
   const tmp = under(PRIVATE_TMP, tmpDir, 'TMPDIR');
 
-  const args = ['--die-with-parent', '--chdir', wt, '--proc', '/proc', '--dev', '/dev'];
+  // Own PID / IPC / UTS namespaces: `--proc /proc` is then the SANDBOX's procfs — the host's
+  // processes (their cmdlines, environments, fds; same uid) are not visible (codex r20 #1).
+  const args = ['--die-with-parent', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--chdir', wt, '--proc', '/proc', '--dev', '/dev'];
   if (unshareNet) args.push('--unshare-net');
 
   // 1. tmpfs mounts first (see the order note above). `--perms 0700` scopes the

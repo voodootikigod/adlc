@@ -96,6 +96,10 @@ export async function advanceTicket(ticket, effects, {
 
   const fail = (reason, reasonCode) => ({ state: 'failed', strikes, reason, reasonCode, deadEnds, gatePassed, prosecution, review });
   const paused = (reason, reasonCode) => ({ state: 'paused', strikes, reason, reasonCode, deadEnds, gatePassed, prosecution, review });
+  // A pause after the worker returned but before the strike's verdict landed (gate/prosecution/merge
+  // cut short or never reached) hands the strike BACK: a resume on the last strike can still run it
+  // (codex r20 #3). The worker's output stays in its worktree.
+  const pausedUnconsumed = (reason) => ({ ...paused(reason, REASON_CODES.WALL_CLOCK), strikes: Math.max(0, strikes - 1) });
 
   /**
    * Consult flail-detector, and SAY SO when the consultation could not produce
@@ -183,13 +187,14 @@ export async function advanceTicket(ticket, effects, {
     // The wall clock bounds the WHOLE run, not just dispatch: nothing gates,
     // prosecutes or merges past it. An expired run pauses (resumable) even when
     // the strike itself returned in time.
-    if (expired()) return paused('external wall clock expired after the strike; nothing is gated or merged past it', REASON_CODES.WALL_CLOCK);
+    if (expired()) return pausedUnconsumed('external wall clock expired after the strike; nothing is gated or merged past it');
 
     log(`${ticket.id} strike ${strikes}: gating`);
     const gate = await effects.gate({ ticket, remainingMs: remainingMs() });
     if (!gate.ok) {
       // A gate cut short by the wall clock is not the worker's failure: pause, never a strike/flail (codex r5).
-      if (expired()) return paused('external wall clock expired during the gate', REASON_CODES.WALL_CLOCK);
+      if (gate.timedOut && expired()) return pausedUnconsumed('external wall clock expired during the gate');
+      if (expired()) return paused('external wall clock expired during a failed gate', REASON_CODES.WALL_CLOCK);
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
       if (canRetry()) {
         const flailed = await consultFlail();
@@ -203,7 +208,7 @@ export async function advanceTicket(ticket, effects, {
     // Verdict evidence ONLY — the spend rode its own entry at dispatch time.
     // Carrying it here too would double-count the call.
     effects.record?.('p4', true);
-    if (expired()) return paused('external wall clock expired after the gate; nothing is prosecuted or merged past it', REASON_CODES.WALL_CLOCK);
+    if (expired()) return pausedUnconsumed('external wall clock expired after the gate; nothing is prosecuted or merged past it');
 
     log(`${ticket.id} strike ${strikes}: prosecuting`);
     const pros = await effects.prosecute({ ticket, remainingMs: remainingMs() });
@@ -211,7 +216,7 @@ export async function advanceTicket(ticket, effects, {
     reviewRounds += 1;
     review = { ...(pros.review ?? {}), verdict: pros.review?.verdict ?? pros.verdict, rounds: reviewRounds };
     if (pros.verdict === 'unavailable') {
-      if (pros.timedOut && expired()) return paused('external wall clock expired during prosecution', REASON_CODES.WALL_CLOCK);
+      if (pros.timedOut && expired()) return pausedUnconsumed('external wall clock expired during prosecution');
       // Cannot prove safety → must not merge, retrying build won't help.
       effects.record?.('p5', false);
       return fail(`prosecution unavailable (fail closed): ${pros.reason}`, REASON_CODES.REVIEW_UNAVAILABLE);
@@ -223,12 +228,12 @@ export async function advanceTicket(ticket, effects, {
       return fail('prosecution blocking after strikes exhausted', REASON_CODES.STRIKES_EXHAUSTED);
     }
     effects.record?.('p5', true);
-    if (expired()) return paused('external wall clock expired after prosecution; nothing is merged past it', REASON_CODES.WALL_CLOCK);
+    if (expired()) return pausedUnconsumed('external wall clock expired after prosecution; nothing is merged past it');
 
     log(`${ticket.id} strike ${strikes}: merging`);
     const merge = await effects.merge({ ticket, remainingMs: remainingMs() });
     // The merge re-checks the deadline INSIDE its mutex (a queued merge may have waited past it).
-    if (merge.expired) return paused('external wall clock expired before the merge', REASON_CODES.WALL_CLOCK);
+    if (merge.expired) return pausedUnconsumed('external wall clock expired before the merge');
     if (!merge.ok) {
       deadEnds.push(fence('POST_MERGE', merge.output ?? 'post-merge gate failed', DEAD_END_MAX_CHARS));
       if (canRetry()) continue;

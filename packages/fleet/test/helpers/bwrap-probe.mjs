@@ -9,5 +9,8 @@ export function probeBwrap() {
   if (backend?.name !== 'bubblewrap') return { ok: false, reason: `no bubblewrap backend on this host (detected: ${backend?.name ?? 'none'})` };
   const res = spawnSync(backend.path ?? 'bwrap', ['--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--die-with-parent', '--', process.execPath, '-e', 'process.exit(0)'], { encoding: 'utf8', timeout: 10_000 });
   if (res.status === 0) return { ok: true };
-  return { ok: false, reason: `bwrap cannot run a sandbox here (user namespaces unavailable?): ${(res.stderr || res.error?.message || '').trim().slice(0, 200)}` };
+  const reason = `bwrap cannot run a sandbox here (user namespaces unavailable?): ${(res.stderr || res.error?.message || '').trim().slice(0, 200)}`;
+  // On CI the containment tests are load-bearing: an unusable sandbox is a failure, never a skip.
+  if (process.env.CI) throw new Error(`${reason} — the CI image must provide a usable bubblewrap`);
+  return { ok: false, reason };
 }

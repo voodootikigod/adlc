@@ -308,3 +308,14 @@ test('a file outside the read set is unreadable, the worktree stays writable, TM
     assert.equal(readFileSync(join(worktree, 'src.txt'), 'utf8'), 'edit', 'the worktree write landed on the host');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('inside the sandbox the HOST\'s processes are invisible: /proc is the sandbox\'s own (PID namespace), the orchestrator\'s pid does not exist there (AC95)', { skip: bwrapSkip }, async () => {
+  const { root, sb } = fixture();
+  try {
+    const res = await sb.run([SH, '-c', `if [ -e /proc/${process.pid} ]; then echo visible; else echo hidden; fi; ls /proc | grep -c '^[0-9]' `]);
+    assert.equal(res.status, 0, res.stderr);
+    const [vis, count] = res.stdout.trim().split('\n');
+    assert.equal(vis, 'hidden', "the orchestrator's pid is not in the sandbox's /proc");
+    assert.ok(Number(count) <= 5, `only the sandbox's own handful of processes are listed (${count})`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

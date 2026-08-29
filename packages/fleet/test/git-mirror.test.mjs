@@ -345,3 +345,18 @@ test('a later ticket cuts from the ADVANCED integration tip: the mirror is refre
     assert.equal(refreshMirrorTip({ mirror: f.mirror, repo: f.repo, baseBranch: ISSUE_BRANCH, sourceRef: 'fleet/run-x', tip: advanced, gitAt }).refreshed, false, 'idempotent once held');
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test('when the rollback after a failed temp-ref delete ALSO fails, the result says so and names the sha the branch was left at (the degraded path is explicit, never silent)', () => {
+  const f = makeFixture();
+  try {
+    cutWithWorkerCommit(f);
+    const log = [];
+    let deletes = 0;
+    const failing = (a) => (a[0] === 'update-ref' && a[1] === '-d' && ++deletes === 1) || (a[0] === 'update-ref' && a.length === 4 && a[2] === f.issueTip);
+    const r = fetchBackWorkerBranch({ repo: f.repo, mirror: f.mirror, workerBranch: WB, cutTip: f.issueTip, gitAt: recordingGitAt(log, failing) });
+    assert.equal(r.ok, false); assert.equal(r.step, 'cleanup');
+    assert.match(r.detail, /ROLLBACK FAILED/);
+    assert.match(r.detail, /branch left at [0-9a-f]{40}/);
+    assert.notEqual(refs(f.repo).includes(f.issueTip), false, 'the fixture refs still list the cut tip for the base branch');
+  } finally { f.cleanup(); }
+});

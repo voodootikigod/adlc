@@ -244,3 +244,22 @@ test('a FAILED strike (exit≠0, not timed out) after the deadline passed pauses
   const r2 = await advanceTicket(ticket, e2, { maxStrikes: 1, deadline: 4000, now: () => t2 });
   assert.equal(r2.state, 'paused'); assert.equal(r2.reasonCode, REASON_CODES.WALL_CLOCK);
 });
+
+test('a wall-clock pause after the worker returned but before its verdict (gate cut short, or nothing gated yet) hands the strike back — a pause on the LAST strike can still resume and run it', async () => {
+  let t = 0;
+  const e = effects({ gate: () => { t = 5000; return { ok: false, output: '', timedOut: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 1, deadline: 4000, now: () => t });
+  assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(r.strikes, 0, 'the strike whose verdict never landed is handed back');
+  // And a resume with that count dispatches again.
+  let t2 = 0;
+  const e2 = effects();
+  const r2 = await advanceTicket(ticket, e2, { maxStrikes: 1, deadline: 4000, now: () => t2, startStrikes: r.strikes });
+  assert.equal(e2.calls.dispatch.length, 1, 'the resumed run could still run its one strike');
+  assert.equal(r2.state === 'merged' || r2.state === 'done' || r2.state === 'built', true, JSON.stringify(r2).slice(0, 120));
+  // A genuinely FAILED gate after the deadline still consumes the strike (its verdict landed).
+  let t3 = 0;
+  const e3 = effects({ gate: () => { t3 = 5000; return { ok: false, output: 'red', timedOut: false }; } });
+  const r3 = await advanceTicket(ticket, e3, { maxStrikes: 1, deadline: 4000, now: () => t3 });
+  assert.equal(r3.state, 'paused'); assert.equal(r3.strikes, 1);
+});
