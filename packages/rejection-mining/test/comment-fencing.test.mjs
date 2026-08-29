@@ -71,10 +71,19 @@ test('buildRefinementPrompt: fenced JSON uses 2-space indentation', () => {
   assert.match(objectLine, /^ {2}\{$/, `expected 2-space indented '{', got ${JSON.stringify(objectLine)}`);
 });
 
-test('buildRefinementPrompt: 5 maximal (300-char) samples exceed the cap and get truncated', () => {
+test('buildRefinementPrompt: 5 maximal (300-char) samples exceed the cap and get truncated to EXACTLY the cap', () => {
   const signals = Array.from({ length: 5 }, (_, i) => ({ body: 'x'.repeat(300), prNumber: 1000 + i }));
   const prompt = buildRefinementPrompt('slug', signals);
   assert.match(prompt, /truncated, showing last/, 'the fence must report truncation for 5 maximal samples');
+
+  const openIdx = prompt.indexOf('<<UNTRUSTED:');
+  const closeIdx = prompt.indexOf('<<END:');
+  const bodyStart = prompt.indexOf('\n', openIdx) + 1;
+  const capped = prompt.slice(bodyStart, closeIdx - 1); // -1 drops the trailing '\n' before <<END
+  // tail()-based truncation keeps exactly the last PR_COMMENTS_MAX_CHARS
+  // characters — pin the exact length so the 1500 boundary itself (not just
+  // "some truncation happened") is what the test observes.
+  assert.strictEqual(capped.length, 1500);
 });
 
 test('buildRefinementPrompt: a typical small sample set is never truncated', () => {
