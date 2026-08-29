@@ -93,6 +93,7 @@ export const REGISTRY = {
     { fn: 'ac41_dispatchParsesResultAndResume', file: 'run.test.mjs', seam: 'dispatch.keyInFleetEnv' },
   ],
   60: [
+    { fn: 'ac60_helperUsesTheUsageFallback', file: 'quota.test.mjs', seam: 'context.helperWithoutPins' },
     { fn: 'ac60_helperRunsFromTheIssueWorktree', file: 'quota.test.mjs', seam: 'paths.helperRefusesLinkedWorktree' },
     { fn: 'ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock', file: 'quota.test.mjs', seam: 'context.helperTokenIgnored' },{ fn: 'ac60_preStrikeResolvedValues', file: 'run.test.mjs', seam: 'fleetArgs.bareAdlcInHelper' }],
   78: [{ fn: 'ac78_readSetAndWritableRoots', file: 'run.test.mjs', seam: 'fleetArgs.readSetIncludesRepo' }],
@@ -116,6 +117,7 @@ export const REGISTRY = {
   23: [{ fn: 'ac23_fallbackGrammar', file: 'quota.test.mjs', seam: 'quota.lenientText' }],
   27: [{ fn: 'ac27_overshootAndReserve', file: 'quota.test.mjs', seam: 'quota.noReserve' }],
   28: [
+    { fn: 'ac28_zeroIsNotALowering', file: 'config.test.mjs', seam: 'config.acceptZeroLimits' },
     { fn: 'ac28_operatorLocalPrecedence', file: 'config.test.mjs', seam: 'config.honourRepoOperatorKeys' },
     { fn: 'ac28_loweringIsApplied', file: 'loop.test.mjs', seam: 'config.allowRaise' },
   ],
@@ -269,6 +271,7 @@ export const REGISTRY = {
     { fn: 'ac158_tokenMargin', file: 'preflight.test.mjs', seam: 'preflight.ignoreTokenMargin' },
   ],
   80: [
+    { fn: 'ac80_unreadableBaselineIsNotAbsence', file: 'preflight-spec.test.mjs', seam: 'preflight.treatReadErrorsAsAbsent' },
     { fn: 'ac80_newestApprovalHashPinned', file: 'preflight-spec.test.mjs', seam: 'specApproval.oldestWins' },
   ],
   83: [
@@ -345,6 +348,7 @@ export const REGISTRY = {
     { fn: 'ac21_resumableRunsAreResumed', file: 'loop.test.mjs', seam: 'loop.ignoreRecoveryActions' },
   ],
   29: [
+    { fn: 'ac29_unlabelEventRecordedAfterTheEffect', file: 'recover.test.mjs', seam: 'recover.recordEventBeforeEffect' },
     { fn: 'ac29_ownershipCheckedDeletion', file: 'recover.test.mjs', seam: 'retire.skipMarkerCheck' },
   ],
   42: [
@@ -389,6 +393,7 @@ export const REGISTRY = {
     { fn: 'ac72_p0p1RecordMechanics', file: 'create.test.mjs', seam: 'create.recordDespiteGaps' },
   ],
   30: [
+    { fn: 'ac30_fleetResultPathsAreSafeAndDistinct', file: 'paths.test.mjs', seam: 'paths.acceptAnyRunId' },
     { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.budgetNotGlobal' },
   ],
   36: [

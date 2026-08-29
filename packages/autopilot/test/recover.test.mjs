@@ -465,3 +465,20 @@ export async function rearmHelperResetsCounters() {
   });
 }
 test('rearmRun resets counters to pr-open; the canonical rule refuses while local artifacts exist', rearmHelperResetsCounters);
+
+export async function ac29_unlabelEventRecordedAfterTheEffect() {
+  // The rearm throws (a crash between the decision and the effect): the event is NOT marked acted-on, so the next recovery retries it.
+  const gh = ghWith();
+  await withFx(async (fx) => {
+    const b = createAutopilotBranch(fx, { issue: 7, push: true }); pushedRecord(fx, 7, 'blocked', b.tip); unlabel(gh, 7, L.blocked, 'alice');
+    const { recover } = await import('../lib/recover.mjs');
+    const realUpdate = fx.ctx.records.update.bind(fx.ctx.records);
+    fx.ctx.records.update = (n, patch) => { if (n === 7 && patch.state && patch.state !== 'blocked') throw new Error('crash mid-rearm'); return realUpdate(n, patch); };
+    const r = await recover({ ctx: fx.ctx });
+    const a = action(r, 7);
+    assert.ok(a && (a.action === 'error' || /crash/.test(String(a.message ?? ''))), `the rearm failure surfaces: ${JSON.stringify(a)}`);
+    const rec = fx.ctx.records.load(7);
+    assert.ok(rec?.unlabeledEventId == null, `the event is not recorded as acted-on when its effect failed: ${JSON.stringify(rec?.unlabeledEventId)}`);
+  }, { gh });
+}
+test('AC29: an authorized unlabel is recorded as acted-on only AFTER its effect — a crash mid-rearm leaves the event for the next recovery instead of stranding the run as already-acted', ac29_unlabelEventRecordedAfterTheEffect);

@@ -46,3 +46,12 @@ export async function ac24_linkedWorktreeRefused() {
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 test('AC24: invoking from inside a linked worktree exits 1 not-main-worktree; the main worktree resolves', ac24_linkedWorktreeRefused);
+
+export async function ac30_fleetResultPathsAreSafeAndDistinct() {
+  const { autopilotPaths, validateRunId } = await import('../lib/paths.mjs');
+  const p = autopilotPaths('/repo');
+  assert.equal(p.fleetResult('run-01ABC'), '/repo/.adlc/autopilot-runs/fleet-run-01ABC.json');
+  assert.ok(!/\/\d+\.json$/.test(p.fleetResult('7')), 'a numeric run id never becomes an issue record file');
+  for (const bad of ['../x', 'a/b', '', '.', '..', 'x\u0000y', 'x'.repeat(200)]) assert.throws(() => validateRunId(bad), /bad-run-id|not a safe path fragment/, JSON.stringify(bad));
+}
+test('AC30: fleet result files are `fleet-<id>.json` (never mistakable for an issue record) and the id is validated as a safe path fragment', ac30_fleetResultPathsAreSafeAndDistinct);

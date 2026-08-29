@@ -308,3 +308,17 @@ export async function ac60_helperRunsFromTheIssueWorktree() {
   } finally { fx.cleanup(); }
 }
 test('AC60: the pre-strike quota helper works when spawned from INSIDE the issue worktree (a linked worktree): it resolves the main worktree as its root and bumps its ordinal', { timeout: 120_000 }, ac60_helperRunsFromTheIssueWorktree);
+
+export async function ac60_helperUsesTheUsageFallback() {
+  // The quota helper never runs phase A: with the endpoint failing, its /usage fallback must still find the pinned claude.
+  const fx = await createSequenceFixture({ quotaRead: null, fetchImpl: async () => ({ status: 401 }), claudeAnswer: (args) => (args.includes('/usage') ? { type: 'result', result: 'Your subscription\nCurrent session: 3% used\nCurrent week (all models): 4% used\n' } : { type: 'result', result: '{}' }) });
+  try {
+    fx.ctx.status.pinTools(fx.ctx.pinned);                                   // what phase A persists
+    fx.ctx.status.resetStarts('it-f');
+    const env = { PATH: process.env.PATH, HOME: fx.ctx.env.home, ADLC_AUTOPILOT_LOCK_TOKEN: fx.ctx.lock.token };
+    const r = await quotaCommand({ flags: { startOrdinal: 'auto', iteration: 'it-f' }, env, cwd: fx.ctx.repoRoot, deps: { fetchImpl: async () => ({ status: 401 }), spawn: fx.ctx.spawn } });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.document));
+    assert.ok((fx.state.claudeCalls ?? []).some((c) => c.args.includes('/usage')), 'the fallback spawned the pinned claude from the persisted pins');
+  } finally { fx.cleanup(); }
+}
+test('AC60: the quota-only helper carries the pins phase A persisted, so its `/usage` fallback runs when the endpoint is unavailable', { timeout: 120_000 }, ac60_helperUsesTheUsageFallback);

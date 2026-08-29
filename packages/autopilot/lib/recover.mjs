@@ -22,7 +22,8 @@ registerSeams([
   'recover.trustAnyUnlabel',        // the unlabel actor's permission is not checked
   'recover.retireInsteadOfRearm',   // an authorized unlabel on a run WITH an open PR retires instead of re-arming
   'recover.rearmWithoutPr',         // an authorized unlabel on a run WITHOUT a PR re-arms instead of retiring
-  'recover.forgetPushedWithoutPr',  // a `pushed` record with no PR is fed to the canonical rule instead of being kept for the upsert
+  'recover.forgetPushedWithoutPr',  // a `pushed` record with no PR is fed to the canonical rule instead of being kept for the upsert,
+  'recover.recordEventBeforeEffect',
 ]);
 
 /** Quarantined states and the label a human removes to release them (§2.1). */
@@ -73,19 +74,22 @@ async function recoverQuarantined(ctx, record) {
     ctx.log?.(`issue ${issue}: unauthorized-unlabel by ${auth.actor ?? '?'} (${auth.reason})`);
     return { action: 'unauthorized-unlabel', issue, actor: auth.actor, reason: auth.reason };
   }
-  ctx.records.update(issue, { unlabeledEventId: auth.event.id });                         // the same event is never acted on twice
+  // The event is recorded as acted-on AFTER its effect (codex r9 B2): a crash between the two used to
+  // strand the run as `already-acted` forever. Seam `recover.recordEventBeforeEffect`.
+  const acted = (r) => { if (ctx.records.load(issue)) ctx.records.update(issue, { unlabeledEventId: auth.event.id }); return r; };
+  if (active('recover.recordEventBeforeEffect')) ctx.records.update(issue, { unlabeledEventId: auth.event.id });
   const current = ctx.records.load(issue);
   const branch = branchFor(issue);
   const prs = record.state === 'clarify' ? [] : await openPrsForHead(ctx, branch);
   const hasPr = prs.length > 0;
   const rearm = hasPr ? !active('recover.retireInsteadOfRearm') : active('recover.rearmWithoutPr');
-  if (rearm) return rearmRun({ ctx, record: current, unlabeledEventId: auth.event.id });
+  if (rearm) return acted(await rearmRun({ ctx, record: current, unlabeledEventId: auth.event.id }));
   if (record.state === 'clarify') {
     const c = await canonicalDeletion({ ctx, record: current });
-    return { action: 'retire', issue, outcome: c.outcome };
+    return acted({ action: 'retire', issue, outcome: c.outcome });
   }
   const r = await retireRun({ ctx, record: current });
-  return { action: 'retire', issue, outcome: r.outcome, reason: r.reason ?? null };
+  return acted({ action: 'retire', issue, outcome: r.outcome, reason: r.reason ?? null });
 }
 
 /** The `remote-deleted` row: re-query PRs; restore on sight; canonical rule after 24 h. */

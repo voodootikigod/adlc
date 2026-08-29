@@ -2,6 +2,7 @@
 // the REAL iterate(): phase A/B faked, selection + triage real, fake tools.
 
 import { test } from './helpers/node-test.mjs';
+import * as cryptoForDigest from 'node:crypto';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,14 +14,25 @@ import { FAKE, GIT } from './helpers/recover-fixture.mjs';
 
 /** A digest of every file under `root` (paths + bytes), skipping volatile git internals. */
 function treeDigest(root) {
+  // Every regular file (content) plus the repository's persistent git state: refs, packed-refs, HEAD, config,
+  // exclude and the object count — a dry run that wrote a ref or an object is not byte-identical.
+  const { createHash } = cryptoForDigest;
   const h = createHash('sha256');
   const walk = (dir) => {
     for (const name of readdirSync(dir).sort()) {
       const p = join(dir, name);
       if (name === '.git' && dir !== root) continue;
-      const st = statSync(p, { throwIfNoEntry: false }); if (!st) continue;
-      if (st.isDirectory()) { if (p === join(root, '.git')) { for (const f of ['config', join('info', 'exclude'), 'HEAD']) if (existsSync(join(p, f))) h.update(`${f}\n${readFileSync(join(p, f))}`); continue; } walk(p); }
-      else if (st.isFile()) h.update(`${p.slice(root.length)}\n${readFileSync(p)}`);
+      if (p === join(root, '.git')) {
+        for (const f of ['config', join('info', 'exclude'), 'HEAD', 'packed-refs']) { const fp = join(p, f); if (existsSync(fp)) h.update(`${f}\n${readFileSync(fp, 'utf8')}\n`); }
+        const refsDir = join(p, 'refs');
+        if (existsSync(refsDir)) { const refs = []; const wr = (d) => { for (const n of readdirSync(d).sort()) { const q = join(d, n); if (statSync(q).isDirectory()) wr(q); else refs.push(`${q.slice(p.length)}=${readFileSync(q, 'utf8').trim()}`); } }; wr(refsDir); h.update(`refs\n${refs.join('\n')}\n`); }
+        const objDir = join(p, 'objects'); let objects = 0;
+        if (existsSync(objDir)) for (const n of readdirSync(objDir)) { const q = join(objDir, n); if (statSync(q).isDirectory()) objects += readdirSync(q).length; }
+        h.update(`objects=${objects}\n`);
+        continue;
+      }
+      const st = statSync(p);
+      if (st.isDirectory()) walk(p); else h.update(`${p.slice(root.length)}\n${readFileSync(p)}\n`);
     }
   };
   walk(root);
@@ -64,7 +76,12 @@ export async function ac10_dryRunHonesty() {
           if (verb === 'config') assert.ok(a.includes('--get') && a.includes('--file'), 'the identity read is the --file --get form, never a write');
           assert.ok(!['fetch', 'worktree', 'push'].includes(verb));
         }
-        if (exe === FAKE.gh) assert.ok(!/^(create|edit|comment|close|merge|delete)$/.test(a[1] ?? '') && !a.includes('--add-label'), `no gh mutation: ${a.join(' ')}`);
+        if (exe === FAKE.gh) {
+          const mutatingVerb = /^(create|edit|comment|close|merge|delete|reopen|transfer|pin|lock)$/.test(a[1] ?? '') || a.includes('--add-label') || a.includes('--remove-label');
+          const method = (() => { const i = a.findIndex((x) => x === '-X' || x === '--method'); return i === -1 ? 'GET' : String(a[i + 1] ?? '').toUpperCase(); })();
+          const mutatingApi = a[0] === 'api' && (method !== 'GET' || a.includes('--input') || a.some((x) => /^query=\s*mutation\b/.test(x)));
+          assert.ok(!mutatingVerb && !mutatingApi, `no gh mutation: ${a.join(' ')}`);
+        }
         assert.ok(!a.includes('--write') && !a.includes('--record'), `no --write/--record flag: ${a.join(' ')}`);
         assert.ok(exe !== FAKE.adlc || a[0] !== 'fleet', 'no fleet spawn');
       }

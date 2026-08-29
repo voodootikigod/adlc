@@ -25,6 +25,7 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams(['context.noUsageTransport',
   'context.helperTokenIgnored',
+  'context.helperWithoutPins',
 ]);
 import { execFileSync } from 'node:child_process';
 
@@ -115,6 +116,9 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
     ...(overrides.deps ?? {}),
   };
   ctx.deps.maintenanceDeps = overrides.maintenanceDeps ?? (() => maintenanceDeps({ ctx, deps: ctx.deps }));
+  // A quota-only context (the pre-strike helper) never runs phase A: its pins are the ones phase A
+  // persisted, so the `/usage` fallback can spawn the pinned claude (codex r9 B3). Seam `context.helperWithoutPins`.
+  if (quotaOnly && !active('context.helperWithoutPins')) ctx.pinned = { ...(ctx.status.read()?.pinnedTools ?? {}), ...ctx.pinned };
   ctx.cleanupIteration = overrides.cleanupIteration ?? (async () => { try { await modules.preflight.cleanupPreflight?.(ctx); } catch { /* best effort */ } });
   return ctx;
 }

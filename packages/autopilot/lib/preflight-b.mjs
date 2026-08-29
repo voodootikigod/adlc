@@ -9,7 +9,7 @@
 // as `skipped: needs-worktree` and never fetches.
 
 import { readFileSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { DEADLINES } from './spawn.mjs';
 import { childEnv } from './keys.mjs';
 import { validateRepoConfig } from './config.mjs';
@@ -32,6 +32,7 @@ registerSeams([
   'preflight.acceptAnyBaseSha',       // the fleet dry-run's baseSha is not compared
   'preflight.keepPreflightWorktree',  // the temporary worktree is not removed,
   'preflight.dryRunDispatches',
+  'preflight.rmAnyPath',
 ]);
 
 const PLUGIN_KEY = 'adlc@adlc';
@@ -121,7 +122,8 @@ async function pinnedConfig(ctx, oid) {
 async function removePreflightWorktree(ctx, wt) {
   if (active('preflight.keepPreflightWorktree')) return;
   await ctx.git.local(ctx.repoRoot, ['worktree', 'remove', '--force', wt], { label: 'git worktree remove (preflight)' });
-  if (existsSync(wt)) rmSync(wt, { recursive: true, force: true });
+  // Recursive removal only of a path this run created under its own runs dir (codex r9 A4). Seam `preflight.rmAnyPath`.
+  if (existsSync(wt) && (active('preflight.rmAnyPath') || isUnderDir(ctx.paths.runsDir, wt))) rmSync(wt, { recursive: true, force: true });
   await ctx.git.local(ctx.repoRoot, ['worktree', 'prune'], { label: 'git worktree prune' });
 }
 
@@ -149,6 +151,8 @@ export async function fleetDryRun(ctx, oid, wt) {
  * Phase B. Returns { complete, incomplete, tokenShort, checks }.
  * @param opts.ticketId  the ticket about to be dispatched; the §14 binding runs only for the build ticket
  */
+function isUnderDir(parent, p) { const a = resolve(parent) + sep; return resolve(p).startsWith(a); }
+
 export async function phaseB(ctx, { dryRun = ctx.dryRun === true, ticketId = ctx.dispatchTicketId ?? null, now = ctx.now ?? Date.now } = {}) {
   const oid = requireBaseline(ctx);
   const checks = {}; const incomplete = [];

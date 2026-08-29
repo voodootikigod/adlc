@@ -25,7 +25,7 @@ export class PathError extends Error {
  * Resolve REPO_ROOT from a cwd using an injectable git runner
  * `git(args) => stdout`. Refuses a linked worktree (`not-main-worktree`).
  */
-registerSeams(['paths.helperRefusesLinkedWorktree']);
+registerSeams(['paths.helperRefusesLinkedWorktree', 'paths.allowLinkedWorktree', 'paths.acceptAnyRunId']);
 
 export function resolveRepoRoot({ cwd, git, explicitRoot = null }) {
   const top = explicitRoot ?? git(['rev-parse', '--show-toplevel'], { cwd }).trim();
@@ -52,6 +52,15 @@ export function resolveMainRoot({ cwd, git }) {
   const main = first ? first.slice('worktree '.length).trim() : null;
   if (!main) throw new PathError('not-a-repository', `${top}: no main worktree`);
   return main;
+}
+
+/** A fleet run id as a path fragment: one segment of [A-Za-z0-9._-], never empty, never a dot-name. */
+export function validateRunId(id) {
+  const v = String(id ?? '');
+  // Mutation seam `paths.acceptAnyRunId`: the fleet run id is used as a path fragment unchecked.
+  if (active('paths.acceptAnyRunId')) return v;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v) || v === '.' || v === '..') throw new PathError('bad-run-id', `fleet run id ${JSON.stringify(v)} is not a safe path fragment`);
+  return v;
 }
 
 /** Every path the autopilot derives, rooted at REPO_ROOT. */
@@ -83,7 +92,9 @@ export function autopilotPaths(repoRoot) {
     attemptsJournal: (n) => join(runs, `${validateIssueNumber(n)}.attempts.reset.journal`),
     findingsLedger: (n) => join(runs, `${validateIssueNumber(n)}.findings.jsonl`),
     triageCriteria: (n) => join(runs, `${validateIssueNumber(n)}-ac.md`),
-    fleetResult: (runId) => join(runs, `${runId}.json`),
+    // `fleet-<id>.json`: never `<digits>.json` (an issue record), and the id is validated — it comes from
+    // fleet's result document, never trusted as a path fragment (codex r9 A1/B4).
+    fleetResult: (runId) => join(runs, `fleet-${validateRunId(runId)}.json`),
     preflightWorktree: (oid) => join(runs, `preflight-${validateOid(oid)}`),
     sshDir: (token) => join(runs, `ssh-${token}`),
     issueAdlc: (n) => join(p.issueWorktree(n), '.adlc'),

@@ -92,3 +92,12 @@ export function ac125_exampleIsValidJsonAndSchemaClean() {
   assert.throws(() => validateRepoConfig(badMode, { ticketSyncSchema: TS_SCHEMA }), (e) => e.code === 'bad-config');
 }
 test('AC125: the §13 example parses with JSON.parse and validates against both schemas; an unknown key or mode is bad-config', ac125_exampleIsValidJsonAndSchemaClean);
+
+export async function ac28_zeroIsNotALowering() {
+  const { applyLowering, AUTOPILOT_DEFAULTS } = await import('../lib/config.mjs');
+  for (const key of ['maxRounds', 'wallClockMinutes', 'maxOpenPrs', 'restMinutes']) {
+    assert.throws(() => applyLowering({ ...AUTOPILOT_DEFAULTS }, { [key]: '0' }), /at least 1/, `${key}=0 is refused`);
+  }
+  assert.equal(applyLowering({ ...AUTOPILOT_DEFAULTS }, { maxRounds: '1' }).maxRounds, 1, '1 is the smallest lowering');
+}
+test('AC28: a lower-only limit of ZERO is refused (it is not a lowering, it is off); 1 is the smallest accepted', ac28_zeroIsNotALowering);

@@ -197,7 +197,7 @@ export async function ac41_dispatchParsesResultAndResume() {
     assert.equal(recorder[0].env.ADLC_MANIFEST_KEY, undefined, 'fleet never receives the manifest key');
     assert.equal(recorder[0].env.GIT_CONFIG_COUNT, '7', 'fleet inherits the bound git overlay');
     assert.equal(recorder[0].cwd, dir);
-    assert.ok(existsSync(join(dir, '.adlc', 'autopilot-runs', 'run-9.json')), "fleet's --json result is stored under .adlc/autopilot-runs/<runId>.json");
+    assert.ok(existsSync(join(dir, '.adlc', 'autopilot-runs', 'fleet-run-9.json')), "fleet's --json result is stored under .adlc/autopilot-runs/fleet-<runId>.json");
     const refused = fakeSpawnImpl({ [ctx.pinned.adlc]: () => ({ stdout: '', stderr: 'cannot resume: integration branch missing\n', status: 1 }) });
     const r2 = await dispatchFleet({ ctx: { ...c, spawn: createSpawner({ spawnImpl: refused.spawnImpl }) }, issue: 7, argv: argvFor(c), cwd: dir });
     assert.equal(r2.resumeRefused, true); assert.match(r2.detail, /cannot resume/); assert.equal(r2.parsed, null);

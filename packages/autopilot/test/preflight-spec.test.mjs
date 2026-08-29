@@ -200,3 +200,16 @@ export async function ac83_unsignedApprovalIsRefused() {
   } finally { ok.cleanup(); }
 }
 test('AC83: the newest spec-approval record must itself be SIGNED — an unsigned record is spec-approval-unsigned even when the chain verifies as a legacy prefix; the signed fixture passes', ac83_unsignedApprovalIsRefused);
+
+export async function ac80_unreadableBaselineIsNotAbsence() {
+  const fx = makeFixture();
+  try {
+    const ctx = buildCtx(fx);
+    await phaseA(ctx);
+    const oid = await resolveBaseline(ctx);
+    const realLocal = ctx.git.local.bind(ctx.git);
+    ctx.git.local = async (cwd, args, o) => (args[0] === 'show' ? { status: 128, stderr: 'fatal: unable to read tree (I/O error)', stdout: '', truncated: false } : realLocal(cwd, args, o));
+    assert.equal(await codeOf(() => checkSpecApproval({ ctx, oid, ticketId: BUILD_TICKET })), 'baseline-unreadable', 'a git failure that is not "missing" never reads as an absent spec (stale)');
+  } finally { fx.cleanup(); }
+}
+test('AC80: a baseline read that FAILS for a reason other than absence (an I/O error) is baseline-unreadable, never treated as a missing spec', ac80_unreadableBaselineIsNotAbsence);

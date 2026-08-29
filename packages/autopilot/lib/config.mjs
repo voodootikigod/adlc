@@ -12,7 +12,9 @@ import { validateAgainst } from './schema-lite.mjs';
 import { validateModel, validateRepoSpec, InputError } from './input.mjs';
 import { active, registerSeams } from './mutations.mjs';
 
-registerSeams(['config.skipTicketSyncSchema']);
+registerSeams(['config.skipTicketSyncSchema',
+  'config.acceptZeroLimits',
+]);
 
 export const DISPATCH_APPROVAL_MODES = Object.freeze(['owner-or-label', 'label-only', 'trusted-authors']);
 export const ALLOWED_WORKSPACE_DEPS = Object.freeze(['@adlc/core', '@adlc/fleet', '@adlc/tickets']);
@@ -155,6 +157,8 @@ export function applyLowering(autopilot, flags = {}) {
     const v = flags[key];
     if (v === undefined || v === null) continue;
     const n = int(key)(v);
+    // A safety limit of zero is not a lowering, it is off (codex r9 A3). Seam `config.acceptZeroLimits`.
+    if (n < 1 && !active('config.acceptZeroLimits')) throw new InputError(key, 'must be at least 1');
     // Mutation seam `config.allowRaise`: the CLI may raise a committed budget.
     if (!active('config.allowRaise') && n > autopilot[key]) throw new ConfigError('bad-input:' + key, `${key} may be lowered by the CLI but not raised above the committed ${autopilot[key]} (got ${n})`);
     out[key] = n;

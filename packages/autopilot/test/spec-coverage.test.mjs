@@ -207,7 +207,7 @@ export async function ac114_everyRegisteredFunctionExecutes() {
   clearAll();
   const modules = new Map();
   let executed = 0;
-  const failures = [];
+  const failures = []; const hostSkippedHere = [];
   const entries = Object.entries(REGISTRY).flatMap(([n, list]) => list.filter((e) => !e.manual).map((e) => ({ n: Number(n), ...e })));
   for (const e of entries) {
     if (e.file === 'spec-coverage.test.mjs' && ['ac114_everyRegisteredFunctionExecutes', 'ac121_everyCriterionHasABitingFixture'].includes(e.fn)) { console.log(`skipped loudly: AC${e.n} ${e.fn} is this pass itself`); executed++; continue; }
@@ -215,11 +215,13 @@ export async function ac114_everyRegisteredFunctionExecutes() {
     const mod = modules.get(e.file);
     if (typeof mod[e.fn] !== 'function') { failures.push(`AC${e.n}: ${e.file} does not export ${e.fn}`); continue; }
     const why = hostSkip(e);
-    if (why) { console.log(`skipped loudly: AC${e.n} ${e.fn} — ${why}`); executed++; continue; }
+    if (why) { console.log(`skipped loudly: AC${e.n} ${e.fn} — ${why}`); hostSkippedHere.push(e.fn); continue; }
     try { await mod[e.fn](); executed++; } catch (err) { failures.push(`AC${e.n}: ${e.fn} failed without a fixture: ${err.message.split('\n')[0]}`); }
   }
   assert.deepEqual(failures, [], failures.join('\n'));
-  assert.equal(executed, entries.length, 'every registered function ran');
+  if (hostSkippedHere.length) console.log(`host-skipped (not executed): ${hostSkippedHere.join(', ')}`);
+  assert.equal(executed + hostSkippedHere.length, entries.length, 'every registered function ran or was host-skipped loudly');
+  assert.ok(executed >= entries.length - hostSkippedHere.length, 'host-skips are reported, never counted as executed');
   assert.ok(knownSeams().length > 0);
 }
 test('AC114: every registered function is EXECUTED here (spy count equals registry size) and passes without a fixture', fullOnly, ac114_everyRegisteredFunctionExecutes);

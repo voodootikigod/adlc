@@ -197,7 +197,7 @@ test('seam check: the AC34/55/98/100/140/76 tests fail under their registered se
 export async function ac76_binaryBlobsFailClosed() {
   const f = fixture();
   try {
-    const blob = Buffer.concat([Buffer.from('PNG'), Buffer.from('AKIA' + 'ABCDEFGHIJKLMNOP'), Buffer.alloc(64, 0)]);
+    const blob = Buffer.concat([Buffer.from('PNG\u0001\u0002'), Buffer.from('AKIA' + 'ABCDEFGHIJKLMNOP'), Buffer.alloc(64, 0)]);
     const { writeFileSync: wf, mkdirSync: mk } = await import('node:fs');
     const { join: j } = await import('node:path');
     f.reset(); mk(j(f.wt, 'packages', 'foo', 'lib'), { recursive: true }); wf(j(f.wt, 'packages', 'foo', 'lib', 'blob.bin'), blob);
