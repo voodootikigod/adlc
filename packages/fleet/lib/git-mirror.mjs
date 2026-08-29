@@ -15,7 +15,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, realpathSync, readdirSync, lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve, join } from 'node:path';
+import { isAbsolute, resolve, join, dirname } from 'node:path';
 
 export const FETCHED_REF_PREFIX = 'refs/fleet/fetched/';
 
@@ -133,6 +133,14 @@ export function assertWorktreeLink({ path, gitDirRoot } = {}) {
   let real; let rootReal;
   try { real = realpathSync(target); rootReal = realpathSync(join(gitDirRoot, 'worktrees')); } catch (e) { throw new Error(`worktree ${path}: gitdir ${target} is unreadable (${errorText(e)})`); }
   if (real !== rootReal && !real.startsWith(rootReal + '/')) throw new Error(`worktree ${path}: .git points at ${real}, outside ${rootReal}; refusing to run git there`);
+  // A SIBLING worktree's gitdir is also under the root: the gitdir's own back-pointer (`<gitdir>/gitdir`
+  // names `<worktree>/.git`) must resolve to THIS worktree (codex r18 #2).
+  let back = null;
+  try { back = readFileSync(join(real, 'gitdir'), 'utf8').trim(); } catch { back = null; }
+  if (!back) throw new Error(`worktree ${path}: gitdir ${real} has no back-pointer; refusing to run git there`);
+  let backReal = null; let pathReal = null;
+  try { backReal = realpathSync(dirname(back)); pathReal = realpathSync(path); } catch { backReal = null; }
+  if (backReal === null || backReal !== pathReal) throw new Error(`worktree ${path}: .git points at ${real}, which belongs to ${back}; refusing to run git there`);
   return { gitdir: real };
 }
 

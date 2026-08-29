@@ -168,6 +168,9 @@ export async function advanceTicket(ticket, effects, {
       return paused('external wall clock expired during the strike', REASON_CODES.WALL_CLOCK);
     }
     if (build.exitCode !== 0 || build.timedOut) {
+      // The wall clock outranks the verdict of the strike: a run whose deadline passed while a strike
+      // failed is PAUSED (resumable), never charged toward the strike cap (codex r18 #4).
+      if (expired()) return paused('external wall clock expired during a failed strike', REASON_CODES.WALL_CLOCK);
       deadEnds.push(fence('BUILD', build.output, DEAD_END_MAX_CHARS));
       if (canRetry()) {
         const flailed = await consultFlail();
@@ -186,7 +189,7 @@ export async function advanceTicket(ticket, effects, {
     const gate = await effects.gate({ ticket, remainingMs: remainingMs() });
     if (!gate.ok) {
       // A gate cut short by the wall clock is not the worker's failure: pause, never a strike/flail (codex r5).
-      if (gate.timedOut && expired()) return paused('external wall clock expired during the gate', REASON_CODES.WALL_CLOCK);
+      if (expired()) return paused('external wall clock expired during the gate', REASON_CODES.WALL_CLOCK);
       deadEnds.push(fence('GATE', gate.output, DEAD_END_MAX_CHARS));
       if (canRetry()) {
         const flailed = await consultFlail();

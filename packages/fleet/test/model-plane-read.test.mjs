@@ -19,12 +19,14 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 import { detectBackend } from '../lib/sandbox.mjs';
+import { probeBwrap } from './helpers/bwrap-probe.mjs';
 import {
   SYSTEM_ROOTS, classifyReadOnlyEntry, checkReadSetInvariant, buildBoundedModelPlaneArgv, BoundedModelSandbox,
 } from '../lib/bounded-model-plane.mjs';
 
 const backend = detectBackend();
-const bwrapSkip = backend?.name === 'bubblewrap' ? false : `bounded model plane needs bubblewrap; host has ${backend?.name ?? 'no sandbox backend'}`;
+const probe = probeBwrap();
+const bwrapSkip = probe.ok ? false : `bounded model plane needs a USABLE bubblewrap; ${probe.reason}`;
 const SH = '/usr/bin/sh';
 
 const scratch = (prefix) => realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));

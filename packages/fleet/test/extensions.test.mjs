@@ -14,6 +14,7 @@ import { advanceTicket } from '../lib/scheduler.mjs';
 import { BRIDGE_PATH, mirrorCreateWorktree, mirrorFetchBack } from '../lib/extensions.mjs';
 import { assertBareMirror, assertMirrorConfigPristine } from '../lib/git-mirror.mjs';
 import { detectBackend } from '../lib/sandbox.mjs';
+import { probeBwrap } from './helpers/bwrap-probe.mjs';
 import { BoundedModelSandbox } from '../lib/bounded-model-plane.mjs';
 import { findInner, unwrapAll } from './helpers/worker-calls.mjs';
 
@@ -284,7 +285,8 @@ test('mirrorCreateWorktree on a second run resets fleet/<id> to the new cut tip 
 
 // ── AC 78: inside the REAL sandbox the worker can `git commit` and the object reaches the mirror ──
 const backend = detectBackend();
-test('AC78 (real bwrap): a worker commit inside the bounded sandbox lands in the mirror and the host .git is invisible', { skip: backend?.name === 'bubblewrap' ? false : 'no bubblewrap on this host' }, async () => {
+const bwrapProbe = probeBwrap();
+test('AC78 (real bwrap): a worker commit inside the bounded sandbox lands in the mirror and the host .git is invisible', { skip: bwrapProbe.ok ? false : bwrapProbe.reason }, async () => {
   const { root, repo, mirror } = mirrorFixture();
   const home = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'fleet-home-')));
   try {
@@ -482,5 +484,19 @@ test('assertWorktreeLink: a mirror worktree whose .git link was rewritten to ano
     assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /missing/, 'a missing .git is refused (git would walk up to an enclosing repository)');
     writeFileSync(link, genuine);
     assert.ok(assertWorktreeLink({ path: a.path, gitDirRoot: mirror }));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('assertWorktreeLink refuses a .git link redirected to a SIBLING worktree\'s gitdir (same root, different back-pointer)', async () => {
+  const { assertWorktreeLink } = await import('../lib/git-mirror.mjs');
+  const { readFileSync: rf } = await import('node:fs');
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const b = mirrorCreateWorktree({ repo, ticketId: 'T2', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const bLink = rf(join(b.path, '.git'), 'utf8');
+    writeFileSync(join(a.path, '.git'), bLink);
+    assert.throws(() => assertWorktreeLink({ path: a.path, gitDirRoot: mirror }), /belongs to/, "A's link now names B's gitdir (under the same root): refused");
+    assert.ok(assertWorktreeLink({ path: b.path, gitDirRoot: mirror }), 'B itself is fine');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -154,7 +154,7 @@ function dryRunJson(repo, envOverrides = {}, extraArgs = []) {
 
 /** Under --json a refusal still yields ONE document — but never a success one: exitCode ≠ 0, reason dispatch-refused, nothing merged (fleet-ext, codex r10). */
 function assertRefusalDocument(json, message = 'a refusal document, never a success document') {
-  if (json === null) return; // an older CLI that printed nothing is still "no success document"
+  assert.ok(json && typeof json === 'object', `${message}: a refusal DOCUMENT is printed under --json`);
   assert.notEqual(json.exitCode, 0, message);
   assert.equal(json.reason, 'dispatch-refused', message);
   assert.equal(json.merged, 0, message);

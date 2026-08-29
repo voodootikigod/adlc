@@ -230,3 +230,17 @@ test('a flail consultation that consumes the budget → paused wall-clock, never
   const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 1000, now: () => t });
   assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
 });
+
+test('a FAILED strike (exit≠0, not timed out) after the deadline passed pauses with wall-clock — the expiry outranks the strike verdict and never counts toward the cap', async () => {
+  let t = 0;
+  const e = effects({ dispatch: () => { t = 5000; return { exitCode: 1, output: 'boom', timedOut: false }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 1, deadline: 4000, now: () => t });
+  assert.equal(r.state, 'paused', JSON.stringify(r));
+  assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK, 'not strikes-exhausted');
+  assert.equal(e.calls.dispatch.length, 1);
+  // A failed GATE after the deadline pauses too.
+  let t2 = 0;
+  const e2 = effects({ gate: () => { t2 = 5000; return { ok: false, output: 'gate red', timedOut: false }; } });
+  const r2 = await advanceTicket(ticket, e2, { maxStrikes: 1, deadline: 4000, now: () => t2 });
+  assert.equal(r2.state, 'paused'); assert.equal(r2.reasonCode, REASON_CODES.WALL_CLOCK);
+});

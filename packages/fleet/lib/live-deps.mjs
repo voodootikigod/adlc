@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
-import { assertWorktreeLink, assertMirrorConfigPristine, HOST_SAFE_GIT_FLAGS } from './git-mirror.mjs';
+import { assertWorktreeLink, assertMirrorConfigPristine, HOST_SAFE_GIT_FLAGS, gitCommonDir } from './git-mirror.mjs';
 import { buildBoundedModelSandbox, bridgeArgv, mirrorCreateWorktree, mirrorFetchBack, mirrorCleanup, policyFromConfig } from './extensions.mjs';
 
 // Ignore fleet working state WITHOUT committing to the base checkout
@@ -536,7 +536,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           // The host is about to run git INSIDE the worker's worktree (codex r15 #1): the worktree's
           // `.git` link must still point into the expected git directory, the mirror (if any) must be
           // pristine, and the commands carry the host-safe overrides. A failure is a strike, never a run.
-          if (existsSync(worktree)) assertWorktreeLink({ path: worktree, gitDirRoot: mirrorMode ? config.modelPlaneGitMirror : join(repo, '.git') });
+          // The git-dir root is the repository's COMMON dir (a linked-worktree caller has a `.git` FILE), or the mirror.
+          if (existsSync(worktree)) assertWorktreeLink({ path: worktree, gitDirRoot: mirrorMode ? config.modelPlaneGitMirror : gitCommonDir(repo, io.git) });
           if (mirrorMode) assertMirrorConfigPristine({ mirror: config.modelPlaneGitMirror, gitAt: io.git });
           const hostGit = io.git(worktree);
           worktrees.commitWorker(worktree, ticket.id, (...args) => hostGit(...HOST_SAFE_GIT_FLAGS, ...args));

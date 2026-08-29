@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorktree, INTEGRATION_WORKTREE } from '../lib/worktrees.mjs';
+import { writeFileSync as require_write } from 'node:fs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'fleet.mjs');
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
@@ -65,5 +66,24 @@ test('createWorktree rooted at a linked worktree cuts the nested worktree under 
     assert.equal(wt.startSha, git(linked, 'rev-parse', 'issue-7'), 'cut from the linked branch tip, which carries the extra ticket');
     assert.match(git(wt.path, 'rev-parse', '--git-common-dir'), /\/main\/\.git$/, 'shares the repository database (a linked worktree of the same repo)');
     assert.equal(join(linked, INTEGRATION_WORKTREE), join(linked, '.worktrees', 'fleet-integration'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the host-side link check works when fleet is invoked from a LINKED worktree: the git-dir root is the common dir (a linked caller has a .git FILE), so a worker worktree cut there passes and commits can proceed', async () => {
+  const { assertWorktreeLink, gitCommonDir } = await import('../lib/git-mirror.mjs');
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const root = mkdtempSync(join(tmpdir(), 'fleet-linked-link-'));
+  const g = (cwd, ...args) => { const r = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
+  try {
+    const main = join(root, 'main'); g(root, 'init', '-q', '-b', 'main', main); require_write(join(main, 'a.txt'), 'a\n'); g(main, 'add', '-A'); g(main, 'commit', '-q', '-m', 'base');
+    const linked = join(root, 'linked'); g(main, 'worktree', 'add', '-q', '-b', 'issue-9', linked);
+    const wt = createWorktree(linked, 'T9', { integrationBranch: 'issue-9' });
+    const gitAt = (dir) => (...args) => g(dir, ...args);
+    assert.throws(() => assertWorktreeLink({ path: wt.path, gitDirRoot: join(linked, '.git') }), /unreadable|outside|missing/, 'the naive <caller>/.git root cannot work from a linked worktree');
+    const common = gitCommonDir(linked, gitAt);
+    assert.ok(assertWorktreeLink({ path: wt.path, gitDirRoot: common }).gitdir.startsWith(common), 'the common-dir root accepts the nested worktree');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
