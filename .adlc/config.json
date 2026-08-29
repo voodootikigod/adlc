@@ -1,4 +1,7 @@
 {
+  "version": 1,
+  "securityMode": "unsigned-fallback",
+  "acknowledgedNewRailBypass": true,
   "fleet": {
     "gate": { "build": "npm run build --workspaces --if-present", "test": "npm test" },
     "init": "npm ci --ignore-scripts",
