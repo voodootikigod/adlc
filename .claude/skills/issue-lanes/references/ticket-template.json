@@ -1,0 +1,16 @@
+{
+  "title": "<pkg>: <imperative one-line statement of the fixed behaviour>",
+  "body": "Source: GitHub issue #<n> (<labels>). Re-verified on main @ <sha>: <file>:<line> <the exact code and why it is wrong>. <the repro from the issue, one or two lines, with the observed exit code>.\n\nCONTEXT FOR THE BUILDER. Package `packages/<pkg>`: <bin + lib module map, one line each>. Tests: `npm test -w packages/<pkg>` from the worktree root. <fixture helpers worth copying, which existing tests are NOT rails and may change>.\n\nNORMATIVE BEHAVIOUR.\n1. <the decision: which condition, ONE exported pure predicate/validator in lib used by every call site, exact message text, exit code (0 pass / 1 operational / 2 gate fail)>.\n2. <CLI surface: text vs --json output, nothing on stdout on operational error if that is the rule, no manifest record on the new outcome>.\n3. <regression guard: what must keep behaving exactly as today>.\n4. Documentation: update `packages/<pkg>/README.md` and make the SAME edit by hand in `docs/tools/<pkg>.md` and `apps/docs/content/docs/toolkit/<pkg>.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 <observable behaviour>. verify: `node --test packages/<pkg>/test/<new-test>.test.mjs`\n- AC2 <…>. verify: `node --test packages/<pkg>/test/<new-test>.test.mjs`\n- AC3 <library-level guard>. verify: `node --test packages/<pkg>/test/<new-test>.test.mjs`\n- AC4 Existing suite green (if an existing test pins the bug, rewrite it and say so in the PR body). verify: `npm test -w packages/<pkg>`\n- AC5 Docs updated in all three places. verify: `grep -c \"<phrase>\" packages/<pkg>/README.md docs/tools/<pkg>.md apps/docs/content/docs/toolkit/<pkg>.mdx` (each >= 1)\n- AC6 Mutation gate green on the branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0 (also run `--max 80` once locally before review)\n\nOUT OF SCOPE: <sibling issues in the same package that must not be folded in>.\n\nPROCESS (ADLC). Work only in your assigned worktree. P3: the rails on this ticket are frozen — if the fix appears to require editing a rail path, STOP and report; never set ADLC_RAILS_BYPASS. P4: TDD — write test/<new-test>.test.mjs first, run it RED, then implement. P5 before opening the PR: `npm test -w packages/<pkg>`, `node scripts/mutation-gate.mjs origin/main --max 12` (exit 0), then `npx adversarial-review --base origin/main --provider codex --timeout 600` and loop review→fix→re-review until exit 0 with ZERO findings and no warning lines (read findings[] every round; exit 0 alone is not the signal). Do not add gate-manifest entries. Keep the diff to packages/<pkg>/**, the three docs files, and this ticket's shard. PR title `fix(<pkg>): ...`, body must contain `Closes #<n>`.",
+  "category": "bugfix",
+  "duration": 1,
+  "scope": [
+    "packages/<pkg>/**",
+    "docs/tools/<pkg>.md",
+    "apps/docs/content/docs/toolkit/<pkg>.mdx"
+  ],
+  "rails": [
+    "packages/<pkg>/lib/<untouched-sibling>.mjs",
+    "packages/<pkg>/test/<test-that-pins-other-behaviour>.test.mjs"
+  ],
+  "edges": []
+}
