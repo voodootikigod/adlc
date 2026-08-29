@@ -17,7 +17,8 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'status.noLockForOrdinal',   // incrementStarts no longer requires the lock
-  'status.skipQuotaAppend',    // recordQuota drops the per-step entry
+  'status.skipQuotaAppend',    // recordQuota drops the per-step entry,
+  'status.noFileMutex',
 ]);
 
 /** A cross-process mutex for the status file: an atomic `mkdir`, spun with short sleeps, stale after 30 s. */
@@ -67,7 +68,10 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
     return writeAtomicJson(paths.statusFile, redactor ? redactRecord(stamped, STATUS_FREE_TEXT_FIELDS, redactor) : stamped);
   };
   /** Shallow merge + atomic write. Returns the written document. */
-  const write = (patch) => persist({ ...read(), ...patch });
+  // Every read-modify-write of the file is serialized across processes (the helper's ordinal bump
+  // and the orchestrator's writes interleave) — codex r8 B2. Seam `status.noFileMutex`.
+  const locked = (fn) => (active('status.noFileMutex') ? fn() : withStatusMutex(paths.statusFile, fn));
+  const write = (patch) => locked(() => persist({ ...read(), ...patch }));
   const requireLock = (what) => {
     if (active('status.noLockForOrdinal')) return;
     // `lockToken` may be a getter: the store is built before the lock is acquired.
@@ -79,7 +83,7 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
     requireLock('incrementStarts');
     // The read-modify-write is serialized ACROSS PROCESSES (the pre-strike helpers run concurrently
     // under the orchestrator's lock, which is not a mutex for them): a mkdir mutex next to the file.
-    return withStatusMutex(paths.statusFile, () => {
+    return locked(() => {
     const cur = read();
       const next = (Number.isInteger(cur.startsThisIteration) ? cur.startsThisIteration : 0) + 1;
       persist({ ...cur, startsThisIteration: next });

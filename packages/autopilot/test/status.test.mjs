@@ -120,3 +120,42 @@ export async function ac87_ordinalIsBumpedFromSeparateProcesses() {
   } finally { cleanup(root); }
 }
 test('AC87: the start ordinal is bumped by concurrent REAL processes over the same file and lock — every process gets a distinct ordinal (1..N) and the file holds N', { timeout: 60_000 }, ac87_ordinalIsBumpedFromSeparateProcesses);
+
+export async function ac87_orchestratorWritesNeverClobberHelperOrdinals() {
+  // The orchestrator's own writes (pinTools, recordQuota, write) interleave with helper increments: no ordinal is lost.
+  const { spawn } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const root = scratch('ap-status-clobber');
+  try {
+    const paths = autopilotPaths(root); mkdirSync(paths.runsDir, { recursive: true });
+    const probes = { pidAlive: () => true, pidStartTimeOf: () => '1' };
+    const lock = acquireLock(paths.adlc, { self: { pid: process.pid, pidStartTime: '1' }, probes });
+    const store = createStatusStore({ paths, lockToken: lock.token, redactor: createRedactor({}) });
+    store.resetStarts('it-c');
+    const mods = ['status', 'paths', 'redact', 'mutations'].map((m) => fileURLToPath(new URL(`../lib/${m}.mjs`, import.meta.url)));
+    const { activeSeams } = await import('../lib/mutations.mjs');
+    const script = `const { createStatusStore } = await import(${JSON.stringify(mods[0])}); const { autopilotPaths } = await import(${JSON.stringify(mods[1])}); const { createRedactor } = await import(${JSON.stringify(mods[2])});
+      const { enable } = await import(${JSON.stringify(mods[3])}); for (const seam of ${JSON.stringify(activeSeams())}) enable(seam);
+      const s = createStatusStore({ paths: autopilotPaths(${JSON.stringify(root)}), lockToken: ${JSON.stringify(lock.token)}, redactor: createRedactor({}) });
+      let last = 0; for (let i = 0; i < 20; i++) last = s.incrementStarts(); process.stdout.write(String(last));`;
+    const child = new Promise((resolve, reject) => { const c = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; let err = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; }); c.on('exit', (code) => (code === 0 ? resolve(Number(out.trim())) : reject(new Error(err.slice(0, 300))))); });
+    // Meanwhile the orchestrator writes other fields 200 times.
+    for (let i = 0; i < 200; i++) { store.write({ lastError: `tick ${i}` }); await new Promise((r) => setImmediate(r)); }
+    const last = await child;
+    assert.equal(last, 20, 'the helper counted 20 increments');
+    assert.equal(store.read().startsThisIteration, 20, 'none of the 20 increments was lost to an orchestrator write');
+    assert.equal(store.read().lastError, 'tick 199', 'and the orchestrator\'s last write is there too');
+    // Deterministic clause: while THIS process holds the file mutex, another process's write BLOCKS until it is released.
+    const { mkdirSync: mk, rmSync: rm } = await import('node:fs');
+    const mutexDir = `${paths.statusFile}.mutex`; mk(mutexDir);
+    const writer = `const { createStatusStore } = await import(${JSON.stringify(mods[0])}); const { autopilotPaths } = await import(${JSON.stringify(mods[1])}); const { createRedactor } = await import(${JSON.stringify(mods[2])});
+      const { enable } = await import(${JSON.stringify(mods[3])}); for (const seam of ${JSON.stringify(activeSeams())}) enable(seam);
+      const t0 = Date.now(); const s = createStatusStore({ paths: autopilotPaths(${JSON.stringify(root)}), lockToken: ${JSON.stringify(lock.token)}, redactor: createRedactor({}) }); s.write({ lastError: 'from child' }); process.stdout.write(String(Date.now() - t0));`;
+    const elapsedP = new Promise((resolve, reject) => { const c = spawn(process.execPath, ['--input-type=module', '-e', writer], { stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; let err = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; }); c.on('exit', (code) => (code === 0 ? resolve(Number(out.trim())) : reject(new Error(err.slice(0, 300))))); });
+    await new Promise((r) => setTimeout(r, 700)); rm(mutexDir, { recursive: true, force: true });
+    const elapsed = await elapsedP;
+    assert.ok(elapsed >= 500, `the child's write waited for the held mutex (${elapsed} ms)`);
+    assert.equal(store.read().lastError, 'from child');
+  } finally { cleanup(root); }
+}
+test('AC87: the orchestrator\'s status writes and a helper process\'s ordinal increments interleave without losing an update (every persist is under the file mutex)', { timeout: 60_000 }, ac87_orchestratorWritesNeverClobberHelperOrdinals);

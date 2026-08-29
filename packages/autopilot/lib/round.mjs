@@ -267,7 +267,10 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       if (!again.ok) return terminal(await mismatch(`actual-diff check failed before push: ${again.code}`));
     }
     const pushed = await deps.push.verifyPushVerify({ ctx, issue: n, record: record(), attestedHead: attested.attestedHead });
-    if (!pushed.ok) return terminal(pushed.state === 'orphan' ? failed(pushed.code, pushed.detail, 'orphan') : await mismatch(pushed.detail));
+    if (!pushed.ok) {
+      if (pushed.transient) return terminal(failed('push-failed', pushed.detail));         // recovery retries from the push intent
+      return terminal(pushed.state === 'orphan' ? failed(pushed.code, pushed.detail, 'orphan') : await mismatch(pushed.detail));
+    }
     let pr;
     try {
       pr = await deps.push.upsertPr({

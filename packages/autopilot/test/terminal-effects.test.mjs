@@ -138,3 +138,19 @@ export async function ac4_labelOnGithubAbsentFromRecord() {
   } finally { h.cleanup(); }
 }
 test('AC4: a label already present on GitHub but absent from the record yields zero --add-label calls', ac4_labelOnGithubAbsentFromRecord);
+
+export async function ac4_prCommentPostIsNeverRetriedBlind() {
+  // gh fails AFTER the PR comment landed: exactly one POST; the next reconciliation finds the sentinel.
+  const h = harness();
+  try {
+    const { ctx, gh } = h;
+    ctx.records.save({ issue: 7, state: 'ci-red', effects: {} });
+    const sentinel = '<!-- adlc-autopilot:ci-red ' + 'd'.repeat(64) + ' -->';
+    let posts = 0;
+    gh.failWhen((a) => { if (isCommentCall(a)) { posts++; return true; } return false; });
+    const args = { ctx, outcome: 'ci-red', target: { kind: 'pr', number: 9 }, sentinel, body: 'red', label: 'adlc:autopilot-ci-red' };
+    const r1 = await applyTerminalEffects({ ...args, record: ctx.records.load(7) });
+    assert.equal(r1.commentPosted, false); assert.equal(posts, 1, 'the failing POST ran exactly once (no blind retry)');
+  } finally { h.cleanup(); }
+}
+test('AC4: a PR terminal-comment POST is never retried blind — a gh failure after the POST is one attempt, the sentinel search is the retry', ac4_prCommentPostIsNeverRetriedBlind);

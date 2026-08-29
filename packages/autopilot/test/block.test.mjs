@@ -57,3 +57,13 @@ export async function ac32_blockGrammarFailsClosed() {
   });
 }
 test('AC32: every ambiguity (duplicate/unbalanced sentinels, garbled JSON, unsupported version, invalid field) fails closed with line-named errors and no block', ac32_blockGrammarFailsClosed);
+
+export async function ac3_onlyTheSupportedBlockVersionIsTrusted() {
+  const { parseBlock, SUPPORTED_BLOCK_VERSION } = await import('../lib/block.mjs');
+  assert.equal(parseBlock(body(FIELDS, `v=${SUPPORTED_BLOCK_VERSION}`)).ok, true);
+  const older = parseBlock(body(FIELDS, 'v=0'));
+  assert.equal(older.ok, false); assert.ok(older.errors.some((e) => /not supported/.test(e)), JSON.stringify(older.errors));
+  const newer = parseBlock(body(FIELDS, `v=${SUPPORTED_BLOCK_VERSION + 1}`));
+  assert.equal(newer.ok, false);
+}
+test('AC3: only the supported trusted-block version is accepted — an older (v=0) or newer block is refused, never treated as trusted input', ac3_onlyTheSupportedBlockVersionIsTrusted);

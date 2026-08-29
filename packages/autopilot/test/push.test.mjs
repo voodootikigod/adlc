@@ -131,3 +131,23 @@ export async function ac144_pushSourceIsTheAttestedOid() {
   } finally { cleanup(root); cleanup(bareDir); }
 }
 test('AC144: real repos — the push argv is --git-dir=<NET_GIT> push --force-with-lease=… <pushUrl> <attestedHead>:refs/heads/…; NET_GIT has no refs/heads before or after; the bare branch equals attestedHead; moving ISSUE_WT does not change what is pushed', ac144_pushSourceIsTheAttestedOid);
+
+export async function ac36_transientPushFailureIsNotAQuarantine() {
+  const root = scratch('ap-push-transient');
+  try {
+    const g = fakeGit();
+    const ctx = buildCtx({ repoRoot: root, handlers: { [FAKE.git]: g.handler, [FAKE.gh]: () => ({ stdout: '[]' }) }, observations: { [`branch.${BRANCH}.adlcAutopilotToken`]: TOKEN } });
+    ctx.records.save(attestedRecord());
+    g.st.pushStatus = 128; g.st.pushStderr = 'ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.';
+    const r = await verifyPushVerify({ ctx, issue: 7, record: ctx.records.load(7), attestedHead: OID.b });
+    assert.equal(r.ok, false); assert.equal(r.code, 'push-failed'); assert.equal(r.transient, true);
+    assert.equal(ctx.records.load(7).state, 'attested', 'a transient transport failure keeps the run attested (recovery retries the push), never oid-mismatch');
+    assert.equal(g.st.pushes.length, 1, 'one attempt here; the retry is recovery\'s');
+    // A lease rejection is still the quarantine.
+    ctx.records.save(attestedRecord()); g.st.pushes.length = 0;
+    g.st.pushStatus = 1; g.st.pushStderr = ' ! [rejected] adlc/autopilot/issue-7 -> adlc/autopilot/issue-7 (stale info)';
+    const lease = await verifyPushVerify({ ctx, issue: 7, record: ctx.records.load(7), attestedHead: OID.b });
+    assert.equal(lease.ok, false); assert.equal(lease.code, 'oid-mismatch'); assert.equal(ctx.records.load(7).state, 'oid-mismatch');
+  } finally { cleanup(root); }
+}
+test('AC36: a TRANSIENT push failure (name resolution, connection, ssh handshake) is a failed round the recovery retries — never an oid-mismatch quarantine; a lease rejection still is', ac36_transientPushFailureIsNotAQuarantine);

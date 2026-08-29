@@ -25,7 +25,8 @@ registerSeams([
   'push.alwaysCreate',             // the upsert never edits an existing PR
   'push.useOriginName',            // the push names `origin` instead of the pinned URL
   'push.sourceIsBranchName',       // the push source is refs/heads/<b> instead of the attested OID
-  'push.skipRemoteUrlCheck',       // the observed remote.origin.url is not re-checked before the push
+  'push.skipRemoteUrlCheck',       // the observed remote.origin.url is not re-checked before the push,
+  'push.quarantineAnyFailure',
 ]);
 
 export class PushError extends Error {
@@ -39,6 +40,9 @@ export function leaseFor(branch, expectedRemoteOid) {
 }
 
 /** First column of `ls-remote <url> refs/heads/<branch>` through NET_GIT, or null when absent. */
+/** Transport failures git reports for a push that never reached the ref-update: retryable, never a lease verdict. */
+export const TRANSIENT_PUSH_RE = /Could not resolve host|Connection timed out|Connection refused|Network is unreachable|unable to access|ssh: connect to host|kex_exchange_identification|Connection reset|early EOF|RPC failed|The remote end hung up unexpectedly|Temporary failure in name resolution/i;
+
 export async function remoteHead(ctx, url, branch) {
   const r = await ctx.git.net(['ls-remote', url, `refs/heads/${branch}`]);
   if (r.status !== 0) throw new PushError('ls-remote-failed', r.stderr.trim().slice(0, 300) || `exit ${r.status}`, { exitCode: 1 });
@@ -96,6 +100,14 @@ export async function verifyPushVerify({ ctx, issue, record, attestedHead }) {
   ctx.records.update(n, { state: 'attested', attestedHead: oid, pushIntent: { oid, expectedRemoteOid, at: iso(ctx) } });
   const push = await pushAttested({ ctx, issue: n, attestedHead: oid, expectedRemoteOid });
   if (!push.ok) {
+    // A known-transient transport failure (name resolution, connection, ssh handshake) is a failed
+    // round that recovery retries from the recorded push intent; anything else — a lease rejection
+    // or an unknown refusal — is the quarantine (codex r8 B3). Seam `push.quarantineAnyFailure`.
+    const err = String(push.result.stderr ?? '');
+    if (!active('push.quarantineAnyFailure') && TRANSIENT_PUSH_RE.test(err)) {
+      ctx.records.update(n, { lastError: `push-failed: ${err.trim().slice(0, 200)}` });
+      return { ok: false, code: 'push-failed', state: 'attested', transient: true, detail: `push failed (transient): ${err.trim().slice(0, 300)}`, argv: push.argv };
+    }
     return quarantine('oid-mismatch', `push refused (lease ${expectedRemoteOid ?? 'absent'}): ${push.result.stderr.trim().slice(0, 300)}`, { leaseFailed: true, expected: expectedRemoteOid, argv: push.argv });
   }
   if (!active('push.skipPostPushVerify')) {

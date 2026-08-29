@@ -13,7 +13,7 @@ export function fakeGit({ head = OID.b, clean = true, pushStatus = 0, remote = O
     switch (verb) {
       case 'rev-parse': return { stdout: `${st.head}\n` };
       case 'status': return { stdout: st.clean ? '' : ' M x.js\n' };
-      case 'push': st.pushes.push(args); return st.pushStatus ? { status: st.pushStatus, stderr: `! [rejected] ${BRANCH_7} -> ${BRANCH_7} (stale info)\n` } : { stdout: '' };
+      case 'push': st.pushes.push(args); return st.pushStatus ? { status: st.pushStatus, stderr: st.pushStderr ?? `! [rejected] ${BRANCH_7} -> ${BRANCH_7} (stale info)\n` } : { stdout: '' };
       case 'ls-remote': { st.lsCalls++; const oid = typeof st.remote === 'function' ? st.remote(st.lsCalls) : st.remote; return { stdout: oid ? `${oid}\trefs/heads/${BRANCH_7}\n` : '' }; }
       default: return { stdout: '' };
     }

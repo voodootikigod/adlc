@@ -16,7 +16,9 @@
 
 import { active, registerSeams } from './mutations.mjs';
 
-registerSeams(['block.lenientGrammar']);
+registerSeams(['block.lenientGrammar',
+  'block.acceptOlderVersions',
+]);
 
 export const SUPPORTED_BLOCK_VERSION = 1;
 
@@ -94,6 +96,9 @@ export function parseBlock(rawBody) {
   const keyMatch = attrs.match(/\bkey=(\S+)/);
   if (!vMatch) { errors.push(`'adlc:begin' (line ${lineOf(body, begin.index)}) is missing the required v=<n> version`); return fail(); }
   const version = Number(vMatch[1]);
+  // Only the supported version is trusted input: an older or unknown one is refused too (codex r8 A1).
+  // Mutation seam `block.acceptOlderVersions`: any version up to the supported one is accepted.
+  if (version < SUPPORTED_BLOCK_VERSION && !active('block.acceptOlderVersions')) { errors.push(`block version v=${version} (line ${lineOf(body, begin.index)}) is not supported (only v=${SUPPORTED_BLOCK_VERSION})`); return fail(); }
   if (version > SUPPORTED_BLOCK_VERSION) { errors.push(`block version v=${version} (line ${lineOf(body, begin.index)}) is newer than supported (max ${SUPPORTED_BLOCK_VERSION})`); return fail(); }
   const inner = body.slice(begin.end, end.index);
   const fenced = inner.match(FENCE_RE);

@@ -179,6 +179,16 @@ export async function ac136_readOnlyCommandsReleaseSshMaterial() {
       assert.ok([0, 2].includes(res.exitCode), `${name}: ${JSON.stringify(res.document).slice(0, 200)}`);
       assert.ok(!existsSync(p), `${name} released the dry-run SSH material`);
     }
+    // The FAILING path: phase A stages the material and then throws — it is still released.
+    const pf = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail-')); writeFileSync(join(pf, 'material'), 'fake');
+    const failing = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = pf; throw Object.assign(new Error('gh host mismatch'), { code: 'remote-host-mismatch' }); }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
+    const st = await statusCommand({ ...args, deps: failing });
+    assert.equal(st.document.preflight?.ok, false, 'status reports the phase A failure');
+    assert.ok(!existsSync(pf), 'status released the material although phase A threw');
+    const pf2 = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail2-')); writeFileSync(join(pf2, 'material'), 'fake');
+    const failing2 = { deps: { ...failing.deps, preflight: { ...failing.deps.preflight, phaseA: async (ctx) => { ctx.sshDryRunParent = pf2; throw new Error('boom'); } } } };
+    await assert.rejects(() => selectCommand({ ...args, deps: failing2 }), /boom/);
+    assert.ok(!existsSync(pf2), 'select released the material on its throwing path too');
   } finally { fx.cleanup(); }
 }
 test('AC136: the read-only commands (status/select/triage) release the dry-run SSH material phase A staged, on every exit path', { timeout: 120_000 }, ac136_readOnlyCommandsReleaseSshMaterial);

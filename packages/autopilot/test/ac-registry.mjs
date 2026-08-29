@@ -18,8 +18,10 @@ export const REGISTRY = {
     { fn: 'ac2_productionReaderHasATransport', file: 'quota.test.mjs', seam: 'context.noUsageTransport' },
   ],
   3: [
+    { fn: 'ac3_onlyTheSupportedBlockVersionIsTrusted', file: 'block.test.mjs', seam: 'block.acceptOlderVersions' },
     { fn: 'ac3_openPrsCoverEveryPage', file: 'github.test.mjs', seam: 'github.firstPrPageOnly' },{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
   4: [
+    { fn: 'ac4_prCommentPostIsNeverRetriedBlind', file: 'terminal-effects.test.mjs', seam: 'github.retryComments' },
     { fn: 'ac4_prCommentSearchCoversEveryPage', file: 'github.test.mjs', seam: 'github.paginateAll' },
     { fn: 'ac4_commentPostIsNeverRetriedBlind', file: 'github.test.mjs', seam: 'github.retryComments' },
     { fn: 'ac4_gateFailuresClarifyWithFindingsAndTemplate', file: 'triage.test.mjs', seam: 'triage.acceptRootWildcard' },
@@ -157,6 +159,7 @@ export const REGISTRY = {
   ],
   77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   87: [
+    { fn: 'ac87_orchestratorWritesNeverClobberHelperOrdinals', file: 'status.test.mjs', seam: 'status.noFileMutex' },
     { fn: 'ac87_ordinalIsBumpedFromSeparateProcesses', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
     { fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' },
     { fn: 'ac87_ordinalIsRecordedUnderTheLock', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
@@ -389,6 +392,7 @@ export const REGISTRY = {
     { fn: 'ac30_fullSequence', file: 'sequence.test.mjs', seam: 'run.budgetNotGlobal' },
   ],
   36: [
+    { fn: 'ac36_transientPushFailureIsNotAQuarantine', file: 'push.test.mjs', seam: 'push.quarantineAnyFailure' },
     { fn: 'ac36_completionDiffIsOnlyTheShard', file: 'sequence.test.mjs', seam: 'run.trustCompletionDiff' },
     { fn: 'ac36_verifyThenPushSequence', file: 'sequence.test.mjs', seam: 'push.skipHeadCheck' },
     { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipLease' },

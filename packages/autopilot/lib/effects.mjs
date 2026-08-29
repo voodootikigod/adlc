@@ -41,7 +41,7 @@ async function commentOn(gh, target, sentinel, body, { skipRead = false } = {}) 
     if (await hasComment(gh, n, sentinel)) return { posted: false };
   }
   const args = [target.kind, 'comment', String(n), '--body-file', '-'];
-  const res = await gh.run(args, { stdinBytes: `${sentinel}\n${body}` });
+  const res = await gh.run(args, { stdinBytes: `${sentinel}\n${body}`, retries: active('github.retryComments') });   // never a blind re-POST
   if (res.status !== 0) throw failed(args, res);
   return { posted: true };
 }
