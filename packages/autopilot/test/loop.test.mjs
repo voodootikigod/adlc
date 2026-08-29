@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { iterate, statusCommand } from '../lib/loop.mjs';
+import { iterate, statusCommand, selectCommand, triageCommand, restMsFor } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { FAKE, GIT } from './helpers/recover-fixture.mjs';
@@ -171,6 +171,28 @@ export async function ac136_readOnlyCommandsReleaseSshMaterial() {
     assert.equal(r.document.preflight?.ok, true, JSON.stringify(r.document.preflight));
     assert.ok(!existsSync(parent), 'the temporary SSH material staged by phase A is removed before the command returns');
     assert.equal((await statusCommand(args)).exitCode, 0, 'a second invocation (material already gone) is still clean');
+    // select and triage take the same path (their own phase A on a dry-run context).
+    for (const [name, run] of [['select', (d) => selectCommand({ ...args, deps: d })], ['triage', (d) => triageCommand({ ...args, flags: { issue: fx.issue }, deps: d })]]) {
+      const p = mkdtempSync(join(tmpdir(), `ap-dryrun-ssh-${name}-`)); writeFileSync(join(p, 'material'), 'fake');
+      const d = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = p; }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
+      const res = await run(d);
+      assert.ok([0, 2].includes(res.exitCode), `${name}: ${JSON.stringify(res.document).slice(0, 200)}`);
+      assert.ok(!existsSync(p), `${name} released the dry-run SSH material`);
+    }
   } finally { fx.cleanup(); }
 }
 test('AC136: the read-only commands (status/select/triage) release the dry-run SSH material phase A staged, on every exit path', { timeout: 120_000 }, ac136_readOnlyCommandsReleaseSshMaterial);
+
+export async function ac10_restHonoursCommittedMinutes() {
+  assert.equal(restMsFor({ local: {}, document: { restMinutes: 3 } }), 3 * 60_000, 'the committed autopilot.restMinutes drives the cadence');
+  assert.equal(restMsFor({ local: { restMs: 5000 }, document: { restMinutes: 3 } }), 5000, 'the operator --rest wins');
+  assert.equal(restMsFor({ local: {}, document: {} }), 10 * 60_000, 'no committed value → 10 minutes');
+  // The iteration reports the committed value it read in phase B.
+  const fx = await createSequenceFixture({ config: { restMinutes: 4 } });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.document.restMinutes, 4, 'the iteration document carries the committed cadence');
+    assert.equal(restMsFor({ local: {}, document: it.document }), 4 * 60_000);
+  } finally { fx.cleanup(); }
+}
+test('AC10: the loop cadence is the COMMITTED autopilot.restMinutes (reported by the iteration), lowered by --rest, never a fixed 10 minutes', { timeout: 120_000 }, ac10_restHonoursCommittedMinutes);

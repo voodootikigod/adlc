@@ -148,6 +148,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     const call = state.reviewCalls++;
     reviewerSideEffect?.(cwd, call, fx);
     const v = reviewVerdict(call);
+    if (v && typeof v === 'object') return v;                                   // a raw child result (malformed-output cases)
     if (v === 'unavailable') return { status: 1, stderr: 'reviewer unavailable' };
     return { status: v === 'approve' ? 0 : 2, stdout: JSON.stringify({ verdict: v, findings: v === 'approve' ? [] : [{ severity: 'high', title: 'planted finding', file: 'packages/x/impl.js' }] }) };
   };

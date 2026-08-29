@@ -45,7 +45,8 @@ export const REGISTRY = {
   59: [{ fn: 'ac59_durableAttemptLedger', file: 'triage.test.mjs', seam: 'attempts.ignoreStarted' }],
   79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
   85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
-  96: [{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
+  96: [
+    { fn: 'ac96_shapedTicketTextIsRedacted', file: 'triage.test.mjs', seam: 'triage.trustShapedText' },{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
   97: [
     { fn: 'ac97_tombstoneBeforeUnlink', file: 'records.test.mjs', seam: 'records.unlinkBeforeTombstone' },{ fn: 'ac97_selectionTimeRemoteCheck', file: 'select.test.mjs', seam: 'select.skipRemoteRefCheck' }],
   101: [{ fn: 'ac101_bodyOnlyModelInput', file: 'triage.test.mjs', seam: 'triage.fetchComments' }],
@@ -63,7 +64,8 @@ export const REGISTRY = {
     { fn: 'ac140_denylistInDiffCheck', file: 'diffcheck.test.mjs', seam: 'diffcheck.skipDenylist' },
   ],
   150: [{ fn: 'ac150_corruptArchiveLineIsQuarantined', file: 'triage.test.mjs', seam: 'attempts.skipQuarantine' }],
-  155: [{ fn: 'ac155_authorizationBindsRevision', file: 'select.test.mjs', seam: 'authorize.ignoreEdits' }],
+  155: [
+    { fn: 'ac155_editHistoryCoversEveryPage', file: 'github.test.mjs', seam: 'github.firstEditsPageOnly' },{ fn: 'ac155_authorizationBindsRevision', file: 'select.test.mjs', seam: 'authorize.ignoreEdits' }],
   12: [
     { fn: 'ac12_sevenKeyBearingCommandsAreTheAuthority', file: 'keys.test.mjs', seam: 'keys.leakKey', noFixture: 'the allowlist constant has no runtime seam; the sibling entry carries keys.leakKey' },
     { fn: 'ac12_onlyThePinnedAdlcCarriesTheKey', file: 'keys.test.mjs', seam: 'keys.leakKey' },
@@ -74,7 +76,8 @@ export const REGISTRY = {
     { fn: 'ac24_linkedWorktreeRefused', file: 'paths.test.mjs', seam: 'paths.allowLinkedWorktree' },
     { fn: 'ac24_pathResolution', file: 'create.test.mjs', seam: 'create.cwdRepoRoot' },
   ],
-  25: [{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal' }],
+  25: [
+    { fn: 'ac25_budgetChargedBeforeDispatch', file: 'run.test.mjs', seam: 'run.chargeAfterDispatch' },{ fn: 'ac25_globalBudget', file: 'run.test.mjs', seam: 'run.budgetNotGlobal' }],
   41: [
     { fn: 'ac41_and_90_outcomeMapping', file: 'run.test.mjs', seam: 'run.acceptUnknownReason' },
     { fn: 'ac41_dispatchParsesResultAndResume', file: 'run.test.mjs', seam: 'dispatch.keyInFleetEnv' },
@@ -121,7 +124,8 @@ export const REGISTRY = {
   53: [{ fn: 'ac53_repoAndPushBinding', file: 'remote.test.mjs', seam: 'remote.ignorePushUrl' }],
   54: [{ fn: 'ac74_paginationContract', file: 'github.test.mjs', seam: 'github.paginateAll' }],
   64: [{ fn: 'ac64_argvArrayShellFalse', file: 'deadline.test.mjs', seam: 'spawn.shellTrue' }],
-  65: [{ fn: 'ac65_familyNormalization', file: 'quota.test.mjs', seam: 'quota.forceOk' }],
+  65: [
+    { fn: 'ac65_familyMappersAgree', file: 'quota.test.mjs', seam: 'preflight.substringFamily' },{ fn: 'ac65_familyNormalization', file: 'quota.test.mjs', seam: 'quota.forceOk' }],
   68: [
     { fn: 'ac68_repoBinIsSkippedAndSystemPinned', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
     { fn: 'ac68_untrustedTool', file: 'tools.test.mjs', seam: 'tools.trustAnyPath' },
@@ -371,6 +375,8 @@ export const REGISTRY = {
     { fn: 'ac36_verifyThenPush', file: 'push.test.mjs', seam: 'push.skipLease' },
   ],
   38: [
+    { fn: 'ac38_retryRefreshesEvidence', file: 'sequence.test.mjs', seam: 'run.staleEvidenceOnRetry' },
+    { fn: 'ac38_malformedReviewIsUnavailable', file: 'sequence.test.mjs', seam: 'review.approveOnExitZero' },
     { fn: 'ac38_reviewedAttestedPushed', file: 'sequence.test.mjs', seam: 'review.reopenWithoutAuthorize' },
     { fn: 'ac38_reviewedEqualsAttestedEqualsPushed', file: 'review.test.mjs', seam: 'review.attestWithoutHeadCheck' },
   ],
@@ -404,6 +410,8 @@ export const REGISTRY = {
     { fn: 'ac50_effectiveModelPropagates', file: 'quota.test.mjs', seam: 'quota.forceOk' },
   ],
   10: [
+    { fn: 'ac10_restHonoursCommittedMinutes', file: 'loop.test.mjs', seam: 'loop.fixedRest' },
+    { fn: 'ac10_dryRunNeverChargesAttempts', file: 'triage.test.mjs', seam: 'triage.dryRunChargesAttempts' },
     { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'loop.dryRunClaimsComplete' },
   ],
   128: [

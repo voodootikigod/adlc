@@ -22,11 +22,13 @@ export { outcomeFor };
 export const BLOCKING_REASONS = FLEET_BLOCKING_REASONS;
 
 /** Remaining build budget (§7): strikes and wall clock are ONE counter each per run. */
-export function remainingBudget(record, config) {
+export function remainingBudget(record, config, now = null) {
   // Mutation seam `run.budgetNotGlobal`: rounds consumed by earlier phases are forgotten.
   const used = active('run.budgetNotGlobal') ? 0 : (record.roundsUsed ?? 0);
   const strikes = Math.max(0, config.maxRounds - used);
-  const wallClockMs = Math.max(0, config.wallClockMinutes * 60_000 - (record.wallClockUsedMs ?? 0));
+  // A round still marked in flight (a crash mid-dispatch) keeps charging the clock until it is settled.
+  const inFlight = typeof record.roundStartedAt === 'number' && typeof now === 'number' ? Math.max(0, now - record.roundStartedAt) : 0;
+  const wallClockMs = Math.max(0, config.wallClockMinutes * 60_000 - (record.wallClockUsedMs ?? 0) - inFlight);
   return { strikes, wallClockMinutes: Math.floor(wallClockMs / 60_000), wallClockMs };
 }
 
@@ -149,7 +151,7 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
     // §6.4–§6.7 — rounds under ONE global budget (§7).
     let deadEndFile = null;
     for (;;) {
-      const budget = remainingBudget(record(), cfg);
+      const budget = remainingBudget(record(), cfg, ctx.now());
       if (budget.strikes === 0 || budget.wallClockMinutes === 0) return { ...(await steps.block('strikes-exhausted', 'build budget exhausted', deadEndFile)), ticketId };
       const r = await steps.round({ budget, deadEndFile, chargeGlobal: true });
       if (r.status === 'terminal') return { ...r.result, ticketId };

@@ -17,7 +17,7 @@ import { buildContext } from './context.mjs';
 import { runIssue, resumeRun, RESUME_ACTIONS } from './run.mjs';
 import { registerSeams, active as seam } from './mutations.mjs';
 
-registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh']);
+registerSeams(['loop.dryRunClaimsComplete', 'loop.dryRunOmitsWorktreeItem', 'loop.ignoreRecoveryActions', 'loop.leakDryRunSsh', 'loop.fixedRest']);
 
 export const REST_DEFAULT_MS = 10 * 60_000;
 
@@ -36,6 +36,7 @@ export async function iterate({ ctx, deps, pinnedIssue = null, force = false }) 
   out.document.baseOid = ctx.baseOid;
   // §9 phase B — every repository input read at BASE_OID.
   const b = await preflight.phaseB(ctx, { dryRun: ctx.dryRun });
+  out.document.restMinutes = ctx.config?.autopilot?.restMinutes ?? null;
   out.document.preflightB = b;
   if (!b.complete) out.document.incomplete.push(...b.incomplete);
   if (ctx.dryRun) {
@@ -168,10 +169,20 @@ export async function runOnce({ flags, env, cwd, deps: overrides = {} }) {
   }
 }
 
+/**
+ * The rest between iterations: the operator's --rest, else the COMMITTED `autopilot.restMinutes`
+ * the iteration read in phase B (reported in its document), else 10 minutes (codex r3 B7).
+ * Mutation seam `loop.fixedRest`: the committed value is ignored.
+ */
+export function restMsFor({ local, document }) {
+  if (local?.restMs != null) return local.restMs;
+  const committed = seam('loop.fixedRest') ? null : document?.restMinutes;
+  return parseDuration(String(committed ?? 10));
+}
+
 /** `loop`: iterate, rest, repeat; SIGTERM finishes the current step and exits 0. */
 export async function runLoop({ flags, env, cwd, deps: overrides = {} }) {
   const local = resolveOperatorLocal(flags, env);
-  const restMs = local.restMs ?? parseDuration(String((await buildContext({ flags, env, cwd, local, dryRun: true, overrides })).config?.autopilot?.restMinutes ?? 10));
   let stop = false;
   const onTerm = () => { stop = true; };
   process.on('SIGTERM', onTerm); process.on('SIGINT', onTerm);
@@ -180,7 +191,7 @@ export async function runLoop({ flags, env, cwd, deps: overrides = {} }) {
       const r = await runOnce({ flags, env, cwd, deps: overrides });
       if (stop) return { exitCode: 0, text: 'adlc-autopilot: stopped' };
       if (r.exitCode === 1 && r.document?.code === 'lock-held') return r;
-      await (overrides.sleep ?? ((ms) => new Promise((res) => setTimeout(res, ms))))(restMs);
+      await (overrides.sleep ?? ((ms) => new Promise((res) => setTimeout(res, ms))))(restMsFor({ local, document: r.document }));
       if (stop) return { exitCode: 0, text: 'adlc-autopilot: stopped' };
     }
   } finally { process.off('SIGTERM', onTerm); process.off('SIGINT', onTerm); }

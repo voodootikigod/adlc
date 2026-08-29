@@ -47,7 +47,7 @@ function appendRunEntry(root, gate) {
 }
 const segmentFiles = (root) => readdirSync(join(root, '.adlc', 'manifest.d')).filter((f) => f.endsWith('.jsonl')).map((f) => join(root, '.adlc', 'manifest.d', f));
 
-export function ac160_manifestVerificationIsKeyed() {
+export async function ac160_manifestVerificationIsKeyed() {
   assert.ok(KEY_BEARING_ARGV.some((a) => a.join(' ').includes('gate-manifest verify')), 'gate-manifest verify is in the §9.3 key-bearing allowlist');
   const { root } = manifestCopy();
   try {
@@ -70,6 +70,18 @@ export function ac160_manifestVerificationIsKeyed() {
     assert.notEqual(verify(root).status, 0, 'a missing signature on a post-prefix line fails the gate');
     writeFileSync(seg, pristine);
     assert.equal(verify(root).status, 0, 'restored → passes again');
+    // A WRONG-key signature: the KEYED gate refuses it; the keyless gate cannot see it (chain-only) —
+    // which is why the autopilot's verify spawn is key-bearing (asserted on the recorder in the spawn test).
+    appendRunEntry(root, 'forged');
+    {
+      const { signEntry } = await import('../../gate-manifest/lib/sign.mjs');
+      const lines = readFileSync(seg, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const last = lines[lines.length - 1]; const { sig: _s, ...unsigned } = last;
+      lines[lines.length - 1] = { ...unsigned, sig: signEntry(`wrong-${KEY}`, unsigned) };   // a signature under ANOTHER key
+      writeFileSync(seg, `${lines.map((e) => JSON.stringify(e)).join('\n')}\n`);
+    }
+    assert.notEqual(verify(root).status, 0, 'a wrong-key signature fails the KEYED gate');
+    assert.equal(verify(root, { key: null }).status, 0, 'the keyless gate accepts the forgery (hash chain only): the key is not optional');
     // The gate itself verifies chain-only without a key (the repository's mixed manifest keeps it functional); the
     // autopilot's obligation is that ITS verify spawn always carries the key — asserted on the recorder below.
     const children = KEY_BEARING_ARGV.map((a) => a.join(' '));

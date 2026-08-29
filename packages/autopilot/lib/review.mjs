@@ -20,7 +20,8 @@ registerSeams([
   'review.skipSizeGate',           // the size gate admits every diff
   'review.allowSummaryReview',     // --allow-summary-review is passed to the reviewer
   'review.attestWithoutHeadCheck', // 7b/7c run without the HEAD/clean/manifest-only assertions
-  'review.reopenWithoutAuthorize', // the reopen update omits --authorize
+  'review.reopenWithoutAuthorize', // the reopen update omits --authorize,
+  'review.approveOnExitZero',
 ]);
 
 export const MANIFEST_PATH_RE = /^\.adlc\/manifest\.d\/[^/]+\.jsonl$/;
@@ -142,11 +143,15 @@ export async function finalReview({ ctx, issue, cwd, baseOid }) {
   let doc = null;
   try { doc = JSON.parse(r.stdout); } catch { doc = null; }
   let verdict;
+  // The verdict is the DOCUMENT's, corroborated by the exit code (codex r3 B1): a status 0 whose
+  // output is not a review document (or names no verdict) is UNAVAILABLE — fail closed.
+  // Mutation seam `review.approveOnExitZero`: exit 0 alone approves.
+  const documented = typeof doc?.verdict === 'string' ? doc.verdict : null;
   if (r.timedOut || r.error) verdict = 'unavailable';
-  else if (r.status === 0) verdict = 'approve';
+  else if (r.status === 0) verdict = active('review.approveOnExitZero') ? 'approve' : (documented === 'approve' ? 'approve' : documented ? 'needs-attention' : 'unavailable');
   else if (r.status === 2) verdict = 'needs-attention';
   else verdict = 'unavailable';
-  if (verdict !== 'unavailable' && doc?.verdict && doc.verdict !== verdict) verdict = doc.verdict === 'approve' ? 'approve' : 'needs-attention';
+  if (verdict !== 'unavailable' && documented && documented !== verdict) verdict = documented === 'approve' ? 'approve' : 'needs-attention';
   const after = await headOf(ctx, cwd);
   if (after !== head || !(await isClean(ctx, cwd))) throw new ReviewError('oid-mismatch', 'tree moved during the final review');
   return { verdict, findings: Array.isArray(doc?.findings) ? doc.findings : [], reviewedHead: head, reason: r.reason ?? null, raw: doc };

@@ -376,3 +376,34 @@ export async function ac115_resetIsTheExitFromShapingFailed() {
   } finally { h.cleanup(); }
 }
 test('AC115: (ticket AC5) after three failed shaping attempts the issue is shaping-failed; reset --attempts needs no OID, archives the three entries and makes the issue selectable again', ac115_resetIsTheExitFromShapingFailed);
+
+export async function ac96_shapedTicketTextIsRedacted() {
+  // The model's own output is untrusted: a secret-shaped string in the shaped ticket is a CLARIFY, never a write.
+  const n = 9; const url = `https://github.com/o/r/issues/${n}`;
+  const leak = 'AKIA' + 'ABCDEFGHIJKLMNOP';
+  const leaky = shapedTicket(n, url); leaky.body = `${leaky.body}\n\nNote: the key ${leak} is needed.\n`;   // a well-formed ticket carrying a secret-shaped string
+  const h = makeTriageCtx({ issues: [ISSUE(n)], claude: () => ({ stdout: claudeResult(leaky) }) });
+  try {
+    const v = await triage({ ctx: h.ctx, issue: ISSUE(n), authorization: AUTHORIZED });
+    assert.equal(v.verdict, 'CLARIFY', JSON.stringify(v).slice(0, 300));
+    assert.ok(v.findings.some((f) => f.gate === 'redaction'), 'the redaction gate names the refusal');
+    assert.ok(!JSON.stringify(v).includes(leak), 'the secret-shaped string never leaves the shaping step');
+    assert.equal(h.spawnsOf(PINNED.adlc).filter((s) => s.argv.includes('create')).length, 0, 'no ticket write');
+  } finally { h.cleanup(); }
+}
+test('AC96: the MODEL-produced ticket text passes the redactor — a secret-shaped string in the shaped ticket is a CLARIFY (gate redaction) with no ticket write and no leak', ac96_shapedTicketTextIsRedacted);
+
+export async function ac10_dryRunNeverChargesAttempts() {
+  const { existsSync } = await import('node:fs');
+  const n = 11;
+  const h = makeTriageCtx({ issues: [ISSUE(n)] });
+  try {
+    const v = await triage({ ctx: h.ctx, issue: ISSUE(n), authorization: AUTHORIZED, dryRun: true });
+    assert.equal(v.verdict, 'PROCEED', JSON.stringify(v).slice(0, 200));
+    assert.ok(!existsSync(h.ctx.paths.attempts(n)), 'a dry-run shaping call writes NO attempts ledger');
+    const real = await triage({ ctx: h.ctx, issue: ISSUE(n), authorization: AUTHORIZED });
+    assert.equal(real.verdict, 'PROCEED');
+    assert.ok(existsSync(h.ctx.paths.attempts(n)), 'a real shaping call books its attempt');
+  } finally { h.cleanup(); }
+}
+test('AC10: a dry-run shaping call reads the attempts ledger but never writes it; a real call books the attempt', ac10_dryRunNeverChargesAttempts);

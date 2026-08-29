@@ -11,7 +11,9 @@ import { DEADLINES, withRetry } from './spawn.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['github.dropHostBinding', 'github.paginateAll', 'github.ignoreTruncation']);
+registerSeams(['github.dropHostBinding', 'github.paginateAll', 'github.ignoreTruncation',
+  'github.firstEditsPageOnly',
+]);
 
 export const PER_PAGE = 100;
 export const MAX_PAGES = 50;
@@ -121,15 +123,30 @@ export async function issueTimeline(ghc, n, { perPage = PER_PAGE, maxPages = MAX
 }
 
 /** GraphQL `userContentEdits` for the issue body (editor logins + editedAt). */
-export async function issueBodyEdits(ghc, n) {
+export async function issueBodyEdits(ghc, n, { pageSize = PER_PAGE, maxPages = MAX_PAGES } = {}) {
   const [owner, name] = ghc.repo.split('/');
-  const query = `query($o:String!,$r:String!,$n:Int!){ repository(owner:$o,name:$r){ issue(number:$n){ lastEditedAt userContentEdits(first:100){ nodes{ editedAt editor{ login } } } } } }`;
+  // EVERY page of the edit history is read (bounded); a history longer than the bound or an
+  // unreadable page fails closed — a partial history could hide the untrusted editor (codex r3 A3).
+  const query = `query($o:String!,$r:String!,$n:Int!,$first:Int!,$after:String){ repository(owner:$o,name:$r){ issue(number:$n){ lastEditedAt userContentEdits(first:$first, after:$after){ pageInfo{ hasNextPage endCursor } nodes{ editedAt editor{ login } } } } } }`;
+  const editors = [];
+  let after = null; let lastEditedAt = null;
   try {
-    const doc = await ghc.json(['api', 'graphql', '-f', `query=${query}`, '-F', `o=${owner}`, '-F', `r=${name}`, '-F', `n=${validateIssueNumber(n)}`]);
-    const issue = doc?.data?.repository?.issue;
-    if (!issue) return { ok: false, reason: 'edits-unreadable' };
-    return { ok: true, lastEditedAt: issue.lastEditedAt ?? null, editors: (issue.userContentEdits?.nodes ?? []).map((e) => ({ login: e?.editor?.login ?? null, editedAt: e?.editedAt ?? null })) };
+    for (let page = 1; page <= maxPages; page++) {
+      const doc = await ghc.json(['api', 'graphql', '-f', `query=${query}`, '-F', `o=${owner}`, '-F', `r=${name}`, '-F', `n=${validateIssueNumber(n)}`, '-F', `first=${pageSize}`, ...(after ? ['-f', `after=${after}`] : [])]);
+      const issue = doc?.data?.repository?.issue;
+      if (!issue) return { ok: false, reason: 'edits-unreadable' };
+      lastEditedAt = issue.lastEditedAt ?? null;
+      const conn = issue.userContentEdits;
+      if (!conn || !Array.isArray(conn.nodes)) return { ok: false, reason: 'edits-unreadable', detail: 'userContentEdits is not a connection' };
+      editors.push(...conn.nodes.map((e) => ({ login: e?.editor?.login ?? null, editedAt: e?.editedAt ?? null })));
+      // Mutation seam `github.firstEditsPageOnly`: later pages are never read (the truncated-history defect).
+      if (!conn.pageInfo?.hasNextPage || active('github.firstEditsPageOnly')) return { ok: true, lastEditedAt, editors };
+      if (page === maxPages) return { ok: false, reason: 'edits-truncated', detail: `more than ${maxPages} pages of edits` };
+      after = conn.pageInfo.endCursor;
+      if (typeof after !== 'string' || after.length === 0) return { ok: false, reason: 'edits-unreadable', detail: 'hasNextPage without an endCursor' };
+    }
   } catch (e) { return { ok: false, reason: 'edits-unreadable', detail: e.message }; }
+  return { ok: false, reason: 'edits-truncated' };
 }
 
 /** Repository permission of a login: admin | maintain | write | triage | read | null. */

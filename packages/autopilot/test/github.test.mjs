@@ -5,7 +5,7 @@
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner } from '../lib/spawn.mjs';
-import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES } from '../lib/github.mjs';
+import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES, issueBodyEdits } from '../lib/github.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';
 
 function harness(handler, { host = 'github.com', repo = 'o/r' } = {}) {
@@ -104,3 +104,22 @@ export async function ac4_commentSearchCoversEveryPage() {
   await assert.rejects(() => ensureComment(broken, 7, '<!-- s -->', 'body'), /gh-failed/, 'an unreadable page fails closed: nothing is posted');
 }
 test('AC4: the terminal-comment sentinel search covers every bounded page and fails closed when a page is unreadable', ac4_commentSearchCoversEveryPage);
+
+export async function ac155_editHistoryCoversEveryPage() {
+  const pages = (calls) => ({ repo: 'o/r', json: async (args) => { calls.push(args); const after = args.find((a) => a.startsWith('after='))?.slice(6) ?? null;
+    const page = after === null ? { nodes: [{ editedAt: '2026-08-01T00:00:00Z', editor: { login: 'alice' } }], pageInfo: { hasNextPage: true, endCursor: 'c1' } }
+      : { nodes: [{ editedAt: '2026-08-02T00:00:00Z', editor: { login: 'mallory' } }], pageInfo: { hasNextPage: false, endCursor: null } };
+    return { data: { repository: { issue: { lastEditedAt: '2026-08-02T00:00:00Z', userContentEdits: page } } } }; } });
+  const calls = [];
+  const r = await issueBodyEdits(pages(calls), 7, { pageSize: 1 });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.editors.map((e) => e.login), ['alice', 'mallory'], 'the editor on the SECOND page is seen (an untrusted editor cannot hide past page one)');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].includes('after=c1'), 'the second request carries the cursor');
+  const endless = { repo: 'o/r', json: async () => ({ data: { repository: { issue: { userContentEdits: { nodes: [{ editor: { login: 'alice' } }], pageInfo: { hasNextPage: true, endCursor: 'x' } } } } } }) };
+  const t = await issueBodyEdits(endless, 7, { pageSize: 1, maxPages: 3 });
+  assert.equal(t.ok, false); assert.equal(t.reason, 'edits-truncated', 'a history longer than the bound fails closed');
+  const cursorless = { repo: 'o/r', json: async () => ({ data: { repository: { issue: { userContentEdits: { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } } } } } }) };
+  assert.equal((await issueBodyEdits(cursorless, 7)).reason, 'edits-unreadable', 'hasNextPage without a cursor is unreadable, never "complete"');
+}
+test('AC155: the issue edit history is read across EVERY page (bounded) — a later-page editor is seen, an over-long history is edits-truncated, a cursorless page is edits-unreadable', ac155_editHistoryCoversEveryPage);

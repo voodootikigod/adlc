@@ -31,7 +31,9 @@ registerSeams([
   'triage.promptInArgv',      // the prompt travels as a positional argv element, not stdin
   'triage.fetchComments',     // `gh issue view` also requests comments and they join the model input
   'triage.shapeTrustedBlock', // a trusted block WITH criteria still triggers the shaping call
-  'triage.noStdoutCap',       // the shaping spawn has no 64 KiB stdout cap
+  'triage.noStdoutCap',       // the shaping spawn has no 64 KiB stdout cap,
+  'triage.trustShapedText',
+  'triage.dryRunChargesAttempts',
 ]);
 
 export const CLARIFY_LABEL = LABEL_FOR_STATE.clarify;
@@ -103,7 +105,7 @@ async function shapingCall({ ctx, n, url, title, body, bodyOnly, store, preModel
  * @param p.preModelCall   optional async gate (quota sample) run before the shaping spawn
  * @returns PROCEED { ticket, evidence } | CLARIFY { findings, sentinel, template, body } | OPERATIONAL { reason }
  */
-export async function triage({ ctx, issue, revision = null, authorization = null, preModelCall = null, attempts = null }) {
+export async function triage({ ctx, issue, revision = null, authorization = null, preModelCall = null, attempts = null, dryRun = false }) {
   const n = validateIssueNumber(issue?.number);
   const full = typeof issue.body === 'string' && typeof issue.title === 'string' ? { comments: undefined, ...issue } : await loadIssue({ ctx, number: n });
   const url = full.url ?? issueUrlFor(ctx, n);
@@ -131,7 +133,12 @@ export async function triage({ ctx, issue, revision = null, authorization = null
     ticket = { title: `#${n}: ${title}`, body: `GitHub issue: ${url}\n${strippedBody}`, ...blockFields };
     mode = 'trusted-block';
   } else {
-    const store = attempts ?? createAttemptStore({ paths: ctx.paths, now: ctx.now, lockToken: ctx.lock?.token ?? null });
+    const real = attempts ?? createAttemptStore({ paths: ctx.paths, now: ctx.now, lockToken: ctx.lock?.token ?? null });
+    // A dry run READS the ledger (the cap still applies) but never writes it (codex r3 B6).
+    // Mutation seam `triage.dryRunChargesAttempts`: a dry run books an attempt.
+    const store = dryRun && !active('triage.dryRunChargesAttempts')
+      ? { shapingExcluded: (m) => real.shapingExcluded(m), beginAttempt: () => ({ id: null }), finishAttempt: () => {} }
+      : real;
     const bodyOnly = block !== null;
     const r = await shapingCall({ ctx, n, url, title, body: strippedBody, bodyOnly, store, preModelCall });
     if (!r.ok) return operational(r.reason, { attemptId: r.attemptId ?? null });
@@ -140,6 +147,15 @@ export async function triage({ ctx, issue, revision = null, authorization = null
       ? { title: `#${n}: ${title}`, body: r.ticket.body, ...blockFields }
       : { title: r.ticket.title, body: r.ticket.body, scope: r.ticket.scope, rails: r.ticket.rails ?? [], edges: [], category: r.ticket.category, duration: r.ticket.duration };
     mode = bodyOnly ? 'trusted-block+shaped-body' : 'shaping-call';
+    // The MODEL-produced text is untrusted output (codex r3 A4): it passes the same redactor as the
+    // issue text and any secret-shaped content in it is a CLARIFY — never a ticket write or a comment.
+    // Mutation seam `triage.trustShapedText`: the shaped text is written unredacted.
+    if (!active('triage.trustShapedText')) {
+      const scans = [ticket.title, ticket.body].map((t) => ctx.redactor.redact(String(t ?? ''), { withheld: WITHHELD_BODY }));
+      if (scans.some((x) => !x.ok || (x.hits ?? []).length > 0)) {
+        return clarify({ findings: [{ gate: 'redaction', detail: 'the shaped ticket text contained secret-shaped content and was withheld from every write' }], issueUrl: url, ticket: null });
+      }
+    }
   }
   // Gate chain (§5.3): every gate, findings verbatim.
   const findings = [...await schemaGate({ ctx, ticket })];

@@ -258,3 +258,13 @@ export async function ac2_productionReaderHasATransport() {
   } finally { fx2.cleanup(); }
 }
 test('AC2: the production quota reader has a transport — the endpoint over fetch with the credential token, then the pinned claude -p /usage fallback on 401', { timeout: 120_000 }, ac2_productionReaderHasATransport);
+
+export async function ac65_familyMappersAgree() {
+  const { modelFamily } = await import('../lib/preflight-a.mjs');
+  for (const m of ['opus', 'claude-opus-5', 'Claude Sonnet 5', 'fable', 'claude-3-haiku', 'gpt-5', 'opusish', 'sonnetx', 'haiku-lite', '', null]) {
+    const q = familyOf(m); const p = modelFamily(m);
+    assert.equal(p, q === 'unknown' ? null : q, `phase A and the quota gate map ${JSON.stringify(m)} the same way (${p} vs ${q})`);
+  }
+  assert.equal(modelFamily('opusish'), null, 'a substring is not a family (the quota gate would call it unknown)');
+}
+test('AC65: phase A validates the model with the SAME family mapper the quota gate enforces with — no model is admitted that the gate calls unknown', ac65_familyMappersAgree);

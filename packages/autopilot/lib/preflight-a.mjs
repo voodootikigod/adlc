@@ -21,6 +21,7 @@ import { missingLabels } from './labels.mjs';
 import { EXCLUDE_ENTRIES } from './paths.mjs';
 import { validateToken } from './input.mjs';
 import { PreflightError, asPreflightError } from './preflight-common.mjs';
+import { familyOf } from './quota.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
@@ -33,6 +34,7 @@ registerSeams([
   'preflight.trustInheritedTools', // tools are taken from the first PATH hit with no trust check
   'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared,
   'preflight.skipPinWhenPathSet',
+  'preflight.substringFamily',
 ]);
 
 const PERM = (m) => m & 0o7777;
@@ -40,8 +42,11 @@ export const MODEL_FAMILIES = Object.freeze(['fable', 'opus', 'sonnet', 'haiku']
 
 /** The model family of an alias or full id, or null (§3.1 → `model-unknown`). */
 export function modelFamily(model) {
-  const s = String(model ?? '').toLowerCase();
-  return MODEL_FAMILIES.find((f) => s === f || s.includes(f)) ?? null;
+  // ONE mapper for validation and quota enforcement (codex r3 A5): quota's token-wise `familyOf`.
+  // Mutation seam `preflight.substringFamily`: the old substring match, which can admit a model the quota gate calls unknown.
+  if (active('preflight.substringFamily')) { const s = String(model ?? '').toLowerCase(); return MODEL_FAMILIES.find((f) => s === f || s.includes(f)) ?? null; }
+  const f = familyOf(model);
+  return f === 'unknown' ? null : f;
 }
 
 /**

@@ -282,3 +282,34 @@ export async function ac44_diffSizeGate() {
   } finally { fx2.cleanup(); }
 }
 test('AC44: a diff of reviewMaxBytes + 1 bytes → round failure diff-too-large with zero adversarial-review calls; two consecutive → blocked; every reviewer argv carries --max-bytes 262144 and never --allow-summary-review', { timeout: 240_000 }, ac44_diffSizeGate);
+
+export async function ac38_malformedReviewIsUnavailable() {
+  // Exit 0 with output that is not a review document is UNAVAILABLE (review-unavailable), never an approve.
+  const fx = await createSequenceFixture({ reviewVerdict: () => ({ status: 0, stdout: 'Reviewed. Looks fine.\n' }) });
+  try {
+    const r = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.notEqual(r.state, 'done', `a status-0 non-document never ships: ${JSON.stringify(r)}`);
+    assert.equal(pushSpawns(fx).length, 0, 'nothing was pushed');
+    assert.equal(fx.recorder.filter((x) => x.argv[0] === FAKE.gh && x.argv[1] === 'pr' && x.argv[2] === 'create').length, 0, 'no PR was opened');
+  } finally { fx.cleanup(); }
+  const fx2 = await createSequenceFixture({ reviewVerdict: () => ({ status: 0, stdout: JSON.stringify({ findings: [] }) }) });
+  try {
+    const r = await runIssue({ ctx: fx2.ctx, deps: fx2.ctx.deps, issue: fx2.issue, ticket: fx2.ticket, revision: { updatedAt: fx2.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.notEqual(r.state, 'done', `a document with no verdict never ships: ${JSON.stringify(r)}`);
+  } finally { fx2.cleanup(); }
+}
+test('AC38: a reviewer exit 0 whose output is not a review document (or names no verdict) is review-unavailable — nothing is pushed and no PR opens', { timeout: 240_000 }, ac38_malformedReviewIsUnavailable);
+
+export async function ac38_retryRefreshesEvidence() {
+  // A reopened (retry) ticket is a new ticket text: its P2 evidence is re-recorded before the retry dispatch.
+  const fx = await createSequenceFixture({ reviewVerdict: (call) => (call === 0 ? 'needs-attention' : 'approve') });
+  try {
+    const r = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(r.state, 'done', JSON.stringify(r));
+    const reopens = fx.recorder.filter((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'ticket' && x.argv[2] === 'update').length;
+    assert.ok(reopens >= 1, 'the retry reopened the ticket');
+    const coldstarts = fx.recorder.filter((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'coldstart' && x.argv.includes('--record-verdict')).length;
+    assert.ok(coldstarts >= 2, `the coldstart verdict was recorded again for the reopened ticket (${coldstarts})`);
+  } finally { fx.cleanup(); }
+}
+test('AC38: a retry round re-records the coldstart evidence for the REOPENED ticket text before dispatching again', { timeout: 240_000 }, ac38_retryRefreshesEvidence);

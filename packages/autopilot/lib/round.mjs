@@ -16,7 +16,10 @@ import { REASON_CODES_FLEET, buildFleetArgv } from './fleet-args.mjs';
 import { describeSecretHits } from './diffcheck.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward']);
+registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
+  'run.chargeAfterDispatch',
+  'run.staleEvidenceOnRetry',
+]);
 
 /** Gate failures that are the ENVIRONMENT's, never the worker's: no retry can fix them. */
 export const GATE_ENVIRONMENT_CODES = Object.freeze(['gate-repo-moved', 'preflight-order-drift', 'sandbox-unavailable', 'gate-deps-missing', 'gate-repo-stale', 'remote-url-changed', 'base-object-missing']);
@@ -122,20 +125,38 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       }
     }
     if (rec.completedOnce) {
-      try { await deps.review.reopenTicket({ ctx, cwd: issueWt, ticketId, round: (rec.roundsUsed ?? 0) + 1, issue: n }); }
+      let reopened;
+      try { reopened = await deps.review.reopenTicket({ ctx, cwd: issueWt, ticketId, round: (rec.roundsUsed ?? 0) + 1, issue: n }); }
       catch (e) { return terminal(failed(e.code ?? 'reopen-failed', e.message)); }
+      // The reopened ticket is a NEW ticket text (its hash changed): the P2 evidence is re-recorded
+      // for it before dispatch (codex r3 B5). Mutation seam `run.staleEvidenceOnRetry`: the old evidence stands.
+      if (reopened?.reopened && !active('run.staleEvidenceOnRetry')) {
+        try {
+          const evidence = await deps.create.recordEvidence({ ctx, issue: n, ticketId, ticket });
+          if (evidence?.verdict === 'CLARIFY') return terminal(failed('coldstart-gaps', 'the reopened ticket has executability gaps'));
+        } catch (e) {
+          if (e.code === 'quota-gated') return terminal({ state: 'quota-paused', reason: 'quota-paused', detail: 'quota refused the retry coldstart' });
+          return terminal(failed(e.code ?? 'evidence-failed', e.message));
+        }
+      }
     }
 
     // §6.4 — dispatch fleet from inside ISSUE_WT.
     const argv = buildFleetArgv({ ctx, issue: n, ticketId, budget, deadEndFile, mirror, workerDeps });
-    ctx.records.update(n, { state: 'dispatched', integrationStart: await ctx.git.localOut(issueWt, ['rev-parse', branch]), fleetArgv: argv });
     const started = ctx.now();
+    const charge = chargeGlobal && !active('run.budgetNotGlobal');
+    // The round is booked against the §7 budget BEFORE the dispatch (one round, clock running from
+    // `roundStartedAt`) so a crash mid-dispatch cannot hand the next process a fresh budget
+    // (codex r3 B4); the settlement below replaces the provisional charge with the actual one.
+    // Mutation seam `run.chargeAfterDispatch`: the budget is charged only when the dispatch returns.
+    const provisional = charge && !active('run.chargeAfterDispatch') ? { roundsUsed: (rec.roundsUsed ?? 0) + 1, roundStartedAt: started } : {};
+    ctx.records.update(n, { state: 'dispatched', integrationStart: await ctx.git.localOut(issueWt, ['rev-parse', branch]), fleetArgv: argv, ...provisional });
     const fleet = await deps.dispatch({ ctx, issue: n, argv, cwd: issueWt, deadlineMs: budget.wallClockMs + 5 * 60_000 });
     const elapsed = ctx.now() - started;
     const strikes = Math.max(1, Number(fleet.parsed?.strikesConsumed) || 1);
     ctx.records.update(n, {
-      fleetRunId: fleet.parsed?.fleetRunId ?? rec.fleetRunId ?? null, lastFleetResult: fleet.parsed ?? null,
-      ...(chargeGlobal && !active('run.budgetNotGlobal') ? { wallClockUsedMs: (rec.wallClockUsedMs ?? 0) + elapsed, roundsUsed: (rec.roundsUsed ?? 0) + strikes } : {}),
+      fleetRunId: fleet.parsed?.fleetRunId ?? rec.fleetRunId ?? null, lastFleetResult: fleet.parsed ?? null, roundStartedAt: null,
+      ...(charge ? { wallClockUsedMs: (rec.wallClockUsedMs ?? 0) + elapsed, roundsUsed: (rec.roundsUsed ?? 0) + strikes } : {}),
     });
     // A PAUSED run (quota / wall clock) must resume as the same fleet run: a fresh
     // fleetRunId after a pause means fleet silently restarted instead of resuming.

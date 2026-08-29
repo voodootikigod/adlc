@@ -269,3 +269,21 @@ export async function ac9_wallClockKillsFleet() {
   } finally { fx.cleanup(); }
 }
 test('AC9: a fleet fake that never returns is killed at the wall clock (fake timers), outcome wall-clock, blocked label applied', { timeout: 120_000 }, ac9_wallClockKillsFleet);
+
+export async function ac25_budgetChargedBeforeDispatch() {
+  // A crash mid-dispatch must not hand the next process a fresh budget: the round is booked BEFORE the dispatch.
+  const { remainingBudget } = await import('../lib/run.mjs');
+  const fx = await createSequenceFixture();
+  try {
+    const deps = { ...fx.ctx.deps, dispatch: async () => { throw new Error('orchestrator crashed mid-dispatch'); } };
+    await assert.rejects(() => runIssue({ ctx: fx.ctx, deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } }), /crashed mid-dispatch/);
+    const rec = fx.ctx.records.load(fx.issue);
+    assert.equal(rec.roundsUsed, 1, 'one round is charged although the dispatch never returned');
+    assert.equal(typeof rec.roundStartedAt, 'number', 'the in-flight round carries its start');
+    const cfg = fx.ctx.config.autopilot;
+    const later = remainingBudget(rec, cfg, rec.roundStartedAt + 7 * 60_000);
+    assert.equal(later.strikes, cfg.maxRounds - 1);
+    assert.equal(later.wallClockMinutes, cfg.wallClockMinutes - 7, 'the clock keeps running for the in-flight round');
+  } finally { fx.cleanup(); }
+}
+test('AC25: the §7 budget is charged BEFORE the dispatch — after a crash mid-dispatch the record shows one round used and a running clock', { timeout: 120_000 }, ac25_budgetChargedBeforeDispatch);
