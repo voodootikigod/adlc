@@ -313,3 +313,17 @@ export async function ac38_retryRefreshesEvidence() {
   } finally { fx.cleanup(); }
 }
 test('AC38: a retry round re-records the coldstart evidence for the REOPENED ticket text before dispatching again', { timeout: 240_000 }, ac38_retryRefreshesEvidence);
+
+export async function ac72_coldstartClarifyRetiresCleanly() {
+  // A coldstart CLARIFY happens after the ticket files were written but before anything dispatched: the run retires (no orphan).
+  const fx = await createSequenceFixture({ claudeAnswer: (args) => (args.includes('/usage') ? { type: 'result', result: 'Your subscription\nCurrent session: 5% used\nCurrent week (all models): 5% used\n' } : { type: 'result', result: JSON.stringify({ gaps: [{ what: 'which widget exactly?', why_blocking: 'two widgets exist' }] }) }) });
+  try {
+    const r = await runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(r.state, 'clarify', JSON.stringify(r));
+    const rec = fx.ctx.records.load(fx.issue);
+    assert.notEqual(rec?.state, 'orphan', `the run is retired, never orphaned on its own ticket files: ${JSON.stringify({ state: rec?.state, orphanReason: rec?.orphanReason, lastError: rec?.lastError, detail: rec?.orphanDetail })}`);
+    assert.ok(!existsSync(fx.paths.issueWorktree(fx.issue)), 'the issue worktree is gone');
+    assert.equal(fx.recorder.filter((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'fleet').length, 0, 'nothing was dispatched');
+  } finally { fx.cleanup(); }
+}
+test('AC72: a coldstart CLARIFY retires the run cleanly — the autopilot\'s own uncommitted ticket files never orphan a run that has not dispatched', { timeout: 120_000 }, ac72_coldstartClarifyRetiresCleanly);

@@ -44,12 +44,22 @@ export async function ac16_gateRecordsForTheBuildTicket() {
 }
 test('AC16: this repository\'s manifest holds the spec-lint and coldstart records bound to the build ticket (the code-level cross-model approve is recorded at PR time via prosecute record-cross-model; verify: prosecute tier-check on the PR)', { timeout: 60_000 }, ac16_gateRecordsForTheBuildTicket);
 
-export function ac156_syntheticHomeContract() {
+export async function ac156_syntheticHomeContract() {
   // The contract itself is fleet's real-bwrap suite (skips loudly without bwrap); this package REQUESTS the synthetic HOME through the bounded plane.
   const ctx = makeCtx({ repoRoot: REPO });
   const argv = buildFleetArgv({ ctx: { ...ctx, local: { model: 'opus' }, config: { autopilot: {} }, iterationId: 'it', lock: { token: 'x'.repeat(64) }, charterPath: '/c', git: { overlayEnv: () => ({}) } }, issue: 7, ticketId: 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH', budget: { strikes: 1, wallClockMinutes: 1 }, mirror: '/m', workerDeps: '/w' });
   assert.equal(argv[argv.indexOf('--model-plane-read') + 1], 'bounded', 'the bounded plane carries the synthetic HOME');
   const r = nodeTest(['packages/fleet/test/synthetic-home-bwrap.test.mjs', 'packages/fleet/test/synthetic-home.test.mjs']);
   assert.equal(r.status, 0, `fleet's synthetic-HOME suites are green:\n${(r.stdout + r.stderr).slice(-2000)}`);
+  // Green is not enough: the isolation tests must have EXECUTED (a host that skips every bwrap clause proves nothing).
+  const out = r.stdout + r.stderr;
+  const passed = Number(/ℹ pass (\d+)/.exec(out)?.[1] ?? 0); const skipped = Number(/ℹ skipped (\d+)/.exec(out)?.[1] ?? 0);
+  assert.ok(passed >= 5, `at least five synthetic-HOME tests ran and passed (${passed})`);
+  const { detectBackend } = await import('@adlc/fleet/lib/sandbox.mjs');
+  const { spawnSync: probeSpawn } = await import('node:child_process');
+  const backend = detectBackend();
+  const usable = backend?.name === 'bubblewrap' && probeSpawn(backend.path ?? 'bwrap', ['--unshare-all', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--die-with-parent', '--', process.execPath, '-e', 'process.exit(0)'], { encoding: 'utf8', timeout: 10_000 }).status === 0;
+  if (usable) { assert.equal(skipped, 0, 'with a usable bwrap nothing is skipped'); assert.ok(!/SKIPPED/.test(out), 'no clause skipped loudly either'); }
+  else console.warn('SKIPPED (loudly): no usable bwrap — the AC 156 isolation clauses did not execute on this host');
 }
 test('AC156: the synthetic HOME contract — fleet\'s real-bwrap suite (skipped loudly without bwrap) is green and this package requests it through the bounded model plane', { timeout: 240_000 }, ac156_syntheticHomeContract);

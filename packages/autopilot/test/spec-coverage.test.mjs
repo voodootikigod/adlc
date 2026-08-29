@@ -25,6 +25,7 @@ globalThis[GATE_EXEC_KEY] = true;
 import { withMutation, knownSeams, clearAll, registerSeams, active } from '../lib/mutations.mjs';
 import { detectBackend } from '@adlc/fleet/lib/sandbox.mjs';
 import * as cryptoModule from 'node:crypto';
+import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 const BUILD_TICKET_ID = 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH';
 
 // The gate's own seam (AC 111/121): when active, the static checker accepts every entry.
@@ -90,7 +91,7 @@ function functionBody(src, name) {
 }
 
 /** Static checks over one test file's SOURCE for one registered function. */
-export function staticCheck(file, fn, n) {
+export async function staticCheck(file, fn, n) {
   if (active('gate.acceptHollowEntries')) return [];
   const src = readFileSync(join(HERE, file), 'utf8');
   const problems = [];
@@ -101,7 +102,15 @@ export function staticCheck(file, fn, n) {
   // Imports at least one module from lib/.
   const libImports = [...src.matchAll(/import\s+\{([^}]+)\}\s+from\s+['"]\.\.\/lib\/([^'"]+)['"]/g)];
   if (libImports.length === 0) problems.push(`${file}: imports nothing from lib/`);
-  const names = libImports.flatMap((m) => m[1].split(',').map((t) => t.trim().split(/\s+as\s+/).pop()).filter(Boolean));
+  // Only names that are FUNCTIONS of the imported lib module count as calls into lib: an imported
+  // constant followed by `(` is text, not a call (a module that cannot be imported keeps its names).
+  const names = [];
+  for (const m of libImports) {
+    const local = m[1].split(',').map((t) => t.trim()).filter(Boolean).map((t) => ({ exported: t.split(/\s+as\s+/)[0].trim(), local: t.split(/\s+as\s+/).pop().trim() }));
+    let mod = null;
+    try { mod = await import(pathToFileURL(join(HERE, '..', 'lib', m[2])).href); } catch { mod = null; }
+    for (const { exported, local: l } of local) if (!mod || typeof mod[exported] === 'function') names.push(l);
+  }
   const body = functionBody(src, fn) ?? '';
   if (!/\bassert\b/.test(body)) problems.push(`${file}: ${fn} has no assert call`);
   const callsLib = (text) => names.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(text));
@@ -148,7 +157,11 @@ export function approvedSpecRevision({ ref = 'HEAD' } = {}) {
   const newest = mine[mine.length - 1] ?? null;
   const spec = spawnSync('git', ['show', `${ref}:${SPEC_PATH}`], { cwd: REPO, encoding: 'utf8' }).stdout;
   const specHash = createHash('sha256').update(spec).digest('hex');
-  return { newest, specHash, approved: newest?.data?.spec_hash === specHash, signed: typeof newest?.sig === 'string' && newest.sig.length > 0 };
+  const key = process.env.ADLC_MANIFEST_KEY && process.env.ADLC_MANIFEST_KEY.length >= 16 ? process.env.ADLC_MANIFEST_KEY : null;
+  const present = typeof newest?.sig === 'string' && newest.sig.length > 0;
+  const verified = key && newest ? verifyEntrySig(key, newest) : null;   // null = no key on this host (CI carries it)
+  if (present && verified === null) console.log('note: the spec-approval signature is present but NOT verified on this host (no ADLC_MANIFEST_KEY); CI verifies it');
+  return { newest, specHash, approved: newest?.data?.spec_hash === specHash, signed: present && verified !== false, verified };
 }
 function requireCrypto() { return cryptoModule; }
 
@@ -156,7 +169,7 @@ export function ac1_registryExecutesEveryFunction() {
   const rev = approvedSpecRevision();
   assert.ok(rev.newest, 'a spec-approval record for the build ticket is committed');
   assert.equal(rev.approved, true, `the spec at HEAD (sha256 ${rev.specHash}) is the APPROVED revision (record ${rev.newest?.seq ?? '?'} names ${rev.newest?.data?.spec_hash})`);
-  assert.equal(rev.signed, true, 'the approval record is signed');
+  assert.equal(rev.signed, true, `the approval record is signed${rev.verified === false ? ' — and its signature does NOT verify under ADLC_MANIFEST_KEY' : ''}`);
   assert.ok(numbers.length >= 163, `§16 has at least 163 criteria (found ${numbers.length})`);
   for (let i = 0; i < numbers.length; i++) assert.equal(numbers[i], i + 1, `criteria are contiguous from 1 (position ${i})`);
   const missing = numbers.filter((n) => !REGISTRY[n] || REGISTRY[n].length === 0);
@@ -170,14 +183,14 @@ export function ac1_registryExecutesEveryFunction() {
 }
 test('AC1: §16 at the pinned blob is contiguous from 1 and every criterion is registered', ac1_registryExecutesEveryFunction);
 
-test('AC1: every registered function exists, is titled AC<n>:, imports lib/ and asserts on a call into it (static)', () => {
+test('AC1: every registered function exists, is titled AC<n>:, imports lib/ and asserts on a call into it (static)', async () => {
   const problems = [];
   const manual = [];
   for (const [n, entries] of Object.entries(REGISTRY)) {
     for (const e of entries) {
       if (e.manual) { manual.push(`AC${n}: ${e.manual}`); continue; }
       if (!existsSync(join(HERE, e.file))) { problems.push(`AC${n}: ${e.file} does not exist`); continue; }
-      problems.push(...staticCheck(e.file, e.fn, Number(n)));
+      problems.push(...await staticCheck(e.file, e.fn, Number(n)));
     }
   }
   for (const line of manual) console.log(`manual: ${line}`);
@@ -192,7 +205,7 @@ export async function ac114_everyRegisteredFunctionExecutes() {
   const failures = [];
   const entries = Object.entries(REGISTRY).flatMap(([n, list]) => list.filter((e) => !e.manual).map((e) => ({ n: Number(n), ...e })));
   for (const e of entries) {
-    if (e.file === 'spec-coverage.test.mjs') { executed++; continue; }
+    if (e.file === 'spec-coverage.test.mjs' && ['ac114_everyRegisteredFunctionExecutes', 'ac121_everyCriterionHasABitingFixture'].includes(e.fn)) { console.log(`skipped loudly: AC${e.n} ${e.fn} is this pass itself`); executed++; continue; }
     if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
     const mod = modules.get(e.file);
     if (typeof mod[e.fn] !== 'function') { failures.push(`AC${e.n}: ${e.file} does not export ${e.fn}`); continue; }
@@ -236,7 +249,12 @@ export async function ac121_everyCriterionHasABitingFixture() {
       let threw = false;
       try { await withMutation(e.seam, () => fn()); } catch { threw = true; }
       clearAll();
-      if (threw) bit = true; else problems.push(`AC${n}: ${e.fn} still passes with fixture ${e.seam} applied — the fixture does not bite`);
+      if (!threw) { problems.push(`AC${n}: ${e.fn} still passes with fixture ${e.seam} applied — the fixture does not bite`); continue; }
+      // A fixture that bites proves nothing if the test fails WITHOUT it too: the plain leg must pass.
+      let plainOk = true;
+      try { await fn(); } catch (err) { plainOk = false; problems.push(`AC${n}: ${e.fn} fails without any fixture: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}`); }
+      clearAll();
+      if (plainOk) bit = true;
     }
     if (!bit) {
       if (reasons.length) noFixture.push(...reasons);
@@ -252,22 +270,22 @@ export async function ac121_everyCriterionHasABitingFixture() {
 test('AC121: every registered criterion names a mutation fixture that BITES (test fails with it, passes without), or a printed noFixture reason (≤ 5)', fullOnly, ac121_everyCriterionHasABitingFixture);
 
 // ── self-tests (AC 111, 121): the gate is not vacuous ──
-export function ac111_gateRejectsHollowEntries() {
+export async function ac111_gateRejectsHollowEntries() {
   const src = "import { x } from '../lib/x.mjs';\nexport function acN_hollow() { return 1; }\ntest('AC9: hollow', acN_hollow);\n";
   const tmp = join(HERE, '.gate-self-test.tmp.mjs');
   try {
     require_write(tmp, src);
-    const problems = staticCheck('.gate-self-test.tmp.mjs', 'acN_hollow', 9);
+    const problems = await staticCheck('.gate-self-test.tmp.mjs', 'acN_hollow', 9);
     assert.ok(problems.some((p) => /no assert/.test(p)), 'a test with no assert is rejected');
     const noLib = "export function acN_noLib() { assert.equal(1, 1); }\ntest('AC9: x', acN_noLib);\n";
     require_write(tmp, noLib);
-    assert.ok(staticCheck('.gate-self-test.tmp.mjs', 'acN_noLib', 9).some((p) => /imports nothing from lib/.test(p)), 'a test without a lib import is rejected');
+    assert.ok((await staticCheck('.gate-self-test.tmp.mjs', 'acN_noLib', 9)).some((p) => /imports nothing from lib/.test(p)), 'a test without a lib import is rejected');
     const wrongTitle = "import { x } from '../lib/x.mjs';\nexport function acN_t() { assert.ok(x()); }\ntest('AC10: x', acN_t);\n";
     require_write(tmp, wrongTitle);
-    assert.ok(staticCheck('.gate-self-test.tmp.mjs', 'acN_t', 9).some((p) => /AC9:/.test(p)), 'a title for another number is rejected');
+    assert.ok((await staticCheck('.gate-self-test.tmp.mjs', 'acN_t', 9)).some((p) => /AC9:/.test(p)), 'a title for another number is rejected');
     const constantOnly = "import { X } from '../lib/x.mjs';\nexport function acN_c() { assert.equal(X, 1); }\ntest('AC9: x', acN_c);\n";
     require_write(tmp, constantOnly);
-    assert.ok(staticCheck('.gate-self-test.tmp.mjs', 'acN_c', 9).some((p) => /no CALL/.test(p)), 'an assertion on a bare exported constant is rejected');
+    assert.ok((await staticCheck('.gate-self-test.tmp.mjs', 'acN_c', 9)).some((p) => /no CALL/.test(p)), 'an assertion on a bare exported constant is rejected');
     assert.ok(!active('gate.acceptHollowEntries'), 'the gate is not running in its hollow-accepting mode');
   } finally { try { require_unlink(tmp); } catch { /* none */ } }
   // Multi-number titles credit every number; quotes inside a title do not break the parser.
@@ -280,7 +298,7 @@ export function ac111_gateRejectsHollowEntries() {
 import { writeFileSync as require_write, unlinkSync as require_unlink } from 'node:fs';
 test('AC111: the gate rejects a registry entry with no lib import, no assert, a wrong title, a constant-only assertion, and a renumbered spec', ac111_gateRejectsHollowEntries);
 
-export function ac121_fixtureRulesSelfTest() {
+export async function ac121_fixtureRulesSelfTest() {
   // Entries without a seam and without a reason are problems; more than 5 reasons is a problem.
   const fake = { 1: [{ fn: 'a', file: 'x', seam: null }] };
   const missing = Object.entries(fake).flatMap(([n, l]) => l.filter((e) => !e.seam && !e.noFixture).map(() => `AC${n}`));
@@ -296,6 +314,6 @@ export function ac121_fixtureRulesSelfTest() {
   assert.match(String(hostSkip({ fn: 'x', requires: 'warp-drive' }, { backend: null })), /unknown capability/);
   const src = "import { X } from '../lib/x.mjs';\nexport function acN_k() { assert.equal(X, 1); }\ntest('AC9: x', acN_k);\n";
   const tmp = join(HERE, '.gate-self-test-121.tmp.mjs');
-  try { require_write(tmp, src); assert.ok(staticCheck('.gate-self-test-121.tmp.mjs', 'acN_k', 9).length > 0, 'a hollow entry is a problem'); } finally { try { require_unlink(tmp); } catch { /* none */ } }
+  try { require_write(tmp, src); assert.ok((await staticCheck('.gate-self-test-121.tmp.mjs', 'acN_k', 9)).length > 0, 'a hollow entry is a problem'); } finally { try { require_unlink(tmp); } catch { /* none */ } }
 }
 test('AC121: an entry without a fixture and without a noFixture reason fails the gate; more than 5 reasons fail it', ac121_fixtureRulesSelfTest);

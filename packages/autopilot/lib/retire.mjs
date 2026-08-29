@@ -23,7 +23,8 @@ registerSeams([
   'retire.skipTipCheck',                // the ref delete is unconditional (no expected OID) and (e) is not re-checked
   'retire.skipMarkerCheck',             // (b) is skipped: the record token is trusted without the marker
   'retire.noDetach',                    // L2 does not detach the quarantined worktree before L3
-  'recover.deleteRecordDespiteRemoteRef', // the canonical rule deletes the record while the remote ref exists
+  'recover.deleteRecordDespiteRemoteRef', // the canonical rule deletes the record while the remote ref exists,
+  'retire.keepOwnWrites',
 ]);
 
 export class RunError extends Error {
@@ -109,7 +110,7 @@ export async function markOrphan(ctx, record, reason, extra = {}) {
  * reason?, quarantined?[] }. `expectedHead` (reset) overrides the record's
  * `localHead`; `requireAncestry:false` is the recordless reset form.
  */
-export async function stepL({ ctx, record, expectedHead = null, requireAncestry = true }) {
+export async function stepL({ ctx, record, expectedHead = null, requireAncestry = true, discardOwnWrites = false }) {
   const issue = record.issue;
   const branch = branchFor(issue);
   const paths = ctx.paths;
@@ -137,8 +138,18 @@ export async function stepL({ ctx, record, expectedHead = null, requireAncestry 
   let moved = false;
   const moveBack = async () => { if (moved) { await runGit(ctx, ctx.repoRoot, ['worktree', 'move', retiring, wt]); moved = false; } };
   if (wtExists) {
-    const st = await runGit(ctx, wt, ['status', '--porcelain']);
+    let st = await runGit(ctx, wt, ['status', '--porcelain']);
     if (!st.ok) return orphan('status-failed');
+    // A run that never dispatched (a coldstart CLARIFY) has only the autopilot's OWN uncommitted
+    // ticket files in its tree: those are discarded rather than orphaning the run (codex r6 B2).
+    // Mutation seam `retire.keepOwnWrites`: the dirty tree orphans the run anyway.
+    if (st.out && discardOwnWrites && !record.fleetRunId && !active('retire.keepOwnWrites')) {
+      const reset = await runGit(ctx, wt, ['checkout', '-q', '--', '.']);
+      const clean = await runGit(ctx, wt, ['clean', '-fdq', '--', '.']);
+      if (!reset.ok || !clean.ok) return orphan('dirty', { detail: (reset.err || clean.err).slice(0, 200) });
+      st = await runGit(ctx, wt, ['status', '--porcelain']);
+      if (!st.ok) return orphan('status-failed');
+    }
     if (st.out && !active('retire.forceRemove')) return orphan('dirty');                          // (e) clean tree
     // L1
     const wtHead = await runGit(ctx, wt, ['rev-parse', 'HEAD']);
@@ -202,9 +213,9 @@ export async function canonicalDeletion({ ctx, record }) {
  * `git push`. `skipCanonical` is the `reset --delete-remote` form, where the
  * record stays `remote-deleted` for its 24 h watch.
  */
-export async function retireRun({ ctx, record, expectedHead = null, requireAncestry = true, skipCanonical = false }) {
+export async function retireRun({ ctx, record, expectedHead = null, requireAncestry = true, skipCanonical = false, discardOwnWrites = false }) {
   let l;
-  try { l = await stepL({ ctx, record, expectedHead, requireAncestry }); }
+  try { l = await stepL({ ctx, record, expectedHead, requireAncestry, discardOwnWrites }); }
   catch (e) { return markOrphan(ctx, record, `error:${e.code ?? e.message}`); }
   if (l.outcome === 'orphan') return l;
   if (skipCanonical || !ctx.records.load(record.issue)) return { ...l, canonical: null };

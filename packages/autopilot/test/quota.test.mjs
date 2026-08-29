@@ -287,3 +287,22 @@ export async function ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock() {
   } finally { fx.cleanup(); }
 }
 test('AC60: the pre-strike quota helper bumps the start ordinal under the ORCHESTRATOR\'s lock (its env token verified against the on-disk owner) and is refused with any other token', { timeout: 120_000 }, ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock);
+
+export async function ac60_helperRunsFromTheIssueWorktree() {
+  // fleet spawns the helper from INSIDE the issue worktree (a linked worktree): the helper resolves the MAIN worktree as its root.
+  const { spawnSync } = await import('node:child_process');
+  const { join } = await import('node:path');
+  const fx = await createSequenceFixture();
+  try {
+    const linked = join(fx.ctx.repoRoot, '.worktrees', 'helper-wt');
+    const r = spawnSync('git', ['worktree', 'add', '-q', '-b', 'helper-branch', linked], { cwd: fx.ctx.repoRoot, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    fx.ctx.status.resetStarts('it-w');
+    const env = { PATH: process.env.PATH, HOME: fx.ctx.env.home, ADLC_AUTOPILOT_LOCK_TOKEN: fx.ctx.lock.token };
+    const out = await quotaCommand({ flags: { startOrdinal: 'auto', iteration: 'it-w' }, env, cwd: linked, deps: { quota: { read: async () => OK_USAGE({}) } } });
+    assert.equal(out.exitCode, 0, JSON.stringify(out.document));
+    assert.equal(out.document.ordinal, 1, 'the helper bumped the MAIN worktree\'s status file from inside the linked worktree');
+    assert.equal(fx.ctx.status.read().startsThisIteration, 1);
+  } finally { fx.cleanup(); }
+}
+test('AC60: the pre-strike quota helper works when spawned from INSIDE the issue worktree (a linked worktree): it resolves the main worktree as its root and bumps its ordinal', { timeout: 120_000 }, ac60_helperRunsFromTheIssueWorktree);

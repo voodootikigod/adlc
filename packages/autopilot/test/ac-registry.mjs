@@ -89,6 +89,7 @@ export const REGISTRY = {
     { fn: 'ac41_dispatchParsesResultAndResume', file: 'run.test.mjs', seam: 'dispatch.keyInFleetEnv' },
   ],
   60: [
+    { fn: 'ac60_helperRunsFromTheIssueWorktree', file: 'quota.test.mjs', seam: 'paths.helperRefusesLinkedWorktree' },
     { fn: 'ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock', file: 'quota.test.mjs', seam: 'context.helperTokenIgnored' },{ fn: 'ac60_preStrikeResolvedValues', file: 'run.test.mjs', seam: 'fleetArgs.bareAdlcInHelper' }],
   78: [{ fn: 'ac78_readSetAndWritableRoots', file: 'run.test.mjs', seam: 'fleetArgs.readSetIncludesRepo' }],
   81: [{ fn: 'ac81_mirrorIsTheOnlyGitDatabase', file: 'run.test.mjs', seam: 'fleetArgs.readSetIncludesRepo' }],
@@ -376,6 +377,7 @@ export const REGISTRY = {
     { fn: 'ac110_pinnedRemoteUrl', file: 'push.test.mjs', seam: 'push.useOriginName' },
   ],
   72: [
+    { fn: 'ac72_coldstartClarifyRetiresCleanly', file: 'sequence.test.mjs', seam: 'retire.keepOwnWrites' },
     { fn: 'ac72_p0p1RecordMechanics', file: 'create.test.mjs', seam: 'create.recordDespiteGaps' },
   ],
   30: [
@@ -421,6 +423,7 @@ export const REGISTRY = {
     { fn: 'ac50_effectiveModelPropagates', file: 'quota.test.mjs', seam: 'quota.forceOk' },
   ],
   10: [
+    { fn: 'ac10_dryRunThroughRunOnce', file: 'loop.test.mjs', seam: 'loop.dryRunClaimsComplete' },
     { fn: 'ac10_restHonoursCommittedMinutes', file: 'loop.test.mjs', seam: 'loop.fixedRest' },
     { fn: 'ac10_dryRunNeverChargesAttempts', file: 'triage.test.mjs', seam: 'triage.dryRunChargesAttempts' },
     { fn: 'ac10_dryRunHonesty', file: 'loop.test.mjs', seam: 'loop.dryRunClaimsComplete' },

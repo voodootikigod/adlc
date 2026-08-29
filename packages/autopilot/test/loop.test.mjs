@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { iterate, statusCommand, selectCommand, triageCommand, restMsFor } from '../lib/loop.mjs';
+import { iterate, statusCommand, selectCommand, triageCommand, restMsFor, runOnce } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { FAKE, GIT } from './helpers/recover-fixture.mjs';
@@ -210,3 +210,26 @@ export async function ac140_maintenanceRunsWithTheDenylistLoaded() {
   } finally { fx.cleanup(); }
 }
 test('AC140: the loop loads the protected-path denylist BEFORE §8 maintenance runs, so a maintenance fix round can never skip the protected-path rule', { timeout: 120_000 }, ac140_maintenanceRunsWithTheDenylistLoaded);
+
+export async function ac10_dryRunThroughRunOnce() {
+  // The PUBLIC entry point: a dry run takes no lock, plans, and releases its dry-run material on the way out.
+  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { LOCK_DIR_NAME } = await import('../lib/lock.mjs');
+  const fx = await createSequenceFixture({ dryRun: true });
+  try {
+    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-once-')); writeFileSync(join(parent, 'material'), 'fake');
+    const stub = fx.loopDeps();
+    const deps = { deps: { ...stub, preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; }, resolveBaseline: async () => fx.baseOid, phaseB: async () => ({ complete: false, incomplete: ['fleet-dry-run-needs-worktree'], tokenShort: false, checks: {} }) }, selection: { ...stub.selection, select: async () => ({ picked: fx.issue, issue: fx.state.issue, authorization: { ok: true }, revision: { updatedAt: fx.state.issue.updatedAt }, ranked: [] }) } } };
+    const r = await runOnce({ flags: { dryRun: true, issue: String(fx.issue) }, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.document).slice(0, 300));
+    assert.equal(r.document.dryRun, true);
+    assert.equal(r.document.complete, false, 'a dry run never claims completeness (fleet needs a worktree)');
+    assert.ok(r.document.incomplete.includes('fleet-dry-run-needs-worktree'));
+    assert.ok(!existsSync(join(fx.ctx.paths.adlc, LOCK_DIR_NAME)), 'a dry run never takes the autopilot lock');
+    assert.ok(!existsSync(parent), 'the dry-run SSH material is released on the way out of runOnce');
+    assert.ok(!fx.recorder.some((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'fleet'), 'no fleet dispatch');
+  } finally { fx.cleanup(); }
+}
+test('AC10: a dry run through the PUBLIC runOnce takes no lock, reports dryRun:true, dispatches nothing and releases its temporary material on exit', { timeout: 120_000 }, ac10_dryRunThroughRunOnce);

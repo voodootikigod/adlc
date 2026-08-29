@@ -118,7 +118,7 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
       if (evidence.verdict === 'CLARIFY') {
         const doc = deps.triage.clarifyDocument({ findings: gapsToFindings(evidence.gaps), issueUrl: deps.triage.issueUrlFor(ctx, n) });
         await deps.triage.clarifyEffects({ ctx, issue: n, sentinel: doc.sentinel, body: doc.body, revision });
-        await deps.retire.retireRun({ ctx, record: record() });
+        await deps.retire.retireRun({ ctx, record: record(), discardOwnWrites: true });
         return { state: 'clarify', reason: 'coldstart-gaps', ticketId };
       }
     } catch (e) {

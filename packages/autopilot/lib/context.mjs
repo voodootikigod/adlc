@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { createSpawner } from './spawn.mjs';
 import { createRedactor } from './redact.mjs';
 import { keyBearingValues } from './keys.mjs';
-import { autopilotPaths, resolveRepoRoot } from './paths.mjs';
+import { autopilotPaths, resolveRepoRoot, resolveMainRoot } from './paths.mjs';
 import { createRecordStore } from './records.mjs';
 import { gitBaseEnv } from './git-env.mjs';
 import { lockHeldBy } from './lock.mjs';
@@ -51,7 +51,9 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
   const recorder = overrides.recorder ?? [];
   const spawn = overrides.spawn ?? createSpawner({ recorder, spawnImpl: overrides.spawnImpl, kill: overrides.kill });
   const gitProbe = overrides.gitProbe ?? ((args, opts) => execFileSync('git', args, { cwd: opts?.cwd ?? cwd, encoding: 'utf8', env: { ...gitBaseEnv({ path: env.PATH ?? '', home: env.HOME ?? '' }) } }));
-  const repoRoot = overrides.repoRoot ?? resolveRepoRoot({ cwd, git: gitProbe });
+  // The quota helper is spawned by fleet from inside the ISSUE worktree (linked): it resolves the
+  // MAIN worktree as its root (codex r6 B1); the orchestrator itself must run from the main worktree.
+  const repoRoot = overrides.repoRoot ?? (quotaOnly ? resolveMainRoot({ cwd, git: gitProbe }) : resolveRepoRoot({ cwd, git: gitProbe }));
   const paths = autopilotPaths(repoRoot);
   const key = overrides.key ?? env.ADLC_MANIFEST_KEY ?? null;
   // The credential's access token is a secret literal from the start (redactor + actual-diff scan), not only at quota time.

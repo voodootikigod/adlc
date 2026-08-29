@@ -8,7 +8,7 @@
 
 import { join } from 'node:path';
 import { validateIssueNumber, validateOid, underRoot, isUnder } from './input.mjs';
-import { active } from './mutations.mjs';
+import { registerSeams, active } from './mutations.mjs';
 
 export const EXCLUDE_ENTRIES = Object.freeze([
   '.adlc/autopilot-status.json',
@@ -25,6 +25,8 @@ export class PathError extends Error {
  * Resolve REPO_ROOT from a cwd using an injectable git runner
  * `git(args) => stdout`. Refuses a linked worktree (`not-main-worktree`).
  */
+registerSeams(['paths.helperRefusesLinkedWorktree']);
+
 export function resolveRepoRoot({ cwd, git, explicitRoot = null }) {
   const top = explicitRoot ?? git(['rev-parse', '--show-toplevel'], { cwd }).trim();
   if (!top) throw new PathError('not-a-repository', cwd);
@@ -34,6 +36,22 @@ export function resolveRepoRoot({ cwd, git, explicitRoot = null }) {
   // Mutation seam `paths.allowLinkedWorktree`: a linked worktree passes as REPO_ROOT.
   if (!active('paths.allowLinkedWorktree') && (!main || main !== top)) throw new PathError('not-main-worktree', `${top} is a linked worktree of ${main ?? '?'}`);
   return top;
+}
+
+/**
+ * The MAIN worktree of the repository `cwd` belongs to — for the pre-strike quota helper, which
+ * fleet spawns from inside the ISSUE worktree (a linked worktree the orchestrator itself refuses).
+ * Mutation seam `paths.helperRefusesLinkedWorktree`: the helper applies the orchestrator's rule.
+ */
+export function resolveMainRoot({ cwd, git }) {
+  if (active('paths.helperRefusesLinkedWorktree')) return resolveRepoRoot({ cwd, git });
+  const top = git(['rev-parse', '--show-toplevel'], { cwd }).trim();
+  if (!top) throw new PathError('not-a-repository', cwd);
+  const porcelain = git(['worktree', 'list', '--porcelain'], { cwd: top });
+  const first = porcelain.split('\n').find((l) => l.startsWith('worktree '));
+  const main = first ? first.slice('worktree '.length).trim() : null;
+  if (!main) throw new PathError('not-a-repository', `${top}: no main worktree`);
+  return main;
 }
 
 /** Every path the autopilot derives, rooted at REPO_ROOT. */
