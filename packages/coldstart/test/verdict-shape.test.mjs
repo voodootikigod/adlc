@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { extractJson } from '@adlc/core';
-import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from '../lib/normalize-gaps.mjs';
+import { normalizeGaps, describeShape, UNREADABLE_VERDICT_PREFIX } from '../lib/normalize-gaps.mjs';
 import { buildCheckTicket, checkTicket } from '../lib/gate.mjs';
 import { findCachedVerdict } from '../lib/cache.mjs';
 
@@ -112,6 +112,39 @@ describe('normalizeGaps — every other shape throws "unreadable executability v
     try { normalizeGaps('z'.repeat(5_000)); } catch (err) { message = err.message; }
     assert.ok(message.length < 400, `got ${message.length} chars`);
     assert.match(message, /string/);
+  });
+});
+
+describe('describeShape — the bounded shape description', () => {
+  const keysObject = (n) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`key${i}`, i]));
+
+  test('lists at most 8 top-level keys: exactly 8 keys are all named, with no ellipsis', () => {
+    const text = describeShape(keysObject(8));
+    for (let i = 0; i < 8; i++) assert.ok(text.includes(`key${i}`), `key${i} must be named in: ${text}`);
+    assert.ok(!text.includes('…'), `no ellipsis for exactly 8 keys: ${text}`);
+  });
+
+  test('a 9th key is elided behind an ellipsis, never named', () => {
+    const text = describeShape(keysObject(9));
+    assert.ok(text.includes('key7'), text);
+    assert.ok(!text.includes('key8'), `the 9th key must not be named: ${text}`);
+    assert.ok(text.includes('…'), `ellipsis expected: ${text}`);
+  });
+
+  test('an object description is cut at exactly 160 characters (a single huge key cannot flood the message)', () => {
+    const text = describeShape({ ['k'.repeat(1_000)]: 1 });
+    assert.equal(text.length, 160);
+    // …and one that fits is not cut.
+    assert.equal(describeShape({ a: 1 }), 'object with keys [a]');
+  });
+
+  test('primitive shapes: type only, never the value', () => {
+    assert.equal(describeShape(42), 'number');
+    assert.equal(describeShape(true), 'boolean');
+    assert.equal(describeShape(undefined), 'undefined');
+    assert.equal(describeShape(null), 'null');
+    assert.equal(describeShape([1, 2, 3]), 'array(3)');
+    assert.equal(describeShape('secret-value'), 'string(12 chars)');
   });
 });
 
