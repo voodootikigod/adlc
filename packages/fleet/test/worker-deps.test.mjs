@@ -16,9 +16,9 @@ function fakeIo(rec) {
   return {
     git: () => (...args) => (args[0] === 'rev-parse' ? 'SHA' : ''),
     adlc: () => ({ status: 0, stdout: '' }), adlcAsync: async () => ({ status: 0, stdout: '' }),
-    spawnWorker: async (cmd, args, opts) => { rec.spawn.push({ cmd, args, opts }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
+    spawnWorker: async (cmd, args, opts) => { (rec.order ??= []).push('spawn'); rec.spawn.push({ cmd, args, opts }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
     readFile: () => '', exists: () => false, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {},
-    copyTree: (src, dest) => rec.copies.push({ src, dest }),
+    copyTree: (src, dest) => { (rec.order ??= []).push('copy'); rec.copies.push({ src, dest }); },
     env: { PATH: '/usr/bin', HOME: '/h' }, hasGh: () => false,
   };
 }
@@ -34,6 +34,8 @@ test('with --worker-deps the tree is copied into <worktree>/node_modules BEFORE 
     { src: '/run/worker-deps/node_modules', dest: '/wt/T1/node_modules' },
     { src: '/run/worker-deps/node_modules', dest: '/wt/T1/node_modules' },
   ]);
+  // Ordering is the guarantee: every dependency copy lands BEFORE the worker is spawned.
+  assert.ok(rec.order.includes('spawn') && rec.order.every((ev, i) => ev !== 'spawn' || rec.order[i - 1] === 'copy'), `a copy immediately precedes EVERY spawn: ${rec.order.join(',')}`);
   assert.equal(rec.spawn.filter((c) => findInner([c], 'claude')).length, 2);
   // No npm ever runs against the worker worktree.
   assert.ok(!rec.spawn.some((c) => [c.cmd, ...c.args].some((a) => /npm/.test(String(a)))), 'no npm spawn at all');

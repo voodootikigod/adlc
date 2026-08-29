@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { mkdtempSync, rmSync, realpathSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, realpathSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -281,7 +281,8 @@ test('the bridge forwards its loopback port to the proxy end to end and exits wi
 
 test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 30_000 }, async () => {
   const bridgePort = await freePort();
-  const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  const pidfile = join(scratch('egress-bridge-child-'), 'inner.pid');
+  const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(pidfile)}, String(process.pid)); setInterval(()=>{},1000)`], { stdio: 'ignore' });
   // Wait until the loopback port answers — that is the moment the child has been spawned. A loaded
   // host may take seconds to start two node processes: wait up to 20 s and FAIL LOUDLY if it never
   // listens, instead of signalling a bridge that is not up yet.
@@ -295,7 +296,12 @@ test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 3
     child.kill('SIGTERM');
     const status = await new Promise((r) => child.once('exit', (code) => r(code)));
     assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
-  } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+    // The INNER child (the worker) is gone too — the bridge relayed the signal, it did not just die itself.
+    const inner = Number(readFileSync(pidfile, 'utf8').trim());
+    let alive = true; for (let i = 0; i < 40 && alive; i++) { try { process.kill(inner, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
+    if (alive) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
+    assert.equal(alive, false, 'the inner worker process was terminated with the bridge');
+  } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } rmSync(dirname(pidfile), { recursive: true, force: true }); }
 });
 
 test('the bridge relays SIGINT too (fleet stops a run with either signal) and exits 128+2', { timeout: 30_000 }, async () => {

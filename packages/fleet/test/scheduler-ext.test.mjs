@@ -10,13 +10,13 @@ import { advanceTicket, reconcileResume, REASON_CODES } from '../lib/scheduler.m
 const ticket = { id: 'T1', title: 'T1', scope: ['src/**'], edges: [] };
 const ok = { ok: true };
 function effects(over = {}) {
-  const calls = { dispatch: [], preStrike: [] };
+  const calls = { dispatch: [], preStrike: [], order: [] };
   return {
     calls,
-    preStrike: over.preStrike ? (a) => { calls.preStrike.push(a); return over.preStrike(a); } : undefined,
+    preStrike: over.preStrike ? (a) => { calls.order.push('preStrike'); calls.preStrike.push(a); return over.preStrike(a); } : undefined,
     // Snapshot deadEnds: the scheduler keeps ONE array it appends to, so a recorder
     // that stored the reference would see later strikes' material retroactively.
-    dispatch: (a) => { calls.dispatch.push({ ...a, deadEnds: [...(a.deadEnds ?? [])] }); return over.dispatch ? over.dispatch(a) : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }; },
+    dispatch: (a) => { calls.order.push('dispatch'); calls.dispatch.push({ ...a, deadEnds: [...(a.deadEnds ?? [])] }); return over.dispatch ? over.dispatch(a) : { exitCode: 0, output: 'TICKET-DONE', timedOut: false }; },
     gate: over.gate ?? (() => ok),
     prosecute: over.prosecute ?? (() => ({ verdict: 'pass', reason: 'clean', review: { provider: 'codex', verdict: 'approve', revision: 'R1' } })),
     merge: over.merge ?? (() => ok),
@@ -262,4 +262,13 @@ test('a wall-clock pause after the worker returned but before its verdict (gate 
   const e3 = effects({ gate: () => { t3 = 5000; return { ok: false, output: 'red', timedOut: false }; } });
   const r3 = await advanceTicket(ticket, e3, { maxStrikes: 1, deadline: 4000, now: () => t3 });
   assert.equal(r3.state, 'paused'); assert.equal(r3.strikes, 1);
+});
+
+test('the pre-strike command runs BEFORE every dispatch, in order (never after, never skipped for a later strike)', async () => {
+  let n = 0;
+  const e = effects({ preStrike: () => ({ ok: true }), dispatch: () => ({ exitCode: ++n < 2 ? 1 : 0, output: n < 2 ? 'boom' : 'TICKET-DONE', timedOut: false }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
+  assert.equal(e.calls.dispatch.length, 2);
+  assert.deepEqual(e.calls.order, ['preStrike', 'dispatch', 'preStrike', 'dispatch'], 'pre-strike precedes each dispatch');
+  assert.ok(r.state);
 });

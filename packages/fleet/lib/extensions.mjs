@@ -13,8 +13,7 @@ import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plan
 import { prepareSyntheticHome } from './synthetic-home.mjs';
 import { startEgressProxy, egressEnv, DEFAULT_BRIDGE_PORT } from './egress-proxy.mjs';
 import {
-  assertBareMirror, assertMirrorConfigPristine, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip,
-} from './git-mirror.mjs';
+  assertBareMirror, assertMirrorConfigPristine, ensureWorkerBranchInRepo, cutMirrorWorktree, fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree, refreshMirrorTip, HOST_SAFE_GIT_FLAGS } from './git-mirror.mjs';
 import * as worktrees from './worktrees.mjs';
 
 export const BRIDGE_PATH = fileURLToPath(new URL('./egress-bridge.mjs', import.meta.url));
@@ -161,7 +160,14 @@ export function mirrorCreateWorktree({ repo, ticketId, integrationBranch, mirror
   // The worker gets the mirror read-write: OTHER tickets' `fleet/*` branches (already fetched back
   // into the caller repository) are dropped from it first, so the worker sees only the base branch
   // and its own branch (codex r19 #3).
-  for (const b of branches) if (b.startsWith('fleet/') && b !== workerBranch) { try { gitAt(mirror)('update-ref', '-d', `refs/heads/${b}`); } catch { /* already gone */ } }
+  let dropped = 0;
+  for (const b of branches) if (b.startsWith('fleet/') && b !== workerBranch) { try { gitAt(mirror)('update-ref', '-d', `refs/heads/${b}`); dropped++; } catch { /* already gone */ } }
+  // Their OBJECTS are pruned too (codex r22 #1): a dropped ref still leaves the sibling's work
+  // readable by hash otherwise. Host-safe overrides, on a mirror the pristine check just passed.
+  if (dropped > 0) {
+    try { gitAt(mirror)(...HOST_SAFE_GIT_FLAGS, 'reflog', 'expire', '--expire-unreachable=now', '--all'); } catch { /* no reflogs in a bare mirror */ }
+    gitAt(mirror)(...HOST_SAFE_GIT_FLAGS, 'gc', '--prune=now', '--quiet');
+  }
   // A later ticket cuts from the ADVANCED integration tip: bring it into the mirror first (codex r8).
   refreshMirrorTip({ mirror, repo, baseBranch, sourceRef: integrationBranch, tip: startSha, gitAt });
   // fleet's own worker branch in the caller repo: detach any gate worktree that

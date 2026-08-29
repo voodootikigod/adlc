@@ -531,3 +531,19 @@ test('assertWorktreeLink refuses a gitdir whose commondir was rewritten to anoth
     assert.ok(assertWorktreeLink({ path: a.path, gitDirRoot: mirror }));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a later ticket\'s mirror no longer holds the previous ticket\'s OBJECTS (refs dropped and pruned): the earlier worker commit is unreadable by hash inside the mirror', () => {
+  const { root, repo, mirror } = mirrorFixture();
+  try {
+    const a = mirrorCreateWorktree({ repo, ticketId: 'T1', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    writeFileSync(join(a.path, 'secret-work.txt'), 'T1 output\n'); sh(a.path, 'add', '-A'); sh(a.path, 'commit', '-q', '-m', 'w1');
+    const t1 = sh(a.path, 'rev-parse', 'HEAD');
+    assert.equal(mirrorFetchBack({ repo, mirror, workerBranch: a.branch, cutTip: a.cutTip, gatePath: a.gatePath, gitAt }).ok, true);
+    const { removeMirrorWorktree } = (() => ({ removeMirrorWorktree: null }))();
+    sh(mirror, 'worktree', 'remove', '--force', a.path);
+    mirrorCreateWorktree({ repo, ticketId: 'T2', integrationBranch: 'adlc/autopilot/issue-7', mirror, repoGit: gitAt(repo), gitAt });
+    const r = spawnSync('git', ['cat-file', '-e', `${t1}^{commit}`], { cwd: mirror, encoding: 'utf8' });
+    assert.notEqual(r.status, 0, "T1's commit is gone from the mirror (pruned with its ref)");
+    assert.equal(sh(repo, 'rev-parse', 'fleet/t1'), t1, 'the caller repository still holds it');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

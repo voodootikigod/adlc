@@ -171,7 +171,7 @@ test('fetchBackWorkerBranch advances the caller branch to the worker commit via 
     // AC 106: the recorded argv shows the temp-ref fetch, the ancestry check and the CAS with the cut tip as old value.
     const mutating = log.filter((a) => a[0] !== 'rev-parse');
     assert.deepEqual(mutating, [
-      ['fetch', '--no-tags', f.mirror, `+refs/heads/${WB}:${TMP_REF}`],
+      ['-c', 'fetch.fsckObjects=true', '-c', 'transfer.fsckObjects=true', 'fetch', '--no-tags', f.mirror, `+refs/heads/${WB}:${TMP_REF}`],
       ['merge-base', '--is-ancestor', f.issueTip, TMP_REF],
       ['update-ref', `refs/heads/${WB}`, TMP_REF, f.issueTip],
       ['update-ref', '-d', TMP_REF],

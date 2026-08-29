@@ -258,7 +258,8 @@ export function fetchBackWorkerBranch({ repo, mirror, workerBranch, cutTip, gitA
     return { ok: false, reason: 'mirror-fetch-failed', step, detail: `${step}: ${errorText(e)}` };
   };
 
-  try { git('fetch', '--no-tags', mirror, `+refs/heads/${workerBranch}:${tmpRef}`); }
+  // The mirror's objects are worker-written: every object received is fsck'd (codex r22 #2).
+  try { git('-c', 'fetch.fsckObjects=true', '-c', 'transfer.fsckObjects=true', 'fetch', '--no-tags', mirror, `+refs/heads/${workerBranch}:${tmpRef}`); }
   catch (e) { return failed('fetch', e); }
   // The only read in the sequence: the fetched tip is the value returned on success and
   // the exact old-value a step-4 rollback must compare against, so it is taken once, here.
