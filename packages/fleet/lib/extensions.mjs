@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { realpathSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { BoundedModelSandbox, checkReadSetInvariant } from './bounded-model-plane.mjs';
+import { BoundedModelSandbox, checkReadSetInvariant, SYSTEM_ROOTS } from './bounded-model-plane.mjs';
 import { prepareSyntheticHome } from './synthetic-home.mjs';
 import { startEgressProxy, egressEnv, DEFAULT_BRIDGE_PORT } from './egress-proxy.mjs';
 import {
@@ -63,7 +63,13 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
   };
   try {
     const home = prepareSyntheticHome({ hostHome, stagingDir: join(stagingDir, 'home'), adapter, fs: io.homeFs, uid: io.uid });
-    const readOnlyPaths = [...(config.modelPlaneReadOnly ?? [])];
+    // The FIXED system roots (runtime libraries, TLS trust store, resolver files) are
+    // always in the bounded read set when the host has them — a non-node adapter needs
+    // the TLS/DNS files for any HTTPS at all, and an operator following the documented
+    // `/usr,/lib,/lib64` example must not end up with a model plane that cannot
+    // complete a handshake (codex r23 #2). `--model-plane-read-only` EXTENDS this set.
+    const pathExists = io.pathExists ?? existsSync;
+    const readOnlyPaths = dedupeList([...SYSTEM_ROOTS.filter((p) => pathExists(p)), ...(config.modelPlaneReadOnly ?? [])]);
     const writableRoots = [...extraWritable, ...(config.modelPlaneWritable ?? [])];
     let egress = null;
     if (config.modelPlaneEgress === 'allowlist') {

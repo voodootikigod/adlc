@@ -168,7 +168,12 @@ export async function advanceTicket(ticket, effects, {
     }
     if (build.timedOut && expired()) {
       // The strike was cut short by the external wall clock, not by the
-      // per-dispatch timeout — resumable, not a failure of the ticket.
+      // per-dispatch timeout — resumable, not a failure of the ticket. When the
+      // dispatch ran on a budget the deadline had TRUNCATED below the configured
+      // per-dispatch timeout it never had its full attempt: that strike is handed
+      // back, so a resume on the last strike can still run it (codex r23 #3). A
+      // worker that had its full budget and still timed out keeps its verdict.
+      if (build.deadlineTruncated) return pausedUnconsumed('external wall clock expired during the strike; its deadline-truncated budget was not a full attempt');
       return paused('external wall clock expired during the strike', REASON_CODES.WALL_CLOCK);
     }
     if (build.exitCode !== 0 || build.timedOut) {
@@ -239,6 +244,10 @@ export async function advanceTicket(ticket, effects, {
       if (canRetry()) continue;
       return fail('post-merge gate failed after strikes exhausted', REASON_CODES.STRIKES_EXHAUSTED);
     }
+    // The merge landed within budget but the wall clock expired during or after the
+    // completion step: the ticket IS merged, and the run reports wall-clock so nothing
+    // (no PR) is published past the deadline by this invocation (codex r23 #4).
+    if (merge.expiredAfterMerge) return { state: 'merged', strikes, deadEnds, gatePassed, prosecution, review, reason: merge.output ?? 'external wall clock expired after the merge', reasonCode: REASON_CODES.WALL_CLOCK };
     return { state: 'merged', strikes, deadEnds, gatePassed, prosecution, review };
   }
   // Verdict evidence only; every strike already booked its own spend at

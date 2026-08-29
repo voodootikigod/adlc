@@ -483,9 +483,14 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
       }
       let res;
+      // The strike's budget: the configured per-dispatch timeout, or LESS when the wall
+      // clock has less left. A strike that times out on a deadline-truncated budget never
+      // had its full attempt — the scheduler hands that strike back (codex r23 #3).
+      const timeoutMs = dispatchTimeoutMs();
+      const deadlineTruncated = config.deadline != null && timeoutMs < (config.timeoutMinutes ?? 30) * 60000;
       try {
         res = await adapter.dispatch({
-          worktree, prompt, timeoutMs: dispatchTimeoutMs(), env: { ...env, ...(egress?.env ?? {}) },
+          worktree, prompt, timeoutMs, env: { ...env, ...(egress?.env ?? {}) },
           // `killGroup`: the worker is a process TREE; on timeout the whole group
           // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
           // The executable mapping is applied BEFORE the bridge prefix, so the bridge
@@ -529,6 +534,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const where = attempt?.channel
         ? ` channel=${attempt.channel}${attempt.escalatedFrom ? ` (escalated from ${attempt.escalatedFrom})` : ''}`
         : '';
+      res = { ...res, deadlineTruncated };
       write(`=== ${ticket.id} strike ${strike}${where} ===\n${res.output ?? ''}\n`);
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {

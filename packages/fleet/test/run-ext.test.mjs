@@ -327,3 +327,54 @@ test('a post-merge gate that THROWS withdraws the merge like a red gate (a strik
   assert.equal(rec2.openPR.length, 0, 'no PR opens from a quarantined branch');
   assert.equal(s2.merged, 0); assert.equal(s2.results.B, 'failed', 'the sibling ticket is refused on the quarantined branch');
 });
+
+test('spawnAsync killGroup: a leader that exits NORMALLY after forking a background survivor takes the survivor with it — the group dies with the leader on every exit, not only a timeout (codex r23 #1)', { timeout: 20_000 }, async () => {
+  const script = 'const { spawn } = require("node:child_process"); const c = spawn("sleep", ["30"], { stdio: "ignore" }); process.stdout.write(String(c.pid)); setTimeout(() => process.exit(0), 50);';
+  const gone = async (pid) => { for (let i = 0; i < 40; i++) { try { process.kill(pid, 0); } catch { return true; } await new Promise((r) => setTimeout(r, 50)); } return false; };
+  const res = await spawnAsync(process.execPath, ['-e', script], { timeout: 10_000, killGroup: true, encoding: 'utf8' });
+  assert.equal(res.status, 0); assert.equal(res.timedOut, false);
+  const survivor = Number(res.stdout.trim());
+  assert.ok(survivor > 1, `the leader reported its survivor pid (${res.stdout})`);
+  assert.equal(await gone(survivor), true, 'the survivor is gone once the call resolved');
+  // Control: without killGroup the legacy single-process path leaves the survivor alive.
+  const legacy = await spawnAsync(process.execPath, ['-e', script], { timeout: 10_000, encoding: 'utf8' });
+  const orphan = Number(legacy.stdout.trim());
+  let alive = true; try { process.kill(orphan, 0); } catch { alive = false; }
+  try { process.kill(orphan, 'SIGKILL'); } catch { /* already gone */ }
+  assert.equal(alive, true, 'the control proves the assertion is load-bearing: the legacy path keeps the orphan');
+});
+
+test('a completion commit that lands past the wall clock is WITHDRAWN: the ticket is merged (not completed), the run reports wall-clock, opens no PR and exits 2 (codex r23 #4)', async () => {
+  const rec = newRec(); const reverts = [];
+  let t = 0;
+  const d = { ...deps(rec, { now: () => t }), completeTicket: async (a) => { rec.complete.push(a); t = 6000; return { completed: true, preCompletionSha: 'P', completionSha: 'C' }; }, revertCompletion: async (a) => { reverts.push(a); } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000 }, deps: d });
+  assert.equal(s.results.A, 'merged', 'the merge itself landed within budget and stands');
+  assert.equal(reverts.length, 1, 'the past-deadline completion commit came off the branch');
+  assert.equal(reverts[0].toSha, 'P');
+  assert.equal(s.status.tickets.A.reasonCode, 'wall-clock');
+  assert.equal(s.wallClockExpired, true);
+  assert.equal(rec.openPR.length, 0, 'nothing is published past the deadline');
+  assert.equal(runExitCode(s), 2, 'resumable');
+  // A withdrawal that cannot happen quarantines the branch instead of shipping the commit.
+  const rec2 = newRec(); let t2 = 0;
+  const d2 = { ...deps(rec2, { now: () => t2 }), completeTicket: async () => { t2 = 6000; return { completed: true, preCompletionSha: 'P' }; }, revertCompletion: undefined };
+  const s2 = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000, maxStrikes: 1 }, deps: d2 });
+  assert.equal(s2.contaminated, true); assert.equal(rec2.openPR.length, 0);
+});
+
+test('a completion re-gate that fails once the wall clock has passed withdraws the completion AND reports wall-clock; a completion gated within budget whose return crosses the deadline is kept but not published (codex r23 #4)', async () => {
+  const rec = newRec(); const reverts = [];
+  let t = 0;
+  const d = { ...deps(rec, { now: () => t }), postMergeGate: async () => { if (rec.complete.length) { t = 6000; return { ok: false, timedOut: true, output: 'cut' }; } return { ok: true }; }, revertCompletion: async (a) => { reverts.push(a); } };
+  const s = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000 }, deps: d });
+  assert.equal(s.results.A, 'merged'); assert.equal(reverts.length, 1); assert.equal(s.wallClockExpired, true); assert.equal(rec.openPR.length, 0);
+  const rec2 = newRec(); const reverts2 = [];
+  let t2 = 0;
+  // The re-gate over the completion ran within budget and passed; the deadline passes before the effect returns.
+  const d2 = { ...deps(rec2, { now: () => t2 }), postMergeGate: async () => { if (rec2.complete.length) t2 = 5000; return { ok: true }; }, completeTicket: async (a) => { rec2.complete.push(a); return { completed: true, preCompletionSha: 'P' }; }, revertCompletion: async (a) => { reverts2.push(a); } };
+  const s2 = await runFleet({ all: [T('A')], runId: 'r', config: { base: 'main', concurrency: 1, deadline: 5000 }, deps: d2 });
+  assert.equal(s2.results.A, 'merged'); assert.equal(reverts2.length, 0, 'a completion gated within budget is kept');
+  assert.equal(s2.wallClockExpired, true, 'but the run still reports wall-clock');
+  assert.equal(rec2.openPR.length, 0, 'and publishes nothing');
+});

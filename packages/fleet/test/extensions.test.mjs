@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildLiveDeps } from '../lib/live-deps.mjs';
 import { advanceTicket } from '../lib/scheduler.mjs';
-import { BRIDGE_PATH, mirrorCreateWorktree, mirrorFetchBack } from '../lib/extensions.mjs';
+import { BRIDGE_PATH, bridgeArgv, mirrorCreateWorktree, mirrorFetchBack } from '../lib/extensions.mjs';
+import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
+import { startEgressProxy, egressEnv } from '../lib/egress-proxy.mjs';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { assertBareMirror, assertMirrorConfigPristine } from '../lib/git-mirror.mjs';
 import { detectBackend } from '../lib/sandbox.mjs';
 import { probeBwrap } from './helpers/bwrap-probe.mjs';
@@ -546,4 +550,62 @@ test('a later ticket\'s mirror no longer holds the previous ticket\'s OBJECTS (r
     assert.notEqual(r.status, 0, "T1's commit is gone from the mirror (pruned with its ref)");
     assert.equal(sh(repo, 'rev-parse', 'fleet/t1'), t1, 'the caller repository still holds it');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('bounded mode binds the FIXED system roots the host has (runtime, TLS trust store, resolver files) without the operator listing them; --model-plane-read-only extends the set; an absent root is not bound (codex r23 #2)', async () => {
+  const rec = newRec();
+  const present = new Set(SYSTEM_ROOTS.filter((p) => p !== '/lib64'));
+  const io = { ...fakeIo(rec), pathExists: (p) => present.has(p) };
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-roots-'));
+  try {
+    const deps = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded' } });
+    const r = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    assert.equal(r.exitCode, 0, r.output);
+    const call = findInner(rec.spawn, `${HOME}/.local/bin/claude`);
+    const w = call.wrapper.args;
+    const pairs = w.map((a, i) => `${a} ${w[i + 1]}`);
+    for (const root of ['/usr', '/lib', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts']) assert.ok(pairs.includes(`--ro-bind ${root}`), `${root} is bound without being listed`);
+    assert.ok(!pairs.includes('--ro-bind /lib64'), 'a root the host does not have is not bound');
+    assert.ok(!pairs.includes('--ro-bind /'), 'never --ro-bind / /');
+    const rec2 = newRec();
+    const deps2 = buildLiveDeps({ repo: '/repo', statusDir: dir, sandboxSpec, io: { ...fakeIo(rec2), pathExists: (p) => present.has(p) }, config: { gate: { test: 't' }, timeoutMinutes: 1, modelPlaneRead: 'bounded', modelPlaneReadOnly: ['/usr', `${HOME}/.local/bin/rg`] } });
+    await deps2.dispatch({ ticket, worktree: '/wt/T1', startSha: 'S', strike: 1, deadEnds: [] });
+    const w2 = findInner(rec2.spawn, `${HOME}/.local/bin/claude`).wrapper.args;
+    const pairs2 = w2.map((a, i) => `${a} ${w2[i + 1]}`);
+    assert.equal(pairs2.filter((p) => p === '--ro-bind /usr').length, 1, 'a listed system root is bound once');
+    assert.ok(pairs2.includes(`--ro-bind ${HOME}/.local/bin/rg`), 'the operator entry extends the set');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── the PRODUCTION egress wiring composed for real: bridgeArgv + egressEnv + startEgressProxy ──
+const CONNECT_PROBE = `
+const net = require("node:net");
+const u = new URL(process.env.HTTPS_PROXY);
+const s = net.connect(Number(u.port), u.hostname);
+let buf = "";
+s.on("connect", () => s.write("CONNECT example.com:443 HTTP/1.1\\r\\nHost: example.com:443\\r\\n\\r\\n"));
+s.on("data", (d) => { buf += d; if (/\\r\\n\\r\\n/.test(buf)) { s.destroy(); process.exit(/^HTTP\\/1\\.[01] 403/.test(buf) ? 3 : 1); } });
+s.on("error", () => process.exit(2));
+setTimeout(() => process.exit(4), 10000);
+`;
+test('the production bridge wiring composes end to end on the host: bridgeArgv + egressEnv + a REAL startEgressProxy — a CONNECT to an unlisted host through the bridge is refused by the proxy and recorded (codex r23 F2 #2)', { timeout: 30_000 }, async () => {
+  const dir = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'fleet-ext-wire-')));
+  const socketPath = join(dir, 'proxy.sock');
+  const proxy = await startEgressProxy({ socketPath, allowlist: ['api.anthropic.com:443'] });
+  try {
+    const port = await new Promise((resolve, reject) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)); }); srv.on('error', reject); });
+    const egress = { proxy, port, socketPath, env: egressEnv(port), allowlist: [...proxy.allowlist] };
+    const argv = bridgeArgv({ egress, argv: [process.execPath, '-e', CONNECT_PROBE] });
+    assert.equal(argv[0], process.execPath); assert.equal(argv[1], BRIDGE_PATH);
+    const res = await new Promise((resolve, reject) => {
+      const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, ...egress.env } });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += d; });
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`bridge run timed out; stderr: ${stderr}`)); }, 20_000);
+      child.once('error', reject);
+      child.once('exit', (status) => { clearTimeout(timer); resolve({ status, stderr }); });
+    });
+    assert.equal(res.status, 3, `the probe saw the proxy's 403 through the bridge (stderr: ${res.stderr})`);
+    assert.deepEqual(proxy.refused.map((r) => r.host), ['example.com'], 'the proxy recorded the refused host');
+  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
 });

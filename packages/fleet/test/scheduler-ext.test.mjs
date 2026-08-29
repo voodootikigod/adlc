@@ -272,3 +272,27 @@ test('the pre-strike command runs BEFORE every dispatch, in order (never after, 
   assert.deepEqual(e.calls.order, ['preStrike', 'dispatch', 'preStrike', 'dispatch'], 'pre-strike precedes each dispatch');
   assert.ok(r.state);
 });
+
+test('a strike that timed out on a DEADLINE-TRUNCATED budget is handed back (paused wall-clock, strike unconsumed); one that had its full budget keeps its verdict (codex r23 #3)', async () => {
+  let t = 0;
+  const e = effects({ dispatch: () => { t = 5000; return { exitCode: 124, output: '', timedOut: true, deadlineTruncated: true }; } });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3, deadline: 4000, now: () => t });
+  assert.equal(r.state, 'paused'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK);
+  assert.equal(r.strikes, 0, 'the truncated strike is handed back so a resume on the last strike can still run it');
+  // On the LAST strike: without the hand-back the resume would exit through the strike cap.
+  let t2 = 0;
+  const e2 = effects({ dispatch: () => { t2 = 5000; return { exitCode: 124, output: '', timedOut: true, deadlineTruncated: true }; } });
+  const r2 = await advanceTicket(ticket, e2, { maxStrikes: 3, startStrikes: 2, deadline: 4000, now: () => t2 });
+  assert.equal(r2.state, 'paused'); assert.equal(r2.strikes, 2, 'still one strike left for the resume');
+  let t3 = 0;
+  const e3 = effects({ dispatch: () => { t3 = 5000; return { exitCode: 124, output: '', timedOut: true, deadlineTruncated: false }; } });
+  const r3 = await advanceTicket(ticket, e3, { maxStrikes: 3, deadline: 4000, now: () => t3 });
+  assert.equal(r3.state, 'paused'); assert.equal(r3.strikes, 1, 'a full-budget timeout is the worker\'s verdict and stays consumed');
+});
+
+test('a merge that reports expiredAfterMerge is a MERGED ticket carrying wall-clock, so the run publishes nothing past the deadline (codex r23 #4)', async () => {
+  const e = effects({ merge: () => ({ ok: true, completed: false, expiredAfterMerge: true, output: 'external wall clock expired during completion' }) });
+  const r = await advanceTicket(ticket, e, { maxStrikes: 3 });
+  assert.equal(r.state, 'merged'); assert.equal(r.reasonCode, REASON_CODES.WALL_CLOCK); assert.equal(r.strikes, 1);
+  assert.match(r.reason, /wall clock expired/);
+});

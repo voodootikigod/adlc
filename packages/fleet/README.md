@@ -49,7 +49,7 @@ fleet run --dry-run --json          # machine-readable plan
 fleet run [--concurrency N] [--tickets T1,T2] [--base main] [--json]
 fleet run --tickets T1 --no-pr --no-complete --max-strikes 14 --wall-clock-minutes 60 \
           --pre-strike-argv '["/abs/adlc","autopilot","quota","--json"]' --pre-strike-env '{"PATH":"/usr/bin","HOME":"/home/me"}' \
-          --model-plane-read bounded --model-plane-read-only /usr,/lib,/lib64 \
+          --model-plane-read bounded --model-plane-read-only /opt/tools/rg \
           --model-plane-git mirror --model-plane-git-mirror /abs/mirror.git \
           --model-plane-egress allowlist --worker-deps /abs/worker-deps/node_modules --json
 fleet status [--json]               # show the current run's per-ticket state
@@ -237,7 +237,7 @@ behaviour when absent.
 | `--wall-clock-minutes <m>` | External deadline for the WHOLE run: nothing new is dispatched after it, a strike it cuts short has its process group killed (SIGTERM, then SIGKILL after 15 s), the run records reason `wall-clock`, exits 2 and stays resumable. |
 | `--charter-file <path>` | Appended to the builder prompt AFTER the Constraints block (the constraints stay authoritative). |
 | `--pre-strike-argv <json-array>` + `--pre-strike-env <json-object>` | A command run before EVERY strike with an argv array and no shell, with EXACTLY the given environment (fleet adds nothing; `ADLC_MANIFEST_KEY` in it is rejected); `argv[0]` must be absolute. Non-zero exit → the ticket pauses (`quota-paused`, exit 2) and an identical re-invocation resumes it via the existing status reconciliation — there is no `--resume` flag and none is needed. |
-| `--model-plane-read host\|bounded` + `--model-plane-read-only <abs,…>` | `bounded` gives the MODEL plane the sandbox module's bounded read policy (worktree + synthetic home + the allowlist) plus a private empty tmpfs at `/tmp`; a FILE entry is bound as a single file, so individual executables can be exposed without their parent directory. |
+| `--model-plane-read host\|bounded` + `--model-plane-read-only <abs,…>` | `bounded` gives the MODEL plane the sandbox module's bounded read policy (worktree + synthetic home + the allowlist) — the fixed system roots the host has (`/usr`, `/lib`, `/lib64`, `/etc/ssl`, `/etc/resolv.conf`, `/etc/hosts`) are always in it, so TLS and name resolution work for every adapter; the flag EXTENDS that set plus a private empty tmpfs at `/tmp`; a FILE entry is bound as a single file, so individual executables can be exposed without their parent directory. |
 | `--model-plane-git mirror` + `--model-plane-git-mirror <abs bare repo>` | The worker's worktree is cut from the caller-supplied bare mirror (its only git database); after the worker exits the branch is fetched back into the caller repository with a compare-and-swap (`fetch` to a temp ref → `merge-base --is-ancestor` → `update-ref … <cutTip>` → delete the temp ref) and gates/prosecution/merge run on that branch as in shared mode. Any step failing → reason `mirror-fetch-failed`, ref untouched. Requires `bounded` reads. |
 | `--model-plane-egress open\|allowlist` | `allowlist` runs the model plane with `--unshare-net` plus a host-side CONNECT proxy on a unix socket whose only permitted targets are the adapter's declared model hosts, bridged to `127.0.0.1` inside the sandbox (`HTTPS_PROXY`/`HTTP_PROXY` set, `NO_PROXY` empty). |
 | `--worker-deps <abs node_modules>` | A plain copy (never an npm run) of a caller-built dependency tree into the worker worktree before every strike; the configured `init` does not run. |

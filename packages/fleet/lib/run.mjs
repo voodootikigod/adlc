@@ -102,33 +102,51 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
       // that branch at a time. Best-effort: the merge already landed and passed its
       // gate, so a completion failure must NOT revert good, shipped work; it degrades
       // to the pre-T73 status quo (merged, not yet marked completed) and is logged.
+      const pastDeadline = () => config.deadline != null && (deps.now ?? Date.now)() >= config.deadline;
+      // Withdraw ONLY the completion commit (the shipped merge below it stays). Withdrawal
+      // failing is NOT a degradation we may swallow: the branch would carry an unvalidated
+      // or past-deadline commit into the fleet PR. Both a missing withdrawal path and a
+      // throwing one quarantine the branch instead. Returns the quarantine result, or null.
+      const withdrawCompletion = (completion, why) => {
+        if (!deps.revertCompletion) {
+          const reason = `${why} could not be withdrawn (no withdrawal path wired)`;
+          markContaminated(reason);
+          return Promise.resolve({ ok: false, output: `${reason}; integration branch quarantined` });
+        }
+        return Promise.resolve()
+          .then(() => deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha, shardPath: completion.shardPath, completionSha: completion.completionSha, ledgerPath: completion.ledgerPath, raced: completion.raced }))
+          .then(() => null, (revertError) => {
+            const reason = `${why} could not be withdrawn (${revertError.message})`;
+            markContaminated(reason);
+            return { ok: false, output: `${reason}; integration branch quarantined` };
+          });
+      };
       try {
         const completion = await deps.completeTicket?.({ ticket, integrationBranch });
-        // The completion adds a commit AFTER the gate that just passed, so re-run the
-        // gate over it — no unvalidated commit reaches the PR. If that re-gate fails,
-        // withdraw ONLY the completion commit (the shipped merge below it stays) and
-        // degrade to the pre-T73 status quo: merged, not marked completed.
         if (completion?.completed && completion.preCompletionSha) {
+          // The completion commit is bounded by the wall clock like everything else: one
+          // that landed past the deadline comes off the branch, and the run reports
+          // wall-clock so no PR is published by this invocation (codex r23 #4).
+          if (pastDeadline()) {
+            const quarantined = await withdrawCompletion(completion, 'a completion commit that landed past the wall clock');
+            if (quarantined) return quarantined;
+            deps.log?.(`${ticket.id} WARNING: wall clock expired during the completion commit; completion withdrawn (merged, not marked completed)`);
+            return { ok: true, completed: false, expiredAfterMerge: true, output: 'external wall clock expired during completion; completion withdrawn (merged, not marked completed)' };
+          }
+          // The completion adds a commit AFTER the gate that just passed, so re-run the
+          // gate over it — no unvalidated commit reaches the PR. If that re-gate fails,
+          // withdraw the completion and degrade to the pre-T73 status quo: merged, not
+          // marked completed.
           const fresh = config.deadline != null ? Math.max(1, config.deadline - (deps.now ?? Date.now)()) : remainingMs;
           const recheck = await deps.postMergeGate({ ticket, integrationBranch, remainingMs: fresh });
           if (!recheck.ok) {
-            // The completion commit FAILED the gate, so it must come off the branch.
-            // Withdrawal failing is NOT a degradation we may swallow: the branch would
-            // carry a gate-rejected commit into the fleet PR. Both a missing withdrawal
-            // path and a throwing one fail the ticket loudly instead.
-            if (!deps.revertCompletion) {
-              const reason = 'a gate-rejected completion commit could not be withdrawn (no withdrawal path wired)';
-              markContaminated(reason);
-              return { ok: false, output: `${reason}; integration branch quarantined` };
-            }
-            try {
-              await deps.revertCompletion({ ticket, integrationBranch, toSha: completion.preCompletionSha, shardPath: completion.shardPath, completionSha: completion.completionSha, ledgerPath: completion.ledgerPath, raced: completion.raced });
-            } catch (revertError) {
-              const reason = `a gate-rejected completion commit could not be withdrawn (${revertError.message})`;
-              markContaminated(reason);
-              return { ok: false, output: `${reason}; integration branch quarantined` };
-            }
+            const quarantined = await withdrawCompletion(completion, 'a gate-rejected completion commit');
+            if (quarantined) return quarantined;
             deps.log?.(`${ticket.id} WARNING: gate over the completion commit failed; completion withdrawn (merged, not marked completed)`);
+            if (pastDeadline()) return { ok: true, completed: false, expiredAfterMerge: true, output: 'external wall clock expired during the completion re-gate; completion withdrawn (merged, not marked completed)' };
+          } else if (pastDeadline()) {
+            // Landed and gated within budget; only the return crossed the deadline.
+            return { ok: true, completed: true, expiredAfterMerge: true, output: 'external wall clock expired after completion; merged and completed, not published by this invocation' };
           }
         }
       } catch (error) {

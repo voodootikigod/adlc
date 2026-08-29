@@ -89,8 +89,11 @@ export function spawnAsync(cmd, args = [], opts = {}) {
       clear();
       // The leader may exit on SIGTERM while a descendant lives on: after a timeout
       // the whole GROUP gets the SIGKILL now, not a grace timer the close just
-      // cancelled (codex r7).
-      if (timedOut && killGroup && child.pid) killTheGroup();
+      // cancelled (codex r7). And a leader that exits NORMALLY after forking a
+      // background helper must not leave it running while the scheduler goes on to
+      // commit, gate, prosecute and merge the worktree (codex r23 #1): with
+      // `killGroup` the group dies with its leader on every exit, not only a timeout.
+      if (killGroup && child.pid) killTheGroup();
       resolve({ status, signal, stdout: text(out), stderr: text(err), timedOut: timedOut || signal === 'SIGTERM', truncated });
     });
   });
