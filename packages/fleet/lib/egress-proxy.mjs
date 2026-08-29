@@ -126,6 +126,39 @@ function refuse(client, ctx, target, reason) {
   client.end(REPLY.forbidden);
 }
 
+/** The 16 bytes of an IPv6 literal (`::` expansion, an embedded dotted IPv4 tail), or null. */
+export function parseIPv6(text) {
+  let s = String(text ?? '').trim().toLowerCase();
+  if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
+  const zone = s.indexOf('%'); if (zone !== -1) s = s.slice(0, zone);
+  if (!/^[0-9a-f:.]+$/.test(s) || s.split('::').length > 2) return null;
+  const [head, tail = null] = s.includes('::') ? s.split('::') : [s, null];
+  const groups = (part) => (part === '' ? [] : part.split(':'));
+  const expand = (parts) => {
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const g = parts[i];
+      if (g.includes('.')) {
+        if (i !== parts.length - 1 || net.isIPv4(g) === false) return null;
+        const [a, b2, c, d] = g.split('.').map(Number);
+        out.push((a << 8) | b2, (c << 8) | d);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+        out.push(parseInt(g, 16));
+      }
+    }
+    return out;
+  };
+  const h = expand(groups(head)); if (!h) return null;
+  const t = tail === null ? [] : expand(groups(tail)); if (!t) return null;
+  const fill = 8 - h.length - t.length;
+  if (tail === null ? h.length !== 8 : fill < 1) return null;
+  const words = tail === null ? h : [...h, ...new Array(fill).fill(0), ...t];
+  const bytes = new Uint8Array(16);
+  words.forEach((w, i) => { bytes[2 * i] = w >> 8; bytes[2 * i + 1] = w & 0xff; });
+  return bytes;
+}
+
 const v4ToInt = (ip) => ip.split('.').reduce((n, o) => (n * 256) + Number(o), 0);
 const inCidr4 = (ip, net4, bits) => (bits === 0 ? true : Math.floor(v4ToInt(ip) / 2 ** (32 - bits)) === Math.floor(v4ToInt(net4) / 2 ** (32 - bits)));
 /** IANA special-purpose IPv4 space (RFC 6890 and successors): nothing here is a public model endpoint. */
@@ -140,18 +173,24 @@ export function isPublicAddress(ip) {
   const v = net.isIP(ip);
   if (v === 4) return !NON_PUBLIC_V4.some(([net4, bits]) => inCidr4(ip, net4, bits));
   if (v === 6) {
-    const low = ip.toLowerCase();
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
-    if (mapped) return isPublicAddress(mapped[1]);
-    if (low === '::1' || low === '::') return false;
-    if (/^f[cd]/.test(low)) return false;            // fc00::/7 unique local
-    if (/^fe[89ab]/.test(low)) return false;         // fe80::/10 link-local
-    if (/^ff/.test(low)) return false;               // multicast
-    if (/^2001:db8:/.test(low)) return false;        // documentation
-    if (/^100:(0:0:0:|:)/.test(low) || low.startsWith('100::')) return false; // discard-only
-    if (/^2002:/.test(low)) return false;            // 6to4 (embeds an IPv4 the proxy cannot vet)
-    if (/^2001:0?:/.test(low) || /^2001::/.test(low)) return false; // Teredo (obfuscated embedded IPv4)
-    if (/^64:ff9b:/.test(low)) return false;         // NAT64 well-known prefix (embedded IPv4)
+    // Classified on the 16 BYTES, never on the text: every spelling of an address (compressed,
+    // uncompressed, upper-case, hex or dotted embedded IPv4) lands in the same bucket (codex r16 #2).
+    const b = parseIPv6(ip);
+    if (!b) return false;
+    const zeros = (from, to) => b.slice(from, to).every((x) => x === 0);
+    const v4 = (at) => `${b[at]}.${b[at + 1]}.${b[at + 2]}.${b[at + 3]}`;
+    if (zeros(0, 16)) return false;                                            // ::
+    if (zeros(0, 15) && b[15] === 1) return false;                             // ::1
+    if (zeros(0, 10) && b[10] === 0xff && b[11] === 0xff) return isPublicAddress(v4(12)); // ::ffff:a.b.c.d
+    if (zeros(0, 12)) return isPublicAddress(v4(12));                          // ::a.b.c.d (v4-compatible, deprecated)
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(4, 12)) return isPublicAddress(v4(12)); // 64:ff9b::/96 NAT64
+    if (b[0] === 0x20 && b[1] === 0x02) return isPublicAddress(v4(2));         // 2002::/16 6to4
+    if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return false; // Teredo
+    if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return false; // documentation
+    if ((b[0] & 0xfe) === 0xfc) return false;                                  // fc00::/7 unique local
+    if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return false;                 // fe80::/10 link-local
+    if (b[0] === 0xff) return false;                                           // multicast
+    if (b[0] === 0x01 && zeros(1, 8)) return false;                            // 100::/64 discard-only
     return true;
   }
   return false;

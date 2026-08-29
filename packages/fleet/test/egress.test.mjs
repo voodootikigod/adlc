@@ -402,10 +402,16 @@ test('a client that never finishes its CONNECT head is dropped at the head deadl
 import { PassThrough } from 'node:stream';
 import { isPublicAddress, resolveVettedAddress, REFUSAL as EGRESS_REFUSAL } from '../lib/egress-proxy.mjs';
 
-test('isPublicAddress: loopback, RFC1918, link-local, CGNAT, multicast, unspecified, ULA and v4-mapped private are NOT public; ordinary unicast is', () => {
+test('isPublicAddress: loopback, RFC1918, link-local, CGNAT, multicast, unspecified, ULA and v4-mapped private are NOT public; ordinary unicast is', async () => {
   for (const ip of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '192.0.0.8', '192.0.2.1', '192.88.99.1', '198.18.0.1', '198.19.255.255', '198.51.100.7', '203.0.113.9', '240.0.0.1', '255.255.255.255', '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '::ffff:192.0.2.1', '2001:db8::1', '2002:c000:0204::1', '64:ff9b::7f00:1', '2001::1', '100::1']) assert.equal(isPublicAddress(ip), false, ip);
   for (const ip of ['93.184.216.34', '172.32.0.1', '8.8.8.8', '198.17.0.1', '198.20.0.1', '192.0.3.1', '2606:4700::1111', '2a00:1450::1', '::ffff:93.184.216.34']) assert.equal(isPublicAddress(ip), true, ip);
   assert.equal(isPublicAddress('not-an-ip'), false);
+  // Every SPELLING of a private IPv6 address lands in the same bucket (classified on the bytes).
+  for (const ip of ['::ffff:7f00:1', '0:0:0:0:0:ffff:127.0.0.1', '0:0:0:0:0:0:0:1', '0::1', '::127.0.0.1', '::0a00:1', '64:ff9b::7f00:1', '64:ff9b::127.0.0.1', '2002:7f00:1::', '2002:c0a8:101::1', 'FE80::1', 'fe80:0:0:0:0:0:0:1', 'FC00::1', 'fd00:0:0:0:0:0:0:1', '::FFFF:192.168.0.1', '2001:0:0:0:0:0:0:1', '0100::1']) assert.equal(isPublicAddress(ip), false, ip);
+  for (const ip of ['::ffff:5db8:d822', '::ffff:8.8.8.8', '2002:0808:0808::1', '64:ff9b::8.8.8.8', '2a00:1450:4001:0:0:0:0:8a', '2606:4700:0:0:0:0:0:1111']) assert.equal(isPublicAddress(ip), true, ip);
+  const { parseIPv6 } = await import('../lib/egress-proxy.mjs');
+  assert.equal(parseIPv6('1::2::3'), null); assert.equal(parseIPv6('12345::1'), null); assert.equal(parseIPv6('::1.2.3'), null);
+  assert.deepEqual([...parseIPv6('::ffff:1.2.3.4').slice(10)], [0xff, 0xff, 1, 2, 3, 4]);
 });
 
 test('resolveVettedAddress: a name whose ANY address is non-public is refused (DNS rebinding); a public name yields its first address; an IP literal is the operator\'s explicit intent', async () => {

@@ -265,6 +265,16 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       log(`${ticket.id} → failed (worktree setup failed: ${e.message})`);
       return;
     }
+    // A cleanup failure is recorded on the ticket and logged, never thrown (codex r16 #1): a thrown
+    // cleanup would abort the whole run while sibling tickets are in flight and release the lock.
+    const safeCleanup = async (args) => {
+      try { await deps.cleanup?.(args); }
+      catch (e) {
+        status = withTicket(status, ticket.id, { cleanupFailed: `${e.message}`.slice(0, 200) });
+        persist();
+        log(`${ticket.id} → cleanup failed (${e.message}); the run continues`);
+      }
+    };
     status = withTicket(status, ticket.id, { state: 'building', branch: wt.branch, startSha: wt.startSha, strikes: startStrikes });
     persist();
     try { await deps.provision?.({ ticket, worktree: wt.path }); }
@@ -274,7 +284,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       dispatchRefused = true;
       persist();
       log(`${ticket.id} → failed (provisioning failed: ${e.message})`);
-      await deps.cleanup?.({ ticket, worktree: wt.path, state: 'failed' });
+      await safeCleanup({ ticket, worktree: wt.path, state: 'failed' });
       return;
     }
     let outcome;
@@ -301,7 +311,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
       prosecution: outcome.prosecution ?? null, review: outcome.review ?? null,
     });
     persist();
-    await deps.cleanup?.({ ticket, worktree: wt.path, state: outcome.state });
+    await safeCleanup({ ticket, worktree: wt.path, state: outcome.state });
     log(`${ticket.id} → ${outcome.state}${outcome.reason ? ` (${outcome.reason})` : ''}`);
   };
 

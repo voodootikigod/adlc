@@ -297,3 +297,14 @@ test('a worktree-setup or provisioning failure is run-level dispatch-refused (ex
   assert.equal(s.results.A, 'pending', 'retryable on the next invocation'); assert.equal(s.dispatchRefused, true);
   assert.equal(summaryReason(s), 'dispatch-refused'); assert.equal(runExitCode(s), 1);
 });
+
+test('a cleanup that THROWS is recorded on its ticket and logged; the run continues with the sibling tickets and finishes (the lock is never released early by a cleanup failure)', async () => {
+  const rec = newRec();
+  const d = deps(rec);
+  d.cleanup = async ({ ticket }) => { if (ticket.id === 'A') throw new Error('rm: device busy'); };
+  const s = await runFleet({ all: [T('A'), T('B')], runId: 'r', config: { base: 'main', concurrency: 1, noPr: true }, deps: d });
+  assert.equal(rec.dispatch.length, 2, 'both tickets were dispatched (the failing cleanup of A did not abort the run)');
+  assert.equal(s.results.A, 'merged'); assert.equal(s.results.B, 'merged');
+  assert.match(String(s.status.tickets.A.cleanupFailed), /device busy/, 'the cleanup failure is recorded on the ticket');
+  assert.equal(s.status.tickets.B.cleanupFailed, undefined);
+});
