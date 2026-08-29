@@ -65,6 +65,17 @@ export function validateVacuousPayload(parsed, verifiedCount) {
   }
 
   const vacuous = parsed.vacuous.map((raw) => {
+    // Reject non-numeric-ish types BEFORE calling Number() on them: JS
+    // coerces null -> 0, false -> 0, true -> 1, and '' (or whitespace-only
+    // strings) -> 0, so Number() alone would silently accept these as
+    // "index 0/1" instead of rejecting them — the exact false-green shape
+    // this validator exists to close.
+    if (typeof raw !== 'number' && typeof raw !== 'string') {
+      throw new Error(`vacuous-vote payload contains a non-numeric index of type ${typeof raw}: ${JSON.stringify(raw)}`);
+    }
+    if (typeof raw === 'string' && raw.trim() === '') {
+      throw new Error(`vacuous-vote payload contains a blank string index: ${JSON.stringify(raw)}`);
+    }
     const n = Number(raw);
     if (!Number.isInteger(n)) {
       throw new Error(`vacuous-vote payload contains a non-numeric or non-integer index: ${JSON.stringify(raw)}`);
@@ -90,14 +101,23 @@ export function validateVacuousPayload(parsed, verifiedCount) {
  * @throws {Error} if the LLM response cannot be validated (see validateVacuousPayload)
  */
 export async function detectVacuous(verifiedCriteria, tier = 'cheap', opts = {}) {
-  const { completeFn = complete, extractJsonFn = extractJson } = opts;
+  const { completeFn, extractJsonFn = extractJson } = opts;
 
   if (verifiedCriteria.length === 0) {
     return { vacuous: [], reason: {} };
   }
 
+  // ADLC_GATE_MOCK_RESPONSE is a TEST-ONLY seam (same convention as coldstart's
+  // checkTicket): honored only when NODE_ENV === 'test' AND no completeFn was
+  // explicitly injected. This lets a CLI-level test drive the REAL bin/spec-
+  // lint.mjs process end to end (flag parsing -> detectVacuous -> validation
+  // -> opError's exit code) without a network call or a second mock mechanism.
+  const mockEnv = process.env.ADLC_GATE_MOCK_RESPONSE;
+  const useMock = completeFn === undefined && mockEnv !== undefined && process.env.NODE_ENV === 'test';
+  const resolvedCompleteFn = useMock ? async () => mockEnv : (completeFn ?? complete);
+
   const prompt = buildVacuousPrompt(verifiedCriteria);
-  const response = await completeFn({
+  const response = await resolvedCompleteFn({
     tier,
     system: 'You are a spec quality auditor. Respond with JSON only.',
     prompt,

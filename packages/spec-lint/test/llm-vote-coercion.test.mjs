@@ -4,9 +4,27 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 
 import { validateVacuousPayload, detectVacuous } from '../lib/llm.mjs';
 import { applyLlmDemotion } from '../lib/classify.mjs';
+
+const FIXTURES = new URL('./fixtures/', import.meta.url).pathname;
+const BIN = new URL('../bin/spec-lint.mjs', import.meta.url).pathname;
+
+function runCliLlm(mockResponse) {
+  const specPath = join(FIXTURES, 'all-verified.md');
+  try {
+    const out = execFileSync(process.execPath, [BIN, specPath, '--llm', '--json'], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test', ADLC_GATE_MOCK_RESPONSE: mockResponse },
+    });
+    return { stdout: out, stderr: '', code: 0 };
+  } catch (err) {
+    return { stdout: err.stdout ?? '', stderr: err.stderr ?? '', code: err.status ?? 1 };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // validateVacuousPayload — the pure validator/coercer (no LLM call)
@@ -88,6 +106,24 @@ describe('validateVacuousPayload', () => {
     assert.throws(() => validateVacuousPayload({ vacuous: [1.5] }, 3), /integer/i);
   });
 
+  it('throws (does not silently coerce to index 0) when an entry is null', () => {
+    // Number(null) === 0 — without an explicit type check this would be
+    // silently accepted as "demote index 0" instead of rejected.
+    assert.throws(() => validateVacuousPayload({ vacuous: [null] }, 3), /non-numeric index of type object/i);
+  });
+
+  it('throws (does not silently coerce to index 0/1) when an entry is a boolean', () => {
+    // Number(false) === 0, Number(true) === 1 — same silent-coercion trap.
+    assert.throws(() => validateVacuousPayload({ vacuous: [false] }, 3), /non-numeric index of type boolean/i);
+    assert.throws(() => validateVacuousPayload({ vacuous: [true] }, 3), /non-numeric index of type boolean/i);
+  });
+
+  it('throws (does not silently coerce to index 0) when an entry is an empty or blank string', () => {
+    // Number('') === 0, Number('   ') === 0 — same silent-coercion trap.
+    assert.throws(() => validateVacuousPayload({ vacuous: [''] }, 3), /blank string index/i);
+    assert.throws(() => validateVacuousPayload({ vacuous: ['   '] }, 3), /blank string index/i);
+  });
+
   it('rejects a bare top-level array (no vacuous wrapper) — deliberate, not a recovered deviation', () => {
     // Unlike coldstart's #594 fix (which recovers a bare array because its
     // prompt is ambiguous about shape), this package's prompt explicitly asks
@@ -155,6 +191,43 @@ describe('detectVacuous with injected complete/extractJson', () => {
     const result = await detectVacuous([], 'cheap', { completeFn: stubComplete, extractJsonFn: JSON.parse });
     assert.deepEqual(result, { vacuous: [], reason: {} });
     assert.equal(called, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI integration — the real bin/spec-lint.mjs process, driven end to end via
+// the ADLC_GATE_MOCK_RESPONSE test seam (NODE_ENV=test), exercising the full
+// wiring: flag parsing -> detectVacuous -> validateVacuousPayload -> opError's
+// exit code. all-verified.md has 6 verified criteria (indices 0-5).
+// ---------------------------------------------------------------------------
+
+describe('CLI: --llm end to end via the mock seam', () => {
+  it('string-index response demotes and exits with gate-fail (real vacuous criteria)', () => {
+    const { code, stdout } = runCliLlm('{"vacuous":["0","2"],"reason":{"0":"vague","2":"vague"}}');
+    assert.equal(code, 2);
+    const result = JSON.parse(stdout);
+    const wishes = result.criteria.filter((c) => c.status === 'WISH');
+    assert.ok(wishes.length >= 2, 'expected at least the 2 demoted criteria to be WISH');
+  });
+
+  it('a malformed payload (missing vacuous field) exits 1, never "all criteria verified"', () => {
+    const { code, stdout, stderr } = runCliLlm('{"result":"ok"}');
+    assert.equal(code, 1);
+    assert.equal(stdout, '');
+    assert.match(stderr, /missing/i);
+  });
+
+  it('a payload with a null entry exits 1, not a silent index-0 demotion', () => {
+    const { code, stderr } = runCliLlm('{"vacuous":[null]}');
+    assert.equal(code, 1);
+    assert.match(stderr, /non-numeric index/i);
+  });
+
+  it('an empty vacuous array is a genuine clean pass, exit 0, no demotions', () => {
+    const { code, stdout } = runCliLlm('{"vacuous":[],"reason":{}}');
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout);
+    assert.ok(result.criteria.every((c) => c.status === 'VERIFIED'), 'all-verified.md has no non-verified criteria to begin with');
   });
 });
 
