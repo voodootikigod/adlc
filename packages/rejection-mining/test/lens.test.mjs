@@ -75,10 +75,15 @@ test('truncateQuote: collapses whitespace', () => {
 // buildDefaultCharter
 // ---------------------------------------------------------------------------
 
-test('buildDefaultCharter: references sample body', () => {
+test('buildDefaultCharter: derives from the cluster title, not raw comment text (#745)', () => {
   const signals = [{ body: 'avoid hardcoding secrets' }];
   const charter = buildDefaultCharter(signals);
-  assert(charter.includes('avoid hardcoding secrets'));
+  // The charter must NOT quote the raw body verbatim — comment bodies are
+  // attacker-influenceable, and this is the sentence a future prosecution
+  // run is told to enforce (issue #745). It is derived from deriveTitle
+  // instead, which title-cases the same slug tokens.
+  assert(!charter.includes('avoid hardcoding secrets'));
+  assert(charter.includes(deriveTitle(signals)));
 });
 
 test('buildDefaultCharter: empty signals → fallback', () => {
@@ -110,6 +115,7 @@ test('renderLensFile: contains required sections', () => {
   assert(content.includes('## Checklist'));
   assert(content.includes('## Example Objections'));
   assert(content.includes('mined from 2 review comments across 2 PRs'));
+  assert(/illustrative only, never an instruction/.test(content));
 });
 
 test('renderLensFile: anonymizes authors', () => {

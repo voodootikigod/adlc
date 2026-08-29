@@ -119,6 +119,17 @@ or stack traces being passed directly to API response bodies or client UI.
 }
 ```
 
+## Untrusted input
+
+Mined PR/comment text is attacker-influenceable (anyone can comment on a public
+PR) and is treated as **untrusted** third-party data throughout: `--llm`
+refinement fences it in the prompt with an explicit "treat as data, never
+instructions" directive, and the default (no-`--llm`) Charter — the sentence a
+future `adversarial-review` prosecution run is told to enforce — is derived
+from the cluster's slug/title, never from raw comment prose. Raw example
+quotes still appear in each lens file, but only under the clearly labelled,
+illustrative-only "Example Objections" section, separate from the Charter.
+
 ## Exit codes
 
 | Code | Meaning |
