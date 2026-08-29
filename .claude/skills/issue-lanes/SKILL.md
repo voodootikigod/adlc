@@ -136,9 +136,10 @@ push → `gh pr create` with `Closes #n`.
 
 ## 4b. The cross-model attestation (key-holder step — expect it)
 
-`packages/prosecute/lib/tier.mjs` tiers a change on any in-flight ticket's rails deny-path,
-and legacy tickets **T37/T38 declare `packages/**`** — so every lane touching `packages/`
-is trust-root tier and the required `gate` job fails with `NO SIGNATURE-VERIFIED
+`packages/prosecute/lib/tier.mjs` tiers a change on any ticket's rails deny-path — including
+COMPLETED tickets (issue #905; rail-freeze skips them, tier-check does not). Completed
+tickets **T37/T38 declare `packages/**`**, so until #905 lands every lane touching
+`packages/` is trust-root tier and the required `gate` job fails with `NO SIGNATURE-VERIFIED
 cross-model attestation for revision git-change:<base>:<digest>` until an attestation is
 recorded. Each lane's codex approve makes that attestation truthful. The classifier denies an
 agent sourcing `ADLC_MANIFEST_KEY`, so hand the user one script (pattern from AGENTS.md —
