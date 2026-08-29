@@ -134,6 +134,31 @@ cross-model loop `adversarial-review --base origin/main --provider codex --timeo
 until a round has exit 0 AND zero findings AND no warnings (cap 8) → commit (`-F file`) →
 push → `gh pr create` with `Closes #n`.
 
+## 4b. The cross-model attestation (key-holder step — expect it)
+
+`packages/prosecute/lib/tier.mjs` tiers a change on any in-flight ticket's rails deny-path,
+and legacy tickets **T37/T38 declare `packages/**`** — so every lane touching `packages/`
+is trust-root tier and the required `gate` job fails with `NO SIGNATURE-VERIFIED
+cross-model attestation for revision git-change:<base>:<digest>` until an attestation is
+recorded. Each lane's codex approve makes that attestation truthful. The classifier denies an
+agent sourcing `ADLC_MANIFEST_KEY`, so hand the user one script (pattern from AGENTS.md —
+the key is sourced, never an argument), one call per lane, using the digest the gate printed:
+
+```bash
+set -a; . ./.env.local; set +a
+cd .worktrees/fix-<n>
+node packages/prosecute/bin/adlc-prosecute.mjs record-cross-model --ticket <T-…> \
+  --provider openai --author-provider anthropic --verdict approve \
+  --revision git-change:<base>:<digest> --base origin/main --json
+node packages/prosecute/bin/adlc-prosecute.mjs tier-check --author-provider anthropic --base origin/main
+git add .adlc/manifest.d && git commit -F <msg> && git push
+```
+
+Record AFTER the lane's final commit (a rebase changes the digest; recording does not). Use
+provider FAMILY tokens (`openai`/`anthropic`), not CLI names. Do not re-run the reviewer
+after attesting — it flags its own attestation shard as a pre-approval (known false
+positive; see the ceremony memory for the forgery table if a reviewer must be answered).
+
 ## 5. Relay and close out
 
 - Relay each lane's report verbatim in substance: coldstart verdict, RED→GREEN, test
