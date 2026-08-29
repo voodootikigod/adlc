@@ -13,6 +13,8 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams(['github.dropHostBinding', 'github.paginateAll', 'github.ignoreTruncation',
   'github.firstEditsPageOnly',
+  'github.retryComments',
+  'github.firstPrPageOnly',
 ]);
 
 export const PER_PAGE = 100;
@@ -122,6 +124,30 @@ export async function issueTimeline(ghc, n, { perPage = PER_PAGE, maxPages = MAX
   return { ok: false, reason: 'timeline-unreadable', detail: 'too many pages' };
 }
 
+/**
+ * Every open pull request (number, headRefName, body) across EVERY page (bounded), the same
+ * fail-closed contract as `listOpenIssues`: a truncated or unreadable listing is
+ * `{ ok:false, reason:'open-prs-truncated' }` — selection must not run on a partial exclusion set
+ * (codex r5 A4). Seam `github.firstPrPageOnly`: only the first page is read.
+ */
+export async function listOpenPrs(ghc, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
+  const prs = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await ghc.run(['api', `repos/${ghc.repo}/pulls?state=open&per_page=${perPage}&page=${page}`], { stdoutCap: PAGE_CAP_BYTES });
+    if (res.status !== 0 || res.truncated) return { ok: false, reason: 'open-prs-truncated', pagesReached: page - 1, detail: res.truncated ? 'page output truncated' : `gh exited ${res.status}` };
+    let arr;
+    try { arr = JSON.parse(res.stdout); } catch { return { ok: false, reason: 'open-prs-truncated', pagesReached: page - 1, detail: 'page is not JSON' }; }
+    if (!Array.isArray(arr)) return { ok: false, reason: 'open-prs-truncated', pagesReached: page - 1, detail: 'page is not an array' };
+    for (const el of arr) {
+      if (el === null || typeof el !== 'object' || !Number.isInteger(el.number)) return { ok: false, reason: 'open-prs-truncated', pagesReached: page - 1, detail: 'malformed element' };
+      prs.push({ number: el.number, headRefName: el.head?.ref ?? null, body: typeof el.body === 'string' ? el.body : '' });
+    }
+    if (arr.length < perPage || active('github.firstPrPageOnly')) return { ok: true, prs, pagesReached: page };
+    if (page === maxPages) return { ok: false, reason: 'open-prs-truncated', pagesReached: page, detail: `${maxPages} full pages` };
+  }
+  return { ok: false, reason: 'open-prs-truncated', pagesReached: maxPages, detail: 'unreachable' };
+}
+
 /** GraphQL `userContentEdits` for the issue body (editor logins + editedAt). */
 export async function issueBodyEdits(ghc, n, { pageSize = PER_PAGE, maxPages = MAX_PAGES } = {}) {
   const [owner, name] = ghc.repo.split('/');
@@ -185,6 +211,8 @@ export async function ensureComment(ghc, n, sentinel, body, { perPage = PER_PAGE
     // Mutation seam `github.ignoreTruncation`: an exhausted page budget is treated as "not found".
     if (page === maxPages && !active('github.ignoreTruncation')) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
   }
-  await mutate(ghc, ['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}` });
+  // The POST itself is NOT retried (codex r5 A3): a failure after the comment landed would post it
+  // twice; the next iteration's sentinel search is the idempotent retry. Seam `github.retryComments`.
+  await mutate(ghc, ['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}`, retries: active('github.retryComments') });
   return { posted: true };
 }

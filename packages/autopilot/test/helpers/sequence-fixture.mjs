@@ -140,7 +140,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     if (String(stdin ?? '').includes('COLDSTART PROMPT')) return { stdout: JSON.stringify({ type: 'result', result: JSON.stringify({ gaps: [] }) }) };
     // the shaping answer (§5.2): a ticket whose body starts with the issue URL and carries the criteria marker
     const url = `https://github.com/o/r/issues/${state.issue.number}`;
-    const shaped = { title: state.issue.title, category: 'feature', scope: ['packages/x/**'], rails: [], edges: [], duration: 1, body: `GitHub issue: ${url}\n\n${state.issue.body}\n\n${CRITERIA_HEADING}\n- widget exists\n- tests pass\n` };
+    const shaped = { title: `#${state.issue.number}: ${state.issue.title}`, category: 'feature', scope: ['packages/x/**'], rails: [], edges: [], duration: 1, body: `GitHub issue: ${url}\n\n${state.issue.body}\n\n${CRITERIA_HEADING}\n- widget exists. VERIFY: node --test packages/x/test exits 0\n- tests pass. VERIFY: npm test exits 0\n` };
     return { stdout: JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify(shaped) }) };
   };
   handlers[FAKE.npm] = (args, { cwd }) => { mkdirSync(join(cwd, 'node_modules'), { recursive: true }); writeFileSync(join(cwd, 'node_modules', '.package-lock.json'), '{}'); return { stdout: '' }; };
@@ -165,6 +165,11 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   const base = gh.handler;
   gh.handler = (args) => {
     const [sub, verb] = args;
+    if (sub === 'api' && /^repos\/[^/]+\/[^/]+\/pulls\?state=open/.test(String(args[1] ?? ''))) {
+      const page = Number(/[?&]page=(\d+)/.exec(String(args[1]))?.[1] ?? 1);
+      const rows = page === 1 ? gh.prs.filter((p) => p.state === 'OPEN') : [];
+      return { stdout: JSON.stringify(rows.map((p) => ({ number: p.number, head: { ref: p.head }, body: p.body ?? '' }))) };
+    }
     if (sub === 'pr' && verb === 'create') {
       const head = flag(args, '--head');
       const pr = { number: state.nextPr++, head, state: 'OPEN', baseRefName: 'main', title: flag(args, '--title') };

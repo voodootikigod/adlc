@@ -9,6 +9,7 @@
 // only while the autopilot lock is held by the caller's token (§3.2: "a helper
 // invoked without a lock-holding parent refuses with exit 1").
 
+import { mkdirSync, statSync, rmSync } from 'node:fs';
 import { writeAtomicJson, readJson } from './records.mjs';
 import { redactRecord } from './redact.mjs';
 import { lockHeldBy } from './lock.mjs';
@@ -18,6 +19,23 @@ registerSeams([
   'status.noLockForOrdinal',   // incrementStarts no longer requires the lock
   'status.skipQuotaAppend',    // recordQuota drops the per-step entry
 ]);
+
+/** A cross-process mutex for the status file: an atomic `mkdir`, spun with short sleeps, stale after 30 s. */
+export function withStatusMutex(statusFile, fn, { timeoutMs = 10_000, staleMs = 30_000, sleepMs = 5 } = {}) {
+  const dir = `${statusFile}.mutex`;
+  const started = Date.now();
+  for (;;) {
+    try { mkdirSync(dir); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let age = 0; try { age = Date.now() - statSync(dir).mtimeMs; } catch { continue; }
+      if (age > staleMs) { rmSync(dir, { recursive: true, force: true }); continue; }
+      if (Date.now() - started > timeoutMs) throw new StatusError('status-mutex-timeout', dir);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
+    }
+  }
+  try { return fn(); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
 
 export const STATUS_FREE_TEXT_FIELDS = Object.freeze(['lastError', 'reason', 'reasonText']);
 export const MAX_QUOTA_STEPS = 50;
@@ -59,10 +77,15 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
   /** Atomic increment under the lock; returns the NEW ordinal (1 for the first start). */
   const incrementStarts = () => {
     requireLock('incrementStarts');
+    // The read-modify-write is serialized ACROSS PROCESSES (the pre-strike helpers run concurrently
+    // under the orchestrator's lock, which is not a mutex for them): a mkdir mutex next to the file.
+    return withStatusMutex(paths.statusFile, () => {
     const cur = read();
-    const next = (Number.isInteger(cur.startsThisIteration) ? cur.startsThisIteration : 0) + 1;
-    persist({ ...cur, startsThisIteration: next });
-    return next;
+      const next = (Number.isInteger(cur.startsThisIteration) ? cur.startsThisIteration : 0) + 1;
+      persist({ ...cur, startsThisIteration: next });
+      return next;
+  
+    });
   };
   /** Top of an iteration: the ordinal returns to 0 (under the lock). */
   const resetStarts = (iterationId = null) => {

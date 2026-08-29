@@ -155,7 +155,7 @@ test('AC2: the quota.forceOk seam admits a 90/90 reading (the fixture the covera
 
 // ---- the re-check points over the REAL loop / run (AC 18, 39, 50) ----
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
-import { iterate } from '../lib/loop.mjs';
+import { iterate, quotaCommand } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { FAKE } from './helpers/recover-fixture.mjs';
 
@@ -268,3 +268,22 @@ export async function ac65_familyMappersAgree() {
   assert.equal(modelFamily('opusish'), null, 'a substring is not a family (the quota gate would call it unknown)');
 }
 test('AC65: phase A validates the model with the SAME family mapper the quota gate enforces with — no model is admitted that the gate calls unknown', ac65_familyMappersAgree);
+
+export async function ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock() {
+  // The helper process never owns the lock: its ADLC_AUTOPILOT_LOCK_TOKEN is verified against the on-disk owner.
+  const fx = await createSequenceFixture();
+  try {
+    const token = fx.ctx.lock.token;
+    fx.ctx.status.resetStarts('it-h');
+    const env = { PATH: process.env.PATH, HOME: fx.ctx.env.home, ADLC_AUTOPILOT_LOCK_TOKEN: token };
+    const deps = { quota: { read: async () => OK_USAGE({}) } };
+    const r1 = await quotaCommand({ flags: { startOrdinal: 'auto', iteration: 'it-h' }, env, cwd: fx.ctx.repoRoot, deps });
+    assert.equal(r1.exitCode, 0, JSON.stringify(r1.document));
+    assert.equal(r1.document.ordinal, 1, 'the helper bumped the ordinal although it holds no lock of its own');
+    const r2 = await quotaCommand({ flags: { startOrdinal: 'auto', iteration: 'it-h' }, env, cwd: fx.ctx.repoRoot, deps });
+    assert.equal(r2.document.ordinal, 2);
+    const wrong = await quotaCommand({ flags: { startOrdinal: 'auto', iteration: 'it-h' }, env: { ...env, ADLC_AUTOPILOT_LOCK_TOKEN: 'f'.repeat(64) }, cwd: fx.ctx.repoRoot, deps });
+    assert.equal(wrong.exitCode, 1); assert.equal(wrong.document.code, 'lock-not-held', 'a token that is not the on-disk owner is refused');
+  } finally { fx.cleanup(); }
+}
+test('AC60: the pre-strike quota helper bumps the start ordinal under the ORCHESTRATOR\'s lock (its env token verified against the on-disk owner) and is refused with any other token', { timeout: 120_000 }, ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock);

@@ -5,7 +5,7 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireLock, releaseLock, readOwner, isStale, LockHeldError, LOCK_DIR_NAME, STALE_AFTER_MS, lockHeldBy } from '../lib/lock.mjs';
@@ -109,3 +109,27 @@ export async function ac22_lockPublishIsAtomic() {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 test('AC22: the lock is PUBLISHED atomically — owner file staged first, directory renamed into place; no mkdir of the lock directory ever happens', ac22_lockPublishIsAtomic);
+
+export async function ac22_releaseNeverRemovesAnotherOwnersLock() {
+  // Between the owner read and the removal a reclaimer replaces the directory: the old owner's release must NOT delete the new lock.
+  const dir = mkdtempSync(join(tmpdir(), 'ap-lock-release-race-'));
+  try {
+    const { LOCK_FS, releaseLock } = await import('../lib/lock.mjs');
+    const lockDir = join(dir, LOCK_DIR_NAME);
+    const a = acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW });
+    // The reclaim that lands in the gap: A's directory is quarantined and B publishes its own.
+    let reclaimed = false;
+    const reclaim = () => {
+      if (reclaimed) return; reclaimed = true;
+      renameSync(lockDir, `${lockDir}.stale-by-b`); rmSync(`${lockDir}.stale-by-b`, { recursive: true, force: true });
+      const b = acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW, token: 'b'.repeat(64) });
+      assert.equal(b.token, 'b'.repeat(64));
+    };
+    const fsImpl = { renameSync: (from, to) => { if (from === lockDir) reclaim(); return LOCK_FS.renameSync(from, to); }, rmSync: (p, o) => { if (p === lockDir) reclaim(); return LOCK_FS.rmSync(p, o); } };
+    const released = releaseLock(lockDir, a.token, { ino: a.ino, fsImpl });
+    assert.equal(released, false, "A's release is refused: the directory is no longer A's");
+    assert.equal(readOwner(lockDir)?.token, 'b'.repeat(64), "B's lock is intact after A's release attempt");
+    assert.ok(!existsSync(`${lockDir}.release-${a.token}`), 'nothing left aside');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+test('AC22: a release that races a reclaim never removes the NEW owner\'s lock — the directory is moved aside and verified before removal', ac22_releaseNeverRemovesAnotherOwnersLock);

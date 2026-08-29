@@ -8,7 +8,7 @@
 // snapshot is taken before the spawn and again after it exits; any difference
 // discards the verdict.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateOid } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
@@ -58,19 +58,45 @@ function hooksExecutables(gitDir) {
 }
 
 /** The complete git-state snapshot of one clone. */
+/** Host git inside a clone the gate has run in carries these, whatever that clone's config says. */
+export const HOST_SAFE_GIT = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false']);
+const hostGit = (ctx, cwd, args) => ctx.git.localOut(cwd, [...HOST_SAFE_GIT, ...args]);
+const hostGitRaw = (ctx, cwd, args) => ctx.git.local(cwd, [...HOST_SAFE_GIT, ...args]);
+
+/**
+ * The clone's git METADATA as files (no git process): `.git` must still be a directory, its
+ * `config` bytes and executable hooks unchanged since `before`. Run after the gate and BEFORE any
+ * host git in the clone — a gate that planted `core.fsmonitor` / a hook would otherwise execute
+ * as the host user inside the very commands that snapshot it (codex r5 B3).
+ * Returns null when unchanged, else the mismatch reason.
+ */
+export function gitMetadataUnchanged(before, cwd) {
+  let st;
+  try { st = lstatSync(join(cwd, '.git')); } catch { return 'gitdir-replaced'; }
+  if (!st.isDirectory()) return 'gitdir-replaced';
+  let config = null;
+  try { config = readFileSync(join(before.gitDir, 'config'), 'utf8'); } catch { config = null; }
+  if (config !== before.configFile) return 'config-changed';
+  if (JSON.stringify(hooksExecutables(before.gitDir)) !== JSON.stringify(before.hooksExecutables)) return 'hooks-added';
+  return null;
+}
+
 export async function snapshotGateRepo({ ctx, cwd, baseOid }) {
-  const gitDir = join(cwd, (await ctx.git.localOut(cwd, ['rev-parse', '--git-dir'])));
-  const baseRefRead = await ctx.git.local(cwd, ['rev-parse', '--verify', '--quiet', trackingRef(baseOid)]);
+  const gitDir = join(cwd, (await hostGit(ctx, cwd, ['rev-parse', '--git-dir'])));
+  let configFile = null;
+  try { configFile = readFileSync(join(gitDir, 'config'), 'utf8'); } catch { configFile = null; }
+  const baseRefRead = await hostGitRaw(ctx, cwd, ['rev-parse', '--verify', '--quiet', trackingRef(baseOid)]);
   const exclude = join(gitDir, 'info', 'exclude');
   return {
-    head: await ctx.git.localOut(cwd, ['rev-parse', 'HEAD']),
+    gitDir, configFile,
+    head: await hostGit(ctx, cwd, ['rev-parse', 'HEAD']),
     baseRef: baseRefRead.status === 0 ? baseRefRead.stdout.trim() : null,
-    forEachRef: await ctx.git.localOut(cwd, ['for-each-ref']),
-    configList: await ctx.git.localOut(cwd, ['config', '--list', '--local']),
+    forEachRef: await hostGit(ctx, cwd, ['for-each-ref']),
+    configList: await hostGit(ctx, cwd, ['config', '--list', '--local']),
     hooksExecutables: hooksExecutables(gitDir),
     infoExclude: existsSync(exclude) ? readFileSync(exclude, 'utf8') : null,
     // node_modules is the orchestrator's read-only bind, not the gate's doing.
-    statusPorcelain: await ctx.git.localOut(cwd, ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)node_modules']),
+    statusPorcelain: await hostGit(ctx, cwd, ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)node_modules']),
   };
 }
 

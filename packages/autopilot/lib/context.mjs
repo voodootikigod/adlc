@@ -23,7 +23,9 @@ import { maintenanceDeps } from './maintenance.mjs';
 import { readUsage } from './quota.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['context.noUsageTransport']);
+registerSeams(['context.noUsageTransport',
+  'context.helperTokenIgnored',
+]);
 import { execFileSync } from 'node:child_process';
 
 export const CHARTER_PATH = fileURLToPath(new URL('./charter-adlc.md', import.meta.url));
@@ -75,7 +77,12 @@ export async function buildContext({ flags, env, cwd, local, dryRun = false, ove
     lockHeldBy: (token) => lockHeldBy(paths.adlc, token),
     modules,
   };
-  ctx.status = modules.status.createStatusStore({ paths, lockToken: () => ctx.lock?.token ?? null, redactor, now });
+  // The lock-token getter: this process's own lock, else the token the orchestrator handed a
+  // pre-strike helper (ADLC_AUTOPILOT_LOCK_TOKEN) — `lockHeldBy` still verifies it against the
+  // on-disk owner, so a helper can bump the ordinal only while the orchestrator holds the lock
+  // (codex r5 B1: the helper never owns the lock itself).
+  // Mutation seam `context.helperTokenIgnored`: only the process's own lock counts.
+  ctx.status = modules.status.createStatusStore({ paths, lockToken: () => ctx.lock?.token ?? (active('context.helperTokenIgnored') ? null : (typeof env.ADLC_AUTOPILOT_LOCK_TOKEN === 'string' && env.ADLC_AUTOPILOT_LOCK_TOKEN ? env.ADLC_AUTOPILOT_LOCK_TOKEN : null)), redactor, now });
   // The production usage reader: the endpoint over the runtime's fetch, then the
   // §3.3 fallback — the pinned `claude -p "/usage" --output-format json` on the host.
   const usageFallback = async () => {

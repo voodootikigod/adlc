@@ -27,7 +27,7 @@ import { childEnv } from './keys.mjs';
 import { pinnedRealpaths } from './tools.mjs';
 import { DEADLINES } from './spawn.mjs';
 import { cloneGateRepo } from './mirror.mjs';
-import { snapshotGateRepo, compareSnapshots, cloneSanity, GateRepoError } from './gate-repo.mjs';
+import { snapshotGateRepo, compareSnapshots, cloneSanity, GateRepoError, gitMetadataUnchanged } from './gate-repo.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 export { ensureTrackingRef, releaseTrackingRef, trackingRef, ZERO_OID } from './gate-repo.mjs';
@@ -38,7 +38,8 @@ registerSeams([
   'gates.reuseClone',           // every gate runs in the FIRST gate's clone
   'gates.allowNetwork',         // the sandbox profile allows egress
   'gates.skipBracket',          // the remote-URL / base-object bracket is not checked
-  'gates.skipDepsBind',         // the node_modules bind is omitted
+  'gates.skipDepsBind',         // the node_modules bind is omitted,
+  'gates.gitBeforeMetadataCheck',
 ]);
 
 export class GatesError extends Error {
@@ -188,6 +189,10 @@ export async function runOuterGates({ ctx, issue, attestedHead, baseOid, gateDep
       const sanity = cloneSanity(snapBefore, { attestedHead, baseOid });
       if (sanity) return { ok: false, code: 'gate-repo-stale', gate: gate.name, reason: sanity, gates: results, head: attestedHead };
       const r = await spawnInGateSandbox({ ctx, clone, inner: gate.argv, nodeModules: gateDepsNodeModules, backend, home, label: `gate:${gate.name}`, bindDeps });
+      // File-level metadata check FIRST (no git process): a gate that touched .git/config or the hooks
+      // is refused before the host runs any git inside that clone. Seam `gates.gitBeforeMetadataCheck`.
+      const meta = active('gates.gitBeforeMetadataCheck') ? null : gitMetadataUnchanged(snapBefore, clone);
+      if (meta) return { ok: false, code: 'gate-repo-moved', gate: gate.name, reason: meta, gates: results, head: attestedHead };
       const cmp = compareSnapshots(snapBefore, await snapshotGateRepo({ ctx, cwd: clone, baseOid }));
       if (!cmp.same) return { ok: false, code: 'gate-repo-moved', gate: gate.name, reason: cmp.reason, gates: results, head: attestedHead };
       results.push({ name: gate.name, clone, status: r.status, timedOut: r.timedOut, output: tail(ctx, `${r.stdout}\n${r.stderr}`) });

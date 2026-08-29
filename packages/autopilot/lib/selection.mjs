@@ -5,7 +5,7 @@
 // repository with hundreds of open issues costs a handful of gh calls, not
 // three per issue. Pure pieces live in select.mjs / authorize.mjs / denylist.mjs.
 
-import { listOpenIssues, issueTimeline, issueBodyEdits, permissionOf } from './github.mjs';
+import { listOpenIssues, issueTimeline, issueBodyEdits, permissionOf, listOpenPrs } from './github.mjs';
 import { eligibleAuthor } from './authorize.mjs';
 import { hardExclusions, selectIssue, scoreIssue } from './select.mjs';
 import { buildDenylist } from './denylist.mjs';
@@ -59,7 +59,9 @@ export async function selectForLoop({ ctx, pinned = null, force = false, top = n
   if (!listed.ok) return { picked: null, issue: null, authorization: null, revision: null, excludedRule: listed.reason, ranked: [], reason: listed.reason, detail: listed.detail };
   const candidates = listed.issues.map(normalizeIssue);
   const denylist = ctx.denylist ?? (ctx.denylist = await loadDenylist({ ctx }));
-  const openPrs = await gh.json(['pr', 'list', '--state', 'open', '--json', 'number,headRefName,body', '--limit', '100']);
+  const listedPrs = await listOpenPrs(gh);
+  if (!listedPrs.ok) return { picked: null, issue: null, authorization: null, revision: null, excludedRule: listedPrs.reason, ranked: [], reason: listedPrs.reason, detail: listedPrs.detail };
+  const openPrs = listedPrs.prs;
   const localBranches = (await ctx.git.localOut(ctx.repoRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/adlc/autopilot/'])).split('\n').map((s) => s.trim()).filter(Boolean);
   const attempts = createAttemptStore({ paths: ctx.paths, now: ctx.now, lockToken: ctx.lock?.token ?? null });
   const facts = new Map();

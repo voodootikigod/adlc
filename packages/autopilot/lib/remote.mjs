@@ -19,7 +19,9 @@ export class RemoteError extends Error {
  */
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['remote.acceptHttps', 'remote.keepCredentials', 'remote.ignorePushUrl', 'remote.acceptAnyGhHost']);
+registerSeams(['remote.acceptHttps', 'remote.keepCredentials', 'remote.ignorePushUrl', 'remote.acceptAnyGhHost',
+  'remote.dropPort',
+]);
 
 export function canonicalizeRemoteUrl(url) {
   const s = String(url ?? '').trim();
@@ -31,9 +33,12 @@ export function canonicalizeRemoteUrl(url) {
     if (active('remote.acceptHttps')) { const h = /^https?:\/\/(?:[^/@]+@)?([^/:]+)\/(.+?)(?:\.git)?\/?$/i.exec(s); if (h) return { ...finish(h[1], h[2]), canonical: s }; }
     throw new RemoteError('remote-url-scheme', 'HTTPS remotes are not supported in v1');
   }
-  if ((m = /^ssh:\/\/([^@/]+)@([^/:]+)(?::\d+)?\/(.+?)(?:\.git)?\/?$/i.exec(s))) {
+  if ((m = /^ssh:\/\/([^@/]+)@([^/:]+)(?::(\d+))?\/(.+?)(?:\.git)?\/?$/i.exec(s))) {
     if (m[1] !== 'git' && !active('remote.keepCredentials')) throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);
-    return finish(m[2], m[3]);
+    // A non-default port names an endpoint the host-key binding (`gh api meta`, port 22) cannot
+    // attest: refused explicitly, never dropped (codex r5 A1). Seam `remote.dropPort`: the old behaviour.
+    if (m[3] !== undefined && m[3] !== '22' && !active('remote.dropPort')) throw new RemoteError('remote-url-port', `ssh port ${m[3]} is not supported in v1 (host-key binding covers port 22 only)`);
+    return finish(m[2], m[4]);
   }
   if ((m = /^([^@:/]+)@([^:/]+):(.+?)(?:\.git)?$/i.exec(s))) {
     if (m[1] !== 'git' && !active('remote.keepCredentials')) throw new RemoteError('remote-url-credentials', `userinfo "${m[1]}"`);

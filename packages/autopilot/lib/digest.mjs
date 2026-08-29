@@ -88,7 +88,8 @@ export async function postDigest({ ctx, record: given, outcome, issue = null, pr
     const body = ctx.redactor.redact(digestBody({ record, outcome, prUrl, quota }), { withheld: WITHHELD_BODY }).text;
     let posted;
     if (active('digest.skipSentinelSearch')) {
-      await ctx.gh.json(['issue', 'comment', String(loc.number), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}` });
+      const r = await ctx.gh.run(['issue', 'comment', String(loc.number), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}`, retries: false });   // never a blind re-POST
+      if (r.status !== 0) throw new Error(`gh issue comment exited ${r.status}: ${String(r.stderr ?? '').trim().slice(0, 200)}`);
       posted = true;
     } else posted = (await ensureComment(ctx.gh, loc.number, sentinel, body)).posted;
     if (ctx.records.load(n)) ctx.records.update(n, { digestPosted: true });

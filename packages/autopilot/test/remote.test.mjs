@@ -55,3 +55,11 @@ export function ac148_ghHostBinding() {
   code(() => assertPrincipalAuthorized(null), 'principal-unauthorized');
 }
 test('AC148/53: gh auth status must show one success+active entry whose login is the principal; a GHES remote against a github.com auth → remote-host-mismatch; read permission → principal-unauthorized', ac148_ghHostBinding);
+
+export async function ac132_nonDefaultSshPortIsRefused() {
+  // The host-key binding (`gh api meta`) attests port 22 only: another port is REFUSED explicitly, never dropped.
+  assert.throws(() => canonicalizeRemoteUrl('ssh://git@github.com:2222/o/r.git'), (e) => e instanceof RemoteError && e.code === 'remote-url-port');
+  assert.equal(canonicalizeRemoteUrl('ssh://git@github.com:22/o/r.git').canonical, 'git@github.com:o/r.git', 'the default port is the default');
+  assert.equal(canonicalizeRemoteUrl('ssh://git@github.com/o/r.git').canonical, 'git@github.com:o/r.git');
+}
+test('AC132: an ssh remote on a non-default port is refused (remote-url-port) — the endpoint the host-key binding cannot attest is never silently rewritten to port 22', ac132_nonDefaultSshPortIsRefused);

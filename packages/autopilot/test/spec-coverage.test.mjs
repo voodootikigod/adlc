@@ -23,6 +23,9 @@ import { GATE_EXEC_KEY } from './helpers/node-test.mjs';
 // those files must not ALSO register their tests here (see helpers/node-test.mjs).
 globalThis[GATE_EXEC_KEY] = true;
 import { withMutation, knownSeams, clearAll, registerSeams, active } from '../lib/mutations.mjs';
+import { detectBackend } from '@adlc/fleet/lib/sandbox.mjs';
+import * as cryptoModule from 'node:crypto';
+const BUILD_TICKET_ID = 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH';
 
 // The gate's own seam (AC 111/121): when active, the static checker accepts every entry.
 registerSeams(['gate.acceptHollowEntries']);
@@ -121,7 +124,39 @@ const section = specSection16();
 const numbers = criterionNumbers(section);
 const registeredNumbers = Object.keys(REGISTRY).map(Number).sort((a, b) => a - b);
 
+/**
+ * An entry may name a host capability it `requires` (today: 'bubblewrap'). Where the host lacks
+ * it, BOTH passes skip the entry LOUDLY — the same rule the test file applies under node:test —
+ * instead of executing a function that would fail for want of the sandbox.
+ */
+export function hostSkip(entry, { backend = detectBackend() } = {}) {
+  if (!entry?.requires) return false;
+  if (entry.requires === 'bubblewrap') return backend?.name === 'bubblewrap' ? false : `requires bubblewrap; host has ${backend?.name ?? 'no sandbox backend'}`;
+  return `requires unknown capability ${JSON.stringify(entry.requires)}`;
+}
+
+/**
+ * The criteria the gate enforces are those of the APPROVED spec revision: the newest spec-approval
+ * record committed for the build ticket names sha256(spec) and it must equal the spec at HEAD —
+ * a spec edited without re-approval cannot move the bar the gate measures against.
+ */
+export function approvedSpecRevision({ ref = 'HEAD' } = {}) {
+  const { createHash } = requireCrypto();
+  const files = spawnSync('git', ['ls-tree', '-r', '--name-only', ref, '.adlc/manifest.jsonl', '.adlc/manifest.d'], { cwd: REPO, encoding: 'utf8' }).stdout.split('\n').filter((f) => f.endsWith('.jsonl'));
+  const entries = files.flatMap((f) => spawnSync('git', ['show', `${ref}:${f}`], { cwd: REPO, encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean));
+  const mine = entries.filter((e) => e.gate === 'spec-approval' && e.ticket === BUILD_TICKET_ID).sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  const newest = mine[mine.length - 1] ?? null;
+  const spec = spawnSync('git', ['show', `${ref}:${SPEC_PATH}`], { cwd: REPO, encoding: 'utf8' }).stdout;
+  const specHash = createHash('sha256').update(spec).digest('hex');
+  return { newest, specHash, approved: newest?.data?.spec_hash === specHash, signed: typeof newest?.sig === 'string' && newest.sig.length > 0 };
+}
+function requireCrypto() { return cryptoModule; }
+
 export function ac1_registryExecutesEveryFunction() {
+  const rev = approvedSpecRevision();
+  assert.ok(rev.newest, 'a spec-approval record for the build ticket is committed');
+  assert.equal(rev.approved, true, `the spec at HEAD (sha256 ${rev.specHash}) is the APPROVED revision (record ${rev.newest?.seq ?? '?'} names ${rev.newest?.data?.spec_hash})`);
+  assert.equal(rev.signed, true, 'the approval record is signed');
   assert.ok(numbers.length >= 163, `§16 has at least 163 criteria (found ${numbers.length})`);
   for (let i = 0; i < numbers.length; i++) assert.equal(numbers[i], i + 1, `criteria are contiguous from 1 (position ${i})`);
   const missing = numbers.filter((n) => !REGISTRY[n] || REGISTRY[n].length === 0);
@@ -161,6 +196,8 @@ export async function ac114_everyRegisteredFunctionExecutes() {
     if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
     const mod = modules.get(e.file);
     if (typeof mod[e.fn] !== 'function') { failures.push(`AC${e.n}: ${e.file} does not export ${e.fn}`); continue; }
+    const why = hostSkip(e);
+    if (why) { console.log(`skipped loudly: AC${e.n} ${e.fn} — ${why}`); executed++; continue; }
     try { await mod[e.fn](); executed++; } catch (err) { failures.push(`AC${e.n}: ${e.fn} failed without a fixture: ${err.message.split('\n')[0]}`); }
   }
   assert.deepEqual(failures, [], failures.join('\n'));
@@ -178,13 +215,15 @@ export async function ac121_everyCriterionHasABitingFixture() {
   for (const [n, list] of Object.entries(REGISTRY)) {
     // One biting fixture per criterion suffices; every entry must name a seam or a
     // reason. The cap of 5 (AC 1) is over CRITERIA that have no biting fixture at all.
-    let bit = false;
+    let bit = false; let hostSkipped = false;
     const reasons = [];
     if (list.every((e) => e.manual)) continue;
     for (const e of list) {
       if (e.manual) continue;
       if (e.noFixture) { reasons.push(`AC${n} (${e.fn}): ${e.noFixture}`); continue; }
       if (!e.seam) { problems.push(`AC${n}: ${e.fn} names neither a seam nor a noFixture reason`); continue; }
+      const why = hostSkip(e);
+      if (why) { console.log(`skipped loudly: AC${n} ${e.fn} — ${why}`); hostSkipped = true; continue; }
       if (!modules.has(e.file)) modules.set(e.file, await import(pathToFileURL(join(HERE, e.file)).href));
       const fn = modules.get(e.file)[e.fn];
       if (typeof fn !== 'function') continue;
@@ -200,7 +239,9 @@ export async function ac121_everyCriterionHasABitingFixture() {
       if (threw) bit = true; else problems.push(`AC${n}: ${e.fn} still passes with fixture ${e.seam} applied — the fixture does not bite`);
     }
     if (!bit) {
-      if (reasons.length) noFixture.push(...reasons); else problems.push(`AC${n}: no biting fixture`);
+      if (reasons.length) noFixture.push(...reasons);
+      else if (hostSkipped) console.log(`skipped loudly: AC${n} has no biting fixture on THIS host (its entries require an absent capability)`);
+      else problems.push(`AC${n}: no biting fixture`);
     }
   }
   for (const line of noFixture) console.log(`noFixture: ${line}`);
@@ -248,6 +289,11 @@ export function ac121_fixtureRulesSelfTest() {
   assert.ok(reasons.length > 5, 'six noFixture reasons exceed the cap');
   assert.ok(readdirSync(HERE).includes('ac-registry.mjs'));
   assert.equal(active('gate.acceptHollowEntries'), false, 'the rules are checked with the gate in its strict mode');
+  // Host requirements: an entry requiring an absent capability is skipped LOUDLY in both passes, never executed or failed.
+  assert.equal(hostSkip({ fn: 'x', requires: 'bubblewrap' }, { backend: null }), 'requires bubblewrap; host has no sandbox backend');
+  assert.equal(hostSkip({ fn: 'x', requires: 'bubblewrap' }, { backend: { name: 'bubblewrap' } }), false);
+  assert.equal(hostSkip({ fn: 'x' }, { backend: null }), false);
+  assert.match(String(hostSkip({ fn: 'x', requires: 'warp-drive' }, { backend: null })), /unknown capability/);
   const src = "import { X } from '../lib/x.mjs';\nexport function acN_k() { assert.equal(X, 1); }\ntest('AC9: x', acN_k);\n";
   const tmp = join(HERE, '.gate-self-test-121.tmp.mjs');
   try { require_write(tmp, src); assert.ok(staticCheck('.gate-self-test-121.tmp.mjs', 'acN_k', 9).length > 0, 'a hollow entry is a problem'); } finally { try { require_unlink(tmp); } catch { /* none */ } }

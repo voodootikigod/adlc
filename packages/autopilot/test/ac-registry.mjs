@@ -17,8 +17,10 @@ export const REGISTRY = {
     { fn: 'ac2_forceOkSeamBites', file: 'quota.test.mjs', seam: 'quota.forceOk' },
     { fn: 'ac2_productionReaderHasATransport', file: 'quota.test.mjs', seam: 'context.noUsageTransport' },
   ],
-  3: [{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
+  3: [
+    { fn: 'ac3_openPrsCoverEveryPage', file: 'github.test.mjs', seam: 'github.firstPrPageOnly' },{ fn: 'ac3_selection', file: 'select.test.mjs', seam: 'select.ignoreLabels' }],
   4: [
+    { fn: 'ac4_commentPostIsNeverRetriedBlind', file: 'github.test.mjs', seam: 'github.retryComments' },
     { fn: 'ac4_gateFailuresClarifyWithFindingsAndTemplate', file: 'triage.test.mjs', seam: 'triage.acceptRootWildcard' },
     { fn: 'ac4_clarifyEffectsReconcileAgainstGithub', file: 'triage.test.mjs', seam: 'effects.trustRecord' },
     { fn: 'ac4_terminalEffectsReconcileIndependently', file: 'terminal-effects.test.mjs', seam: 'effects.skipIntent' },
@@ -46,6 +48,7 @@ export const REGISTRY = {
   79: [{ fn: 'ac79_dispatchApprovalModes', file: 'select.test.mjs', seam: 'authorize.acceptUnknownMode' }],
   85: [{ fn: 'ac85_dispatchApprovalDefault', file: 'select.test.mjs', seam: 'authorize.trustedAuthorsDefault' }],
   96: [
+    { fn: 'ac96_shapingContractIsEnforced', file: 'triage.test.mjs', seam: 'shaping.lenientContract' },
     { fn: 'ac96_shapedTicketTextIsRedacted', file: 'triage.test.mjs', seam: 'triage.trustShapedText' },{ fn: 'ac96_modelInputsAreRedacted', file: 'triage.test.mjs', seam: 'triage.skipRedaction' }],
   97: [
     { fn: 'ac97_tombstoneBeforeUnlink', file: 'records.test.mjs', seam: 'records.unlinkBeforeTombstone' },{ fn: 'ac97_selectionTimeRemoteCheck', file: 'select.test.mjs', seam: 'select.skipRemoteRefCheck' }],
@@ -85,7 +88,8 @@ export const REGISTRY = {
     { fn: 'ac41_and_90_outcomeMapping', file: 'run.test.mjs', seam: 'run.acceptUnknownReason' },
     { fn: 'ac41_dispatchParsesResultAndResume', file: 'run.test.mjs', seam: 'dispatch.keyInFleetEnv' },
   ],
-  60: [{ fn: 'ac60_preStrikeResolvedValues', file: 'run.test.mjs', seam: 'fleetArgs.bareAdlcInHelper' }],
+  60: [
+    { fn: 'ac60_helperBumpsTheOrdinalUnderTheOrchestratorLock', file: 'quota.test.mjs', seam: 'context.helperTokenIgnored' },{ fn: 'ac60_preStrikeResolvedValues', file: 'run.test.mjs', seam: 'fleetArgs.bareAdlcInHelper' }],
   78: [{ fn: 'ac78_readSetAndWritableRoots', file: 'run.test.mjs', seam: 'fleetArgs.readSetIncludesRepo' }],
   81: [{ fn: 'ac81_mirrorIsTheOnlyGitDatabase', file: 'run.test.mjs', seam: 'fleetArgs.readSetIncludesRepo' }],
   90: [{ fn: 'ac41_and_90_outcomeMapping', file: 'run.test.mjs', seam: 'run.acceptUnknownReason' }],
@@ -97,6 +101,7 @@ export const REGISTRY = {
     { fn: 'ac162_workerDepsBuilt', file: 'deps.test.mjs', seam: 'deps.useOperatorHome' },
   ],
   22: [
+    { fn: 'ac22_releaseNeverRemovesAnotherOwnersLock', file: 'lock.test.mjs', seam: 'lock.releaseByToken' },
     { fn: 'ac22_lockPublishIsAtomic', file: 'lock.test.mjs', seam: 'lock.twoStepPublish' },
     { fn: 'ac22_twoStartersOneWins', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
     { fn: 'ac22_reclaimRules', file: 'lock.test.mjs', seam: 'lock.alwaysAcquire' },
@@ -147,6 +152,7 @@ export const REGISTRY = {
   ],
   77: [{ fn: 'ac77_ticketSyncValidates', file: 'config.test.mjs', seam: 'config.skipTicketSyncSchema' }],
   87: [
+    { fn: 'ac87_ordinalIsBumpedFromSeparateProcesses', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
     { fn: 'ac87_sampleNeverReusedPastTtl', file: 'quota.test.mjs', seam: 'quota.reuseStale' },
     { fn: 'ac87_ordinalIsRecordedUnderTheLock', file: 'status.test.mjs', seam: 'status.noLockForOrdinal' },
     { fn: 'ac87_reconciliationAppendsToStatusAndRecord', file: 'status.test.mjs', seam: 'quota-gate.skipRecordAppend' },
@@ -174,7 +180,8 @@ export const REGISTRY = {
     { fn: 'ac126_boundEnvBeatsRewrittenFile', file: 'git-env.test.mjs', seam: 'gitEnv.dropUrlRows' },
     { fn: 'ac126_netCarriesBoundTableOnly', file: 'git-runner.test.mjs', seam: 'gitRunner.noOverlay' },
   ],
-  132: [{ fn: 'ac132_sshOnlyForms', file: 'remote.test.mjs', seam: 'remote.acceptHttps' }],
+  132: [
+    { fn: 'ac132_nonDefaultSshPortIsRefused', file: 'remote.test.mjs', seam: 'remote.dropPort' },{ fn: 'ac132_sshOnlyForms', file: 'remote.test.mjs', seam: 'remote.acceptHttps' }],
   143: [
     { fn: 'ac143_netGitTemplateAndVerify', file: 'git-env.test.mjs', seam: 'gitEnv.verifyNetGitAlways' },
     { fn: 'ac143_netGitIsolatesTransport', file: 'git-runner.test.mjs', seam: 'gitRunner.skipRevalidation' },
@@ -296,7 +303,7 @@ export const REGISTRY = {
   ],
   157: [
     { fn: 'ac157_gateInstallSanitized', file: 'deps.test.mjs', seam: 'deps.allowOnlineGate' },
-    { fn: 'ac157_sandboxDepsResolve', file: 'gates.test.mjs', seam: 'gates.skipDepsBind' },
+    { fn: 'ac157_sandboxDepsResolve', file: 'gates.test.mjs', seam: 'gates.skipDepsBind', requires: 'bubblewrap' },
   ],
   84: [
     { fn: 'ac84_workerMirror', file: 'mirror.test.mjs', seam: 'mirror.keepRemote' },
@@ -320,8 +327,9 @@ export const REGISTRY = {
     { fn: 'ac141_trackingRefNeverClobbered', file: 'gates.test.mjs', seam: 'gates.clobberTrackingRef' },
   ],
   149: [
+    { fn: 'ac149_gateMetadataCheckedBeforeHostGit', file: 'gates.test.mjs', seam: 'gates.gitBeforeMetadataCheck' },
     { fn: 'ac149_gatesSandboxedArgv', file: 'gates.test.mjs', seam: 'gates.allowNetwork' },
-    { fn: 'ac149_realBwrapGates', file: 'gates.test.mjs', seam: 'gates.skipSnapshotCheck' },
+    { fn: 'ac149_realBwrapGates', file: 'gates.test.mjs', seam: 'gates.skipSnapshotCheck', requires: 'bubblewrap' },
   ],
   21: [
     { fn: 'ac21_recoveryTableRows', file: 'recover.test.mjs', seam: 'recover.deleteRecordDespiteRemoteRef' },
@@ -484,7 +492,8 @@ export const REGISTRY = {
     { fn: 'ac142_fetchAndPushUrlsAreOneString', file: 'preflight-transport.test.mjs', seam: 'gitRunner.identityRowsDropped' },
   ],
   91: [{ fn: 'ac91_outwardRedactionOnEveryExitPath', file: 'redact.test.mjs', seam: 'redactor.disable' }],
-  160: [{ fn: 'ac160_verifySpawnCarriesTheKey', file: 'manifest-verify.test.mjs', seam: 'diffcheck.skipManifestVerify' }],
+  160: [
+    { fn: 'ac160_manifestVerificationIsKeyed', file: 'manifest-verify.test.mjs', seam: 'keys.leakKey' },{ fn: 'ac160_verifySpawnCarriesTheKey', file: 'manifest-verify.test.mjs', seam: 'diffcheck.skipManifestVerify' }],
 };
 
 /** The critical set for which the mutation-fixture check is mandatory (AC 114): quota, authorization, redaction, retirement, attestation. */

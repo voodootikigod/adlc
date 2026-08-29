@@ -281,3 +281,41 @@ test('seam check: the gates tests fail under their registered seams', async () =
   if (!bwrapSkip) pairs.push(['gates.skipSnapshotCheck', ac149_realBwrapGates], ['gates.skipDepsBind', ac157_sandboxDepsResolve]);
   for (const [seam, fn] of pairs) await assert.rejects(() => withMutation(seam, fn), `${fn.name} must fail under ${seam}`);
 });
+
+export async function ac149_gateMetadataCheckedBeforeHostGit() {
+  const { writeFileSync: wf, chmodSync: cm } = await import('node:fs');
+  const { HOST_SAFE_GIT } = await import('../lib/gate-repo.mjs');
+  const f = fixture({ onGate: (args, opts) => {
+    // The gate plants an fs-monitor command and a hook inside the clone's .git.
+    const clone = opts.cwd; wf(join(clone, '.git', 'config'), `${readFileSync(join(clone, '.git', 'config'), 'utf8')}[core]\n\tfsmonitor = /tmp/evil-monitor\n`);
+    wf(join(clone, '.git', 'hooks', 'post-checkout'), '#!/bin/sh\ntouch /tmp/pwned-by-gate\n'); cm(join(clone, '.git', 'hooks', 'post-checkout'), 0o755);
+    return 0;
+  } });
+  try {
+    await f.prepare();
+    const gitBefore = f.ctx.recorder.length;
+    const r = await f.run();
+    assert.equal(r.ok, false); assert.equal(r.code, 'gate-repo-moved'); assert.equal(r.reason, 'config-changed', JSON.stringify(r));
+    const clone = f.gates[0]?.cwd; assert.ok(clone, 'the gate ran in a clone');
+    const gateIdx = f.ctx.recorder.findIndex((x) => x.argv[0] === FAKE_BWRAP);
+    const inClone = f.ctx.recorder.slice(gateIdx + 1).filter((x) => /(^|\/)git$/.test(String(x.argv[0])) && String(x.cwd ?? '') === clone);
+    assert.equal(inClone.length, 0, `no host git ran inside the tampered clone after the gate: ${JSON.stringify(inClone.map((x) => x.argv.slice(0, 4)))}`);
+    assert.ok(!existsSync('/tmp/pwned-by-gate'));
+    // And every host git that DOES run in a clone carries the host-safe overrides.
+    const clean = fixture();
+    try {
+      await clean.prepare(); const ok = await clean.run(); assert.equal(ok.ok, true, JSON.stringify(ok));
+      // Only git that runs in a clone AFTER a gate executed IN THAT clone is exposed to the gate's edits.
+      const rec = clean.ctx.recorder;
+      const gits = [];
+      for (const g of ok.gates ?? []) {
+        const gateIdx = rec.findIndex((x) => x.argv[0] === FAKE_BWRAP && JSON.stringify(x.argv).includes(g.clone));
+        assert.ok(gateIdx >= 0, `the gate ran in ${g.clone}`);
+        gits.push(...rec.slice(gateIdx + 1).filter((x) => /(^|\/)git$/.test(String(x.argv[0])) && String(x.cwd ?? '') === g.clone));
+      }
+      assert.ok(gits.length > 0, 'host git ran in the clone');
+      for (const g of gits) assert.deepEqual(g.argv.slice(1, 1 + HOST_SAFE_GIT.length), [...HOST_SAFE_GIT], `host-safe overrides lead: ${g.argv.slice(0, 8).join(' ')}`);
+    } finally { clean.cleanup(); }
+  } finally { f.cleanup(); }
+}
+test('AC149: a gate that touches the clone\'s .git config or hooks is refused by a FILE-level check before any host git runs inside that clone, and every host git in a clone carries the host-safe overrides', ac149_gateMetadataCheckedBeforeHostGit);

@@ -7,9 +7,9 @@
 // a losing racer's rename fails and it exits 1 `lock-held`. Release checks the
 // token before removing.
 
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, lstatSync } from 'node:fs';
 
-registerSeams(['lock.twoStepPublish']);
+registerSeams(['lock.twoStepPublish', 'lock.releaseByToken']);
 
 /** The fs surface `acquireLock` publishes through (injectable so a test can record the ORDER of the steps). */
 export const LOCK_FS = Object.freeze({ mkdirSync, mkdtempSync, writeFileSync, renameSync, rmSync });
@@ -93,24 +93,41 @@ export function acquireLock(adlcDir, { self, probes, now = Date.now, token = ran
       throw e;
     }
   }
+  let ino = null;
+  try { ino = lstatSync(lockDir).ino; } catch { ino = null; }
   return {
-    token, lockDir,
+    token, lockDir, ino,
     heartbeat() {
       const cur = readOwner(lockDir);
       if (!cur || cur.token !== token) return false;
       writeAtomic(ownerPath(lockDir), { ...cur, heartbeatAt: new Date(now()).toISOString() }, fsx);
       return true;
     },
-    release() { return releaseLock(lockDir, token); },
+    release() { return releaseLock(lockDir, token, { ino, fsImpl }); },
   };
 }
 
 /** Release only if the owner file carries OUR token. */
-export function releaseLock(lockDir, token) {
+export function releaseLock(lockDir, token, { ino = null, fsImpl = null } = {}) {
+  const fsx = fsImpl ? { ...LOCK_FS, ...fsImpl } : LOCK_FS;
   const cur = readOwner(lockDir);
   // Mutation seam `lock.releaseAnyToken`: the token check is skipped.
   if (!cur || (!active('lock.releaseAnyToken') && cur.token !== token)) return false;
-  rmSync(lockDir, { recursive: true, force: true });
+  // Mutation seam `lock.releaseByToken`: read-then-remove (a reclaimer that replaced the directory
+  // between the read and the removal loses ITS lock).
+  if (active('lock.releaseByToken')) { fsx.rmSync(lockDir, { recursive: true, force: true }); return true; }
+  // Release only the directory WE published (codex r5 A2): the inode must still be ours, and the
+  // directory is moved aside first — if what moved is someone else's lock (a reclaim landed in the
+  // gap), it is put back untouched.
+  if (ino != null) { let st; try { st = lstatSync(lockDir); } catch { return false; } if (st.ino !== ino) return false; }
+  const aside = `${lockDir}.release-${token}`;
+  try { fsx.renameSync(lockDir, aside); } catch { return false; }
+  const moved = readOwner(aside);
+  if (!(active('lock.releaseAnyToken') || moved?.token === token)) {
+    try { fsx.renameSync(aside, lockDir); } catch { /* a newer lock appeared meanwhile; leave it */ }
+    return false;
+  }
+  fsx.rmSync(aside, { recursive: true, force: true });
   return true;
 }
 

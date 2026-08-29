@@ -5,7 +5,7 @@
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner } from '../lib/spawn.mjs';
-import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES, issueBodyEdits } from '../lib/github.mjs';
+import { createGh, listOpenIssues, ensureComment, ensureLabel, PAGE_CAP_BYTES, issueBodyEdits, listOpenPrs } from '../lib/github.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';
 
 function harness(handler, { host = 'github.com', repo = 'o/r' } = {}) {
@@ -123,3 +123,32 @@ export async function ac155_editHistoryCoversEveryPage() {
   assert.equal((await issueBodyEdits(cursorless, 7)).reason, 'edits-unreadable', 'hasNextPage without a cursor is unreadable, never "complete"');
 }
 test('AC155: the issue edit history is read across EVERY page (bounded) — a later-page editor is seen, an over-long history is edits-truncated, a cursorless page is edits-unreadable', ac155_editHistoryCoversEveryPage);
+
+export async function ac4_commentPostIsNeverRetriedBlind() {
+  // gh fails AFTER the comment landed: exactly one POST, the failure surfaces, and the next call finds the sentinel.
+  const posts = []; const comments = [];
+  const { ghc } = harness((args, io) => {
+    if (args[0] === 'issue' && args[1] === 'comment') { posts.push(args); comments.push(String(io.stdin ?? '')); return { status: 1, stderr: 'connection reset after POST' }; }
+    if (args[0] === 'api' && String(args[1]).includes('/comments')) return { stdout: JSON.stringify(comments.map((body) => ({ body }))) };
+    return { stdout: '[]' };
+  }, { host: 'github.com', repo: 'o/r' });
+  await assert.rejects(() => ensureComment(ghc, 7, '<!-- s -->', 'body'), /gh-failed|exited 1/);
+  assert.equal(posts.length, 1, 'the POST ran exactly once (no blind retry)');
+  const again = await ensureComment(ghc, 7, '<!-- s -->', 'body');
+  assert.deepEqual(again, { posted: false }, 'the next call finds the sentinel: that is the idempotent retry');
+  assert.equal(posts.length, 1);
+}
+test('AC4: a terminal-comment POST is never retried blind — a failure after the comment landed posts once, and the sentinel search is the retry', ac4_commentPostIsNeverRetriedBlind);
+
+export async function ac3_openPrsCoverEveryPage() {
+  const page = (n, count, per) => Array.from({ length: count }, (_, i) => ({ number: (n - 1) * per + i + 1, head: { ref: `adlc/autopilot/issue-${(n - 1) * per + i + 1}` }, body: '' }));
+  const ghc = (pages, hasMore) => ({ repo: 'o/r', run: async (args) => { const p = Number(/[?&]page=(\d+)/.exec(args[1])[1]); const per = Number(/per_page=(\d+)/.exec(args[1])[1]); return { status: 0, stdout: JSON.stringify(p <= pages ? page(p, p < pages || hasMore ? per : 1, per) : []), truncated: false }; } });
+  const two = await listOpenPrs(ghc(2, false), { perPage: 2 });
+  assert.equal(two.ok, true); assert.deepEqual(two.prs.map((p) => p.number), [1, 2, 3], 'the PR on the SECOND page is listed');
+  assert.equal(two.prs[0].headRefName, 'adlc/autopilot/issue-1');
+  const endless = await listOpenPrs(ghc(99, true), { perPage: 2, maxPages: 3 });
+  assert.equal(endless.ok, false); assert.equal(endless.reason, 'open-prs-truncated', 'more pages than the bound fails closed');
+  const bad = await listOpenPrs({ repo: 'o/r', run: async () => ({ status: 0, stdout: '{"not":"an array"}', truncated: false }) });
+  assert.equal(bad.ok, false);
+}
+test('AC3: the open-PR exclusion set is read across EVERY page (bounded) and fails closed when truncated — never a silent 100-entry cap', ac3_openPrsCoverEveryPage);

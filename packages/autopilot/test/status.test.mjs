@@ -84,3 +84,39 @@ export async function ac87_reconciliationAppendsToStatusAndRecord() {
   } finally { cleanup(root); }
 }
 test('AC87: reconcile appends {step, before, after, delta, overshoot} to the status file and the run record, and an overshoot refuses the next start', ac87_reconciliationAppendsToStatusAndRecord);
+
+export async function ac87_ordinalIsBumpedFromSeparateProcesses() {
+  // N REAL processes bump the ordinal concurrently over the same file + lock: the ordinals are exactly 1..N, each once.
+  const { spawn } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const root = scratch('ap-status-procs');
+  try {
+    const paths = autopilotPaths(root); mkdirSync(paths.runsDir, { recursive: true });
+    const probes = { pidAlive: () => true, pidStartTimeOf: () => '1' };
+    const lock = acquireLock(paths.adlc, { self: { pid: process.pid, pidStartTime: '1' }, probes });
+    const store = createStatusStore({ paths, lockToken: lock.token, redactor: createRedactor({}) });
+    store.resetStarts('it-p');
+    const statusMod = fileURLToPath(new URL('../lib/status.mjs', import.meta.url));
+    const pathsMod = fileURLToPath(new URL('../lib/paths.mjs', import.meta.url));
+    const redactMod = fileURLToPath(new URL('../lib/redact.mjs', import.meta.url));
+    const mutationsMod = fileURLToPath(new URL('../lib/mutations.mjs', import.meta.url));
+    const { activeSeams } = await import('../lib/mutations.mjs');
+    const script = `const { createStatusStore } = await import(${JSON.stringify(statusMod)}); const { autopilotPaths } = await import(${JSON.stringify(pathsMod)}); const { createRedactor } = await import(${JSON.stringify(redactMod)});
+      const { enable } = await import(${JSON.stringify(mutationsMod)}); for (const seam of ${JSON.stringify(activeSeams())}) enable(seam);
+      const s = createStatusStore({ paths: autopilotPaths(${JSON.stringify(root)}), lockToken: ${JSON.stringify(lock.token)}, redactor: createRedactor({}) }); process.stdout.write(String(s.incrementStarts()));`;
+    const N = 6;
+    const outs = await Promise.all(Array.from({ length: N }, () => new Promise((resolve, reject) => {
+      const c = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = ''; let err = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; });
+      c.on('exit', (code) => (code === 0 ? resolve(out.trim()) : reject(new Error(`helper exited ${code}: ${err.slice(0, 300)}`))));
+    })));
+    assert.deepEqual(outs.map(Number).sort((a, b) => a - b), Array.from({ length: N }, (_, i) => i + 1), `six concurrent processes got six distinct ordinals: ${outs.join(',')}`);
+    assert.equal(store.read().startsThisIteration, N, 'the file holds the last ordinal');
+    // A process whose token is not the on-disk owner's is refused (the lock is load-bearing for the ordinal).
+    const badScript = script.replace(JSON.stringify(lock.token), JSON.stringify('f'.repeat(64)));
+    const bad = await new Promise((resolve) => { const c = spawn(process.execPath, ['--input-type=module', '-e', badScript], { stdio: ['ignore', 'pipe', 'pipe'] }); let err = ''; c.stderr.on('data', (d) => { err += d; }); c.on('exit', (code) => resolve({ code, err })); });
+    assert.notEqual(bad.code, 0, 'a wrong token is refused'); assert.match(bad.err, /lock-required/);
+    assert.equal(store.read().startsThisIteration, N, 'the refused process did not bump the ordinal');
+  } finally { cleanup(root); }
+}
+test('AC87: the start ordinal is bumped by concurrent REAL processes over the same file and lock — every process gets a distinct ordinal (1..N) and the file holds N', { timeout: 60_000 }, ac87_ordinalIsBumpedFromSeparateProcesses);

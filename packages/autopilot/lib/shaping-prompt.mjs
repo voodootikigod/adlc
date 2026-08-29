@@ -11,6 +11,10 @@
 
 import { CATEGORIES } from './block.mjs';
 
+import { registerSeams, active } from './mutations.mjs';
+
+registerSeams(['shaping.lenientContract']);
+
 export const CRITERIA_MARKER = '=== ACCEPTANCE CRITERIA ===';
 export const ISSUE_BODY_FENCE_CAP = 8000;
 export const SHAPING_STDOUT_CAP = 64 * 1024;
@@ -60,8 +64,20 @@ export function validateShapedTicket(t, { issueUrl, bodyOnly = false } = {}) {
     if (!t.body.startsWith(`GitHub issue: ${issueUrl}`)) problems.push('body: must begin with "GitHub issue: <url>"');
     if (!t.body.includes(CRITERIA_MARKER)) problems.push(`body: missing "${CRITERIA_MARKER}" section`);
   }
+  // The declared contract is ENFORCED, not just requested (codex r5 A5): every criterion carries a
+  // VERIFY clause and the title is prefixed "#<issue number>: ". Seam `shaping.lenientContract`.
+  if (typeof t.body === 'string' && t.body.includes(CRITERIA_MARKER) && !active('shaping.lenientContract')) {
+    const items = t.body.slice(t.body.indexOf(CRITERIA_MARKER) + CRITERIA_MARKER.length).split('\n').map((l) => l.trim()).filter((l) => /^[-*]\s+/.test(l));
+    if (items.length === 0) problems.push('criteria: at least one "- " item is required after the marker');
+    for (const it of items) if (!/\bVERIFY:\s*\S/.test(it)) problems.push(`criteria: item without a VERIFY clause: ${it.slice(0, 60)}`);
+  }
   if (bodyOnly) return problems;
   if (typeof t.title !== 'string' || t.title.trim().length === 0) problems.push('title: expected non-empty string');
+  else if (!active('shaping.lenientContract')) {
+    const num = /\/issues\/(\d+)\/?$/.exec(String(issueUrl ?? ''))?.[1];
+    if (num && !t.title.startsWith(`#${num}: `)) problems.push(`title: must be prefixed "#${num}: "`);
+    if (/\n/.test(t.title)) problems.push('title: must be one line');
+  }
   if (!isStringArray(t.scope)) problems.push('scope: expected array of non-empty strings');
   if (!(t.rails === undefined || isStringArray(t.rails) || (Array.isArray(t.rails) && t.rails.length === 0))) problems.push('rails: expected array of strings');
   if (!(typeof t.category === 'string' && CATEGORIES.includes(t.category))) problems.push(`category: must be one of ${CATEGORIES.join(', ')}`);

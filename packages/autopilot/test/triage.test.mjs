@@ -407,3 +407,22 @@ export async function ac10_dryRunNeverChargesAttempts() {
   } finally { h.cleanup(); }
 }
 test('AC10: a dry-run shaping call reads the attempts ledger but never writes it; a real call books the attempt', ac10_dryRunNeverChargesAttempts);
+
+export async function ac96_shapingContractIsEnforced() {
+  const { validateShapedTicket } = await import('../lib/shaping-prompt.mjs');
+  const url = 'https://github.com/o/r/issues/9';
+  const good = shapedTicket(9, url);
+  assert.deepEqual(validateShapedTicket(good, { issueUrl: url }), [], 'the fixture ticket satisfies the contract');
+  assert.ok(validateShapedTicket({ ...good, title: 'Add the widget' }, { issueUrl: url }).some((p) => /prefixed "#9: "/.test(p)), 'a title without the issue prefix is refused');
+  assert.ok(validateShapedTicket({ ...good, title: '#9: two\nlines' }, { issueUrl: url }).some((p) => /one line/.test(p)));
+  const noVerify = { ...good, body: good.body.replace(/ VERIFY:[^\n]*/g, '') };
+  assert.ok(validateShapedTicket(noVerify, { issueUrl: url }).some((p) => /without a VERIFY clause/.test(p)), 'a criterion without VERIFY is refused');
+  assert.ok(validateShapedTicket(noVerify, { issueUrl: url, bodyOnly: true }).some((p) => /VERIFY/.test(p)), 'body-only shaping is held to the same clause');
+  // End to end: a shaped answer without VERIFY clauses is shaping-malformed, never a ticket.
+  const h = makeTriageCtx({ issues: [ISSUE(9)], claude: () => ({ stdout: claudeResult(noVerify) }) });
+  try {
+    const v = await triage({ ctx: h.ctx, issue: ISSUE(9), authorization: AUTHORIZED });
+    assert.equal(v.verdict, 'OPERATIONAL'); assert.match(String(v.reason), /shaping-malformed/);
+  } finally { h.cleanup(); }
+}
+test('AC96: the shaping contract is ENFORCED — "#<n>: " title prefix, one line, and a VERIFY clause on every criterion; a violating answer is shaping-malformed', ac96_shapingContractIsEnforced);

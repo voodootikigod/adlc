@@ -84,6 +84,9 @@ export async function ac160_manifestVerificationIsKeyed() {
     assert.equal(verify(root, { key: null }).status, 0, 'the keyless gate accepts the forgery (hash chain only): the key is not optional');
     // The gate itself verifies chain-only without a key (the repository's mixed manifest keeps it functional); the
     // autopilot's obligation is that ITS verify spawn always carries the key — asserted on the recorder below.
+    // The key reaches ONLY the key-bearing children: a non-key-bearing child env never carries it.
+    assert.ok(!('ADLC_MANIFEST_KEY' in childEnv({ PATH: '/usr/bin', HOME: root }, { key: KEY, keyBearing: false })), 'a non-key-bearing child never sees the key');
+    assert.equal(childEnv({ PATH: '/usr/bin', HOME: root }, { key: KEY, keyBearing: true }).ADLC_MANIFEST_KEY, KEY);
     const children = KEY_BEARING_ARGV.map((a) => a.join(' '));
     assert.equal(children.length, 7, 'the §9.3 allowlist has exactly the seven key-bearing children');
     for (const want of ['ticket create', 'ticket complete', 'ticket update', 'coldstart', 'spec-lint', 'record-cross-model', 'gate-manifest verify']) assert.ok(children.some((c) => c.includes(want)), `allowlist names ${want}`);

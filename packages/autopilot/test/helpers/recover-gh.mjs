@@ -25,6 +25,11 @@ export function fakeGithub(state = {}) {
     gh.calls.push([...args]);
     gh.onCall?.(args);
     const [sub, verb] = args;
+    if (sub === 'api' && /^repos\/[^/]+\/[^/]+\/pulls\?state=open/.test(String(args[1] ?? ''))) {
+      const page = Number(/[?&]page=(\d+)/.exec(String(args[1]))?.[1] ?? 1);
+      const rows = page === 1 ? gh.prs.filter((p) => p.state === 'OPEN') : [];
+      return { stdout: JSON.stringify(rows.map((p) => ({ number: p.number, head: { ref: p.head }, body: p.body ?? '' }))) };
+    }
     if (sub === 'pr' && verb === 'list') {
       const head = flag(args, '--head'); const st = flag(args, '--state') ?? 'open';
       const rows = gh.prs.filter((p) => p.head === head && (st === 'all' || p.state === st.toUpperCase()));
