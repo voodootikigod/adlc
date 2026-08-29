@@ -212,9 +212,9 @@ test('every write in the module targets the staging dir; the source has no write
     .replace(/^const defaultFs = Object\.freeze\(\{[\s\S]*?\}\);/m, '');
   const writers = /\b(writeFileSync|chmodSync|appendFileSync|copyFileSync|renameSync|truncateSync|ftruncateSync|unlinkSync|rmSync|createWriteStream|writeSync|openSync)\b/;
   const mentions = body.split('\n').filter((l) => writers.test(l) && !/^\s*(\/\/|\*)/.test(l));
-  const allowed = /fs\.writeFileSync\(path, bytes, \{ mode \}\)|fs\.chmodSync\(path, mode\)|fs\.openSync\(path, fs\.constants\.O_RDONLY \| fs\.constants\.O_NOFOLLOW\)/;
+  const allowed = /fs\.writeFileSync\(path, bytes, \{ mode \}\)|fs\.chmodSync\(path, mode\)|fs\.rmSync\(path, \{ force: true \}\)|fs\.openSync\(path, fs\.constants\.O_RDONLY \| fs\.constants\.O_NOFOLLOW\)/;
   assert.deepEqual(mentions.filter((l) => !allowed.test(l)), [], 'a write primitive outside the staging helper is a write-back path');
-  assert.equal(mentions.length, 3, 'exactly the two staging writes and the one read-only O_NOFOLLOW open');
+  assert.equal(mentions.length, 4, 'exactly the stale-file removal, the two staging writes and the one read-only O_NOFOLLOW open');
   assert.ok(!/O_WRONLY|O_RDWR|O_APPEND|O_CREAT|O_TRUNC/.test(src), 'no writable open flag anywhere');
   assert.ok(!/writeFileSync\(\s*(hostHome|home|hostCredential)/.test(src), 'no write addressed at the host HOME');
   // And dynamically: with a recording fs, every staged path is under the staging dir.
@@ -261,5 +261,30 @@ test('a host with NO ~/.claude/plugins (a fresh install) still gets a synthetic 
     assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage2'), adapter, uid: 1000 }), /not a directory/);
     rmSync(join(hostHome, '.claude', 'plugins')); symlinkSync(root, join(hostHome, '.claude', 'plugins'));
     assert.throws(() => prepareSyntheticHome({ hostHome, stagingDir: join(root, 'stage3'), adapter, uid: 1000 }), /symlink/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('re-staging into a directory that already holds a read-only staged file does not crash: the stale 0400 file is replaced, the mode is kept (agy fleet r4 c4)', async () => {
+  const { prepareSyntheticHome } = await import('../lib/synthetic-home.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'fleet-sh-restage-'));
+  try {
+    const hostHome = join(root, 'home'); mkdirSync(join(hostHome, '.claude'), { recursive: true });
+    writeFileSync(join(hostHome, '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":"x"}}', { mode: 0o600 });
+    writeFileSync(join(hostHome, '.claude', 'settings.json'), JSON.stringify({ model: 1 }));
+    writeFileSync(join(hostHome, '.claude.json'), '{}');
+    const adapter = { name: 'claude-code', homeState: { dirs: [], files: [] } };
+    const stagingDir = join(root, 'stage');
+    const first = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: 1000 });
+    const settings = first.homeBinds.find((b) => b.target.endsWith('settings.json')).source;
+    assert.equal(statSync(settings).mode & 0o777, 0o400, 'staged read-only');
+    writeFileSync(join(hostHome, '.claude', 'settings.json'), JSON.stringify({ model: 2 }));
+    const second = prepareSyntheticHome({ hostHome, stagingDir, adapter, uid: 1000 });
+    const settings2 = second.homeBinds.find((b) => b.target.endsWith('settings.json')).source;
+    assert.equal(settings2, settings);
+    assert.match(readFileSync(settings2, 'utf8'), /"model":\s*2/, 'the re-staged content is the new host content');
+    assert.equal(statSync(settings2).mode & 0o777, 0o400, 'still read-only');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

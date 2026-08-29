@@ -24,8 +24,7 @@
 
 import {
   openSync, fstatSync, lstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, existsSync,
-  constants as fsConstants,
-} from 'node:fs';
+  constants as fsConstants, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, isAbsolute, resolve, sep } from 'node:path';
 import { homeStateOf } from './model-plane.mjs';
@@ -50,7 +49,7 @@ export const CLAUDE_JSON_KEYS = Object.freeze([
 ]);
 
 const defaultFs = Object.freeze({
-  openSync, fstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, lstatSync, existsSync, constants: fsConstants,
+  openSync, fstatSync, readFileSync, closeSync, writeFileSync, chmodSync, mkdirSync, statSync, lstatSync, existsSync, rmSync, constants: fsConstants,
 });
 
 const isStrictAncestor = (root, path) => path !== root && path.startsWith(root + sep);
@@ -105,6 +104,10 @@ export function pickAllowlisted(doc, keys) {
 
 /** Write a staged file with an exact mode, even if a previous staging left one behind. */
 function stage(fs, path, bytes, mode) {
+  // A previous staging may have left a READ-ONLY (0400) file behind: opening it for writing
+  // is EACCES, so the stale file goes first (agy fleet r4 c4). The staging dir is mkdtemp-fresh
+  // per build in production; this keeps the documented re-staging contract true regardless.
+  if (typeof fs.rmSync === 'function') fs.rmSync(path, { force: true });
   fs.writeFileSync(path, bytes, { mode });
   fs.chmodSync(path, mode);
 }
