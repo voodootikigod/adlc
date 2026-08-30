@@ -805,3 +805,19 @@ test('measureRun times ONE run of the fast target command through an injectable 
   const timedOut = measureRun('node --test x', { spawn: () => ({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' }), now: () => 0 });
   assert.equal(timedOut.ok, false); assert.match(timedOut.reason, /timed out/);
 });
+
+test('every field of the budget document is pinned on every path (the gate on its own change found the unasserted ones)', () => {
+  assert.deepEqual(mutantBudget({ kind: 'slow', max: 3, files: ['a', 'b'] }), { ok: true, draw: 3, want: 3, fits: null, capped: false });
+  assert.deepEqual(mutantBudget(fast(20)), { ok: true, draw: 40, want: 40, fits: null, capped: false });
+  const slowRun = mutantBudget(fast(3), { runMs: FAST_RUN_TIMEOUT_MS + 1, windowMs: HOLLOW_WINDOW_MS });
+  assert.equal(slowRun.ok, false); assert.equal(slowRun.draw, 0); assert.equal(slowRun.fits, 0); assert.equal(slowRun.capped, true); assert.equal(slowRun.want, 12);
+  const no = mutantBudget(fast(67), { runMs: 120_000, windowMs: 1_400_000 });
+  assert.equal(no.ok, false); assert.equal(no.draw, 0); assert.equal(no.fits, 10, '11 runs − 1 baseline'); assert.equal(no.capped, true); assert.equal(no.want, 134);
+  // A window that cannot even hold two runs: fits is 0 (never negative, never 1).
+  const tiny = mutantBudget(fast(3), { runMs: 100_000, windowMs: 150_000 });
+  assert.equal(tiny.ok, false); assert.equal(tiny.fits, 0); assert.match(tiny.reason, /0 draw\(s\) fit/);
+  const big = mutantBudget(fast(67), { runMs: 80_000, windowMs: 45 * 60_000 });
+  assert.deepEqual(big, { ok: true, draw: 32, want: 134, fits: 32, capped: true });
+  const small = mutantBudget(fast(5), { runMs: 80_000, windowMs: 45 * 60_000 });
+  assert.deepEqual(small, { ok: true, draw: 12, want: 12, fits: 32, capped: false });
+});
