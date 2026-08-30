@@ -313,10 +313,53 @@ export function classify(changed, requestedMax, root = ROOT) {
  */
 export const MUTANTS_PER_CHANGED_FILE = 2;
 
-export function mutantBudget(decision) {
+/** The ONE spawnSync window hollow-test gets: its baseline run plus every mutant run must fit. */
+export const HOLLOW_WINDOW_MS = 45 * 60_000;
+/** Per-run timeout hollow-test is handed on the fast path (the slow path keeps its own 10 minutes). */
+export const FAST_RUN_TIMEOUT_MS = 180_000;
+export const SLOW_RUN_TIMEOUT_MS = 600_000;
+
+/**
+ * Size the hollow-test draw. Without a measurement this is exactly the historical rule
+ * (every changed file gets more than one draw; a bare-minimum `max` otherwise). WITH a
+ * measured run cost the draw is the largest that fits the window — hollow-test runs the
+ * suite once as a baseline and once per mutant — never above 2 × files and never below
+ * the requested floor. A floor that cannot fit is `ok:false` with the reason: a draw that
+ * cannot finish is not coverage, it is a guaranteed ETIMEDOUT (PR #913: 67 files × 2 at
+ * ~80 s a run inside a 30-minute window). `capped` says per-file coverage was reduced.
+ *
+ * @returns {{ ok: boolean, draw: number, want: number, fits: number|null, capped: boolean, reason?: string }}
+ */
+export function mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_MS, perRunTimeoutMs = FAST_RUN_TIMEOUT_MS } = {}) {
   const files = decision.files ?? [];
-  if (decision.kind === 'slow') return decision.max;
-  return Math.max(decision.max, files.length * MUTANTS_PER_CHANGED_FILE);
+  if (decision.kind === 'slow') return { ok: true, draw: decision.max, want: decision.max, fits: null, capped: false };
+  const want = Math.max(decision.max, files.length * MUTANTS_PER_CHANGED_FILE);
+  if (runMs == null) return { ok: true, draw: want, want, fits: null, capped: false };
+  if (runMs > perRunTimeoutMs) {
+    return { ok: false, draw: 0, want, fits: 0, capped: true, reason: `one run of the fast target command takes ${runMs} ms, past the ${perRunTimeoutMs} ms per-run timeout hollow-test is handed — every run would time out` };
+  }
+  const fits = Math.max(0, Math.floor(windowMs / runMs) - 1); // minus the baseline run
+  if (fits < decision.max) {
+    return { ok: false, draw: 0, want, fits, capped: true, reason: `one run of the fast target command takes ${runMs} ms; ${fits} draw(s) fit the ${windowMs} ms window after the baseline, fewer than the requested floor of ${decision.max}` };
+  }
+  const draw = Math.min(want, fits);
+  return { ok: true, draw, want, fits, capped: draw < want };
+}
+
+/**
+ * Time ONE run of the fast target command — the same shell command hollow-test will run —
+ * so the draw can be sized to what actually fits. A red run is the gate's own baseline
+ * failure, reported with the suite's output before any mutant is drawn.
+ */
+export function measureRun(testCmd, { spawn = spawnSync, now = Date.now, cwd = ROOT, timeoutMs = FAST_RUN_TIMEOUT_MS } = {}) {
+  const t0 = now();
+  const r = spawn(testCmd, [], { shell: true, cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
+  const runMs = Math.max(1, now() - t0);
+  const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  if (r.error) return { ok: false, runMs, output, reason: `could not run the fast target command: ${r.error.message}` };
+  if (r.signal || r.status == null) return { ok: false, runMs, output, reason: `the fast target command timed out (${timeoutMs} ms) or was killed by ${r.signal ?? 'a signal'}` };
+  if (r.status !== 0) return { ok: false, runMs, output, reason: `the fast target command exited ${r.status}` };
+  return { ok: true, runMs, output };
 }
 
 function isMain() {
@@ -379,20 +422,40 @@ export function main() {
 
   // NO --target. hollow-test independently re-derives the same file set from
   // the same --base and hunk-scopes each one from the diff itself.
+  // The draw is sized by what fits the window (T-01M19V5SCKQYRPYXYZHQ0AEZBT): one measured run of
+  // the fast target command first — a red one is the baseline failure, reported with its output.
+  let budget;
+  if (decision.kind === 'fast') {
+    const measured = measureRun(decision.testCmd);
+    if (!measured.ok) {
+      process.stderr.write(measured.output.slice(-8000));
+      fail(`${measured.reason} — the baseline suite is not green; fix the suite / the fast target command first`);
+    }
+    budget = mutantBudget(decision, { runMs: measured.runMs });
+    console.log(`mutation-gate: one run of the fast target command took ${(measured.runMs / 1000).toFixed(1)} s; window ${HOLLOW_WINDOW_MS / 60_000} min → ${budget.ok ? `${budget.draw} draw(s)` : 'does not fit'} (wanted ${budget.want} = ${MUTANTS_PER_CHANGED_FILE} × ${decision.files.length} file(s))`);
+    if (!budget.ok) fail(`${budget.reason}. Make the fast target command cheaper or split the change.`);
+    if (budget.capped) {
+      console.log(`mutation-gate: BUDGET-CAPPED — ${budget.draw} of ${budget.want} draws: changed files may receive fewer than ${MUTANTS_PER_CHANGED_FILE} draws each (${decision.files.length} files); per-file coverage is reduced for this diff, not silently skipped.`);
+    }
+  } else {
+    budget = mutantBudget(decision);
+  }
+
   const bin = join(ROOT, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
   const result = spawnSync(process.execPath, [
     bin,
     '--base', base,
     '--test-cmd', decision.testCmd,
-    // Enough mutants that every changed file gets more than one draw — see
-    // mutantBudget: a single draw can be spent on an unparseable mutant, which
-    // leaves that file unprosecuted while the run still reports zero survivors.
-    '--max', String(mutantBudget(decision)),
-    '--timeout-ms', decision.kind === 'fast' ? '180000' : '600000',
+    // The draw: every changed file gets more than one draw when that fits the window — see
+    // mutantBudget: a single draw can be spent on an unparseable mutant, which leaves that
+    // file unprosecuted while the run still reports zero survivors. When it does not fit,
+    // the cap was printed above; the run is bounded either way.
+    '--max', String(budget.draw),
+    '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
     // Mirror the wrapper's own source declaration into the tool, so the two
     // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).
     ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
-  ], { stdio: 'inherit', cwd: ROOT, timeout: 1800000 });
+  ], { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 });
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);
   if (result.signal) fail(`hollow-test timed out or was killed by ${result.signal}`);

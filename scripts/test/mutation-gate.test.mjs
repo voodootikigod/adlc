@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE, mutantBudget, MUTANTS_PER_CHANGED_FILE } from '../mutation-gate.mjs';
+import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE, mutantBudget, MUTANTS_PER_CHANGED_FILE, HOLLOW_WINDOW_MS, FAST_RUN_TIMEOUT_MS, measureRun } from '../mutation-gate.mjs';
 import { generateMutants } from '../../packages/core/lib/mutate.mjs';
 import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
 
@@ -712,27 +712,27 @@ test('the survivor message is honest: a comment-prefixed line really is prosecut
 
 test('the fast path budgets MORE than one mutant per changed file', () => {
   const decision = { kind: 'fast', max: 12, files: Array.from({ length: 16 }, (_, i) => `src/f${i}.mjs`) };
-  assert.equal(mutantBudget(decision), 32);
-  assert.ok(mutantBudget(decision) > decision.files.length,
+  assert.equal(mutantBudget(decision).draw, 32);
+  assert.ok(mutantBudget(decision).draw > decision.files.length,
     'one-per-file is the starvation case this exists to prevent');
 });
 
 test('the fast path never budgets BELOW the requested max', () => {
   // A narrow diff must not lose budget just because it touches few files.
   const decision = { kind: 'fast', max: 12, files: ['src/one.mjs'] };
-  assert.equal(mutantBudget(decision), 12);
+  assert.equal(mutantBudget(decision).draw, 12);
 });
 
 test('the SLOW path keeps its deliberate cap — widening it would unbound CI', () => {
   // The slow fallback re-runs the whole suite per mutant; classify() already
   // caps it at 3 for that reason, and the budget rule must not undo that.
   const decision = { kind: 'slow', max: 3, files: Array.from({ length: 16 }, (_, i) => `src/f${i}.mjs`) };
-  assert.equal(mutantBudget(decision), 3);
+  assert.equal(mutantBudget(decision).draw, 3);
 });
 
 test('a decision with no file list is handled without inventing budget', () => {
-  assert.equal(mutantBudget({ kind: 'fast', max: 12 }), 12);
-  assert.equal(mutantBudget({ kind: 'fast', max: 12, files: [] }), 12);
+  assert.equal(mutantBudget({ kind: 'fast', max: 12 }).draw, 12);
+  assert.equal(mutantBudget({ kind: 'fast', max: 12, files: [] }).draw, 12);
 });
 
 test('MUTANTS_PER_CHANGED_FILE is the knob, and it is greater than one', () => {
@@ -740,4 +740,68 @@ test('MUTANTS_PER_CHANGED_FILE is the knob, and it is greater than one', () => {
   // number, and so lowering it back to 1 is a visible edit rather than a silent
   // arithmetic change.
   assert.ok(MUTANTS_PER_CHANGED_FILE > 1);
+});
+
+// ── budget-aware draw (T-01M19V5SCKQYRPYXYZHQ0AEZBT) ─────────────────────────────
+// hollow-test runs the suite once as a baseline and once per mutant inside ONE spawnSync
+// window. A draw of 2 × files that cannot fit the window is not coverage — it is a guaranteed
+// ETIMEDOUT (PR #913: 67 files, ~80 s a run). The draw is sized by the MEASURED run cost:
+// small diffs keep today's 2 × files exactly; large ones get the largest draw that fits,
+// never below the requested floor; a floor that cannot fit fails loudly BEFORE hollow-test.
+const fast = (n, max = 12) => ({ kind: 'fast', max, files: Array.from({ length: n }, (_, i) => `packages/x/lib/f${i}.mjs`), testCmd: 'node --test packages/x/test/*.test.mjs' });
+
+test('mutantBudget without a measurement is byte-identical to today: max(requested, 2 × files)', () => {
+  assert.equal(mutantBudget(fast(3)).draw, 12);
+  assert.equal(mutantBudget(fast(20)).draw, 40);
+  assert.equal(mutantBudget(fast(3)).capped, false);
+  assert.equal(mutantBudget({ kind: 'slow', max: 3, files: ['a', 'b'] }).draw, 3, 'the slow path keeps its own cap');
+  assert.equal(typeof mutantBudget(fast(3)), 'object', 'returns a document, not a bare number');
+});
+
+test('with a measured run cost the draw is the largest that fits the window (baseline + draws), capped at 2 × files, floored at the request', () => {
+  // 67 files × 2 = 134 wanted; 80 s a run in a 45-minute window: (45 × 60) / 80 = 33.75 runs → 33 − 1 baseline = 32 draws.
+  const big = mutantBudget(fast(67), { runMs: 80_000, windowMs: 45 * 60_000 });
+  assert.equal(big.want, 134); assert.equal(big.draw, 32); assert.equal(big.capped, true);
+  // A small diff fits with room to spare: exactly today's 2 × files, uncapped.
+  const small = mutantBudget(fast(5), { runMs: 80_000, windowMs: 45 * 60_000 });
+  assert.equal(small.draw, 12); assert.equal(small.capped, false);
+  const mid = mutantBudget(fast(15), { runMs: 80_000, windowMs: 45 * 60_000 });
+  assert.equal(mid.draw, 30); assert.equal(mid.capped, false, '30 of 30 wanted fit (33 would)');
+  // The floor is the request: a run cost that fits fewer than the requested draws is NOT silently shrunk below it.
+  const tight = mutantBudget(fast(67), { runMs: 210_000, windowMs: 45 * 60_000 });
+  assert.equal(tight.ok, false, '210 s a run → 12 runs → 11 draws: fewer than the requested 12 fit');
+});
+
+test('the floor exactly fitting is ok; one run more expensive than that is a loud refusal naming the cost and the window', () => {
+  // 120 s a run in a 26-minute window: 13 runs → 12 draws: the floor fits exactly (capped: 12 of 134 wanted).
+  const exact = mutantBudget(fast(67), { runMs: 120_000, windowMs: 13 * 120_000 });
+  assert.equal(exact.ok, true); assert.equal(exact.draw, 12); assert.equal(exact.capped, true);
+  // A slightly smaller window: 11 runs → 10 draws, fewer than the requested 12 → a loud refusal.
+  const no = mutantBudget(fast(67), { runMs: 120_000, windowMs: 1_400_000 });
+  assert.equal(no.ok, false);
+  assert.match(no.reason, /takes 120000 ms/, 'the refusal names the measured cost');
+  assert.match(no.reason, /1400000 ms window/, 'and the window');
+  assert.match(no.reason, /floor of 12/, 'and the floor that does not fit');
+  // A single run past the per-run timeout can never be green either, whatever the window.
+  const slowRun = mutantBudget(fast(3), { runMs: FAST_RUN_TIMEOUT_MS + 1, windowMs: HOLLOW_WINDOW_MS });
+  assert.equal(slowRun.ok, false); assert.match(slowRun.reason, /per-run timeout/);
+});
+
+test('the window is 45 minutes and the per-run timeout is what hollow-test is handed', () => {
+  assert.equal(HOLLOW_WINDOW_MS, 45 * 60_000);
+  assert.equal(FAST_RUN_TIMEOUT_MS, 180_000);
+});
+
+test('measureRun times ONE run of the fast target command through an injectable spawn and reports a red run with its output', () => {
+  const calls = [];
+  const spawn = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { status: 0, stdout: 'ok', stderr: '' }; };
+  const clock = [1000, 81_000]; const now = () => clock.shift();
+  const r = measureRun('node --test packages/x/test/*.test.mjs', { spawn, now, cwd: '/repo', timeoutMs: 180_000 });
+  assert.equal(r.ok, true); assert.equal(r.runMs, 80_000);
+  assert.equal(calls.length, 1); assert.equal(calls[0].opts.cwd, '/repo'); assert.equal(calls[0].opts.timeout, 180_000);
+  assert.ok(calls[0].opts.shell === true || calls[0].cmd === 'sh', 'the command string runs as the shell command hollow-test itself will run');
+  const red = measureRun('node --test x', { spawn: () => ({ status: 1, stdout: '', stderr: 'not ok 3 - AC9' }), now: () => 0 });
+  assert.equal(red.ok, false); assert.match(red.output, /not ok 3/);
+  const timedOut = measureRun('node --test x', { spawn: () => ({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' }), now: () => 0 });
+  assert.equal(timedOut.ok, false); assert.match(timedOut.reason, /timed out/);
 });

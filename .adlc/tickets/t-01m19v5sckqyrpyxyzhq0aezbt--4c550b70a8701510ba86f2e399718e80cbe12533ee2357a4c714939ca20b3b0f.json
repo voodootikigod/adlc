@@ -1,0 +1,14 @@
+{
+  "body": "CONTEXT. scripts/mutation-gate.mjs hands hollow-test a draw of max(requested, 2 x changed mutable files) inside a fixed 30-minute spawnSync window. A 67-file diff (PR #913) needs ~134 draws at ~80 s per run: the job dies ETIMEDOUT (exit 1) regardless of test quality, three times locally and once in CI. GOAL. The gate stays a fail-closed, per-file-coverage gate for ordinary diffs and degrades LOUDLY (a printed cap, never a timeout) for large ones. ACCEPTANCE. (1) mutantBudget(decision, { runMs, windowMs }) is pure: with no measurement it returns todays max(requested, 2 x files); with a measurement it returns the largest draw such that (draws + 1 baseline) x runMs fits the window, never above 2 x files and never below the requested floor; (2) when even the floor does not fit, or a single run exceeds the per-run timeout, main() fails loudly naming the measured cost and the window, before hollow-test starts; (3) when the draw is capped below 2 x files the job log says so with the ratio, so reduced per-file coverage is visible; (4) the window is 45 minutes with the hollow-test spawnSync timeout derived from it; (5) the measured run reuses the baseline: a red fast-target run fails the gate with the suites output before any mutant is drawn; (6) all existing mutation-gate tests keep passing; the slow path is unchanged. VERIFY. scripts/test/mutation-gate.test.mjs covers 1-4 with an injectable spawn; node scripts/mutation-gate.mjs origin/main --max 12 on this branch and on feat/autopilot (must print the cap and finish inside the window).",
+  "budget": "direct",
+  "category": "chore",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M19V5SCKQYRPYXYZHQ0AEZBT",
+  "rails": [],
+  "scope": [
+    "scripts/mutation-gate.mjs",
+    "scripts/test/mutation-gate.test.mjs"
+  ],
+  "title": "mutation-gate: size the hollow-test draw by the measured suite cost so large diffs fit the window (honest green, never a timeout)"
+}
