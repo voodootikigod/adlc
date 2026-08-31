@@ -282,13 +282,24 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
     const found = findAdlcRoot(candidate);
     if (found) return found;
   }
+
+  const pathKeys = ['transcriptPath', 'transcript_path', 'artifactPath', 'artifact_path', 'logPath', 'log_path'];
+  for (const pk of pathKeys) {
+    const p = payload?.[pk];
+    if (typeof p === 'string' && p.trim()) {
+      const found = findAdlcRoot(dirname(p));
+      if (found) return found;
+    }
+  }
+
   const envCandidates = [
+    env?.AGY_WORKSPACE,
     env?.ANTIGRAVITY_WORKSPACE,
     env?.GEMINI_WORKSPACE,
     env?.PROJECT_ROOT,
     env?.INIT_CWD,
     env?.PWD,
-    process.cwd(),
+    env === process.env ? process.cwd() : null,
   ].filter((s) => typeof s === 'string' && s.trim());
 
   for (const c of envCandidates) {
@@ -300,7 +311,13 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
 
 function sanitizeField(val, maxLen = 120) {
   if (typeof val !== 'string') return '';
-  return val.replace(/[\r\n\x00-\x1f`]/g, ' ').trim().slice(0, maxLen);
+  const stripped = val.replace(/[\r\n\x00-\x1f`]/g, ' ').trim().slice(0, maxLen);
+  return stripped
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 function sanitizeList(list, maxItems = 10, maxItemLen = 80) {
@@ -357,16 +374,6 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
-    const root = resolveWorkspaceRoot(payload, env);
-    if (!root) return { decision: 'stop' };
-
-    const active = resolveActiveTicketId(root, env);
-    if (!active.id || active.conflict) return { decision: 'stop' };
-
-    const sessionID = resolveSessionId({ payload, env });
-    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
-
     const payloadClaim = [
       payload?.lastMessage,
       payload?.message,
@@ -374,6 +381,24 @@ export function onStop(payload, { env = process.env } = {}) {
       payload?.summary,
       payload?.reason,
     ].filter((s) => typeof s === 'string').join('\n');
+
+    const root = resolveWorkspaceRoot(payload, env);
+    if (!root) {
+      if (payloadClaim.includes('TICKET-DONE')) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved for verification.',
+        };
+      }
+      return { decision: 'stop' };
+    }
+
+    const active = resolveActiveTicketId(root, env);
+    if (!active.id || active.conflict) return { decision: 'stop' };
+
+    const sessionID = resolveSessionId({ payload, env });
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
 
     const recentRecords = records.slice(-5);
     const extractText = (r) => (r && typeof r === 'object' ? [r.content, r.text, r.message].filter((s) => typeof s === 'string').join('\n') : '');
@@ -390,14 +415,23 @@ export function onStop(payload, { env = process.env } = {}) {
 
       const hasTestCommand = records.some((r) => {
         if (!r || typeof r !== 'object') return false;
-        const calls = Array.isArray(r.tool_calls) ? r.tool_calls : (r.toolCall ? [r.toolCall] : (r.name ? [r] : []));
+        const calls = Array.isArray(r.toolCalls) ? r.toolCalls
+          : (Array.isArray(r.tool_calls) ? r.tool_calls
+          : (r.toolCall ? [r.toolCall]
+          : (r.name ? [r] : [])));
+
         return calls.some((c) => {
           const name = c?.name ?? c?.toolName ?? '';
           if (name !== 'run_command' && name !== 'execute') return false;
           const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-          if (typeof cmd !== 'string') return false;
-          const isTestRunner = /^(npm\s+(test|run\s+test)|npx\s+(adlc|mocha|jest|vitest)|node\s+(--test|scripts\/test\/)|adlc\s+(hollow-test|rails-guard|preflight))/i.test(cmd);
+          if (typeof cmd !== 'string' || !cmd) return false;
+
+          // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
+          if (/[;&|<>]/.test(cmd)) return false;
+
+          const isTestRunner = /^(npm\s+(test|run\s+test)|npx\s+(adlc|mocha|jest|vitest)|node\s+(--test|scripts\/test\/)|adlc\s+(hollow-test|rails-guard|preflight))(\s+|$)/i.test(cmd);
           if (!isTestRunner) return false;
+
           const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
           if (typeof exitCode === 'number' && exitCode !== 0) return false;
           const isError = r?.status === 'ERROR' || r?.status === 'error';
@@ -415,7 +449,13 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     return { decision: 'stop' };
-  } catch {
+  } catch (err) {
+    if (env?.ADLC_P4_ENFORCEMENT === '1') {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Internal error evaluating Stop hook under enforcement.',
+      };
+    }
     return { decision: 'stop' };
   }
 }

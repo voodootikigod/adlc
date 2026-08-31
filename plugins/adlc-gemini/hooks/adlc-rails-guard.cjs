@@ -43,8 +43,12 @@ if (subcmd === 'status' || subcmd === 'doctor') {
     } catch (_) { emit({ injectSteps: [] }); }
   })();
 } else if (subcmd === 'stop') {
-  process.on('uncaughtException', function () { emit({ decision: 'stop' }); });
-  process.on('unhandledRejection', function () { emit({ decision: 'stop' }); });
+  var stopFail = function () {
+    var enf = process.env.ADLC_P4_ENFORCEMENT === '1';
+    emit(enf ? { decision: 'continue', reason: 'ADLC Rails-Guard: Internal error evaluating Stop hook under enforcement.' } : { decision: 'stop' });
+  };
+  process.on('uncaughtException', stopFail);
+  process.on('unhandledRejection', stopFail);
   var modStop = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
   (async function () {
     try {
@@ -54,7 +58,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
       var raw = Buffer.concat(chunks).toString('utf8');
       var payload = raw ? JSON.parse(raw) : {};
       emit(adapter.onStop(payload, { env: process.env }));
-    } catch (_) { emit({ decision: 'stop' }); }
+    } catch (_) { stopFail(); }
   })();
 } else {
   process.on('uncaughtException', function (e) { failSafe('uncaught ' + (e && e.message)); });
