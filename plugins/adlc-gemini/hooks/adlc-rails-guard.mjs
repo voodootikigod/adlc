@@ -377,6 +377,9 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
   if (/[;&|<>]/.test(trimmed)) return false;
 
+  // Reject shell substitutions or variables that could dynamically resolve paths/commands
+  if (/[\$`]/.test(trimmed)) return false;
+
   // Reject directory-redirecting flags pointing elsewhere
   if (/(^|\s)(--prefix|--cwd|-C)\b/i.test(trimmed)) return false;
 
@@ -394,7 +397,8 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   // If command includes arguments/paths, validate that positional paths do not point outside root
   if (root) {
     const tokens = trimmed.split(/\s+/);
-    for (const token of tokens) {
+    for (const rawToken of tokens) {
+      const token = rawToken.replace(/^["']|["']$/g, '');
       if (token.startsWith('/') || token.startsWith('\\')) {
         const absRoot = resolve(root);
         const rel = relative(absRoot, token);
@@ -524,7 +528,7 @@ export function onStop(payload, { env = process.env } = {}) {
         }
 
         if (name === 'run_command' || name === 'execute') {
-          const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
+          const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? '').trim();
           if (isVerificationCommand(cmd, { root, toolArgs: args })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
