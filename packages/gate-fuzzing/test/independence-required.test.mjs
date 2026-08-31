@@ -23,6 +23,10 @@ test('clean dry-streak run, independenceConfigured:false → exit 1, refuses cle
   assert.equal(result.exitCode, 1);
   assert.match(result.summary, /no independence source configured — cannot certify absence of defeats/);
   assert.notEqual(result.summary, 'clean');
+  assert.deepEqual(result.defeats, []);
+  assert.equal(result.contractDefeats, 0);
+  assert.equal(result.behavioralDefeats, 0);
+  assert.equal(result.inconclusive, true);
 });
 
 test('clean dry-streak run, independenceConfigured:true → unchanged existing clean verdict', () => {
