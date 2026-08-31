@@ -22,6 +22,19 @@ jobs:
         with:
           fetch-depth: 0 # full history so origin/main resolves for merge-base-dependent tests
 
+      - name: Install bubblewrap (real-sandbox tests run instead of skipping)
+        # The fleet's bounded model plane, synthetic HOME, egress and the autopilot's
+        # gate containment are exercised for REAL only where a usable bubblewrap
+        # exists; without it those suites skip LOUDLY (the bwrap probe helpers are
+        # the single switch). Ubuntu 24.04 restricts unprivileged user namespaces
+        # via AppArmor, which bwrap needs — relax that on this runner. The probe
+        # line never fails the step: an unusable bwrap means loud skips, not a red.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap probe: usable" || echo "bwrap probe: NOT usable (suites will skip loudly)"
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -396,6 +409,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history so the diff base resolves
+
+      - name: Install bubblewrap (real-sandbox tests run instead of skipping)
+        # The fleet's bounded model plane, synthetic HOME, egress and the autopilot's
+        # gate containment are exercised for REAL only where a usable bubblewrap
+        # exists; without it those suites skip LOUDLY (the bwrap probe helpers are
+        # the single switch). Ubuntu 24.04 restricts unprivileged user namespaces
+        # via AppArmor, which bwrap needs — relax that on this runner. The probe
+        # line never fails the step: an unusable bwrap means loud skips, not a red.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap probe: usable" || echo "bwrap probe: NOT usable (suites will skip loudly)"
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
