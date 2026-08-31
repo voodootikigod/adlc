@@ -88,7 +88,13 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
-  if (typeof direct === 'string' && existsSync(direct)) return direct;
+  if (typeof direct === 'string') {
+    try {
+      if (existsSync(direct) && statSync(direct).isFile()) return direct;
+    } catch {
+      // not a regular file or inaccessible
+    }
+  }
 
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   let cid = cidFromPayload;
@@ -100,16 +106,21 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 
   const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const transcriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl');
-  if (existsSync(transcriptPath)) return transcriptPath;
+  try {
+    if (existsSync(transcriptPath) && statSync(transcriptPath).isFile()) return transcriptPath;
+  } catch {}
   const fullTranscriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript_full.jsonl');
-  if (existsSync(fullTranscriptPath)) return fullTranscriptPath;
+  try {
+    if (existsSync(fullTranscriptPath) && statSync(fullTranscriptPath).isFile()) return fullTranscriptPath;
+  } catch {}
   return null;
 }
 
 export function parseTranscriptRecords(filePath, maxScanBytes = MAX_SCAN_BYTES) {
-  if (!filePath || !existsSync(filePath)) return [];
+  if (!filePath) return [];
   try {
     const stat = statSync(filePath);
+    if (!stat.isFile()) return [];
     let content = '';
     if (stat.size > maxScanBytes) {
       const fd = openSync(filePath, 'r');

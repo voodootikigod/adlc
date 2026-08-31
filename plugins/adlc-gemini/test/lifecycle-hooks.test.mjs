@@ -324,3 +324,57 @@ test('onStop: rejects completion when file edits occur after the test run', () =
     cleanup();
   }
 });
+
+test('onStop: rejects completion when active ticket is missing from ticket store', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Corrupt ticket store so active ticket T1 is missing
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ version: 1, tickets: [] }));
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-123',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /not found in validated ticket store/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects non-verification commands such as adlc ticket list or mocha --version', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npx adlc ticket list' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-123',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /requires running test\/verification commands before completing/);
+  } finally {
+    cleanup();
+  }
+});

@@ -369,6 +369,27 @@ export function preInvocation(payload, { env = process.env } = {}) {
   }
 }
 
+export function isVerificationCommand(cmd) {
+  if (typeof cmd !== 'string' || !cmd) return false;
+  const trimmed = cmd.trim();
+  if (!trimmed) return false;
+
+  // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
+  if (/[;&|<>]/.test(trimmed)) return false;
+
+  // Reject help, version, list queries
+  if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
+  if (/^(adlc|npx\s+adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
+
+  // Strict verification runners
+  if (/^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+  if (/^(node\s+(--test|scripts\/test\/))/i.test(trimmed)) return true;
+  if (/^(adlc|npx\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
+  if (/^npx\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
+
+  return false;
+}
+
 export function onStop(payload, { env = process.env } = {}) {
   try {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
@@ -395,6 +416,22 @@ export function onStop(payload, { env = process.env } = {}) {
 
     const active = resolveActiveTicketId(root, env);
     if (!active.id || active.conflict) return { decision: 'stop' };
+
+    // Validate that the active ticket is present in the validated ticket store
+    try {
+      const snapshot = loadTicketStoreReadOnly({ root, env });
+      if (!snapshot.get(active.id)) {
+        return {
+          decision: 'continue',
+          reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
+        };
+      }
+    } catch {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
+      };
+    }
 
     const sessionID = resolveSessionId({ payload, env });
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
@@ -433,13 +470,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
           if (name === 'run_command' || name === 'execute') {
             const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-            if (typeof cmd !== 'string' || !cmd) continue;
-
-            // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
-            if (/[;&|<>]/.test(cmd)) continue;
-
-            const isTestRunner = /^(npm\s+(test|run\s+test)|npx\s+(adlc|mocha|jest|vitest)|node\s+(--test|scripts\/test\/)|adlc\s+(hollow-test|rails-guard|preflight))(\s+|$)/i.test(cmd);
-            if (!isTestRunner) continue;
+            if (!isVerificationCommand(cmd)) continue;
 
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
