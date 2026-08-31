@@ -28,8 +28,8 @@ function runCli(args, cwd) {
   return { stdout: result.stdout, stderr: result.stderr, code: result.status };
 }
 
-// Routes to LINT: shouldRouteLint() requires a quoted literal or a marker
-// (TODO/FIXME/eslint-disable/...) in desc/evidence (lib/route.mjs).
+// Routes to LINT: shouldRouteLint() requires a quoted literal or a recognizable
+// code-suppression-style marker in desc/evidence (see MARKER_RE in lib/route.mjs).
 const CLUSTER_ENTRIES = [
   { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check before calling "db.query"' },
   { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'security', severity: 'high', desc: 'missing null check before calling "db.query"' },
