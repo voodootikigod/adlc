@@ -156,6 +156,13 @@ test('widget cap still 3 lines with the new signals', () => {
   assert.ok(lines.length <= 3);
 });
 
+test('p7StaleDays boundary: 0 suppresses, 1 renders (off-by-one kill)', () => {
+  const suppressed = renderWidgetLines({ ticketId: 'T1', enforcement: 'active', p7StaleDays: 0 });
+  assert.ok(!suppressed.some((l) => /P7 stale:/.test(l)), '0 days is not stale');
+  const rendered = renderWidgetLines({ ticketId: 'T1', enforcement: 'active', p7StaleDays: 1 });
+  assert.ok(rendered.some((l) => /P7 stale: lesson-foundry\/skill-rot 1d ago/.test(l)), '1 day renders');
+});
+
 test('pendingAcceptance false falls through to lastGateEvent', () => {
   const lines = renderWidgetLines({
     ticketId: 'T1',

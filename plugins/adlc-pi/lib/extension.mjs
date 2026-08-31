@@ -84,7 +84,9 @@ export function computeP7StaleDays(entries, { now = Date.now(), thresholdDays = 
   }
   if (latest === null) return null;
   const days = Math.floor((now - latest) / MS_PER_DAY);
-  return days >= thresholdDays ? days : null;
+  // Boundary-exclusive: at exactly the threshold the evidence has not yet
+  // "crossed" it (README/docs language), so 14d at a 14d threshold is fresh.
+  return days > thresholdDays ? days : null;
 }
 
 export function createExtension({ env = process.env } = {}) {
