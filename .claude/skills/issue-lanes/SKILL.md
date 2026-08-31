@@ -204,6 +204,13 @@ worktree right before attesting (its stderr already prints the exact `git-change
 <digest>` string the gate expects) rather than trusting an older CI log — a lane rebase
 changes the digest, so always re-derive it fresh.
 
+**When attesting multiple lanes, derive each digest as its OWN command with an explicit `cd`
+AND a visible `pwd && git rev-parse HEAD` in the SAME command** — do not fire off several
+digest-derivation commands back to back and read the outputs by position. A `cd`-less command
+silently inherits the previous call's leftover cwd (a real near-miss: one digest came back
+belonging to the wrong lane, caught only by cross-checking `pwd`/HEAD before trusting it).
+Confirm the printed path and HEAD sha match the lane you intend BEFORE recording, never after.
+
 Record AFTER the lane's final commit (a rebase changes the digest; recording does not). Use
 provider FAMILY tokens, not CLI names. Do not re-run the reviewer after attesting — it flags
 its own attestation shard as a pre-approval (known false positive; see the ceremony memory
