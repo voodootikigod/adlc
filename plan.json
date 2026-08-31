@@ -1,0 +1,136 @@
+{
+  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/agy-improvements",
+  "base": "feat/antigravity-harness-improvements",
+  "gate": {
+    "build": "npm run test --prefix plugins/adlc-gemini",
+    "test": "npm test --prefix plugins/adlc-gemini"
+  },
+  "tickets": [
+    {
+      "id": "t-agy-939",
+      "title": "Modernize phase-router skill prompts and remove legacy Claude references (#939)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/939\n\n=== CONTEXT ===\nIn plugins/adlc-gemini/skills/adlc/SKILL.md, lines 14-17 contain legacy copy from Claude Code stating 'Claude is the model. Every LLM-backed gate supports --prompt-only... Inside Claude Code you do not need API keys...'. This is misleading in Antigravity and Gemini sessions.\n\n=== TASK ===\n1. Update plugins/adlc-gemini/skills/adlc/SKILL.md to tailor instructions specifically for Gemini and Antigravity (agy).\n2. Explain how to evaluate --prompt-only directly inside Antigravity.\n3. Align model tier references (Gemini 3.7 Flash for cheap/gates, Gemini 3.7 Pro for frontier/P1/P5).\n4. Ensure plugins/adlc-gemini/test/*.test.mjs all pass cleanly.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: No mentions of 'Inside Claude Code' or 'Claude is the model' in plugins/adlc-gemini/skills/adlc/SKILL.md.\n- AC2: Clear guidance on running gates with --prompt-only inside Antigravity.\n- AC3: Suite tests pass (node --test plugins/adlc-gemini/test/*.test.mjs).",
+      "scope": [
+        "plugins/adlc-gemini/skills/adlc/SKILL.md",
+        "plugins/adlc-gemini/README.md"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-943",
+      "title": "Dual-format hook output emission for forward compatibility (#943)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/943\n\n=== CONTEXT ===\nplugins/adlc-gemini/hooks/adlc-rails-guard.mjs and adlc-rails-guard.cjs currently emit { allow_tool: false, deny_reason: '...' } or { allow_tool: true }. Antigravity's latest customization spec documents { decision: 'deny' | 'allow', reason: '...' }. Emitting both key sets simultaneously ensures forward and backward compatibility across all current and future versions of agy CLI and Antigravity IDE.\n\n=== TASK ===\n1. Update allow() and deny() in plugins/adlc-gemini/hooks/adlc-rails-guard.mjs to emit dual-keyed objects:\n   - allow: { decision: 'allow', allow_tool: true }\n   - deny: { decision: 'deny', allow_tool: false, reason: '...', deny_reason: '...' }\n2. Update failSafe() in plugins/adlc-gemini/hooks/adlc-rails-guard.cjs to emit the dual-keyed format.\n3. Update plugins/adlc-gemini/test/decide.test.mjs, test/wire.test.mjs, and test/flail.test.mjs to assert that decision, reason, allow_tool, and deny_reason are correctly populated.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: allow() returns { decision: 'allow', allow_tool: true }.\n- AC2: deny() returns { decision: 'deny', allow_tool: false, reason: <reason>, deny_reason: <reason> }.\n- AC3: All tests pass under node --test plugins/adlc-gemini/test/*.test.mjs.",
+      "scope": [
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
+        "plugins/adlc-gemini/test/decide.test.mjs",
+        "plugins/adlc-gemini/test/wire.test.mjs",
+        "plugins/adlc-gemini/test/flail.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-940",
+      "title": "Implement PreInvocation ephemeral context injection (active ticket & frozen rails) (#940)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/940\n\n=== CONTEXT ===\nAntigravity supports the PreInvocation lifecycle hook event in hooks.json. It receives system metadata and outputs { injectSteps: [{ ephemeralMessage: '...' }] }. This allows injecting the active ticket, declared scope, and frozen rails as an ephemeral reminder before each model turn, eliminating the need to manually invoke /adlc-status.\n\n=== TASK ===\n1. In plugins/adlc-gemini/hooks/adlc-rails-guard.mjs, export a preInvocation(payload, { env }) function that inspects the active ticket via resolveActiveTicketId() / railPreconditions().\n2. When an active ticket is present, return { injectSteps: [{ ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} | Scope: ${scope.join(', ')} | Frozen Rails: ${rails.join(', ')}` }] }. When inactive or no ticket, return { injectSteps: [] }.\n3. Wire the PreInvocation event in plugins/adlc-gemini/hooks.json pointing to adlc-rails-guard.cjs preinvocation.\n4. Update plugins/adlc-gemini/hooks/adlc-rails-guard.cjs to support process.argv[2] === 'preinvocation'.\n5. Add tests in plugins/adlc-gemini/test/context-injection.test.mjs.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: preInvocation outputs ephemeralMessage when active ticket is present.\n- AC2: preInvocation outputs empty injectSteps when no active ticket is present.\n- AC3: hooks.json declares PreInvocation handler.\n- AC4: node --test plugins/adlc-gemini/test/*.test.mjs passes.",
+      "scope": [
+        "plugins/adlc-gemini/hooks.json",
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
+        "plugins/adlc-gemini/test/context-injection.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [
+        { "to": "t-agy-943" }
+      ],
+      "tier": "mid",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-941",
+      "title": "Wire Stop lifecycle hook to intercept unverified completion claims (#941)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/941\n\n=== CONTEXT ===\nPremature satisfaction (F1) is a primary model failure mode. Antigravity supports the Stop hook in hooks.json. Returning { decision: 'continue', reason: '...' } blocks agent termination and forces continuation.\n\n=== TASK ===\n1. In plugins/adlc-gemini/hooks/adlc-rails-guard.mjs, export a onStop(payload, { env }) function.\n2. When ADLC_P4_ENFORCEMENT=1 and an active ticket is present:\n   - Check if the session transcript ends with completion without verification.\n   - If unverified, return { decision: 'continue', reason: 'ADLC Rails-Guard: Active ticket build requires running test/verification commands before completing.' }.\n   - Otherwise, return { decision: 'stop' }.\n3. Wire the Stop event in plugins/adlc-gemini/hooks.json.\n4. Update plugins/adlc-gemini/hooks/adlc-rails-guard.cjs to dispatch 'stop' subcommand.\n5. Add tests in plugins/adlc-gemini/test/stop-hook.test.mjs.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: onStop returns decision: continue when completion claimed without running verification under enforcement.\n- AC2: onStop returns decision: stop when enforcement is inactive or verification ran.\n- AC3: node --test plugins/adlc-gemini/test/*.test.mjs passes.",
+      "scope": [
+        "plugins/adlc-gemini/hooks.json",
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
+        "plugins/adlc-gemini/test/stop-hook.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [
+        { "to": "t-agy-940" }
+      ],
+      "tier": "mid",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-942",
+      "title": "Add automated 5-lens prosecution fan-out command and documentation (#942)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/942\n\n=== CONTEXT ===\nplugins/adlc-gemini/agents/ provides definition files for 5 prosecution lenses (contract, correctness, diff, security, tests) and verifier. In interactive Antigravity sessions, users should have an /adlc-prosecute command that explains and triggers the 5-lens subagent fan-out via invoke_subagent.\n\n=== TASK ===\n1. Create plugins/adlc-gemini/commands/adlc-prosecute.md documenting /adlc-prosecute in Antigravity.\n2. Update plugins/adlc-gemini/skills/adlc-prosecutor/SKILL.md to provide the concrete invoke_subagent payload template for launching the 5 lenses concurrently.\n3. Add tests in plugins/adlc-gemini/test/prosecutor.test.mjs asserting command presence and prompt structure.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: plugins/adlc-gemini/commands/adlc-prosecute.md exists and is documented.\n- AC2: adlc-prosecutor SKILL.md documents the invoke_subagent fan-out format.\n- AC3: node --test plugins/adlc-gemini/test/prosecutor.test.mjs passes.",
+      "scope": [
+        "plugins/adlc-gemini/commands/adlc-prosecute.md",
+        "plugins/adlc-gemini/skills/adlc-prosecutor/SKILL.md",
+        "plugins/adlc-gemini/test/prosecutor.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-944",
+      "title": "Bi-directional Antigravity brain artifact & implementation plan integration (#944)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/944\n\n=== CONTEXT ===\nAntigravity stores conversation artifacts (implementation_plan.md) in ~/.gemini/antigravity-cli/brain/<conversation-id>/. We want first-class documentation and command guidance for importing and syncing brain artifacts into ADLC tickets.\n\n=== TASK ===\n1. Create plugins/adlc-gemini/commands/adlc-plan.md documenting the brain plan compilation workflow (agb plan / import).\n2. Update plugins/adlc-gemini/skills/adlc-self-orchestrate/SKILL.md with explicit instructions for discovering and compiling brain artifacts into .adlc/tickets/ shards.\n3. Add test verifying command format in plugins/adlc-gemini/test/docs-visibility.test.mjs.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: /adlc-plan command documented in plugins/adlc-gemini/commands/adlc-plan.md.\n- AC2: adlc-self-orchestrate skill contains the brain compilation guide.\n- AC3: node --test plugins/adlc-gemini/test/docs-visibility.test.mjs passes.",
+      "scope": [
+        "plugins/adlc-gemini/commands/adlc-plan.md",
+        "plugins/adlc-gemini/skills/adlc-self-orchestrate/SKILL.md",
+        "plugins/adlc-gemini/test/docs-visibility.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-gemini/constants.mjs",
+        "plugins/adlc-gemini/core-inline.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "gemini"
+    },
+    {
+      "id": "t-agy-945",
+      "title": "Complete Antigravity / Gemini detection in universal install.sh (#945)",
+      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/945\n\n=== CONTEXT ===\napps/docs/public/install.sh provides the universal installer for all harnesses. We need to ensure agy / jetski detection and native plugin registration are completely supported and verified by test/install-sh.test.mjs.\n\n=== TASK ===\n1. Inspect apps/docs/public/install.sh to ensure 'agy' and 'jetski' binaries are detected on PATH and invoke @adlc/gemini installer.\n2. Update test/install-sh.test.mjs and test/install-digests.json to assert agy detection and pass the digest pinning test.\n3. Update docs/integrations/gemini.md to document the universal installer support.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: apps/docs/public/install.sh detects agy/jetski.\n- AC2: node --test test/install-sh.test.mjs passes.\n- AC3: docs/integrations/gemini.md accurately reflects universal install availability.",
+      "scope": [
+        "apps/docs/public/install.sh",
+        "test/install-sh.test.mjs",
+        "test/install-digests.json",
+        "docs/integrations/gemini.md"
+      ],
+      "rails": [
+        "packages/cli/**"
+      ],
+      "edges": [],
+      "tier": "mid",
+      "pool_hint": "gemini"
+    }
+  ]
+}
