@@ -31,6 +31,7 @@ import {
   collectCommandText,
   toolNameOf,
   resolveHandoffSessionIdLocal,
+  RECOVERY_AUDIT_ENV_ALLOWLIST,
 } from './adlc-handoff-gate.mjs';
 import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
 import { join, dirname } from 'node:path';
@@ -200,14 +201,31 @@ function tailBytes(path, maxBytes) {
 // Bypass recording — shells to the globally-installed `adlc` binary, exactly
 // like Claude Code's recordBuildGateBypass, so manifest entries stay
 // harness-agnostic (same gate name: build-gate-bypass).
+//
+// Resolved via resolveTrustedBinary (never a bare `spawnSync('adlc', ...)`
+// PATH lookup) and invoked via process.execPath with an env built from
+// RECOVERY_AUDIT_ENV_ALLOWLIST only — the same threat model and mechanism
+// adlc-handoff-gate.mjs's recordRecoveryUnderBand already uses: a repository
+// can plant `node_modules/.bin/adlc` ahead of a real install, and the
+// resolved binary's provenance cannot be fully verified, so its child must
+// never see ADLC_MANIFEST_KEY/ADLC_ADMIN_KEY or anything else outside the
+// allowlist (#807).
 // ---------------------------------------------------------------------------
 
 export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd } = {}) {
-  const result = spawnSync('adlc', [
+  const adlcBinPath = resolveTrustedBinary('adlc', process.env.PATH);
+  if (!adlcBinPath) return false;
+  const env = {};
+  for (const name of RECOVERY_AUDIT_ENV_ALLOWLIST) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
+  const args = [
+    adlcBinPath,
     'gate-manifest', 'record', 'build-gate-bypass',
     '--ticket', ticketId,
     '--data', JSON.stringify({ signals, depth, sessionBytes }),
-  ], { encoding: 'utf8', ...(cwd ? { cwd } : {}) });
+  ];
+  const result = spawnSync(process.execPath, args, { encoding: 'utf8', env, ...(cwd ? { cwd } : {}) });
   return !!result && result.status === 0;
 }
 

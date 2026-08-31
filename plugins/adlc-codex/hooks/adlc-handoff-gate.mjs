@@ -1035,7 +1035,7 @@ const HOOK_SECRET_ENV_VARS = ['ADLC_MANIFEST_KEY', 'ADLC_ADMIN_KEY'];
  * class of residual as any other recording failure this path already
  * tolerates.
  */
-const RECOVERY_AUDIT_ENV_ALLOWLIST = [
+export const RECOVERY_AUDIT_ENV_ALLOWLIST = [
   'PATH',
   'HOME',
   'NODE_PATH',

@@ -6,26 +6,32 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-build-gate.mjs');
 
-// recordBuildGateBypass spawnSync's `adlc` from ambient PATH, and this test file
-// calls it IN-PROCESS — so the resolved binary is whatever the test runner's PATH
-// happens to hold. Resolve the workspace-local CLI deterministically instead
-// (same WITH_ADLC convention as the claude-code sibling): the mutation-gate CI
-// job runs these tests WITHOUT run-tests.mjs's node_modules/.bin PATH prepend
-// and has no global adlc, while a dev machine may have a stale global one —
-// either way, ambient PATH is the wrong resolver for a hermetic test (#378).
-const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
-const NODE_DIR = dirname(process.execPath);
+// recordBuildGateBypass resolves `adlc` via resolveTrustedBinary(name, PATH),
+// which — for exactly the same reason recordRecoveryUnderBand's does (see
+// adlc-handoff-gate.mjs) — SKIPS any PATH entry whose directory string
+// contains "node_modules" (a project could plant a shim there ahead of a
+// real install). So the hermetic PATH shim for these tests cannot point at
+// node_modules/.bin the way earlier revisions of this file did; it must be a
+// plain, non-node_modules directory. Symlink the real workspace CLI script
+// into one so "writes a real build-gate-bypass entry" still exercises a
+// genuine, working @adlc/cli invocation end to end, not a stand-in.
+const REAL_ADLC_SCRIPT = join(
+  dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..',
+  'node_modules', '@adlc', 'cli', 'bin', 'adlc.mjs',
+);
+const TRUSTED_BIN_DIR = mkdtempSync(join(tmpdir(), 'adlc-build-gate-trusted-bin-'));
+symlinkSync(REAL_ADLC_SCRIPT, join(TRUSTED_BIN_DIR, 'adlc'));
 
 function withAdlcOnPath(fn) {
   const prev = process.env.PATH;
-  process.env.PATH = `${REPO_BIN}:${NODE_DIR}:${prev ?? ''}`;
+  process.env.PATH = `${TRUSTED_BIN_DIR}:${prev ?? ''}`;
   try { return fn(); } finally { process.env.PATH = prev; }
 }
 
