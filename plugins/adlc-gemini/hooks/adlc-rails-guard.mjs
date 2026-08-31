@@ -378,7 +378,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
   }
 }
 
-export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMutated = false } = {}) {
+export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMutated = false, shellMutated = false } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -388,6 +388,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // Reject directory-redirecting flags and test-filtering/skipping flags
   if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--grep|-g)\b/i.test(trimmed)) return false;
+
+  // Reject device paths like /dev/null, /dev/zero
+  if (/(^|\s)\/dev\//i.test(trimmed)) return false;
 
   const realRoot = root ? realpathOr(resolve(root)) : null;
 
@@ -424,8 +427,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // If package.json was mutated, mutable npm script aliases cannot be trusted as verification
-  if (!packageManifestMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+  // If package.json or shell mutations occurred, mutable npm script aliases cannot be trusted as verification
+  if (!packageManifestMutated && !shellMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
 
   // Strict immutable verification runners
   if (/^(node\s+(--test|scripts\/test\/))/i.test(trimmed)) return true;
@@ -522,10 +525,18 @@ export function onStop(payload, { env = process.env } = {}) {
     let lastMutationCallIdx = -1;
     let lastSuccessTestCallIdx = -1;
     let packageManifestMutated = false;
+    let shellMutated = false;
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
       if (!r || typeof r !== 'object') continue;
+
+      if (r.__unparseable) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Corrupted or unparseable transcript records detected under enforcement during Stop verification.',
+        };
+      }
 
       const calls = Array.isArray(r.toolCalls) ? r.toolCalls
         : (Array.isArray(r.tool_calls) ? r.tool_calls
@@ -550,7 +561,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (name === 'run_command' || name === 'execute') {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? '').trim();
-          if (isVerificationCommand(cmd, { root, toolArgs: args, packageManifestMutated })) {
+          if (isVerificationCommand(cmd, { root, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -561,6 +572,7 @@ export function onStop(payload, { env = process.env } = {}) {
             }
           } else if (!isReadonlyCommand(cmd)) {
             lastMutationCallIdx = currentCallIdx;
+            shellMutated = true;
           }
         }
       }

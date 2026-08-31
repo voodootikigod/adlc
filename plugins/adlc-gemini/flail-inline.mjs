@@ -145,7 +145,7 @@ export function parseTranscriptRecords(filePath, options = {}) {
       try {
         records.push(JSON.parse(rawLine));
       } catch {
-        records.push({ content: rawLine });
+        records.push({ content: rawLine, __unparseable: true });
       }
     }
     return records;
