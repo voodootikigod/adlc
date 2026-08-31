@@ -94,6 +94,15 @@ test('parseTranscriptLines extracts content and error text from JSONL transcript
     const lines = parseTranscriptLines(transcriptPath);
     assert.ok(lines.includes('Error: Cannot find module lodash line 1'));
     assert.ok(lines.includes('Error: Cannot find module express line 2'));
+
+    // resolveTranscriptPath handles existing string paths
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath } }), transcriptPath);
+
+    // resolveTranscriptPath rejects non-string and non-existent paths
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: { invalid: true } } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: 12345 } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: true } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: join(tmpDir, 'non-existent.jsonl') } }), null);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
