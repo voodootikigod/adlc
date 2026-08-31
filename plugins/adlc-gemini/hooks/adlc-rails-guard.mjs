@@ -10,7 +10,7 @@ import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
-import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, analyzeFlail } from '../flail-inline.mjs';
+import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -274,12 +274,43 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   console.log(`Flail Status: ${flail.verdict.toUpperCase()}${flail.summary ? ` (${flail.summary})` : ''}`);
 }
 
+export function resolveWorkspaceRoot(payload, env = process.env) {
+  const direct = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+    .find((s) => typeof s === 'string' && s.trim());
+  if (direct) {
+    const candidate = isAbsolute(direct) ? direct : join(process.cwd(), direct);
+    const found = findAdlcRoot(candidate);
+    if (found) return found;
+  }
+  const envCandidates = [
+    env?.ANTIGRAVITY_WORKSPACE,
+    env?.GEMINI_WORKSPACE,
+    env?.PROJECT_ROOT,
+    env?.INIT_CWD,
+    env?.PWD,
+    process.cwd(),
+  ].filter((s) => typeof s === 'string' && s.trim());
+
+  for (const c of envCandidates) {
+    const found = findAdlcRoot(c);
+    if (found) return found;
+  }
+  return null;
+}
+
+function sanitizeField(val, maxLen = 120) {
+  if (typeof val !== 'string') return '';
+  return val.replace(/[\r\n\x00-\x1f`]/g, ' ').trim().slice(0, maxLen);
+}
+
+function sanitizeList(list, maxItems = 10, maxItemLen = 80) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, maxItems).map((s) => sanitizeField(String(s), maxItemLen)).filter(Boolean);
+}
+
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
-    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-      .find((s) => typeof s === 'string' && s.trim());
-    const candidateRoot = ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd();
-    const root = findAdlcRoot(candidateRoot);
+    const root = resolveWorkspaceRoot(payload, env);
     if (!root) return { injectSteps: [] };
 
     const active = resolveActiveTicketId(root, env);
@@ -289,13 +320,16 @@ export function preInvocation(payload, { env = process.env } = {}) {
       const snapshot = loadTicketStoreReadOnly({ root, env });
       const ticket = snapshot.get(active.id);
       if (ticket) {
-        const declaredRails = ticket.rails?.length ? ticket.rails.join(', ') : 'none declared (trust roots only)';
-        const declaredScope = ticket.scope?.length ? ticket.scope.join(', ') : 'unrestricted';
+        const cleanTitle = sanitizeField(ticket.title ?? 'No title', 120);
+        const cleanRails = sanitizeList(ticket.rails);
+        const cleanScope = sanitizeList(ticket.scope);
+        const declaredRails = cleanRails.length ? cleanRails.join(', ') : 'none declared (trust roots only)';
+        const declaredScope = cleanScope.length ? cleanScope.join(', ') : 'unrestricted';
         const enf = env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE (advisory)';
         return {
           injectSteps: [
             {
-              ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} (${ticket.title ?? 'No title'}) | Declared Scope: ${declaredScope} | Frozen Rails: ${declaredRails} | Enforcement: ${enf}`,
+              ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} ("${cleanTitle}") | Declared Scope: ${declaredScope} | Frozen Rails: ${declaredRails} | Enforcement: ${enf}`,
             },
           ],
         };
@@ -315,10 +349,7 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
-    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-      .find((s) => typeof s === 'string' && s.trim());
-    const candidateRoot = ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd();
-    const root = findAdlcRoot(candidateRoot);
+    const root = resolveWorkspaceRoot(payload, env);
     if (!root) return { decision: 'stop' };
 
     const active = resolveActiveTicketId(root, env);
@@ -326,11 +357,35 @@ export function onStop(payload, { env = process.env } = {}) {
 
     const sessionID = resolveSessionId({ payload, env });
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const steps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
-    const recentContent = steps.slice(-5).flat().join('\n');
+    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
 
-    if (recentContent.includes('TICKET-DONE')) {
-      const hasTestCommand = steps.flat().some((line) => /npm (test|run test)|node --test|adlc (hollow-test|rails-guard|preflight)/i.test(line));
+    const payloadClaim = [
+      payload?.lastMessage,
+      payload?.message,
+      payload?.content,
+      payload?.summary,
+      payload?.reason,
+    ].filter(Boolean).join('\n');
+
+    const recentRecords = records.slice(-5);
+    const recentContent = recentRecords.map((r) => [r.content, r.text, r.message].filter(Boolean).join('\n')).join('\n') + '\n' + payloadClaim;
+
+    const claimsCompletion = recentContent.includes('TICKET-DONE');
+    if (claimsCompletion) {
+      if (!transcriptPath || records.length === 0) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but session transcript is unreadable or verification evidence is missing.',
+        };
+      }
+
+      const hasTestCommand = records.some((r) => {
+        const cmd = r?.tool_calls?.find?.((t) => t.name === 'run_command')?.args?.CommandLine
+          ?? r?.args?.CommandLine
+          ?? (typeof r.content === 'string' && /run_command|npm (test|run test)|node --test/i.test(r.content) ? r.content : '');
+        return /npm (test|run test)|node --test|adlc (hollow-test|rails-guard|preflight)/i.test(cmd);
+      });
+
       if (!hasTestCommand) {
         return {
           decision: 'continue',

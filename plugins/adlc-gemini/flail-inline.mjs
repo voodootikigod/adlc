@@ -106,10 +106,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   return null;
 }
 
-/**
- * Safely parse recent lines from an agy transcript JSONL file.
- */
-export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+export function parseTranscriptRecords(filePath, maxScanBytes = MAX_SCAN_BYTES) {
   if (!filePath || !existsSync(filePath)) return [];
   try {
     const stat = statSync(filePath);
@@ -125,32 +122,42 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
     } else {
       content = readFileSync(filePath, 'utf8');
     }
-    const steps = [];
+    const records = [];
     for (const rawLine of content.split('\n')) {
       if (!rawLine.trim()) continue;
       try {
-        const obj = JSON.parse(rawLine);
-        const stepLines = [];
-        if (obj.content && typeof obj.content === 'string') {
-          stepLines.push(...obj.content.split('\n'));
-        }
-        if (obj.text && typeof obj.text === 'string') {
-          stepLines.push(...obj.text.split('\n'));
-        }
-        if (obj.message && typeof obj.message === 'string') {
-          stepLines.push(...obj.message.split('\n'));
-        }
-        if (stepLines.length > 0) {
-          steps.push(stepLines);
-        }
+        records.push(JSON.parse(rawLine));
       } catch {
-        steps.push([rawLine]);
+        records.push({ content: rawLine });
       }
     }
-    return steps;
+    return records;
   } catch {
     return [];
   }
+}
+
+export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+  const records = parseTranscriptRecords(filePath, maxScanBytes);
+  const steps = [];
+  for (const obj of records) {
+    const stepLines = [];
+    if (obj.content && typeof obj.content === 'string') {
+      stepLines.push(...obj.content.split('\n'));
+    }
+    if (obj.text && typeof obj.text === 'string') {
+      stepLines.push(...obj.text.split('\n'));
+    }
+    if (obj.message && typeof obj.message === 'string') {
+      stepLines.push(...obj.message.split('\n'));
+    }
+    if (stepLines.length > 0) {
+      steps.push(stepLines);
+    } else if (typeof obj === 'string') {
+      steps.push([obj]);
+    }
+  }
+  return steps;
 }
 
 export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
