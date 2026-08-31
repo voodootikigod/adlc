@@ -89,7 +89,7 @@ export function makeFixture({ signEntries = true, repo = 'o/r', originUrl = 'git
   const home = join(root, 'home');
   mkdirSync(repoRoot, { mode: 0o755 }); chmodSync(repoRoot, 0o755); // §9.3: the key file's parent must not be group/world-writable (umask-proof)
   mkdirSync(join(home, '.claude', 'plugins'), { recursive: true });
-  git(repoRoot, ['init', '-q', '-b', 'main']);
+  git(repoRoot, ['init', '-q', '-b', 'main']); git(repoRoot, ['config', 'gc.auto', '0']); git(repoRoot, ['config', 'gc.autoDetach', 'false']);
   const write = (rel, text) => { const p = join(repoRoot, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); return p; };
   write('plugins/adlc-claude-code/.claude-plugin/plugin.json', JSON.stringify({ name: 'adlc', version: pluginVersion }, null, 2) + '\n');
   write('.adlc/config.json', JSON.stringify(config ?? exampleConfig(repo), null, 2) + '\n');

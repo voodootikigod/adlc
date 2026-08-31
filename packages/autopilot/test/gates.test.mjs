@@ -188,7 +188,7 @@ test('AC149: every gate is wrapped in bwrap with --unshare-net, a bind of GATE_R
 
 function realFixture() {
   const root = scratch('ap-real-'); seedRealGateFixture(root);
-  git(root, ['init', '-q', '-b', 'main']); const baseOid = commitAll(root, 'base');
+  git(root, ['init', '-q', '-b', 'main']); git(root, ['config', 'gc.auto', '0']); git(root, ['config', 'gc.autoDetach', 'false']); const baseOid = commitAll(root, 'base');
   const home = scratch('ap-real-home-'); writeFiles(home, { '.claude/.credentials.json': '{"secret":1}' });
   const ctx = makeCtx({ repoRoot: root, baseOid, home });
   writeFiles(root, { '.env.local': 'ADLC_MANIFEST_KEY=hostkey' });

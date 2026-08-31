@@ -33,7 +33,7 @@ export async function ac24_linkedWorktreeRefused() {
   const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'ap-paths-')));
   try {
     const main = join(root, 'main'); mkdirSync(main);
-    gitRun(['init', '-q', '-b', 'main'], { cwd: main });
+    gitRun(['init', '-q', '-b', 'main'], { cwd: main }); gitRun(['config', 'gc.auto', '0'], { cwd: main }); gitRun(['config', 'gc.autoDetach', 'false'], { cwd: main });
     gitRun(['commit', '-q', '--allow-empty', '-m', 'base'], { cwd: main });
     const linked = join(root, 'linked');
     gitRun(['worktree', 'add', '-q', '-b', 'x', linked, 'main'], { cwd: main });

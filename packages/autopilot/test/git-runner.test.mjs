@@ -146,7 +146,7 @@ export async function ac138_identityAssertion() {
     assert.equal(await runner.assertIdentity(w.fx.repoRoot, w.fx.repoRoot), true);
     const decoy = mkdtempSync(join(tmpdir(), 'ap-decoy-'));
     try {
-      git(decoy, ['init', '-q', '-b', 'main']);
+      git(decoy, ['init', '-q', '-b', 'main']); git(decoy, ['config', 'gc.auto', '0']); git(decoy, ['config', 'gc.autoDetach', 'false']);
       assert.equal(await codeOf(() => runner.assertIdentity(decoy, w.fx.repoRoot)), 'repo-identity-mismatch', 'a decoy cwd fails the identity assertion');
       // A nested worktree of the primary passes: its git dir lies under REPO_ROOT/.git.
       const wt = join(w.fx.root, 'wt'); git(w.fx.repoRoot, ['worktree', 'add', '-q', '--detach', wt, 'HEAD']);

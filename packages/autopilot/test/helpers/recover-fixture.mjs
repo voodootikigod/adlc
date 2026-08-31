@@ -46,6 +46,10 @@ export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.par
   mkdirSync(repoRoot);
   sh(['init', '-q', '-b', 'main']);
   sh(['config', 'user.name', 'ap-test']); sh(['config', 'user.email', 'ap@test.invalid']);
+  // Same detached-auto-gc race as origin.git below, but for the WORKING repo itself: a background
+  // gc keeps writing into repo/.git after the last git command returns, racing the teardown's
+  // recursive rm (CI ENOTEMPTY flake, 2026-08-31: AC38 on the node-22 matrix job).
+  sh(['config', 'gc.auto', '0']); sh(['config', 'gc.autoDetach', 'false']);
   writeFileSync(join(repoRoot, 'README.md'), '# fixture\n');
   mkdirSync(join(repoRoot, '.adlc', 'tickets'), { recursive: true });
   writeFileSync(join(repoRoot, '.adlc', 'keep'), '');

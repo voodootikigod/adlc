@@ -37,7 +37,7 @@ function manifestCopy() {
   assert.ok(firstSigned > 0, 'the real manifest has a legacy unsigned prefix followed by signed entries');
   writeFileSync(join(root, '.adlc', 'manifest.jsonl'), `${lines.slice(0, firstSigned).join('\n')}\n`);
   const git = (args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } });
-  git(['init', '-q', '-b', 'adlc/autopilot/issue-7']); git(['add', '-A']); git(['commit', '-q', '-m', 'manifest copy']);
+  git(['init', '-q', '-b', 'adlc/autopilot/issue-7']); git(['config', 'gc.auto', '0']); git(['config', 'gc.autoDetach', 'false']); git(['add', '-A']); git(['commit', '-q', '-m', 'manifest copy']);
   return { root, prefixLines: firstSigned };
 }
 

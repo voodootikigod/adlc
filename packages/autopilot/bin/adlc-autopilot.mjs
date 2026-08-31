@@ -10,18 +10,18 @@ import { dispatch } from '../lib/cli.mjs';
 const USAGE = `adlc-autopilot — quota-gated local issue-to-PR loop (also: adlc autopilot)
 
 Usage:
-  adlc-autopilot loop    [--rest <duration>] [--dry-run]
-  adlc-autopilot once    [--issue <n>] [--force] [--dry-run] [--dry-run-shape]
+  adlc-autopilot loop    [--rest DURATION] [--dry-run]
+  adlc-autopilot once    [--issue N] [--force] [--dry-run] [--dry-run-shape]
   adlc-autopilot status  [--json]
-  adlc-autopilot select  [--top <n>] [--json]
-  adlc-autopilot quota   [--json] [--model <m>] [--quota-threshold <T>] [--quota-reserve <R>]
-                         [--iteration <id>] [--start-ordinal auto] [--wall-clock-remaining <min>]
-  adlc-autopilot triage  --issue <n> [--json]
-  adlc-autopilot reset   --issue <n> ( --confirm-delete <OID> [--delete-remote] | --attempts )
+  adlc-autopilot select  [--top N] [--json]
+  adlc-autopilot quota   [--json] [--model M] [--quota-threshold T] [--quota-reserve R]
+                         [--iteration ID] [--start-ordinal auto] [--wall-clock-remaining MIN]
+  adlc-autopilot triage  --issue N [--json]
+  adlc-autopilot reset   --issue N ( --confirm-delete OID [--delete-remote] | --attempts )
   adlc-autopilot init    [--labels] [--service] [--write]
 
-Global operator-local flags: --repo <owner/name> (or ADLC_AUTOPILOT_REPO), --model, --adapter,
-  --quota-threshold, --quota-reserve, --trusted-bin-dirs <abs,...>, --ssh-identity <abs>, --json
+Global operator-local flags: --repo OWNER/NAME (or ADLC_AUTOPILOT_REPO), --model, --adapter,
+  --quota-threshold, --quota-reserve, --trusted-bin-dirs ABS-PATH-LIST, --ssh-identity ABS, --json
 Exit codes: 0 ok · 1 operational error · 2 a gate refused.`;
 
 export const OPTIONS = {

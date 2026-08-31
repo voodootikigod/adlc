@@ -43,7 +43,7 @@ export function commitAll(root, message) {
 /** `git init -b main` + one base commit; returns { root, baseOid }. */
 export function makeRepo({ files = { 'README.md': 'base\n' }, dir = null } = {}) {
   const root = dir ?? scratch('ap-s5-');
-  git(root, ['init', '-q', '-b', 'main']);
+  git(root, ['init', '-q', '-b', 'main']); git(root, ['config', 'gc.auto', '0']); git(root, ['config', 'gc.autoDetach', 'false']);
   writeFiles(root, files);
   const baseOid = commitAll(root, 'base');
   return { root, baseOid };
