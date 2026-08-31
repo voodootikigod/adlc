@@ -267,6 +267,19 @@ export async function ac2_productionReaderHasATransport() {
 }
 test('AC2: the production quota reader has a transport — the endpoint over fetch with the credential token, then the pinned claude -p /usage fallback on 401', { timeout: 120_000 }, ac2_productionReaderHasATransport);
 
+export async function ac65_modelFamiliesArrayIsComplete() {
+  // MODEL_FAMILIES is read ONLY behind the preflight.substringFamily seam (the legacy substring
+  // matcher) — a plain call never touches it (2026-08-31: an array-literal-shrink mutant on
+  // MODEL_FAMILIES survived because no test exercised that branch at all).
+  const { modelFamily, MODEL_FAMILIES } = await import('../lib/preflight-a.mjs');
+  assert.deepEqual(MODEL_FAMILIES, ['fable', 'opus', 'sonnet', 'haiku']);
+  await withMutation('preflight.substringFamily', () => {
+    for (const f of MODEL_FAMILIES) assert.equal(modelFamily(f), f, `${f} is matched via MODEL_FAMILIES under the substring seam`);
+    assert.equal(modelFamily('claude-haiku-4-5'), 'haiku');
+  });
+}
+test('AC65: MODEL_FAMILIES names every family the substring-matching seam must recognize', ac65_modelFamiliesArrayIsComplete);
+
 export async function ac65_familyMappersAgree() {
   const { modelFamily } = await import('../lib/preflight-a.mjs');
   for (const m of ['opus', 'claude-opus-5', 'Claude Sonnet 5', 'fable', 'claude-3-haiku', 'gpt-5', 'opusish', 'sonnetx', 'haiku-lite', '', null]) {

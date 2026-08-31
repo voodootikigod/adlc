@@ -87,10 +87,12 @@ export async function ac61_ownershipAndSelector() {
       const before = h.mutations();
       const { actions } = await h.run();
       assert.deepEqual(h.mutations(), before, `${state}: zero git/gh mutating calls`);
-      // Exactly ONE of skip/observed, decided by LIFECYCLE_OBSERVED_STATES membership — a looser
-      // any-of assertion cannot notice the array losing an entry (2026-08-31 mutation-gate finding).
-      const expected = LIFECYCLE_OBSERVED_STATES.includes(state) ? 'observed' : 'skip';
+      // Exactly ONE of skip/observed, against a HARDCODED expectation (never derived from the live
+      // LIFECYCLE_OBSERVED_STATES import — that binding is itself what a mutant shrinks, which would
+      // make a derived `expected` tautological and blind to exactly that mutation).
+      const expected = ['stale', 'ci-red', 'oid-mismatch'].includes(state) ? 'observed' : 'skip';
       assert.equal(actions[0].action, expected, `${state}: expected ${expected}`);
+      assert.deepEqual([...LIFECYCLE_OBSERVED_STATES].sort(), ['ci-red', 'oid-mismatch', 'stale'], 'the exported list matches the hardcoded expectation above');
       assert.equal(h.ctx.records.load(7).state, state, `${state}: state untouched`);
     }
     const cases = [

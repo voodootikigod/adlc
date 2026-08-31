@@ -114,9 +114,13 @@ export async function ac75_exactNameGuard() {
   assert.equal(compareLockfiles(lock, registry, { allowed: ALLOWED }).code, 'lockfile-drift', 'node_modules/@adlc/core with a registry resolved URL');
   const link = { lockfileVersion: 3, packages: { ...lock.packages, 'node_modules/@adlc/core': { resolved: 'packages/core', link: true } } };
   assert.equal(compareLockfiles(lock, link, { allowed: ALLOWED }).ok, true, 'the workspace link form passes');
-  // A link-ONLY change on an existing shared entry (2026-08-31: COMPARED_FIELDS' trailing 'link' had no drift test).
-  const linkChanged = { lockfileVersion: 3, packages: { ...lock.packages, 'node_modules/@adlc/core': { ...lock.packages['node_modules/@adlc/core'], link: true } } };
-  assert.equal(compareLockfiles(lock, linkChanged, { allowed: ALLOWED }).code, 'lockfile-drift', 'a link field flip on a shared entry is drift');
+  // A link-ONLY change on an entry present in BOTH base and head — a SHARED-entry comparison
+  // (checkSharedEntry/COMPARED_FIELDS), not the added-entry path `link` above exercises
+  // (2026-08-31: my first attempt at this test put the key only in head, so it never reached
+  // COMPARED_FIELDS at all — the mutant survived a "passing" test).
+  const linkedBase = { lockfileVersion: 3, packages: { ...lock.packages, 'node_modules/@adlc/core': { resolved: 'packages/core', link: true } } };
+  const linkedHeadUnlinked = { lockfileVersion: 3, packages: { ...lock.packages, 'node_modules/@adlc/core': { resolved: 'packages/core', link: false } } };
+  assert.equal(compareLockfiles(linkedBase, linkedHeadUnlinked, { allowed: ALLOWED }).code, 'lockfile-drift', 'a link field flip on a SHARED entry is drift');
   assert.equal(lockError, null, lockError ?? '');
   {
     const f = fixture();
