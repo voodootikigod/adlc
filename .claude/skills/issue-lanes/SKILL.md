@@ -207,8 +207,16 @@ final word — verify.
   AND the polled CI status — not just the lane's own local claim of it.
 - If push/PR was denied by permissions, give the user the exact commands per lane.
 - Save a `project` memory: lanes, ticket ids, blockers, anything non-obvious.
-- After the human merges: `adlc ticket complete <id>` is a base-branch admin act (rails
-  auto-expire on `completed: true`); then the worktree cleanup checklist in
+- After the human merges: `adlc ticket complete <id>` is a base-branch admin act — rails-guard's
+  contract-preservation check refuses `completed: true` on an existing ticket inside ANY PR, so
+  this can only land as a DIRECT PUSH TO MAIN (`git push origin main`; expect and accept
+  GitHub's "Bypassed rule violations" notice if this repo has a ruleset). It also creates a new
+  `.adlc/manifest.d/` segment. Ask before doing this — it is a different, more privileged action
+  than the signing ceremony above, which still goes through a normal PR. Once pushed, any OTHER
+  open PR branched from an OLDER main is now BEHIND a new manifest segment; rails-guard reads
+  that as `… exists at base but is absent at HEAD — committed segments cannot be removed or
+  renamed in a PR` (a false positive from staleness, not a real violation) — rebase that PR
+  onto the new main tip and re-push to clear it. Then the worktree cleanup checklist in
   `~/.claude/rules/common/worktrees.md`.
 
 ## Gotchas that are not in the ticket bodies
