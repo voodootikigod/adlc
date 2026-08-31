@@ -8,7 +8,7 @@ import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { maintainOpenPrs, activePrCount, capAllows, remoteDeleteCommand } from '../lib/maintain.mjs';
+import { maintainOpenPrs, activePrCount, capAllows, remoteDeleteCommand, LIFECYCLE_OBSERVED_STATES } from '../lib/maintain.mjs';
 import { attest } from '../lib/review.mjs';
 import { manifestLineSha256 } from '../lib/diffcheck.mjs';
 import { STATES, MAINTENANCE_STATES } from '../lib/records.mjs';
@@ -87,7 +87,10 @@ export async function ac61_ownershipAndSelector() {
       const before = h.mutations();
       const { actions } = await h.run();
       assert.deepEqual(h.mutations(), before, `${state}: zero git/gh mutating calls`);
-      assert.ok(['skip', 'observed'].includes(actions[0].action), `${state}: ${actions[0].action}`);
+      // Exactly ONE of skip/observed, decided by LIFECYCLE_OBSERVED_STATES membership — a looser
+      // any-of assertion cannot notice the array losing an entry (2026-08-31 mutation-gate finding).
+      const expected = LIFECYCLE_OBSERVED_STATES.includes(state) ? 'observed' : 'skip';
+      assert.equal(actions[0].action, expected, `${state}: expected ${expected}`);
       assert.equal(h.ctx.records.load(7).state, state, `${state}: state untouched`);
     }
     const cases = [

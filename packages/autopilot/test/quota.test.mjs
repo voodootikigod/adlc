@@ -119,6 +119,8 @@ export function ac65_familyNormalization() {
   assert.equal(familyOf('Claude Sonnet 5'), 'sonnet');
   assert.equal(familyOf('opus'), 'opus');
   assert.equal(familyOf('gpt-5'), 'unknown');
+  assert.equal(familyOf('claude-haiku-4-5'), 'haiku');
+  assert.equal(familyOf('Claude Haiku 4.5'), 'haiku');
   assert.equal(familyOf(null), 'unknown');
   const text = 'subscription\nCurrent session: 1% used\nCurrent week (all models): 2% used\nCurrent week (Opus): 70% used\n';
   assert.equal(evaluate(parseUsageText(text), { family: familyOf('claude-opus-5') }).reason, 'seven_day_opus', 'an Opus line at 70 with --model claude-opus-5 → refused');

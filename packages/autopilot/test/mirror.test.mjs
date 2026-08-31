@@ -127,7 +127,7 @@ export async function ac161_gateMirror() {
     // A gate mirror created BEFORE the attestation commit.
     await createGateMirror({ ctx: f.ctx, issue: ISSUE, attestedHead: completion, baseOid: f.baseOid });
     const later = f.commitIn(f.wt, { '.adlc/manifest.d/seg.jsonl': '{"seq":1}\n{"seq":2}\n' }, 'chore(manifest): re-attest');
-    await assert.rejects(() => cloneGateRepo({ ctx: f.ctx, issue: ISSUE, k: 1, attestedHead: later, baseOid: f.baseOid }), (e) => e.code === 'gate-mirror-stale');
+    await assert.rejects(() => cloneGateRepo({ ctx: f.ctx, issue: ISSUE, k: 1, attestedHead: later, baseOid: f.baseOid }), (e) => e.exitCode === 2 && e.code === 'gate-mirror-stale');
     assert.equal(existsSync(join(f.ctx.paths.runDir(ISSUE), 'gate-repo-1')), false, 'no clone is cut from a stale mirror');
   } finally { f.cleanup(); }
 }

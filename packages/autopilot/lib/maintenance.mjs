@@ -12,7 +12,7 @@ import { validateIssueNumber } from './input.mjs';
 import { createRunSteps } from './round.mjs';
 import { CI_FIX_WALL_MINUTES } from './ci.mjs';
 
-async function stepsFor({ ctx, deps, record }) {
+export async function stepsFor({ ctx, deps, record }) {
   const n = validateIssueNumber(record.issue);
   const ticket = record.ticketCache ?? { scope: [] };
   const mirror = await deps.mirror.createWorkerMirror({ ctx, issue: n });
