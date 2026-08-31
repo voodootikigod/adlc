@@ -17,7 +17,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, cpSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, cpSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +75,57 @@ test('adlc-lifecycle.mjs still runs main() when its OWN install path contains a 
     );
   } finally {
     rmSync(spaceBase, { recursive: true, force: true });
+  }
+});
+
+test('adlc-lifecycle.mjs still runs main() with NO mode argument (default context mode) from a space-containing install path', () => {
+  // Distinguishes isMain's process.argv[1] (the script path) from
+  // process.argv[2] (the mode argument, absent here — defaults to
+  // 'context'). A mutant that checks Boolean(process.argv[2]) instead of
+  // Boolean(process.argv[1]) is invisible to the sibling test above (which
+  // always supplies a mode argument, making argv[2] truthy too); only a
+  // no-mode-argument invocation exercises the argv[1] vs argv[2] boundary.
+  const spaceBase = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-lifecycle-space-nomode-')));
+  const spaceRoot = join(spaceBase, 'adlc lifecycle nomode space');
+  mkdirSync(spaceRoot, { recursive: true });
+  const repoRoot = mkdtempSync(join(tmpdir(), 'adlc-lifecycle-nomode-repo-'));
+  try {
+    const hooksCopy = join(spaceRoot, 'hooks');
+    cpSync(HOOKS_DIR, hooksCopy, { recursive: true });
+    const hookCopyPath = join(hooksCopy, 'adlc-lifecycle.mjs');
+
+    mkdirSync(join(repoRoot, '.adlc'), { recursive: true });
+    const ticket = { id: 'T1', title: 'space nomode', category: 'contract', scope: ['src/**'], rails: [], edges: [] };
+    writeFileSync(join(repoRoot, '.adlc/tickets.json'), `${JSON.stringify({ tickets: [ticket] }, null, 2)}\n`);
+    writeFileSync(join(repoRoot, '.adlc/current-ticket.json'), `${JSON.stringify({ id: ticket.id })}\n`);
+
+    const env = {
+      ...process.env,
+      NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
+    };
+
+    let stdout = '';
+    try {
+      stdout = execFileSync(process.execPath, [hookCopyPath], {
+        input: JSON.stringify({ cwd: repoRoot }),
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+      });
+    } catch (e) {
+      stdout = e.stdout ?? '';
+    }
+
+    assert.notEqual(stdout.trim(), '', 'expected default context-mode output naming the active ticket — stdout was empty');
+    const parsed = JSON.parse(stdout.trim());
+    assert.match(
+      parsed.additionalContext ?? '',
+      /ADLC current ticket: T1/,
+      `expected the active-ticket context narration, got: ${JSON.stringify(parsed)}`
+    );
+  } finally {
+    rmSync(spaceBase, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });
 
