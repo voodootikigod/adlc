@@ -136,7 +136,9 @@ async function main() {
     return;
   }
   if (command === 'doctor') {
-    emit(doctorTicketStore(store, { root, archive: Boolean(flags.archive), key }), flags.json);
+    const report = doctorTicketStore(store, { root, archive: Boolean(flags.archive), key });
+    process.exitCode = report.ok ? 0 : 2;
+    emit(report, flags.json);
     return;
   }
   const snapshot = store.load();
