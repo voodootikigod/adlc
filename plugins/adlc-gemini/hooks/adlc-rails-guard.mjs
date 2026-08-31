@@ -390,13 +390,27 @@ export function isVerificationCommand(cmd) {
   return false;
 }
 
+export function isReadonlyCommand(cmd) {
+  if (typeof cmd !== 'string' || !cmd) return false;
+  const trimmed = cmd.trim();
+  if (!trimmed) return false;
+  // Any shell redirection, chaining, or piping could mutate state
+  if (/[;&|<>]/.test(trimmed)) return false;
+  return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date)(\s+|$)/i.test(trimmed);
+}
+
 export function onStop(payload, { env = process.env } = {}) {
   try {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
     const root = resolveWorkspaceRoot(payload, env);
-    if (!root) return { decision: 'stop' };
+    if (!root) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Repository workspace root cannot be resolved under enforcement during Stop verification.',
+      };
+    }
 
     const active = resolveActiveTicketId(root, env);
     if (active.conflict) {
@@ -451,15 +465,17 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (name === 'run_command' || name === 'execute') {
           const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-          if (!isVerificationCommand(cmd)) continue;
+          if (isVerificationCommand(cmd)) {
+            const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
+            const status = r?.status ?? c?.status;
+            const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
+            const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
 
-          const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
-          const status = r?.status ?? c?.status;
-          const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
-          const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
-
-          if (isExplicitSuccess && !isExplicitFailure) {
-            lastSuccessTestIdx = i;
+            if (isExplicitSuccess && !isExplicitFailure) {
+              lastSuccessTestIdx = i;
+            }
+          } else if (!isReadonlyCommand(cmd)) {
+            lastMutationIdx = i;
           }
         }
       }

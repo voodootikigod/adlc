@@ -461,3 +461,40 @@ test('onStop: fails closed when active ticket state has conflict', () => {
     cleanup();
   }
 });
+
+test('onStop: tracks shell commands as mutations and requires tests', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node build.js' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shell-mutation',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: fails closed under enforcement when workspace root is unresolvable', () => {
+  const payload = {
+    workspacePaths: [],
+    transcriptPath: '/tmp/nonexistent.jsonl',
+    conversationId: 'test-session-noroot',
+  };
+  const res = onStop(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
+  assert.equal(res.decision, 'continue');
+  assert.match(res.reason, /Repository workspace root cannot be resolved/);
+});
