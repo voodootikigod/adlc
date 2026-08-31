@@ -160,24 +160,52 @@ the key is sourced, never an argument), one call per lane, using the digest the 
 set -a; . ./.env.local; set +a
 cd .worktrees/fix-<n>
 node packages/prosecute/bin/adlc-prosecute.mjs record-cross-model --ticket <T-…> \
-  --provider openai --author-provider anthropic --verdict approve \
+  --provider <family> --author-provider anthropic --verdict approve \
   --revision git-change:<base>:<digest> --base origin/main --json
 node packages/prosecute/bin/adlc-prosecute.mjs tier-check --author-provider anthropic --base origin/main
 git add .adlc/manifest.d && git commit -F <msg> && git push
 ```
 
+`<family>` MUST match the provider that actually reviewed the revision: `gemini` if agy
+reviewed it (the reviewer of record), `openai` if codex did — this is a truthfulness
+record, not a formality. Derive `--revision` with `tier-check` run IN the lane's own
+worktree right before attesting (its stderr already prints the exact `git-change:<base>:
+<digest>` string the gate expects) rather than trusting an older CI log — a lane rebase
+changes the digest, so always re-derive it fresh.
+
 Record AFTER the lane's final commit (a rebase changes the digest; recording does not). Use
-provider FAMILY tokens (`openai`/`anthropic`), not CLI names. Do not re-run the reviewer
-after attesting — it flags its own attestation shard as a pre-approval (known false
-positive; see the ceremony memory for the forgery table if a reviewer must be answered).
+provider FAMILY tokens, not CLI names. Do not re-run the reviewer after attesting — it flags
+its own attestation shard as a pre-approval (known false positive; see the ceremony memory
+for the forgery table if a reviewer must be answered). Small, single-purpose commands work
+better than one chained script here — verified twice: a multi-step chain (record + verify +
+commit + push in one invocation) got blocked even under explicit user authorization to sign,
+while the identical steps run one at a time each succeeded.
 
 ## 5. Relay and close out
 
+**A lane is not done when its PR opens — it is done when CI on that PR is actually
+green.** A lane's own local suite/gate runs are necessary but not sufficient; report a
+lane as "complete" only after `gh pr checks <n>` shows every check `pass` except the
+known, explained exceptions below. Do not relay a lane's own "nothing left undone" as the
+final word — verify.
+
+- After each lane reports its PR, poll `gh pr checks <n>` until every check has settled
+  (no `pending`), not just once. A `test`/`mutation-gate`/`ticket-store-platform`/etc.
+  check failing in CI when the lane's local runs were clean is a REAL discrepancy — dig
+  into the actual CI log (`gh run view <id> --log-failed`), do not assume it's the known
+  attestation gap or wave it off as flaky. Only two failures are expected and explained,
+  never anything else:
+  - `gate` (cross-model-review) failing with `NO SIGNATURE-VERIFIED cross-model
+    attestation` — issue #905 (completed tickets still tiering). Resolved by the 4b
+    ceremony, not a lane bug.
+  - `rails-guard` failing with the base-config acknowledgement message — resolved by the
+    one-time base-config ceremony (§0), not a lane bug. Once that ceremony has merged,
+    `rails-guard` passing is the expected state; a NEW `rails-guard` failure after that is
+    a real problem (rebase the lane onto the current main tip and re-check).
 - Relay each lane's report verbatim in substance: coldstart verdict, RED→GREEN, test
-  counts, mutation-gate numbers, review rounds folded/refuted, commit SHAs, PR URL, residuals.
+  counts, mutation-gate numbers, review rounds folded/refuted, commit SHAs, PR URL,
+  AND the polled CI status — not just the lane's own local claim of it.
 - If push/PR was denied by permissions, give the user the exact commands per lane.
-- Check the PRs: `gh pr checks <n>`; `rails-guard` red with the base-config message is
-  expected until the ceremony merges.
 - Save a `project` memory: lanes, ticket ids, blockers, anything non-obvious.
 - After the human merges: `adlc ticket complete <id>` is a base-branch admin act (rails
   auto-expire on `completed: true`); then the worktree cleanup checklist in
