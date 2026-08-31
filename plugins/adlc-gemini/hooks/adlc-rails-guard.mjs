@@ -316,9 +316,12 @@ export function preInvocation(payload, { env = process.env } = {}) {
     const active = resolveActiveTicketId(root, env);
     if (!active.id || active.conflict) return { injectSteps: [] };
 
+    const cleanId = sanitizeField(active.id, 64);
+    if (!cleanId || cleanId !== active.id || /[\r\n\x00-\x1f`]/.test(cleanId)) return { injectSteps: [] };
+
     try {
       const snapshot = loadTicketStoreReadOnly({ root, env });
-      const ticket = snapshot.get(active.id);
+      const ticket = snapshot.get(cleanId);
       if (ticket) {
         const cleanTitle = sanitizeField(ticket.title ?? 'No title', 120);
         const cleanRails = sanitizeList(ticket.rails);
@@ -329,7 +332,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
         return {
           injectSteps: [
             {
-              ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} ("${cleanTitle}") | Declared Scope: ${declaredScope} | Frozen Rails: ${declaredRails} | Enforcement: ${enf}`,
+              ephemeralMessage: `[ADLC Context] Active Ticket: ${cleanId} ("${cleanTitle}") | Declared Scope: ${declaredScope} | Frozen Rails: ${declaredRails} | Enforcement: ${enf}`,
             },
           ],
         };
@@ -365,10 +368,11 @@ export function onStop(payload, { env = process.env } = {}) {
       payload?.content,
       payload?.summary,
       payload?.reason,
-    ].filter(Boolean).join('\n');
+    ].filter((s) => typeof s === 'string').join('\n');
 
     const recentRecords = records.slice(-5);
-    const recentContent = recentRecords.map((r) => [r.content, r.text, r.message].filter(Boolean).join('\n')).join('\n') + '\n' + payloadClaim;
+    const extractText = (r) => (r && typeof r === 'object' ? [r.content, r.text, r.message].filter((s) => typeof s === 'string').join('\n') : '');
+    const recentContent = recentRecords.map(extractText).join('\n') + '\n' + payloadClaim;
 
     const claimsCompletion = recentContent.includes('TICKET-DONE');
     if (claimsCompletion) {
@@ -380,10 +384,21 @@ export function onStop(payload, { env = process.env } = {}) {
       }
 
       const hasTestCommand = records.some((r) => {
-        const cmd = r?.tool_calls?.find?.((t) => t.name === 'run_command')?.args?.CommandLine
-          ?? r?.args?.CommandLine
-          ?? (typeof r.content === 'string' && /run_command|npm (test|run test)|node --test/i.test(r.content) ? r.content : '');
-        return /npm (test|run test)|node --test|adlc (hollow-test|rails-guard|preflight)/i.test(cmd);
+        if (!r || typeof r !== 'object') return false;
+        const calls = Array.isArray(r.tool_calls) ? r.tool_calls : (r.toolCall ? [r.toolCall] : (r.name ? [r] : []));
+        return calls.some((c) => {
+          const name = c?.name ?? c?.toolName ?? '';
+          if (name !== 'run_command' && name !== 'execute') return false;
+          const cmd = c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '';
+          if (typeof cmd !== 'string') return false;
+          const matchesTest = /npm (test|run test)|node --test|adlc (hollow-test|rails-guard|preflight)/i.test(cmd);
+          if (!matchesTest) return false;
+          const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
+          if (typeof exitCode === 'number' && exitCode !== 0) return false;
+          const isError = r?.status === 'ERROR' || r?.status === 'error';
+          if (isError) return false;
+          return true;
+        });
       });
 
       if (!hasTestCommand) {
