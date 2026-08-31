@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { recordBuildGateBypass } from '../adlc-build-gate.mjs';
@@ -22,12 +22,26 @@ function withPath(pathEnv, fn) {
 // A fake `adlc` that just dumps its received env to a JSON file and exits 0 —
 // the same "spawn a real tiny script" technique the ticket names as an
 // alternative to DI, and the one adlc-handoff-gate's own allowlist test uses.
+//
+// Mirrors the REAL deployment shape deliberately: a genuine `npm i -g
+// @adlc/cli` bin-links an EXTENSIONLESS `adlc` on PATH as a symlink to a
+// `.mjs` target (verified against this repo's own global install). An
+// extensionless file's OWN content decides its module type inconsistently
+// across Node versions (older Node defaults such a file to CommonJS and
+// fails on `import`); resolveTrustedBinary correctly returns that
+// extensionless symlink path, so recordBuildGateBypass must realpath it to
+// the `.mjs` target before invoking — these fixtures exercise exactly that
+// symlink shape rather than a same-named extensionless file with ESM
+// content directly, which would pass on newer Node's auto-detection but is
+// not what production actually looks like.
 function writeFakeAdlc(dir, envDumpPath) {
-  const fakeBin = join(dir, 'adlc');
+  const implPath = join(dir, 'adlc-impl.mjs');
   writeFileSync(
-    fakeBin,
+    implPath,
     `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(envDumpPath)}, JSON.stringify(process.env));\n`,
   );
+  const fakeBin = join(dir, 'adlc');
+  symlinkSync(implPath, fakeBin);
   return fakeBin;
 }
 
@@ -143,10 +157,12 @@ test('recordBuildGateBypass preserves the cwd passthrough contract with the trus
   try {
     mkdirSync(join(cwd, '.adlc'), { recursive: true });
     const cwdDumpPath = join(realDir, 'cwd-dump.txt');
+    const implPath = join(realDir, 'adlc-impl.mjs');
     writeFileSync(
-      join(realDir, 'adlc'),
+      implPath,
       `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(cwdDumpPath)}, process.cwd());\n`,
     );
+    symlinkSync(implPath, join(realDir, 'adlc'));
 
     const ok = withPath(realDir, () =>
       recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd }));

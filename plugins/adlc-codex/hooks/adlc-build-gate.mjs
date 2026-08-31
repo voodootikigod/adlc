@@ -18,7 +18,7 @@
 // scripts/test/ticket-store-boundary.test.mjs enforces that the pointer has
 // exactly one reader across the whole repo.
 
-import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
@@ -215,12 +215,22 @@ function tailBytes(path, maxBytes) {
 export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd } = {}) {
   const adlcBinPath = resolveTrustedBinary('adlc', process.env.PATH);
   if (!adlcBinPath) return false;
+  // A real global install (`npm i -g @adlc/cli`) links an EXTENSIONLESS bin name
+  // to a `.mjs` target — Node's module-type detection for a `node <path>` entry
+  // point is version-dependent for an extensionless path (older Node defaults to
+  // CommonJS and fails an `import` statement; newer Node auto-detects). Resolve
+  // the trust-verified candidate to its real, extensioned path before invoking
+  // it so the spawned script's module type is unambiguous on every supported
+  // Node version — a pure robustness step, not a trust decision (that already
+  // happened in resolveTrustedBinary above).
+  let resolvedBinPath = adlcBinPath;
+  try { resolvedBinPath = realpathSync(adlcBinPath); } catch { /* fall back to the candidate as-is */ }
   const env = {};
   for (const name of RECOVERY_AUDIT_ENV_ALLOWLIST) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
   const args = [
-    adlcBinPath,
+    resolvedBinPath,
     'gate-manifest', 'record', 'build-gate-bypass',
     '--ticket', ticketId,
     '--data', JSON.stringify({ signals, depth, sessionBytes }),
