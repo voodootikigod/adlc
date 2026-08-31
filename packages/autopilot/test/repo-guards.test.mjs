@@ -53,7 +53,9 @@ export async function ac156_syntheticHomeContract() {
   assert.equal(r.status, 0, `fleet's synthetic-HOME suites are green:\n${(r.stdout + r.stderr).slice(-2000)}`);
   // Green is not enough: the isolation tests must have EXECUTED (a host that skips every bwrap clause proves nothing).
   const out = r.stdout + r.stderr;
-  const passed = Number(/ℹ pass (\d+)/.exec(out)?.[1] ?? 0); const skipped = Number(/ℹ skipped (\d+)/.exec(out)?.[1] ?? 0);
+  // Node's piped default reporter is TAP on ≤22 (`# pass N`) and spec glyphs on newer (`ℹ pass N`): accept both (node-22 CI red, 2026-08-30).
+  const passed = Number((/ℹ pass (\d+)/.exec(out) ?? /^# pass (\d+)$/m.exec(out))?.[1] ?? 0);
+  const skipped = Number((/ℹ skipped (\d+)/.exec(out) ?? /^# skipped (\d+)$/m.exec(out))?.[1] ?? 0);
   assert.ok(passed >= 5, `at least five synthetic-HOME tests ran and passed (${passed})`);
   const { detectBackend } = await import('@adlc/fleet/lib/sandbox.mjs');
   const { spawnSync: probeSpawn } = await import('node:child_process');
