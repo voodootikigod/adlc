@@ -101,6 +101,13 @@ test('AC3: a fresh out-dir with plain --write (no --force) writes every planned 
   }
 });
 
+// A second, distinct LINT-routed cluster (different quoted literal → different
+// clusterName/pattern → a different .lint.json filename from CLUSTER_ENTRIES).
+const CLUSTER_ENTRIES_2 = [
+  { ts: '2025-02-01', tool: 'test', file: 'c.mjs', line: 3, category: 'security', severity: 'high', desc: 'unsafe eval near "user.rawInput"' },
+  { ts: '2025-02-02', tool: 'test', file: 'd.mjs', line: 4, category: 'security', severity: 'high', desc: 'unsafe eval near "user.rawInput"' },
+];
+
 test('AC4: --json --write on a mix of new and pre-existing files reports both written and skipped paths', () => {
   const dir = makeTempDir();
   try {
@@ -109,14 +116,34 @@ test('AC4: --json --write on a mix of new and pre-existing files reports both wr
     const first = runCli(['--write', '--out-dir', outDir], dir);
     assert.strictEqual(first.code, 0);
 
-    const lintPath = findLintJsonPath(outDir);
-    writeFileSync(lintPath, '{"pattern":"HAND_TUNED"}\n', 'utf8');
+    // A LINT cluster emits TWO files (a .lint.json descriptor and a check-*.mjs
+    // script) — both already exist after the first run and must both be skipped.
+    const filesBefore = new Set(readdirSync(outDir).map((f) => join(outDir, f)));
+    const lintPathA = findLintJsonPath(outDir);
+    const handTuned = '{"pattern":"HAND_TUNED"}\n';
+    writeFileSync(lintPathA, handTuned, 'utf8');
+
+    // Add a SECOND, distinct cluster so the next --write sees a genuine mix: A's
+    // two files already exist (must be skipped), B's two files are brand new
+    // (must be written).
+    writeLedger(dir, [...CLUSTER_ENTRIES, ...CLUSTER_ENTRIES_2]);
 
     const second = runCli(['--write', '--json', '--out-dir', outDir], dir);
     assert.strictEqual(second.code, 0, `second --json --write should succeed: ${second.stderr}`);
     const parsed = JSON.parse(second.stdout);
-    const skipped = JSON.stringify(parsed).match(/skipped/i);
-    assert.ok(skipped, `JSON output must report the skipped file(s) in some form: ${second.stdout}`);
+    assert.ok(Array.isArray(parsed.writeSkipped), `writeSkipped must be an array: ${second.stdout}`);
+    assert.deepStrictEqual(
+      new Set(parsed.writeSkipped), filesBefore,
+      'writeSkipped must list exactly A\'s two pre-existing files, not B\'s new ones',
+    );
+    assert.strictEqual(readFileSync(lintPathA, 'utf8'), handTuned, 'the pre-existing file must remain untouched (hand edit preserved)');
+
+    const filesAfter = readdirSync(outDir).map((f) => join(outDir, f));
+    const newFiles = filesAfter.filter((f) => !filesBefore.has(f));
+    assert.strictEqual(newFiles.length, 2, `expected B's 2 new files (.lint.json + check-*.mjs), got: ${newFiles.join(', ')}`);
+    const newLintPath = newFiles.find((f) => f.endsWith('.lint.json'));
+    assert.ok(newLintPath, 'one of the new files must be a .lint.json');
+    assert.notStrictEqual(readFileSync(newLintPath, 'utf8'), handTuned, 'the new file must be the real generated content, not the hand-tuned one');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
