@@ -407,27 +407,7 @@ export function onStop(payload, { env = process.env } = {}) {
       payload?.reason,
     ].filter((s) => typeof s === 'string').join('\n');
 
-    let root = resolveWorkspaceRoot(payload, env);
-
-    // If root wasn't found from direct payload/env, try discovering it from absolute paths in transcript tool calls
-    if (!root && records.length > 0) {
-      for (const r of records) {
-        if (!r || typeof r !== 'object') continue;
-        const calls = Array.isArray(r.toolCalls) ? r.toolCalls : (Array.isArray(r.tool_calls) ? r.tool_calls : (r.toolCall ? [r.toolCall] : []));
-        for (const c of calls) {
-          const args = c?.args ?? c?.arguments ?? {};
-          const candidatePath = args.TargetFile ?? args.AbsolutePath ?? args.SearchDirectory ?? args.Cwd ?? args.cwd;
-          if (typeof candidatePath === 'string' && isAbsolute(candidatePath)) {
-            const found = findAdlcRoot(dirname(candidatePath)) ?? findAdlcRoot(candidatePath);
-            if (found) {
-              root = found;
-              break;
-            }
-          }
-        }
-        if (root) break;
-      }
-    }
+    const root = resolveWorkspaceRoot(payload, env);
 
     const recentRecords = records.slice(-5);
     const extractText = (r) => (r && typeof r === 'object' ? [r.content, r.text, r.message].filter((s) => typeof s === 'string').join('\n') : '');
@@ -438,12 +418,18 @@ export function onStop(payload, { env = process.env } = {}) {
       if (!root) {
         return {
           decision: 'continue',
-          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved for verification.',
+          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved from trusted environment or host metadata.',
         };
       }
 
       const active = resolveActiveTicketId(root, env);
-      if (!active.id || active.conflict) return { decision: 'stop' };
+      if (active.conflict) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
+        };
+      }
+      if (!active.id) return { decision: 'stop' };
 
       // Validate that the active ticket is present in the validated ticket store
       try {

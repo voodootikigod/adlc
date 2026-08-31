@@ -383,15 +383,10 @@ test('onStop: rejects completion when an unrecognized path-bearing writer runs a
   }
 });
 
-test('onStop: discovers repo root from transcript tool call paths in headless mode with empty workspacePaths', () => {
+test('onStop: resolves repo root via ANTIGRAVITY_WORKSPACE in headless mode with empty workspacePaths', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
-  const externalDir = tmpdir();
-  const transcriptFile = join(externalDir, `test-transcript-${Date.now()}.jsonl`);
+  const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
-    JSON.stringify({
-      type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'index.js') } }],
-    }),
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
       tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
@@ -406,10 +401,36 @@ test('onStop: discovers repo root from transcript tool call paths in headless mo
       transcriptPath: transcriptFile,
       conversationId: 'test-session-headless',
     };
-    const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
+    const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: root } });
     assert.equal(res.decision, 'stop');
   } finally {
-    try { rmSync(transcriptFile, { force: true }); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: fails closed when active ticket state has conflict', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  // Pass conflicting env variable ADLC_TICKET pointing to T2
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-conflict',
+    };
+    const res = onStop(payload, { env: { ...env, ADLC_TICKET: 'T2' } });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket state conflict detected/);
+  } finally {
     cleanup();
   }
 });
