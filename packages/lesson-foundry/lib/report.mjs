@@ -58,10 +58,13 @@ export function buildHumanReport({ clusters, skipped, filtered, plan }) {
 /**
  * Build JSON output structure.
  */
-export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult }) {
+export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult, writeSkipped }) {
   return {
     skippedMalformed: skipped,
     skippedKilled: filtered,
+    // Existing artifacts --write left untouched to preserve hand-refinement (#674). null
+    // when --write was not requested; otherwise an array, empty when nothing was skipped.
+    writeSkipped: writeSkipped ?? null,
     clusters: clusters.map((c) => {
       const p = plan.find((e) => e.cluster === c);
       return {
