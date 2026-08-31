@@ -131,6 +131,18 @@ test('checkRail (sensitive fs, injected): a differently-cased UNRELATED file is 
   assert.equal(result.decision, 'allow');
 });
 
+test('checkRail (insensitive fs): a glob-pattern rail denies via glob match alone, not just exact string equality', () => {
+  // The rail is a glob (SRC/**), so rail.toLowerCase() ('src/**') never literally
+  // equals the lowercased candidate path — only globMatch can find this hit. This
+  // distinguishes the `||` between exact-equality and globMatch from an `&&`.
+  const root = adlcRepo({ rails: ['SRC/**'] });
+  const result = checkRail({
+    filePath: 'src/nested/newfile.js', tool: 'write_to_file', root, env: ENF,
+    isCaseInsensitiveFsFn: insensitiveProbe,
+  });
+  assert.equal(result.decision, 'deny');
+});
+
 test('checkRail (no probe injected — real fs): exact-case frozen file is still DENIED (byte-identical baseline behaviour)', () => {
   const root = adlcRepo({ rails: ['src/frozen.js'] });
   const result = checkRail({ filePath: 'src/frozen.js', tool: 'write_to_file', root, env: ENF });
