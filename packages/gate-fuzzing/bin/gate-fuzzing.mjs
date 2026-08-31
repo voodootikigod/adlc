@@ -266,6 +266,11 @@ const fanFn = async (opts, nFan) => {
 };
 
 // Per-candidate provisionFn: fresh disposable clone + sandbox-bound gate/witness.
+// Behavioral oracle lens (b) only enabled with --behavioral-witness. Wiring a
+// real fresh-context approval model is out of scope for offline runs; absent a
+// configured lens, behavioral defeats stay unwitnessed (conservative) — and,
+// per #641, a clean run below cannot be reported as earned without one.
+const independentApprovalFn = null;
 const { makeProvisionFn } = await import('../lib/provision.mjs');
 const provisionFn = makeProvisionFn({
   repoRoot,
@@ -273,10 +278,7 @@ const provisionFn = makeProvisionFn({
   unsafeNoSandbox: values['unsafe-no-sandbox'],
   suite: gates,
   baselineRef: 'HEAD',
-  // Behavioral oracle lens (b) only enabled with --behavioral-witness. Wiring a
-  // real fresh-context approval model is out of scope for offline runs; absent a
-  // configured lens, behavioral defeats stay unwitnessed (conservative).
-  independentApprovalFn: null,
+  independentApprovalFn,
 });
 
 // classifyFn receives sandbox-bound runGateFn/runWitnessFn/oracleFn from provisionFn.
@@ -316,6 +318,7 @@ const verdict = computeVerdict({
   rounds: loopResult.rounds,
   strictBudget: values['strict-budget'],
   failOnBehavioral: values['fail-on-behavioral'],
+  independenceConfigured: independentApprovalFn !== null,
 });
 
 // ── report ────────────────────────────────────────────────────────────────────

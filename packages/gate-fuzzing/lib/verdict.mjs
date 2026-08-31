@@ -53,6 +53,11 @@ function isRunInconclusive(runState) {
  * @param {number} opts.rounds - Total rounds run
  * @param {boolean} opts.strictBudget - --strict-budget flag
  * @param {boolean} opts.failOnBehavioral - --fail-on-behavioral flag (Fix 5)
+ * @param {boolean} opts.independenceConfigured - true only when a real oracle
+ *   independence mechanism is wired (a non-null independentApprovalFn, or
+ *   genuine contract-derivation). Without one, a clean run cannot distinguish
+ *   "no defeat exists" from "no independence source was configured to find
+ *   one" — see issue #641.
  * @returns {{exitCode:0|1|2, summary:string, defeats:object[], contractDefeats:number, behavioralDefeats:number, inconclusive:boolean}}
  */
 export function computeVerdict(opts) {
@@ -63,6 +68,7 @@ export function computeVerdict(opts) {
     rounds,
     strictBudget,
     failOnBehavioral,
+    independenceConfigured,
   } = opts;
 
   // Categorize defeats by source
@@ -120,7 +126,21 @@ export function computeVerdict(opts) {
     };
   }
 
-  // Clean stop: dry streak with no defeats
+  // Clean stop: dry streak with no defeats. Without a real independence
+  // source, checkOracle's only path to independent:true is the candidate's
+  // own self-reported witnessSource — a clean result here proves nothing
+  // about whether a genuine defeat was missed (#641). Refuse to report it.
+  if (!independenceConfigured) {
+    return {
+      exitCode: 1,
+      summary: 'no independence source configured — cannot certify absence of defeats',
+      defeats: [],
+      contractDefeats: 0,
+      behavioralDefeats: 0,
+      inconclusive: true,
+    };
+  }
+
   return {
     exitCode: 0,
     summary: 'clean',

@@ -14,6 +14,7 @@ test('no defeats + dry streak → exit 0 clean', () => {
     rounds: 5,
     strictBudget: false,
     failOnBehavioral: false,
+    independenceConfigured: true,
   });
   assert.equal(result.exitCode, 0);
   assert.equal(result.summary, 'clean');
@@ -103,6 +104,7 @@ test('partial inconclusive rounds with some dry rounds + no defeats → clean', 
     rounds: 5,
     strictBudget: false,
     failOnBehavioral: false,
+    independenceConfigured: true,
   });
   // Had a genuine dry streak (stopped by 'dry'), some inconclusive but not all
   // This is clean since the dry streak was achieved
