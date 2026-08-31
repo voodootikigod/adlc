@@ -83,10 +83,11 @@ for (const [label, payload] of [['null', null], ['undefined', undefined], ['stri
   test(`decide(): ${label} payload under enforcement fails CLOSED at the payload guard`, () => {
     const v = decide(payload, { env: ENF });
     assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
     assert.match(v.deny_reason, /unparseable tool payload while enforcing/);
   });
   test(`decide(): ${label} payload with enforcement off allows`, () => {
-    assert.deepEqual(decide(payload, { env: {} }), { allow_tool: true });
+    assert.deepEqual(decide(payload, { env: {} }), { decision: 'allow', allow_tool: true });
   });
 }
 
@@ -96,9 +97,10 @@ for (const [label, payload] of [['{}', {}], ['{toolCall:{}}', { toolCall: {} }],
   test(`decide(): ${label} (no tool name) under enforcement fails CLOSED`, () => {
     const v = decide(payload, { env: ENF });
     assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
     assert.match(v.deny_reason, /exposes no tool name/);
   });
   test(`decide(): ${label} (no tool name) with enforcement off allows`, () => {
-    assert.deepEqual(decide(payload, { env: {} }), { allow_tool: true });
+    assert.deepEqual(decide(payload, { env: {} }), { decision: 'allow', allow_tool: true });
   });
 }

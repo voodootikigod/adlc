@@ -58,7 +58,7 @@ test('shim: exits 0 and prints an allow verdict for a read tool', () => {
     input: JSON.stringify({ toolCall: { name: 'view_file', args: { AbsolutePath: '/x' } } }),
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
-  assert.deepEqual(JSON.parse(out), { allow_tool: true });
+  assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
 });
 test('shim: empty stdin under enforcement fails closed with allow_tool: false', () => {
   const out = execFileSync(process.execPath, [SHIM], {
@@ -66,6 +66,7 @@ test('shim: empty stdin under enforcement fails closed with allow_tool: false', 
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
   assert.equal(JSON.parse(out).allow_tool, false);
+  assert.equal(JSON.parse(out).decision, 'deny');
 });
 test('shim: scalar JSON under enforcement fails closed with allow_tool: false', () => {
   const out = execFileSync(process.execPath, [SHIM], {
@@ -73,6 +74,7 @@ test('shim: scalar JSON under enforcement fails closed with allow_tool: false', 
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
   assert.equal(JSON.parse(out).allow_tool, false);
+  assert.equal(JSON.parse(out).decision, 'deny');
 });
 test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', () => {
   // execFileSync only throws on non-zero exit; since the shim always exits 0,
@@ -85,6 +87,7 @@ test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed 
   });
   const v = JSON.parse(out);
   assert.equal(v.allow_tool, false);           // fail CLOSED under enforcement
+  assert.equal(v.decision, 'deny');
   assert.ok(/ADLC rails-guard/.test(v.deny_reason ?? ''));
 });
 test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', () => {
@@ -92,5 +95,5 @@ test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', (
     input: '{}', encoding: 'utf8',
     env: { ...process.env, ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },  // no ADLC_P4_ENFORCEMENT
   });
-  assert.deepEqual(JSON.parse(out), { allow_tool: true });
+  assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
 });

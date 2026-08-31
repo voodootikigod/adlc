@@ -7,7 +7,15 @@
 var enforcing = process.env.ADLC_P4_ENFORCEMENT === '1';
 function emit(v) { try { process.stdout.write(JSON.stringify(v)); } catch (_) {} process.exit(0); }
 function failSafe(reason) {
-  emit(enforcing ? { allow_tool: false, deny_reason: 'ADLC rails-guard: ' + reason } : { allow_tool: true });
+  emit(enforcing ? {
+    decision: 'deny',
+    reason: 'ADLC rails-guard: ' + reason,
+    allow_tool: false,
+    deny_reason: 'ADLC rails-guard: ' + reason,
+  } : {
+    decision: 'allow',
+    allow_tool: true,
+  });
 }
 
 var subcmd = process.argv[2];

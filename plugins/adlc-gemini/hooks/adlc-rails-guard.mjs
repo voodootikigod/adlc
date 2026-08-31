@@ -76,8 +76,13 @@ export function anchorPath(rawPath, payload) {
   return { abs: null, anchored: false };
 }
 
-const allow = () => ({ allow_tool: true });
-const deny = (reason) => ({ allow_tool: false, deny_reason: `ADLC rails-guard: ${reason}` });
+const allow = () => ({ decision: 'allow', allow_tool: true });
+const deny = (reason) => ({
+  decision: 'deny',
+  reason: `ADLC rails-guard: ${reason}`,
+  allow_tool: false,
+  deny_reason: `ADLC rails-guard: ${reason}`,
+});
 
 /**
  * A parsed payload the decision tree can reason about: a plain (non-array)
