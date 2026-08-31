@@ -43,12 +43,12 @@ export function ac140_denylistDerivesFromTrustRootLists() {
   assert.deepEqual(parseTrustRootList(syn.railsGuardCiText, REPO_ROOTS_IDENT), ['scripts/preflight.mjs', 'scripts/toolkit-floor.json']);
   assert.equal(stripComments("a // 'x'\nb /* \"y\" */ c 'kept // here'"), "a \nb  c 'kept // here'");
   // (5) fail closed: a source without its list, an empty list, or a non-relative entry is refused — never an empty denylist
-  assert.throws(() => buildDenylist({ ...syn, railsGuardCiText: 'const OTHER = ["x"];' }), { code: 'denylist-source-unparseable' });
-  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: 'export const DEFAULT_IMMUTABLE_TRUST_ROOTS = Object.freeze([]);' }), { code: 'denylist-source-unparseable' });
-  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: "export const DEFAULT_IMMUTABLE_TRUST_ROOTS = ['/etc/passwd'];" }), { code: 'denylist-source-unparseable' });
-  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: "export const DEFAULT_IMMUTABLE_TRUST_ROOTS = ['../x'];" }), { code: 'denylist-source-unparseable' });
-  assert.throws(() => buildDenylist({ trustRootsModuleText: null, railsGuardCiText: syn.railsGuardCiText }), { code: 'denylist-source-unparseable' });
-  assert.throws(() => buildDenylist({ ...syn, extras: 'not-an-array' }), { code: 'bad-config' });
+  assert.throws(() => buildDenylist({ ...syn, railsGuardCiText: 'const OTHER = ["x"];' }), { code: 'denylist-source-unparseable', exitCode: 1 });
+  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: 'export const DEFAULT_IMMUTABLE_TRUST_ROOTS = Object.freeze([]);' }), { code: 'denylist-source-unparseable', exitCode: 1 });
+  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: "export const DEFAULT_IMMUTABLE_TRUST_ROOTS = ['/etc/passwd'];" }), { code: 'denylist-source-unparseable', exitCode: 1 });
+  assert.throws(() => buildDenylist({ ...syn, trustRootsModuleText: "export const DEFAULT_IMMUTABLE_TRUST_ROOTS = ['../x'];" }), { code: 'denylist-source-unparseable', exitCode: 1 });
+  assert.throws(() => buildDenylist({ trustRootsModuleText: null, railsGuardCiText: syn.railsGuardCiText }), { code: 'denylist-source-unparseable', exitCode: 1 });
+  assert.throws(() => buildDenylist({ ...syn, extras: 'not-an-array' }), { code: 'bad-config', exitCode: 1 });
   assert.throws(() => dl.matches(42), TypeError);
 }
 test('AC140: the denylist is parsed from the pinned DEFAULT_IMMUTABLE_TRUST_ROOTS and REPO_TRUST_ROOTS texts plus the static extras; scripts/preflight.mjs and scripts/toolkit-floor.json intersect a shaped scope; an entry added to either source list extends it with no autopilot change; a missing or empty list fails closed', ac140_denylistDerivesFromTrustRootLists);
