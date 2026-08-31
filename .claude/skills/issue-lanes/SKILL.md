@@ -219,6 +219,22 @@ better than one chained script here — verified twice: a multi-step chain (reco
 commit + push in one invocation) got blocked even under explicit user authorization to sign,
 while the identical steps run one at a time each succeeded.
 
+**After pushing a fix to a skill/docs PR of your own (not a lane's), confirm it is still
+open** (`gh pr view <n> --json state`) before assuming the push will land in it — a PR can
+merge between your push attempts (the user merges on their own schedule), and a commit pushed
+to an already-merged PR's branch is stranded (never reaches `main`) with no error. Recover by
+`git cherry-pick <sha>` onto a fresh branch off current `main` and open it as its own PR.
+
+**After ANY failed `git pull --ff-only`, do not proceed until it has actually succeeded** —
+stash/resolve whatever blocked it, then re-run the pull and confirm `git log --oneline -1`
+shows the expected remote tip. A pull that failed once and was "set aside to handle later"
+leaves every subsequent command (including `adlc ticket complete`) silently operating on the
+STALE local HEAD — a real incident this session cost ~10 minutes chasing a misleading
+`TICKET_NOT_FOUND` error that was actually just "you're behind, the ticket exists on the
+remote you haven't fetched into HEAD yet." If a command's error looks confusing given what
+you just did, check `git merge-base --is-ancestor <expected-remote-sha> HEAD` before assuming
+the tool is wrong.
+
 ## 5. Relay and close out
 
 **A lane is not done when its PR opens — it is done when CI on that PR is actually
