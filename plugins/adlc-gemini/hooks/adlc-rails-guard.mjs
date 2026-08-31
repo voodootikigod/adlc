@@ -6,7 +6,7 @@
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, parse } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
@@ -369,13 +369,27 @@ export function preInvocation(payload, { env = process.env } = {}) {
   }
 }
 
-export function isVerificationCommand(cmd) {
+export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
 
   // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
   if (/[;&|<>]/.test(trimmed)) return false;
+
+  // Reject directory-redirecting flags pointing elsewhere
+  if (/(^|\s)(--prefix|--cwd|-C)\b/i.test(trimmed)) return false;
+
+  // If tool args specify a working directory, it must be inside or equal to the resolved root
+  if (root && toolArgs) {
+    const cwd = toolArgs.Cwd ?? toolArgs.cwd;
+    if (typeof cwd === 'string' && cwd) {
+      const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
+      const absRoot = resolve(root);
+      const rel = relative(absRoot, absCwd);
+      if (rel.startsWith('..') || isAbsolute(rel)) return false;
+    }
+  }
 
   // Reject help, version, list queries
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
@@ -404,7 +418,35 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
-    const root = resolveWorkspaceRoot(payload, env);
+    const sessionID = resolveSessionId({ payload, env });
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
+
+    let root = resolveWorkspaceRoot(payload, env);
+
+    // Fallback: discover repo root from absolute paths in transcript tool calls for headless sessions
+    if (!root && records.length > 0) {
+      for (const r of records) {
+        if (!r || typeof r !== 'object') continue;
+        const calls = Array.isArray(r.toolCalls) ? r.toolCalls
+          : (Array.isArray(r.tool_calls) ? r.tool_calls
+          : (r.toolCall ? [r.toolCall]
+          : (r.name ? [r] : [])));
+        for (const c of calls) {
+          const args = c?.args ?? c?.arguments ?? {};
+          const candidatePath = args.TargetFile ?? args.AbsolutePath ?? args.SearchDirectory ?? args.Cwd ?? args.cwd;
+          if (typeof candidatePath === 'string' && isAbsolute(candidatePath)) {
+            const found = findAdlcRoot(dirname(candidatePath)) ?? findAdlcRoot(candidatePath);
+            if (found) {
+              root = found;
+              break;
+            }
+          }
+        }
+        if (root) break;
+      }
+    }
+
     if (!root) {
       return {
         decision: 'continue',
@@ -437,9 +479,13 @@ export function onStop(payload, { env = process.env } = {}) {
       };
     }
 
-    const sessionID = resolveSessionId({ payload, env });
-    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
+    // Under enforcement with an active ticket, transcript evidence is required
+    if (!transcriptPath || records.length === 0) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session transcript is missing or unreadable under enforcement during Stop verification.',
+      };
+    }
 
     let lastMutationIdx = -1;
     let lastSuccessTestIdx = -1;
@@ -465,7 +511,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (name === 'run_command' || name === 'execute') {
           const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-          if (isVerificationCommand(cmd)) {
+          if (isVerificationCommand(cmd, { root, toolArgs: args })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
