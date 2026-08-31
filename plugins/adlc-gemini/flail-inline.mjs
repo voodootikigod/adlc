@@ -141,20 +141,22 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
   const records = parseTranscriptRecords(filePath, maxScanBytes);
   const steps = [];
   for (const obj of records) {
+    if (!obj || typeof obj !== 'object') {
+      if (typeof obj === 'string' && obj.trim()) steps.push([obj]);
+      continue;
+    }
     const stepLines = [];
-    if (obj.content && typeof obj.content === 'string') {
+    if (typeof obj.content === 'string') {
       stepLines.push(...obj.content.split('\n'));
     }
-    if (obj.text && typeof obj.text === 'string') {
+    if (typeof obj.text === 'string') {
       stepLines.push(...obj.text.split('\n'));
     }
-    if (obj.message && typeof obj.message === 'string') {
+    if (typeof obj.message === 'string') {
       stepLines.push(...obj.message.split('\n'));
     }
     if (stepLines.length > 0) {
       steps.push(stepLines);
-    } else if (typeof obj === 'string') {
-      steps.push([obj]);
     }
   }
   return steps;

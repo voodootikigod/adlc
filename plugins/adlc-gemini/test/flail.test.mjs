@@ -103,6 +103,12 @@ test('parseTranscriptLines extracts content and error text from JSONL transcript
     assert.equal(resolveTranscriptPath({ payload: { transcriptPath: 12345 } }), null);
     assert.equal(resolveTranscriptPath({ payload: { transcriptPath: true } }), null);
     assert.equal(resolveTranscriptPath({ payload: { transcriptPath: join(tmpDir, 'non-existent.jsonl') } }), null);
+
+    // parseTranscriptLines handles scalar null, boolean, and number JSONL records without throwing
+    const scalarPath = join(tmpDir, 'scalar.jsonl');
+    writeFileSync(scalarPath, ['null', 'true', '42', JSON.stringify({ content: 'Real log line' })].join('\n'));
+    const scalarLines = parseTranscriptLines(scalarPath);
+    assert.ok(scalarLines.includes('Real log line'));
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
