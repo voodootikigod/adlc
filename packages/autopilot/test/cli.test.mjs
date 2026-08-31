@@ -8,3 +8,8 @@ test('an unknown subcommand exits 1 (operational error, never the gate-fail code
   assert.equal(r.exitCode, 1);
   assert.match(String(r.text), /unknown subcommand: bogus-subcommand/);
 });
+
+test('SUBCOMMANDS names exactly the eight subcommands the bin help text documents, including init', async () => {
+  const { SUBCOMMANDS } = await import('../bin/adlc-autopilot.mjs');
+  assert.deepEqual(SUBCOMMANDS, ['loop', 'once', 'status', 'select', 'quota', 'triage', 'reset', 'init']);
+});
