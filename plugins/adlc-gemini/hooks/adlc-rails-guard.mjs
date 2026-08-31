@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
-import { loadTickets } from '../core-inline.mjs';
+import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, analyzeFlail } from '../flail-inline.mjs';
 
@@ -285,13 +285,9 @@ export function preInvocation(payload, { env = process.env } = {}) {
     const active = resolveActiveTicketId(root, env);
     if (!active.id || active.conflict) return { injectSteps: [] };
 
-    const pre = railPreconditions({ root, env });
-    const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
-    const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
-
     try {
-      const { tickets } = loadTickets(ticketsPath);
-      const ticket = tickets.find((t) => t.id === active.id);
+      const snapshot = loadTicketStoreReadOnly({ root, env });
+      const ticket = snapshot.get(active.id);
       if (ticket) {
         const declaredRails = ticket.rails?.length ? ticket.rails.join(', ') : 'none declared (trust roots only)';
         const declaredScope = ticket.scope?.length ? ticket.scope.join(', ') : 'unrestricted';

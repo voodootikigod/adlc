@@ -1,5 +1,5 @@
 {
-  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/agy-improvements",
+  "repo": ".",
   "base": "feat/antigravity-harness-improvements",
   "gate": {
     "build": "npm run test --prefix plugins/adlc-gemini",

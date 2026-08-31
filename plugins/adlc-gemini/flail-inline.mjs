@@ -87,6 +87,9 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  * Resolve transcript path for a given agy conversation ID or payload.
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
+  const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
+  if (direct && typeof direct === 'string' && existsSync(direct)) return direct;
+
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   let cid = cidFromPayload;
   if (!cid && !payload && typeof conversationId === 'string' && conversationId !== 'default_session') {
