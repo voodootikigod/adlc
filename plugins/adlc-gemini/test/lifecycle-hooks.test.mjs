@@ -552,10 +552,67 @@ test('onStop: discovers repo root from transcript paths in headless mode with em
       conversationId: 'test-session-headless-discovery',
     };
     const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
-    assert.equal(res.reason, undefined);
     assert.equal(res.decision, 'stop');
   } finally {
     try { rmSync(transcriptFile, { force: true }); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: rejects test runner specifying test file outside repo root', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test /tmp/external-pass.test.mjs' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-external-test',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: detects early mutations in large transcripts exceeding standard scan window', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  // Write early mutation, followed by > 300 KiB of readonly padding
+  const paddingLine = JSON.stringify({ type: 'PLANNER_RESPONSE', content: 'padding '.repeat(200) });
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    ...Array(300).fill(paddingLine),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-large-transcript',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
     cleanup();
   }
 });

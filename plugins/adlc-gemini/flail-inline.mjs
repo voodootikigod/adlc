@@ -116,13 +116,19 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   return null;
 }
 
-export function parseTranscriptRecords(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+export function parseTranscriptRecords(filePath, options = {}) {
+  const maxScanBytes = typeof options === 'number' ? options : (options?.maxScanBytes ?? MAX_SCAN_BYTES);
+  const readFull = typeof options === 'object' && options?.readFull === true;
+  const maxFullBytes = options?.maxFullBytes ?? (32 * 1024 * 1024);
   if (!filePath) return [];
   try {
     const stat = statSync(filePath);
     if (!stat.isFile()) return [];
     let content = '';
-    if (stat.size > maxScanBytes) {
+    if (readFull) {
+      if (stat.size > maxFullBytes) return [];
+      content = readFileSync(filePath, 'utf8');
+    } else if (stat.size > maxScanBytes) {
       const fd = openSync(filePath, 'r');
       const buf = Buffer.alloc(maxScanBytes);
       readSync(fd, buf, 0, maxScanBytes, stat.size - maxScanBytes);

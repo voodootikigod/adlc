@@ -391,6 +391,20 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
     }
   }
 
+  // If command includes arguments/paths, validate that positional paths do not point outside root
+  if (root) {
+    const tokens = trimmed.split(/\s+/);
+    for (const token of tokens) {
+      if (token.startsWith('/') || token.startsWith('\\')) {
+        const absRoot = resolve(root);
+        const rel = relative(absRoot, token);
+        if (rel.startsWith('..') || isAbsolute(rel)) return false;
+      } else if (token.includes('..')) {
+        return false;
+      }
+    }
+  }
+
   // Reject help, version, list queries
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
@@ -420,7 +434,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
     const sessionID = resolveSessionId({ payload, env });
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
+    const records = transcriptPath ? parseTranscriptRecords(transcriptPath, { readFull: true }) : [];
 
     let root = resolveWorkspaceRoot(payload, env);
 
