@@ -5,7 +5,14 @@ All lanes go in ONE message so they run concurrently. The fork inherits the pare
 (tickets, gates, lessons), so the prompt is the contract plus the mechanics, not a tutorial.
 
 ```
-You are lane-<n>. Resolve GitHub issue #<n> through the ADLC gates, exactly per the ticket you (as the parent) authored.
+You are lane-<n>, ONE of <N> sibling lanes the parent ALREADY LAUNCHED in parallel (lanes for
+issues <list the other issue numbers>). You inherited the parent's full conversation, including
+the issue-lanes skill's own "launch the lanes" step — that step is the PARENT's job and it is
+DONE; the other lanes already exist as separate forked agents. Never call the Agent tool
+yourself, for any reason, in this task — a nested fork call fails ("Fork is not available inside
+a forked worker") and, more importantly, is not your job. Resolve ONLY issue #<n>.
+
+Resolve GitHub issue #<n> through the ADLC gates, exactly per the ticket you (as the parent) authored.
 
 LANE FACTS
 - Worktree: <repo>/.worktrees/fix-<n> (branch fix/<n>-<slug>, base refs/remotes/origin/main = <sha>). node_modules is installed there. NEVER touch the main checkout or any other worktree.
@@ -38,3 +45,4 @@ REPORT BACK (this is what the parent relays; be concrete): ticket coldstart verd
 | commit `-F file` | the block-no-verify hook rejects `grep -n` in a commit chain |
 | cap at 8 rounds | large diffs do not converge; the residual is the human's call |
 | stop on permission denial | the classifier owns push/PR; an agent must not route around it |
+| state "you are lane N of M, siblings already launched" up front | a fork inherits the whole skill text (incl. "launch the lanes") and can mistake itself for the parent — two of four lanes independently tried to Agent-call the other three sibling issues before self-correcting (harmless: nested fork calls fail closed with no side effect, but wastes a turn) |

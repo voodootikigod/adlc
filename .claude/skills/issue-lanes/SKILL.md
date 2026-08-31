@@ -61,10 +61,24 @@ Selection rules, in order:
 1. `bug` + `P1-high` (or the user's `--label`), class **false-green** first — that is the
    product's signature risk.
 2. **One lane per package.** Two issues in the same package go in ONE lane or wait.
-3. **Skip the trust-root tier** unless the user explicitly wants the cross-model ceremony:
-   `packages/{rails-guard,prosecute,gate-manifest,build-gate,ticket-prune,ticket-sync}`,
-   `scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`, root `package.json`/lockfile,
-   `.adlc/tickets.json`, `scripts/preflight.mjs` (see `packages/prosecute/lib/tier.mjs`).
+3. **Check tiering per candidate — it is not just `packages/**`.** `packages/prosecute/lib/tier.mjs`
+   tiers a change on ANY ticket's declared rail globs, COMPLETED tickets included (issue #905).
+   Grep every completed ticket for a rail matching the candidate's exact path before assuming a
+   plugin or script is untiered:
+   ```bash
+   for f in $(grep -l '"rails"' .adlc/tickets/*.json); do node -e '
+   (function(){const t=JSON.parse(require("fs").readFileSync(process.argv[1]));
+   if(t.completed!==true) return; const rails=(t.rails||[]).join(" ");
+   if(/<candidate-path-fragment>/.test(rails)) console.log(t.id,"|",rails);})();' "$f"; done
+   ```
+   In this repo, `packages/**` and `.github/workflows/**` are ALWAYS tiered (T37/T38), so any
+   `packages/*` lane needs the 4b ceremony — but plugin directories vary PER PLUGIN: T37 also
+   rails `plugins/{pi,opencode,codex,claude-code}/**` specifically (NOT copilot/cursor/gemini/
+   herdr), so a plugin lane may or may not need the ceremony depending on which plugin it is.
+   Verified empirically: `adlc-copilot`/`adlc-gemini`/`adlc-herdr` lanes shipped WITHOUT the
+   ceremony (`gate` passed clean, 19/19); an `adlc-codex` lane needed it (T37 rails
+   `plugins/adlc-codex/**`) despite looking superficially identical to the other three. Do not
+   generalize "plugins are untiered" from one or two examples — check every candidate.
 4. Skip packages under an active rail (`.adlc/tickets/*.json` with `rails` and no
    `completed: true`) and areas with an in-flight program (e.g. `area:autopilot`).
 5. **Re-verify the premise at HEAD** for every candidate: `grep -n` the cited line in the
@@ -128,7 +142,12 @@ never conflict; a plain create records no manifest entry — by design).
 
 One `Agent` call per lane, all in ONE message, `subagent_type: "fork"` (inherits the tickets,
 gates and lessons you just loaded). Prompt from `references/lane-prompt.md` with the lane's
-worktree, branch, ticket id, issue number, package, rails, and new-test filename filled in.
+worktree, branch, ticket id, issue number, package, rails, and new-test filename filled in —
+**including the "you are lane N of M, siblings already launched" preamble**: a fork inherits
+this whole skill's text (including this very "launch the lanes" step) and can mistake itself
+for the parent, attempting to Agent-call the other sibling issues itself. Nested fork calls
+fail closed ("Fork is not available inside a forked worker") with no side effect, but cost a
+wasted turn — state the preamble explicitly rather than relying on "do not re-delegate" alone.
 Then do not touch lane files; work on the relay/skill/memory until the notifications arrive.
 
 The lane sequence the prompt enforces: P2 `adlc coldstart <id> --prompt-only` (self-audit) →
