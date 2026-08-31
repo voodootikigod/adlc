@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { planAction } from '../lib/actions.mjs';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -62,4 +62,31 @@ test('importing action.mjs does not itself spawn or notify (main() is guarded)',
   const before = Date.now();
   await import(`../bin/action.mjs?guardProbe=${Math.random()}`);
   assert.ok(Date.now() - before < 2000, 'import must not trigger main()');
+});
+
+test('isMainEntry: false when argv1 is undefined/empty, never calls pathToFileURL(undefined)', async () => {
+  const mod = await import('../bin/action.mjs');
+  assert.equal(mod.isMainEntry(undefined, import.meta.url), false);
+  assert.equal(mod.isMainEntry('', import.meta.url), false);
+  assert.equal(mod.isMainEntry(null, import.meta.url), false);
+});
+
+test('isMainEntry: true only when the module URL matches argv1s file URL exactly', async () => {
+  const mod = await import('../bin/action.mjs');
+  const url = pathToFileURL(actionBin).href;
+  assert.equal(mod.isMainEntry(actionBin, url), true);
+  assert.equal(mod.isMainEntry('/some/other/file.mjs', url), false);
+});
+
+test('handleMainFailure always exits with code 0, never a nonzero code', async () => {
+  const mod = await import('../bin/action.mjs');
+  const calls = [];
+  const originalExit = process.exit;
+  process.exit = (code) => { calls.push(code); };
+  try {
+    mod.handleMainFailure();
+  } finally {
+    process.exit = originalExit;
+  }
+  assert.deepEqual(calls, [0]);
 });

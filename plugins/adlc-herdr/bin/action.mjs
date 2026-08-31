@@ -74,10 +74,34 @@ async function main() {
   await notify('ADLC', 'internal error: unhandled action plan');
 }
 
+/**
+ * Whether this module is being run directly (`node action.mjs`) rather than
+ * imported. A pure function of its two inputs so it is unit-testable without
+ * spawning a process: `argv1` may legitimately be undefined (some invocation
+ * modes never set it), in which case this must return false WITHOUT calling
+ * pathToFileURL(undefined) — that throws. Exported so a test can assert the
+ * short-circuit directly, rather than relying on process.argv[1] happening
+ * to be truthy in every real invocation this repo's tests run under.
+ */
+export function isMainEntry(argv1, moduleUrl) {
+  if (!argv1) return false;
+  return moduleUrl === pathToFileURL(argv1).href;
+}
+
+/**
+ * main()'s catch-all: this dispatcher is advisory (a UI action, not an
+ * enforcing gate), so an unexpected internal error must never surface as a
+ * nonzero process exit to the herdr host — exported so a test can assert the
+ * exact exit code without needing to force a genuine rejection through
+ * main()'s otherwise fail-soft call chain (runHerdr/notify never reject).
+ */
+export function handleMainFailure() {
+  process.exit(0);
+}
+
 // Only run as a live hook when executed directly, not when imported (this
 // test suite imports the module to reach resolvePluginRoot() without
 // triggering a live herdr probe).
-const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
-  main().catch(() => process.exit(0));
+if (isMainEntry(process.argv[1], import.meta.url)) {
+  main().catch(handleMainFailure);
 }
