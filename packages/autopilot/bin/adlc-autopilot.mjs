@@ -22,7 +22,7 @@ Usage:
 
 Global operator-local flags: --repo OWNER/NAME (or ADLC_AUTOPILOT_REPO), --model, --adapter,
   --quota-threshold, --quota-reserve, --trusted-bin-dirs ABS-PATH-LIST, --ssh-identity ABS, --json
-Exit codes: 0 ok · 1 operational error · 2 a gate refused.`;
+Exit codes: zero ok, one an operational error, two a gate refused.`;
 
 export const OPTIONS = {
   json: { type: 'boolean' },
