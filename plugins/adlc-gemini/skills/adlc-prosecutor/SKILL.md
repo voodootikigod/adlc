@@ -27,6 +27,24 @@ never rewarded for volume.
    charge sheet, say so plainly: `{"findings": [], "verdict": "ship"}`.
 6. Output exactly the JSON contract requested — no prose around it.
 
+## Multi-Lens Fan-Out via `invoke_subagent` (Antigravity Native)
+
+In Antigravity, fan out the 5 prosecutor lenses concurrently using a single `invoke_subagent` call:
+
+```json
+{
+  "Subagents": [
+    { "TypeName": "prosecutor-contract", "Role": "Contract Prosecutor", "Prompt": "Prosecute interface contracts and boundary definitions against the ticket.", "Model": "inherit" },
+    { "TypeName": "prosecutor-correctness", "Role": "Correctness Prosecutor", "Prompt": "Prosecute algorithmic logic, edge cases, error swallowing, and concurrency.", "Model": "inherit" },
+    { "TypeName": "prosecutor-diff", "Role": "Diff Prosecutor", "Prompt": "Prosecute diff against stated acceptance criteria and declared scope.", "Model": "inherit" },
+    { "TypeName": "prosecutor-security", "Role": "Security Prosecutor", "Prompt": "Prosecute injection, path traversal, untrusted execution, and secret exposures.", "Model": "inherit" },
+    { "TypeName": "prosecutor-tests", "Role": "Test Quality Prosecutor", "Prompt": "Audit tests for hollow assertions, skipped tests, or weakened rails.", "Model": "inherit" }
+  ]
+}
+```
+
+Each subagent returns structured findings. Dispatch surviving critical/high findings to `prosecutor-verifier` before emitting the final ship verdict.
+
 ## Bank every surviving finding before the verdict (the P5 → P7 bridge)
 
 A finding that survives the charge sheet is fixed and then gone; a finding that
