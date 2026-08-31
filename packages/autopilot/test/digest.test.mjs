@@ -45,7 +45,11 @@ export async function ac69_digestProtocol() {
     assert.equal(ctx.records.load(7).digestPosted, false, 'the intent is persisted BEFORE the post and left false on failure');
     assert.equal(ctx.records.load(7).digestRunId, 'run-7-a');
     assert.equal(gh1.state.comments[20].length, 1, 'the comment did land on GitHub');
-    assert.ok(gh1.state.comments[20][0].startsWith(runSentinel('run-7-a')), 'the comment starts with the run sentinel');
+    // A HARDCODED literal, never derived from the live runSentinel import — that binding is
+    // exactly what a mutant changes, which would make a derived expectation blind to it
+    // (2026-08-31 mutation-gate finding, same class as the LIFECYCLE_OBSERVED_STATES bug).
+    assert.equal(runSentinel('run-7-a'), '<!-- adlc-autopilot:run run-7-a -->');
+    assert.ok(gh1.state.comments[20][0].startsWith('<!-- adlc-autopilot:run run-7-a -->'), 'the comment starts with the run sentinel');
     assert.ok(gh1.state.comments[20][0].includes('issue #7') && gh1.state.comments[20][0].includes('rounds: 0'), 'digest body names issue, rounds');
     const postsBefore = gh1.state.posts;
     const r2 = await postDigest({ ctx, record: ctx.records.load(7), outcome: 'pr-open' });
