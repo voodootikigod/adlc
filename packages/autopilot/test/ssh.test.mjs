@@ -145,7 +145,7 @@ export async function ac146_bindingUsesCopy() {
       writeFileSync(fx.paths.knownHosts, `${hostLine}\n`);
       const ctx4 = sshCtx(fx, { agentLines: [livePub] });
       const m4 = await prep(ctx4, fx, join(fx.root, 'm4'), { identityPath: liveKey, registeredKeys: [{ id: 9, key: livePub }] });
-      const bare = join(fx.root, 'live.git'); spawnSync('git', ['init', '-q', '--bare', bare]);
+      const bare = join(fx.root, 'live.git'); spawnSync('git', ['init', '-q', '--bare', bare]); spawnSync('git', ['--git-dir', bare, 'config', 'gc.auto', '0']); spawnSync('git', ['--git-dir', bare, 'config', 'gc.autoDetach', 'false']);
       const src = join(fx.root, 'live-src'); mkdirSync(src);
       const g = (args) => spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: src, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
       g(['init', '-q', '-b', 'main']); writeFileSync(join(src, 'f.txt'), 'live\n'); g(['add', '-A']); g(['commit', '-q', '-m', 'live']);

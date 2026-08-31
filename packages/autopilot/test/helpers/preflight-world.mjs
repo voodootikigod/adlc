@@ -37,6 +37,8 @@ export async function world({ seeded = {}, transport = 'file' } = {}) {
   const evilDir = join(fx.root, 'evil'); const evilBare = join(evilDir, 'pinned.git');
   mkdirSync(evilDir);
   git(fx.root, ['init', '-q', '--bare', pinnedBare]); git(fx.root, ['init', '-q', '--bare', evilBare]);
+  // No detached receive-side auto-gc: it keeps writing after a push returns and races the teardown rm (CI ENOTEMPTY flake).
+  for (const b of [pinnedBare, evilBare]) { git(fx.root, ['--git-dir', b, 'config', 'gc.auto', '0']); git(fx.root, ['--git-dir', b, 'config', 'gc.autoDetach', 'false']); }
   const ssh = transport === 'ssh';
   const pinnedUrl = ssh ? `ssh://git@localhost${pinnedBare}` : pinnedBare;
   const prefix = ssh ? `ssh://git@localhost${fx.root}/` : `${fx.root}/`; // a prefix of the pinned URL

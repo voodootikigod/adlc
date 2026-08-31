@@ -37,7 +37,15 @@ export const MANUAL_CAP = 1;
 // gate: `npm run test:gate -w packages/autopilot`) and are reported as skipped
 // otherwise — the mutation gate and the root suite must not pay for them per mutant.
 export const FULL = process.env.AUTOPILOT_GATE_FULL === '1';
-const fullOnly = { skip: FULL ? false : 'execution pass runs under AUTOPILOT_GATE_FULL=1 (npm run test:gate)' };
+// The FULL pass needs node >= 20: node 18's runner first cancels the queued gate tests when the
+// event loop drains, and with that held open its AC121 bite pass stalls past 18 minutes (vs ~3 on
+// node 20/24) — an EOL runtime is not worth a hung CI job. The skip is LOUD, the plain suite still
+// runs on 18, and the gate enforces wherever the root runner's AUTOPILOT_GATE_FULL segment runs on
+// node >= 20 (2026-08-30, #913 matrix).
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+const GATE_NODE_OK = NODE_MAJOR >= 20;
+if (process.env.AUTOPILOT_GATE_FULL === '1' && !GATE_NODE_OK) console.log(`skipped loudly: the full AC gate needs node >= 20 (running ${process.versions.node})`);
+const fullOnly = !GATE_NODE_OK ? { skip: `the full AC gate needs node >= 20 (running ${process.versions.node})` } : { skip: FULL ? false : 'execution pass runs under AUTOPILOT_GATE_FULL=1 (npm run test:gate)' };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..', '..');

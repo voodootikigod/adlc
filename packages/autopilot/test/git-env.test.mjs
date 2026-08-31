@@ -92,7 +92,7 @@ export function ac143_netGitTemplateAndVerify() {
     assert.equal(verifyNetGit({ netGit, expectedConfigSha256: configSha256, repoRoot }).code, 'net-config-tampered');
     assert.deepEqual(netGitArgv('/usr/bin/git', netGit, 'ls-remote', '--exit-code', URL, 'refs/heads/main'), ['/usr/bin/git', `--git-dir=${netGit}`, 'ls-remote', '--exit-code', URL, 'refs/heads/main']);
     // A real git accepts the template: ls-remote against a local bare fixture via NET_GIT resolves.
-    const bare = join(root, 'origin.git'); spawnSync('git', ['init', '-q', '--bare', bare]);
+    const bare = join(root, 'origin.git'); spawnSync('git', ['init', '-q', '--bare', bare]); spawnSync('git', ['--git-dir', bare, 'config', 'gc.auto', '0']); spawnSync('git', ['--git-dir', bare, 'config', 'gc.autoDetach', 'false']);
     writeNetGit({ netGit: join(root, 'net2.git'), repoRoot, remoteFetchUrl: bare, remotePushUrl: bare, sshWrapperPath: '/w' });
     const ls = spawnSync('git', [`--git-dir=${join(root, 'net2.git')}`, 'ls-remote', bare], { encoding: 'utf8', env: gitBaseEnv({ path: process.env.PATH, home: root }) });
     assert.equal(ls.status, 0, ls.stderr);
