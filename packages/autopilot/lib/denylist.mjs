@@ -13,7 +13,7 @@ import { active, registerSeams } from './mutations.mjs';
 
 registerSeams([
   'denylist.allowShrink', // config `extras` REPLACE the denylist instead of extending it
-  'denylist.staticOnly',  // the two parsed trust-root lists are ignored (AC 140)
+  'denylist.staticOnly',  // the two parsed trust-root lists are ignored
 ]);
 
 /** §4.2 (b): the static extras and the trust-root tier packages. */

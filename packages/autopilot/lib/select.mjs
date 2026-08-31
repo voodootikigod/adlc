@@ -11,9 +11,9 @@ import { scopeIntersects } from './denylist.mjs';
 import { active, registerSeams } from './mutations.mjs';
 
 registerSeams([
-  'select.ignoreLabels',        // the score ignores every label signal (AC 3)
-  'select.forceLiftsAll',       // --force lifts every exclusion, not only the STOP labels (AC 19)
-  'select.skipRemoteRefCheck',  // the selection-time ls-remote result is ignored (AC 97)
+  'select.ignoreLabels',        // the score ignores every label signal
+  'select.forceLiftsAll',       // --force lifts every exclusion, not only the STOP labels
+  'select.skipRemoteRefCheck',  // the selection-time ls-remote result is ignored
 ]);
 
 /* ---------- §4.3 score ---------- */
