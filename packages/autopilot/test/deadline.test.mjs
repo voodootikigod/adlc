@@ -3,7 +3,7 @@
 // GROUP (SIGTERM, SIGKILL 15 s later), a closed stdin unless the caller passes
 // bytes, and a stdout cap that kills the child. Fake children, fake clock.
 
-import { test, mock } from './helpers/node-test.mjs';
+import { test, mock, enableFakeTimers } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { createSpawner, DEADLINES, KILL_GRACE_MS, withRetry, RETRY_BACKOFF_MS } from '../lib/spawn.mjs';
 import { fakeSpawnImpl } from './helpers/fake-children.mjs';
@@ -31,7 +31,7 @@ export async function ac49_deadlineSignalsGroupThenKills() {
 test('AC49: the deadline wrapper SIGTERMs the process group, SIGKILLs after the grace, and fails timeout:<command>', { timeout: 60_000 }, ac49_deadlineSignalsGroupThenKills);
 test('AC49: on expiry the wrapper SIGTERMs the process group, SIGKILLs after the grace, and fails timeout:<command>', { timeout: 60_000 }, async () => {
   // The grace period is 15 s of real time in production; drive it with mocked timers.
-  mock.timers.enable({ apis: ['setTimeout'] });
+  enableFakeTimers(mock);
   try {
     const h = harness({ '/bin/stubborn': () => ({ ignoreSigterm: true, hang: true }) });
     const p = h.spawn({ argv: ['/bin/stubborn'], cwd: '/', env: {}, deadlineMs: 1000, label: 'npm ci' });

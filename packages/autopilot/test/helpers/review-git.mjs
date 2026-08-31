@@ -54,7 +54,7 @@ export function makeIssueWorktree({ repoRoot, issue, baseOid, token }) {
 }
 
 /** A bare repository usable as a LOCAL pinned remote URL. */
-export function bareRemote(dir) { mkdirSync(dir, { recursive: true }); git(dir, ['init', '-q', '--bare']); return dir; }
+export function bareRemote(dir) { mkdirSync(dir, { recursive: true }); git(dir, ['init', '-q', '--bare']); git(dir, ['config', 'gc.auto', '0']); git(dir, ['config', 'gc.autoDetach', 'false']); return dir; }
 
 /** Tip of `refs/heads/<branch>` in a bare repo, or null. */
 export function bareTip(bare, branch) {

@@ -52,6 +52,10 @@ export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.par
   writeFileSync(join(repoRoot, 'package.json'), '{"name":"fixture","private":true}\n');
   sh(['add', '-A']); sh(['commit', '-q', '-m', 'base']);
   spawnSync(GIT, ['init', '-q', '--bare', originPath], { env: base });
+  // Receive-side auto-gc DETACHES and keeps writing into origin.git after a push returns — the
+  // teardown's recursive rm then races it (ENOTEMPTY flake on the CI matrix, 2026-08-30).
+  spawnSync(GIT, ['--git-dir', originPath, 'config', 'gc.auto', '0'], { env: base });
+  spawnSync(GIT, ['--git-dir', originPath, 'config', 'gc.autoDetach', 'false'], { env: base });
   sh(['remote', 'add', 'origin', originPath]);
   sh(['push', '-q', originPath, 'main:refs/heads/main']);
   const baseOid = sh(['rev-parse', 'main']);
@@ -105,7 +109,7 @@ export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.par
     /** Every recorded git spawn whose verb is `push`. */
     pushes: () => recorder.filter((r) => r.argv[0] === GIT && r.argv.some((a) => a === 'push')),
     gitArgvs: () => recorder.filter((r) => r.argv[0] === GIT).map((r) => r.argv.slice(1).filter((a) => !a.startsWith('--git-dir='))),
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
   };
   return fx;
 }

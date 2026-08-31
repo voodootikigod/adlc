@@ -2,7 +2,7 @@
 // ticket AC5 — triage (shaping, trusted block, gate chain, CLARIFY effects) and
 // the durable attempt ledger with its journaled `reset --attempts`.
 
-import { test, mock } from './helpers/node-test.mjs';
+import { test, mock, enableFakeTimers } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -137,7 +137,7 @@ test('AC32: an OWNER issue with a block and an "## Acceptance criteria" list →
 
 export async function ac35_shapingBounds() {
   // (a) a shaping fake that never exits is killed at 5 minutes, group-signalled, no record, no GitHub write.
-  mock.timers.enable({ apis: ['setTimeout'] });
+  enableFakeTimers(mock);
   let h = makeTriageCtx({ issues: [ISSUE()], claude: () => ({ hang: true }) });
   try {
     const p = triage({ ctx: h.ctx, issue: ISSUE(), authorization: AUTHORIZED });

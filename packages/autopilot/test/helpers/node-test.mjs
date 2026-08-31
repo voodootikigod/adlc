@@ -14,3 +14,8 @@ export const gateExecuting = () => globalThis[GATE_EXEC_KEY] === true;
 
 export const test = (...args) => (gateExecuting() ? Promise.resolve() : nodeTest.test(...args));
 export const { mock, before, after, beforeEach, afterEach } = nodeTest;
+
+/** node >=20.12 takes `{ apis: [...] }`; node 18 takes the bare array — enable whichever this runtime speaks (CI matrix red, 2026-08-30). */
+export function enableFakeTimers(mock, apis = ['setTimeout']) {
+  try { mock.timers.enable({ apis }); } catch { mock.timers.enable(apis); }
+}
