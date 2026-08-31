@@ -104,10 +104,17 @@ test('onStop: returns decision: stop when enforcement is inactive', () => {
   }
 });
 
-test('onStop: intercepts unverified completion claims when enforcement is active', () => {
+test('onStop: intercepts unverified mutations when enforcement is active', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
-  writeFileSync(transcriptFile, JSON.stringify({ content: 'Work finished. TICKET-DONE' }) + '\n');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/feature.js' } }],
+    }),
+    JSON.stringify({ content: 'Work finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
     const payload = {
       workspacePaths: [root],
@@ -116,22 +123,26 @@ test('onStop: intercepts unverified completion claims when enforcement is active
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }
 });
 
-test('onStop: allows stop when tests were executed via run_command before completion claim', () => {
+test('onStop: allows stop when tests were executed via run_command after mutations', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/feature.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
       tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
       exit_code: 0,
     }),
-    JSON.stringify({ content: 'All tests passed. TICKET-DONE' }),
+    JSON.stringify({ content: 'All tests passed.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
@@ -147,12 +158,16 @@ test('onStop: allows stop when tests were executed via run_command before comple
   }
 });
 
-test('onStop: rejects plain prose mention of test command when no tool executed', () => {
+test('onStop: rejects plain prose mention of test command when mutations occurred and no tool executed', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/feature.js' } }],
+    }),
     JSON.stringify({ content: 'User says: please run npm test' }),
-    JSON.stringify({ content: 'All done. TICKET-DONE' }),
+    JSON.stringify({ content: 'All done.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
@@ -163,7 +178,7 @@ test('onStop: rejects plain prose mention of test command when no tool executed'
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }
@@ -198,10 +213,14 @@ test('onStop: rejects echo or printf commands that mention test runners as strin
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
       tool_calls: [{ name: 'run_command', args: { CommandLine: "echo 'npm test'" } }],
       exit_code: 0,
     }),
-    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+    JSON.stringify({ content: 'Finished.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
@@ -212,7 +231,7 @@ test('onStop: rejects echo or printf commands that mention test runners as strin
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }
@@ -249,10 +268,14 @@ test('onStop: rejects chained test commands with shell operators like npm test |
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
       tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test || true' } }],
       exit_code: 0,
     }),
-    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+    JSON.stringify({ content: 'Finished.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
@@ -263,7 +286,7 @@ test('onStop: rejects chained test commands with shell operators like npm test |
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }
@@ -275,10 +298,14 @@ test('onStop: rejects test record with missing exit code or failure status', () 
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
       tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
       // No exit_code or status: 'DONE'
     }),
-    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+    JSON.stringify({ content: 'Finished.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
@@ -289,7 +316,7 @@ test('onStop: rejects test record with missing exit code or failure status', () 
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }

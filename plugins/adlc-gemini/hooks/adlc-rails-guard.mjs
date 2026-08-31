@@ -395,114 +395,89 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
+    const root = resolveWorkspaceRoot(payload, env);
+    if (!root) return { decision: 'stop' };
+
+    const active = resolveActiveTicketId(root, env);
+    if (active.conflict) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
+      };
+    }
+    if (!active.id) return { decision: 'stop' };
+
+    // Validate that the active ticket is present in the validated ticket store
+    try {
+      const snapshot = loadTicketStoreReadOnly({ root, env });
+      if (!snapshot.get(active.id)) {
+        return {
+          decision: 'continue',
+          reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
+        };
+      }
+    } catch {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
+      };
+    }
+
     const sessionID = resolveSessionId({ payload, env });
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
     const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
 
-    const payloadClaim = [
-      payload?.lastMessage,
-      payload?.message,
-      payload?.content,
-      payload?.summary,
-      payload?.reason,
-    ].filter((s) => typeof s === 'string').join('\n');
+    let lastMutationIdx = -1;
+    let lastSuccessTestIdx = -1;
 
-    const root = resolveWorkspaceRoot(payload, env);
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      if (!r || typeof r !== 'object') continue;
 
-    const recentRecords = records.slice(-5);
-    const extractText = (r) => (r && typeof r === 'object' ? [r.content, r.text, r.message].filter((s) => typeof s === 'string').join('\n') : '');
-    const recentContent = recentRecords.map(extractText).join('\n') + '\n' + payloadClaim;
+      const calls = Array.isArray(r.toolCalls) ? r.toolCalls
+        : (Array.isArray(r.tool_calls) ? r.tool_calls
+        : (r.toolCall ? [r.toolCall]
+        : (r.name ? [r] : [])));
 
-    const claimsCompletion = recentContent.includes('TICKET-DONE');
-    if (claimsCompletion) {
-      if (!root) {
-        return {
-          decision: 'continue',
-          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved from trusted environment or host metadata.',
-        };
-      }
+      for (const c of calls) {
+        const name = c?.name ?? c?.toolName ?? '';
+        const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
+        const isMutating = classifyTool(name) === 'mutating'
+          || (classifyTool(name) !== 'readonly' && Boolean(args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory));
 
-      const active = resolveActiveTicketId(root, env);
-      if (active.conflict) {
-        return {
-          decision: 'continue',
-          reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
-        };
-      }
-      if (!active.id) return { decision: 'stop' };
-
-      // Validate that the active ticket is present in the validated ticket store
-      try {
-        const snapshot = loadTicketStoreReadOnly({ root, env });
-        if (!snapshot.get(active.id)) {
-          return {
-            decision: 'continue',
-            reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
-          };
+        if (isMutating) {
+          lastMutationIdx = i;
         }
-      } catch {
-        return {
-          decision: 'continue',
-          reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
-        };
-      }
 
-      if (!transcriptPath || records.length === 0) {
-        return {
-          decision: 'continue',
-          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but session transcript is unreadable or verification evidence is missing.',
-        };
-      }
+        if (name === 'run_command' || name === 'execute') {
+          const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
+          if (!isVerificationCommand(cmd)) continue;
 
-      let lastMutationIdx = -1;
-      let lastSuccessTestIdx = -1;
+          const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
+          const status = r?.status ?? c?.status;
+          const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
+          const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
 
-      for (let i = 0; i < records.length; i++) {
-        const r = records[i];
-        if (!r || typeof r !== 'object') continue;
-
-        const calls = Array.isArray(r.toolCalls) ? r.toolCalls
-          : (Array.isArray(r.tool_calls) ? r.tool_calls
-          : (r.toolCall ? [r.toolCall]
-          : (r.name ? [r] : [])));
-
-        for (const c of calls) {
-          const name = c?.name ?? c?.toolName ?? '';
-          const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
-          const isMutating = classifyTool(name) === 'mutating'
-            || (classifyTool(name) !== 'readonly' && Boolean(args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory));
-
-          if (isMutating) {
-            lastMutationIdx = i;
-          }
-
-          if (name === 'run_command' || name === 'execute') {
-            const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-            if (!isVerificationCommand(cmd)) continue;
-
-            const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
-            const status = r?.status ?? c?.status;
-            const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
-            const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
-
-            if (isExplicitSuccess && !isExplicitFailure) {
-              lastSuccessTestIdx = i;
-            }
+          if (isExplicitSuccess && !isExplicitFailure) {
+            lastSuccessTestIdx = i;
           }
         }
       }
+    }
 
+    // If mutations occurred under the active ticket, verification is required before stopping
+    if (lastMutationIdx !== -1) {
       if (lastSuccessTestIdx === -1) {
         return {
           decision: 'continue',
-          reason: 'ADLC Rails-Guard: Active ticket build requires running test/verification commands before completing (TICKET-DONE).',
+          reason: 'ADLC Rails-Guard: Active ticket has unverified file edits. Verification/test commands must be run before completing.',
         };
       }
 
       if (lastMutationIdx > lastSuccessTestIdx) {
         return {
           decision: 'continue',
-          reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing (TICKET-DONE).',
+          reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing.',
         };
       }
     }
