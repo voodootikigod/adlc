@@ -20,8 +20,8 @@ function listEntries(relDir, { dirs = false, files = false, ext = null } = {}) {
 }
 
 const HOOK_EVENT_NAMES = new Set([
-  'PreToolUse', 'PostToolUse', 'SessionStart', 'Stop',
-  'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'stop', 'beforeSubmitPrompt',
+  'PreToolUse', 'PostToolUse', 'SessionStart', 'Stop', 'PreInvocation',
+  'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'stop', 'beforeSubmitPrompt', 'preInvocation',
   'sessionStart', 'preCompact', 'subagentStart', 'subagentStop',
   'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop',
 ]);
@@ -196,8 +196,8 @@ test('filesystem-derived surface counts match marketing facts for every harness'
   assert.equal(surfaceCount(ag, 'agents'), listEntries('plugins/adlc-gemini/agents', { files: true, ext: '.md' }).length);
   assert.equal(surfaceCount(ag, 'skills'), listEntries('plugins/adlc-gemini/skills', { dirs: true }).length);
   assert.equal(surfaceCount(ag, 'hooks'), hookEventCount('plugins/adlc-gemini'));
-  assert.equal(surfaceCount(ag, 'commands'), 3);
-  assert.deepEqual(ag.surfaces.find((s) => s.key === 'commands')?.items, ['/adlc-init', '/adlc-status', '/adlc-doctor']);
+  assert.equal(surfaceCount(ag, 'commands'), 5);
+  assert.deepEqual(ag.surfaces.find((s) => s.key === 'commands')?.items, ['/adlc-init', '/adlc-plan', '/adlc-prosecute', '/adlc-status', '/adlc-doctor']);
 
   // Bundle notes that declare a surfaceKey must stay tied to that surface's count.
   for (const integration of INTEGRATIONS) {
