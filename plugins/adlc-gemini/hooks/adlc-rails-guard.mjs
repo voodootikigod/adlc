@@ -464,7 +464,11 @@ export function onStop(payload, { env = process.env } = {}) {
 
         for (const c of calls) {
           const name = c?.name ?? c?.toolName ?? '';
-          if (classifyTool(name) === 'mutating') {
+          const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
+          const isMutating = classifyTool(name) === 'mutating'
+            || (classifyTool(name) !== 'readonly' && Boolean(args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory));
+
+          if (isMutating) {
             lastMutationIdx = i;
           }
 

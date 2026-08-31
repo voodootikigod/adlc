@@ -353,14 +353,18 @@ test('onStop: rejects completion when active ticket is missing from ticket store
   }
 });
 
-test('onStop: rejects non-verification commands such as adlc ticket list or mocha --version', () => {
+test('onStop: rejects completion when an unrecognized path-bearing writer runs after tests', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npx adlc ticket list' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
       exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'set_file_contents', args: { TargetFile: 'src/config.json' } }],
     }),
     JSON.stringify({ content: 'Finished. TICKET-DONE' }),
   ];
@@ -373,7 +377,7 @@ test('onStop: rejects non-verification commands such as adlc ticket list or moch
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /requires running test\/verification commands before completing/);
+    assert.match(res.reason, /File edits occurred after the last test run/);
   } finally {
     cleanup();
   }
