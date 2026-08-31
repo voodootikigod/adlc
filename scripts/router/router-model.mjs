@@ -94,7 +94,10 @@ export const routerModel = {
       path: "plugins/adlc-codex/skills/adlc/SKILL.md",
       format: "minimal",
       frontmatter: "---\nname: adlc\ndescription: Route software work through the Agentic Development Lifecycle in Codex. Use when the user asks to apply ADLC, operate in ADLC, triage work, or choose the next ADLC gate.\n---\n",
-      slots: {},
+      slots: {
+        MODEL_PROMPT_NOTE: "",
+        COLDSTART_LLM_NOTE: "",
+      },
       includes: ["minimal:adversarial-loop"],
       local: {
         "body": "\nADLC_CODEX_SENTINEL_PHASE_ROUTER_V1\n\n# ADLC Router\n\nClassify the work before acting:\n\n- Trivial: direct edit, existing rails, one prosecution pass.\n- Bounded: write or identify rails, build, prosecute-lite.\n- Substantial: P1-P7 full lifecycle.\n- Architectural: P1 design alternatives, then full lifecycle.\n\nUse deterministic ADLC CLIs for pass/fail. Skills may recommend commands; they do not\ndeclare gates complete unless the relevant CLI and `.adlc/manifest.jsonl` evidence pass.\n\nStart with:\n\n```sh\nadlc preflight --json\n```\n\nFor strict phase assertions, use:\n\n```sh\nadlc run <p0|p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json\n```\n\nP0, P1, P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for\nthose phases.\n\n",
@@ -109,7 +112,10 @@ export const routerModel = {
       path: "plugins/adlc-pi/skills/adlc/SKILL.md",
       format: "minimal",
       frontmatter: "---\nname: adlc\ndescription: Route software work through the Agentic Development Lifecycle in Pi. Use when the user asks to apply ADLC, operate in ADLC, triage work, or choose the next ADLC gate.\n---\n",
-      slots: {},
+      slots: {
+        MODEL_PROMPT_NOTE: "",
+        COLDSTART_LLM_NOTE: "",
+      },
       includes: ["minimal:adversarial-loop"],
       local: {
         "body": "\n# ADLC Router (Pi Integration)\n\nClassify the work before acting:\n\n- Trivial: direct edit, existing rails, one prosecution pass.\n- Bounded: write or identify rails, build, prosecute-lite.\n- Substantial: P1-P7 full lifecycle.\n- Architectural: P1 design alternatives, then full lifecycle.\n\nUse deterministic ADLC CLIs for pass/fail. Skills may recommend commands; they do not declare gates complete unless the relevant CLI and `.adlc/manifest.jsonl` evidence pass.\n\nStart with:\n\n```sh\nadlc preflight --json\n```\n\nFor strict phase assertions, use:\n\n```sh\nadlc run <p0|p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json\n```\n\nP0, P1, P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for those phases.\n\n",
@@ -120,7 +126,10 @@ export const routerModel = {
       path: "plugins/adlc-opencode/skill/adlc.md",
       format: "table",
       frontmatter: "---\nname: adlc\ndescription: >-\n  Routes agentic development work to the right Agentic Development Lifecycle\n  (ADLC) gate from inside OpenCode. Use when shaping a spec or ticket, deciding\n  how to fan work out to models, protecting frozen rails during a build,\n  prosecuting a change before merge, or distilling repeated findings into\n  defenses. Triggers on \"shape this spec\", \"is this ticket ready\", \"freeze these\n  tests\", \"prosecute this change\", \"is this safe to merge\", \"ADLC\", \"which gate\",\n  \"spec-lint\", \"premortem\", \"coldstart\", \"rails-guard\", \"hollow-test\".\n---\n",
-      slots: {},
+      slots: {
+        MODEL_PROMPT_NOTE: "",
+        COLDSTART_LLM_NOTE: "",
+      },
       includes: ["table:head","table:rows-rest","table:adversarial"],
       local: {
         "intro": "\n# ADLC phase router (OpenCode)\n\nDescribe what you're doing; this routes you to the gate that fits. Gates run via\nthe `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support\n`--prompt-only` — inside OpenCode, the model answers the printed prompt, so no\nAPI key is required.\n",
@@ -133,7 +142,10 @@ export const routerModel = {
       path: "plugins/adlc-cursor/rules/adlc.mdc",
       format: "table",
       frontmatter: "---\ndescription: >-\n  Routes agentic development work to the right Agentic Development Lifecycle\n  (ADLC) gate from inside Cursor. Use when shaping a spec or ticket, deciding how\n  to fan work out to models, protecting frozen rails during a build, prosecuting a\n  change before merge, or distilling repeated findings into defenses. Triggers on\n  \"shape this spec\", \"is this ticket ready\", \"freeze these tests\", \"prosecute this\n  change\", \"is this safe to merge\", \"ADLC\", \"which gate\", \"spec-lint\", \"premortem\",\n  \"coldstart\", \"rails-guard\", \"hollow-test\".\nalwaysApply: false\n---\n",
-      slots: {},
+      slots: {
+        MODEL_PROMPT_NOTE: "",
+        COLDSTART_LLM_NOTE: "",
+      },
       includes: ["table:head","table:rows-rest","table:adversarial"],
       local: {
         "intro": "\n# ADLC phase router (Cursor)\n\nDescribe what you're doing; this routes you to the gate that fits. Gates run via\nthe `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support\n`--prompt-only` — inside Cursor the model answers the printed prompt, so no API\nkey is required. Run `/adlc-init` once per repo to create the `.adlc/` workspace\nand deploy the `/adlc-*` command palette into `.cursor/commands/`.\n",

@@ -92,7 +92,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   let cid = cidFromPayload;
-  if (!cid && !payload && typeof conversationId === 'string' && conversationId !== 'default_session') {
+  if (!cid && typeof conversationId === 'string' && conversationId !== 'default_session') {
     cid = conversationId;
   }
   if (!cid || typeof cid !== 'string') return null;

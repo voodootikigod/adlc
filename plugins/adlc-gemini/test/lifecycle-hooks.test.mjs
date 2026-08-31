@@ -159,3 +159,29 @@ test('onStop: allows stop when session concludes without claiming TICKET-DONE', 
     cleanup();
   }
 });
+
+test('onStop: resolves transcript via ANTIGRAVITY_APP_DATA_DIR when payload lacks conversationId but env provides session ID', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const fakeDataDir = join(root, 'fake-app-data');
+  const sessionLogDir = join(fakeDataDir, 'brain', 'session-abc', '.system_generated', 'logs');
+  mkdirSync(sessionLogDir, { recursive: true });
+  writeFileSync(join(sessionLogDir, 'transcript.jsonl'), JSON.stringify({ content: 'Finished task. TICKET-DONE' }) + '\n');
+
+  const customEnv = {
+    ...env,
+    ANTIGRAVITY_APP_DATA_DIR: fakeDataDir,
+    ADLC_SESSION_ID: 'session-abc',
+  };
+
+  try {
+    const payload = {
+      workspacePaths: [root],
+      // Note: No conversationId in payload
+    };
+    const res = onStop(payload, { env: customEnv });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /requires running test\/verification commands before completing/);
+  } finally {
+    cleanup();
+  }
+});
