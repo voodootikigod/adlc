@@ -382,3 +382,34 @@ test('onStop: rejects completion when an unrecognized path-bearing writer runs a
     cleanup();
   }
 });
+
+test('onStop: discovers repo root from transcript tool call paths in headless mode with empty workspacePaths', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const externalDir = tmpdir();
+  const transcriptFile = join(externalDir, `test-transcript-${Date.now()}.jsonl`);
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'index.js') } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-headless',
+    };
+    const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    try { rmSync(transcriptFile, { force: true }); } catch (_) {}
+    cleanup();
+  }
+});

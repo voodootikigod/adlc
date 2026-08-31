@@ -395,6 +395,10 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
+    const sessionID = resolveSessionId({ payload, env });
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
+
     const payloadClaim = [
       payload?.lastMessage,
       payload?.message,
@@ -403,39 +407,27 @@ export function onStop(payload, { env = process.env } = {}) {
       payload?.reason,
     ].filter((s) => typeof s === 'string').join('\n');
 
-    const root = resolveWorkspaceRoot(payload, env);
-    if (!root) {
-      if (payloadClaim.includes('TICKET-DONE')) {
-        return {
-          decision: 'continue',
-          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved for verification.',
-        };
+    let root = resolveWorkspaceRoot(payload, env);
+
+    // If root wasn't found from direct payload/env, try discovering it from absolute paths in transcript tool calls
+    if (!root && records.length > 0) {
+      for (const r of records) {
+        if (!r || typeof r !== 'object') continue;
+        const calls = Array.isArray(r.toolCalls) ? r.toolCalls : (Array.isArray(r.tool_calls) ? r.tool_calls : (r.toolCall ? [r.toolCall] : []));
+        for (const c of calls) {
+          const args = c?.args ?? c?.arguments ?? {};
+          const candidatePath = args.TargetFile ?? args.AbsolutePath ?? args.SearchDirectory ?? args.Cwd ?? args.cwd;
+          if (typeof candidatePath === 'string' && isAbsolute(candidatePath)) {
+            const found = findAdlcRoot(dirname(candidatePath)) ?? findAdlcRoot(candidatePath);
+            if (found) {
+              root = found;
+              break;
+            }
+          }
+        }
+        if (root) break;
       }
-      return { decision: 'stop' };
     }
-
-    const active = resolveActiveTicketId(root, env);
-    if (!active.id || active.conflict) return { decision: 'stop' };
-
-    // Validate that the active ticket is present in the validated ticket store
-    try {
-      const snapshot = loadTicketStoreReadOnly({ root, env });
-      if (!snapshot.get(active.id)) {
-        return {
-          decision: 'continue',
-          reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
-        };
-      }
-    } catch {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
-      };
-    }
-
-    const sessionID = resolveSessionId({ payload, env });
-    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const records = transcriptPath ? parseTranscriptRecords(transcriptPath) : [];
 
     const recentRecords = records.slice(-5);
     const extractText = (r) => (r && typeof r === 'object' ? [r.content, r.text, r.message].filter((s) => typeof s === 'string').join('\n') : '');
@@ -443,6 +435,32 @@ export function onStop(payload, { env = process.env } = {}) {
 
     const claimsCompletion = recentContent.includes('TICKET-DONE');
     if (claimsCompletion) {
+      if (!root) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Completion claimed (TICKET-DONE), but repository workspace root cannot be resolved for verification.',
+        };
+      }
+
+      const active = resolveActiveTicketId(root, env);
+      if (!active.id || active.conflict) return { decision: 'stop' };
+
+      // Validate that the active ticket is present in the validated ticket store
+      try {
+        const snapshot = loadTicketStoreReadOnly({ root, env });
+        if (!snapshot.get(active.id)) {
+          return {
+            decision: 'continue',
+            reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
+          };
+        }
+      } catch {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
+        };
+      }
+
       if (!transcriptPath || records.length === 0) {
         return {
           decision: 'continue',
