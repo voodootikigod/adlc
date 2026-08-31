@@ -76,3 +76,24 @@ test('running cli.mjs directly with an unknown command still dispatches (guard f
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /unknown command "not-a-command"/);
 });
+
+// The guard keys on argv[1] (the script path) — not argv[2] (the first CLI
+// argument). With NO CLI argument at all (bare `node cli.mjs`), argv[2] is
+// undefined; a guard reading the wrong slot would decline to dispatch and the
+// bin would exit 0 having silently done nothing (this exact off-by-one is
+// what the mutation gate found: every OTHER test here also supplies a second
+// argv entry — --help or a command — so argv[1] and argv[2] were both truthy
+// in every case and could not distinguish the two). The default command with
+// no argument is "init", which writes to projectRoot — run it against a
+// throwaway tmpdir so the assertion never touches the real checkout.
+test('running cli.mjs directly with NO CLI argument still dispatches (argv[1], not argv[2], is the entry check)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'opencode-cli-bare-'));
+  try {
+    const r = spawnSync(process.execPath, [BIN], { encoding: 'utf8', cwd: dir });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /adlc-opencode init:/,
+      'a bare invocation (argv[2] undefined) must still dispatch — the guard reads argv[1]');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
