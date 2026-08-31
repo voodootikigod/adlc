@@ -11,6 +11,20 @@
           }
         ]
       }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs preinvocation",
+        "timeout": 15
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs stop",
+        "timeout": 15
+      }
     ]
   }
 }

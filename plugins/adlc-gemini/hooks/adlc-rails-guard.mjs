@@ -7,7 +7,8 @@
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
-import { checkRail, classifyTool, isShellTool, resolveActiveTicketId } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
+import { loadTickets } from '../core-inline.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, analyzeFlail } from '../flail-inline.mjs';
 
@@ -271,6 +272,81 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   console.log(`Context Depth (Tool Calls): ${tracker.depth(sessionID)}`);
   console.log(`Session Compacted: ${tracker.isCompacted(sessionID)}`);
   console.log(`Flail Status: ${flail.verdict.toUpperCase()}${flail.summary ? ` (${flail.summary})` : ''}`);
+}
+
+export function preInvocation(payload, { env = process.env } = {}) {
+  try {
+    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+      .find((s) => typeof s === 'string' && s.trim());
+    const candidateRoot = ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd();
+    const root = findAdlcRoot(candidateRoot);
+    if (!root) return { injectSteps: [] };
+
+    const active = resolveActiveTicketId(root, env);
+    if (!active.id || active.conflict) return { injectSteps: [] };
+
+    const pre = railPreconditions({ root, env });
+    const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
+    const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
+
+    try {
+      const { tickets } = loadTickets(ticketsPath);
+      const ticket = tickets.find((t) => t.id === active.id);
+      if (ticket) {
+        const declaredRails = ticket.rails?.length ? ticket.rails.join(', ') : 'none declared (trust roots only)';
+        const declaredScope = ticket.scope?.length ? ticket.scope.join(', ') : 'unrestricted';
+        const enf = env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE (advisory)';
+        return {
+          injectSteps: [
+            {
+              ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} (${ticket.title ?? 'No title'}) | Declared Scope: ${declaredScope} | Frozen Rails: ${declaredRails} | Enforcement: ${enf}`,
+            },
+          ],
+        };
+      }
+    } catch {
+      return { injectSteps: [] };
+    }
+
+    return { injectSteps: [] };
+  } catch {
+    return { injectSteps: [] };
+  }
+}
+
+export function onStop(payload, { env = process.env } = {}) {
+  try {
+    const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+    if (!enforcing) return { decision: 'stop' };
+
+    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+      .find((s) => typeof s === 'string' && s.trim());
+    const candidateRoot = ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd();
+    const root = findAdlcRoot(candidateRoot);
+    if (!root) return { decision: 'stop' };
+
+    const active = resolveActiveTicketId(root, env);
+    if (!active.id || active.conflict) return { decision: 'stop' };
+
+    const sessionID = resolveSessionId({ payload, env });
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    const steps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
+    const recentContent = steps.slice(-5).flat().join('\n');
+
+    if (recentContent.includes('TICKET-DONE')) {
+      const hasTestCommand = steps.flat().some((line) => /npm (test|run test)|node --test|adlc (hollow-test|rails-guard|preflight)/i.test(line));
+      if (!hasTestCommand) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Active ticket build requires running test/verification commands before completing (TICKET-DONE).',
+        };
+      }
+    }
+
+    return { decision: 'stop' };
+  } catch {
+    return { decision: 'stop' };
+  }
 }
 
 export function printDoctor(root = process.cwd(), env = process.env) {
