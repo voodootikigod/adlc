@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { readActiveTicketPointer, resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
@@ -360,7 +361,14 @@ async function main() {
 // not when imported — the drift test imports this module for its pure
 // exports (classifyRiskTier, stopReview, ...) and must not trigger a live
 // stdin read.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+//
+// pathToFileURL, never `file://${argv[1]}`: Node percent-encodes
+// import.meta.url (a space becomes %20) but a manually built template
+// string does not, so ANY install path containing a space (or other
+// percent-encoded character) made this comparison always false — main()
+// silently never ran and every lifecycle hook it backs exited 0 with no
+// output, indistinguishable from "nothing to report".
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   main().catch((error) => {
     process.stdout.write(`${JSON.stringify({ systemMessage: `ADLC advisory hook could not complete: ${error.message}` })}\n`);
