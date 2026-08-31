@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop } from '../hooks/adlc-rails-guard.mjs';
@@ -783,6 +783,73 @@ test('preInvocation: strips natural-language injection attempts from ticket meta
     assert.doesNotMatch(msg, /DROP TABLE/);
     assert.match(msg, /valid\/path\/\*\*/);
     assert.match(msg, /src\/\*\*/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects symlinked test path resolving outside repository root', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const externalTest = join(tmpdir(), `external-test-${Date.now()}.mjs`);
+  writeFileSync(externalTest, 'console.log("pass");\n');
+  mkdirSync(join(root, 'test'), { recursive: true });
+  const symlinkPath = join(root, 'test', 'linked.test.mjs');
+  symlinkSync(externalTest, symlinkPath);
+
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test test/linked.test.mjs' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-symlink-test',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    try { rmSync(externalTest, { force: true }); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: rejects npm test after package.json mutation and requires immutable test runner', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'package.json' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-package-mutated',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
   } finally {
     cleanup();
   }

@@ -5,8 +5,16 @@
 // editor-agnostic checkRail() and emits agy's { allow_tool, deny_reason } verdict.
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+
+function realpathOr(p) {
+  try {
+    return existsSync(p) ? realpathSync(p) : p;
+  } catch {
+    return p;
+  }
+}
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
@@ -370,7 +378,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
   }
 }
 
-export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
+export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMutated = false } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -381,28 +389,33 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   // Reject directory-redirecting flags and test-filtering/skipping flags
   if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--grep|-g)\b/i.test(trimmed)) return false;
 
-  // If tool args specify a working directory, it must be inside or equal to the resolved root
-  if (root && toolArgs) {
+  const realRoot = root ? realpathOr(resolve(root)) : null;
+
+  // If tool args specify a working directory, it must resolve via realpath to inside or equal to the root
+  if (realRoot && toolArgs) {
     const cwd = toolArgs.Cwd ?? toolArgs.cwd;
     if (typeof cwd === 'string' && cwd) {
       const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-      const absRoot = resolve(root);
-      const rel = relative(absRoot, absCwd);
+      const realCwd = realpathOr(absCwd);
+      const rel = relative(realRoot, realCwd);
       if (rel.startsWith('..') || isAbsolute(rel)) return false;
     }
   }
 
-  // If command includes arguments/paths, validate that positional paths do not point outside root
-  if (root) {
+  // If command includes arguments/paths, validate that all positional paths resolve inside root
+  if (realRoot) {
     const tokens = trimmed.split(/\s+/);
     for (const rawToken of tokens) {
       const token = rawToken.replace(/^["']|["']$/g, '');
       if (token.startsWith('/') || token.startsWith('\\')) {
-        const absRoot = resolve(root);
-        const rel = relative(absRoot, token);
+        const realToken = realpathOr(token);
+        const rel = relative(realRoot, realToken);
         if (rel.startsWith('..') || isAbsolute(rel)) return false;
-      } else if (token.includes('..')) {
-        return false;
+      } else if (token.includes('/') || token.includes('\\') || token.includes('..')) {
+        const absToken = resolve(root, token);
+        const realToken = realpathOr(absToken);
+        const rel = relative(realRoot, realToken);
+        if (rel.startsWith('..') || isAbsolute(rel)) return false;
       }
     }
   }
@@ -411,8 +424,10 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // Strict verification runners
-  if (/^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+  // If package.json was mutated, mutable npm script aliases cannot be trusted as verification
+  if (!packageManifestMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+
+  // Strict immutable verification runners
   if (/^(node\s+(--test|scripts\/test\/))/i.test(trimmed)) return true;
   if (/^(adlc|npx\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
   if (/^npx\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
@@ -506,6 +521,7 @@ export function onStop(payload, { env = process.env } = {}) {
     let callSeq = 0;
     let lastMutationCallIdx = -1;
     let lastSuccessTestCallIdx = -1;
+    let packageManifestMutated = false;
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
@@ -521,16 +537,20 @@ export function onStop(payload, { env = process.env } = {}) {
         const currentCallIdx = callSeq;
         const name = c?.name ?? c?.toolName ?? '';
         const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
+        const filePath = args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory;
         const isMutating = classifyTool(name) === 'mutating'
-          || (classifyTool(name) !== 'readonly' && Boolean(args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory));
+          || (classifyTool(name) !== 'readonly' && Boolean(filePath));
 
         if (isMutating) {
           lastMutationCallIdx = currentCallIdx;
+          if (typeof filePath === 'string' && /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(filePath)) {
+            packageManifestMutated = true;
+          }
         }
 
         if (name === 'run_command' || name === 'execute') {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? '').trim();
-          if (isVerificationCommand(cmd, { root, toolArgs: args })) {
+          if (isVerificationCommand(cmd, { root, toolArgs: args, packageManifestMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
