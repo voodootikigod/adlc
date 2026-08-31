@@ -413,37 +413,57 @@ export function onStop(payload, { env = process.env } = {}) {
         };
       }
 
-      const hasTestCommand = records.some((r) => {
-        if (!r || typeof r !== 'object') return false;
+      let lastMutationIdx = -1;
+      let lastSuccessTestIdx = -1;
+
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        if (!r || typeof r !== 'object') continue;
+
         const calls = Array.isArray(r.toolCalls) ? r.toolCalls
           : (Array.isArray(r.tool_calls) ? r.tool_calls
           : (r.toolCall ? [r.toolCall]
           : (r.name ? [r] : [])));
 
-        return calls.some((c) => {
+        for (const c of calls) {
           const name = c?.name ?? c?.toolName ?? '';
-          if (name !== 'run_command' && name !== 'execute') return false;
-          const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
-          if (typeof cmd !== 'string' || !cmd) return false;
+          if (classifyTool(name) === 'mutating') {
+            lastMutationIdx = i;
+          }
 
-          // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
-          if (/[;&|<>]/.test(cmd)) return false;
+          if (name === 'run_command' || name === 'execute') {
+            const cmd = (c?.args?.CommandLine ?? c?.args?.command ?? c?.args?.cmd ?? '').trim();
+            if (typeof cmd !== 'string' || !cmd) continue;
 
-          const isTestRunner = /^(npm\s+(test|run\s+test)|npx\s+(adlc|mocha|jest|vitest)|node\s+(--test|scripts\/test\/)|adlc\s+(hollow-test|rails-guard|preflight))(\s+|$)/i.test(cmd);
-          if (!isTestRunner) return false;
+            // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
+            if (/[;&|<>]/.test(cmd)) continue;
 
-          const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
-          if (typeof exitCode === 'number' && exitCode !== 0) return false;
-          const isError = r?.status === 'ERROR' || r?.status === 'error';
-          if (isError) return false;
-          return true;
-        });
-      });
+            const isTestRunner = /^(npm\s+(test|run\s+test)|npx\s+(adlc|mocha|jest|vitest)|node\s+(--test|scripts\/test\/)|adlc\s+(hollow-test|rails-guard|preflight))(\s+|$)/i.test(cmd);
+            if (!isTestRunner) continue;
 
-      if (!hasTestCommand) {
+            const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
+            const status = r?.status ?? c?.status;
+            const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
+            const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
+
+            if (isExplicitSuccess && !isExplicitFailure) {
+              lastSuccessTestIdx = i;
+            }
+          }
+        }
+      }
+
+      if (lastSuccessTestIdx === -1) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: Active ticket build requires running test/verification commands before completing (TICKET-DONE).',
+        };
+      }
+
+      if (lastMutationIdx > lastSuccessTestIdx) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing (TICKET-DONE).',
         };
       }
     }

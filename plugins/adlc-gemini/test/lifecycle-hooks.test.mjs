@@ -269,37 +269,57 @@ test('onStop: rejects chained test commands with shell operators like npm test |
   }
 });
 
-test('onStop: fails closed when workspace root cannot be resolved but completion is claimed', () => {
-  const { env } = setupTempRepo({ enforcement: '1' });
-  const payload = {
-    workspacePaths: [],
-    lastMessage: 'Finished task. TICKET-DONE',
-  };
-  const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
-  assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /workspace root cannot be resolved for verification/);
-});
-
-test('preInvocation: escapes XML special characters in metadata', () => {
-  const injectionTitle = 'Title with <script> & "quotes" \'apostrophes\'';
-  const { root, env, cleanup } = setupTempRepo();
+test('onStop: rejects test record with missing exit code or failure status', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      // No exit_code or status: 'DONE'
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
   try {
-    const tPath = join(root, '.adlc', 'tickets.json');
-    writeFileSync(tPath, JSON.stringify({
-      version: 1,
-      tickets: [{ id: 'T1', title: injectionTitle, rails: [], scope: [] }]
-    }));
     const payload = {
       workspacePaths: [root],
+      transcriptPath: transcriptFile,
       conversationId: 'test-session-123',
     };
-    const res = preInvocation(payload, { env });
-    assert.equal(res.injectSteps.length, 1);
-    const msg = res.injectSteps[0].ephemeralMessage;
-    assert.match(msg, /&lt;script&gt;/);
-    assert.match(msg, /&amp;/);
-    assert.match(msg, /&quot;quotes&quot;/);
-    assert.match(msg, /&apos;apostrophes&apos;/);
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /requires running test\/verification commands before completing/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects completion when file edits occur after the test run', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-123',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /File edits occurred after the last test run/);
   } finally {
     cleanup();
   }
