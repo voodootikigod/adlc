@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { detectBackend } from '@adlc/fleet/lib/sandbox.mjs';
-import { runOuterGates, gateOrderFromPreflight, checkGateOrder, EXPECTED_GATES, ensureTrackingRef, releaseTrackingRef, spawnInGateSandbox, ZERO_OID } from '../lib/gates.mjs';
+import { runOuterGates, gateOrderFromPreflight, gateArgvFor, checkGateOrder, EXPECTED_GATES, ensureTrackingRef, releaseTrackingRef, spawnInGateSandbox, ZERO_OID } from '../lib/gates.mjs';
 import { createGateMirror, cloneGateRepo } from '../lib/mirror.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 import { makeCtx } from './helpers/gates-ctx.mjs';
@@ -122,7 +122,7 @@ export async function ac141_trackingRefNeverClobbered() {
     assert.equal(git(f.root, ['rev-parse', ref]), f.baseOid, 'a pre-existing equal ref survives the bracket');
     git(f.root, ['update-ref', ref, f.attestedHead]);
     f.ctx.recorder.length = 0;
-    await assert.rejects(() => ensureTrackingRef({ ctx: f.ctx, cwd: f.root, baseOid: f.baseOid }), (e) => e.code === 'base-ref-conflict');
+    await assert.rejects(() => ensureTrackingRef({ ctx: f.ctx, cwd: f.root, baseOid: f.baseOid }), (e) => e.code === 'base-ref-conflict' && e.exitCode === 2, 'GateRepoError carries exitCode 2 (cli.mjs contract: 1 operational / 2 gate)');
     assert.equal(f.ctx.recorder.filter((s) => s.argv[0] === FAKE_BWRAP).length, 0, 'zero gate spawns');
     assert.equal(git(f.root, ['rev-parse', ref]), f.attestedHead, 'the different value is never clobbered');
     git(f.root, ['update-ref', '-d', ref]);
@@ -135,7 +135,7 @@ export async function ac141_trackingRefNeverClobbered() {
     // A ref that appears between the read and the create.
     const real = f.ctx.git.local;
     f.ctx.git.local = async (cwd, args, o) => { const r = await real(cwd, args, o); if (args[0] === 'rev-parse' && r.status !== 0) git(f.root, ['update-ref', ref, f.attestedHead]); return r; };
-    await assert.rejects(() => ensureTrackingRef({ ctx: f.ctx, cwd: f.root, baseOid: f.baseOid }), (e) => e.code === 'base-ref-conflict');
+    await assert.rejects(() => ensureTrackingRef({ ctx: f.ctx, cwd: f.root, baseOid: f.baseOid }), (e) => e.code === 'base-ref-conflict' && e.exitCode === 2, 'GateRepoError carries exitCode 2 (cli.mjs contract: 1 operational / 2 gate)');
     assert.equal(git(f.root, ['rev-parse', ref]), f.attestedHead, 'the racing value is left in place');
   } finally { f.cleanup(); }
 }
@@ -319,3 +319,10 @@ export async function ac149_gateMetadataCheckedBeforeHostGit() {
   } finally { f.cleanup(); }
 }
 test('AC149: a gate that touches the clone\'s .git config or hooks is refused by a FILE-level check before any host git runs inside that clone, and every host git in a clone carries the host-safe overrides', ac149_gateMetadataCheckedBeforeHostGit);
+
+test('AC122: GatesError carries the documented exitCode contract (1 operational / 2 gate) at every throw site — gateOrderFromPreflight (unparseable preflight) and gateArgvFor (a non-node gate argv)', () => {
+  for (const [bad, code] of [['no buildGates() at all', 'preflight-unparseable'], ['function buildGates() { return [', 'preflight-unparseable']]) {
+    assert.throws(() => gateOrderFromPreflight(bad), (e) => e.code === code && e.exitCode === 2, code);
+  }
+  assert.throws(() => gateArgvFor({ name: 'x', argv: ['bash', '-c', 'evil'] }, { node: '/pinned/node', baseOid: 'a'.repeat(40) }), (e) => e.code === 'preflight-order-drift' && e.exitCode === 2);
+});
