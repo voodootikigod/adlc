@@ -535,7 +535,7 @@ describe('{base} substitution in review command', () => {
       [
         '--review-cmd', fakeReviewCmd,
         '--commit', 'HEAD',
-        '--plants', '2',
+        '--plants', '2', '--min-plants', '1',
         '--min-recall', '0',
         '--scorer', 'string', // offline: default judge needs an LLM
         '--json',
@@ -598,7 +598,7 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
   it('default scorer (judge) with NO LLM provider → exit 1, refuses to string-match', () => {
     const result = spawnSync('node', [BIN,
       '--review-cmd', `node ${scriptPath} {base}`,
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--json',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0', '--json',
     ], {
       cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: 60000,
       env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', ADLC_PROVIDER: '' },
@@ -610,7 +610,7 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
   it('--scorer string runs but PRINTS A WARNING that the number is untrustworthy', () => {
     const result = runCli([
       '--review-cmd', `node ${scriptPath} {base}`,
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--scorer', 'string', '--json',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
     ], dir);
     assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
     assert.ok(/NOT trustworthy|gameab|echo/i.test(result.stderr), `expected legacy warning, got: ${result.stderr}`);
@@ -638,7 +638,7 @@ describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () 
       [
         '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
         '--commit', 'HEAD',
-        '--plants', '3',
+        '--plants', '3', '--min-plants', '1',
         '--min-recall', '0.5',
         '--scorer', 'string',
         '--json',
@@ -673,7 +673,7 @@ describe('E2E: file restoration after run', () => {
       [
         '--review-cmd', 'node -e "process.stdout.write(\'ok\\n\')"',
         '--commit', 'HEAD',
-        '--plants', '3',
+        '--plants', '3', '--min-plants', '1',
         '--min-recall', '0',
         '--scorer', 'string',
       ],
@@ -721,7 +721,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('same-family judge + --review-provider → warns by default, still passes the gate', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--review-provider', 'anthropic', '--json',
     ]);
     assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
@@ -731,7 +731,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('same-family judge + --review-provider + --strict → gate-fails (exit 2)', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--review-provider', 'anthropic', '--strict', '--json',
     ]);
     assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
@@ -741,7 +741,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('a claude alias for --review-provider is still recognized as the same family under --strict', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--review-provider', 'claude', '--strict', '--json',
     ]);
     assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
@@ -750,7 +750,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('different --review-provider from the judge → no warning, gate governed only by recall', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--review-provider', 'openai', '--json',
     ]);
     assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
@@ -760,7 +760,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('--strict without --review-provider is an operational error (exit 1)', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--strict',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0', '--strict',
     ]);
     assert.equal(result.status, 1, `expected opError exit 1, got ${result.status}: ${result.stderr}`);
     assert.ok(/--strict requires --review-provider/.test(result.stderr), result.stderr);
@@ -769,7 +769,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   it('no --review-provider at all → no comparison, no warning', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0', '--json',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0', '--json',
     ]);
     assert.equal(result.status, 0);
     assert.ok(!/same model family|independence/i.test(result.stderr), result.stderr);
@@ -810,7 +810,7 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
   it('agy + --tier mid + --review-provider anthropic --strict → gate-fails (both are Claude)', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--tier', 'mid', '--review-provider', 'anthropic', '--strict', '--json',
     ]);
     assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
@@ -820,7 +820,7 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
   it('agy + --tier cheap + --review-provider gemini --strict → gate-fails (both are Gemini)', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--tier', 'cheap', '--review-provider', 'gemini', '--strict', '--json',
     ]);
     assert.equal(result.status, 2, `expected gate-fail exit 2, got ${result.status}: ${result.stderr}`);
@@ -829,7 +829,7 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
   it('agy + --tier cheap + --review-provider anthropic → no warning (genuinely different families)', () => {
     const result = run([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
-      '--commit', 'HEAD', '--plants', '3', '--min-recall', '0',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
       '--tier', 'cheap', '--review-provider', 'anthropic', '--json',
     ]);
     assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);

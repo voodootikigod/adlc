@@ -63,6 +63,7 @@ export function printScorecard(scorecard) {
   console.log('');
   console.log(`review-calibration — commit ${commit}  [scorer: ${scorer}]`);
   console.log('─'.repeat(60));
+  console.log(`Plants:          ${total}`);
   console.log(`Overall recall:  ${pct(recall)}  (${caught}/${total} plants caught)`);
   console.log(`Min recall gate: ${pct(minRecall)}  [${recallPass ? 'PASS' : 'FAIL'}]`);
   console.log(`Precision:       ${pct(precision)}  (${falsePositives} spurious finding(s))`);

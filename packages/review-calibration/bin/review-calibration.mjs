@@ -36,6 +36,7 @@ const { values } = parseArgs({
     plants:         { type: 'string', default: '8' },
     'min-recall':   { type: 'string', default: '0.5' },
     'min-precision':{ type: 'string' },
+    'min-plants':   { type: 'string', default: '4' },
     scorer:         { type: 'string', default: 'judge' }, // judge | string
     files:          { type: 'string' },
     'plants-file':  { type: 'string' },
@@ -66,6 +67,10 @@ Options:
   --plants <n>          Number of bugs to plant (default: 8)
   --min-recall <f>      Minimum recall to pass the gate (default: 0.5)
   --min-precision <f>   Optional minimum precision to also require
+  --min-plants <n>      Minimum valid-plant count required to report a recall
+                        measurement (default: 4). Below this, the sample is
+                        too small to mean anything — refuses with exit 1
+                        instead of printing a scorecard.
   --scorer <mode>       judge (default; cheap-model semantic match) |
                         string (LEGACY location-only — gameable by echoing,
                         prints a warning; not a trustworthy recall number)
@@ -140,6 +145,7 @@ const commitRef  = values.commit;
 const maxPlants  = parseInt(values.plants, 10);
 const minRecall  = parseFloat(values['min-recall']);
 const minPrecision = values['min-precision'] != null ? parseFloat(values['min-precision']) : null;
+const minPlants  = parseInt(values['min-plants'], 10);
 const scorerMode = values.scorer;
 const filesFlag  = values.files ?? '';
 const tier       = values.tier;
@@ -149,6 +155,7 @@ const reviewProvider = values['review-provider'];
 const strict     = values.strict;
 
 if (isNaN(maxPlants) || maxPlants < 1)  opError('--plants must be a positive integer');
+if (isNaN(minPlants) || minPlants < 1)  opError(`--min-plants must be a positive integer, got: ${values['min-plants']}`);
 if (isNaN(minRecall) || minRecall < 0 || minRecall > 1) opError('--min-recall must be between 0 and 1');
 if (minPrecision != null && (isNaN(minPrecision) || minPrecision < 0 || minPrecision > 1)) {
   opError('--min-precision must be between 0 and 1');
@@ -246,6 +253,13 @@ if (values['plants-file']) {
 const { valid: validPlants, equivalent } = filterEquivalentMutants(plants, cwd);
 if (validPlants.length === 0) {
   opError(`all ${plants.length} plant(s) were equivalent mutants (no behavioral discriminator) — cannot calibrate`);
+}
+if (validPlants.length < minPlants) {
+  opError(
+    `only ${validPlants.length} valid plant(s) (--min-plants requires ${minPlants}) — ` +
+    'the sample is too small to certify a recall measurement; raise --plants, adjust the ' +
+    'target files, or lower --min-plants if this small a sample is deliberate.'
+  );
 }
 const equivalentExcluded = equivalent.length;
 
