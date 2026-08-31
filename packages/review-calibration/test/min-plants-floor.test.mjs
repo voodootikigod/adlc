@@ -185,9 +185,10 @@ describe('review-calibration --min-plants floor (#751)', () => {
     assert.ok(/Plants:\s*4/i.test(result.stdout), `expected a prominent "Plants: 4" line, got:\n${result.stdout}`);
   });
 
-  it('--help documents --min-plants and its default', () => {
+  it('--help documents --min-plants, its <n> argument, its default, and refuses with exit 1', () => {
     const result = runCli(['--help'], dir);
-    assert.ok(/--min-plants/.test(result.stdout), result.stdout);
-    assert.ok(/\b4\b/.test(result.stdout), 'help text should mention the default of 4');
+    assert.ok(result.stdout.includes('--min-plants <n>'), result.stdout);
+    assert.ok(/default: 4/.test(result.stdout), 'help text should state the default of 4');
+    assert.ok(result.stdout.includes('refuses with exit 1'), result.stdout);
   });
 });
