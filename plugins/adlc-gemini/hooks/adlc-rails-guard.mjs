@@ -374,11 +374,8 @@ export function isVerificationCommand(cmd, { root, toolArgs } = {}) {
   const trimmed = cmd.trim();
   if (!trimmed) return false;
 
-  // Reject shell chaining or operators that can mask test failures (e.g. `npm test || true`, `npm test ; true`)
-  if (/[;&|<>]/.test(trimmed)) return false;
-
-  // Reject shell substitutions or variables that could dynamically resolve paths/commands
-  if (/[\$`]/.test(trimmed)) return false;
+  // Reject newlines, shell chaining, pipes, redirects, substitutions, or operators that can mask test failures
+  if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
 
   // Reject directory-redirecting flags pointing elsewhere
   if (/(^|\s)(--prefix|--cwd|-C)\b/i.test(trimmed)) return false;
@@ -427,7 +424,7 @@ export function isReadonlyCommand(cmd) {
   const trimmed = cmd.trim();
   if (!trimmed) return false;
   // Any shell redirection, chaining, or piping could mutate state
-  if (/[;&|<>]/.test(trimmed)) return false;
+  if (/[\r\n;&|<>]/.test(trimmed)) return false;
   return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date)(\s+|$)/i.test(trimmed);
 }
 
@@ -505,8 +502,9 @@ export function onStop(payload, { env = process.env } = {}) {
       };
     }
 
-    let lastMutationIdx = -1;
-    let lastSuccessTestIdx = -1;
+    let callSeq = 0;
+    let lastMutationCallIdx = -1;
+    let lastSuccessTestCallIdx = -1;
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
@@ -518,13 +516,15 @@ export function onStop(payload, { env = process.env } = {}) {
         : (r.name ? [r] : [])));
 
       for (const c of calls) {
+        callSeq++;
+        const currentCallIdx = callSeq;
         const name = c?.name ?? c?.toolName ?? '';
         const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
         const isMutating = classifyTool(name) === 'mutating'
           || (classifyTool(name) !== 'readonly' && Boolean(args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory));
 
         if (isMutating) {
-          lastMutationIdx = i;
+          lastMutationCallIdx = currentCallIdx;
         }
 
         if (name === 'run_command' || name === 'execute') {
@@ -536,25 +536,25 @@ export function onStop(payload, { env = process.env } = {}) {
             const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
 
             if (isExplicitSuccess && !isExplicitFailure) {
-              lastSuccessTestIdx = i;
+              lastSuccessTestCallIdx = currentCallIdx;
             }
           } else if (!isReadonlyCommand(cmd)) {
-            lastMutationIdx = i;
+            lastMutationCallIdx = currentCallIdx;
           }
         }
       }
     }
 
     // If mutations occurred under the active ticket, verification is required before stopping
-    if (lastMutationIdx !== -1) {
-      if (lastSuccessTestIdx === -1) {
+    if (lastMutationCallIdx !== -1) {
+      if (lastSuccessTestCallIdx === -1) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: Active ticket has unverified file edits. Verification/test commands must be run before completing.',
         };
       }
 
-      if (lastMutationIdx > lastSuccessTestIdx) {
+      if (lastMutationCallIdx > lastSuccessTestCallIdx) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing.',
