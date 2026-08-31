@@ -285,6 +285,42 @@ test('AC2: session_shutdown with no active ticket appends nothing', async () => 
 // degrades to a notify.
 // =========================================================================
 
+// =========================================================================
+// #927 — pending-acceptance classification: a ticket-done-claimed that is not
+// resolved by an adlc-accept marks the shutdown kind 'pending-acceptance'.
+// Manifest remains the base of record (the acceptance.ok here is the hint).
+// =========================================================================
+
+test('buildShutdownEvidence: done-claim without accept marks pending-acceptance', () => {
+  const done = [gateEvent('e1', 'ticket-done-claimed')];
+  const out = buildShutdownEvidence({ entries: done, ticketId: 'T1' });
+  assert.ok(out, 'done-claim unresolved by accept is pending');
+  assert.equal(out.kind, 'pending-acceptance');
+});
+
+test('buildShutdownEvidence: accept(ok) resolves the done-claim', () => {
+  const cleared = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: cleared, ticketId: 'T1' }), null, 'accept resolves pending-acceptance');
+});
+
+test('buildShutdownEvidence: deny still takes precedence over pending-acceptance classification', () => {
+  const both = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'rail-deny', { path: 'x' })];
+  const out = buildShutdownEvidence({ entries: both, ticketId: 'T1' });
+  assert.ok(out);
+  assert.equal(out.kind, 'unresolved', 'deny/revert outrank the pending hint');
+});
+
+test('buildShutdownEvidence: no ticket id → done-claims alone are not pending', () => {
+  const done = [gateEvent('e1', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: done, ticketId: null }), null, 'pending needs a ticket binding');
+});
+
+// =========================================================================
+// AC3 — /adlc-rollback surfaces a select of entry digests and forks the chosen
+// entry; select=undefined forks nothing; a sessionManager without getBranch
+// degrades to a notify.
+// =========================================================================
+
 test('buildRollbackCandidates: message entries newest-first, pre-failure entries preferred', () => {
   const branch = [
     msg('m1', 'user', 'start'),

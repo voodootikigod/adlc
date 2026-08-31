@@ -233,3 +233,45 @@ test('AC5: an advisory gate (unvetted tool) does NOT emit a gate-notice', async 
     assert.ok(!pi.messages.some((m) => m.msg.customType === 'adlc-gate-notice'), 'no notice for a non-deny event');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// =========================================================================
+// #927/#936 — the session_start widget hints: P7 staleness rides the manifest
+// read (fail-silent); pendingAcceptance rides this session's own branch when
+// a done-claim lacks a resolving accept.
+// =========================================================================
+
+test('AC3: P7 staleness renders when manifest carries stale lesson-foundry', async () => {
+  const root = makeRepo({} = {});
+  try {
+    // Overwrite the fixture manifest with a lesson-foundry entry old enough
+    // (30 days) to cross the default 14-day threshold.
+    const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), JSON.stringify({ gate: 'lesson-foundry', type: 'lesson-foundry', at: old }) + '\n');
+    const { ctx } = await boot(root);
+    const w = lastWidget(ctx);
+    assert.ok(w.content.some((l) => /P7 stale:/.test(l)), `P7 stale line rendered: ${JSON.stringify(w.content)}`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('AC3: manifest read failure degrades silently (no P7 hint, no error)', async () => {
+  const root = makeRepo();
+  try {
+    // Make the manifest unreadable: a directory at the manifest path makes
+    // readOwnManifestChain's legacy flat-file read throw.
+    mkdirSync(join(root, '.adlc', 'manifest.jsonl'), { recursive: true });
+    const { ctx } = await boot(root);
+    const w = lastWidget(ctx);
+    assert.ok(!w.content.some((l) => /P7 stale:/.test(l)), 'no P7 hint on unreadable manifest');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('AC3: P7 hint suppressed when lesson-foundry is fresh', async () => {
+  const root = makeRepo();
+  try {
+    const fresh = new Date().toISOString();
+    writeFileSync(join(root, '.adlc', 'manifest.jsonl'), JSON.stringify({ gate: 'lesson-foundry', type: 'lesson-foundry', at: fresh }) + '\n');
+    const { ctx } = await boot(root);
+    const w = lastWidget(ctx);
+    assert.ok(!w.content.some((l) => /P7 stale:/.test(l)), 'fresh P7 entry → no hint');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

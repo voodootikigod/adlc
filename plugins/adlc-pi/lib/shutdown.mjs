@@ -18,9 +18,12 @@ import { recordGateEvent } from './evidence.mjs';
 
 const SHUTDOWN_MAX_EVENTS = 10;
 
-// A gate event that RESOLVES prior denies/reverts: a clean gate pass
-// ('adlc-gate-run' with exit code 0) or a recorded acceptance ('adlc-accept'
-// that succeeded). Everything after the last such event is still "open".
+// Pending-acceptance hint (#927): a ticket-done-claimed event with no later
+// adlc-accept(ok) marks the shutdown kind 'pending-acceptance' instead of
+// 'unresolved'. The manifest is the base of record (the p6-acceptance-packet
+// entry type resolves), so this session-side classification is only the hint
+// that the completion-listener and the widget use; deny/revert events still
+// outrank the hint as 'unresolved'.
 function resolvesState(d) {
   if (!d || typeof d.type !== 'string') return false;
   if (d.type === 'adlc-gate-run' && d.code === 0) return true;
@@ -51,10 +54,19 @@ export function buildShutdownEvidence({ entries, ticketId = null } = {}) {
     if (resolvesState(d)) lastResolvedIdx = i;
   });
   const unresolved = events.filter((d, i) => i > lastResolvedIdx && isStop(d.type));
-  if (unresolved.length === 0) return null;
+  // Pending-acceptance hint is only meaningful when a ticket bound (never a
+  // bare done-claim with no binding ticket). Deny/revert outranks the hint.
+  let pendingAcceptance = false;
+  if (unresolved.length === 0 && ticketId) {
+    pendingAcceptance = events.some((d, i) => i > lastResolvedIdx && d.type === 'ticket-done-claimed');
+    if (!pendingAcceptance) return null;
+  } else if (unresolved.length === 0) {
+    return null;
+  }
 
   const recent = unresolved.slice(-SHUTDOWN_MAX_EVENTS);
   return {
+    kind: pendingAcceptance ? 'pending-acceptance' : 'unresolved',
     ticketId,
     unresolvedCount: unresolved.length,
     events: recent.map((d) => ({

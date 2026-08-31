@@ -1,0 +1,25 @@
+{
+  "allowedSuppressions": [],
+  "body": "GitHub issues: https://github.com/voodootikigod/adlc/issues/927 , https://github.com/voodootikigod/adlc/issues/936\n\n=== CONTEXT ===\nplugins/adlc-pi/lib/shutdown.mjs records a 'session-shutdown-open-ticket' evidence entry when a session ends with unresolved denies/reverts, but a ticket claimed DONE and never accepted leaves no signal — /adlc-accept depends on the human remembering. Separately, P7 (lesson-foundry/skill-rot) only runs when a human remembers /adlc-maintain; pi has no scheduler. Widget line capacity exists (3 lines) and renderWidgetLines is pure.\n\n=== TASK ===\n1. pendingAcceptance detection: extend buildShutdownEvidence (plugins/adlc-pi/lib/shutdown.mjs) to also scan gate events for the last ticket-done-claimed vs last adlc-accept(ok:true); when a done-claim with no resolving accept exists, the shutdown payload gains detail.kind='pending-acceptance'. Manifest (readOwnManifestChain) is the base of record for the session_start side; the session-file scan is a hint only. NO packet auto-generation — shutdown stays cleanup-only (adlc accept requires ticketHash/storeHash/bindingScope/packetHash; validated against packages/runner/lib/acceptance.mjs).\n2. Widget: renderWidgetLines (plugins/adlc-pi/lib/widget.mjs) accepts pendingAcceptance and p7StaleDays in state. Priority for the third line: pendingAcceptance > p7Stale > lastGateEvent. Keep the 3-line cap and WIDGET_MAX_LINE truncation.\n3. P7 staleness: at session_start in lib/extension.mjs, read the own manifest chain (read-only, try/catch -> null on any error — fail-silent), compute days since latest lesson-foundry/skill-rot entry, render one widget line when >= threshold. Threshold default 14, overridable via env ADLC_P7_STALE_DAYS.\n4. Tests: extend plugins/adlc-pi/test/widget.test.mjs (new states, priority), extension.test.mjs / widget-wiring.test.mjs (staleness feed + pendingAcceptance wiring), shutdown evidence builder tests.\n5. Docs: docs/integrations/pi.md P6 row moves from 'Design intent' to the shipped nudge behavior; P7 row softened likewise; plugins/adlc-pi/README.md gains a short paragraph on the nudge.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: a session whose only ADLC event is ticket-done-claimed (no accept) produces buildShutdownEvidence output with kind='pending-acceptance'. VERIFY: node --test plugins/adlc-pi/test; add a case asserting the classification.\n- AC2: widget priority — pendingAcceptance beats p7StaleDays beats lastGateEvent for the third line; still <=3 lines, <=WIDGET_MAX_LINE per line. VERIFY: widget.test.mjs priority + truncation cases.\n- AC3: P7 staleness renders only at threshold; ADLC_P7_STALE_DAYS overrides; manifest read failure yields NO widget change and NO error. VERIFY: extension wiring test with injected entries and injected failure.\n- AC4: shutdown remains non-blocking and packet-free (cleanup-only) — no writes introduced into the shutdown path. VERIFY: test asserting no fs writes called in the listener (existing pattern).\n- AC5: docs updated; full plugin suite (npm test in plugins/adlc-pi) green; issues #927 and #936 close by the PR.",
+  "budget": "direct",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "A144",
+  "rails": [
+    "plugins/adlc-pi/lib/",
+    "plugins/adlc-pi/test/"
+  ],
+  "scope": [
+    "plugins/adlc-pi/lib/shutdown.mjs",
+    "plugins/adlc-pi/lib/widget.mjs",
+    "plugins/adlc-pi/lib/extension.mjs",
+    "plugins/adlc-pi/test/widget.test.mjs",
+    "plugins/adlc-pi/test/extension.test.mjs",
+    "plugins/adlc-pi/test/widget-wiring.test.mjs",
+    "plugins/adlc-pi/test/completion-prosecute.test.mjs",
+    "plugins/adlc-pi/README.md",
+    "docs/integrations/pi.md"
+  ],
+  "title": "adlc-pi: P6 acceptance-pending shutdown nudge + P7 staleness widget (#927, #936)"
+}

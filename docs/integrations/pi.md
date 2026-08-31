@@ -24,10 +24,10 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | Native `adlc_prosecute` tool: deterministic P5 loop (§4) | **Shipped** — in-session fan-out → verify → loop-until-dry over write-disabled children; live proof `scripts/pi-live-prosecute.mjs` (required, Node 22 leg) |
 | `TICKET-DONE` completion listener → prosecution nudge (§4) | **Shipped** |
 | Native `adlc_gate` tool + compaction defense (§Phase 4) | **Shipped** — LLM-backed gates keyless via the session model; rail context survives compaction |
-| P6 integrate + `/adlc-accept` + rollback (§Phase 4) | **Shipped** — accept is command-driven; rollback path lands the revert |
+| P6 integrate + `/adlc-accept` + rollback (§Phase 4) | **Shipped** — accept is command-driven; rollback path lands the revert. Shutdown additionally marks a claimed-done-but-unaccepted ticket, and the next session's widget prioritizes `P6 pending: run /adlc-accept` (over P7-stale, over last-gate) |
 | npm publication: `@adlc/pi` release-ready + folds into lockstep `/release` (§5) | **Shipped + published** — `@adlc/pi` is on npm, so the `pi install npm:@adlc/pi` (or project-scoped `pi install -l npm:@adlc/pi`) one-liner works today. Version-matrix smoke (`scripts/pi-version-matrix.mjs`, weekly cron) tracks upstream pi drift |
-| P6 `session_shutdown` auto-capture (§2 table) | **Design intent** — acceptance is `/adlc-accept`-driven today |
-| In-harness scheduled P7 distillation (§2 table) | **Design intent** — pi has no `/schedule`; CI cron is the substrate |
+| P6 `session_shutdown` pending-acceptance nudge (§2 table) | **Shipped** — no packet auto-generation (acceptance remains human); the shutdown evidence builder classifies done-claimed-not-accepted as `kind:'pending-acceptance'`, and the widget pushes `/adlc-accept` at next session_start |
+| P7 staleness widget nudge (§2 table) | **Shipped as a hint** — pi has no `/schedule`, so CI cron remains the substrate; the session_start manifest scan renders `P7 stale: lesson-foundry/skill-rot Nd ago` once evidence crosses `ADLC_P7_STALE_DAYS` (default 14). |
 
 ---
 
