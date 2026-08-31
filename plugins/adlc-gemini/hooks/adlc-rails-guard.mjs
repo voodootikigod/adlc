@@ -170,7 +170,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
         const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptSteps });
 
-        const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
+        const flailEnforcing = env?.ADLC_FLAIL_ENFORCEMENT === '1';
         const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
 
         if (flailRes?.verdict === 'flail') {

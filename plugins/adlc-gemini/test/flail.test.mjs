@@ -154,6 +154,7 @@ test('runFromStdin denies mutating tools when session is flailing under enforcem
 
     const env = {
       ADLC_P4_ENFORCEMENT: '1',
+      ADLC_FLAIL_ENFORCEMENT: '1',
       ANTIGRAVITY_APP_DATA_DIR: root,
     };
 
