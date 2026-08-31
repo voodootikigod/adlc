@@ -21,7 +21,7 @@ import { registerSeams, active } from './mutations.mjs';
 registerSeams([
   'gitRunner.inheritEnv',          // spawns inherit the orchestrator's (seeded) environment
   'gitRunner.noOverlay',           // net() carries no GIT_CONFIG_* identity table
-  'gitRunner.identityRowsDropped', // the overlay omits rows 3–5 (the identity rewrites)
+  'gitRunner.identityRowsDropped', // the overlay omits the identity-rewrite rows entirely
   'gitRunner.skipRevalidation',    // net() skips the NET_GIT / ssh / remote-URL re-checks
   'gitRunner.skipIdentityCheck',   // assertIdentity never fails
   'gitRunner.overlayObserve',      // observe() reads with the overlay and without --file (echoes the pin back)

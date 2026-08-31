@@ -21,7 +21,7 @@ import { DISPATCH_APPROVAL_MODES, ConfigError } from './config.mjs';
 import { active, registerSeams } from './mutations.mjs';
 
 registerSeams([
-  'authorize.trustWriteActors',     // a `write` actor's label authorizes (AC 33)
+  'authorize.trustWriteActors',     // a `write` actor's label authorizes
   'authorize.acceptUnknownMode',    // an unknown dispatchApproval mode falls back to the default instead of bad-config (AC 79)
   'authorize.trustedAuthorsDefault', // the default mode admits MEMBER/COLLABORATOR authors unlabeled (AC 85)
   'authorize.ignoreUnlabel',        // the latest LABELED event counts even when an unlabel followed it (AC 109)

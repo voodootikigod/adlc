@@ -14,7 +14,7 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'digest.skipSentinelSearch',   // the comment is posted without searching for the sentinel
-  'digest.postWithoutIntent',    // digestPosted:false is not persisted before the post,
+  'digest.postWithoutIntent',    // the digest-posted intent is not persisted before the post,
   'digest.requireRecord',
 ]);
 

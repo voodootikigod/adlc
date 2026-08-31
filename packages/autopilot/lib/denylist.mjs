@@ -12,7 +12,7 @@ import { globMatch } from '@adlc/core';
 import { active, registerSeams } from './mutations.mjs';
 
 registerSeams([
-  'denylist.allowShrink', // config `extras` REPLACE the denylist instead of extending it (AC 3)
+  'denylist.allowShrink', // config `extras` REPLACE the denylist instead of extending it
   'denylist.staticOnly',  // the two parsed trust-root lists are ignored (AC 140)
 ]);
 

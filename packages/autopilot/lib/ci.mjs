@@ -17,7 +17,7 @@ import { registerSeams, active } from './mutations.mjs';
 registerSeams([
   'ci.ignoreHeadBinding',     // polls no longer compare headRefOid with attestedHead
   'ci.skippedIsPass',         // a skipped `test (N)` counts as pass
-  'ci.shareBudgets',          // the CI fix round draws from roundsUsed / the 90-minute clock
+  'ci.shareBudgets',          // the CI fix round draws from roundsUsed / the shared wall-clock budget
   'ci.missingBucketIsPass',   // a row without a string bucket counts as pass
   'ci.redWaitsForPending',    // a red does not start the fix round while other jobs are pending
 ]);
