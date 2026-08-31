@@ -228,12 +228,77 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: active.id };
 }
 
+// Per-root cache for the REAL filesystem probe only. Injected fns (tests) always
+// bypass the cache so mocked results never leak between calls that reuse a path.
+const caseSensitivityCache = new Map();
+
+/**
+ * Determine whether the filesystem containing `root` is case-insensitive
+ * (default macOS APFS, default Windows NTFS) or case-sensitive (default Linux).
+ *
+ * Pure and side-effect-free: never writes to disk. Stats a path known to exist
+ * (`.adlc` under root if present, else root itself) with its LEAF segment's case
+ * flipped, and checks whether that flipped spelling resolves to the SAME real
+ * path as the original. If the leaf has no alphabetic characters to flip (a flip
+ * that is a no-op would trivially "match" and falsely report insensitive), or any
+ * underlying call throws, this reports `false` (sensitive) — a probe that cannot
+ * positively prove insensitivity must not grant the extra case-insensitive
+ * denial-widening comparison, only a probe that positively demonstrates it may.
+ *
+ * @param {string} root
+ * @param {{ existsSync?: Function, realpathSync?: Function }} [fns] injectable
+ *   for deterministic tests; when provided the per-root cache is bypassed.
+ * @returns {boolean}
+ */
+export function isCaseInsensitiveFs(root, fns) {
+  const exists = fns?.existsSync ?? existsSync;
+  const realpath = fns?.realpathSync ?? realpathSync;
+  if (!fns && caseSensitivityCache.has(root)) return caseSensitivityCache.get(root);
+
+  const compute = () => {
+    try {
+      const adlcDir = join(root, '.adlc');
+      const probeTarget = exists(adlcDir) ? adlcDir : root;
+      const dir = dirname(probeTarget);
+      const leaf = basename(probeTarget);
+      const flippedLeaf = flipCase(leaf);
+      if (flippedLeaf === leaf) return false; // nothing alphabetic to flip — cannot determine
+      const flipped = join(dir, flippedLeaf);
+      if (!exists(flipped)) return false;
+      return realpath(flipped) === realpath(probeTarget);
+    } catch {
+      return false;
+    }
+  };
+
+  const result = compute();
+  if (!fns) caseSensitivityCache.set(root, result);
+  return result;
+}
+
+/** Swap the case of every letter (a<->A) — used only to build a probe spelling. */
+function flipCase(s) {
+  let out = '';
+  for (const ch of s) {
+    const lower = ch.toLowerCase();
+    const upper = ch.toUpperCase();
+    if (lower === upper) { out += ch; continue; } // not alphabetic
+    out += ch === lower ? upper : lower;
+  }
+  return out;
+}
+
+/** Find the declared rail (original spelling) that exactly or glob-matches `path`. */
+function findRailHit(path, rails) {
+  return rails.find((rail) => rail === path || globMatch(rail, path));
+}
+
 /**
  * Decide whether a structured edit/write to a specific path should be allowed or
  * denied. Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
  * Preconditions are delegated to railPreconditions (single source of truth).
  */
-export function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) {
+export function checkRail({ filePath, tool, root = process.cwd(), env = process.env, isCaseInsensitiveFsFn = isCaseInsensitiveFs }) {
   if (classifyTool(tool) === 'readonly') {
     return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
@@ -244,8 +309,16 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
   // Enforcing: match BOTH the lexical path and the symlink-resolved real path (so a
   // symlink alias whose target is a frozen rail can't slip past a name check).
   const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
+  const insensitive = isCaseInsensitiveFsFn(root);
   for (const path of candidates) {
-    const hit = pre.rails.find((rail) => rail === path || globMatch(rail, path));
+    let hit = findRailHit(path, pre.rails);
+    // Case-insensitive comparison only WIDENS denial, never narrows an allow: it
+    // is consulted only when the exact-case match above found nothing, and only
+    // when the probe positively reports an insensitive filesystem for `root`.
+    if (!hit && insensitive) {
+      const lowerPath = path.toLowerCase();
+      hit = pre.rails.find((rail) => rail.toLowerCase() === lowerPath || globMatch(rail.toLowerCase(), lowerPath));
+    }
     if (hit) {
       return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${pre.activeId})` };
     }
