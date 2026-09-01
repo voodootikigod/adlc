@@ -735,6 +735,12 @@ export function onStop(payload, { env = process.env } = {}) {
                 reason: 'ADLC Rails-Guard: Corrupt or unreadable current-ticket pointer after shell execution.',
               };
             }
+            if (currentObj.id && currentObj.id !== active.id) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Active ticket pointer ID was altered during shell execution.',
+              };
+            }
           }
         } catch {
           return {
