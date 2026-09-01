@@ -459,8 +459,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   const trimmed = cmd.trim();
   if (!trimmed) return false;
 
-  // Reject newlines, shell chaining, pipes, redirects, substitutions, or operators that can mask test failures
-  if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
+  // Reject newlines, shell chaining, pipes, redirects, substitutions, tilde expansion, or operators that can mask test failures
+  if (/[\r\n;&|<>\$`~]/.test(trimmed)) return false;
 
   // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, destination/reporter flags, module preload/loader options, setup/teardown code, watch mode, snapshot updates, and coverage options
   if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--test-reporter-destination|--output|--output-dir|--output-directory|--destination|-o|--grep|-g|--require|--import|--loader|--experimental-loader|-r|--test-global-setup|--test-global-teardown|--test-update-snapshots|--test-coverage|--experimental-test-coverage|--watch|--watch-mode|--run)\b/i.test(trimmed)) return false;
@@ -496,6 +496,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
     const tokens = tokenizeCommand(trimmed);
     for (const rawToken of tokens) {
       const token = rawToken.includes('=') ? rawToken.slice(rawToken.indexOf('=') + 1) : rawToken;
+      if (token.startsWith('~')) return false;
       if (token.startsWith('/') || token.startsWith('\\')) {
         const realToken = realpathOr(token);
         const rel = relative(realRoot, realToken);

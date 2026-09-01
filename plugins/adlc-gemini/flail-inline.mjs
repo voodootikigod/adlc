@@ -137,6 +137,7 @@ export function parseTranscriptRecords(filePath, options = {}) {
   const readFull = typeof options === 'object' && options?.readFull === true;
   const maxRecords = typeof options === 'object' ? (options?.maxRecords ?? 50000) : 50000;
   const maxLineLength = typeof options === 'object' ? (options?.maxLineLength ?? 1048576) : 1048576;
+  const maxTotalBytes = typeof options === 'object' ? (options?.maxTotalBytes ?? (16 * 1024 * 1024)) : (16 * 1024 * 1024);
   if (!filePath) return [];
   try {
     const stat = statSync(filePath);
@@ -149,6 +150,7 @@ export function parseTranscriptRecords(filePath, options = {}) {
       const buf = Buffer.alloc(chunkSize);
       let leftover = '';
       let pos = 0;
+      let totalBytes = 0;
       try {
         while (pos < stat.size) {
           const toRead = Math.min(chunkSize, stat.size - pos);
@@ -164,7 +166,8 @@ export function parseTranscriptRecords(filePath, options = {}) {
           }
           for (const rawLine of lines) {
             if (!rawLine.trim()) continue;
-            if (records.length >= maxRecords) {
+            totalBytes += rawLine.length;
+            if (records.length >= maxRecords || totalBytes > maxTotalBytes) {
               records.push({ content: 'oversized_transcript', __oversized: true });
               return records;
             }
@@ -183,7 +186,8 @@ export function parseTranscriptRecords(filePath, options = {}) {
         closeSync(fd);
       }
       if (leftover.trim()) {
-        if (records.length >= maxRecords) {
+        totalBytes += leftover.length;
+        if (records.length >= maxRecords || totalBytes > maxTotalBytes) {
           records.push({ content: 'oversized_transcript', __oversized: true });
         } else {
           try {
