@@ -105,3 +105,19 @@ for (const [label, payload] of [['{}', {}], ['{toolCall:{}}', { toolCall: {} }],
     assert.deepEqual(decide(payload, { env: {} }), { decision: 'allow', allow_tool: true });
   });
 }
+
+test('decide(): write to .adlc/.session-secret is denied as a frozen rail', () => {
+  const root = adlcRepo();
+  const v = call('write_to_file', { TargetFile: join(root, '.adlc/.session-secret') });
+  assert.equal(v.allow_tool, false);
+  assert.equal(v.decision, 'deny');
+  assert.match(v.deny_reason, /frozen rail/);
+});
+
+test('decide(): nested path object on unclassified tool targeting frozen rail is denied', () => {
+  const root = adlcRepo();
+  const v = call('custom_mutator', { target: { path: join(root, '.adlc/tickets.json') } });
+  assert.equal(v.allow_tool, false);
+  assert.equal(v.decision, 'deny');
+  assert.match(v.deny_reason, /frozen rail/);
+});

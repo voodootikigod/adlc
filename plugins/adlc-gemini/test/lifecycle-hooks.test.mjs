@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { preInvocation, onStop, findAdlcRoot, runFromStdin } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker } from '../build-gate-inline.mjs';
+import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
@@ -3017,6 +3018,41 @@ test('onStop: rejects Stop when sessions.json entry is missing baselineSig under
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /Session baseline signature mismatch/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('isReadonlyCommand: allows safe git branch query forms and rejects mutating options', () => {
+  assert.equal(isReadonlyCommand('git branch'), true);
+  assert.equal(isReadonlyCommand('git branch -a'), true);
+  assert.equal(isReadonlyCommand('git branch -r'), true);
+  assert.equal(isReadonlyCommand('git branch --list'), true);
+  assert.equal(isReadonlyCommand('git branch --show-current'), true);
+
+  // Destructive / mutating branch commands
+  assert.equal(isReadonlyCommand('git branch -d old-feat'), false);
+  assert.equal(isReadonlyCommand('git branch -D old-feat'), false);
+  assert.equal(isReadonlyCommand('git branch -m old-feat new-feat'), false);
+  assert.equal(isReadonlyCommand('git branch -M old-feat new-feat'), false);
+  assert.equal(isReadonlyCommand('git branch new-branch-name'), false);
+  assert.equal(isReadonlyCommand('git branch -f target HEAD'), false);
+  assert.equal(isReadonlyCommand('git branch --delete target'), false);
+  assert.equal(isReadonlyCommand('git branch --set-upstream-to=origin/main'), false);
+});
+
+test('parseTranscriptRecords: reads regular file and safely handles non-file descriptor', () => {
+  const { root, cleanup } = setupTempRepo();
+  try {
+    const transcriptFile = join(root, 'transcript.jsonl');
+    writeFileSync(transcriptFile, JSON.stringify({ type: 'PLANNER_RESPONSE', content: 'test' }) + '\n');
+    const records = parseTranscriptRecords(transcriptFile, { readFull: true });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].content, 'test');
+
+    // Non-existent or non-file returns empty array
+    assert.deepEqual(parseTranscriptRecords(root, { readFull: true }), []);
+    assert.deepEqual(parseTranscriptRecords(join(root, 'nonexistent.jsonl'), { readFull: true }), []);
   } finally {
     cleanup();
   }

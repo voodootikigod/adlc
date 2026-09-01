@@ -1,7 +1,7 @@
 // flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, fstatSync, realpathSync, constants as fsConstants } from 'node:fs';
 import { join, relative, isAbsolute, dirname, parse } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -152,55 +152,56 @@ export function parseTranscriptRecords(filePath, options = {}) {
   const maxLineLength = typeof options === 'object' ? (options?.maxLineLength ?? 1048576) : 1048576;
   const maxTotalBytes = typeof options === 'object' ? (options?.maxTotalBytes ?? (16 * 1024 * 1024)) : (16 * 1024 * 1024);
   if (!filePath) return [];
+  let fd;
   try {
-    const stat = statSync(filePath);
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    return [];
+  }
+  try {
+    const stat = fstatSync(fd);
     if (!stat.isFile()) return [];
     const records = [];
 
     if (readFull) {
-      const fd = openSync(filePath, 'r');
       const chunkSize = 65536;
       const buf = Buffer.alloc(chunkSize);
       let leftover = '';
       let pos = 0;
       let totalBytes = 0;
-      try {
-        while (pos < stat.size) {
-          const toRead = Math.min(chunkSize, stat.size - pos);
-          const bytesRead = readSync(fd, buf, 0, toRead, pos);
-          if (bytesRead <= 0) break;
-          pos += bytesRead;
-          totalBytes += bytesRead;
-          if (totalBytes > maxTotalBytes) {
+      while (pos < stat.size) {
+        const toRead = Math.min(chunkSize, stat.size - pos);
+        const bytesRead = readSync(fd, buf, 0, toRead, pos);
+        if (bytesRead <= 0) break;
+        pos += bytesRead;
+        totalBytes += bytesRead;
+        if (totalBytes > maxTotalBytes) {
+          records.push({ content: 'oversized_transcript', __oversized: true });
+          return records;
+        }
+        const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
+        const lines = chunkStr.split('\n');
+        leftover = lines.pop() ?? '';
+        if (leftover.length > maxLineLength) {
+          records.push({ content: 'unterminated_oversized_line', __oversized: true });
+          return records;
+        }
+        for (const rawLine of lines) {
+          if (!rawLine.trim()) continue;
+          if (records.length >= maxRecords) {
             records.push({ content: 'oversized_transcript', __oversized: true });
             return records;
           }
-          const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
-          const lines = chunkStr.split('\n');
-          leftover = lines.pop() ?? '';
-          if (leftover.length > maxLineLength) {
-            records.push({ content: 'unterminated_oversized_line', __oversized: true });
-            return records;
+          if (rawLine.length > maxLineLength) {
+            records.push({ content: 'oversized_line', __unparseable: true });
+            continue;
           }
-          for (const rawLine of lines) {
-            if (!rawLine.trim()) continue;
-            if (records.length >= maxRecords) {
-              records.push({ content: 'oversized_transcript', __oversized: true });
-              return records;
-            }
-            if (rawLine.length > maxLineLength) {
-              records.push({ content: 'oversized_line', __unparseable: true });
-              continue;
-            }
-            try {
-              records.push(JSON.parse(rawLine));
-            } catch {
-              records.push({ content: rawLine, __unparseable: true });
-            }
+          try {
+            records.push(JSON.parse(rawLine));
+          } catch {
+            records.push({ content: rawLine, __unparseable: true });
           }
         }
-      } finally {
-        closeSync(fd);
       }
       if (leftover.trim()) {
         if (records.length >= maxRecords) {
@@ -218,15 +219,20 @@ export function parseTranscriptRecords(filePath, options = {}) {
 
     let content = '';
     if (stat.size > maxScanBytes) {
-      const fd = openSync(filePath, 'r');
       const buf = Buffer.alloc(maxScanBytes);
       readSync(fd, buf, 0, maxScanBytes, stat.size - maxScanBytes);
-      closeSync(fd);
       content = buf.toString('utf8');
       const firstNewline = content.indexOf('\n');
       if (firstNewline !== -1) content = content.slice(firstNewline + 1);
     } else {
-      content = readFileSync(filePath, 'utf8');
+      const buf = Buffer.alloc(stat.size);
+      let pos = 0;
+      while (pos < stat.size) {
+        const n = readSync(fd, buf, pos, stat.size - pos, pos);
+        if (n <= 0) break;
+        pos += n;
+      }
+      content = buf.toString('utf8', 0, pos);
     }
     for (const rawLine of content.split('\n')) {
       if (!rawLine.trim()) continue;
@@ -239,6 +245,8 @@ export function parseTranscriptRecords(filePath, options = {}) {
     return records;
   } catch {
     return [];
+  } finally {
+    try { closeSync(fd); } catch {}
   }
 }
 

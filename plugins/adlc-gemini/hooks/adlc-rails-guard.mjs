@@ -57,26 +57,33 @@ export function extractArgs(payload) {
 export function extractFilePaths(payload) {
   const args = extractArgs(payload);
   const out = new Set();
-  for (const [key, v] of Object.entries(args)) {
-    if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
-      continue;
-    }
-    const isPathKey = PATH_KEYS.some((pk) => pk.toLowerCase() === key.toLowerCase());
-    if (isPathKey) {
-      if (typeof v === 'string' && v.trim()) {
-        out.add(v.trim());
+
+  function scan(obj, parentKey = '', depth = 0) {
+    if (!obj || typeof obj !== 'object' || depth > 5) return;
+    for (const [key, v] of Object.entries(obj)) {
+      if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
+        continue;
+      }
+      const isPathKey = PATH_KEYS.some((pk) => pk.toLowerCase() === key.toLowerCase()) || (parentKey && PATH_KEYS.some((pk) => pk.toLowerCase() === parentKey.toLowerCase()));
+      if (typeof v === 'string') {
+        if (isPathKey && v.trim()) out.add(v.trim());
       } else if (Array.isArray(v)) {
         for (const e of v) {
-          if (typeof e === 'string' && e.trim()) out.add(e.trim());
+          if (typeof e === 'string' && isPathKey && e.trim()) out.add(e.trim());
+          else if (e && typeof e === 'object') scan(e, key, depth + 1);
         }
+      } else if (v && typeof v === 'object') {
+        scan(v, key, depth + 1);
       }
     }
   }
+
+  scan(args);
   return [...out];
 }
 
-function hasPathLikeArgs(args) {
-  if (!args || typeof args !== 'object') return false;
+function hasPathLikeArgs(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
     if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
       continue;
@@ -84,6 +91,10 @@ function hasPathLikeArgs(args) {
     if (typeof val === 'string') {
       const trimmed = val.trim();
       if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('.') || /(file|path|dest|target|dir|src|dst)/i.test(key)) {
+        return true;
+      }
+    } else if (val && typeof val === 'object') {
+      if (/(file|path|dest|target|dir|src|dst)/i.test(key) || hasPathLikeArgs(val, depth + 1)) {
         return true;
       }
     }
@@ -629,7 +640,18 @@ export function isReadonlyCommand(cmd) {
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
   // Reject output redirection flags (e.g. git diff --output=file)
   if (/(^|\s)(--output|-o|--output-directory)\b/i.test(trimmed) || /--output=/i.test(trimmed)) return false;
-  return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
+
+  // Treat git branch as mutating unless only read-only listing flags are supplied with no new branch name
+  if (/^git\s+branch\b/i.test(trimmed)) {
+    if (/(^|\s)(-[dDmMcfuU]|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|-u)\b/i.test(trimmed)) return false;
+    const tokens = tokenizeCommand(trimmed).slice(2);
+    for (const t of tokens) {
+      if (!t.startsWith('-')) return false; // positional branch argument (creating/modifying branch)
+    }
+    return true;
+  }
+
+  return /^(git\s+(status|diff|log|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
 }
 
 export function onStop(payload, { env = process.env } = {}) {

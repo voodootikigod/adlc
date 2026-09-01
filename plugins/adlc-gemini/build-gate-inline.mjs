@@ -169,28 +169,56 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
   return 'default_session';
 }
 
+const loadedSecretCache = new Map();
+
 function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
   if (env?.ADLC_MANIFEST_KEY) return env.ADLC_MANIFEST_KEY;
   const secretFile = join(root, '.adlc', '.session-secret');
+
+  if (loadedSecretCache.has(root)) {
+    const cached = loadedSecretCache.get(root);
+    try {
+      if (!existsSync(secretFile)) return null; // Key disappeared -> tamper
+      const stat = lstatSync(secretFile);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return null;
+      const raw = readFileSync(secretFile, 'utf8').trim();
+      if (raw !== cached) return null; // Key replaced -> tamper
+      return cached;
+    } catch {
+      return null;
+    }
+  }
+
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       if (existsSync(secretFile)) {
         const stat = lstatSync(secretFile);
-        if (stat.isFile() && !stat.isSymbolicLink()) {
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
           const raw = readFileSync(secretFile, 'utf8').trim();
-          if (raw.length >= 32) return raw;
+          if (raw.length >= 32) {
+            loadedSecretCache.set(root, raw);
+            return raw;
+          }
         }
+        return null;
       }
       const secret = randomBytes(32).toString('hex');
       if (!existsSync(join(root, '.adlc'))) mkdirSync(join(root, '.adlc'), { recursive: true });
       writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
+      loadedSecretCache.set(root, secret);
       return secret;
     } catch (err) {
       if (err.code === 'EEXIST') {
         try {
-          const raw = readFileSync(secretFile, 'utf8').trim();
-          if (raw.length >= 32) return raw;
+          const stat = lstatSync(secretFile);
+          if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+            const raw = readFileSync(secretFile, 'utf8').trim();
+            if (raw.length >= 32) {
+              loadedSecretCache.set(root, raw);
+              return raw;
+            }
+          }
         } catch {}
       }
     }
