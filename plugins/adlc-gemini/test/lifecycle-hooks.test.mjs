@@ -2652,3 +2652,43 @@ test('preInvocation: discovers repo root from early tool call in > 256 KiB trans
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when session entry counters are zeroed out mid-session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js') } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-zeroed-counters',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('test-session-zeroed-counters', { isMutating: true });
+
+    // Now zero out the mutatingCalls counter in sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    sData['test-session-zeroed-counters'].mutatingCalls = 0;
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Untracked or missing tool execution records|Session tracking entry was deleted, reset, or modified/);
+  } finally {
+    cleanup();
+  }
+});

@@ -843,7 +843,38 @@ export function onStop(payload, { env = process.env } = {}) {
           };
         }
         if (sData[sessionID]) {
-          if (typeof sData[sessionID] !== 'object' || (trackedInitialTicket && sData[sessionID].initialActiveTicket !== trackedInitialTicket) || (active.id && sData[sessionID].initialActiveTicket && sData[sessionID].initialActiveTicket !== active.id) || (active.id && Object.keys(sData[sessionID]).length === 0)) {
+          const entry = sData[sessionID];
+          if (typeof entry !== 'object' || Array.isArray(entry)) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+          if (trackedInitialTicket && entry.initialActiveTicket !== trackedInitialTicket) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+          if (active.id && entry.initialActiveTicket && entry.initialActiveTicket !== active.id) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+          if (active.id && Object.keys(entry).length === 0) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+          if (trackedDepth > 0 && typeof entry.mutatingCalls === 'number' && entry.mutatingCalls < trackedDepth) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+          if (trackedTotal > 0 && typeof entry.totalCalls === 'number' && entry.totalCalls < trackedTotal) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
