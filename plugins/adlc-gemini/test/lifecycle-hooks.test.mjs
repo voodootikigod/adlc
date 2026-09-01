@@ -3470,3 +3470,36 @@ test('decide and onStop: unknown command-shaped tools (custom_shell / terminal_m
     cleanup();
   }
 });
+
+test('decide and onStop: mixed command/path arguments targeting frozen rails are denied', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const customStore = join(root, '.adlc/tickets.json');
+    writeFileSync(customStore, JSON.stringify({
+      version: 1,
+      tickets: [{ id: 'T1', title: 'T1', rails: ['src/frozen.js'] }],
+    }));
+
+    // 1. Tool with execute: true and TargetFile pointing to frozen rail
+    const payload1 = {
+      workspacePaths: [root],
+      toolCall: { name: 'custom_mutator', args: { execute: true, TargetFile: join(root, 'src/frozen.js'), CodeContent: 'mod' } },
+    };
+    const v1 = runFromStdin(JSON.stringify(payload1), env);
+    assert.equal(v1.allow_tool, false);
+    assert.equal(v1.decision, 'deny');
+    assert.match(v1.deny_reason, /frozen rail/);
+
+    // 2. Tool with CommandLine and TargetFile pointing to ticket trust root
+    const payload2 = {
+      workspacePaths: [root],
+      toolCall: { name: 'custom_mutator', args: { CommandLine: 'echo hello', TargetFile: join(root, '.adlc/tickets.json'), CodeContent: '{}' } },
+    };
+    const v2 = runFromStdin(JSON.stringify(payload2), env);
+    assert.equal(v2.allow_tool, false);
+    assert.equal(v2.decision, 'deny');
+    assert.match(v2.deny_reason, /frozen rail/);
+  } finally {
+    cleanup();
+  }
+});

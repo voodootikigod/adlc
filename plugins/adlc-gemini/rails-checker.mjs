@@ -94,7 +94,10 @@ const SHELL_TOOL_NAMES = new Set([
 
 export function hasCommandLineArgs(args) {
   if (!args || typeof args !== 'object') return false;
-  return 'CommandLine' in args || 'command' in args || 'cmd' in args || 'code' in args || 'script' in args || 'execute' in args;
+  for (const key of ['CommandLine', 'command', 'cmd', 'code', 'script']) {
+    if (typeof args[key] === 'string' && args[key].trim().length > 0) return true;
+  }
+  return false;
 }
 
 /**

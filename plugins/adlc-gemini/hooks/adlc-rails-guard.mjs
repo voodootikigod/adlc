@@ -242,6 +242,98 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       overrideEscaped = new RegExp('(^|[\\s=;,"\'/$.()[\\]])(' + escaped + '|ADLC_TICKET_STORE|ADLC_TICKETS)', 'i');
     }
 
+    const paths = extractFilePaths(payload);
+
+    if (paths.length > 0) {
+      const localCache = trackerCache ?? new Map();
+      const getTracker = (r) => {
+        if (!localCache.has(r)) localCache.set(r, createPersistentTracker(r, env));
+        return localCache.get(r);
+      };
+
+      let canonicalStoreOverride = null;
+      if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
+        const trimmed = storeOverride.trim();
+        canonicalStoreOverride = canonicalizeExisting(isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed));
+      }
+
+      // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
+      // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
+      for (const raw of paths) {
+        const { abs, anchored } = anchorPath(raw, payload);
+        if (!anchored) {
+          if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
+          continue;
+        }
+        const canonicalAbs = canonicalizeExisting(abs);
+
+        // Check if target is a configured ticket store override (external or custom in-repo)
+        if (canonicalStoreOverride && (canonicalAbs === canonicalStoreOverride || canonicalAbs.startsWith(canonicalStoreOverride + '/'))) {
+          return deny(`frozen rail — custom ticket store override "${storeOverride}" is a protected trust root`);
+        }
+
+        let effectiveRoot = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
+        if (effectiveRoot === null) {
+          if (canonicalStoreOverride && existsSync(canonicalStoreOverride)) {
+            const wsCandidate = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+              .filter((s) => typeof s === 'string' && s.trim())
+              .find((ws) => {
+                const absWs = canonicalizeExisting(isAbsolute(ws) ? ws : resolve(process.cwd(), ws));
+                const rel = relative(absWs, canonicalAbs);
+                return !rel.startsWith('..') && !isAbsolute(rel);
+              }) ?? WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+              .find((s) => typeof s === 'string' && s.trim());
+            if (wsCandidate) {
+              effectiveRoot = canonicalizeExisting(isAbsolute(wsCandidate) ? wsCandidate : resolve(process.cwd(), wsCandidate));
+            } else if (enforcing) {
+              return deny(`external ticket store override is active but workspace root could not be established for path "${raw}" — failing closed`);
+            }
+          }
+        }
+        if (effectiveRoot === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
+
+        const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root: effectiveRoot, env });
+        if (verdictCanonical.decision === 'deny') return deny(`frozen rail — ${verdictCanonical.reason}`);
+
+        const verdict = checkRail({ filePath: abs, tool, root: effectiveRoot, env });
+        if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
+
+        const pathTracker = getTracker(effectiveRoot);
+        const sessionID = resolveSessionId({ payload, env });
+
+        // Check build-gate backstop for structured mutators and unknown ('other') tools
+        if (cls !== 'readonly' && enforcing) {
+          if (sessionID === 'default_session') {
+            console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
+          }
+          const gate = checkBuildGate({ sessionID, tracker: pathTracker, root: effectiveRoot, env });
+          if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
+        }
+
+        // Record edit for flail tracking & inspect session transcript for repeated errors / edit churn
+        if (cls === 'mutating' && pathTracker?.recordEdit) {
+          const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+          const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
+          const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptSteps });
+
+          const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
+          const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
+
+          if (flailRes?.verdict === 'loop_blocked') {
+            return deny(`flail-guard — ${flailMessage(flailRes)}`);
+          }
+          if (flailRes?.verdict === 'flail') {
+            if (flailEnforcing && !flailBypass) {
+              return deny(`flail-detector — session is flailing: ${flailRes.summary}. Step back or start a fresh session before retrying.`);
+            }
+            if (flailRes.isNewSignal) {
+              console.error(`[adlc-anti-flail] Advisory: ${flailRes.recommendation}`);
+            }
+          }
+        }
+      }
+    }
+
     const isShell = isShellTool(tool, args);
 
     if (isShell) {
@@ -251,10 +343,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
       }
-      return allow(); // run_command → CI diff gate
+      return allow(); // pure command runner with no rail paths
     }
-
-    const paths = extractFilePaths(payload);
 
     // Step 2 (cont.) — an 'other' tool with NO path and no mutating hint is not a file
     // op (e.g. generate_image, a mutator with no inspectable path) → allow. A
@@ -271,90 +361,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         : allow();
     }
 
-    const localCache = trackerCache ?? new Map();
-    const getTracker = (r) => {
-      if (!localCache.has(r)) localCache.set(r, createPersistentTracker(r, env));
-      return localCache.get(r);
-    };
-
-    let canonicalStoreOverride = null;
-    if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
-      const trimmed = storeOverride.trim();
-      canonicalStoreOverride = canonicalizeExisting(isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed));
-    }
-
-    // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
-    // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
-    for (const raw of paths) {
-      const { abs, anchored } = anchorPath(raw, payload);
-      if (!anchored) {
-        if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
-        continue;
-      }
-      const canonicalAbs = canonicalizeExisting(abs);
-
-      // Check if target is a configured ticket store override (external or custom in-repo)
-      if (canonicalStoreOverride && (canonicalAbs === canonicalStoreOverride || canonicalAbs.startsWith(canonicalStoreOverride + '/'))) {
-        return deny(`frozen rail — custom ticket store override "${storeOverride}" is a protected trust root`);
-      }
-
-      let effectiveRoot = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
-      if (effectiveRoot === null) {
-        if (canonicalStoreOverride && existsSync(canonicalStoreOverride)) {
-          const wsCandidate = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-            .filter((s) => typeof s === 'string' && s.trim())
-            .find((ws) => {
-              const absWs = canonicalizeExisting(isAbsolute(ws) ? ws : resolve(process.cwd(), ws));
-              const rel = relative(absWs, canonicalAbs);
-              return !rel.startsWith('..') && !isAbsolute(rel);
-            }) ?? WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-            .find((s) => typeof s === 'string' && s.trim());
-          if (wsCandidate) {
-            effectiveRoot = canonicalizeExisting(isAbsolute(wsCandidate) ? wsCandidate : resolve(process.cwd(), wsCandidate));
-          } else if (enforcing) {
-            return deny(`external ticket store override is active but workspace root could not be established for path "${raw}" — failing closed`);
-          }
-        }
-      }
-      if (effectiveRoot === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
-
-      const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root: effectiveRoot, env });
-      if (verdictCanonical.decision === 'deny') return deny(`frozen rail — ${verdictCanonical.reason}`);
-
-      const verdict = checkRail({ filePath: abs, tool, root: effectiveRoot, env });
-      if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
-
-      const pathTracker = getTracker(effectiveRoot);
-      const sessionID = resolveSessionId({ payload, env });
-
-      // Check build-gate backstop for structured mutators and unknown ('other') tools
-      if (cls !== 'readonly' && enforcing) {
-        if (sessionID === 'default_session') {
-          console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
-        }
-        const gate = checkBuildGate({ sessionID, tracker: pathTracker, root: effectiveRoot, env });
-        if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
-      }
-
-      // Record edit for flail tracking & inspect session transcript for repeated errors / edit churn
-      if (cls === 'mutating' && pathTracker?.recordEdit) {
-        const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-        const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
-        const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptSteps });
-
-        const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
-        const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
-
-        if (flailRes?.verdict === 'flail') {
-          if (flailEnforcing && !flailBypass) {
-            return deny(`flail-detector — session is flailing: ${flailRes.summary}. Step back or start a fresh session before retrying.`);
-          }
-          if (flailRes.isNewSignal) {
-            console.error(`[adlc-anti-flail] Advisory: ${flailRes.recommendation}`);
-          }
-        }
-      }
-    }
     return allow();
   } catch (err) {
     // Categorical fail-safe: under enforcement an unexpected error is more likely
@@ -929,6 +935,20 @@ export function onStop(payload, { env = process.env } = {}) {
         const name = extractToolName({ toolCall: c }) || (c?.name ?? c?.toolName ?? c?.tool_name ?? '');
         const args = extractArgs({ toolCall: c });
         const filePaths = extractFilePaths({ toolCall: c });
+
+        if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p)) || (overrideEscaped && filePaths.some((p) => overrideEscaped.test(p)))) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
+          };
+        }
+        if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
+          };
+        }
+
         const isShell = isShellTool(name, args);
         const isMutating = !isShell && classifyTool(name) !== 'readonly';
         if (isMutating) mutatingCallSeq++;
@@ -947,18 +967,6 @@ export function onStop(payload, { env = process.env } = {}) {
           }
           if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
             packageManifestMutated = true;
-          }
-          if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p))) {
-            return {
-              decision: 'continue',
-              reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
-            };
-          }
-          if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
-            return {
-              decision: 'continue',
-              reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
-            };
           }
         }
 
