@@ -90,12 +90,18 @@ const SHELL_TOOL_NAMES = new Set([
   'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
   'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
+  'customshell', 'terminalmodify',
 ]);
 
-export function hasCommandLineArgs(args) {
-  if (!args || typeof args !== 'object') return false;
-  for (const key of ['CommandLine', 'command', 'cmd']) {
-    if (typeof args[key] === 'string' && args[key].trim().length > 0) return true;
+export function hasCommandLineArgs(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return false;
+  for (const [key, val] of Object.entries(args)) {
+    if (/^(CommandLine|command|cmd|command_line|exec|script_cmd)$/i.test(key) || /(^|_)(command|cmd)($|_)/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) return true;
+    }
+    if (val && typeof val === 'object' && hasCommandLineArgs(val, depth + 1)) {
+      return true;
+    }
   }
   return false;
 }
@@ -115,15 +121,12 @@ export function hasCodeExecutionArgs(args, depth = 0) {
 
 /**
  * True for a recognized shell/terminal execution tool (exact whole-name match
- * after normalization) or any tool carrying command-line execution arguments.
- * Tools bearing arbitrary code/scripts (like python_exec, generate_code) are
- * NOT classified as shells and must fail closed as opaque mutators.
+ * after normalization). Tools bearing arbitrary code/scripts or unclassified
+ * executors are NOT classified as shells and must fail closed as opaque mutators.
  */
 export function isShellTool(name, args = null) {
   const norm = normalizeToolName(name);
   if (SHELL_TOOL_NAMES.has(norm)) return true;
-  if (classifyTool(name) === 'mutating') return false;
-  if (args && hasCommandLineArgs(args)) return true;
   return false;
 }
 

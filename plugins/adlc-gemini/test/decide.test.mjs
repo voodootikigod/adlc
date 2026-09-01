@@ -204,13 +204,33 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(v6.decision, 'deny');
   assert.match(v6.deny_reason, /uninspectable arguments/);
 
-  // When enforcement is off, unclassified tools without paths allow
-  const vOff = decide({
+  // nested CommandLine argument in unclassified executor
+  const v7 = decide({
     workspacePaths: [root],
-    toolCall: { name: 'python_exec', args: { code: "print('hello')" } },
-  }, { env: {} });
-  assert.equal(vOff.allow_tool, true);
-  assert.equal(vOff.decision, 'allow');
+    toolCall: { name: 'custom_executor', args: { options: { CommandLine: "rm -f /repo/.adlc/tickets.json" } } },
+  }, { env: ENF });
+  assert.equal(v7.allow_tool, false);
+  assert.equal(v7.decision, 'deny');
+  assert.match(v7.deny_reason, /uninspectable arguments/);
+
+  // nested cmd argument in unclassified executor
+  const v8 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'unrecognized_runner', args: { config: { cmd: "rm -rf .adlc" } } },
+  }, { env: ENF });
+  assert.equal(v8.allow_tool, false);
+  assert.equal(v8.decision, 'deny');
+  assert.match(v8.deny_reason, /uninspectable arguments/);
+
+  // recognized shell tool with nested CommandLine targeting trust root is denied
+  const v9 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'run_command', args: { options: { CommandLine: "rm -rf .adlc/tickets.json" } } },
+  }, { env: ENF });
+  assert.equal(v9.allow_tool, false);
+  assert.equal(v9.decision, 'deny');
+  assert.match(v9.deny_reason, /shell modification of ticket store or trust-root rails/);
 });
+
 
 

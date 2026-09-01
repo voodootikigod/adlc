@@ -210,6 +210,20 @@ function isToolPayload(p) {
   return Boolean(p) && typeof p === 'object' && !Array.isArray(p);
 }
 
+export function extractCommandString(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return '';
+  for (const key of ['CommandLine', 'command', 'cmd', 'code', 'script']) {
+    if (typeof args[key] === 'string' && args[key].trim().length > 0) return args[key].trim();
+  }
+  for (const val of Object.values(args)) {
+    if (val && typeof val === 'object') {
+      const nested = extractCommandString(val, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
 /**
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
@@ -338,7 +352,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     if (isShell) {
       if (enforcing) {
-        const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? args?.script ?? '').trim();
+        const cmd = extractCommandString(args);
         if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
@@ -1116,14 +1130,7 @@ export function onStop(payload, { env = process.env } = {}) {
               reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
             };
           }
-          if (enforcing && (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0 || hasSnap || (Object.keys(sData).length > 0 && mutatingCallSeq > 0))) {
-            if (!sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
-              return {
-                decision: 'continue',
-                reason: 'ADLC Rails-Guard: Session tracking entry was deleted, evicted, reset, or missing during Stop verification.',
-              };
-            }
-          }
+
         if (sData[sessionID]) {
           const entry = sData[sessionID];
           if (typeof entry !== 'object' || Array.isArray(entry)) {
@@ -1260,6 +1267,15 @@ export function onStop(payload, { env = process.env } = {}) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing.',
+        };
+      }
+    }
+
+    if (enforcing && (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0 || hasSnap || mutatingCallSeq > 0 || lastMutationCallIdx !== -1 || shellMutated)) {
+      if (!sData || !sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session tracking entry was deleted, evicted, reset, or missing during Stop verification.',
         };
       }
     }

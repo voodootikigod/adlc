@@ -159,6 +159,10 @@ test('onStop: allows stop when tests were executed via run_command after mutatio
       transcriptPath: transcriptFile,
       conversationId: 'test-session-123',
     };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'stop');
   } finally {
@@ -560,6 +564,10 @@ test('onStop: discovers repo root from transcript paths in headless mode with em
       transcriptPath: transcriptFile,
       conversationId: 'test-session-headless-discovery',
     };
+    preInvocation({ ...payload, workspacePaths: [root] }, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
     const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: undefined, INIT_CWD: undefined, PWD: '/nonexistent' } });
     assert.equal(res.decision, 'stop');
   } finally {
@@ -678,6 +686,10 @@ test('onStop: recognizes verification from alternate arguments envelope', () => 
       transcriptPath: transcriptFile,
       conversationId: 'test-session-alt-envelope',
     };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'stop');
   } finally {
@@ -1097,6 +1109,10 @@ test('onStop: allows npx --no-install adlc preflight', () => {
       transcriptPath: transcriptFile,
       conversationId: 'test-session-pinned-npx',
     };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'stop');
   } finally {
@@ -1326,6 +1342,10 @@ test('onStop: recognizes tool_call and tool_name snake_case envelopes in transcr
       transcriptPath: transcriptFile,
       conversationId: 'test-session-snake-case',
     };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'stop');
   } finally {
@@ -4125,6 +4145,43 @@ test('onStop: rejects Stop when session infrastructure is absent and transcript 
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when sessions.json contains empty object {} and transcript has mutations', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    // Write empty sessions.json and empty session-ledger.jsonl
+    writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+    writeFileSync(join(root, '.adlc', 'session-ledger.jsonl'), '');
+
+    // NO preInvocation or runFromStdin recorded for this session
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// untracked edit' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-empty-store-untracked',
+    };
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking entry was deleted, evicted, reset, or missing|Session ledger integrity verification failed|Untracked tool execution records/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 
