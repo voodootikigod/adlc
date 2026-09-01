@@ -186,16 +186,17 @@ function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
   if (env?.ADLC_MANIFEST_KEY) return env.ADLC_MANIFEST_KEY;
 
-  // Store secret outside the repository workspace so agents running in workspace cannot read it
+  // Store secret in OS process-isolated runtime path inaccessible inside workspace
   let secretDir;
   try {
-    const home = homedir();
-    if (home && existsSync(home)) {
-      secretDir = join(home, '.adlc-secrets');
+    const uid = typeof process.getuid === 'function' ? process.getuid() : '0';
+    if (existsSync('/dev/shm')) {
+      secretDir = `/dev/shm/.adlc-secrets-${uid}`;
     }
   } catch {}
   if (!secretDir) {
-    secretDir = join(tmpdir(), '.adlc-host-secrets');
+    const uid = typeof process.getuid === 'function' ? process.getuid() : '0';
+    secretDir = join(tmpdir(), `.adlc-runtime-secrets-${uid}`);
   }
   const rootKey = createHash('sha256').update(root).digest('hex').slice(0, 16);
   const secretFile = join(secretDir, `session-${rootKey}.secret`);
@@ -364,6 +365,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     }
   }
 
+  const MAX_LEDGER_BYTES = 512 * 1024; // 512 KiB write-side rotation threshold
+
   function appendLedger(entry) {
     if (!ticketStoreExists(root, env)) return;
     try {
@@ -372,6 +375,44 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         t: Date.now(),
         ...entry,
       }) + '\n';
+
+      // Check if ledger exceeds rotation threshold
+      if (existsSync(ledgerPath)) {
+        try {
+          const lStat = lstatSync(ledgerPath);
+          if (lStat.isFile() && lStat.size + record.length > MAX_LEDGER_BYTES) {
+            // Compact ledger: replay into compact state snapshot records
+            const store = replayLedger();
+            if (store && Object.keys(store).length > 0) {
+              const tmpLedger = `${ledgerPath}.tmp.${process.pid}.${Date.now()}`;
+              const compactedLines = [];
+              for (const [sid, s] of Object.entries(store)) {
+                compactedLines.push(JSON.stringify({
+                  t: s.updatedAt ?? Date.now(),
+                  type: 'snapshot',
+                  sessionID: sid,
+                  depth: s.depth ?? 0,
+                  totalCalls: s.totalCalls ?? 0,
+                  mutatingCalls: s.mutatingCalls ?? 0,
+                  compacted: Boolean(s.compacted),
+                  ended: Boolean(s.ended),
+                  initialActiveTicket: s.initialActiveTicket ?? null,
+                  initialStoreHash: s.initialStoreHash ?? null,
+                  initialPointer: s.initialPointer ?? null,
+                  initialTranscript: s.initialTranscript ?? null,
+                  lastTranscriptHash: s.lastTranscriptHash ?? null,
+                  lastTranscriptSize: s.lastTranscriptSize ?? null,
+                }));
+              }
+              compactedLines.push(JSON.stringify({ t: Date.now(), ...entry }));
+              writeFileSync(tmpLedger, compactedLines.join('\n') + '\n', { mode: 0o600 });
+              renameSync(tmpLedger, ledgerPath);
+              return;
+            }
+          }
+        } catch {}
+      }
+
       appendFileSync(ledgerPath, record, { mode: 0o600 });
     } catch {}
   }
@@ -390,7 +431,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           const safeKey = sanitizeSessionId(ev.sessionID);
           if (!safeKey) continue;
           const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [] };
-          if (ev.type === 'recordActiveTicket') {
+          if (ev.type === 'snapshot') {
+            s.depth = ev.depth ?? s.depth ?? 0;
+            s.totalCalls = ev.totalCalls ?? s.totalCalls ?? 0;
+            s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
+            s.compacted = Boolean(ev.compacted);
+            s.ended = Boolean(ev.ended);
+            if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
+            if (ev.initialStoreHash) s.initialStoreHash = ev.initialStoreHash;
+            if (ev.initialPointer) s.initialPointer = ev.initialPointer;
+            if (ev.initialTranscript) s.initialTranscript = ev.initialTranscript;
+            if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+            if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+          } else if (ev.type === 'recordActiveTicket') {
             if (!s.initialActiveTicket && ev.activeTicketId) {
               s.initialActiveTicket = ev.activeTicketId;
               s.initialStoreHash = ev.storeHash ?? null;

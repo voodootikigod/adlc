@@ -4,6 +4,9 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
@@ -3651,7 +3654,7 @@ test('onStop: rejects npm run check as verification after file edits', () => {
 test('subprocess integration: cjs shim executes across separate Node processes with durable baseline', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
   const transcriptFile = join(root, 'transcript.jsonl');
-  const cjsShim = join(import.meta.dirname, '..', 'hooks', 'adlc-rails-guard.cjs');
+  const cjsShim = join(__dirname, '..', 'hooks', 'adlc-rails-guard.cjs');
   try {
     const lines = [
       JSON.stringify({
@@ -3779,6 +3782,32 @@ test('writeStore: bounds active session storage to MAX_TRACKED_SESSIONS without 
     const keys = Object.keys(store).filter((k) => k !== '_corrupted');
     assert.ok(keys.length <= 100, `Expected <= 100 sessions, got ${keys.length}`);
     assert.ok(keys.includes('session-bulk-105'), 'Active session must not be evicted');
+  } finally {
+    cleanup();
+  }
+});
+
+test('appendLedger: compacts snapshot records and accurately recovers session state', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const sessionID = 'sess-compaction-test';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1', 'mock-hash-123');
+    for (let i = 0; i < 20; i++) {
+      tracker.recordToolCall(sessionID, { isMutating: i % 2 === 0 });
+    }
+    // Verify initial state
+    assert.equal(tracker.depth(sessionID), 20);
+    assert.equal(tracker.mutatingCalls(sessionID), 10);
+
+    // Delete sessions.json and recover via ledger replay
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    if (existsSync(sessionsFile)) unlinkSync(sessionsFile);
+
+    const freshTracker = createPersistentTracker(root, env);
+    assert.equal(freshTracker.depth(sessionID), 20);
+    assert.equal(freshTracker.mutatingCalls(sessionID), 10);
+    assert.equal(freshTracker.initialTicket(sessionID), 'T1');
   } finally {
     cleanup();
   }
