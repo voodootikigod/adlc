@@ -246,8 +246,11 @@ export function runFromStdin(raw, env = process.env) {
     if (fallbackRoot) distinctRoots.add(fallbackRoot);
   }
 
+  const args = extractArgs(payload);
   const isShell = isShellTool(toolName) || toolName === 'run_command' || toolName === 'execute' || toolName === 'bash' || toolName === 'execute_command' || toolName === 'terminal';
-  const isMut = isShell || cls !== 'readonly';
+  const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
+  const primaryRoot = Array.from(distinctRoots)[0] ?? process.cwd();
+  const isMut = isShell ? (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: primaryRoot, toolArgs: args })) : cls !== 'readonly';
 
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   for (const root of distinctRoots) {
@@ -761,7 +764,13 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     const trackedDepth = tracker.mutatingCalls ? tracker.mutatingCalls(sessionID) : tracker.depth(sessionID);
-    if (trackedDepth > 0 && mutatingCallSeq > trackedDepth) {
+    if (trackedDepth > 0 && mutatingCallSeq !== trackedDepth) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Untracked or missing tool execution records detected in transcript during Stop verification.',
+      };
+    }
+    if (trackedDepth === 0 && mutatingCallSeq > 0 && trackedInitialTicket) {
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Untracked tool execution records detected in transcript during Stop verification.',

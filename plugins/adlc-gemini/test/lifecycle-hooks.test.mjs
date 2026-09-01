@@ -2468,7 +2468,39 @@ test('onStop: rejects Stop when transcript contains untracked injected tool call
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Untracked tool execution records detected in transcript/);
+    assert.match(res.reason, /Untracked or missing tool execution records detected in transcript/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when transcript omits mutating tool calls recorded by host', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-omitted-mutations',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    // Host recorded 2 mutating calls, but transcript omitted them
+    tracker.recordToolCall('test-session-omitted-mutations', { isMutating: true });
+    tracker.recordToolCall('test-session-omitted-mutations', { isMutating: true });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Untracked or missing tool execution records detected in transcript/);
   } finally {
     cleanup();
   }
