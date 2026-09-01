@@ -257,7 +257,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   function readStore() {
     try {
       if (existsSync(storePath)) {
-        const store = JSON.parse(readFileSync(storePath, 'utf8'));
+        const stat = lstatSync(storePath);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return {};
+        const raw = readTextFileBounded(storePath, stat.size);
+        if (!raw) return {};
+        const store = JSON.parse(raw);
         // TTL check for default_session (1 hour) to avoid stale lockouts across days
         if (store.default_session && store.default_session.updatedAt && Date.now() - store.default_session.updatedAt > 3600000) {
           delete store.default_session;

@@ -622,9 +622,10 @@ export function onStop(payload, { env = process.env } = {}) {
 
     const trackerInfo = tracker.lastTranscript ? tracker.lastTranscript(sessionID) : { initial: tracker.initialTranscript(sessionID) };
     const initialTranscript = trackerInfo?.initial;
+    let curStat = null;
     if (initialTranscript && transcriptPath) {
       try {
-        const curStat = lstatSync(transcriptPath);
+        curStat = lstatSync(transcriptPath);
         if (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev) {
           return {
             decision: 'continue',
@@ -954,10 +955,21 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
+    if (transcriptPath && existsSync(transcriptPath) && curStat) {
+      try {
+        const finalStat = lstatSync(transcriptPath);
+        if (finalStat.size !== curStat.size || finalStat.ino !== curStat.ino) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session transcript was modified concurrently during Stop verification.',
+          };
+        }
+      } catch {}
+    }
+
     return { decision: 'stop' };
   } catch (err) {
     if (env?.ADLC_P4_ENFORCEMENT === '1') {
-      console.error('ONSTOP STACK:', err.stack);
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Internal error evaluating Stop hook under enforcement.',
