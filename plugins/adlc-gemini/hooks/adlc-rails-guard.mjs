@@ -521,8 +521,16 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
     if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
   }
 
-  // Strict immutable verification runners
-  if (/^node\s+--test(\s+|$)/i.test(trimmed)) return true;
+  // Strict immutable verification runners: require full-suite execution from repository root
+  if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
+    const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
+    if (typeof cwd === 'string' && cwd) {
+      const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
+      const realCwd = realpathOr(absCwd);
+      if (!realRoot || relative(realRoot, realCwd) !== '') return false;
+    }
+    return true;
+  }
 
   return false;
 }
