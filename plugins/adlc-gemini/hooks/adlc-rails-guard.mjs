@@ -342,7 +342,30 @@ function sanitizeGlobList(list, maxItems = 20) {
 
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
-    const root = resolveWorkspaceRoot(payload, env);
+    let root = resolveWorkspaceRoot(payload, env);
+    if (!root) {
+      const transcriptPath = resolveTranscriptPath({ payload, env });
+      if (transcriptPath) {
+        const records = parseTranscriptRecords(transcriptPath);
+        for (const r of records) {
+          const calls = Array.isArray(r.toolCalls) ? r.toolCalls
+            : (Array.isArray(r.tool_calls) ? r.tool_calls
+            : (r.toolCall ? [r.toolCall] : []));
+          for (const c of calls) {
+            const args = c?.args ?? c?.arguments ?? {};
+            const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
+            if (typeof p === 'string' && isAbsolute(p)) {
+              const candidate = findAdlcRoot(p);
+              if (candidate) {
+                root = candidate;
+                break;
+              }
+            }
+          }
+          if (root) break;
+        }
+      }
+    }
     if (!root) return { injectSteps: [] };
 
     const active = resolveActiveTicketId(root, env);
@@ -400,8 +423,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
 
   // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, and module preload/loader options
-  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--test-shard|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
-  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=)/i.test(trimmed)) return false;
+  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
+  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=)/i.test(trimmed)) return false;
 
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
@@ -468,27 +491,24 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
-    const sessionID = resolveSessionId({ payload, env });
-    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    let root = resolveWorkspaceRoot(payload, env);
+    const transcriptPath = resolveTranscriptPath({ payload, env });
     const records = transcriptPath ? parseTranscriptRecords(transcriptPath, { readFull: true }) : [];
 
-    let root = resolveWorkspaceRoot(payload, env);
-
-    // Fallback: discover repo root from absolute paths in transcript tool calls for headless sessions
+    // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
+    // discover root from absolute file paths in the transcript
     if (!root && records.length > 0) {
       for (const r of records) {
-        if (!r || typeof r !== 'object') continue;
         const calls = Array.isArray(r.toolCalls) ? r.toolCalls
           : (Array.isArray(r.tool_calls) ? r.tool_calls
-          : (r.toolCall ? [r.toolCall]
-          : (r.name ? [r] : [])));
+          : (r.toolCall ? [r.toolCall] : []));
         for (const c of calls) {
           const args = c?.args ?? c?.arguments ?? {};
-          const candidatePath = args.TargetFile ?? args.AbsolutePath ?? args.SearchDirectory ?? args.Cwd ?? args.cwd;
-          if (typeof candidatePath === 'string' && isAbsolute(candidatePath)) {
-            const found = findAdlcRoot(dirname(candidatePath)) ?? findAdlcRoot(candidatePath);
-            if (found) {
-              root = found;
+          const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
+          if (typeof p === 'string' && isAbsolute(p)) {
+            const candidate = findAdlcRoot(p);
+            if (candidate) {
+              root = candidate;
               break;
             }
           }
@@ -498,22 +518,27 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     if (!root) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Repository workspace root cannot be resolved under enforcement during Stop verification.',
-      };
+      if (env?.ADLC_P4_ENFORCEMENT === '1') {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Repository workspace root cannot be resolved under enforcement during Stop verification.',
+        };
+      }
+      return { decision: 'stop' };
     }
 
     const active = resolveActiveTicketId(root, env);
-    if (active.conflict) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
-      };
+    if (!active.id) {
+      if (active.conflict) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
+        };
+      }
+      return { decision: 'stop' };
     }
-    if (!active.id) return { decision: 'stop' };
 
-    // Validate that the active ticket is present in the validated ticket store
+    // Validate active ticket exists in ticket store
     try {
       const snapshot = loadTicketStoreReadOnly({ root, env });
       if (!snapshot.get(active.id)) {
@@ -572,6 +597,12 @@ export function onStop(payload, { env = process.env } = {}) {
           lastMutationCallIdx = currentCallIdx;
           if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
             packageManifestMutated = true;
+          }
+          if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
+            };
           }
         }
 

@@ -1175,3 +1175,88 @@ test('preInvocation: includes trust-root rails in frozen rails reminder', () => 
     cleanup();
   }
 });
+
+test('preInvocation: discovers repo root from transcript paths in headless mode with empty workspacePaths', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1' });
+  const headlessTranscript = join(tmpdir(), `headless-preinv-transcript-${Date.now()}.jsonl`);
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, 'src/index.js') } }],
+    }),
+  ];
+  writeFileSync(headlessTranscript, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [],
+      transcriptPath: headlessTranscript,
+      conversationId: 'test-session-headless-preinv',
+    };
+    const res = preInvocation(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: '' } });
+    assert.equal(res.injectSteps.length, 1);
+    assert.match(res.injectSteps[0].ephemeralMessage, /Active Ticket: T1/);
+  } finally {
+    try { rmSync(headlessTranscript, { force: true }); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: rejects node --test --test-skip-pattern', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: "node --test --test-skip-pattern='.*'" } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-skip-flag',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects tampering with transcript file', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: transcriptFile } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-tamper',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Tampering with session transcript files is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});
