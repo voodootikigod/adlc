@@ -251,6 +251,9 @@ export function runFromStdin(raw, env = process.env) {
     if (fallbackRoot) distinctRoots.add(fallbackRoot);
   }
 
+  const wsRoot = resolveWorkspaceRoot(payload, env);
+  if (wsRoot) distinctRoots.add(wsRoot);
+
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -606,6 +609,12 @@ export function onStop(payload, { env = process.env } = {}) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session transcript file identity (inode/device) changed during session.',
+          };
+        }
+        if (initialTranscript.byteLength && curStat.size < initialTranscript.byteLength) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
         }
       } catch {

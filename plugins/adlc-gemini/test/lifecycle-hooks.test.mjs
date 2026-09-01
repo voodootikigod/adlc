@@ -2248,3 +2248,39 @@ test('onStop: rejects Stop when transcript file is replaced with a different ino
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when transcript file shrinks in size (in-place truncation)', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const longLines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js') } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished with extensive notes and explanations.' }),
+  ];
+  writeFileSync(transcriptFile, longLines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shrink-tamper',
+    };
+    // Initialize session state with full transcript
+    preInvocation(payload, { env });
+
+    // Truncate file in place
+    writeFileSync(transcriptFile, '{"type":"PLANNER_RESPONSE"}\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript file size shrank/);
+  } finally {
+    cleanup();
+  }
+});

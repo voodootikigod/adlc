@@ -1,6 +1,7 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
@@ -266,11 +267,22 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
+        let hash = null;
+        let byteLength = 0;
+        try {
+          const raw = readFileSync(transcriptPath, 'utf8');
+          hash = createHash('sha256').update(raw).digest('hex');
+          byteLength = Buffer.byteLength(raw, 'utf8');
+        } catch {}
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev };
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash, byteLength };
+          }
+          if (hash) {
+            s.lastTranscriptHash = hash;
+            s.lastTranscriptByteLength = byteLength;
           }
           s.updatedAt = Date.now();
           store[sessionID] = s;
