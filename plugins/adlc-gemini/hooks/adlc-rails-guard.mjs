@@ -27,7 +27,12 @@ const ARGS_KEYS = ['args', 'arguments', 'params', 'parameters', 'input', 'tool_i
 // agy file-path arg keys are PascalCase (V7): write_to_file→TargetFile,
 // view_file→AbsolutePath. Include common fallbacks. CommandLine/CodeContent are
 // deliberately EXCLUDED — they are a shell string / file body, not a path.
-const PATH_KEYS = ['TargetFile', 'AbsolutePath', 'FilePath', 'Path', 'path', 'file_path', 'filePath', 'target_file', 'targetFile'];
+const PATH_KEYS = [
+  'TargetFile', 'AbsolutePath', 'FilePath', 'Path', 'path', 'file_path', 'filePath', 'target_file', 'targetFile',
+  'dest_file', 'destFile', 'dest', 'destination', 'destPath', 'target', 'file', 'filename', 'filepath',
+  'targetPath', 'source', 'sourceFile', 'src', 'src_file', 'dst', 'dst_file', 'output', 'output_file',
+  'output_path', 'out_file', 'outFile', 'outPath', 'outputPath', 'TargetContentPath', 'TargetDir',
+];
 
 function toolCallOf(p) {
   if (!p || typeof p !== 'object') return undefined;
@@ -52,12 +57,38 @@ export function extractArgs(payload) {
 export function extractFilePaths(payload) {
   const args = extractArgs(payload);
   const out = new Set();
-  for (const k of PATH_KEYS) {
-    const v = args[k];
-    if (typeof v === 'string' && v.trim()) out.add(v);
-    else if (Array.isArray(v)) for (const e of v) if (typeof e === 'string' && e.trim()) out.add(e);
+  for (const [key, v] of Object.entries(args)) {
+    if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
+      continue;
+    }
+    const isPathKey = PATH_KEYS.some((pk) => pk.toLowerCase() === key.toLowerCase());
+    if (isPathKey) {
+      if (typeof v === 'string' && v.trim()) {
+        out.add(v.trim());
+      } else if (Array.isArray(v)) {
+        for (const e of v) {
+          if (typeof e === 'string' && e.trim()) out.add(e.trim());
+        }
+      }
+    }
   }
   return [...out];
+}
+
+function hasPathLikeArgs(args) {
+  if (!args || typeof args !== 'object') return false;
+  for (const [key, val] of Object.entries(args)) {
+    if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
+      continue;
+    }
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('.') || /(file|path|dest|target|dir|src|dst)/i.test(key)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
@@ -162,7 +193,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     // op (e.g. generate_image, a mutator with no inspectable path) → allow. A
     // 'mutating' name with no path is opaque (H2).
     if (!paths.length) {
-      if (cls === 'other') return allow();
+      if (cls === 'other') {
+        const args = extractArgs(payload);
+        if (enforcing && hasPathLikeArgs(args)) {
+          return deny(`unclassified tool "${tool}" has uninspectable path-like arguments — failing closed`);
+        }
+        return allow();
+      }
       return enforcing
         ? deny(`mutating tool "${tool}" exposed no inspectable target path — failing closed`)
         : allow();
@@ -566,8 +603,11 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+(--no-install\s+)?adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // If package.json or shell mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
-  if (!packageManifestMutated && !shellMutated) {
+  // If shell mutations occurred, no textual test execution can be trusted as clean verification
+  if (shellMutated) return false;
+
+  // If package.json mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
+  if (!packageManifestMutated) {
     if (/^(npm\s+(test|run\s+(test|preflight|check)))\s*$/i.test(trimmed)) return true;
     if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)\s*$/i.test(trimmed)) return true;
     if (/^npx\s+--no-install\s+(mocha|jest|vitest)\s*$/i.test(trimmed)) return true;
@@ -589,7 +629,7 @@ export function isReadonlyCommand(cmd) {
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
   // Reject output redirection flags (e.g. git diff --output=file)
   if (/(^|\s)(--output|-o|--output-directory)\b/i.test(trimmed) || /--output=/i.test(trimmed)) return false;
-  return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date)(\s+|$)/i.test(trimmed);
+  return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
 }
 
 export function onStop(payload, { env = process.env } = {}) {
@@ -807,7 +847,7 @@ export function onStop(payload, { env = process.env } = {}) {
             if (isExplicitSuccess && !isExplicitFailure) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd)) {
+          } else if (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root, toolArgs: args })) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;

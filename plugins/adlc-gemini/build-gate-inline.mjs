@@ -418,7 +418,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return true;
       const store = readStore();
       const s = store[sessionID];
-      if (!s || !s.baselineSig) return true;
+      if (!s) return true;
+      const hasTrackedState = (s.totalCalls ?? 0) > 0 || (s.depth ?? 0) > 0 || (s.mutatingCalls ?? 0) > 0 || Boolean(s.initialActiveTicket) || Boolean(s.initialTranscript);
+      if (!s.baselineSig) {
+        return !hasTrackedState && env?.ADLC_P4_ENFORCEMENT !== '1';
+      }
       const expected = computeBaselineSig(sessionID, s, root, env);
       if (!expected) return false;
       return s.baselineSig === expected;

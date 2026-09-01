@@ -2532,7 +2532,7 @@ test('onStop: rejects Stop when .adlc/sessions.json session entry is wiped to em
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Session tracking entry was deleted, reset, or modified/);
+    assert.match(res.reason, /Session baseline signature mismatch|Session tracking entry was deleted, reset, or modified/);
   } finally {
     cleanup();
   }
@@ -2915,7 +2915,103 @@ test('onStop: rejects Stop when mutable call counters in sessions.json are forge
     // Tamper with mutatingCalls or totalCalls directly in sessions.json
     const sessionsFile = join(root, '.adlc', 'sessions.json');
     const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
-    sData['sess-tamper-counters'].mutatingCalls = 0;
+    sData['sess-tamper-counters'] = { mutatingCalls: 0, totalCalls: 0, initialStoreHash: 'fake', baselineSig: 'fake' };
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session baseline signature mismatch/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when shell mutations ran prior to node --test verification', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: 'impl' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'sed -i "s/fail/pass/g" test/suite.js', Cwd: root } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-shell-test-tamper',
+    };
+    preInvocation(payload, { env });
+
+    // Simulate tool invocations through runFromStdin
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'sed -i "s/fail/pass/g" test/suite.js', Cwd: root } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits|Edits exist in this session.*no successful verification command/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('decide: fails closed when unclassified tool attempts to write to frozen rail via dest_file or file', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload1 = {
+      workspacePaths: [root],
+      toolCall: { name: 'sync', args: { dest_file: '.adlc/tickets.json' } },
+    };
+    const res1 = runFromStdin(JSON.stringify(payload1), env);
+    assert.equal(res1.decision, 'deny');
+    assert.match(res1.reason, /frozen rail/);
+
+    const payload2 = {
+      workspacePaths: [root],
+      toolCall: { name: 'transfer', args: { file: join(root, '.adlc/current-ticket.json') } },
+    };
+    const res2 = runFromStdin(JSON.stringify(payload2), env);
+    assert.equal(res2.decision, 'deny');
+    assert.match(res2.reason, /frozen rail/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when sessions.json entry is missing baselineSig under enforcement', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-missing-sig',
+    };
+    preInvocation(payload, { env });
+
+    // Remove baselineSig from sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    delete sData['sess-missing-sig'].baselineSig;
     writeFileSync(sessionsFile, JSON.stringify(sData));
 
     const res = onStop(payload, { env });
