@@ -831,9 +831,24 @@ export function onStop(payload, { env = process.env } = {}) {
       }
       return { decision: 'stop' };
     }
+    // Check if initial pointer was removed
+    const trackedInitialPointer = tracker.initialPointer ? tracker.initialPointer(sessionID) : null;
+    const currentFile = join(root, '.adlc', 'current-ticket.json');
+    if (trackedInitialPointer?.exists && !existsSync(currentFile)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Active ticket pointer (.adlc/current-ticket.json) was removed during session.',
+      };
+    }
 
     // Validate session tracking store integrity
     const sessionsFile = join(root, '.adlc', 'sessions.json');
+    if ((trackedDepth > 0 || trackedTotal > 0 || mutatingCallSeq > 0 || trackedInitialTicket) && !existsSync(sessionsFile)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
+      };
+    }
     if (existsSync(sessionsFile)) {
       try {
         const sStat = lstatSync(sessionsFile);

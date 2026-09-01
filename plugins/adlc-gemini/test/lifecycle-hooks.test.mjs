@@ -2738,3 +2738,34 @@ test('onStop: rejects Stop when transcript path changes mid-session', () => {
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when current-ticket.json is deleted mid-session even if ADLC_TICKET is set', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-ptr-del',
+    };
+    const testEnv = { ...env, ADLC_TICKET: 'T1' };
+    preInvocation(payload, { env: testEnv });
+
+    // Now delete current-ticket.json
+    unlinkSync(join(root, '.adlc', 'current-ticket.json'));
+
+    const res = onStop(payload, { env: testEnv });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket pointer \(\.adlc\/current-ticket\.json\) was removed/);
+  } finally {
+    cleanup();
+  }
+});

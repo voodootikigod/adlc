@@ -340,6 +340,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (!s.initialActiveTicket && activeTicketId) {
           s.initialActiveTicket = activeTicketId;
           s.initialStoreHash = storeHash ?? null;
+          const currentFile = join(root, '.adlc', 'current-ticket.json');
+          if (existsSync(currentFile)) {
+            try {
+              const cStat = lstatSync(currentFile);
+              s.initialPointer = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
+            } catch {}
+          }
         }
         s.updatedAt = Date.now();
         store[sessionID] = s;
@@ -355,6 +362,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return null;
       const store = readStore();
       return store[sessionID]?.initialStoreHash ?? null;
+    },
+    initialPointer(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialPointer ?? null;
     },
     recordTranscript(sessionID, transcriptPath) {
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
