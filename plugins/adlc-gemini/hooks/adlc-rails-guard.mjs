@@ -762,6 +762,14 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
+    const trackedDepth = tracker.depth(sessionID);
+    if (trackedDepth > 0 && callSeq > trackedDepth) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Untracked tool execution records detected in transcript during Stop verification.',
+      };
+    }
+
     const active = resolveActiveTicketId(root, env);
     if (initialActiveId && active.id !== initialActiveId) {
       return {
@@ -791,10 +799,10 @@ export function onStop(payload, { env = process.env } = {}) {
       try {
         const sRaw = readFileSync(sessionsFile, 'utf8');
         const sData = JSON.parse(sRaw);
-        if (!sData || typeof sData !== 'object' || !sData[sessionID]) {
+        if (!sData || typeof sData !== 'object') {
           return {
             decision: 'continue',
-            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or missing session entry during verification.',
+            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
           };
         }
       } catch {
@@ -803,6 +811,11 @@ export function onStop(payload, { env = process.env } = {}) {
           reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
         };
       }
+    } else if (trackedInitialTicket || (active.id && records.length > 0 && shellMutated)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted under enforcement during Stop verification.',
+      };
     }
 
     // Validate active ticket exists in ticket store

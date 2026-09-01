@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker } from '../build-gate-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
@@ -29,6 +29,8 @@ function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope =
   if (activeTicket) {
     writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: activeTicket }));
   }
+
+  writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
 
   const env = {
     ADLC_P4_ENFORCEMENT: enforcement,
@@ -2357,7 +2359,7 @@ test('computePrefixHash: correctly hashes multi-chunk streaming files', () => {
   }
 });
 
-test('onStop: rejects Stop when .adlc/sessions.json entry for sessionID is deleted', () => {
+test('onStop: rejects Stop when .adlc/sessions.json file is corrupted', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
@@ -2377,15 +2379,92 @@ test('onStop: rejects Stop when .adlc/sessions.json entry for sessionID is delet
     };
     preInvocation(payload, { env });
 
-    // Erase session tracking entry from .adlc/sessions.json
+    // Corrupt .adlc/sessions.json
     const sessionsFile = join(root, '.adlc', 'sessions.json');
-    if (writeFileSync) {
-      writeFileSync(sessionsFile, JSON.stringify({ other_session: { depth: 0 } }));
-    }
+    writeFileSync(sessionsFile, '{ corrupted json');
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Session tracking store was corrupted or missing session entry/);
+    assert.match(res.reason, /Session tracking store was corrupted or unreadable/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when .adlc/sessions.json file is completely deleted mid-session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'touch build.log', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-deleted-sessions-file',
+    };
+    preInvocation(payload, { env });
+
+    // Completely delete .adlc/sessions.json
+    rmSync(join(root, '.adlc', 'sessions.json'), { force: true });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking store was missing or deleted/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when transcript contains untracked injected tool calls', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  // Initial 1 tool call recorded
+  const initialLine = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, 'src/feature/app.js') } }],
+  });
+  writeFileSync(transcriptFile, initialLine + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-injected-tools',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('test-session-injected-tools');
+
+    // Host recorded depth: 1 (via recordToolCall)
+    // Now inject multiple fake tool calls into transcript that never ran via PreToolUse
+    const forgedLines = [
+      initialLine,
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, forgedLines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Untracked tool execution records detected in transcript/);
   } finally {
     cleanup();
   }
