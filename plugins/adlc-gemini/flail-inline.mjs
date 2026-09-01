@@ -100,7 +100,9 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
           const isTest = env?.NODE_ENV === 'test' || env?.ADLC_TEST_MODE === '1' || process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT !== undefined || process.execArgv.some((a) => a.includes('test')) || (process.argv[1] && process.argv[1].includes('test'));
-          const allowedRoots = [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT, tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])];
+          const allowedRoots = isTest
+            ? [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT, tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])]
+            : [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT];
           let isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {
               const realR = realpathSync(r);
@@ -110,7 +112,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
               return false;
             }
           });
-          if (!isAllowed) {
+          if (!isAllowed && isTest) {
             let cur = dirname(real);
             const { root: fsRoot } = parse(cur);
             while (cur && cur !== fsRoot) {

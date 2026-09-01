@@ -990,6 +990,9 @@ export function onStop(payload, { env = process.env } = {}) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
+            if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(cmd)) {
+              packageManifestMutated = true;
+            }
           }
         }
       }

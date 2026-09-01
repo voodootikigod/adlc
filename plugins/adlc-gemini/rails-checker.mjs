@@ -103,7 +103,7 @@ export function hasCommandLineArgs(args) {
 export function hasCodeExecutionArgs(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
-    if (/(^|[\b_])(code|script|eval|expression|program|snippet|inline)([\b_]|$)/i.test(key)) {
+    if (/(code|script|eval|expression|program|snippet|inline)/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCodeExecutionArgs(val, depth + 1)) {

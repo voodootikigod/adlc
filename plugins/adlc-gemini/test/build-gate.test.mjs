@@ -450,3 +450,27 @@ test('createFlailTracker: records mutations and emits warning on threshold', () 
   assert.equal(res.churning.length, 1);
   assert.equal(res.churning[0].path, 'src/app.mjs');
 });
+
+test('checkBuildGate: allows build on sharded ticket store under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sharded-bg-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+    writeFileSync(join(root, '.adlc', 'tickets', ticketFilename('T-01')), JSON.stringify({
+      id: 'T-01',
+      title: 'Shard Ticket',
+      rails: ['src/frozen.js'],
+      scope: ['src/feature/**'],
+    }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-01' }));
+    writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+
+    const tracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID: 'sess-shard', tracker, root, env });
+    assert.equal(gate.decision, 'allow', gate.reason);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

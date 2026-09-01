@@ -3944,3 +3944,48 @@ test('onStop: rejects untracked mutating transcript without session tracker entr
     cleanup();
   }
 });
+
+test('onStop: rejects npm test verification after shell mutation modified package.json', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-shell-pkg-tamper',
+    };
+    preInvocation(payload, { env });
+
+    // 1. Shell command rewriting package.json
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'node -e "fs.writeFileSync(\'package.json\', \'{}\')"', Cwd: root } },
+    }), env);
+
+    // 2. npm test run
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+    }), env);
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node -e "fs.writeFileSync(\'package.json\', \'{}\')"', Cwd: root } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits|Edits exist in this session.*no successful verification command/i);
+  } finally {
+    cleanup();
+  }
+});
+

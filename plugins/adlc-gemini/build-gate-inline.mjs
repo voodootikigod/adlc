@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSyn
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
+import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
 import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps } from './flail-inline.mjs';
 
@@ -904,11 +905,13 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   if (!active.id) {
     return { decision: 'allow', reason: 'no unambiguous active ticket' };
   }
-  const { tickets, errors } = loadTickets(ticketsPath);
-  if (errors && errors.length > 0) {
-    return { decision: 'deny', reason: `corrupt or unparseable ticket store: ${errors.join('; ')}` };
+  let ticket = null;
+  try {
+    const store = loadTicketStoreReadOnly({ root, env });
+    ticket = store.get(active.id);
+  } catch (err) {
+    return { decision: 'deny', reason: `corrupt or unparseable ticket store: ${err?.message ?? err}` };
   }
-  const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
     return { decision: 'deny', reason: `active ticket ${active.id} declared in current-ticket.json but not found in tickets.json` };
   }

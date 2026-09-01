@@ -177,6 +177,33 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(v3.decision, 'deny');
   assert.match(v3.deny_reason, /uninspectable arguments/);
 
+  // python_exec with scriptContent (camelCase)
+  const v4 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'python_exec', args: { scriptContent: "open('src/file.js','w').write('x')" } },
+  }, { env: ENF });
+  assert.equal(v4.allow_tool, false);
+  assert.equal(v4.decision, 'deny');
+  assert.match(v4.deny_reason, /uninspectable arguments/);
+
+  // custom_runner with codePayload (camelCase)
+  const v5 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'custom_runner', args: { codePayload: "rm -rf src/frozen.js" } },
+  }, { env: ENF });
+  assert.equal(v5.allow_tool, false);
+  assert.equal(v5.decision, 'deny');
+  assert.match(v5.deny_reason, /uninspectable arguments/);
+
+  // nested code argument
+  const v6 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'remote_eval', args: { options: { inlineCode: "process.exit(1)" } } },
+  }, { env: ENF });
+  assert.equal(v6.allow_tool, false);
+  assert.equal(v6.decision, 'deny');
+  assert.match(v6.deny_reason, /uninspectable arguments/);
+
   // When enforcement is off, unclassified tools without paths allow
   const vOff = decide({
     workspacePaths: [root],
@@ -185,4 +212,5 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(vOff.allow_tool, true);
   assert.equal(vOff.decision, 'allow');
 });
+
 
