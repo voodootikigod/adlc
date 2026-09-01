@@ -208,6 +208,11 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     h: s?.initialStoreHash ?? null,
     p: s?.initialPointer ?? null,
     tr: s?.initialTranscript ?? null,
+    depth: s?.depth ?? 0,
+    totalCalls: s?.totalCalls ?? 0,
+    mutatingCalls: s?.mutatingCalls ?? 0,
+    lastTranscriptSize: s?.lastTranscriptSize ?? null,
+    lastTranscriptHash: s?.lastTranscriptHash ?? null,
   });
   return createHmac('sha256', secretKey).update(payload).digest('hex');
 }
@@ -342,6 +347,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.totalCalls = (s.totalCalls ?? 0) + 1;
         s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
         s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         writeStore(store);
       });
@@ -356,6 +362,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (s.totalCalls && s.totalCalls > 0) s.totalCalls -= 1;
         if (isMutating && s.mutatingCalls && s.mutatingCalls > 0) s.mutatingCalls -= 1;
         s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         writeStore(store);
       });
@@ -385,9 +392,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               s.initialPointer = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
             } catch {}
           }
-          s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         }
         s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         writeStore(store);
       });
@@ -412,7 +419,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const store = readStore();
       const s = store[sessionID];
       if (!s || !s.baselineSig) return true;
-      return s.baselineSig === computeBaselineSig(sessionID, s, root, env);
+      const expected = computeBaselineSig(sessionID, s, root, env);
+      if (!expected) return false;
+      return s.baselineSig === expected;
     },
     recordTranscript(sessionID, transcriptPath) {
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
@@ -424,12 +433,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (!s.initialTranscript) {
             const curHash = computePrefixHash(transcriptPath, stat.size);
             s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
-            s.baselineSig = computeBaselineSig(sessionID, s, root, env);
           }
           const curHash = computePrefixHash(transcriptPath, stat.size);
           if (curHash) s.lastTranscriptHash = curHash;
           s.lastTranscriptSize = stat.size;
           s.updatedAt = Date.now();
+          s.baselineSig = computeBaselineSig(sessionID, s, root, env);
           store[sessionID] = s;
           writeStore(store);
         });

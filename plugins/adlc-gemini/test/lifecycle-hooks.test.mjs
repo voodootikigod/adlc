@@ -2846,6 +2846,34 @@ test('findAdlcRoot: discovers root and enforces rails when ADLC_TICKET_STORE is 
       ]
     }));
     const testEnv = { ...env, ADLC_TICKET_STORE: customStore, ADLC_TICKET: 'T1' };
+    const discovered = findAdlcRoot(join(root, 'src', 'deep', 'nested', 'frozen.js'), testEnv);
+    assert.equal(discovered, root);
+
+    const payload = {
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src', 'frozen.js'), CodeContent: 'new' } }
+    };
+    const res = runFromStdin(JSON.stringify(payload), testEnv);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.reason, /frozen rail/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('findAdlcRoot: discovers root and enforces rails when ADLC_TICKET_STORE is external absolute path', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const externalDir = join(tmpdir(), `adlc-ext-store-${Date.now()}`);
+  mkdirSync(externalDir, { recursive: true });
+  const externalStore = join(externalDir, 'ext-tickets.json');
+  writeFileSync(externalStore, JSON.stringify({
+    version: 1,
+    tickets: [
+      { id: 'T1', title: 'T1', rails: ['src/frozen.js'] }
+    ]
+  }));
+  try {
+    const testEnv = { ...env, ADLC_TICKET_STORE: externalStore, ADLC_TICKET: 'T1' };
     const discovered = findAdlcRoot(join(root, 'src', 'frozen.js'), testEnv);
     assert.equal(discovered, root);
 
@@ -2853,9 +2881,46 @@ test('findAdlcRoot: discovers root and enforces rails when ADLC_TICKET_STORE is 
       workspacePaths: [root],
       toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src', 'frozen.js'), CodeContent: 'new' } }
     };
-    const res = runFromStdin(JSON.stringify(payload), { env: testEnv });
+    const res = runFromStdin(JSON.stringify(payload), testEnv);
     assert.equal(res.decision, 'deny');
     assert.match(res.reason, /frozen rail/);
+  } finally {
+    rmSync(externalDir, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when mutable call counters in sessions.json are forged/tampered', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-tamper-counters',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('sess-tamper-counters', { isMutating: true });
+    tracker.recordActiveTicket('sess-tamper-counters', 'T1', 'hash123');
+
+    // Tamper with mutatingCalls or totalCalls directly in sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    sData['sess-tamper-counters'].mutatingCalls = 0;
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session baseline signature mismatch/);
   } finally {
     cleanup();
   }

@@ -65,23 +65,41 @@ const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', '
 /** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null.
  * Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir). */
 export function findAdlcRoot(absPath, env = process.env) {
-  if (env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS) {
-    const storePath = env.ADLC_TICKET_STORE || env.ADLC_TICKETS;
-    const absStore = isAbsolute(storePath) ? storePath : (absPath ? join(absPath, storePath) : null);
-    if (absStore && existsSync(absStore)) {
-      let cur = dirname(absStore);
-      if (cur.endsWith('.adlc')) cur = dirname(cur);
+  if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
+  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+
+  let cur = absPath;
+  try {
+    const stat = lstatSync(absPath);
+    if (!stat.isDirectory()) cur = dirname(absPath);
+  } catch {
+    cur = dirname(absPath);
+  }
+
+  const { root: fsRoot } = parse(cur);
+  let externalWorkspaceCandidate = null;
+
+  while (true) {
+    if (storeOverride) {
+      if (!isAbsolute(storeOverride)) {
+        if (existsSync(join(cur, storeOverride))) return cur;
+      } else if (existsSync(storeOverride)) {
+        if (existsSync(join(cur, '.adlc')) || existsSync(join(cur, '.git')) || existsSync(join(cur, 'package.json'))) {
+          return cur;
+        }
+        if (!externalWorkspaceCandidate) externalWorkspaceCandidate = cur;
+      }
+    }
+    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
       return cur;
     }
-  }
-  if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
-  let cur = absPath;
-  const { root: fsRoot } = parse(cur);
-  while (true) {
-    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
-    if (cur === fsRoot) return null;
+    if (cur === fsRoot) break;
     cur = dirname(cur);
   }
+  if (storeOverride && isAbsolute(storeOverride) && existsSync(storeOverride)) {
+    return externalWorkspaceCandidate;
+  }
+  return null;
 }
 
 /** Make a raw target path absolute using workspacePaths[0]; report if we could. */
