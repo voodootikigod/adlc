@@ -184,7 +184,7 @@ test('onStop: rejects plain prose mention of test command when mutations occurre
   }
 });
 
-test('onStop: handles scalar null and string lines in transcript without crashing', () => {
+test('onStop: rejects scalar null and string lines in transcript under enforcement', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
@@ -201,7 +201,8 @@ test('onStop: handles scalar null and string lines in transcript without crashin
       conversationId: 'test-session-123',
     };
     const res = onStop(payload, { env });
-    assert.equal(res.decision, 'stop');
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Invalid or schema-corrupted transcript records/);
   } finally {
     cleanup();
   }

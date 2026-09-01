@@ -178,7 +178,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         const transcriptSteps = transcriptPath ? parseTranscriptSteps(transcriptPath) : [];
         const flailRes = pathTracker.recordEdit(sessionID, abs, { transcriptSteps });
 
-        const flailEnforcing = env?.ADLC_FLAIL_ENFORCEMENT === '1';
+        const flailEnforcing = enforcing || env?.ADLC_FLAIL_ENFORCEMENT === '1';
         const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
 
         if (flailRes?.verdict === 'flail') {
@@ -595,7 +595,12 @@ export function onStop(payload, { env = process.env } = {}) {
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
-      if (!r || typeof r !== 'object') continue;
+      if (!r || typeof r !== 'object' || Array.isArray(r)) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Invalid or schema-corrupted transcript records detected under enforcement during Stop verification.',
+        };
+      }
 
       if (r.__oversized) {
         return {
