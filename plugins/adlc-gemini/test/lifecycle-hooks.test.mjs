@@ -2805,3 +2805,58 @@ test('onStop: rejects Stop when sessions.json baseline fields are tampered with'
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when sessions.json is replaced by an array []', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-array-store',
+    };
+    preInvocation(payload, { env });
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    writeFileSync(sessionsFile, '[]');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking store was corrupted or unreadable/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('findAdlcRoot: discovers root and enforces rails when ADLC_TICKET_STORE is configured', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  try {
+    const customStore = join(root, 'custom-tickets.json');
+    writeFileSync(customStore, JSON.stringify({
+      version: 1,
+      tickets: [
+        { id: 'T1', title: 'T1', rails: ['src/frozen.js'] }
+      ]
+    }));
+    const testEnv = { ...env, ADLC_TICKET_STORE: customStore, ADLC_TICKET: 'T1' };
+    const discovered = findAdlcRoot(join(root, 'src', 'frozen.js'), testEnv);
+    assert.equal(discovered, root);
+
+    const payload = {
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src', 'frozen.js'), CodeContent: 'new' } }
+    };
+    const res = runFromStdin(JSON.stringify(payload), { env: testEnv });
+    assert.equal(res.decision, 'deny');
+    assert.match(res.reason, /frozen rail/);
+  } finally {
+    cleanup();
+  }
+});

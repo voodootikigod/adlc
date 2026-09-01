@@ -196,13 +196,12 @@ function getOrCreateSessionSecret(root, env = process.env) {
     }
     sleepSyncWithJitter(10);
   }
-  const user = env?.USER || env?.LOGNAME || 'user';
-  const home = env?.HOME || '/root';
-  return `adlc-secret-${user}-${home}`;
+  return null;
 }
 
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
   const secretKey = getOrCreateSessionSecret(root, env);
+  if (!secretKey) return null;
   const payload = JSON.stringify({
     sessionID,
     t: s?.initialActiveTicket ?? null,
@@ -300,6 +299,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const raw = readTextFileBounded(storePath, stat.size);
         if (!raw) return {};
         const store = JSON.parse(raw);
+        if (!store || typeof store !== 'object' || Array.isArray(store)) return {};
         // TTL check for default_session (1 hour) to avoid stale lockouts across days
         if (store.default_session && store.default_session.updatedAt && Date.now() - store.default_session.updatedAt > 3600000) {
           delete store.default_session;

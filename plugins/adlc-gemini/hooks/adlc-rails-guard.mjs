@@ -64,7 +64,16 @@ const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', '
 
 /** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null.
  * Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir). */
-export function findAdlcRoot(absPath) {
+export function findAdlcRoot(absPath, env = process.env) {
+  if (env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS) {
+    const storePath = env.ADLC_TICKET_STORE || env.ADLC_TICKETS;
+    const absStore = isAbsolute(storePath) ? storePath : (absPath ? join(absPath, storePath) : null);
+    if (absStore && existsSync(absStore)) {
+      let cur = dirname(absStore);
+      if (cur.endsWith('.adlc')) cur = dirname(cur);
+      return cur;
+    }
+  }
   if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
   let cur = absPath;
   const { root: fsRoot } = parse(cur);
@@ -155,7 +164,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
         continue;
       }
-      const root = findAdlcRoot(abs);
+      const root = findAdlcRoot(abs, env);
       if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
@@ -200,7 +209,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 }
 
 /** Parse a raw stdin string and return the agy verdict. Enforcement-aware on bad JSON. */
-export function runFromStdin(raw, env = process.env) {
+export function runFromStdin(raw, envArg = process.env) {
+  const env = (envArg && typeof envArg === 'object' && envArg.env) ? envArg.env : (envArg ?? process.env);
   const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
   if (!raw || !raw.trim()) {
     return enforcing ? deny('unparseable tool payload while enforcing — failing closed') : allow();
@@ -246,14 +256,14 @@ export function runFromStdin(raw, env = process.env) {
     for (const p of paths) {
       const { abs } = anchorPath(p, payload);
       if (abs) {
-        const root = findAdlcRoot(abs);
+        const root = findAdlcRoot(abs, env);
         if (root) distinctRoots.add(root);
       }
     }
   }
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   if (distinctRoots.size === 0 && transcriptPath) {
-    const transcriptRoot = findAdlcRoot(transcriptPath);
+    const transcriptRoot = findAdlcRoot(transcriptPath, env);
     if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
@@ -295,7 +305,7 @@ async function readStdin() {
 
 export function printStatus(root = process.cwd(), env = process.env, payload = {}) {
   const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
-  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
+  const resolvedRoot = findAdlcRoot(absRoot, env) ?? absRoot;
   const active = resolveActiveTicketId(resolvedRoot, env);
   const tracker = createPersistentTracker(resolvedRoot, env);
   const sessionID = resolveSessionId({ payload, env });
@@ -316,7 +326,7 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
     .find((s) => typeof s === 'string' && s.trim());
   if (direct) {
     const candidate = isAbsolute(direct) ? direct : join(process.cwd(), direct);
-    const found = findAdlcRoot(candidate);
+    const found = findAdlcRoot(candidate, env);
     if (found) return found;
   }
 
@@ -324,7 +334,7 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
   for (const pk of pathKeys) {
     const p = payload?.[pk];
     if (typeof p === 'string' && p.trim()) {
-      const found = findAdlcRoot(dirname(p));
+      const found = findAdlcRoot(dirname(p), env);
       if (found) return found;
     }
   }
@@ -340,7 +350,7 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
   ].filter((s) => typeof s === 'string' && s.trim());
 
   for (const c of envCandidates) {
-    const found = findAdlcRoot(c);
+    const found = findAdlcRoot(c, env);
     if (found) return found;
   }
   return null;
@@ -424,7 +434,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
             const args = extractArgs({ toolCall: c });
             const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
             if (typeof p === 'string' && isAbsolute(p)) {
-              const candidate = findAdlcRoot(p);
+              const candidate = findAdlcRoot(p, env);
               if (candidate) {
                 root = candidate;
                 break;
@@ -595,7 +605,7 @@ export function onStop(payload, { env = process.env } = {}) {
           const args = extractArgs({ toolCall: c });
           const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
           if (typeof p === 'string' && isAbsolute(p)) {
-            const candidate = findAdlcRoot(p);
+            const candidate = findAdlcRoot(p, env);
             if (candidate) {
               root = candidate;
               break;
@@ -872,7 +882,7 @@ export function onStop(payload, { env = process.env } = {}) {
           };
         }
         const sData = JSON.parse(sRaw);
-        if (!sData || typeof sData !== 'object') {
+        if (!sData || typeof sData !== 'object' || Array.isArray(sData)) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
@@ -1051,7 +1061,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
 export function printDoctor(root = process.cwd(), env = process.env) {
   const absRoot = isAbsolute(root) ? root : join(process.cwd(), root);
-  const resolvedRoot = findAdlcRoot(absRoot) ?? absRoot;
+  const resolvedRoot = findAdlcRoot(absRoot, env) ?? absRoot;
   const active = resolveActiveTicketId(resolvedRoot, env);
 
   console.log(`--- ADLC Gemini Doctor ---`);

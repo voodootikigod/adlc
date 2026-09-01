@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, realpathSync } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
+import { join, relative, isAbsolute, dirname, parse } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -99,8 +99,10 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         const lstat = lstatSync(direct);
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
-          const allowedRoots = [appDataDir, tmpdir(), env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT, ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])].filter(Boolean);
-          const isAllowed = allowedRoots.some((r) => {
+          const isTest = env?.NODE_ENV === 'test' || env?.ADLC_TEST_MODE === '1' || process.env.NODE_TEST_CONTEXT !== undefined;
+          const allowedRoots = [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT, ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])];
+          if (isTest) allowedRoots.push(tmpdir());
+          let isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {
               const realR = realpathSync(r);
               const rel = relative(realR, real);
@@ -109,6 +111,17 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
               return false;
             }
           });
+          if (!isAllowed) {
+            let cur = dirname(real);
+            const { root: fsRoot } = parse(cur);
+            while (cur && cur !== fsRoot) {
+              if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
+                isAllowed = true;
+                break;
+              }
+              cur = dirname(cur);
+            }
+          }
           if (isAllowed) return real;
         }
       } catch {
