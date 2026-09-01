@@ -1050,16 +1050,19 @@ export function onStop(payload, { env = process.env } = {}) {
 
     // Validate session tracking store integrity
     const sessionsFile = join(root, '.adlc', 'sessions.json');
-    if ((trackedDepth > 0 || trackedTotal > 0 || mutatingCallSeq > 0 || trackedInitialTicket) && !existsSync(sessionsFile)) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
-      };
+    const hasSnap = tracker.hasSnapshot ? tracker.hasSnapshot(sessionID) : false;
+    if (!existsSync(sessionsFile)) {
+      if (enforcing && (trackedDepth > 0 || trackedTotal > 0 || mutatingCallSeq > 0 || trackedInitialTicket || hasSnap)) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
+        };
+      }
     }
     if (tracker.validateBaseline && !tracker.validateBaseline(sessionID)) {
       return {
         decision: 'continue',
-        reason: 'ADLC Rails-Guard: Session baseline signature mismatch (tampering detected).',
+        reason: 'ADLC Rails-Guard: Session baseline signature mismatch or missing tracking entry (tampering detected).',
       };
     }
     if (existsSync(sessionsFile)) {
@@ -1085,11 +1088,11 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
           };
         }
-        if (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0) {
+        if (enforcing && (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0 || hasSnap)) {
           if (!sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
             return {
               decision: 'continue',
-              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, evicted, reset, or missing during Stop verification.',
             };
           }
         }

@@ -3556,3 +3556,51 @@ test('discoverRootFromTranscriptRecords: discovers root in headless mode using d
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when current session entry is missing or evicted from sessions.json', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-evicted-123',
+    };
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    preInvocation(payload, { env });
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } },
+    }), env);
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+    }), env);
+
+    // Evict or remove the session key from sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    writeFileSync(sessionsFile, JSON.stringify({
+      'other-session-456': { depth: 1, baselineSig: 'dummy' },
+    }));
+
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Session tracking entry was deleted, evicted, reset, or missing|Session baseline signature mismatch or missing tracking entry/);
+  } finally {
+    cleanup();
+  }
+});

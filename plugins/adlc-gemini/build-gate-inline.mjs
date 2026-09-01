@@ -259,6 +259,8 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
   return createHmac('sha256', secretKey).update(payload).digest('hex');
 }
 
+const inMemorySessionSnapshots = new Map();
+
 /**
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
  * Reclaims orphaned lock directories even if owner.json is missing when mtime > 3s.
@@ -272,7 +274,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const ownerFile = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
-  const inMemorySessionSnapshots = new Map();
+  const snapKey = (sid) => `${root}:${sid}`;
 
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
@@ -381,7 +383,15 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
       const keys = Object.keys(data);
       if (keys.length > MAX_TRACKED_SESSIONS) {
-        const sorted = keys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
+        const sorted = keys.sort((a, b) => {
+          const aLive = inMemorySessionSnapshots.has(snapKey(a));
+          const bLive = inMemorySessionSnapshots.has(snapKey(b));
+          if (aLive !== bLive) return aLive ? 1 : -1;
+          const aEnded = Boolean(data[a]?.ended);
+          const bEnded = Boolean(data[b]?.ended);
+          if (aEnded !== bEnded) return aEnded ? -1 : 1;
+          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
+        });
         const toRemove = sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS);
         for (const k of toRemove) delete data[k];
       }
@@ -400,7 +410,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-        const snap = inMemorySessionSnapshots.get(sessionID);
+        const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
         if (snap) {
           s.depth = Math.max(s.depth ?? 0, snap.depth ?? 0);
           s.totalCalls = Math.max(s.totalCalls ?? 0, snap.totalCalls ?? 0);
@@ -414,7 +424,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
-        inMemorySessionSnapshots.set(sessionID, { ...s });
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
         writeStore(store);
       });
     },
@@ -430,19 +440,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
-        inMemorySessionSnapshots.set(sessionID, { ...s });
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
         writeStore(store);
       });
     },
     totalCalls(sessionID) {
       if (!sessionID) return 0;
       const store = readStore();
-      return store[sessionID]?.totalCalls ?? inMemorySessionSnapshots.get(sessionID)?.totalCalls ?? 0;
+      return store[sessionID]?.totalCalls ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.totalCalls ?? 0;
     },
     mutatingCalls(sessionID) {
       if (!sessionID) return 0;
       const store = readStore();
-      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? inMemorySessionSnapshots.get(sessionID)?.mutatingCalls ?? 0;
+      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.mutatingCalls ?? 0;
     },
     recordActiveTicket(sessionID, activeTicketId, storeHash) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
@@ -463,32 +473,36 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
-        inMemorySessionSnapshots.set(sessionID, { ...s });
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
         writeStore(store);
       });
     },
     initialTicket(sessionID) {
       if (!sessionID) return null;
       const store = readStore();
-      return store[sessionID]?.initialActiveTicket ?? inMemorySessionSnapshots.get(sessionID)?.initialActiveTicket ?? null;
+      return store[sessionID]?.initialActiveTicket ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialActiveTicket ?? null;
     },
     initialStoreHash(sessionID) {
       if (!sessionID) return null;
       const store = readStore();
-      return store[sessionID]?.initialStoreHash ?? inMemorySessionSnapshots.get(sessionID)?.initialStoreHash ?? null;
+      return store[sessionID]?.initialStoreHash ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialStoreHash ?? null;
     },
     initialPointer(sessionID) {
       if (!sessionID) return null;
       const store = readStore();
       return store[sessionID]?.initialPointer ?? null;
     },
+    hasSnapshot(sessionID) {
+      if (!sessionID) return false;
+      return inMemorySessionSnapshots.has(snapKey(sessionID));
+    },
     validateBaseline(sessionID) {
       if (!sessionID) return true;
       const store = readStore();
       const s = store[sessionID];
-      const snap = inMemorySessionSnapshots.get(sessionID);
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
       if (snap) {
-        if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store
+        if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store or evicted
         if ((s.depth ?? 0) < (snap.depth ?? 0) || (s.mutatingCalls ?? 0) < (snap.mutatingCalls ?? 0) || (s.totalCalls ?? 0) < (snap.totalCalls ?? 0)) {
           return false; // Counters artificially lowered
         }
