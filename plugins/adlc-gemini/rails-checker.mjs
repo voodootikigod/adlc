@@ -17,7 +17,7 @@ import { ticketHash, loadTicketStoreReadOnly } from './generated-ticket-reader.m
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
 // rail set cannot be quietly edited away. Mirrors adlc-opencode/rails-checker.mjs.
-export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**', '.adlc/.session-secret', '.adlc/.session-secret*'];
+export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**', '.adlc/session-ledger.jsonl', '.adlc/session-ledger.jsonl*', '.adlc/.session-secret', '.adlc/.session-secret*'];
 
 // Cursor's structured file-mutation tools (normalized to lowercase, non-alpha
 // stripped). Cursor exposes Write/Edit/MultiEdit/search_replace/delete_file-style

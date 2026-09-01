@@ -882,6 +882,13 @@ export function onStop(payload, { env = process.env } = {}) {
       };
     }
 
+    if (tracker?.validateBaseline && !tracker.validateBaseline(sessionID)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session baseline signature mismatch or missing tracking entry.',
+      };
+    }
+
     if (tracker?.validateLedger && !tracker.validateLedger(sessionID)) {
       return {
         decision: 'continue',
@@ -1167,12 +1174,12 @@ export function onStop(payload, { env = process.env } = {}) {
           reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
         };
       }
-    } else if (trackedInitialTicket || (active.id && records.length > 0 && shellMutated)) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted under enforcement during Stop verification.',
-      };
     }
+  } else if (trackedInitialTicket || (active.id && records.length > 0 && (shellMutated || mutatingCallSeq > 0 || lastMutationCallIdx !== -1))) {
+    return {
+      decision: 'continue',
+      reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted under enforcement during Stop verification.',
+    };
   }
 
     // Validate active ticket exists in ticket store

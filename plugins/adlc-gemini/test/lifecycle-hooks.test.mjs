@@ -2692,7 +2692,7 @@ test('onStop: rejects Stop when session entry counters are zeroed out mid-sessio
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Untracked or missing tool execution records|Session tracking entry was deleted, reset, or modified/);
+    assert.match(res.reason, /Session baseline signature mismatch|Untracked or missing tool execution records|Session tracking entry was deleted, reset, or modified/);
   } finally {
     cleanup();
   }
@@ -4089,5 +4089,42 @@ test('onStop: rejects completion when ledger is truncated while sessions.json re
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when session infrastructure is absent and transcript has mutations', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    // Delete sessions.json and session-ledger.jsonl if created
+    rmSync(join(root, '.adlc', 'sessions.json'), { force: true });
+    rmSync(join(root, '.adlc', 'session-ledger.jsonl'), { force: true });
+
+    // NO preInvocation or runFromStdin recorded (PreToolUse skipped)
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// unauthenticated' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-no-infra-untracked',
+    };
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking store was missing or deleted|Untracked or missing tool execution records|Session tracking entry is missing/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 

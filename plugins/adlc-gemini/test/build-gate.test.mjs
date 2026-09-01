@@ -531,4 +531,57 @@ test('ledger: truncated or tampered ledger fails closed under enforcement', () =
   }
 });
 
+test('rails: structured write targeting .adlc/session-ledger.jsonl is denied under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-rail-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    const res = runFromStdin(JSON.stringify({
+      conversationId: 'sess-ledger-rail',
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: ledgerFile, CodeContent: '{}' } },
+    }), env);
+
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /frozen rail/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: ledger ahead of stale sessions.json fails closed under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-ahead-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const sessionID = 'sess-ahead-test';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+
+    // Save stale sessions.json snapshot at depth 0
+    const staleSessionsJson = readFileSync(join(root, '.adlc', 'sessions.json'), 'utf8');
+
+    // Record tool call (ledger advances to seq 2, depth 1)
+    tracker.recordToolCall(sessionID, { isMutating: true });
+
+    // Restore stale sessions.json simulating crash before writeStore
+    writeFileSync(join(root, '.adlc', 'sessions.json'), staleSessionsJson);
+
+    // validateLedger must reject the mismatch
+    assert.equal(tracker.validateLedger(sessionID), false, 'ledger-ahead mismatch must fail closed');
+    const gate = checkBuildGate({ sessionID, tracker, root, env });
+    assert.equal(gate.decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
 

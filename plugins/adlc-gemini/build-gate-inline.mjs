@@ -996,7 +996,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const entry = store[sessionID];
         if (entry && typeof entry.ledgerSeq === 'number' && entry.ledgerSeq > 0) {
           const replayedEntry = replayed[sessionID];
-          if (!replayedEntry || (replayedEntry.ledgerSeq ?? 0) < entry.ledgerSeq) {
+          if (
+            !replayedEntry ||
+            replayedEntry.ledgerSeq !== entry.ledgerSeq ||
+            (replayedEntry.depth ?? 0) !== (entry.depth ?? 0) ||
+            (replayedEntry.totalCalls ?? 0) !== (entry.totalCalls ?? 0) ||
+            (replayedEntry.mutatingCalls ?? 0) !== (entry.mutatingCalls ?? 0)
+          ) {
             return false;
           }
         }
