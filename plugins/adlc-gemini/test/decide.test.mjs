@@ -59,6 +59,7 @@ test('sharded store enforces rails and freezes its shards', () => {
   writeFileSync(join(root, '.adlc/current-ticket.json'), JSON.stringify({ id: 'T1' }));
   assert.equal(call('write_to_file', { TargetFile: join(root, 'src/frozen.js') }).allow_tool, false);
   assert.equal(call('write_to_file', { TargetFile: join(store, shard) }).allow_tool, false);
+  assert.equal(call('write_to_file', { TargetFile: join(root, 'src/ok.js') }).allow_tool, true);
 });
 test('H1/H3: relative path + empty workspacePaths (headless) denied under enforcement', () => {
   const v = call('write_to_file', { TargetFile: 'src/frozen.js' }, ENF, { workspacePaths: [] });

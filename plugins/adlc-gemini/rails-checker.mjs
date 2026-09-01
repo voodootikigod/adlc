@@ -204,26 +204,24 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (!active.id) {
     return { state: 'inactive', reason: 'no active ticket resolved' };
   }
-  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement. core
-  // surfaces corruption three ways: it throws on some malformed schemas, returns an
-  // `errors` array on others, and returns an empty list when `tickets` is absent.
-  let tickets, errors;
+  let snapshot;
   try {
-    ({ tickets, errors } = loadTickets(ticketsPath));
+    snapshot = loadTicketStoreReadOnly({ root, env });
   } catch (err) {
-    return { state: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
+    if (/validation failed/i.test(err.message)) {
+      return { state: 'deny', reason: `tickets.json failed to validate (${err.message}) — failing closed` };
+    }
+    return { state: 'deny', reason: `ticket store failed to load (${err.message}) — failing closed` };
   }
-  if (errors && errors.length) {
-    return { state: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
-  }
-  const ticket = tickets.find((t) => t.id === active.id);
+  const ticket = snapshot?.get(active.id);
   if (!ticket) {
-    return { state: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
+    return { state: 'deny', reason: `active ticket ${active.id} not found in ticket store — failing closed` };
   }
   if (active.ticketHash) {
+    const storeHash = snapshot.ticketHashes?.[active.id] ?? snapshot.ticketHashes?.get?.(active.id);
     let computed;
     try {
-      computed = ticketHash(ticket);
+      computed = storeHash ?? ticketHash(ticket);
     } catch (err) {
       return { state: 'deny', reason: `failed to compute ticket hash for ${active.id} (${err.message}) — failing closed` };
     }
