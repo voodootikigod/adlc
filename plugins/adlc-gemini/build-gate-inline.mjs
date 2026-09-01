@@ -173,23 +173,32 @@ function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
   if (env?.ADLC_MANIFEST_KEY) return env.ADLC_MANIFEST_KEY;
   const secretFile = join(root, '.adlc', '.session-secret');
-  try {
-    if (existsSync(secretFile)) {
-      const stat = lstatSync(secretFile);
-      if (stat.isFile() && !stat.isSymbolicLink()) {
-        const raw = readFileSync(secretFile, 'utf8').trim();
-        if (raw.length >= 32) return raw;
-      }
-    }
-    const secret = randomBytes(32).toString('hex');
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
+      if (existsSync(secretFile)) {
+        const stat = lstatSync(secretFile);
+        if (stat.isFile() && !stat.isSymbolicLink()) {
+          const raw = readFileSync(secretFile, 'utf8').trim();
+          if (raw.length >= 32) return raw;
+        }
+      }
+      const secret = randomBytes(32).toString('hex');
       if (!existsSync(join(root, '.adlc'))) mkdirSync(join(root, '.adlc'), { recursive: true });
       writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
-    } catch {}
-    return secret;
-  } catch {
-    return randomBytes(32).toString('hex');
+      return secret;
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        try {
+          const raw = readFileSync(secretFile, 'utf8').trim();
+          if (raw.length >= 32) return raw;
+        } catch {}
+      }
+    }
+    sleepSyncWithJitter(10);
   }
+  const user = env?.USER || env?.LOGNAME || 'user';
+  const home = env?.HOME || '/root';
+  return `adlc-secret-${user}-${home}`;
 }
 
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
@@ -214,39 +223,51 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
   const lockDir = join(adlcDir, 'sessions.lock');
+  const ownerFile = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
 
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
     const pid = process.pid;
-    const lockSessionDir = join(lockDir, 'global');
+    const nonce = `${pid}-${Date.now()}-${Math.random()}`;
     let acquired = false;
+
     for (let attempt = 0; attempt < 100; attempt++) {
       try {
-        mkdirSync(lockSessionDir, { recursive: true });
-        const pidFile = join(lockSessionDir, 'lock.pid');
-        try {
-          writeFileSync(pidFile, String(pid), { flag: 'wx' });
-          acquired = true;
-          break;
-        } catch (err) {
-          if (err.code === 'EEXIST') {
-            try {
-              const stat = lstatSync(pidFile);
-              if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) {
-                unlinkSync(pidFile);
-                continue;
+        mkdirSync(lockDir);
+        writeFileSync(ownerFile, JSON.stringify({ pid, nonce, time: Date.now() }));
+        acquired = true;
+        break;
+      } catch (err) {
+        if (err.code === 'EEXIST') {
+          try {
+            if (existsSync(ownerFile)) {
+              const raw = readFileSync(ownerFile, 'utf8');
+              const owner = JSON.parse(raw);
+              const isStale = Date.now() - (owner.time ?? 0) > 5000;
+              const isDead = !isPidAlive(owner.pid);
+              if (isStale && isDead) {
+                const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                try {
+                  renameSync(lockDir, tombstone);
+                  rmSync(tombstone, { recursive: true, force: true });
+                } catch {}
               }
-            } catch {
-              continue;
+            } else {
+              const stat = lstatSync(lockDir);
+              if (Date.now() - stat.mtimeMs > 5000) {
+                const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                try {
+                  renameSync(lockDir, tombstone);
+                  rmSync(tombstone, { recursive: true, force: true });
+                } catch {}
+              }
             }
-          }
+          } catch {}
         }
-      } catch { /* ignore lock mkdir error */ }
-      const ms = Math.min(10 * Math.pow(1.5, attempt), 200);
-      const start = Date.now();
-      while (Date.now() - start < ms) { /* sync backoff busywait */ }
+      }
+      sleepSyncWithJitter(10);
     }
 
     if (!acquired) {
@@ -259,15 +280,15 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       return fn();
     } finally {
       try {
-        const pidFile = join(lockSessionDir, 'lock.pid');
-        if (existsSync(pidFile)) {
-          const rawPid = readFileSync(pidFile, 'utf8');
-          if (rawPid === String(pid)) {
-            unlinkSync(pidFile);
-            rmSync(lockSessionDir, { recursive: true, force: true });
+        if (existsSync(ownerFile)) {
+          const owner = JSON.parse(readFileSync(ownerFile, 'utf8'));
+          if (owner.nonce === nonce) {
+            const tombstone = `${lockDir}.rel-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            renameSync(lockDir, tombstone);
+            rmSync(tombstone, { recursive: true, force: true });
           }
         }
-      } catch { /* ignore release errors */ }
+      } catch {}
     }
   }
 

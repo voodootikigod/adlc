@@ -878,6 +878,14 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
           };
         }
+        if (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0) {
+          if (!sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
+        }
         if (sData[sessionID]) {
           const entry = sData[sessionID];
           if (typeof entry !== 'object' || Array.isArray(entry)) {
