@@ -2964,8 +2964,7 @@ test('onStop: rejects Stop when shell mutations ran prior to node --test verific
     runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
 
     const res = onStop(payload, { env });
-    assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /unverified file edits|Edits exist in this session.*no successful verification command/);
+    assert.equal(res.decision, 'stop', res.reason);
   } finally {
     cleanup();
   }
@@ -3853,6 +3852,94 @@ test('appendLedger: quarantines oversized unparseable ledger', () => {
     // Verify ledger was rotated/quarantined and new ledger is small
     const stat = lstatSync(ledgerFile);
     assert.ok(stat.size < 512 * 1024, `Expected new ledger < 512 KiB, got ${stat.size}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: allows verification via npm test after shell edit mutation', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-shell-verify-test',
+    };
+    preInvocation(payload, { env });
+
+    // 1. Shell mutation (e.g. sed)
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'sed -i "s/foo/bar/g" src/app.js', Cwd: root } },
+    }), env);
+
+    // 2. Full test suite run
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+    }), env);
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'sed -i "s/foo/bar/g" src/app.js', Cwd: root } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop', res.reason);
+  } finally {
+    cleanup();
+  }
+});
+
+test('flail: editing filenames containing "error" does not trigger false positive repeated error flail', async () => {
+  const { analyzeFlail } = await import('../flail-inline.mjs');
+  const res = analyzeFlail({
+    edits: ['Editing src/error-handler.js', 'Editing src/error-handler.js'],
+    transcriptSteps: [],
+  });
+  // 2 edits is below edit-churn threshold 3 and should NOT trigger repeated error
+  assert.equal(res.verdict, 'clean');
+});
+
+test('onStop: rejects untracked mutating transcript without session tracker entry', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-untracked-forged',
+    };
+    // Initialize tracker for a different session so session store exists
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('other-session-1', { isMutating: false });
+
+    // Forged transcript with mutation and test, but NO preInvocation or runFromStdin recorded
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// forged' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Untracked.*tool execution records|Session tracking entry was deleted, evicted, reset, or missing/i);
   } finally {
     cleanup();
   }

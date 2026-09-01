@@ -398,6 +398,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
                   mutatingCalls: s.mutatingCalls ?? 0,
                   compacted: Boolean(s.compacted),
                   ended: Boolean(s.ended),
+                  edits: Array.isArray(s.edits) ? s.edits : [],
+                  warned: Array.isArray(s.warned) ? s.warned : [],
                   initialActiveTicket: s.initialActiveTicket ?? null,
                   initialStoreHash: s.initialStoreHash ?? null,
                   initialPointer: s.initialPointer ?? null,
@@ -436,13 +438,15 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           const ev = JSON.parse(line);
           const safeKey = sanitizeSessionId(ev.sessionID);
           if (!safeKey) continue;
-          const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [] };
+          const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [], warned: [] };
           if (ev.type === 'snapshot') {
             s.depth = ev.depth ?? s.depth ?? 0;
             s.totalCalls = ev.totalCalls ?? s.totalCalls ?? 0;
             s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
             s.compacted = Boolean(ev.compacted);
             s.ended = Boolean(ev.ended);
+            s.edits = Array.isArray(ev.edits) ? ev.edits : s.edits ?? [];
+            s.warned = Array.isArray(ev.warned) ? ev.warned : s.warned ?? [];
             if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
             if (ev.initialStoreHash) s.initialStoreHash = ev.initialStoreHash;
             if (ev.initialPointer) s.initialPointer = ev.initialPointer;
@@ -463,6 +467,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             if (s.depth > 0) s.depth -= 1;
             if (s.totalCalls > 0) s.totalCalls -= 1;
             if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+          } else if (ev.type === 'recordEdit') {
+            if (ev.filePath) {
+              s.edits.push(`Editing ${ev.filePath}`);
+              if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+            }
           } else if (ev.type === 'compact') {
             s.compacted = true;
           } else if (ev.type === 'ended') {
@@ -490,24 +499,25 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (existsSync(storePath)) {
         const stat = lstatSync(storePath);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
-          const fromLedger = replayLedger();
-          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
           const s = Object.create(null);
           s._corrupted = true;
           return s;
         }
         const raw = readTextFileBounded(storePath, stat.size);
         if (!raw) {
-          const fromLedger = replayLedger();
-          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
           const s = Object.create(null);
           s._corrupted = true;
           return s;
         }
-        const parsed = JSON.parse(raw);
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          const fromLedger = replayLedger();
-          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
           const s = Object.create(null);
           s._corrupted = true;
           return s;
@@ -534,8 +544,6 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       }
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
-      const fromLedger = replayLedger();
-      if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
       const s = Object.create(null);
       s._corrupted = true;
       return s;
@@ -802,7 +810,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'recordEdit', sessionID, filePath });
 
         const churns = detectEditChurn(s.edits, 3);
         const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));

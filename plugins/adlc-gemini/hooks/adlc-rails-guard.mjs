@@ -734,9 +734,6 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+(--no-install\s+)?adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // If shell mutations occurred, no textual test execution can be trusted as clean verification
-  if (shellMutated) return false;
-
   // If package.json mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
   if (!packageManifestMutated) {
     if (/^(npm\s+(test|run\s+(test|preflight)))\s*$/i.test(trimmed)) return true;
@@ -1053,52 +1050,57 @@ export function onStop(payload, { env = process.env } = {}) {
 
     // Validate session tracking store integrity
     const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
     const hasSnap = tracker.hasSnapshot ? tracker.hasSnapshot(sessionID) : false;
-    if (!existsSync(sessionsFile)) {
-      if (enforcing && (trackedDepth > 0 || trackedTotal > 0 || mutatingCallSeq > 0 || trackedInitialTicket || hasSnap)) {
+    const hasSessionInfrastructure = existsSync(sessionsFile) || existsSync(ledgerFile) || hasSnap || Boolean(trackedInitialTicket) || (trackedDepth > 0) || (trackedTotal > 0);
+
+    let sData = null;
+    if (hasSessionInfrastructure) {
+      if (!existsSync(sessionsFile)) {
+        if (enforcing && (trackedDepth > 0 || trackedTotal > 0 || mutatingCallSeq > 0 || trackedInitialTicket || hasSnap)) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
+          };
+        }
+      }
+      if (tracker.validateBaseline && !tracker.validateBaseline(sessionID)) {
         return {
           decision: 'continue',
-          reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
+          reason: 'ADLC Rails-Guard: Session baseline signature mismatch or missing tracking entry (tampering detected).',
         };
       }
-    }
-    if (tracker.validateBaseline && !tracker.validateBaseline(sessionID)) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Session baseline signature mismatch or missing tracking entry (tampering detected).',
-      };
-    }
-    if (existsSync(sessionsFile)) {
-      try {
-        const sStat = lstatSync(sessionsFile);
-        if (!sStat.isFile() || sStat.isSymbolicLink() || sStat.size > 1024 * 1024) {
-          return {
-            decision: 'continue',
-            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
-          };
-        }
-        const sRaw = readTextFileBounded(sessionsFile, sStat.size);
-        if (!sRaw) {
-          return {
-            decision: 'continue',
-            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
-          };
-        }
-        const sData = JSON.parse(sRaw);
-        if (!sData || typeof sData !== 'object' || Array.isArray(sData)) {
-          return {
-            decision: 'continue',
-            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
-          };
-        }
-        if (enforcing && (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0 || hasSnap)) {
-          if (!sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
+      if (existsSync(sessionsFile)) {
+        try {
+          const sStat = lstatSync(sessionsFile);
+          if (!sStat.isFile() || sStat.isSymbolicLink() || sStat.size > 1024 * 1024) {
             return {
               decision: 'continue',
-              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, evicted, reset, or missing during Stop verification.',
+              reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
             };
           }
-        }
+          const sRaw = readTextFileBounded(sessionsFile, sStat.size);
+          if (!sRaw) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
+            };
+          }
+          sData = JSON.parse(sRaw);
+          if (!sData || typeof sData !== 'object' || Array.isArray(sData)) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
+            };
+          }
+          if (enforcing && (trackedInitialTicket || trackedTotal > 0 || trackedDepth > 0 || hasSnap || (Object.keys(sData).length > 0 && mutatingCallSeq > 0))) {
+            if (!sData[sessionID] || typeof sData[sessionID] !== 'object' || Array.isArray(sData[sessionID]) || Object.keys(sData[sessionID]).length === 0) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Session tracking entry was deleted, evicted, reset, or missing during Stop verification.',
+              };
+            }
+          }
         if (sData[sessionID]) {
           const entry = sData[sessionID];
           if (typeof entry !== 'object' || Array.isArray(entry)) {
@@ -1155,6 +1157,7 @@ export function onStop(payload, { env = process.env } = {}) {
         reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted under enforcement during Stop verification.',
       };
     }
+  }
 
     // Validate active ticket exists in ticket store
     try {

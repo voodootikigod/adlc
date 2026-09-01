@@ -283,11 +283,11 @@ export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
  */
 export function analyzeFlail({ edits = [], transcriptSteps = [], transcriptLines = [], threshold = DEFAULT_FLAIL_THRESHOLD, maxErrorRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD } = {}) {
   const churning = detectEditChurn(edits, threshold);
-  const steps = [...edits.map(edit => [edit]), ...transcriptSteps];
+  const errorSteps = [...transcriptSteps];
   if (transcriptLines.length > 0 && transcriptSteps.length === 0) {
-    steps.push(...transcriptLines.map(line => [line]));
+    errorSteps.push(...transcriptLines.map(line => [line]));
   }
-  const repeatedErrors = detectRepeatedErrors(steps, maxErrorRepeat);
+  const repeatedErrors = detectRepeatedErrors(errorSteps, maxErrorRepeat);
 
   const signals = [];
   if (churning.length > 0) {
