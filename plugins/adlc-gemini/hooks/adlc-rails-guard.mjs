@@ -596,6 +596,13 @@ export function onStop(payload, { env = process.env } = {}) {
       const r = records[i];
       if (!r || typeof r !== 'object') continue;
 
+      if (r.__oversized) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session transcript exceeds maximum supported size under enforcement during Stop verification.',
+        };
+      }
+
       if (r.__unparseable) {
         return {
           decision: 'continue',
@@ -633,9 +640,10 @@ export function onStop(payload, { env = process.env } = {}) {
           }
         }
 
-        if (name === 'run_command' || name === 'execute') {
-          const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? '').trim();
-          if (/(^|[/\s"'])(.adlc|.system_generated|transcript.*\.jsonl)/i.test(cmd) && !isReadonlyCommand(cmd)) {
+        const isShell = isShellTool(name) || name === 'run_command' || name === 'execute' || name === 'bash' || name === 'execute_command' || name === 'terminal';
+        if (isShell) {
+          const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
+          if (/(^|[=\s"';,/])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',

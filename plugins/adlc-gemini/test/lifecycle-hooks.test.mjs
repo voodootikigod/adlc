@@ -1634,3 +1634,64 @@ test('onStop: detects early mutation in large multi-chunk streaming transcript',
     cleanup();
   }
 });
+
+test('onStop: recognizes bash / execute_command as shell tool and rejects edit after test', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'bash', args: { command: 'echo "mutate" > src/app.js' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-bash-tool',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /File edits occurred after the last test run/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects shell assignment variable tampering with .adlc', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'p=.adlc/tickets.json; printf "{}" > "$p"' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shell-var-adlc',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Shell modification of trust-root store or transcript is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});

@@ -135,6 +135,8 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 export function parseTranscriptRecords(filePath, options = {}) {
   const maxScanBytes = typeof options === 'number' ? options : (options?.maxScanBytes ?? MAX_SCAN_BYTES);
   const readFull = typeof options === 'object' && options?.readFull === true;
+  const maxRecords = typeof options === 'object' ? (options?.maxRecords ?? 50000) : 50000;
+  const maxLineLength = typeof options === 'object' ? (options?.maxLineLength ?? 1048576) : 1048576;
   if (!filePath) return [];
   try {
     const stat = statSync(filePath);
@@ -156,8 +158,20 @@ export function parseTranscriptRecords(filePath, options = {}) {
           const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
           const lines = chunkStr.split('\n');
           leftover = lines.pop() ?? '';
+          if (leftover.length > maxLineLength) {
+            records.push({ content: 'unterminated_oversized_line', __unparseable: true });
+            leftover = '';
+          }
           for (const rawLine of lines) {
             if (!rawLine.trim()) continue;
+            if (records.length >= maxRecords) {
+              records.push({ content: 'oversized_transcript', __oversized: true });
+              return records;
+            }
+            if (rawLine.length > maxLineLength) {
+              records.push({ content: 'oversized_line', __unparseable: true });
+              continue;
+            }
             try {
               records.push(JSON.parse(rawLine));
             } catch {
@@ -169,10 +183,14 @@ export function parseTranscriptRecords(filePath, options = {}) {
         closeSync(fd);
       }
       if (leftover.trim()) {
-        try {
-          records.push(JSON.parse(leftover));
-        } catch {
-          records.push({ content: leftover, __unparseable: true });
+        if (records.length >= maxRecords) {
+          records.push({ content: 'oversized_transcript', __oversized: true });
+        } else {
+          try {
+            records.push(JSON.parse(leftover));
+          } catch {
+            records.push({ content: leftover, __unparseable: true });
+          }
         }
       }
       return records;
