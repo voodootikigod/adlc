@@ -135,25 +135,51 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 export function parseTranscriptRecords(filePath, options = {}) {
   const maxScanBytes = typeof options === 'number' ? options : (options?.maxScanBytes ?? MAX_SCAN_BYTES);
   const readFull = typeof options === 'object' && options?.readFull === true;
-  const maxFullBytes = options?.maxFullBytes ?? (32 * 1024 * 1024);
   if (!filePath) return [];
   try {
     const stat = statSync(filePath);
     if (!stat.isFile()) return [];
-    let content = '';
+    const records = [];
+
     if (readFull) {
-      if (stat.size > maxFullBytes) {
-        const fd = openSync(filePath, 'r');
-        const buf = Buffer.alloc(maxFullBytes);
-        readSync(fd, buf, 0, maxFullBytes, stat.size - maxFullBytes);
+      const fd = openSync(filePath, 'r');
+      const chunkSize = 65536;
+      const buf = Buffer.alloc(chunkSize);
+      let leftover = '';
+      let pos = 0;
+      try {
+        while (pos < stat.size) {
+          const toRead = Math.min(chunkSize, stat.size - pos);
+          const bytesRead = readSync(fd, buf, 0, toRead, pos);
+          if (bytesRead <= 0) break;
+          pos += bytesRead;
+          const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
+          const lines = chunkStr.split('\n');
+          leftover = lines.pop() ?? '';
+          for (const rawLine of lines) {
+            if (!rawLine.trim()) continue;
+            try {
+              records.push(JSON.parse(rawLine));
+            } catch {
+              records.push({ content: rawLine, __unparseable: true });
+            }
+          }
+        }
+      } finally {
         closeSync(fd);
-        content = buf.toString('utf8');
-        const firstNewline = content.indexOf('\n');
-        if (firstNewline !== -1) content = content.slice(firstNewline + 1);
-      } else {
-        content = readFileSync(filePath, 'utf8');
       }
-    } else if (stat.size > maxScanBytes) {
+      if (leftover.trim()) {
+        try {
+          records.push(JSON.parse(leftover));
+        } catch {
+          records.push({ content: leftover, __unparseable: true });
+        }
+      }
+      return records;
+    }
+
+    let content = '';
+    if (stat.size > maxScanBytes) {
       const fd = openSync(filePath, 'r');
       const buf = Buffer.alloc(maxScanBytes);
       readSync(fd, buf, 0, maxScanBytes, stat.size - maxScanBytes);
@@ -164,7 +190,6 @@ export function parseTranscriptRecords(filePath, options = {}) {
     } else {
       content = readFileSync(filePath, 'utf8');
     }
-    const records = [];
     for (const rawLine of content.split('\n')) {
       if (!rawLine.trim()) continue;
       try {

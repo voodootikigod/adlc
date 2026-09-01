@@ -1604,3 +1604,33 @@ test('onStop: rejects node --test --test-global-setup', () => {
     cleanup();
   }
 });
+
+test('onStop: detects early mutation in large multi-chunk streaming transcript', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+  ];
+  // Add 1000 filler lines (~200 KiB to exceed standard single chunk)
+  const filler = JSON.stringify({ type: 'USER_INPUT', content: 'x'.repeat(200) });
+  for (let i = 0; i < 1000; i++) {
+    lines.push(filler);
+  }
+  lines.push(JSON.stringify({ content: 'Finished without tests.' }));
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-streaming-chunks',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
