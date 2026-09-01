@@ -27,7 +27,7 @@ Nothing below is claimed shipped unless it has a runtime caller in
 | P6 integrate + `/adlc-accept` + rollback (§Phase 4) | **Shipped** — accept is command-driven; rollback path lands the revert. Shutdown additionally marks a claimed-done-but-unaccepted ticket, and the next session's widget prioritizes `P6 pending: run /adlc-accept` (over P7-stale, over last-gate) |
 | npm publication: `@adlc/pi` release-ready + folds into lockstep `/release` (§5) | **Shipped + published** — `@adlc/pi` is on npm, so the `pi install npm:@adlc/pi` (or project-scoped `pi install -l npm:@adlc/pi`) one-liner works today. Version-matrix smoke (`scripts/pi-version-matrix.mjs`, weekly cron) tracks upstream pi drift |
 | P6 `session_shutdown` pending-acceptance nudge (§2 table) | **Shipped** — no packet auto-generation (acceptance remains human); the shutdown evidence builder classifies done-claimed-not-accepted as `kind:'pending-acceptance'`, and the widget pushes `/adlc-accept` at next session_start |
-| P7 staleness widget nudge (§2 table) | **Shipped as a hint** — pi has no `/schedule`, so CI cron remains the substrate; the session_start manifest scan renders `P7 stale: lesson-foundry/skill-rot Nd ago` once evidence crosses `ADLC_P7_STALE_DAYS` (default 14). |
+| P7 staleness widget nudge (§2 table) | **Shipped as a hint** — pi has no `/schedule`, so CI cron remains the substrate; the session_start manifest scan renders `P7 stale: lesson-foundry/skill-rot Nd ago` once evidence reaches `ADLC_P7_STALE_DAYS` (default 14, inclusive). |
 
 ---
 

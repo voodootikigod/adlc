@@ -298,6 +298,19 @@ test('buildShutdownEvidence: done-claim without accept marks pending-acceptance'
   assert.equal(out.kind, 'pending-acceptance');
 });
 
+test('buildShutdownEvidence: a passing gate run does NOT resolve a done-claim (cross-model finding)', () => {
+  // The natural post-TICKET-DONE flow runs gates (build verify, prosecution
+  // nudge); those adlc-gate-run code:0 events resolve denies/reverts but must
+  // NOT suppress the pending-acceptance hint without an actual acceptance.
+  const flow = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-gate-run', { code: 0 })];
+  const out = buildShutdownEvidence({ entries: flow, ticketId: 'T1' });
+  assert.ok(out, 'a gate pass is not an acceptance');
+  assert.equal(out.kind, 'pending-acceptance');
+  // …and the accept after the gate pass still resolves it.
+  const accepted = [...flow, gateEvent('e3', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: accepted, ticketId: 'T1' }), null);
+});
+
 test('buildShutdownEvidence: accept(ok) resolves the done-claim', () => {
   const cleared = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: true })];
   assert.equal(buildShutdownEvidence({ entries: cleared, ticketId: 'T1' }), null, 'accept resolves pending-acceptance');

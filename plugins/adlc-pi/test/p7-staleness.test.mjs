@@ -9,12 +9,14 @@ import { computeP7StaleDays, P7_STALE_DEFAULT_DAYS } from '../lib/extension.mjs'
 const DAY = 86_400_000;
 const now = Date.parse('2026-08-04T00:00:00Z');
 
-test('default threshold is 14 days and the boundary is exclusive (14 = fresh)', () => {
+test('default threshold is 14 days and the boundary is inclusive (14 = stale)', () => {
   assert.equal(P7_STALE_DEFAULT_DAYS, 14, 'the documented default threshold');
+  // Inclusive per ticket A144 AC3 ('renders at threshold'); cross-model review
+  // (PR #955) caught the exclusive variant delaying the nudge a day past it.
   const atBoundary = [{ type: 'lesson-foundry', at: new Date(now - 14 * DAY).toISOString() }];
-  assert.equal(computeP7StaleDays(atBoundary, { now }), null, 'exactly 14 days old is not yet stale');
-  const pastBoundary = [{ type: 'lesson-foundry', at: new Date(now - 15 * DAY).toISOString() }];
-  assert.equal(computeP7StaleDays(pastBoundary, { now }), 15, '15 days old reports 15');
+  assert.equal(computeP7StaleDays(atBoundary, { now }), 14, 'exactly 14 days old is stale');
+  const fresh = [{ type: 'lesson-foundry', at: new Date(now - 13 * DAY).toISOString() }];
+  assert.equal(computeP7StaleDays(fresh, { now }), null, '13 days old is fresh');
 });
 
 test('skill-rot entries count toward staleness (types-set shrink kill)', () => {
@@ -43,8 +45,8 @@ test('mixed: latest P7 entry wins over older P7 entries; malformed entries ignor
 
 test('threshold override: a custom threshold flips the boundary', () => {
   const at = [{ type: 'lesson-foundry', at: new Date(now - 7 * DAY).toISOString() }];
-  assert.equal(computeP7StaleDays(at, { now, thresholdDays: 7 }), null, '7 < default but exactly at custom 7');
-  assert.equal(computeP7StaleDays(at, { now, thresholdDays: 6 }), 7, 'crosses a 6-day custom threshold');
+  assert.equal(computeP7StaleDays(at, { now, thresholdDays: 7 }), 7, 'inclusive: exactly at a custom 7-day threshold is stale');
+  assert.equal(computeP7StaleDays(at, { now, thresholdDays: 8 }), null, 'under an 8-day custom threshold is fresh');
 });
 
 test('empty or absent entries → null (no evidence, no hint)', () => {

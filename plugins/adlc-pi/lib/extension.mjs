@@ -84,9 +84,10 @@ export function computeP7StaleDays(entries, { now = Date.now(), thresholdDays = 
   }
   if (latest === null) return null;
   const days = Math.floor((now - latest) / MS_PER_DAY);
-  // Boundary-exclusive: at exactly the threshold the evidence has not yet
-  // "crossed" it (README/docs language), so 14d at a 14d threshold is fresh.
-  return days > thresholdDays ? days : null;
+  // Inclusive boundary: the ticket contract (AC3) is "renders at threshold",
+  // so evidence exactly thresholdDays old IS stale. (Cross-model review, PR
+  // #955: an exclusive compare delayed the nudge a day past the contract.)
+  return days >= thresholdDays ? days : null;
 }
 
 export function createExtension({ env = process.env } = {}) {
