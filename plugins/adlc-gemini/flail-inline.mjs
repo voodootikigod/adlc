@@ -142,8 +142,17 @@ export function parseTranscriptRecords(filePath, options = {}) {
     if (!stat.isFile()) return [];
     let content = '';
     if (readFull) {
-      if (stat.size > maxFullBytes) return [];
-      content = readFileSync(filePath, 'utf8');
+      if (stat.size > maxFullBytes) {
+        const fd = openSync(filePath, 'r');
+        const buf = Buffer.alloc(maxFullBytes);
+        readSync(fd, buf, 0, maxFullBytes, stat.size - maxFullBytes);
+        closeSync(fd);
+        content = buf.toString('utf8');
+        const firstNewline = content.indexOf('\n');
+        if (firstNewline !== -1) content = content.slice(firstNewline + 1);
+      } else {
+        content = readFileSync(filePath, 'utf8');
+      }
     } else if (stat.size > maxScanBytes) {
       const fd = openSync(filePath, 'r');
       const buf = Buffer.alloc(maxScanBytes);

@@ -1574,3 +1574,33 @@ test('onStop: rejects stopping when active ticket is deleted while unverified mu
     cleanup();
   }
 });
+
+test('onStop: rejects node --test --test-global-setup', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test --test-global-setup=setup.mjs', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-global-setup',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
