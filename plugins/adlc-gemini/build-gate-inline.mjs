@@ -259,6 +259,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const ownerFile = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
+  const inMemorySessionSnapshots = new Map();
 
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
@@ -269,33 +270,37 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     for (let attempt = 0; attempt < 100; attempt++) {
       try {
         mkdirSync(lockDir);
-        writeFileSync(ownerFile, JSON.stringify({ pid, nonce, time: Date.now() }));
+        const tmpOwner = `${lockDir}/owner.json.tmp.${pid}.${Date.now()}`;
+        writeFileSync(tmpOwner, JSON.stringify({ pid, nonce, time: Date.now() }));
+        renameSync(tmpOwner, ownerFile);
         acquired = true;
         break;
       } catch (err) {
         if (err.code === 'EEXIST') {
           try {
+            let isStaleAndDead = false;
             if (existsSync(ownerFile)) {
-              const raw = readFileSync(ownerFile, 'utf8');
-              const owner = JSON.parse(raw);
-              const isStale = Date.now() - (owner.time ?? 0) > 5000;
-              const isDead = !isPidAlive(owner.pid);
-              if (isStale && isDead) {
-                const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                try {
-                  renameSync(lockDir, tombstone);
-                  rmSync(tombstone, { recursive: true, force: true });
-                } catch {}
+              try {
+                const raw = readFileSync(ownerFile, 'utf8');
+                const owner = JSON.parse(raw);
+                const isStale = Date.now() - (owner.time ?? 0) > 3000;
+                const isDead = !isPidAlive(owner.pid);
+                if (isStale && isDead) isStaleAndDead = true;
+              } catch {
+                // Malformed owner.json (crashed/partial write)
+                const stat = lstatSync(lockDir);
+                if (Date.now() - stat.mtimeMs > 3000) isStaleAndDead = true;
               }
             } else {
               const stat = lstatSync(lockDir);
-              if (Date.now() - stat.mtimeMs > 5000) {
-                const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                try {
-                  renameSync(lockDir, tombstone);
-                  rmSync(tombstone, { recursive: true, force: true });
-                } catch {}
-              }
+              if (Date.now() - stat.mtimeMs > 3000) isStaleAndDead = true;
+            }
+            if (isStaleAndDead) {
+              const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              try {
+                renameSync(lockDir, tombstone);
+                rmSync(tombstone, { recursive: true, force: true });
+              } catch {}
             }
           } catch {}
         }
@@ -372,12 +377,21 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        const snap = inMemorySessionSnapshots.get(sessionID);
+        if (snap) {
+          s.depth = Math.max(s.depth ?? 0, snap.depth ?? 0);
+          s.totalCalls = Math.max(s.totalCalls ?? 0, snap.totalCalls ?? 0);
+          s.mutatingCalls = Math.max(s.mutatingCalls ?? 0, snap.mutatingCalls ?? 0);
+          if (snap.compacted) s.compacted = true;
+          if (snap.initialActiveTicket && !s.initialActiveTicket) s.initialActiveTicket = snap.initialActiveTicket;
+        }
         s.depth = (s.depth ?? 0) + 1;
         s.totalCalls = (s.totalCalls ?? 0) + 1;
         s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
+        inMemorySessionSnapshots.set(sessionID, { ...s });
         writeStore(store);
       });
     },
@@ -393,18 +407,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
+        inMemorySessionSnapshots.set(sessionID, { ...s });
         writeStore(store);
       });
     },
     totalCalls(sessionID) {
       if (!sessionID) return 0;
       const store = readStore();
-      return store[sessionID]?.totalCalls ?? 0;
+      return store[sessionID]?.totalCalls ?? inMemorySessionSnapshots.get(sessionID)?.totalCalls ?? 0;
     },
     mutatingCalls(sessionID) {
       if (!sessionID) return 0;
       const store = readStore();
-      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? 0;
+      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? inMemorySessionSnapshots.get(sessionID)?.mutatingCalls ?? 0;
     },
     recordActiveTicket(sessionID, activeTicketId, storeHash) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
@@ -425,18 +440,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
+        inMemorySessionSnapshots.set(sessionID, { ...s });
         writeStore(store);
       });
     },
     initialTicket(sessionID) {
       if (!sessionID) return null;
       const store = readStore();
-      return store[sessionID]?.initialActiveTicket ?? null;
+      return store[sessionID]?.initialActiveTicket ?? inMemorySessionSnapshots.get(sessionID)?.initialActiveTicket ?? null;
     },
     initialStoreHash(sessionID) {
       if (!sessionID) return null;
       const store = readStore();
-      return store[sessionID]?.initialStoreHash ?? null;
+      return store[sessionID]?.initialStoreHash ?? inMemorySessionSnapshots.get(sessionID)?.initialStoreHash ?? null;
     },
     initialPointer(sessionID) {
       if (!sessionID) return null;
@@ -447,6 +463,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return true;
       const store = readStore();
       const s = store[sessionID];
+      const snap = inMemorySessionSnapshots.get(sessionID);
+      if (snap) {
+        if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store
+        if ((s.depth ?? 0) < (snap.depth ?? 0) || (s.mutatingCalls ?? 0) < (snap.mutatingCalls ?? 0) || (s.totalCalls ?? 0) < (snap.totalCalls ?? 0)) {
+          return false; // Counters artificially lowered
+        }
+        if (snap.compacted && !s.compacted) return false;
+      }
       if (!s) return true;
       const hasTrackedState = (s.totalCalls ?? 0) > 0 || (s.depth ?? 0) > 0 || (s.mutatingCalls ?? 0) > 0 || Boolean(s.initialActiveTicket) || Boolean(s.initialTranscript);
       if (!s.baselineSig) {

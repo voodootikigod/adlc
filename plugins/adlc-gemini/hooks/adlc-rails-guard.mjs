@@ -118,28 +118,44 @@ export function findAdlcRoot(absPath, env = process.env) {
     cur = dirname(absPath);
   }
 
+  // Check explicit workspace roots from env if storeOverride is an absolute path
+  if (storeOverride && isAbsolute(storeOverride) && existsSync(storeOverride)) {
+    const explicitRoots = [env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT]
+      .filter((r) => typeof r === 'string' && r.trim() && isAbsolute(r.trim()));
+    for (const er of explicitRoots) {
+      const rel = relative(er, absPath);
+      if (!rel.startsWith('..') && !isAbsolute(rel)) {
+        return er;
+      }
+    }
+  }
+
   const { root: fsRoot } = parse(cur);
-  let externalWorkspaceCandidate = null;
+  let topGitRoot = null;
+  let topAdlcRoot = null;
 
   while (true) {
     if (storeOverride) {
       if (!isAbsolute(storeOverride)) {
         if (existsSync(join(cur, storeOverride))) return cur;
-      } else if (existsSync(storeOverride)) {
-        if (existsSync(join(cur, '.adlc')) || existsSync(join(cur, '.git')) || existsSync(join(cur, 'package.json'))) {
-          return cur;
-        }
-        if (!externalWorkspaceCandidate) externalWorkspaceCandidate = cur;
       }
     }
     if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
       return cur;
     }
+    if (existsSync(join(cur, '.adlc'))) {
+      topAdlcRoot = cur;
+    }
+    if (existsSync(join(cur, '.git'))) {
+      topGitRoot = cur;
+    }
     if (cur === fsRoot) break;
     cur = dirname(cur);
   }
+
   if (storeOverride && isAbsolute(storeOverride) && existsSync(storeOverride)) {
-    return externalWorkspaceCandidate;
+    if (topAdlcRoot) return topAdlcRoot;
+    if (topGitRoot) return topGitRoot;
   }
   return null;
 }

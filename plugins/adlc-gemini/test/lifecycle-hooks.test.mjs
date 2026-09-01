@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
@@ -347,7 +347,7 @@ test('onStop: rejects completion when file edits occur after the test run', () =
     const payload = {
       workspacePaths: [root],
       transcriptPath: transcriptFile,
-      conversationId: 'test-session-123',
+      conversationId: 'test-session-edits-after-test',
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
@@ -375,7 +375,7 @@ test('onStop: rejects completion when active ticket is missing from ticket store
     const payload = {
       workspacePaths: [root],
       transcriptPath: transcriptFile,
-      conversationId: 'test-session-123',
+      conversationId: 'test-session-ticket-missing',
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
@@ -405,7 +405,7 @@ test('onStop: rejects completion when an unrecognized path-bearing writer runs a
     const payload = {
       workspacePaths: [root],
       transcriptPath: transcriptFile,
-      conversationId: 'test-session-123',
+      conversationId: 'test-session-unrecognized-writer',
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
@@ -2386,7 +2386,7 @@ test('onStop: rejects Stop when .adlc/sessions.json file is corrupted', () => {
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Session tracking store was corrupted or unreadable/);
+    assert.match(res.reason, /Session tracking store was corrupted or unreadable|Session baseline signature mismatch/);
   } finally {
     cleanup();
   }
@@ -2422,7 +2422,7 @@ test('onStop: rejects Stop when .adlc/sessions.json file is completely deleted m
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Session tracking store was missing or deleted/);
+    assert.match(res.reason, /Session tracking store was missing or deleted|Session baseline signature mismatch|Untracked tool execution records/);
   } finally {
     cleanup();
   }
@@ -2830,7 +2830,7 @@ test('onStop: rejects Stop when sessions.json is replaced by an array []', () =>
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Session tracking store was corrupted or unreadable/);
+    assert.match(res.reason, /Session tracking store was corrupted or unreadable|Session baseline signature mismatch/);
   } finally {
     cleanup();
   }
@@ -3136,6 +3136,51 @@ test('validateBaseline: detects compacted flag tampering in sessions.json', () =
     writeFileSync(sessionsFile, JSON.stringify(sData));
 
     assert.equal(tracker.validateBaseline('sess-compact-tamper'), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('checkBuildGate: deleting sessions.json cannot reset depth gate for active session', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    // Record high depth
+    for (let i = 0; i < 30; i++) {
+      tracker.recordToolCall('sess-reset-depth', { isMutating: true });
+    }
+
+    // Delete sessions.json
+    rmSync(join(root, '.adlc', 'sessions.json'), { force: true });
+
+    // Validate baseline detects deletion
+    assert.equal(tracker.validateBaseline('sess-reset-depth'), false);
+
+    // checkBuildGate denies
+    const res = checkBuildGate({ sessionID: 'sess-reset-depth', tracker, root, env });
+    assert.equal(res.decision, 'deny');
+    assert.match(res.reason, /Session baseline signature mismatch/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('withLock: recovers from malformed/crashed owner.json stale lock', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const lockDir = join(root, '.adlc', 'sessions.lock');
+    mkdirSync(lockDir, { recursive: true });
+    // Write partial/corrupted owner.json with old mtime
+    const ownerFile = join(lockDir, 'owner.json');
+    writeFileSync(ownerFile, '{"pid": 999999, "nonce": "incomplete');
+    // Set old mtime (> 3s ago)
+    const oldTime = new Date(Date.now() - 5000);
+    utimesSync(lockDir, oldTime, oldTime);
+
+    const tracker = createPersistentTracker(root, env);
+    // Should recover stale lock and successfully write tool call
+    tracker.recordToolCall('sess-stale-corrupt-owner', { isMutating: true });
+    assert.equal(tracker.totalCalls('sess-stale-corrupt-owner'), 1);
   } finally {
     cleanup();
   }
