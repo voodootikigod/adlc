@@ -1,7 +1,7 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
@@ -169,16 +169,31 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
   return 'default_session';
 }
 
-function getBaselineSecret(env = process.env) {
-  const custom = env?.ADLC_SESSION_SECRET || env?.ADLC_MANIFEST_KEY;
-  if (custom) return custom;
-  const user = env?.USER || env?.LOGNAME || 'user';
-  const home = env?.HOME || '/root';
-  return `adlc-secret-${user}-${home}`;
+function getOrCreateSessionSecret(root, env = process.env) {
+  if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
+  if (env?.ADLC_MANIFEST_KEY) return env.ADLC_MANIFEST_KEY;
+  const secretFile = join(root, '.adlc', '.session-secret');
+  try {
+    if (existsSync(secretFile)) {
+      const stat = lstatSync(secretFile);
+      if (stat.isFile() && !stat.isSymbolicLink()) {
+        const raw = readFileSync(secretFile, 'utf8').trim();
+        if (raw.length >= 32) return raw;
+      }
+    }
+    const secret = randomBytes(32).toString('hex');
+    try {
+      if (!existsSync(join(root, '.adlc'))) mkdirSync(join(root, '.adlc'), { recursive: true });
+      writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
+    } catch {}
+    return secret;
+  } catch {
+    return randomBytes(32).toString('hex');
+  }
 }
 
-function computeBaselineSig(sessionID, s, env = process.env) {
-  const secretKey = getBaselineSecret(env);
+function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
+  const secretKey = getOrCreateSessionSecret(root, env);
   const payload = JSON.stringify({
     sessionID,
     t: s?.initialActiveTicket ?? null,
@@ -186,7 +201,7 @@ function computeBaselineSig(sessionID, s, env = process.env) {
     p: s?.initialPointer ?? null,
     tr: s?.initialTranscript ?? null,
   });
-  return createHash('sha256').update(`${secretKey}:${payload}`).digest('hex');
+  return createHmac('sha256', secretKey).update(payload).digest('hex');
 }
 
 /**
@@ -205,10 +220,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
     const pid = process.pid;
-    const safeSessionKey = createHash('sha256').update(sessionID || 'global').digest('hex').slice(0, 32);
-    const lockSessionDir = join(lockDir, safeSessionKey);
+    const lockSessionDir = join(lockDir, 'global');
     let acquired = false;
-    for (let attempt = 0; attempt < 50; attempt++) {
+    for (let attempt = 0; attempt < 100; attempt++) {
       try {
         mkdirSync(lockSessionDir, { recursive: true });
         const pidFile = join(lockSessionDir, 'lock.pid');
@@ -237,7 +251,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
     if (!acquired) {
       if (sessionID) lockFailures.add(sessionID);
-      console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out for ${safeSessionKey}`);
+      console.error(`[adlc-rails-guard] Warning: session store lock acquisition timed out`);
       return;
     }
 
@@ -350,7 +364,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               s.initialPointer = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
             } catch {}
           }
-          s.baselineSig = computeBaselineSig(sessionID, s);
+          s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         }
         s.updatedAt = Date.now();
         store[sessionID] = s;
@@ -377,7 +391,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const store = readStore();
       const s = store[sessionID];
       if (!s || !s.baselineSig) return true;
-      return s.baselineSig === computeBaselineSig(sessionID, s);
+      return s.baselineSig === computeBaselineSig(sessionID, s, root, env);
     },
     recordTranscript(sessionID, transcriptPath) {
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
@@ -389,7 +403,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (!s.initialTranscript) {
             const curHash = computePrefixHash(transcriptPath, stat.size);
             s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
-            s.baselineSig = computeBaselineSig(sessionID, s);
+            s.baselineSig = computeBaselineSig(sessionID, s, root, env);
           }
           const curHash = computePrefixHash(transcriptPath, stat.size);
           if (curHash) s.lastTranscriptHash = curHash;
