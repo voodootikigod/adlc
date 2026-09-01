@@ -981,7 +981,7 @@ test('onStop: treats git diff --output as mutation requiring verification', () =
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({
@@ -1304,7 +1304,7 @@ test('onStop: recognizes tool_call and tool_name snake_case envelopes in transcr
     JSON.stringify({
       tool_call: {
         tool_name: 'run_command',
-        args: { CommandLine: 'node --test' },
+        args: { CommandLine: 'node --test', Cwd: root },
       },
       exit_code: 0,
     }),
@@ -1513,6 +1513,63 @@ test('onStop: rejects bare node --test when CWD is a subdirectory inside repo', 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects bare node --test when Cwd is omitted', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-omitted-cwd',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects stopping when active ticket is deleted while unverified mutations exist', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Remove current-ticket pointer to simulate deletion
+  rmSync(join(root, '.adlc/current-ticket.json'), { force: true });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-deleted-pointer',
+    };
+    const res = onStop(payload, { env: { ...env, ADLC_TICKET: '' } });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket is missing while unverified edits exist/);
   } finally {
     cleanup();
   }

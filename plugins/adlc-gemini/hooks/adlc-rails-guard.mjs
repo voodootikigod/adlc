@@ -471,6 +471,15 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   const realRoot = root ? realpathOr(resolve(root)) : null;
 
+  // If running bare node --test with no explicit target, cwd is mandatory and must be the repository root
+  if (/^node\s+--test\s*$/i.test(trimmed)) {
+    const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
+    if (typeof cwd !== 'string' || !cwd) return false;
+    const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
+    const realCwd = realpathOr(absCwd);
+    if (!realRoot || relative(realRoot, realCwd) !== '') return false;
+  }
+
   // If tool args specify a working directory, it must resolve via realpath to inside or equal to the root
   if (realRoot && toolArgs) {
     const cwd = toolArgs.Cwd ?? toolArgs.cwd;
@@ -479,8 +488,6 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
       const realCwd = realpathOr(absCwd);
       const rel = relative(realRoot, realCwd);
       if (rel.startsWith('..') || isAbsolute(rel)) return false;
-      // If running bare node --test with no explicit target, cwd must be the repository root
-      if (/^node\s+--test\s*$/i.test(trimmed) && rel !== '') return false;
     }
   }
 
@@ -567,48 +574,16 @@ export function onStop(payload, { env = process.env } = {}) {
       return { decision: 'stop' };
     }
 
-    const active = resolveActiveTicketId(root, env);
-    if (!active.id) {
-      if (active.conflict) {
+    // Under enforcement, transcript evidence is parsed to evaluate all mutations first
+    if (!transcriptPath || records.length === 0) {
+      const active = resolveActiveTicketId(root, env);
+      if (active.id || active.conflict) {
         return {
           decision: 'continue',
-          reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
+          reason: 'ADLC Rails-Guard: Session transcript is missing or unreadable under enforcement during Stop verification.',
         };
       }
       return { decision: 'stop' };
-    }
-
-    // Validate active ticket exists in ticket store
-    try {
-      const snapshot = loadTicketStoreReadOnly({ root, env });
-      const ticket = snapshot.get(active.id);
-      if (!ticket) {
-        return {
-          decision: 'continue',
-          reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
-        };
-      }
-      const storeHash = snapshot.ticketHashes?.[active.id] ?? snapshot.ticketHashes?.get?.(active.id);
-      const activeHash = active.ticketHash ?? active.hash;
-      if (activeHash && storeHash && activeHash !== storeHash) {
-        return {
-          decision: 'continue',
-          reason: `ADLC Rails-Guard: Active ticket hash mismatch detected during Stop verification.`,
-        };
-      }
-    } catch {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
-      };
-    }
-
-    // Under enforcement with an active ticket, transcript evidence is required
-    if (!transcriptPath || records.length === 0) {
-      return {
-        decision: 'continue',
-        reason: 'ADLC Rails-Guard: Session transcript is missing or unreadable under enforcement during Stop verification.',
-      };
     }
 
     let callSeq = 0;
@@ -681,6 +656,48 @@ export function onStop(payload, { env = process.env } = {}) {
           }
         }
       }
+    }
+
+    const active = resolveActiveTicketId(root, env);
+    if (!active.id) {
+      if (active.conflict) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Active ticket state conflict detected during Stop verification.',
+        };
+      }
+      if (lastMutationCallIdx !== -1) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Active ticket is missing while unverified edits exist in session.',
+        };
+      }
+      return { decision: 'stop' };
+    }
+
+    // Validate active ticket exists in ticket store
+    try {
+      const snapshot = loadTicketStoreReadOnly({ root, env });
+      const ticket = snapshot.get(active.id);
+      if (!ticket) {
+        return {
+          decision: 'continue',
+          reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
+        };
+      }
+      const storeHash = snapshot.ticketHashes?.[active.id] ?? snapshot.ticketHashes?.get?.(active.id);
+      const activeHash = active.ticketHash ?? active.hash;
+      if (activeHash && storeHash && activeHash !== storeHash) {
+        return {
+          decision: 'continue',
+          reason: `ADLC Rails-Guard: Active ticket hash mismatch detected during Stop verification.`,
+        };
+      }
+    } catch {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Corrupt or unreadable ticket store during Stop verification.',
+      };
     }
 
     // If mutations occurred under the active ticket, verification is required before stopping
