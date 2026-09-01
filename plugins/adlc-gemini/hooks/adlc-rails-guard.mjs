@@ -340,18 +340,46 @@ function sanitizeGlobList(list, maxItems = 20) {
   return list.slice(0, maxItems).map(sanitizeGlobPattern).filter(Boolean);
 }
 
+export function unwrapCall(c) {
+  let cur = c;
+  while (cur && typeof cur === 'object') {
+    if (typeof cur.name === 'string' || typeof cur.toolName === 'string' || typeof cur.tool_name === 'string') {
+      return cur;
+    }
+    let unwrapped = false;
+    for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
+      if (cur[k] && typeof cur[k] === 'object' && !Array.isArray(cur[k])) {
+        cur = cur[k];
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) break;
+  }
+  return cur;
+}
+
 export function extractToolCalls(record) {
   if (!record || typeof record !== 'object') return [];
+  let rawCalls = [];
   for (const k of ['toolCalls', 'tool_calls', 'calls']) {
-    if (Array.isArray(record[k])) return record[k];
+    if (Array.isArray(record[k])) {
+      rawCalls = record[k];
+      break;
+    }
   }
-  for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
-    if (record[k] && typeof record[k] === 'object' && !Array.isArray(record[k])) return [record[k]];
+  if (rawCalls.length === 0) {
+    for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
+      if (record[k] && typeof record[k] === 'object' && !Array.isArray(record[k])) {
+        rawCalls = [record[k]];
+        break;
+      }
+    }
   }
-  if (typeof record.name === 'string' || typeof record.toolName === 'string' || typeof record.tool_name === 'string') {
-    return [record];
+  if (rawCalls.length === 0 && (typeof record.name === 'string' || typeof record.toolName === 'string' || typeof record.tool_name === 'string')) {
+    rawCalls = [record];
   }
-  return [];
+  return rawCalls.map(unwrapCall).filter(Boolean);
 }
 
 export function preInvocation(payload, { env = process.env } = {}) {
@@ -480,7 +508,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (!packageManifestMutated && !shellMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
 
   // Strict immutable verification runners (npx requires --no-install)
-  if (/^(node\s+(--test|scripts\/test\/))/i.test(trimmed)) return true;
+  if (/^node\s+--test(\s+|$)/i.test(trimmed)) return true;
   if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
   if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
 
