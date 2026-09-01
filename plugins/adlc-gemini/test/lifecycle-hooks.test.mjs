@@ -1124,3 +1124,54 @@ test('onStop: rejects npm test when package.json is mutated via AbsolutePath or 
     cleanup();
   }
 });
+
+test('onStop: rejects node --test --test-shard=1/2 partial suite', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test --test-shard=1/2' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shard-flag',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('preInvocation: includes trust-root rails in frozen rails reminder', () => {
+  const { root, env, cleanup } = setupTempRepo({
+    activeTicket: 'T1',
+    rails: ['src/app.js'],
+  });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      conversationId: 'test-session-trust-roots',
+    };
+    const res = preInvocation(payload, { env });
+    assert.equal(res.injectSteps.length, 1);
+    const msg = res.injectSteps[0].ephemeralMessage;
+    assert.match(msg, /\.adlc\/tickets\.json/);
+    assert.match(msg, /\.adlc\/current-ticket\.json/);
+    assert.match(msg, /src\/app\.js/);
+  } finally {
+    cleanup();
+  }
+});

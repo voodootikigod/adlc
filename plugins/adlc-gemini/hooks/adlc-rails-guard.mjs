@@ -356,14 +356,15 @@ export function preInvocation(payload, { env = process.env } = {}) {
       const ticket = snapshot.get(cleanId);
       if (ticket) {
         const cleanRails = sanitizeGlobList(ticket.rails);
+        const allRails = Array.from(new Set([...cleanRails, ...TRUST_ROOT_RAILS]));
         const cleanScope = sanitizeGlobList(ticket.scope);
-        const declaredRails = cleanRails.length ? cleanRails.join(', ') : 'none (trust roots only)';
+        const declaredRails = allRails.join(', ');
         const declaredScope = cleanScope.length ? cleanScope.join(', ') : 'unrestricted';
         const enf = env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE (advisory)';
         return {
           injectSteps: [
             {
-              ephemeralMessage: `[ADLC Context] Active Ticket: ${cleanId} | Enforcement: ${enf} | Scope: ${declaredScope} | Rails: ${declaredRails}`,
+              ephemeralMessage: `[ADLC Context] Active Ticket: ${cleanId} | Enforcement: ${enf} | Scope: ${declaredScope} | Frozen Rails: ${declaredRails}`,
             },
           ],
         };
@@ -398,9 +399,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // Reject newlines, shell chaining, pipes, redirects, substitutions, or operators that can mask test failures
   if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
 
-  // Reject directory-redirecting flags, test-filtering/skipping flags, and module preload/loader options
-  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
-  if (/(--require=|--import=|--loader=|--experimental-loader=)/i.test(trimmed)) return false;
+  // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, and module preload/loader options
+  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--test-shard|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
+  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=)/i.test(trimmed)) return false;
 
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
