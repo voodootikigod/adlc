@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -473,4 +473,62 @@ test('checkBuildGate: allows build on sharded ticket store under enforcement', (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('flail: accumulation of > 20 distinct warnings preserves valid session baseline HMAC', () => {
+  const root = mkdtempSync(join(tmpdir(), 'warn-prune-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+    writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+
+    const sessionID = 'sess-warn-prune';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+
+    // Produce 25 distinct file edit churn events to accumulate > 20 warnings
+    for (let i = 0; i < 25; i++) {
+      tracker.recordEdit(sessionID, `src/file_${i}.js`, [`Editing src/file_${i}.js`, `Editing src/file_${i}.js`, `Editing src/file_${i}.js`]);
+    }
+
+    assert.equal(tracker.validateBaseline(sessionID), true, 'session baseline must remain valid after warning pruning');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: truncated or tampered ledger fails closed under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-tamper-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const sessionID = 'sess-tamper-test';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+    tracker.recordToolCall(sessionID, { isMutating: true });
+    tracker.recordToolCall(sessionID, { isMutating: true });
+
+    // Remove sessions.json so replayLedger is authoritative
+    rmSync(join(root, '.adlc', 'sessions.json'));
+
+    // Truncate ledger file to corrupt the MAC chain / remove second tool call
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    const raw = readFileSync(ledgerFile, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    // Write only the first line (dropped subsequent entries without proper compaction/chaining)
+    writeFileSync(ledgerFile, lines[0] + '\n');
+
+    // In a fresh tracker process, replaying the truncated ledger must detect sequence broken/corrupted
+    const freshTracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID, tracker: freshTracker, root, env });
+    assert.equal(gate.decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 

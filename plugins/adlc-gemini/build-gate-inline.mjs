@@ -369,14 +369,58 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const MAX_LEDGER_BYTES = 512 * 1024; // 512 KiB write-side rotation threshold
   const HARD_MAX_LEDGER_BYTES = 2 * 1024 * 1024; // 2 MiB hard limit
 
+  function computeLedgerMac(prevMac, seq, data) {
+    const secret = getOrCreateSessionSecret(root, env);
+    return createHmac('sha256', secret).update(`${prevMac}:${seq}:${JSON.stringify(data)}`).digest('hex');
+  }
+
+  function readLastLedgerHeader() {
+    if (!existsSync(ledgerPath)) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+    try {
+      const raw = readFileSync(ledgerPath, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      if (lines.length === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+      const last = JSON.parse(lines[lines.length - 1]);
+      if (typeof last?.seq === 'number' && typeof last?.mac === 'string') {
+        return { lastSeq: last.seq, lastMac: last.mac };
+      }
+    } catch {}
+    return null;
+  }
+
   function appendLedger(entry) {
     if (!ticketStoreExists(root, env)) return;
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
-      const record = JSON.stringify({
-        t: Date.now(),
-        ...entry,
-      }) + '\n';
+
+      let header = readLastLedgerHeader();
+      if (!header && existsSync(ledgerPath)) {
+        // Unparseable ledger header -> attempt replay, fail-closed if corrupted
+        const replayed = replayLedger();
+        if (replayed?._corrupted) {
+          try {
+            const lStat = lstatSync(ledgerPath);
+            if (lStat.size > HARD_MAX_LEDGER_BYTES) {
+              const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
+              renameSync(ledgerPath, tombstone);
+              header = { lastSeq: 0, lastMac: '0'.repeat(64) };
+            } else {
+              return;
+            }
+          } catch {
+            return;
+          }
+        } else {
+          header = { lastSeq: 0, lastMac: '0'.repeat(64) };
+        }
+      }
+      if (!header) header = { lastSeq: 0, lastMac: '0'.repeat(64) };
+
+      const seq = header.lastSeq + 1;
+      const prevMac = header.lastMac;
+      const payload = { t: Date.now(), ...entry };
+      const mac = computeLedgerMac(prevMac, seq, payload);
+      const record = JSON.stringify({ seq, prevMac, mac, payload }) + '\n';
 
       // Check if ledger exceeds rotation threshold
       if (existsSync(ledgerPath)) {
@@ -388,9 +432,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             if (store && Object.keys(store).length > 0 && !store._corrupted) {
               const tmpLedger = `${ledgerPath}.tmp.${process.pid}.${Date.now()}`;
               const compactedLines = [];
+              let curSeq = 0;
+              let curPrevMac = '0'.repeat(64);
               for (const [sid, s] of Object.entries(store)) {
                 if (sid === '_corrupted') continue;
-                compactedLines.push(JSON.stringify({
+                curSeq++;
+                const snapPayload = {
                   t: s.updatedAt ?? Date.now(),
                   type: 'snapshot',
                   sessionID: sid,
@@ -407,9 +454,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
                   initialTranscript: s.initialTranscript ?? null,
                   lastTranscriptHash: s.lastTranscriptHash ?? null,
                   lastTranscriptSize: s.lastTranscriptSize ?? null,
-                }));
+                };
+                const snapMac = computeLedgerMac(curPrevMac, curSeq, snapPayload);
+                compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: snapMac, payload: snapPayload }));
+                curPrevMac = snapMac;
               }
-              compactedLines.push(JSON.stringify({ t: Date.now(), ...entry }));
+              curSeq++;
+              const newEntryMac = computeLedgerMac(curPrevMac, curSeq, payload);
+              compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: newEntryMac, payload }));
               writeFileSync(tmpLedger, compactedLines.join('\n') + '\n', { mode: 0o600 });
               renameSync(tmpLedger, ledgerPath);
               return;
@@ -430,68 +482,106 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     try {
       if (!existsSync(ledgerPath)) return null;
       const stat = lstatSync(ledgerPath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) return null;
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) {
+        const s = Object.create(null);
+        s._corrupted = true;
+        return s;
+      }
       const raw = readFileSync(ledgerPath, 'utf8');
       const lines = raw.split('\n').filter(Boolean);
+      if (lines.length === 0) return null;
       const store = Object.create(null);
+      let expectedSeq = 1;
+      let expectedPrevMac = '0'.repeat(64);
+
       for (const line of lines) {
+        let parsed;
         try {
-          const ev = JSON.parse(line);
-          const safeKey = sanitizeSessionId(ev.sessionID);
-          if (!safeKey) continue;
-          const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [], warned: [] };
-          if (ev.type === 'snapshot') {
-            s.depth = ev.depth ?? s.depth ?? 0;
-            s.totalCalls = ev.totalCalls ?? s.totalCalls ?? 0;
-            s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
-            s.compacted = Boolean(ev.compacted);
-            s.ended = Boolean(ev.ended);
-            s.edits = Array.isArray(ev.edits) ? ev.edits : s.edits ?? [];
-            s.warned = Array.isArray(ev.warned) ? ev.warned : s.warned ?? [];
-            if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
-            if (ev.initialStoreHash) s.initialStoreHash = ev.initialStoreHash;
+          parsed = JSON.parse(line);
+        } catch {
+          store._corrupted = true;
+          return store;
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          store._corrupted = true;
+          return store;
+        }
+
+        // Authenticate ledger entry sequence and HMAC
+        if (parsed.seq !== expectedSeq || parsed.prevMac !== expectedPrevMac) {
+          store._corrupted = true;
+          return store;
+        }
+        const expectedMac = computeLedgerMac(parsed.prevMac, parsed.seq, parsed.payload);
+        if (parsed.mac !== expectedMac) {
+          store._corrupted = true;
+          return store;
+        }
+        expectedPrevMac = parsed.mac;
+        expectedSeq = parsed.seq + 1;
+
+        const ev = parsed.payload;
+        if (!ev || typeof ev !== 'object') {
+          store._corrupted = true;
+          return store;
+        }
+
+        const safeKey = sanitizeSessionId(ev.sessionID);
+        if (!safeKey) continue;
+        const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [], warned: [] };
+        if (ev.type === 'snapshot') {
+          s.depth = ev.depth ?? s.depth ?? 0;
+          s.totalCalls = ev.totalCalls ?? s.totalCalls ?? 0;
+          s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
+          s.compacted = Boolean(ev.compacted);
+          s.ended = Boolean(ev.ended);
+          s.edits = Array.isArray(ev.edits) ? ev.edits : s.edits ?? [];
+          s.warned = Array.isArray(ev.warned) ? ev.warned : s.warned ?? [];
+          if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
+          if (ev.initialStoreHash) s.initialStoreHash = ev.initialStoreHash;
+          if (ev.initialPointer) s.initialPointer = ev.initialPointer;
+          if (ev.initialTranscript) s.initialTranscript = ev.initialTranscript;
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+        } else if (ev.type === 'recordActiveTicket') {
+          if (!s.initialActiveTicket && ev.activeTicketId) {
+            s.initialActiveTicket = ev.activeTicketId;
+            s.initialStoreHash = ev.storeHash ?? null;
             if (ev.initialPointer) s.initialPointer = ev.initialPointer;
-            if (ev.initialTranscript) s.initialTranscript = ev.initialTranscript;
-            if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
-            if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
-          } else if (ev.type === 'recordActiveTicket') {
-            if (!s.initialActiveTicket && ev.activeTicketId) {
-              s.initialActiveTicket = ev.activeTicketId;
-              s.initialStoreHash = ev.storeHash ?? null;
-              if (ev.initialPointer) s.initialPointer = ev.initialPointer;
-            }
-          } else if (ev.type === 'recordToolCall') {
-            s.depth = (s.depth ?? 0) + 1;
-            s.totalCalls = (s.totalCalls ?? 0) + 1;
-            if (ev.isMutating) s.mutatingCalls = (s.mutatingCalls ?? 0) + 1;
-          } else if (ev.type === 'revertToolCall') {
-            if (s.depth > 0) s.depth -= 1;
-            if (s.totalCalls > 0) s.totalCalls -= 1;
-            if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
-          } else if (ev.type === 'recordEdit') {
-            if (ev.filePath) {
-              s.edits.push(`Editing ${ev.filePath}`);
-              if (s.edits.length > 200) s.edits = s.edits.slice(-200);
-            }
-          } else if (ev.type === 'compact') {
-            s.compacted = true;
-          } else if (ev.type === 'ended') {
-            s.ended = true;
-          } else if (ev.type === 'recordTranscript') {
-            if (!s.initialTranscript && ev.initialTranscript) {
-              s.initialTranscript = ev.initialTranscript;
-            }
-            if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
-            if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
           }
-          s.updatedAt = ev.t ?? Date.now();
-          s.baselineSig = computeBaselineSig(safeKey, s, root, env);
-          store[safeKey] = s;
-        } catch {}
+        } else if (ev.type === 'recordToolCall') {
+          s.depth = (s.depth ?? 0) + 1;
+          s.totalCalls = (s.totalCalls ?? 0) + 1;
+          if (ev.isMutating) s.mutatingCalls = (s.mutatingCalls ?? 0) + 1;
+        } else if (ev.type === 'revertToolCall') {
+          if (s.depth > 0) s.depth -= 1;
+          if (s.totalCalls > 0) s.totalCalls -= 1;
+          if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+        } else if (ev.type === 'recordEdit') {
+          if (ev.filePath) {
+            s.edits.push(`Editing ${ev.filePath}`);
+            if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+          }
+        } else if (ev.type === 'compact') {
+          s.compacted = true;
+        } else if (ev.type === 'ended') {
+          s.ended = true;
+        } else if (ev.type === 'recordTranscript') {
+          if (!s.initialTranscript && ev.initialTranscript) {
+            s.initialTranscript = ev.initialTranscript;
+          }
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+        }
+        s.updatedAt = ev.t ?? Date.now();
+        s.baselineSig = computeBaselineSig(safeKey, s, root, env);
+        store[safeKey] = s;
       }
       return store;
     } catch {
-      return null;
+      const s = Object.create(null);
+      s._corrupted = true;
+      return s;
     }
   }
 
@@ -566,6 +656,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (Array.isArray(data[k].warned) && data[k].warned.length > 20) {
             data[k].warned = data[k].warned.slice(-20);
           }
+          data[k].baselineSig = computeBaselineSig(k, data[k], root, env);
         }
       }
 
