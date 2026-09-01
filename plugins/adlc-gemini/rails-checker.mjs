@@ -12,6 +12,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { ticketHash, loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -218,6 +219,17 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
     return { state: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
+  }
+  if (active.ticketHash) {
+    let computed;
+    try {
+      computed = ticketHash(ticket);
+    } catch (err) {
+      return { state: 'deny', reason: `failed to compute ticket hash for ${active.id} (${err.message}) — failing closed` };
+    }
+    if (computed !== active.ticketHash) {
+      return { state: 'deny', reason: `active ticket ${active.id} hash mismatch (${computed} !== ${active.ticketHash}) — failing closed` };
+    }
   }
   const declaredRails = ticket.rails ?? [];
   // core validates rails is an array but NOT its element types; a non-string entry

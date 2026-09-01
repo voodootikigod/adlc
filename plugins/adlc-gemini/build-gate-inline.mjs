@@ -238,6 +238,30 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         writeStore(store);
       });
     },
+    recordActiveTicket(sessionID, activeTicketId, storeHash) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        if (!s.initialActiveTicket && activeTicketId) {
+          s.initialActiveTicket = activeTicketId;
+          s.initialStoreHash = storeHash ?? null;
+        }
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
+      });
+    },
+    initialTicket(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialActiveTicket ?? null;
+    },
+    initialStoreHash(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialStoreHash ?? null;
+    },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
       withLock(sessionID, () => {

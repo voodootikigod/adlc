@@ -69,7 +69,7 @@ export function findAdlcRoot(absPath) {
   let cur = absPath;
   const { root: fsRoot } = parse(cur);
   while (true) {
-    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json')) || existsSync(join(cur, '.adlc', 'current-ticket.json')) || existsSync(join(cur, '.adlc'))) return cur;
+    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json')) || existsSync(join(cur, '.adlc', 'current-ticket.json'))) return cur;
     if (cur === fsRoot) return null;
     cur = dirname(cur);
   }
@@ -252,7 +252,15 @@ export function runFromStdin(raw, env = process.env) {
   }
 
   for (const root of distinctRoots) {
-    getTracker(root).recordToolCall(sessionID);
+    const tracker = getTracker(root);
+    tracker.recordToolCall(sessionID);
+    const active = resolveActiveTicketId(root, env);
+    if (active.id) {
+      try {
+        const snap = loadTicketStoreReadOnly({ root, env });
+        tracker.recordActiveTicket(sessionID, active.id, snap?.hash);
+      } catch {}
+    }
   }
 
   return decide(payload, { env, trackerCache });
@@ -418,6 +426,10 @@ export function preInvocation(payload, { env = process.env } = {}) {
       const snapshot = loadTicketStoreReadOnly({ root, env });
       const ticket = snapshot.get(cleanId);
       if (ticket) {
+        const tracker = createPersistentTracker(root, env);
+        const sessionID = resolveSessionId({ payload, env });
+        tracker.recordActiveTicket(sessionID, cleanId, snapshot.hash);
+
         const cleanRails = sanitizeGlobList(ticket.rails);
         const allRails = Array.from(new Set([...cleanRails, ...TRUST_ROOT_RAILS]));
         const cleanScope = sanitizeGlobList(ticket.scope);
@@ -569,9 +581,23 @@ export function onStop(payload, { env = process.env } = {}) {
       return { decision: 'stop' };
     }
 
+    const initialActive = resolveActiveTicketId(root, env);
+    let initialStoreHash = null;
+    try {
+      const initialSnapshot = loadTicketStoreReadOnly({ root, env });
+      initialStoreHash = initialSnapshot?.hash ?? null;
+    } catch {}
+
+    const tracker = createPersistentTracker(root, env);
+    const sessionID = resolveSessionId({ payload, env });
+    const trackedInitialTicket = tracker.initialTicket(sessionID);
+    const trackedInitialHash = tracker.initialStoreHash(sessionID);
+    const initialActiveId = trackedInitialTicket ?? initialActive.id;
+    const initialHash = trackedInitialHash ?? initialStoreHash;
+
     // Under enforcement, transcript evidence is parsed to evaluate all mutations first
     if (!transcriptPath || records.length === 0) {
-      const active = resolveActiveTicketId(root, env);
+      const active = initialActiveId ? { id: initialActiveId } : resolveActiveTicketId(root, env);
       if (active.id || active.conflict) {
         return {
           decision: 'continue',
@@ -676,6 +702,12 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     const active = resolveActiveTicketId(root, env);
+    if (initialActiveId && active.id !== initialActiveId) {
+      return {
+        decision: 'continue',
+        reason: `ADLC Rails-Guard: Active ticket ID changed from ${initialActiveId} to ${active.id ?? 'none'} during session.`,
+      };
+    }
     if (!active.id) {
       if (active.conflict) {
         return {
@@ -695,6 +727,12 @@ export function onStop(payload, { env = process.env } = {}) {
     // Validate active ticket exists in ticket store
     try {
       const snapshot = loadTicketStoreReadOnly({ root, env });
+      if (initialHash && snapshot.hash !== initialHash) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Ticket store hash changed during session.',
+        };
+      }
       const ticket = snapshot.get(active.id);
       if (!ticket) {
         return {

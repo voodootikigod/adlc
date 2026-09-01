@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { preInvocation, onStop } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot } from '../hooks/adlc-rails-guard.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
@@ -2133,6 +2133,56 @@ test('onStop: rejects obfuscated shell mutation that corrupts ticket store contr
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /Corrupt or unreadable ticket store/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('findAdlcRoot: does not stop at nested empty .adlc directory and finds true root', () => {
+  const { root, cleanup } = setupTempRepo();
+  const nestedDir = join(root, 'src', 'subdir');
+  const nestedAdlc = join(nestedDir, '.adlc');
+  mkdirSync(nestedAdlc, { recursive: true });
+  try {
+    const found = findAdlcRoot(join(nestedDir, 'file.js'));
+    assert.equal(found, root);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects mid-session active ticket pointer change', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Add T2 to ticket store
+  const t2 = { id: 'T2', title: 'Ticket 2', status: 'open', rails: [] };
+  const storeRaw = readFileSync(join(root, '.adlc', 'tickets.json'), 'utf8');
+  const store = JSON.parse(storeRaw);
+  store.tickets.push(t2);
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify(store));
+
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-pointer-switch',
+    };
+    // Initialize session state with active ticket T1
+    preInvocation(payload, { env });
+    // Switch active ticket pointer mid-session
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T2' }));
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket ID changed from T1 to T2/);
   } finally {
     cleanup();
   }
