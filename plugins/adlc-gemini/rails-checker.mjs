@@ -170,7 +170,7 @@ export function resolveActiveTicketId(root, env) {
   // now also covers an unparseable pointer AND an object pointer whose id key is
   // unrecognized — the latter used to read as "no active ticket" and ALLOW.
   if (!resolved.ok) return { id: null, conflict: true, code: resolved.code, message: resolved.message };
-  return { id: resolved.value?.id ?? null, conflict: false };
+  return { id: resolved.value?.id ?? null, conflict: false, ticketHash: resolved.value?.ticketHash ?? null };
 }
 
 /**

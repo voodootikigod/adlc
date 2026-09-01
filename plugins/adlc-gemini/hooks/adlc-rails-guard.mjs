@@ -579,10 +579,19 @@ export function onStop(payload, { env = process.env } = {}) {
     // Validate active ticket exists in ticket store
     try {
       const snapshot = loadTicketStoreReadOnly({ root, env });
-      if (!snapshot.get(active.id)) {
+      const ticket = snapshot.get(active.id);
+      if (!ticket) {
         return {
           decision: 'continue',
           reason: `ADLC Rails-Guard: Active ticket ${active.id} not found in validated ticket store.`,
+        };
+      }
+      const storeHash = snapshot.ticketHashes?.[active.id] ?? snapshot.ticketHashes?.get?.(active.id);
+      const activeHash = active.ticketHash ?? active.hash;
+      if (activeHash && storeHash && activeHash !== storeHash) {
+        return {
+          decision: 'continue',
+          reason: `ADLC Rails-Guard: Active ticket hash mismatch detected during Stop verification.`,
         };
       }
     } catch {
@@ -632,6 +641,12 @@ export function onStop(payload, { env = process.env } = {}) {
           lastMutationCallIdx = currentCallIdx;
           if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
             packageManifestMutated = true;
+          }
+          if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p))) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
+            };
           }
           if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
             return {

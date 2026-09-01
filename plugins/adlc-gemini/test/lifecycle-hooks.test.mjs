@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop } from '../hooks/adlc-rails-guard.mjs';
@@ -1378,6 +1378,79 @@ test('onStop: rejects arbitrary node scripts/test/ script as verification runner
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects symlinked transcript files', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const realTranscript = join(root, 'real_transcript.jsonl');
+  const symlinkTranscript = join(root, 'symlink_transcript.jsonl');
+  writeFileSync(realTranscript, JSON.stringify({ content: 'test' }) + '\n');
+  try {
+    symlinkSync(realTranscript, symlinkTranscript);
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: symlinkTranscript,
+      conversationId: 'test-session-symlink-transcript',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript is missing or unreadable/);
+  } finally {
+    try { unlinkSync(symlinkTranscript); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: rejects modification to .adlc trust-root files during session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: '.adlc/tickets.json' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-trust-root-mod',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket contract or trust-root store was modified/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: fails closed when active ticket pointer hash mismatches store', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  writeFileSync(join(root, '.adlc/current-ticket.json'), JSON.stringify({
+    id: 'T1',
+    ticketHash: '0000000000000000000000000000000000000000000000000000000000000000',
+  }, null, 2));
+  const transcriptFile = join(root, 'transcript.jsonl');
+  writeFileSync(transcriptFile, JSON.stringify({ content: 'Clean run' }) + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-hash-mismatch',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Active ticket hash mismatch/);
   } finally {
     cleanup();
   }

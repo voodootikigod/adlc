@@ -1,7 +1,7 @@
 // flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -91,8 +91,9 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   if (typeof direct === 'string' && direct.trim()) {
     try {
-      const real = realpathSync(direct);
-      if (statSync(real).isFile()) {
+      const lstat = lstatSync(direct);
+      if (!lstat.isSymbolicLink() && lstat.isFile()) {
+        const real = realpathSync(direct);
         const allowedRoots = [appDataDir, tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])].filter(Boolean);
         const isAllowed = allowedRoots.some((r) => {
           try {
@@ -106,7 +107,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         if (isAllowed) return real;
       }
     } catch {
-      // not a regular file, inaccessible, or outside allowed roots
+      // not a regular file, inaccessible, symlink, or outside allowed roots
     }
   }
 
@@ -120,11 +121,13 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
 
   const transcriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl');
   try {
-    if (existsSync(transcriptPath) && statSync(transcriptPath).isFile()) return transcriptPath;
+    const lstat = lstatSync(transcriptPath);
+    if (!lstat.isSymbolicLink() && lstat.isFile()) return transcriptPath;
   } catch {}
   const fullTranscriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript_full.jsonl');
   try {
-    if (existsSync(fullTranscriptPath) && statSync(fullTranscriptPath).isFile()) return fullTranscriptPath;
+    const lstat = lstatSync(fullTranscriptPath);
+    if (!lstat.isSymbolicLink() && lstat.isFile()) return fullTranscriptPath;
   } catch {}
   return null;
 }
