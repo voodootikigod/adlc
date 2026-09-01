@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { preInvocation, onStop, findAdlcRoot } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot, runFromStdin } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker } from '../build-gate-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -2688,6 +2688,52 @@ test('onStop: rejects Stop when session entry counters are zeroed out mid-sessio
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /Untracked or missing tool execution records|Session tracking entry was deleted, reset, or modified/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runFromStdin: denied tool call on frozen rail does not advance session counters', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', rails: ['src/frozen.js'] });
+  try {
+    const payload = JSON.stringify({
+      conversationId: 'sess-denied-rail',
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/frozen.js'), CodeContent: 'bad' } },
+      workspacePaths: [root],
+    });
+    const res = runFromStdin(payload, env);
+    assert.equal(res.allow_tool, false);
+
+    const tracker = createPersistentTracker(root, env);
+    assert.equal(tracker.depth('sess-denied-rail'), 0);
+    assert.equal(tracker.mutatingCalls('sess-denied-rail'), 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when transcript path changes mid-session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcript1 = join(root, 'transcript1.jsonl');
+  const transcript2 = join(root, 'transcript2.jsonl');
+  writeFileSync(transcript1, '{"type":"USER_INPUT"}\n');
+  writeFileSync(transcript2, '{"type":"USER_INPUT"}\n');
+  try {
+    const payload1 = {
+      workspacePaths: [root],
+      transcriptPath: transcript1,
+      conversationId: 'sess-path-switch',
+    };
+    preInvocation(payload1, { env });
+
+    const payload2 = {
+      workspacePaths: [root],
+      transcriptPath: transcript2,
+      conversationId: 'sess-path-switch',
+    };
+    const res = onStop(payload2, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript path changed during session/);
   } finally {
     cleanup();
   }

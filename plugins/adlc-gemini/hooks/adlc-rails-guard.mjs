@@ -275,7 +275,16 @@ export function runFromStdin(raw, env = process.env) {
     }
   }
 
-  return decide(payload, { env, trackerCache });
+  const verdict = decide(payload, { env, trackerCache });
+  if (verdict.allow_tool === false) {
+    for (const root of distinctRoots) {
+      const tracker = getTracker(root);
+      tracker.revertToolCall?.(sessionID, { isMutating: isMut });
+    }
+    return verdict;
+  }
+
+  return verdict;
 }
 
 async function readStdin() {
@@ -624,6 +633,12 @@ export function onStop(payload, { env = process.env } = {}) {
     const initialTranscript = trackerInfo?.initial;
     let curStat = null;
     if (initialTranscript && transcriptPath) {
+      if (initialTranscript.path && transcriptPath !== initialTranscript.path) {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session transcript path changed during session.',
+        };
+      }
       try {
         curStat = lstatSync(transcriptPath);
         if (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev) {

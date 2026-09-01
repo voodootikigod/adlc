@@ -308,6 +308,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         writeStore(store);
       });
     },
+    revertToolCall(sessionID, { isMutating = true } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID];
+        if (!s) return;
+        if (s.depth && s.depth > 0) s.depth -= 1;
+        if (s.totalCalls && s.totalCalls > 0) s.totalCalls -= 1;
+        if (isMutating && s.mutatingCalls && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+        s.updatedAt = Date.now();
+        store[sessionID] = s;
+        writeStore(store);
+      });
+    },
     totalCalls(sessionID) {
       if (!sessionID) return 0;
       const store = readStore();
