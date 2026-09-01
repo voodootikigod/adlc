@@ -228,6 +228,24 @@ export function extractCommandString(args, depth = 0) {
   return '';
 }
 
+export function extractCwdFromArgs(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return null;
+  for (const [key, val] of Object.entries(args)) {
+    if (typeof val === 'string' && val.trim().length > 0) {
+      if (/^(cwd|workdir|workingDirectory|projectRoot|dir|directory)$/i.test(key) || /(^|_)(cwd|workdir)($|_)/i.test(key)) {
+        return val.trim();
+      }
+    }
+  }
+  for (const val of Object.values(args)) {
+    if (val && typeof val === 'object') {
+      const nested = extractCwdFromArgs(val, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
 /**
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
@@ -360,7 +378,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (hasCommandLineArgs(args) && !cmd) {
           return deny('recognized shell tool has unparseable command arguments — failing closed');
         }
-        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
+        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
       }
@@ -450,8 +468,8 @@ export function runFromStdin(raw, envArg = process.env) {
   }
 
   const isShell = isShellTool(toolName, args);
-  const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? args?.script ?? '').trim();
-  const shellCwd = args?.Cwd ?? args?.cwd;
+  const cmd = extractCommandString(args);
+  const shellCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
   if (shellCwd && typeof shellCwd === 'string') {
     const shellRoot = findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env);
     if (shellRoot) distinctRoots.add(shellRoot);
@@ -737,7 +755,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   const realRoot = root ? realpathOr(resolve(root)) : null;
 
   // All verification commands must execute with an explicit Cwd bound to the repository root
-  const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
+  const cwd = extractCwdFromArgs(toolArgs) ?? toolArgs?.Cwd ?? toolArgs?.cwd;
   if (typeof cwd !== 'string' || !cwd) return false;
   const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
   const realCwd = realpathOr(absCwd);
@@ -1029,14 +1047,14 @@ export function onStop(payload, { env = process.env } = {}) {
         }
 
         if (isShell) {
-          const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
+          const cmd = extractCommandString(args);
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          const cmdCwd = args?.Cwd ?? args?.cwd;
+          const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
           const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(isAbsolute(cmdCwd) ? cmdCwd : join(root, cmdCwd), env) : null) ?? root;
           if (isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;

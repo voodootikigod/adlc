@@ -4279,6 +4279,68 @@ test('onStop: allows stop with mixed text and functionCall parts followed by suc
   }
 });
 
+test('onStop: allows stop when verification command is inside nested options envelope', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// edit' } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { options: { CommandLine: 'node --test', Cwd: root } } },
+        ],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished with verified tests.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-nested-options-test',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    cleanup();
+  }
+});
+
+test('runFromStdin: denies shell command attempting to read session secrets under enforcement', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat /dev/shm/.adlc-secrets-1000/session-1234.secret',
+          Cwd: root,
+        },
+      },
+    };
+    const res = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});
+
+
+
 
 
 

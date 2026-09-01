@@ -184,7 +184,7 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 const loadedSecretCache = new Map();
 
 function getOrCreateSessionSecret(root, env = process.env) {
-  if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
+  if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
   // Store secret in OS process-isolated runtime path inaccessible inside workspace
   let secretDir;
@@ -201,12 +201,16 @@ function getOrCreateSessionSecret(root, env = process.env) {
   const rootKey = createHash('sha256').update(root).digest('hex').slice(0, 16);
   const secretFile = join(secretDir, `session-${rootKey}.secret`);
 
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+
   if (loadedSecretCache.has(root)) {
     const cached = loadedSecretCache.get(root);
     try {
       if (!existsSync(secretFile)) return null; // Key disappeared -> tamper
       const stat = lstatSync(secretFile);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return null;
+      if (uid !== null && stat.uid !== uid) return null;
+      if ((stat.mode & 0o077) !== 0) return null;
       const raw = readFileSync(secretFile, 'utf8').trim();
       if (raw !== cached) return null; // Key replaced -> tamper
       return cached;
@@ -220,6 +224,8 @@ function getOrCreateSessionSecret(root, env = process.env) {
       if (existsSync(secretFile)) {
         const stat = lstatSync(secretFile);
         if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+          if (uid !== null && stat.uid !== uid) return null;
+          if ((stat.mode & 0o077) !== 0) return null;
           const raw = readFileSync(secretFile, 'utf8').trim();
           if (raw.length >= 32) {
             loadedSecretCache.set(root, raw);
@@ -240,6 +246,8 @@ function getOrCreateSessionSecret(root, env = process.env) {
         try {
           const stat = lstatSync(secretFile);
           if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+            if (uid !== null && stat.uid !== uid) return null;
+            if ((stat.mode & 0o077) !== 0) return null;
             const raw = readFileSync(secretFile, 'utf8').trim();
             if (raw.length >= 32) {
               loadedSecretCache.set(root, raw);
