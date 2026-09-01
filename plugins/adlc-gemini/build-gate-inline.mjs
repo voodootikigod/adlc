@@ -37,7 +37,7 @@ function isPidAlive(pid) {
   }
 }
 
-export const MAX_TRANSCRIPT_HASH_BYTES = 256 * 1024;
+export const MAX_TRANSCRIPT_HASH_BYTES = 16 * 1024 * 1024;
 
 export function computePrefixHash(filePath, targetBytes, maxBytes = MAX_TRANSCRIPT_HASH_BYTES) {
   if (typeof targetBytes !== 'number' || targetBytes <= 0) return null;
@@ -296,7 +296,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-        if (isMutating) s.depth = (s.depth ?? 0) + 1;
+        s.depth = (s.depth ?? 0) + 1;
         s.totalCalls = (s.totalCalls ?? 0) + 1;
         s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
         s.updatedAt = Date.now();

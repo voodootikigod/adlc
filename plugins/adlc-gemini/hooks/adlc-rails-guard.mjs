@@ -223,14 +223,25 @@ export function runFromStdin(raw, env = process.env) {
   const cls = classifyTool(toolName);
 
   const sessionID = resolveSessionId({ payload, env });
+  const args = extractArgs(payload);
 
   const paths = extractFilePaths(payload);
+  const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory, payload?.cwd, payload?.workspaceRoot];
+  for (const c of cwdCandidates) {
+    if (typeof c === 'string' && c.trim()) {
+      paths.push(c.trim());
+    }
+  }
+
   const getTracker = (r) => {
     if (!trackerCache.has(r)) trackerCache.set(r, createPersistentTracker(r, env));
     return trackerCache.get(r);
   };
 
   const distinctRoots = new Set();
+  const wsRoot = resolveWorkspaceRoot(payload, env);
+  if (wsRoot) distinctRoots.add(wsRoot);
+
   if (paths.length > 0) {
     for (const p of paths) {
       const { abs } = anchorPath(p, payload);
@@ -239,20 +250,18 @@ export function runFromStdin(raw, env = process.env) {
         if (root) distinctRoots.add(root);
       }
     }
-  } else {
-    const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-      .find((s) => typeof s === 'string' && s.trim());
-    const fallbackRoot = findAdlcRoot(ws ? (isAbsolute(ws) ? ws : join(process.cwd(), ws)) : process.cwd());
-    if (fallbackRoot) distinctRoots.add(fallbackRoot);
+  }
+  const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+  if (distinctRoots.size === 0 && transcriptPath) {
+    const transcriptRoot = findAdlcRoot(transcriptPath);
+    if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
-  const args = extractArgs(payload);
   const isShell = isShellTool(toolName) || toolName === 'run_command' || toolName === 'execute' || toolName === 'bash' || toolName === 'execute_command' || toolName === 'terminal';
   const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
   const primaryRoot = Array.from(distinctRoots)[0] ?? process.cwd();
   const isMut = isShell ? (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: primaryRoot, toolArgs: args })) : cls !== 'readonly';
 
-  const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
     tracker.recordToolCall(sessionID, { isMutating: isMut });
