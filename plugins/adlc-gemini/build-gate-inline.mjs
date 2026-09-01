@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -10,6 +10,7 @@ import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSt
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
+export const LOCK_TTL_MS = 5000;
 export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**'];
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
@@ -168,7 +169,16 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
   return 'default_session';
 }
 
-function computeBaselineSig(sessionID, s, secretKey = 'adlc-internal-sig') {
+function getBaselineSecret(env = process.env) {
+  const custom = env?.ADLC_SESSION_SECRET || env?.ADLC_MANIFEST_KEY;
+  if (custom) return custom;
+  const user = env?.USER || env?.LOGNAME || 'user';
+  const home = env?.HOME || '/root';
+  return `adlc-secret-${user}-${home}`;
+}
+
+function computeBaselineSig(sessionID, s, env = process.env) {
+  const secretKey = getBaselineSecret(env);
   const payload = JSON.stringify({
     sessionID,
     t: s?.initialActiveTicket ?? null,
@@ -189,24 +199,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
   const lockDir = join(adlcDir, 'sessions.lock');
-  const ownerPath = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
-
-  function writeOwnerFile(payload) {
-    try {
-      const tmpOwner = `${ownerPath}.tmp.${process.pid}.${Date.now()}`;
-      writeFileSync(tmpOwner, JSON.stringify(payload));
-      renameSync(tmpOwner, ownerPath);
-    } catch {
-      try { writeFileSync(ownerPath, JSON.stringify(payload)); } catch { /* ignore fallback write failure */ }
-    }
-  }
 
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
     const pid = process.pid;
-    const lockSessionDir = join(lockDir, sessionID || 'global');
+    const safeSessionKey = createHash('sha256').update(sessionID || 'global').digest('hex').slice(0, 32);
+    const lockSessionDir = join(lockDir, safeSessionKey);
     let acquired = false;
     for (let attempt = 0; attempt < 50; attempt++) {
       try {
@@ -235,21 +235,25 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       while (Date.now() - start < ms) { /* sync backoff busywait */ }
     }
 
+    if (!acquired) {
+      if (sessionID) lockFailures.add(sessionID);
+      console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out for ${safeSessionKey}`);
+      return;
+    }
+
     try {
       return fn();
     } finally {
-      if (acquired) {
-        try {
-          const pidFile = join(lockSessionDir, 'lock.pid');
-          if (existsSync(pidFile)) {
-            const rawPid = readFileSync(pidFile, 'utf8');
-            if (rawPid === String(pid)) {
-              unlinkSync(pidFile);
-              rmSync(lockSessionDir, { recursive: true, force: true });
-            }
+      try {
+        const pidFile = join(lockSessionDir, 'lock.pid');
+        if (existsSync(pidFile)) {
+          const rawPid = readFileSync(pidFile, 'utf8');
+          if (rawPid === String(pid)) {
+            unlinkSync(pidFile);
+            rmSync(lockSessionDir, { recursive: true, force: true });
           }
-        } catch { /* ignore release errors */ }
-      }
+        }
+      } catch { /* ignore release errors */ }
     }
   }
 
