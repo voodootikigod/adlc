@@ -3375,3 +3375,98 @@ test('decide: plain workspace without .git or .adlc enforces rails under externa
     try { rmSync(plainWs, { recursive: true, force: true }); } catch {}
   }
 });
+
+test('lifecycle: full lifecycle on plain workspace with external ticket store', () => {
+  const plainWs = join(tmpdir(), `adlc-plain-lifecycle-${Date.now()}`);
+  mkdirSync(join(plainWs, 'src'), { recursive: true });
+  writeFileSync(join(plainWs, 'src', 'editable.js'), '// work');
+  const transcriptFile = join(plainWs, 'transcript.jsonl');
+
+  const externalStore = join(tmpdir(), `adlc-plain-life-store-${Date.now()}.json`);
+  try {
+    writeFileSync(externalStore, JSON.stringify({
+      version: 1,
+      tickets: [{ id: 'T1', title: 'External Ticket', rails: ['src/frozen.js'] }],
+    }));
+    const env = {
+      ADLC_P4_ENFORCEMENT: '1',
+      ADLC_TICKET_STORE: externalStore,
+      ADLC_TICKET: 'T1',
+    };
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(plainWs, 'src/editable.js'), CodeContent: '// edit' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: plainWs } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const basePayload = {
+      workspacePaths: [plainWs],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-plain-lifecycle',
+    };
+
+    preInvocation(basePayload, { env });
+    const runRes1 = runFromStdin(JSON.stringify({ ...basePayload, toolCall: { name: 'write_to_file', args: { TargetFile: join(plainWs, 'src/editable.js'), CodeContent: '// edit' } } }), env);
+    assert.equal(runRes1.allow_tool, true);
+
+    const runRes2 = runFromStdin(JSON.stringify({ ...basePayload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: plainWs } } }), env);
+    assert.equal(runRes2.allow_tool, true);
+
+    const stopRes = onStop(basePayload, { env });
+    assert.equal(stopRes.decision, 'stop');
+  } finally {
+    try { unlinkSync(externalStore); } catch {}
+    try { rmSync(plainWs, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('decide and onStop: unknown command-shaped tools (custom_shell / terminal_modify) are treated as shell tools', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-custom-shell',
+    };
+
+    // 1. decide denies when custom shell tool targets trust root
+    const vDeny = runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'custom_shell', args: { CommandLine: 'rm -f .adlc/tickets.json' } },
+    }), env);
+    assert.equal(vDeny.allow_tool, false);
+    assert.match(vDeny.deny_reason, /shell modification of ticket store/);
+
+    // 2. onStop detects custom shell tool mutation and enforces test run
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'terminal_modify', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } }],
+      }),
+      JSON.stringify({ content: 'Attempting stop without test' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    preInvocation(payload, { env });
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'terminal_modify', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } },
+    }), env);
+
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Active ticket has unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});

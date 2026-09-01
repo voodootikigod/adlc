@@ -92,14 +92,19 @@ const SHELL_TOOL_NAMES = new Set([
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
 ]);
 
+export function hasCommandLineArgs(args) {
+  if (!args || typeof args !== 'object') return false;
+  return 'CommandLine' in args || 'command' in args || 'cmd' in args || 'code' in args || 'script' in args || 'execute' in args;
+}
+
 /**
- * True ONLY for a recognized shell/terminal execution tool (exact whole-name match
- * after normalization). Used by the no-path exemption, which must NOT be fooled by a
- * structured mutator whose name merely contains a shell word. Mutating classification
- * also wins first in the caller, so `terminal_edit` is denied regardless.
+ * True for a recognized shell/terminal execution tool (exact whole-name match
+ * after normalization) or any tool carrying command-line execution arguments.
  */
-export function isShellTool(name) {
-  return SHELL_TOOL_NAMES.has(normalizeToolName(name));
+export function isShellTool(name, args = null) {
+  if (SHELL_TOOL_NAMES.has(normalizeToolName(name))) return true;
+  if (args && hasCommandLineArgs(args)) return true;
+  return false;
 }
 
 /**

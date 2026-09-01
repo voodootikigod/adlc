@@ -33,7 +33,7 @@ function realpathOr(p) {
     return p;
   }
 }
-import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
@@ -242,9 +242,11 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       overrideEscaped = new RegExp('(^|[\\s=;,"\'/$.()[\\]])(' + escaped + '|ADLC_TICKET_STORE|ADLC_TICKETS)', 'i');
     }
 
-    if (isShellTool(tool)) {
+    const isShell = isShellTool(tool, args);
+
+    if (isShell) {
       if (enforcing) {
-        const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
+        const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? args?.script ?? '').trim();
         if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
@@ -259,8 +261,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     // 'mutating' name with no path is opaque (H2).
     if (!paths.length) {
       if (cls === 'other') {
-        if (enforcing && hasPathLikeArgs(args)) {
-          return deny(`unclassified tool "${tool}" has uninspectable path-like arguments — failing closed`);
+        if (enforcing && (hasPathLikeArgs(args) || hasCommandLineArgs(args))) {
+          return deny(`unclassified tool "${tool}" has uninspectable arguments — failing closed`);
         }
         return allow();
       }
@@ -420,8 +422,8 @@ export function runFromStdin(raw, envArg = process.env) {
     if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
-  const isShell = isShellTool(toolName) || toolName === 'run_command' || toolName === 'execute' || toolName === 'bash' || toolName === 'execute_command' || toolName === 'terminal';
-  const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
+  const isShell = isShellTool(toolName, args);
+  const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? args?.script ?? '').trim();
   const shellCwd = args?.Cwd ?? args?.cwd;
   if (shellCwd && typeof shellCwd === 'string') {
     const shellRoot = findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env);
@@ -480,6 +482,9 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
 }
 
 export function resolveWorkspaceRoot(payload, env = process.env) {
+  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const hasStoreOverride = storeOverride && existsSync(isAbsolute(storeOverride) ? storeOverride : join(process.cwd(), storeOverride));
+
   const pathKeys = ['transcriptPath', 'transcript_path', 'artifactPath', 'artifact_path', 'logPath', 'log_path'];
   for (const pk of pathKeys) {
     const p = payload?.[pk];
@@ -495,6 +500,9 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
     const candidate = isAbsolute(ws) ? ws : join(process.cwd(), ws);
     const found = findAdlcRoot(candidate, env);
     if (found) return found;
+    if (hasStoreOverride && existsSync(candidate) && lstatSync(candidate).isDirectory()) {
+      return candidate;
+    }
   }
 
   const envCandidates = [
@@ -510,6 +518,9 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
   for (const c of envCandidates) {
     const found = findAdlcRoot(c, env);
     if (found) return found;
+    if (hasStoreOverride && existsSync(c) && lstatSync(c).isDirectory()) {
+      return c;
+    }
   }
   return null;
 }
@@ -918,7 +929,7 @@ export function onStop(payload, { env = process.env } = {}) {
         const name = extractToolName({ toolCall: c }) || (c?.name ?? c?.toolName ?? c?.tool_name ?? '');
         const args = extractArgs({ toolCall: c });
         const filePaths = extractFilePaths({ toolCall: c });
-        const isShell = isShellTool(name) || name === 'run_command' || name === 'execute' || name === 'bash' || name === 'execute_command' || name === 'terminal';
+        const isShell = isShellTool(name, args);
         const isMutating = !isShell && classifyTool(name) !== 'readonly';
         if (isMutating) mutatingCallSeq++;
 

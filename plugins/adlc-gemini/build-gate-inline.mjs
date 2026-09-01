@@ -276,6 +276,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   function withLock(sessionID, fn) {
     if (!ticketStoreExists(root, env)) return fn();
+    try { mkdirSync(adlcDir, { recursive: true }); } catch {}
     const pid = process.pid;
     const nonce = `${pid}-${Date.now()}-${Math.random()}`;
     let acquired = false;
