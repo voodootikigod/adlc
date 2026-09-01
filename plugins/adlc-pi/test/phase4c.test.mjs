@@ -312,6 +312,15 @@ test('buildShutdownEvidence: latest-of-each-kind index tracking (boundary kill f
   assert.equal(buildShutdownEvidence({ entries: reversed, ticketId: 'T1' })?.kind, 'pending-acceptance');
 });
 
+test('buildShutdownEvidence: a FAILED accept (ok:false) does not resolve the done-claim', () => {
+  // Pins the conjunction in the accept tracker: type AND ok. The logic-swap
+  // mutant (&& → ||) lets a failed accept clear the hint — caught here.
+  const failedAccept = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: false })];
+  assert.equal(buildShutdownEvidence({ entries: failedAccept, ticketId: 'T1' })?.kind, 'pending-acceptance');
+  const acceptMissingOk = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept')];
+  assert.equal(buildShutdownEvidence({ entries: acceptMissingOk, ticketId: 'T1' })?.kind, 'pending-acceptance');
+});
+
 test('buildShutdownEvidence: a passing gate run does NOT resolve a done-claim (cross-model finding)', () => {
   // The natural post-TICKET-DONE flow runs gates (build verify, prosecution
   // nudge); those adlc-gate-run code:0 events resolve denies/reverts but must
