@@ -2063,3 +2063,77 @@ test('onStop: rejects untrusted arbitrary path with non-transcript filename in t
     cleanup();
   }
 });
+
+test('onStop: allows sharded store after non-verification shell command and successful test', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Migrate to sharded store layout
+  const ticketsDir = join(root, '.adlc', 'tickets');
+  mkdirSync(ticketsDir, { recursive: true });
+  writeFileSync(join(ticketsDir, '.store.json'), JSON.stringify({
+    format: 'adlc-ticket-directory',
+    version: 1,
+  }));
+  const t1 = { id: 'T1', title: 'Ticket 1', status: 'open', rails: ['rail1'] };
+  writeFileSync(join(ticketsDir, ticketFilename(t1.id)), JSON.stringify(t1));
+  rmSync(join(root, '.adlc', 'tickets.json'), { force: true });
+
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'echo "building"', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-sharded-shell',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects obfuscated shell mutation that corrupts ticket store contract', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Corrupt ticket store via invalid contract
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: '' }] }));
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'touch /tmp/build.log', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-obfuscated-tamper',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Corrupt or unreadable ticket store/);
+  } finally {
+    cleanup();
+  }
+});

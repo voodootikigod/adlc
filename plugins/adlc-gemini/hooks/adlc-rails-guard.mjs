@@ -713,15 +713,28 @@ export function onStop(payload, { env = process.env } = {}) {
 
       if (shellMutated) {
         try {
-          const ticketsRaw = readFileSync(join(root, '.adlc', 'tickets.json'), 'utf8');
-          const currentRaw = readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8');
-          const ticketsObj = JSON.parse(ticketsRaw);
-          const currentObj = JSON.parse(currentRaw);
-          if (!ticketsObj || typeof ticketsObj !== 'object' || !currentObj || typeof currentObj !== 'object') {
-            return {
-              decision: 'continue',
-              reason: 'ADLC Rails-Guard: Corrupt or unreadable trust-root files after shell execution.',
-            };
+          const isSharded = existsSync(join(root, '.adlc', 'tickets', '.store.json')) || existsSync(join(root, '.adlc', 'tickets'));
+          const storePath = isSharded ? join(root, '.adlc', 'tickets', '.store.json') : join(root, '.adlc', 'tickets.json');
+          if (existsSync(storePath)) {
+            const raw = readFileSync(storePath, 'utf8');
+            const obj = JSON.parse(raw);
+            if (!obj || typeof obj !== 'object') {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Corrupt or unreadable trust-root files after shell execution.',
+              };
+            }
+          }
+          const currentFile = join(root, '.adlc', 'current-ticket.json');
+          if (existsSync(currentFile)) {
+            const currentRaw = readFileSync(currentFile, 'utf8');
+            const currentObj = JSON.parse(currentRaw);
+            if (!currentObj || typeof currentObj !== 'object') {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Corrupt or unreadable current-ticket pointer after shell execution.',
+              };
+            }
           }
         } catch {
           return {
