@@ -398,8 +398,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // Reject newlines, shell chaining, pipes, redirects, substitutions, or operators that can mask test failures
   if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
 
-  // Reject directory-redirecting flags and test-filtering/skipping flags
-  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--grep|-g)\b/i.test(trimmed)) return false;
+  // Reject directory-redirecting flags, test-filtering/skipping flags, and module preload/loader options
+  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-only|--passWithNoTests|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
+  if (/(--require=|--import=|--loader=|--experimental-loader=)/i.test(trimmed)) return false;
 
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
@@ -420,7 +421,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // If command includes arguments/paths, validate that all positional paths resolve inside root
   if (realRoot) {
     const tokens = tokenizeCommand(trimmed);
-    for (const token of tokens) {
+    for (const rawToken of tokens) {
+      const token = rawToken.includes('=') ? rawToken.slice(rawToken.indexOf('=') + 1) : rawToken;
       if (token.startsWith('/') || token.startsWith('\\')) {
         const realToken = realpathOr(token);
         const rel = relative(realRoot, realToken);
@@ -436,15 +438,15 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // Reject help, version, list queries
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
-  if (/^(adlc|npx\s+adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
+  if (/^(adlc|npx\s+(--no-install\s+)?adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
   // If package.json or shell mutations occurred, mutable npm script aliases cannot be trusted as verification
   if (!packageManifestMutated && !shellMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
 
-  // Strict immutable verification runners
+  // Strict immutable verification runners (npx requires --no-install)
   if (/^(node\s+(--test|scripts\/test\/))/i.test(trimmed)) return true;
-  if (/^(adlc|npx\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
-  if (/^npx\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
+  if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
+  if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
 
   return false;
 }
