@@ -1,7 +1,7 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -261,6 +261,27 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return null;
       const store = readStore();
       return store[sessionID]?.initialStoreHash ?? null;
+    },
+    recordTranscript(sessionID, transcriptPath) {
+      if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
+      try {
+        const stat = lstatSync(transcriptPath);
+        withLock(sessionID, () => {
+          const store = readStore();
+          const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+          if (!s.initialTranscript) {
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev };
+          }
+          s.updatedAt = Date.now();
+          store[sessionID] = s;
+          writeStore(store);
+        });
+      } catch {}
+    },
+    initialTranscript(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialTranscript ?? null;
     },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;

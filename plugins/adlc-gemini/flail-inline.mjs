@@ -90,10 +90,8 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
-  let cid = cidFromPayload;
-  if (!cid && typeof conversationId === 'string' && conversationId !== 'default_session') {
-    cid = conversationId;
-  }
+  const cidFromEnv = env?.ADLC_SESSION_ID ?? env?.AGY_SESSION_ID ?? env?.GEMINI_SESSION_ID;
+  let cid = cidFromPayload ?? (typeof conversationId === 'string' && conversationId !== 'default_session' ? conversationId : null) ?? (typeof cidFromEnv === 'string' && cidFromEnv !== 'default_session' ? cidFromEnv : null);
 
   if (typeof direct === 'string' && direct.trim()) {
     if (/(^|[/\\]).*transcript.*\.jsonl$/i.test(direct.trim())) {

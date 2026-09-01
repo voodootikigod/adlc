@@ -2187,3 +2187,64 @@ test('onStop: rejects mid-session active ticket pointer change', () => {
     cleanup();
   }
 });
+
+test('onStop: resolves transcript using ADLC_SESSION_ID when payload omits conversationId', () => {
+  const cid = `session-env-${Date.now()}`;
+  const appDataDir = join(tmpdir(), `adlc-brain-${Date.now()}`);
+  const brainDir = join(appDataDir, 'brain', cid, '.system_generated', 'logs');
+  mkdirSync(brainDir, { recursive: true });
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(brainDir, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+    };
+    const res = onStop(payload, { env: { ...env, ADLC_SESSION_ID: cid, ANTIGRAVITY_APP_DATA_DIR: appDataDir } });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    try { rmSync(appDataDir, { recursive: true, force: true }); } catch (_) {}
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when transcript file is replaced with a different inode', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-inode-tamper',
+    };
+    // Initialize session state with original transcript
+    preInvocation(payload, { env });
+
+    // Recreate transcript file with a new inode
+    rmSync(transcriptFile, { force: true });
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript file identity \(inode\/device\) changed/);
+  } finally {
+    cleanup();
+  }
+});

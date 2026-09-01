@@ -5,7 +5,7 @@
 // editor-agnostic checkRail() and emits agy's { allow_tool, deny_reason } verdict.
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 function realpathOr(p) {
@@ -251,9 +251,11 @@ export function runFromStdin(raw, env = process.env) {
     if (fallbackRoot) distinctRoots.add(fallbackRoot);
   }
 
+  const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
     tracker.recordToolCall(sessionID);
+    if (transcriptPath) tracker.recordTranscript(sessionID, transcriptPath);
     const active = resolveActiveTicketId(root, env);
     if (active.id) {
       try {
@@ -429,6 +431,8 @@ export function preInvocation(payload, { env = process.env } = {}) {
         const tracker = createPersistentTracker(root, env);
         const sessionID = resolveSessionId({ payload, env });
         tracker.recordActiveTicket(sessionID, cleanId, snapshot.hash);
+        const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+        if (transcriptPath) tracker.recordTranscript(sessionID, transcriptPath);
 
         const cleanRails = sanitizeGlobList(ticket.rails);
         const allRails = Array.from(new Set([...cleanRails, ...TRUST_ROOT_RAILS]));
@@ -460,8 +464,7 @@ export function tokenizeCommand(cmd) {
   const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
   let m;
   while ((m = regex.exec(cmd)) !== null) {
-    const raw = m[1] ?? m[2] ?? m[3] ?? '';
-    tokens.push(raw.replace(/\\(["'\s\\])/g, '$1'));
+    tokens.push(m[1] ?? m[2] ?? m[3]);
   }
   return tokens;
 }
@@ -547,8 +550,9 @@ export function onStop(payload, { env = process.env } = {}) {
     const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
     if (!enforcing) return { decision: 'stop' };
 
+    const sessionID = resolveSessionId({ payload, env });
     let root = resolveWorkspaceRoot(payload, env);
-    const transcriptPath = resolveTranscriptPath({ payload, env });
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
     const records = transcriptPath ? parseTranscriptRecords(transcriptPath, { readFull: true }) : [];
 
     // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
@@ -589,11 +593,28 @@ export function onStop(payload, { env = process.env } = {}) {
     } catch {}
 
     const tracker = createPersistentTracker(root, env);
-    const sessionID = resolveSessionId({ payload, env });
     const trackedInitialTicket = tracker.initialTicket(sessionID);
     const trackedInitialHash = tracker.initialStoreHash(sessionID);
     const initialActiveId = trackedInitialTicket ?? initialActive.id;
     const initialHash = trackedInitialHash ?? initialStoreHash;
+
+    const initialTranscript = tracker.initialTranscript(sessionID);
+    if (initialTranscript && transcriptPath) {
+      try {
+        const curStat = lstatSync(transcriptPath);
+        if (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session transcript file identity (inode/device) changed during session.',
+          };
+        }
+      } catch {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session transcript became unreadable or missing during Stop verification.',
+        };
+      }
+    }
 
     // Under enforcement, transcript evidence is parsed to evaluate all mutations first
     if (!transcriptPath || records.length === 0) {
