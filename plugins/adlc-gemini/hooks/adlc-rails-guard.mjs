@@ -378,6 +378,18 @@ export function preInvocation(payload, { env = process.env } = {}) {
   }
 }
 
+export function tokenizeCommand(cmd) {
+  if (typeof cmd !== 'string') return [];
+  const tokens = [];
+  const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let m;
+  while ((m = regex.exec(cmd)) !== null) {
+    const raw = m[1] ?? m[2] ?? m[3] ?? '';
+    tokens.push(raw.replace(/\\(["'\s\\])/g, '$1'));
+  }
+  return tokens;
+}
+
 export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMutated = false, shellMutated = false } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
@@ -407,9 +419,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // If command includes arguments/paths, validate that all positional paths resolve inside root
   if (realRoot) {
-    const tokens = trimmed.split(/\s+/);
-    for (const rawToken of tokens) {
-      const token = rawToken.replace(/^["']|["']$/g, '');
+    const tokens = tokenizeCommand(trimmed);
+    for (const token of tokens) {
       if (token.startsWith('/') || token.startsWith('\\')) {
         const realToken = realpathOr(token);
         const rel = relative(realRoot, realToken);
@@ -444,6 +455,8 @@ export function isReadonlyCommand(cmd) {
   if (!trimmed) return false;
   // Any shell redirection, chaining, or piping could mutate state
   if (/[\r\n;&|<>]/.test(trimmed)) return false;
+  // Reject output redirection flags (e.g. git diff --output=file)
+  if (/(^|\s)(--output|-o|--output-directory)\b/i.test(trimmed) || /--output=/i.test(trimmed)) return false;
   return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date)(\s+|$)/i.test(trimmed);
 }
 
