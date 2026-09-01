@@ -469,27 +469,17 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
 
+  // Reject forwarded arguments (-- -t, etc.) that can filter tests
+  if (/(^|\s)--(\s+|$)/.test(trimmed)) return false;
+
   const realRoot = root ? realpathOr(resolve(root)) : null;
 
-  // If running bare node --test with no explicit target, cwd is mandatory and must be the repository root
-  if (/^node\s+--test\s*$/i.test(trimmed)) {
-    const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
-    if (typeof cwd !== 'string' || !cwd) return false;
-    const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-    const realCwd = realpathOr(absCwd);
-    if (!realRoot || relative(realRoot, realCwd) !== '') return false;
-  }
-
-  // If tool args specify a working directory, it must resolve via realpath to inside or equal to the root
-  if (realRoot && toolArgs) {
-    const cwd = toolArgs.Cwd ?? toolArgs.cwd;
-    if (typeof cwd === 'string' && cwd) {
-      const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-      const realCwd = realpathOr(absCwd);
-      const rel = relative(realRoot, realCwd);
-      if (rel.startsWith('..') || isAbsolute(rel)) return false;
-    }
-  }
+  // All verification commands must execute with an explicit Cwd bound to the repository root
+  const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
+  if (typeof cwd !== 'string' || !cwd) return false;
+  const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
+  const realCwd = realpathOr(absCwd);
+  if (!realRoot || relative(realRoot, realCwd) !== '') return false;
 
   // If command includes arguments/paths, validate that all positional paths resolve inside root
   if (realRoot) {
@@ -523,11 +513,6 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // Strict immutable verification runners: require full-suite execution from repository root with explicit CWD
   if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
-    const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
-    if (typeof cwd !== 'string' || !cwd) return false;
-    const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-    const realCwd = realpathOr(absCwd);
-    if (!realRoot || relative(realRoot, realCwd) !== '') return false;
     return true;
   }
 

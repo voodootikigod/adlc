@@ -139,7 +139,7 @@ test('onStop: allows stop when tests were executed via run_command after mutatio
     }),
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({ content: 'All tests passed.' }),
@@ -244,7 +244,7 @@ test('onStop: recognizes camelCase toolCalls array from Antigravity transcripts'
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      toolCalls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      toolCalls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({ content: 'Finished. TICKET-DONE' }),
@@ -329,7 +329,7 @@ test('onStop: rejects completion when file edits occur after the test run', () =
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({
@@ -387,7 +387,7 @@ test('onStop: rejects completion when an unrecognized path-bearing writer runs a
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({
@@ -417,7 +417,7 @@ test('onStop: resolves repo root via ANTIGRAVITY_WORKSPACE in headless mode with
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({ content: 'Finished. TICKET-DONE' }),
@@ -658,7 +658,7 @@ test('onStop: recognizes verification from alternate arguments envelope', () => 
     }),
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'npm test' } }],
+      tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'npm test', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({ content: 'Finished.' }),
@@ -714,7 +714,7 @@ test('onStop: rejects batched record when mutation call occurs after test call i
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
       tool_calls: [
-        { name: 'run_command', args: { CommandLine: 'npm test' } },
+        { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
         { name: 'write_to_file', args: { TargetFile: 'src/app.js' } },
       ],
       exit_code: 0,
@@ -1077,7 +1077,7 @@ test('onStop: allows npx --no-install adlc preflight', () => {
     }),
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
-      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npx --no-install adlc preflight' } }],
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npx --no-install adlc preflight', Cwd: root } }],
       exit_code: 0,
     }),
     JSON.stringify({ content: 'Finished.' }),
@@ -1883,6 +1883,66 @@ test('onStop: rejects node --test test/ when Cwd is omitted', () => {
       workspacePaths: [root],
       transcriptPath: transcriptFile,
       conversationId: 'test-session-node-test-no-cwd',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects npm test when Cwd is omitted', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-npm-test-no-cwd',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects npm test with forwarded filter args like npm test -- -t foo', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test -- -t "specific test"', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-npm-test-forwarded',
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
