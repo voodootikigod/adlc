@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -3714,6 +3714,71 @@ test('subprocess integration: cjs shim executes across separate Node processes w
     assert.equal(proc4.status, 0);
     const stopOut = JSON.parse(proc4.stdout);
     assert.equal(stopOut.decision, 'stop', stopOut.reason);
+  } finally {
+    cleanup();
+  }
+});
+
+test('checkBuildGate: deleting sessions.json is recovered via session ledger and remains denied', () => {
+  const { root, env, cleanup } = setupTempRepo({
+    enforcement: '1',
+    activeTicket: 'T-CONTRACT-1',
+  });
+  // Update ticket to high risk
+  const ticketsFile = join(root, '.adlc', 'tickets.json');
+  writeFileSync(ticketsFile, JSON.stringify({
+    version: 1,
+    tickets: [{ id: 'T-CONTRACT-1', category: 'contract', rails: [], scope: ['src/**'] }],
+  }));
+
+  try {
+    const sessionID = 'sess-ledger-test-1';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T-CONTRACT-1');
+
+    // Simulate 50 calls to exceed threshold
+    for (let i = 0; i < 50; i++) {
+      tracker.recordToolCall(sessionID, { isMutating: true });
+    }
+
+    // Gate should deny because depth 50 >= 50
+    const gate1 = checkBuildGate({ sessionID, tracker, root, env });
+    assert.equal(gate1.decision, 'deny');
+
+    // Delete sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    if (existsSync(sessionsFile)) unlinkSync(sessionsFile);
+
+    // Fresh tracker instance in new process context
+    const freshTracker = createPersistentTracker(root, env);
+    const gate2 = checkBuildGate({ sessionID, tracker: freshTracker, root, env });
+    // Replayed from ledger, so still denied!
+    assert.equal(gate2.decision, 'deny');
+    assert.equal(freshTracker.depth(sessionID), 50);
+  } finally {
+    cleanup();
+  }
+});
+
+test('isReadonlyCommand: treats attempts to read session secret or ledger as non-readonly', () => {
+  assert.equal(isReadonlyCommand('cat .adlc/.session-secret'), false);
+  assert.equal(isReadonlyCommand('cat /tmp/.adlc-host-secrets/session.secret'), false);
+  assert.equal(isReadonlyCommand('head .adlc/session-ledger.jsonl'), false);
+  assert.equal(isReadonlyCommand('cat .adlc/sessions.json'), false);
+  assert.equal(isReadonlyCommand('cat src/index.js'), true);
+});
+
+test('writeStore: bounds active session storage to MAX_TRACKED_SESSIONS without evicting active session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    for (let i = 1; i <= 105; i++) {
+      tracker.recordToolCall(`session-bulk-${i}`, { isMutating: false });
+    }
+    const store = tracker.rawStore();
+    const keys = Object.keys(store).filter((k) => k !== '_corrupted');
+    assert.ok(keys.length <= 100, `Expected <= 100 sessions, got ${keys.length}`);
+    assert.ok(keys.includes('session-bulk-105'), 'Active session must not be evicted');
   } finally {
     cleanup();
   }

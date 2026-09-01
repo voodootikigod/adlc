@@ -771,6 +771,9 @@ export function isReadonlyCommand(cmd) {
     return true;
   }
 
+  // Reject commands targeting session secrets, session store, or ledger
+  if (/(session-secret|adlc.*secret|\.adlc\/sessions|session-ledger)/i.test(trimmed)) return false;
+
   return /^(git\s+(status|diff|log|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
 }
 

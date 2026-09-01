@@ -2,7 +2,8 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, constants as fsConstants } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -11,7 +12,7 @@ import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSt
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
 export const LOCK_TTL_MS = 5000;
-export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**'];
+export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**', '.adlc/session-ledger.jsonl', '.adlc/.session-secret'];
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 
@@ -184,7 +185,20 @@ const loadedSecretCache = new Map();
 function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET) return env.ADLC_SESSION_SECRET;
   if (env?.ADLC_MANIFEST_KEY) return env.ADLC_MANIFEST_KEY;
-  const secretFile = join(root, '.adlc', '.session-secret');
+
+  // Store secret outside the repository workspace so agents running in workspace cannot read it
+  let secretDir;
+  try {
+    const home = homedir();
+    if (home && existsSync(home)) {
+      secretDir = join(home, '.adlc-secrets');
+    }
+  } catch {}
+  if (!secretDir) {
+    secretDir = join(tmpdir(), '.adlc-host-secrets');
+  }
+  const rootKey = createHash('sha256').update(root).digest('hex').slice(0, 16);
+  const secretFile = join(secretDir, `session-${rootKey}.secret`);
 
   if (loadedSecretCache.has(root)) {
     const cached = loadedSecretCache.get(root);
@@ -214,7 +228,9 @@ function getOrCreateSessionSecret(root, env = process.env) {
         return null;
       }
       const secret = randomBytes(32).toString('hex');
-      if (!existsSync(join(root, '.adlc'))) mkdirSync(join(root, '.adlc'), { recursive: true });
+      if (!existsSync(secretDir)) {
+        try { mkdirSync(secretDir, { recursive: true, mode: 0o700 }); } catch {}
+      }
       writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
       loadedSecretCache.set(root, secret);
       return secret;
@@ -271,6 +287,7 @@ const inMemorySessionSnapshots = new Map();
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
+  const ledgerPath = join(adlcDir, 'session-ledger.jsonl');
   const lockDir = join(adlcDir, 'sessions.lock');
   const ownerFile = join(lockDir, 'owner.json');
 
@@ -347,15 +364,95 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     }
   }
 
+  function appendLedger(entry) {
+    if (!ticketStoreExists(root, env)) return;
+    try {
+      if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
+      const record = JSON.stringify({
+        t: Date.now(),
+        ...entry,
+      }) + '\n';
+      appendFileSync(ledgerPath, record, { mode: 0o600 });
+    } catch {}
+  }
+
+  function replayLedger() {
+    try {
+      if (!existsSync(ledgerPath)) return null;
+      const stat = lstatSync(ledgerPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) return null;
+      const raw = readFileSync(ledgerPath, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      const store = Object.create(null);
+      for (const line of lines) {
+        try {
+          const ev = JSON.parse(line);
+          const safeKey = sanitizeSessionId(ev.sessionID);
+          if (!safeKey) continue;
+          const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [] };
+          if (ev.type === 'recordActiveTicket') {
+            if (!s.initialActiveTicket && ev.activeTicketId) {
+              s.initialActiveTicket = ev.activeTicketId;
+              s.initialStoreHash = ev.storeHash ?? null;
+              if (ev.initialPointer) s.initialPointer = ev.initialPointer;
+            }
+          } else if (ev.type === 'recordToolCall') {
+            s.depth = (s.depth ?? 0) + 1;
+            s.totalCalls = (s.totalCalls ?? 0) + 1;
+            if (ev.isMutating) s.mutatingCalls = (s.mutatingCalls ?? 0) + 1;
+          } else if (ev.type === 'revertToolCall') {
+            if (s.depth > 0) s.depth -= 1;
+            if (s.totalCalls > 0) s.totalCalls -= 1;
+            if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+          } else if (ev.type === 'compact') {
+            s.compacted = true;
+          } else if (ev.type === 'ended') {
+            s.ended = true;
+          } else if (ev.type === 'recordTranscript') {
+            if (!s.initialTranscript && ev.initialTranscript) {
+              s.initialTranscript = ev.initialTranscript;
+            }
+            if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+            if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+          }
+          s.updatedAt = ev.t ?? Date.now();
+          s.baselineSig = computeBaselineSig(safeKey, s, root, env);
+          store[safeKey] = s;
+        } catch {}
+      }
+      return store;
+    } catch {
+      return null;
+    }
+  }
+
   function readStore() {
     try {
       if (existsSync(storePath)) {
         const stat = lstatSync(storePath);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return Object.create(null);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+          const fromLedger = replayLedger();
+          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
         const raw = readTextFileBounded(storePath, stat.size);
-        if (!raw) return Object.create(null);
+        if (!raw) {
+          const fromLedger = replayLedger();
+          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
         const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return Object.create(null);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          const fromLedger = replayLedger();
+          if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
         const store = Object.create(null);
         for (const [k, v] of Object.entries(parsed)) {
           const safeKey = sanitizeSessionId(k);
@@ -370,26 +467,49 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           delete store.default_session;
         }
         return store;
+      } else {
+        const fromLedger = replayLedger();
+        if (fromLedger && Object.keys(fromLedger).length > 0) {
+          return fromLedger;
+        }
       }
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
+      const fromLedger = replayLedger();
+      if (fromLedger && Object.keys(fromLedger).length > 0) return fromLedger;
+      const s = Object.create(null);
+      s._corrupted = true;
+      return s;
     }
     return Object.create(null);
   }
 
-  function writeStore(data) {
+  function writeStore(data, currentSessionID) {
     if (!ticketStoreExists(root, env)) return;
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
 
-      const keys = Object.keys(data);
-      if (keys.length > MAX_TRACKED_SESSIONS) {
-        const endedKeys = keys.filter((k) => Boolean(data[k]?.ended));
-        if (endedKeys.length > 0) {
-          const sorted = endedKeys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
-          const toRemove = sorted.slice(0, Math.min(sorted.length, keys.length - MAX_TRACKED_SESSIONS));
-          for (const k of toRemove) delete data[k];
+      const keys = Object.keys(data).filter((k) => k !== '_corrupted');
+      for (const k of keys) {
+        if (data[k] && typeof data[k] === 'object') {
+          if (Array.isArray(data[k].edits) && data[k].edits.length > 200) {
+            data[k].edits = data[k].edits.slice(-200);
+          }
+          if (Array.isArray(data[k].warned) && data[k].warned.length > 20) {
+            data[k].warned = data[k].warned.slice(-20);
+          }
         }
+      }
+
+      if (keys.length > MAX_TRACKED_SESSIONS) {
+        const sorted = keys.filter((k) => k !== currentSessionID).sort((a, b) => {
+          const aEnded = Boolean(data[a]?.ended);
+          const bEnded = Boolean(data[b]?.ended);
+          if (aEnded !== bEnded) return aEnded ? -1 : 1;
+          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
+        });
+        const toRemove = sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS);
+        for (const k of toRemove) delete data[k];
       }
 
       const tmpPath = `${storePath}.tmp.${process.pid}.${Date.now()}`;
@@ -401,10 +521,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   return {
+    rawStore() {
+      return readStore();
+    },
     recordToolCall(sessionID, { isMutating = true } = {}) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
       withLock(sessionID, () => {
         const store = readStore();
+        if (store._corrupted && env?.ADLC_P4_ENFORCEMENT === '1') {
+          return; // Fail closed: do not reset or accept new calls on corrupted store
+        }
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
         if (snap) {
@@ -421,7 +547,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'recordToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
       });
     },
     revertToolCall(sessionID, { isMutating = true } = {}) {
@@ -437,7 +564,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'revertToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
       });
     },
     totalCalls(sessionID) {
@@ -455,6 +583,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        let pointerInfo = null;
         if (!s.initialActiveTicket && activeTicketId) {
           s.initialActiveTicket = activeTicketId;
           s.initialStoreHash = storeHash ?? null;
@@ -462,7 +591,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (existsSync(currentFile)) {
             try {
               const cStat = lstatSync(currentFile);
-              s.initialPointer = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
+              pointerInfo = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
+              s.initialPointer = pointerInfo;
             } catch {}
           }
         }
@@ -470,7 +600,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'recordActiveTicket', sessionID, activeTicketId, storeHash, initialPointer: pointerInfo });
       });
     },
     initialTicket(sessionID) {
@@ -494,9 +625,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     },
     validateBaseline(sessionID) {
       if (!sessionID) return true;
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
       const store = readStore();
       const s = store[sessionID];
-      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
       if (snap) {
         if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store or evicted
         if ((s.depth ?? 0) < (snap.depth ?? 0) || (s.mutatingCalls ?? 0) < (snap.mutatingCalls ?? 0) || (s.totalCalls ?? 0) < (snap.totalCalls ?? 0)) {
@@ -524,7 +655,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'ended', sessionID });
       });
     },
     recordTranscript(sessionID, transcriptPath) {
@@ -534,9 +666,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+          let initialTranscript = s.initialTranscript ?? null;
           if (!s.initialTranscript) {
             const curHash = computePrefixHash(transcriptPath, stat.size);
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
+            initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
+            s.initialTranscript = initialTranscript;
           }
           const curHash = computePrefixHash(transcriptPath, stat.size);
           if (curHash) s.lastTranscriptHash = curHash;
@@ -544,7 +678,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           s.updatedAt = Date.now();
           s.baselineSig = computeBaselineSig(sessionID, s, root, env);
           store[sessionID] = s;
-          writeStore(store);
+          writeStore(store, sessionID);
+          appendLedger({ type: 'recordTranscript', sessionID, initialTranscript, lastTranscriptHash: s.lastTranscriptHash, lastTranscriptSize: s.lastTranscriptSize });
         });
       } catch {}
     },
@@ -573,7 +708,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.updatedAt = Date.now();
         s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
-        writeStore(store);
+        writeStore(store, sessionID);
+        appendLedger({ type: 'compact', sessionID });
       });
     },
     recordEdit(sessionID, filePath, { transcriptSteps = [], transcriptLines = [] } = {}) {
