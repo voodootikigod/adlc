@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash } from '../build-gate-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
@@ -2336,6 +2336,56 @@ test('readTranscriptPrefixBounded: reads and hashes up to maxBytes prefix cleanl
     const { prefixHash, prefixLength } = readTranscriptPrefixBounded(testFile, 12);
     assert.equal(prefixLength, 12);
     assert.ok(prefixHash && typeof prefixHash === 'string');
+  } finally {
+    cleanup();
+  }
+});
+
+test('computePrefixHash: correctly hashes multi-chunk streaming files', () => {
+  const { root, cleanup } = setupTempRepo();
+  const testFile = join(root, 'test-chunk.txt');
+  // Create 128KB file to cross 64KB chunk boundary
+  const chunkData = 'A'.repeat(64 * 1024) + 'B'.repeat(64 * 1024);
+  writeFileSync(testFile, chunkData);
+  try {
+    const hash = computePrefixHash(testFile, chunkData.length);
+    assert.ok(hash && typeof hash === 'string');
+    const prefixHash = computePrefixHash(testFile, 64 * 1024);
+    assert.ok(prefixHash && prefixHash !== hash);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when .adlc/sessions.json entry for sessionID is deleted', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-sessions-tamper',
+    };
+    preInvocation(payload, { env });
+
+    // Erase session tracking entry from .adlc/sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    if (writeFileSync) {
+      writeFileSync(sessionsFile, JSON.stringify({ other_session: { depth: 0 } }));
+    }
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking store was corrupted or missing session entry/);
   } finally {
     cleanup();
   }

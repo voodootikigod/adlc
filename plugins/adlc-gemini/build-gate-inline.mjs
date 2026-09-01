@@ -37,6 +37,31 @@ function isPidAlive(pid) {
   }
 }
 
+export function computePrefixHash(filePath, targetBytes) {
+  if (typeof targetBytes !== 'number' || targetBytes <= 0) return null;
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const hash = createHash('sha256');
+    const buf = Buffer.allocUnsafe(Math.min(64 * 1024, targetBytes));
+    let remaining = targetBytes;
+    while (remaining > 0) {
+      const toRead = Math.min(buf.length, remaining);
+      const bytesRead = readSync(fd, buf, 0, toRead, null);
+      if (bytesRead <= 0) break;
+      hash.update(buf.subarray(0, bytesRead));
+      remaining -= bytesRead;
+    }
+    return remaining === 0 ? hash.digest('hex') : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
 export function readTranscriptPrefixBounded(filePath, maxBytes = 64 * 1024) {
   let fd;
   try {
@@ -286,14 +311,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
-        const { prefixHash, prefixLength } = readTranscriptPrefixBounded(transcriptPath);
+        const snapHash = computePrefixHash(transcriptPath, stat.size);
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, prefixHash, prefixLength, size: stat.size };
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: snapHash, size: stat.size };
           }
-          s.lastTranscriptSize = stat.size;
+          if (snapHash) {
+            s.lastTranscriptHash = snapHash;
+            s.lastTranscriptSize = stat.size;
+          }
           s.updatedAt = Date.now();
           store[sessionID] = s;
           writeStore(store);
@@ -304,6 +332,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return null;
       const store = readStore();
       return store[sessionID]?.initialTranscript ?? null;
+    },
+    lastTranscript(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      const s = store[sessionID];
+      if (!s) return null;
+      return {
+        initial: s.initialTranscript ?? null,
+        lastHash: s.lastTranscriptHash ?? null,
+        lastSize: s.lastTranscriptSize ?? null,
+      };
     },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;

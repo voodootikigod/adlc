@@ -17,7 +17,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -556,7 +556,19 @@ export function onStop(payload, { env = process.env } = {}) {
     const sessionID = resolveSessionId({ payload, env });
     let root = resolveWorkspaceRoot(payload, env);
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    const records = transcriptPath ? parseTranscriptRecords(transcriptPath, { readFull: true }) : [];
+    let records = [];
+    if (transcriptPath) {
+      try {
+        const statBefore = lstatSync(transcriptPath);
+        records = parseTranscriptRecords(transcriptPath, { readFull: true });
+        const statAfter = lstatSync(transcriptPath);
+        if (statAfter.size !== statBefore.size || statAfter.mtimeMs !== statBefore.mtimeMs) {
+          records = parseTranscriptRecords(transcriptPath, { readFull: true });
+        }
+      } catch {
+        records = [];
+      }
+    }
 
     // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
     // discover root from absolute file paths in the transcript
@@ -601,7 +613,8 @@ export function onStop(payload, { env = process.env } = {}) {
     const initialActiveId = trackedInitialTicket ?? initialActive.id;
     const initialHash = trackedInitialHash ?? initialStoreHash;
 
-    const initialTranscript = tracker.initialTranscript(sessionID);
+    const trackerInfo = tracker.lastTranscript ? tracker.lastTranscript(sessionID) : { initial: tracker.initialTranscript(sessionID) };
+    const initialTranscript = trackerInfo?.initial;
     if (initialTranscript && transcriptPath) {
       try {
         const curStat = lstatSync(transcriptPath);
@@ -617,12 +630,21 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
         }
-        if (initialTranscript.prefixHash && initialTranscript.prefixLength > 0) {
-          const curPrefix = readTranscriptPrefixBounded(transcriptPath, initialTranscript.prefixLength);
-          if (curPrefix.prefixHash !== initialTranscript.prefixHash) {
+        if (initialTranscript.hash && initialTranscript.size > 0) {
+          const prefixHash = computePrefixHash(transcriptPath, initialTranscript.size);
+          if (prefixHash !== initialTranscript.hash) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Session transcript prefix content was modified during session.',
+            };
+          }
+        }
+        if (trackerInfo?.lastHash && trackerInfo?.lastSize && trackerInfo.lastSize > 0) {
+          const lastHash = computePrefixHash(transcriptPath, trackerInfo.lastSize);
+          if (lastHash !== trackerInfo.lastHash) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session transcript content was modified during session.',
             };
           }
         }
@@ -761,6 +783,26 @@ export function onStop(payload, { env = process.env } = {}) {
         };
       }
       return { decision: 'stop' };
+    }
+
+    // Validate session tracking store integrity
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    if (existsSync(sessionsFile)) {
+      try {
+        const sRaw = readFileSync(sessionsFile, 'utf8');
+        const sData = JSON.parse(sRaw);
+        if (!sData || typeof sData !== 'object' || !sData[sessionID]) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or missing session entry during verification.',
+          };
+        }
+      } catch {
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
+        };
+      }
     }
 
     // Validate active ticket exists in ticket store
