@@ -23,6 +23,7 @@ coldstart --all     [options]
 |------|---------|-------------|
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
 | `--all` | off | Run the gate on every ticket in the file |
+| `--offline` | off | Run deterministic offline schema and input contract validation without calling an LLM or requiring API keys |
 | `--force` | off | Bypass the cache entirely and re-audit every target ticket |
 | `--max-age <days>` | `30` | Treat a cached verdict older than this as stale; `0` treats every cache entry as stale |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |

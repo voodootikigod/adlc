@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // coldstart — P2 ticket executability gate.
-// Usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--prompt-only] [--json]
+// Usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--offline] [--prompt-only] [--json]
 
 import {
   parseArgs,
@@ -12,7 +12,7 @@ import {
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
-import { checkAll, resolveExpectedModel } from '../lib/gate.mjs';
+import { checkAll, resolveExpectedModel, checkAllOffline } from '../lib/gate.mjs';
 import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { activeTickets } from '../lib/active-tickets.mjs';
@@ -43,6 +43,7 @@ if (!maxAgeResult.ok) {
 const maxAgeMs = maxAgeResult.maxAgeMs;
 
 const promptOnlyMode = values['prompt-only'];
+const offlineMode = values['offline'];
 const jsonMode = values['json'];
 const ticketsPath = values['tickets'];
 const runAll = values['all'];
@@ -116,13 +117,25 @@ if (promptOnlyMode) {
   // promptOnly() calls process.exit(0) internally
 }
 
+// ── --offline: deterministic offline schema & input contract check ───────────
+
+if (offlineMode) {
+  const results = checkAllOffline(targets, tickets);
+  if (jsonMode) {
+    printJson(buildJsonOutput(results));
+  } else {
+    console.log(renderReport(results));
+  }
+  process.exit(allPass(results) ? 0 : 2);
+}
+
 // ── Verify provider is available for real runs ───────────────────────────────
 
 const provider = detectProvider();
 if (!provider) {
   opError(
     'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY\n' +
-    '(or use --prompt-only to print the prompts without calling an LLM)'
+    '(or use --offline / --prompt-only to run without calling an LLM)'
   );
 }
 

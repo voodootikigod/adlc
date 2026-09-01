@@ -12,8 +12,8 @@
  */
 export function renderReport(results) {
   const lines = [];
-  for (const { id, gaps, cached } of results) {
-    const suffix = cached ? ' (cached)' : '';
+  for (const { id, gaps, cached, offline } of results) {
+    const suffix = cached ? ' (cached)' : (offline ? ' (offline)' : '');
     if (gaps.length === 0) {
       lines.push(`[PASS] ${id}: ticket is fully executable${suffix}`);
     } else {
@@ -34,11 +34,12 @@ export function buildJsonOutput(results) {
   const allPass = results.every((r) => r.gaps.length === 0);
   return {
     ok: allPass,
-    results: results.map(({ id, gaps, cached }) => ({
+    results: results.map(({ id, gaps, cached, offline }) => ({
       id,
       pass: gaps.length === 0,
       gaps,
       cached: Boolean(cached),
+      ...(offline !== undefined ? { offline: Boolean(offline) } : {}),
     })),
   };
 }

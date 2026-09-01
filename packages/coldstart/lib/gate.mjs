@@ -194,3 +194,111 @@ export function aggregateCheckAllUsage(results) {
     { inputTokens: 0, outputTokens: 0, cachedTokens: 0, provider, model, tier }
   );
 }
+
+/**
+ * Validate a single ticket deterministically without network or LLM calls.
+ * Checks completeness of ticket fields and input contracts:
+ * - body: must be a non-empty string explaining requirements
+ * - scope: must be a non-empty array of non-empty strings
+ * - rails: if present, must be an array of non-empty strings
+ * - edges: if present, must be an array of valid edge objects with non-empty "to"
+ *   and non-empty "contract" (if contract is specified)
+ * - edge targets: if allTickets provided, edge.to must point to a known ticket
+ * - duration: if present, must be a positive finite number
+ *
+ * @param {object} ticket
+ * @param {object[]} [allTickets]
+ * @returns {{ id: string, gaps: Array<{what: string, why_blocking: string}>, usage: null, cached: false, offline: true }}
+ */
+export function checkTicketOffline(ticket, allTickets = []) {
+  const gaps = [];
+
+  if (!ticket || typeof ticket !== 'object') {
+    return {
+      id: ticket?.id ?? '?',
+      gaps: [{ what: 'invalid ticket', why_blocking: 'ticket must be an object' }],
+      usage: null,
+      cached: false,
+      offline: true,
+    };
+  }
+
+  if (!ticket.body || typeof ticket.body !== 'string' || !ticket.body.trim()) {
+    gaps.push({
+      what: 'missing body',
+      why_blocking: 'ticket has no description or body explaining requirements',
+    });
+  }
+
+  if (!ticket.scope || !Array.isArray(ticket.scope) || ticket.scope.length === 0) {
+    gaps.push({
+      what: 'missing scope',
+      why_blocking: 'ticket has no declared file scope globs',
+    });
+  } else if (ticket.scope.some((s) => typeof s !== 'string' || !s.trim())) {
+    gaps.push({
+      what: 'invalid scope',
+      why_blocking: 'ticket scope contains empty or non-string entries',
+    });
+  }
+
+  if (ticket.rails !== undefined) {
+    if (!Array.isArray(ticket.rails) || ticket.rails.some((r) => typeof r !== 'string' || !r.trim())) {
+      gaps.push({
+        what: 'invalid rails',
+        why_blocking: 'ticket rails must be an array of non-empty string globs',
+      });
+    }
+  }
+
+  if (ticket.edges !== undefined) {
+    if (!Array.isArray(ticket.edges)) {
+      gaps.push({
+        what: 'invalid edges',
+        why_blocking: 'ticket edges must be an array',
+      });
+    } else {
+      for (const edge of ticket.edges) {
+        if (!edge || typeof edge !== 'object' || Array.isArray(edge) || typeof edge.to !== 'string' || !edge.to.trim()) {
+          gaps.push({
+            what: 'invalid edge',
+            why_blocking: 'edge is missing string "to" target ticket id',
+          });
+        } else {
+          if (allTickets && allTickets.length > 0 && !allTickets.some((t) => t.id === edge.to)) {
+            gaps.push({
+              what: 'unknown edge target',
+              why_blocking: `edge points to unknown ticket ${edge.to}`,
+            });
+          }
+          if (edge.contract !== undefined && (typeof edge.contract !== 'string' || !edge.contract.trim())) {
+            gaps.push({
+              what: 'invalid edge contract',
+              why_blocking: `edge to ${edge.to} has invalid contract definition`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (ticket.duration !== undefined && (typeof ticket.duration !== 'number' || !Number.isFinite(ticket.duration) || ticket.duration <= 0)) {
+    gaps.push({
+      what: 'invalid duration',
+      why_blocking: 'ticket duration must be a positive number',
+    });
+  }
+
+  return { id: ticket.id, gaps, usage: null, cached: false, offline: true };
+}
+
+/**
+ * Run deterministic offline cold-start validation for every ticket in the array.
+ *
+ * @param {object[]} tickets - target tickets
+ * @param {object[]} [allTickets] - all tickets in store
+ * @returns {Array<{id: string, gaps: Array<{what: string, why_blocking: string}>, usage: null, cached: false, offline: true}>}
+ */
+export function checkAllOffline(tickets, allTickets = tickets) {
+  return tickets.map((t) => checkTicketOffline(t, allTickets));
+}
