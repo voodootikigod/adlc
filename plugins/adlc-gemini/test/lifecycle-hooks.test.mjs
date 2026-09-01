@@ -2769,3 +2769,39 @@ test('onStop: rejects Stop when current-ticket.json is deleted mid-session even 
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when sessions.json baseline fields are tampered with', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-tamper-sig',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('sess-tamper-sig', { isMutating: false });
+    tracker.recordActiveTicket('sess-tamper-sig', 'T1', 'hash123');
+
+    // Tamper with initialStoreHash directly in sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    sData['sess-tamper-sig'].initialStoreHash = 'forged-hash';
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session baseline signature mismatch/);
+  } finally {
+    cleanup();
+  }
+});

@@ -849,6 +849,12 @@ export function onStop(payload, { env = process.env } = {}) {
         reason: 'ADLC Rails-Guard: Session tracking store was missing or deleted during verification.',
       };
     }
+    if (tracker.validateBaseline && !tracker.validateBaseline(sessionID)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session baseline signature mismatch (tampering detected).',
+      };
+    }
     if (existsSync(sessionsFile)) {
       try {
         const sStat = lstatSync(sessionsFile);

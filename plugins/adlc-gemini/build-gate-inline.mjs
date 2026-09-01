@@ -168,6 +168,17 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
   return 'default_session';
 }
 
+function computeBaselineSig(sessionID, s, secretKey = 'adlc-internal-sig') {
+  const payload = JSON.stringify({
+    sessionID,
+    t: s?.initialActiveTicket ?? null,
+    h: s?.initialStoreHash ?? null,
+    p: s?.initialPointer ?? null,
+    tr: s?.initialTranscript ?? null,
+  });
+  return createHash('sha256').update(`${secretKey}:${payload}`).digest('hex');
+}
+
 /**
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
  * Reclaims orphaned lock directories even if owner.json is missing when mtime > 3s.
@@ -192,61 +203,49 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     }
   }
 
-  function withLock(sessionID, fn, fallback = null) {
+  function withLock(sessionID, fn) {
+    if (!ticketStoreExists(root, env)) return fn();
+    const pid = process.pid;
+    const lockSessionDir = join(lockDir, sessionID || 'global');
     let acquired = false;
-    const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
-
-    for (let i = 0; i < 100; i++) {
+    for (let attempt = 0; attempt < 50; attempt++) {
       try {
-        mkdirSync(lockDir);
-        writeOwnerFile({ pid: process.pid, nonce, time: Date.now() });
-        acquired = true;
-        if (sessionID) lockFailures.delete(sessionID);
-        break;
-      } catch {
+        mkdirSync(lockSessionDir, { recursive: true });
+        const pidFile = join(lockSessionDir, 'lock.pid');
         try {
-          if (existsSync(lockDir)) {
-            const stat = statSync(lockDir);
-            const isStale = Date.now() - stat.mtimeMs > 3000;
-            if (isStale) {
-              let isDead = false;
-              if (existsSync(ownerPath)) {
-                try {
-                  const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-                  isDead = !isPidAlive(owner.pid);
-                } catch {
-                  isDead = true; // unreadable after >3s stale window → treat as dead
-                }
-              } else {
-                isDead = true; // missing owner.json after >3s stale window → treat as dead
+          writeFileSync(pidFile, String(pid), { flag: 'wx' });
+          acquired = true;
+          break;
+        } catch (err) {
+          if (err.code === 'EEXIST') {
+            try {
+              const stat = lstatSync(pidFile);
+              if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) {
+                unlinkSync(pidFile);
+                continue;
               }
-              if (isDead) {
-                try {
-                  const tombstone = `${lockDir}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                  renameSync(lockDir, tombstone);
-                  rmSync(tombstone, { recursive: true, force: true });
-                } catch { /* another contender won the atomic rename race */ }
-              }
+            } catch {
+              continue;
             }
           }
-        } catch { /* ignore */ }
-        sleepSyncWithJitter(30);
-      }
+        }
+      } catch { /* ignore lock mkdir error */ }
+      const ms = Math.min(10 * Math.pow(1.5, attempt), 200);
+      const start = Date.now();
+      while (Date.now() - start < ms) { /* sync backoff busywait */ }
     }
-    if (!acquired) {
-      if (sessionID) lockFailures.add(sessionID);
-      console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out at ${lockDir}`);
-      return fallback;
-    }
+
     try {
       return fn();
     } finally {
       if (acquired) {
         try {
-          if (existsSync(ownerPath)) {
-            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-            if (owner.nonce === nonce) {
-              rmSync(lockDir, { recursive: true, force: true });
+          const pidFile = join(lockSessionDir, 'lock.pid');
+          if (existsSync(pidFile)) {
+            const rawPid = readFileSync(pidFile, 'utf8');
+            if (rawPid === String(pid)) {
+              unlinkSync(pidFile);
+              rmSync(lockSessionDir, { recursive: true, force: true });
             }
           }
         } catch { /* ignore release errors */ }
@@ -347,6 +346,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               s.initialPointer = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
             } catch {}
           }
+          s.baselineSig = computeBaselineSig(sessionID, s);
         }
         s.updatedAt = Date.now();
         store[sessionID] = s;
@@ -368,21 +368,28 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const store = readStore();
       return store[sessionID]?.initialPointer ?? null;
     },
+    validateBaseline(sessionID) {
+      if (!sessionID) return true;
+      const store = readStore();
+      const s = store[sessionID];
+      if (!s || !s.baselineSig) return true;
+      return s.baselineSig === computeBaselineSig(sessionID, s);
+    },
     recordTranscript(sessionID, transcriptPath) {
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
-        const curHash = computePrefixHash(transcriptPath, stat.size);
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
+            const curHash = computePrefixHash(transcriptPath, stat.size);
             s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
+            s.baselineSig = computeBaselineSig(sessionID, s);
           }
-          if (curHash) {
-            s.lastTranscriptHash = curHash;
-            s.lastTranscriptSize = stat.size;
-          }
+          const curHash = computePrefixHash(transcriptPath, stat.size);
+          if (curHash) s.lastTranscriptHash = curHash;
+          s.lastTranscriptSize = stat.size;
           s.updatedAt = Date.now();
           store[sessionID] = s;
           writeStore(store);
