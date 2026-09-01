@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -3181,6 +3181,59 @@ test('withLock: recovers from malformed/crashed owner.json stale lock', () => {
     // Should recover stale lock and successfully write tool call
     tracker.recordToolCall('sess-stale-corrupt-owner', { isMutating: true });
     assert.equal(tracker.totalCalls('sess-stale-corrupt-owner'), 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('decide: symlinked workspace alias enforces frozen rail checks', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1', rails: ['src/frozen.js'] });
+  const symlinkPath = join(tmpdir(), `adlc-symlink-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try {
+    symlinkSync(root, symlinkPath, 'dir');
+    const payload = {
+      workspacePaths: [symlinkPath],
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(symlinkPath, 'src/frozen.js') } },
+    };
+    const v = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
+    assert.match(v.deny_reason, /frozen rail/);
+  } finally {
+    try { unlinkSync(symlinkPath); } catch {}
+    cleanup();
+  }
+});
+
+test('resolveSessionId: sanitizes prototype-key identifiers and oversized IDs', () => {
+  assert.equal(resolveSessionId({ payload: { conversationId: 'constructor' } }), 'default_session');
+  assert.equal(resolveSessionId({ payload: { conversationId: '__proto__' } }), 'default_session');
+  assert.equal(resolveSessionId({ payload: { conversationId: 'prototype' } }), 'default_session');
+  assert.equal(resolveSessionId({ payload: { conversationId: 'toString' } }), 'default_session');
+  assert.equal(resolveSessionId({ payload: { conversationId: 'a'.repeat(200) } }), 'default_session');
+  assert.equal(resolveSessionId({ payload: { conversationId: 'valid-session-123.test' } }), 'valid-session-123.test');
+});
+
+test('validateBaseline: detects tampering with edits, warned, or flailStatus in sessions.json', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordEdit('sess-flail-tamper', 'src/file1.js');
+    assert.equal(tracker.validateBaseline('sess-flail-tamper'), true);
+
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+
+    // Tamper with edits
+    sData['sess-flail-tamper'].edits = [];
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+    assert.equal(tracker.validateBaseline('sess-flail-tamper'), false);
+
+    // Restore and tamper with flailStatus
+    sData['sess-flail-tamper'].edits = [`Editing ${join(root, 'src/file1.js')}`];
+    sData['sess-flail-tamper'].flailStatus = { verdict: 'clean', summary: '' };
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+    assert.equal(tracker.validateBaseline('sess-flail-tamper'), false);
   } finally {
     cleanup();
   }

@@ -158,13 +158,23 @@ export function createDepthTracker() {
   };
 }
 
+export function sanitizeSessionId(id) {
+  if (typeof id !== 'string') return 'default_session';
+  const trimmed = id.trim();
+  if (!trimmed || trimmed.length > 120 || !/^[a-zA-Z0-9_\-\.]+$/.test(trimmed)) return 'default_session';
+  if (trimmed === '__proto__' || trimmed === 'constructor' || trimmed === 'prototype' || trimmed === 'toString' || trimmed === 'valueOf') {
+    return 'default_session';
+  }
+  return trimmed;
+}
+
 /**
  * Universal session ID resolution for hooks and status display.
  */
 export function resolveSessionId({ payload, env = process.env } = {}) {
   const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.GEMINI_CONVERSATION_ID ?? env?.JETSKI_CONVERSATION_ID ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID ?? env?.ADLC_SESSION_ID;
   if (typeof candidate === 'string' && candidate.trim().length > 0) {
-    return candidate.trim();
+    return sanitizeSessionId(candidate);
   }
   return 'default_session';
 }
@@ -240,6 +250,9 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     totalCalls: s?.totalCalls ?? 0,
     mutatingCalls: s?.mutatingCalls ?? 0,
     compacted: Boolean(s?.compacted),
+    edits: Array.isArray(s?.edits) ? s.edits : [],
+    warned: Array.isArray(s?.warned) ? s.warned : [],
+    flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? '', summary: s.flailStatus.summary ?? '' } : null,
     lastTranscriptSize: s?.lastTranscriptSize ?? null,
     lastTranscriptHash: s?.lastTranscriptHash ?? null,
   });
@@ -334,11 +347,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     try {
       if (existsSync(storePath)) {
         const stat = lstatSync(storePath);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return {};
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) return Object.create(null);
         const raw = readTextFileBounded(storePath, stat.size);
-        if (!raw) return {};
-        const store = JSON.parse(raw);
-        if (!store || typeof store !== 'object' || Array.isArray(store)) return {};
+        if (!raw) return Object.create(null);
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return Object.create(null);
+        const store = Object.create(null);
+        for (const [k, v] of Object.entries(parsed)) {
+          const safeKey = sanitizeSessionId(k);
+          if (safeKey && safeKey !== 'default_session') {
+            store[safeKey] = v;
+          } else if (k === 'default_session') {
+            store.default_session = v;
+          }
+        }
         // TTL check for default_session (1 hour) to avoid stale lockouts across days
         if (store.default_session && store.default_session.updatedAt && Date.now() - store.default_session.updatedAt > 3600000) {
           delete store.default_session;
@@ -348,7 +370,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
     }
-    return {};
+    return Object.create(null);
   }
 
   function writeStore(data) {

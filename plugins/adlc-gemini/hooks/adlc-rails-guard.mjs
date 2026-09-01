@@ -8,6 +8,24 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, realpathSync, lstatSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 
+function canonicalizeExisting(p) {
+  if (!p || typeof p !== 'string') return p;
+  try {
+    if (existsSync(p)) return realpathSync(p);
+    let cur = dirname(p);
+    const suffix = [parse(p).base];
+    const { root: fsRoot } = parse(cur);
+    while (cur && cur !== fsRoot) {
+      if (existsSync(cur)) {
+        return join(realpathSync(cur), ...suffix);
+      }
+      suffix.unshift(parse(cur).base);
+      cur = dirname(cur);
+    }
+  } catch {}
+  return p;
+}
+
 function realpathOr(p) {
   try {
     return existsSync(p) ? realpathSync(p) : p;
@@ -249,8 +267,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
         continue;
       }
-      const root = findAdlcRoot(abs, env);
+      const canonicalAbs = canonicalizeExisting(abs);
+      const root = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
       if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
+
+      const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root, env });
+      if (verdictCanonical.decision === 'deny') return deny(`frozen rail — ${verdictCanonical.reason}`);
+
       const verdict = checkRail({ filePath: abs, tool, root, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
