@@ -214,7 +214,7 @@ export function extractCommandString(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return '';
   for (const [key, val] of Object.entries(args)) {
     if (typeof val === 'string' && val.trim().length > 0) {
-      if (/(command|cmd|exec|shell|terminal|script|code|eval|run)/i.test(key)) {
+      if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
         return val.trim();
       }
     }
@@ -357,6 +357,9 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     if (isShell) {
       if (enforcing) {
         const cmd = extractCommandString(args);
+        if (hasCommandLineArgs(args) && !cmd) {
+          return deny('recognized shell tool has unparseable command arguments — failing closed');
+        }
         if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
@@ -588,7 +591,12 @@ export function unwrapCall(c) {
     }
     if (!unwrapped) break;
   }
-  return cur;
+  if (cur && typeof cur === 'object') {
+    if (typeof cur.name === 'string' || typeof cur.toolName === 'string' || typeof cur.tool_name === 'string' || typeof cur.functionName === 'string' || typeof cur.function_name === 'string') {
+      return cur;
+    }
+  }
+  return null;
 }
 
 export function extractToolCalls(record) {

@@ -4240,6 +4240,46 @@ test('onStop: rejects transcript record with unrecognized tool envelope under en
   }
 });
 
+test('onStop: allows stop with mixed text and functionCall parts followed by successful verification', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        parts: [
+          { text: 'Starting implementation...' },
+          { functionCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// edit' } } },
+        ],
+      }),
+      JSON.stringify({
+        parts: [
+          { text: 'Running test verification suite...' },
+          { functionCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } },
+        ],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished successfully.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-mixed-parts',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 
 

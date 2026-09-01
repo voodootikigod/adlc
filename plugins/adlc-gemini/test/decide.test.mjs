@@ -247,7 +247,25 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(v11.allow_tool, false);
   assert.equal(v11.decision, 'deny');
   assert.match(v11.deny_reason, /uninspectable arguments/);
+
+  // recognized shell tool with query or operation argument targeting trust root is denied
+  const v12 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'run_command', args: { query: "rm -f .adlc/tickets.json" } },
+  }, { env: ENF });
+  assert.equal(v12.allow_tool, false);
+  assert.equal(v12.decision, 'deny');
+  assert.match(v12.deny_reason, /shell modification of ticket store or trust-root rails/);
+
+  const v13 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'run_command', args: { payload: { operation: "rm -rf .adlc" } } },
+  }, { env: ENF });
+  assert.equal(v13.allow_tool, false);
+  assert.equal(v13.decision, 'deny');
+  assert.match(v13.deny_reason, /shell modification of ticket store or trust-root rails/);
 });
+
 
 
 
