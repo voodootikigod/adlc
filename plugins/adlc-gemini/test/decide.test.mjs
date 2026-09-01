@@ -121,3 +121,28 @@ test('decide(): nested path object on unclassified tool targeting frozen rail is
   assert.equal(v.decision, 'deny');
   assert.match(v.deny_reason, /frozen rail/);
 });
+
+test('decide(): relative workspacePaths ["."] with relative frozen rail target is denied under enforcement', () => {
+  const root = adlcRepo({ rails: ['src/frozen.js'] });
+  const origCwd = process.cwd();
+  try {
+    process.chdir(root);
+    const v1 = decide({
+      workspacePaths: ['.'],
+      toolCall: { name: 'write_to_file', args: { TargetFile: '.adlc/tickets.json' } },
+    }, { env: ENF });
+    assert.equal(v1.allow_tool, false);
+    assert.equal(v1.decision, 'deny');
+    assert.match(v1.deny_reason, /frozen rail/);
+
+    const v2 = decide({
+      workspacePaths: ['.'],
+      toolCall: { name: 'write_to_file', args: { TargetFile: 'src/frozen.js' } },
+    }, { env: ENF });
+    assert.equal(v2.allow_tool, false);
+    assert.equal(v2.decision, 'deny');
+    assert.match(v2.deny_reason, /frozen rail/);
+  } finally {
+    process.chdir(origCwd);
+  }
+});

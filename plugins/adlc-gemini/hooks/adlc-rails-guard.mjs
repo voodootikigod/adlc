@@ -150,7 +150,10 @@ export function anchorPath(rawPath, payload) {
   if (isAbsolute(rawPath)) return { abs: rawPath, anchored: true };
   const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
     .find((s) => typeof s === 'string' && s.trim());
-  if (ws) return { abs: join(ws, rawPath), anchored: true };
+  if (ws) {
+    const absWs = isAbsolute(ws) ? ws : resolve(process.cwd(), ws);
+    return { abs: join(absWs, rawPath), anchored: true };
+  }
   return { abs: null, anchored: false };
 }
 
