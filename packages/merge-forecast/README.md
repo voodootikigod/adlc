@@ -16,6 +16,7 @@ Options:
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes
   --co-change-limit <N>      Git log depth for co-change mining (default: 500)
   --conflict-threshold <F>   Score >= this triggers SEQUENCE verdict (default: 0.5)
+  --graph-coupling <path>    Path to semantic call/symbol graph coupling JSON
   --json                     Machine-readable JSON output
   --help                     Show this help
 ```
@@ -30,12 +31,13 @@ Options:
 
 ## Signals
 
-Each parallel-eligible ticket pair (neither is an ancestor of the other in the DAG) is scored by four signals. **Combined score = max of individual signals.**
+Each parallel-eligible ticket pair (neither is an ancestor of the other in the DAG) is scored by five signals. **Combined score = max of individual signals.**
 
 | Score | Signal | Description |
 |-------|--------|-------------|
 | 1.0   | `scope-overlap` | **HARD VETO** — tickets' declared scope globs overlap. These must serialize. |
 | 0.8   | `namespace-collision` | Dynamic route segments conflict (`[pk]` vs `[voteKey]` at same path depth) or migration prefix collision (`drizzle/0005_*` vs `migrations/0005_*`). |
+| 0.7   | `graph-coupling` | Semantic call/symbol graph coupling (e.g. Spanner Graph, `mcp__spannercg`, or exported graph coupling). |
 | 0.6   | `import-radius` | Files matching ticket A's scope import from ticket B's scope or vice versa. |
 | 0–0.5 | `co-change` | Historical co-commit coupling: `pairCount / min(fileCountA, fileCountB) × 0.5`. |
 

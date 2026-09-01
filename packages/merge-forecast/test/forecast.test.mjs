@@ -27,6 +27,7 @@ import {
   signalCoChange,
   signalNamespaceRoutes,
   signalMigrationCollision,
+  signalGraphCoupling,
   walkTree,
   pairScore,
 } from '../lib/signals.mjs';
@@ -332,6 +333,41 @@ describe('signalMigrationCollision', () => {
   });
 });
 
+describe('signalGraphCoupling', () => {
+  test('fileCoupling map raises score up to 0.7', () => {
+    const a = mkTicket('A', { scope: ['src/services/user.ts'] });
+    const b = mkTicket('B', { scope: ['src/db/repo.ts'] });
+    const repoFiles = ['src/services/user.ts', 'src/db/repo.ts'];
+    const graphCouplingData = {
+      fileCoupling: {
+        'src/services/user.ts|src/db/repo.ts': 1.0,
+      },
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.7);
+  });
+
+  test('edges array connects callers across tickets', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/services/order.ts', to: 'src/payment/gateway.ts', weight: 1.0 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.7);
+  });
+
+  test('no graph data returns 0', () => {
+    const a = mkTicket('A', { scope: ['src/a.ts'] });
+    const b = mkTicket('B', { scope: ['src/b.ts'] });
+    const score = signalGraphCoupling(a, b, null, ['src/a.ts', 'src/b.ts']);
+    assert.equal(score, 0);
+  });
+});
+
 describe('pairScore — hard veto', () => {
   test('scope overlap → 1.0 HARD VETO', () => {
     const a = mkTicket('A', { scope: ['src/auth/**'] });
@@ -380,6 +416,31 @@ describe('runForecast', () => {
       assert.equal(result.pairs.length, 1);
       assert.equal(result.pairs[0].verdict, 'PARALLEL');
       assert.equal(result.gateFailures.length, 0);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('graph coupling data triggers SEQUENCE verdict on coupled tickets', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/user.ts': '// user' }, 'init user');
+      gitCommit(root, { 'src/repo.ts': '// repo' }, 'init repo');
+
+      const tickets = [
+        mkTicket('T1', { scope: ['src/user.ts'] }),
+        mkTicket('T2', { scope: ['src/repo.ts'] }),
+      ];
+      const graphCouplingData = {
+        edges: [{ from: 'src/user.ts', to: 'src/repo.ts', weight: 1.0 }],
+      };
+      const result = await runForecast({ tickets, root, graphCouplingData, conflictThreshold: 0.5 });
+
+      assert.equal(result.pairs.length, 1);
+      assert.equal(result.pairs[0].signal, 'graph-coupling');
+      assert.equal(result.pairs[0].score, 0.7);
+      assert.equal(result.pairs[0].verdict, 'SEQUENCE');
     } finally {
       cleanup(root);
     }
