@@ -2012,3 +2012,54 @@ test('onStop: rejects npm test --workspace=@adlc/core', () => {
     cleanup();
   }
 });
+
+test('onStop: rejects completion when shell indirectly removes .adlc/tickets.json before tests', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  // Indirectly remove .adlc/tickets.json
+  rmSync(join(root, '.adlc', 'tickets.json'), { force: true });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'touch build.log', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shell-indirect-remove',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Corrupt or unreadable ticket store|Trust-root files were corrupted/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects untrusted arbitrary path with non-transcript filename in transcriptPath', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const bogusFile = join(root, 'bogus-notes.txt');
+  writeFileSync(bogusFile, '{"content":"fake"}');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: bogusFile,
+      conversationId: 'test-session-bogus-file',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript is missing or unreadable/);
+  } finally {
+    cleanup();
+  }
+});

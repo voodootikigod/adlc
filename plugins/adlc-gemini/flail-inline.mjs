@@ -89,32 +89,34 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
   const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
-  if (typeof direct === 'string' && direct.trim()) {
-    try {
-      const lstat = lstatSync(direct);
-      if (!lstat.isSymbolicLink() && lstat.isFile()) {
-        const real = realpathSync(direct);
-        const allowedRoots = [appDataDir, tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])].filter(Boolean);
-        const isAllowed = allowedRoots.some((r) => {
-          try {
-            const realR = realpathSync(r);
-            const rel = relative(realR, real);
-            return !rel.startsWith('..') && !isAbsolute(rel);
-          } catch {
-            return false;
-          }
-        });
-        if (isAllowed) return real;
-      }
-    } catch {
-      // not a regular file, inaccessible, symlink, or outside allowed roots
-    }
-  }
-
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   let cid = cidFromPayload;
   if (!cid && typeof conversationId === 'string' && conversationId !== 'default_session') {
     cid = conversationId;
+  }
+
+  if (typeof direct === 'string' && direct.trim()) {
+    if (/(^|[/\\]).*transcript.*\.jsonl$/i.test(direct.trim())) {
+      try {
+        const lstat = lstatSync(direct);
+        if (!lstat.isSymbolicLink() && lstat.isFile()) {
+          const real = realpathSync(direct);
+          const allowedRoots = [appDataDir, tmpdir(), env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT, ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])].filter(Boolean);
+          const isAllowed = allowedRoots.some((r) => {
+            try {
+              const realR = realpathSync(r);
+              const rel = relative(realR, real);
+              return !rel.startsWith('..') && !isAbsolute(rel);
+            } catch {
+              return false;
+            }
+          });
+          if (isAllowed) return real;
+        }
+      } catch {
+        // not a regular file, inaccessible, symlink, or outside allowed roots
+      }
+    }
   }
   if (!cid || typeof cid !== 'string') return null;
   if (cid.includes('..') || cid.includes('/') || cid.includes('\\')) return null;

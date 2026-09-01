@@ -69,7 +69,7 @@ export function findAdlcRoot(absPath) {
   let cur = absPath;
   const { root: fsRoot } = parse(cur);
   while (true) {
-    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
+    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json')) || existsSync(join(cur, '.adlc', 'current-ticket.json')) || existsSync(join(cur, '.adlc'))) return cur;
     if (cur === fsRoot) return null;
     cur = dirname(cur);
   }
@@ -709,6 +709,26 @@ export function onStop(payload, { env = process.env } = {}) {
           decision: 'continue',
           reason: `ADLC Rails-Guard: Active ticket hash mismatch detected during Stop verification.`,
         };
+      }
+
+      if (shellMutated) {
+        try {
+          const ticketsRaw = readFileSync(join(root, '.adlc', 'tickets.json'), 'utf8');
+          const currentRaw = readFileSync(join(root, '.adlc', 'current-ticket.json'), 'utf8');
+          const ticketsObj = JSON.parse(ticketsRaw);
+          const currentObj = JSON.parse(currentRaw);
+          if (!ticketsObj || typeof ticketsObj !== 'object' || !currentObj || typeof currentObj !== 'object') {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Corrupt or unreadable trust-root files after shell execution.',
+            };
+          }
+        } catch {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Trust-root files were corrupted or removed during shell execution.',
+          };
+        }
       }
     } catch {
       return {
