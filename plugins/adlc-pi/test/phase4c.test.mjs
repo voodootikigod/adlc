@@ -298,6 +298,20 @@ test('buildShutdownEvidence: done-claim without accept marks pending-acceptance'
   assert.equal(out.kind, 'pending-acceptance');
 });
 
+test('buildShutdownEvidence: latest-of-each-kind index tracking (boundary kill for the initializers)', () => {
+  // done-claim at index 0 with NO other entries: a mutated initial index
+  // (0 instead of -1) misclassifies this as resolved — observable here.
+  const atZero = [gateEvent('e1', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: atZero, ticketId: 'T1' })?.kind, 'pending-acceptance');
+  // Adjacent indices pin both sides: done at 0, accept at 1 must resolve;
+  // with a mutated -1 initializer (0), accept-at-0-then-done-at-1 must still
+  // be pending and not "resolved by an accept at the sentinel index".
+  const adjacent = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: adjacent, ticketId: 'T1' }), null);
+  const reversed = [gateEvent('e1', 'adlc-accept', { ok: true }), gateEvent('e2', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: reversed, ticketId: 'T1' })?.kind, 'pending-acceptance');
+});
+
 test('buildShutdownEvidence: a passing gate run does NOT resolve a done-claim (cross-model finding)', () => {
   // The natural post-TICKET-DONE flow runs gates (build verify, prosecution
   // nudge); those adlc-gate-run code:0 events resolve denies/reverts but must
