@@ -941,22 +941,17 @@ export function onStop(payload, { env = process.env } = {}) {
 
       if (shellMutated) {
         try {
-          const isSharded = existsSync(join(root, '.adlc', 'tickets', '.store.json')) || existsSync(join(root, '.adlc', 'tickets'));
-          const storePath = isSharded ? join(root, '.adlc', 'tickets', '.store.json') : join(root, '.adlc', 'tickets.json');
-          if (existsSync(storePath)) {
-            const raw = readFileSync(storePath, 'utf8');
-            const obj = JSON.parse(raw);
-            if (!obj || typeof obj !== 'object') {
-              return {
-                decision: 'continue',
-                reason: 'ADLC Rails-Guard: Corrupt or unreadable trust-root files after shell execution.',
-              };
-            }
-          }
           const currentFile = join(root, '.adlc', 'current-ticket.json');
           if (existsSync(currentFile)) {
-            const currentRaw = readFileSync(currentFile, 'utf8');
-            const currentObj = JSON.parse(currentRaw);
+            const currentStat = lstatSync(currentFile);
+            if (!currentStat.isFile() || currentStat.isSymbolicLink() || currentStat.size > 64 * 1024) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Corrupt or unreadable current-ticket pointer after shell execution.',
+              };
+            }
+            const currentRaw = readTextFileBounded(currentFile, currentStat.size);
+            const currentObj = currentRaw ? JSON.parse(currentRaw) : null;
             if (!currentObj || typeof currentObj !== 'object') {
               return {
                 decision: 'continue',
