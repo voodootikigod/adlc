@@ -224,11 +224,6 @@ export function runFromStdin(raw, env = process.env) {
 
   const sessionID = resolveSessionId({ payload, env });
 
-  // For readonly tools, skip session lock persistence entirely
-  if (cls === 'readonly') {
-    return decide(payload, { env, trackerCache });
-  }
-
   const paths = extractFilePaths(payload);
   const getTracker = (r) => {
     if (!trackerCache.has(r)) trackerCache.set(r, createPersistentTracker(r, env));
@@ -630,12 +625,21 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
         }
-        if (initialTranscript.prefixHash && initialTranscript.prefixLen > 0) {
-          const curPrefix = computePrefixHash(transcriptPath, initialTranscript.prefixLen);
-          if (curPrefix !== initialTranscript.prefixHash) {
+        if (initialTranscript.hash && initialTranscript.size > 0) {
+          const prefixHash = computePrefixHash(transcriptPath, initialTranscript.size);
+          if (prefixHash !== initialTranscript.hash) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Session transcript prefix content was modified during session.',
+            };
+          }
+        }
+        if (trackerInfo?.lastHash && trackerInfo?.lastSize && trackerInfo.lastSize > 0) {
+          const lastHash = computePrefixHash(transcriptPath, trackerInfo.lastSize);
+          if (lastHash !== trackerInfo.lastHash) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session transcript content was modified during session.',
             };
           }
         }
@@ -660,6 +664,7 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     let callSeq = 0;
+    let mutatingCallSeq = 0;
     let lastMutationCallIdx = -1;
     let lastSuccessTestCallIdx = -1;
     let packageManifestMutated = false;
@@ -698,6 +703,7 @@ export function onStop(payload, { env = process.env } = {}) {
         const filePaths = extractFilePaths({ toolCall: c });
         const isShell = isShellTool(name) || name === 'run_command' || name === 'execute' || name === 'bash' || name === 'execute_command' || name === 'terminal';
         const isMutating = !isShell && classifyTool(name) !== 'readonly';
+        if (isMutating) mutatingCallSeq++;
 
         if (isMutating) {
           lastMutationCallIdx = currentCallIdx;
@@ -746,6 +752,7 @@ export function onStop(payload, { env = process.env } = {}) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
           } else if (!isReadonlyCommand(cmd)) {
+            mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
           }
@@ -753,8 +760,8 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
-    const trackedDepth = tracker.depth(sessionID);
-    if (trackedDepth > 0 && callSeq > trackedDepth) {
+    const trackedDepth = tracker.mutatingCalls ? tracker.mutatingCalls(sessionID) : tracker.depth(sessionID);
+    if (trackedDepth > 0 && mutatingCallSeq > trackedDepth) {
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Untracked tool execution records detected in transcript during Stop verification.',
@@ -803,6 +810,11 @@ export function onStop(payload, { env = process.env } = {}) {
               reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
             };
           }
+        } else if (trackedInitialTicket) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+          };
         }
       } catch {
         return {
@@ -907,6 +919,7 @@ export function onStop(payload, { env = process.env } = {}) {
     return { decision: 'stop' };
   } catch (err) {
     if (env?.ADLC_P4_ENFORCEMENT === '1') {
+      console.error('ONSTOP STACK:', err.stack);
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Internal error evaluating Stop hook under enforcement.',

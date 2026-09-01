@@ -323,15 +323,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
-        const prefixLen = Math.min(stat.size, 64 * 1024);
-        const prefixHash = computePrefixHash(transcriptPath, prefixLen);
+        const curHash = computePrefixHash(transcriptPath, stat.size);
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, prefixHash, prefixLen, size: stat.size };
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
           }
-          s.lastTranscriptSize = stat.size;
+          if (curHash) {
+            s.lastTranscriptHash = curHash;
+            s.lastTranscriptSize = stat.size;
+          }
           s.updatedAt = Date.now();
           store[sessionID] = s;
           writeStore(store);
