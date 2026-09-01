@@ -296,16 +296,33 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         return deny(`frozen rail — custom ticket store override "${storeOverride}" is a protected trust root`);
       }
 
-      const root = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
-      if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
+      let effectiveRoot = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
+      if (effectiveRoot === null) {
+        if (canonicalStoreOverride && existsSync(canonicalStoreOverride)) {
+          const wsCandidate = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+            .filter((s) => typeof s === 'string' && s.trim())
+            .find((ws) => {
+              const absWs = canonicalizeExisting(isAbsolute(ws) ? ws : resolve(process.cwd(), ws));
+              const rel = relative(absWs, canonicalAbs);
+              return !rel.startsWith('..') && !isAbsolute(rel);
+            }) ?? WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
+            .find((s) => typeof s === 'string' && s.trim());
+          if (wsCandidate) {
+            effectiveRoot = canonicalizeExisting(isAbsolute(wsCandidate) ? wsCandidate : resolve(process.cwd(), wsCandidate));
+          } else if (enforcing) {
+            return deny(`external ticket store override is active but workspace root could not be established for path "${raw}" — failing closed`);
+          }
+        }
+      }
+      if (effectiveRoot === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
 
-      const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root, env });
+      const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root: effectiveRoot, env });
       if (verdictCanonical.decision === 'deny') return deny(`frozen rail — ${verdictCanonical.reason}`);
 
-      const verdict = checkRail({ filePath: abs, tool, root, env });
+      const verdict = checkRail({ filePath: abs, tool, root: effectiveRoot, env });
       if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
-      const pathTracker = getTracker(root);
+      const pathTracker = getTracker(effectiveRoot);
       const sessionID = resolveSessionId({ payload, env });
 
       // Check build-gate backstop for structured mutators and unknown ('other') tools
@@ -313,7 +330,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (sessionID === 'default_session') {
           console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
         }
-        const gate = checkBuildGate({ sessionID, tracker: pathTracker, root, env });
+        const gate = checkBuildGate({ sessionID, tracker: pathTracker, root: effectiveRoot, env });
         if (gate.decision === 'deny') return deny(`build-gate — ${gate.reason}`);
       }
 

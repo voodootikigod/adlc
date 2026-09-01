@@ -3344,3 +3344,34 @@ test('onStop: rejects Stop when shell commands modify external ticket store over
     cleanup();
   }
 });
+
+test('decide: plain workspace without .git or .adlc enforces rails under external ticket store', () => {
+  const plainWs = join(tmpdir(), `adlc-plain-ws-${Date.now()}`);
+  mkdirSync(join(plainWs, 'src'), { recursive: true });
+  writeFileSync(join(plainWs, 'src', 'frozen.js'), '// frozen');
+
+  const externalStore = join(tmpdir(), `adlc-plain-ext-store-${Date.now()}.json`);
+  try {
+    writeFileSync(externalStore, JSON.stringify({
+      version: 1,
+      tickets: [{ id: 'T1', title: 'External Ticket', rails: ['src/frozen.js'] }],
+    }));
+    const env = {
+      ADLC_P4_ENFORCEMENT: '1',
+      ADLC_TICKET_STORE: externalStore,
+      ADLC_TICKET: 'T1',
+    };
+
+    const payload = {
+      workspacePaths: [plainWs],
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(plainWs, 'src/frozen.js') } },
+    };
+    const v = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
+    assert.match(v.deny_reason, /frozen rail/);
+  } finally {
+    try { unlinkSync(externalStore); } catch {}
+    try { rmSync(plainWs, { recursive: true, force: true }); } catch {}
+  }
+});
