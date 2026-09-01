@@ -37,14 +37,17 @@ function isPidAlive(pid) {
   }
 }
 
-export function computePrefixHash(filePath, targetBytes) {
+export const MAX_TRANSCRIPT_HASH_BYTES = 256 * 1024;
+
+export function computePrefixHash(filePath, targetBytes, maxBytes = MAX_TRANSCRIPT_HASH_BYTES) {
   if (typeof targetBytes !== 'number' || targetBytes <= 0) return null;
+  const effectiveBytes = Math.min(targetBytes, maxBytes);
   let fd;
   try {
     fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
     const hash = createHash('sha256');
-    const buf = Buffer.allocUnsafe(Math.min(64 * 1024, targetBytes));
-    let remaining = targetBytes;
+    const buf = Buffer.allocUnsafe(Math.min(64 * 1024, effectiveBytes));
+    let remaining = effectiveBytes;
     while (remaining > 0) {
       const toRead = Math.min(buf.length, remaining);
       const bytesRead = readSync(fd, buf, 0, toRead, null);

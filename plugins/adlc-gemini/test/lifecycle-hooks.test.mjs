@@ -2610,3 +2610,45 @@ test('onStop: rejects Stop when transcript suffix is modified after last tool ca
     cleanup();
   }
 });
+
+test('computePrefixHash: bounds hashing to MAX_TRANSCRIPT_HASH_BYTES on large multi-megabyte file', () => {
+  const { root, cleanup } = setupTempRepo();
+  const largeFile = join(root, 'large-transcript.jsonl');
+  // Write 1 MiB transcript
+  const chunk = 'x'.repeat(1024 * 1024);
+  writeFileSync(largeFile, chunk);
+  try {
+    const hash = computePrefixHash(largeFile, 1024 * 1024);
+    assert.ok(hash);
+    assert.equal(typeof hash, 'string');
+    assert.equal(hash.length, 64);
+  } finally {
+    cleanup();
+  }
+});
+
+test('preInvocation: discovers repo root from early tool call in > 256 KiB transcript', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'large-headless-transcript.jsonl');
+  // First line has the only absolute repo path
+  const earlyLine = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, 'src/early.js') } }],
+  });
+  // Pad with 300 KiB of unrelated lines
+  const paddingLines = Array.from({ length: 300 }, (_, i) =>
+    JSON.stringify({ type: 'USER_INPUT', content: `padding line ${i} ` + 'a'.repeat(1000) })
+  );
+  writeFileSync(transcriptFile, [earlyLine, ...paddingLines].join('\n') + '\n');
+  try {
+    const payload = {
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-large-headless',
+    };
+    const res = preInvocation(payload, { env });
+    assert.ok(res.injectSteps);
+    assert.ok(res.injectSteps.length > 0);
+  } finally {
+    cleanup();
+  }
+});

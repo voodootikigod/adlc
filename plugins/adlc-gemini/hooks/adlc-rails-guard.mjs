@@ -399,7 +399,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
     if (!root) {
       const transcriptPath = resolveTranscriptPath({ payload, env });
       if (transcriptPath) {
-        const records = parseTranscriptRecords(transcriptPath);
+        const records = parseTranscriptRecords(transcriptPath, { maxTailBytes: Infinity });
         for (const r of records) {
           const calls = extractToolCalls(r);
           for (const c of calls) {
