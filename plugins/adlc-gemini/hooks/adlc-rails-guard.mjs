@@ -479,6 +479,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
       const realCwd = realpathOr(absCwd);
       const rel = relative(realRoot, realCwd);
       if (rel.startsWith('..') || isAbsolute(rel)) return false;
+      // If running bare node --test with no explicit target, cwd must be the repository root
+      if (/^node\s+--test\s*$/i.test(trimmed) && rel !== '') return false;
     }
   }
 
@@ -658,6 +660,12 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (name === 'run_command' || name === 'execute') {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? '').trim();
+          if (/(^|[/\s"'])(.adlc|.system_generated|transcript.*\.jsonl)/i.test(cmd) && !isReadonlyCommand(cmd)) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
+            };
+          }
           if (isVerificationCommand(cmd, { root, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
