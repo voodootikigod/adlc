@@ -514,13 +514,15 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+(--no-install\s+)?adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // If package.json or shell mutations occurred, mutable npm script aliases cannot be trusted as verification
-  if (!packageManifestMutated && !shellMutated && /^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+  // If package.json or shell mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
+  if (!packageManifestMutated && !shellMutated) {
+    if (/^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
+    if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
+    if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
+  }
 
-  // Strict immutable verification runners (npx requires --no-install)
+  // Strict immutable verification runners
   if (/^node\s+--test(\s+|$)/i.test(trimmed)) return true;
-  if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
-  if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
 
   return false;
 }
@@ -624,8 +626,8 @@ export function onStop(payload, { env = process.env } = {}) {
         const name = extractToolName({ toolCall: c }) || (c?.name ?? c?.toolName ?? c?.tool_name ?? '');
         const args = extractArgs({ toolCall: c });
         const filePaths = extractFilePaths({ toolCall: c });
-        const isMutating = classifyTool(name) === 'mutating'
-          || (classifyTool(name) !== 'readonly' && filePaths.length > 0);
+        const isShell = isShellTool(name) || name === 'run_command' || name === 'execute' || name === 'bash' || name === 'execute_command' || name === 'terminal';
+        const isMutating = !isShell && classifyTool(name) !== 'readonly';
 
         if (isMutating) {
           lastMutationCallIdx = currentCallIdx;
@@ -646,7 +648,6 @@ export function onStop(payload, { env = process.env } = {}) {
           }
         }
 
-        const isShell = isShellTool(name) || name === 'run_command' || name === 'execute' || name === 'bash' || name === 'execute_command' || name === 'terminal';
         if (isShell) {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
           if (/(^|[=\s"';,/])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) && !isReadonlyCommand(cmd)) {

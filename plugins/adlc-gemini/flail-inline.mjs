@@ -157,17 +157,21 @@ export function parseTranscriptRecords(filePath, options = {}) {
           const bytesRead = readSync(fd, buf, 0, toRead, pos);
           if (bytesRead <= 0) break;
           pos += bytesRead;
+          totalBytes += bytesRead;
+          if (totalBytes > maxTotalBytes) {
+            records.push({ content: 'oversized_transcript', __oversized: true });
+            return records;
+          }
           const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
           const lines = chunkStr.split('\n');
           leftover = lines.pop() ?? '';
           if (leftover.length > maxLineLength) {
-            records.push({ content: 'unterminated_oversized_line', __unparseable: true });
-            leftover = '';
+            records.push({ content: 'unterminated_oversized_line', __oversized: true });
+            return records;
           }
           for (const rawLine of lines) {
             if (!rawLine.trim()) continue;
-            totalBytes += rawLine.length;
-            if (records.length >= maxRecords || totalBytes > maxTotalBytes) {
+            if (records.length >= maxRecords) {
               records.push({ content: 'oversized_transcript', __oversized: true });
               return records;
             }
@@ -186,8 +190,7 @@ export function parseTranscriptRecords(filePath, options = {}) {
         closeSync(fd);
       }
       if (leftover.trim()) {
-        totalBytes += leftover.length;
-        if (records.length >= maxRecords || totalBytes > maxTotalBytes) {
+        if (records.length >= maxRecords) {
           records.push({ content: 'oversized_transcript', __oversized: true });
         } else {
           try {
