@@ -57,8 +57,8 @@ export function buildShutdownEvidence({ entries, ticketId = null } = {}) {
   // (cross-model review finding: done-claim → prosecution nudge → passing
   // adlc_gate run would otherwise suppress the nudge without any acceptance).
   // Deny/revert events still outrank the hint as 'unresolved'.
-  let lastDoneIdx = -1;
-  let lastAcceptIdx = -1;
+  let lastDoneIdx = null;
+  let lastAcceptIdx = null;
   events.forEach((d, i) => {
     if (d.type === 'ticket-done-claimed') lastDoneIdx = i;
     if (d.type === 'adlc-accept' && d.ok === true) lastAcceptIdx = i;
@@ -67,7 +67,11 @@ export function buildShutdownEvidence({ entries, ticketId = null } = {}) {
   // done-claim with no active ticket).
   let pendingAcceptance = false;
   if (unresolved.length === 0 && ticketId) {
-    pendingAcceptance = lastDoneIdx !== -1 && lastDoneIdx > lastAcceptIdx;
+    // null sentinels, not -1: the -1 form generates an EQUIVALENT off-by-one
+    // mutant (-1 → -2, masked by the paired !==-1/> checks — measured in the
+    // PR #955 mutation-gate run), and the gate bans suppressing it, so the
+    // sentinel class itself is removed here instead.
+    pendingAcceptance = lastDoneIdx !== null && (lastAcceptIdx === null || lastDoneIdx > lastAcceptIdx);
     if (!pendingAcceptance) return null;
   } else if (unresolved.length === 0) {
     return null;
