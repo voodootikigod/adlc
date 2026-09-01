@@ -235,7 +235,30 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
     return { state: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
   }
-  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: active.id };
+  const overridePath = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const customRoots = [];
+  if (overridePath && typeof overridePath === 'string') {
+    const raw = overridePath.trim();
+    if (raw) {
+      customRoots.push(raw);
+      customRoots.push(`${raw}/**`);
+      customRoots.push(`${raw}/*`);
+      if (isAbsolute(raw)) {
+        try {
+          const rel = relative(root, raw);
+          if (!rel.startsWith('..')) {
+            customRoots.push(rel);
+            customRoots.push(`${rel}/**`);
+          }
+        } catch {}
+      } else {
+        customRoots.push(join(root, raw));
+        customRoots.push(`${join(root, raw)}/**`);
+      }
+    }
+  }
+
+  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS, ...customRoots], activeId: active.id };
 }
 
 // Per-root cache for the REAL filesystem probe only. Injected fns (tests) always

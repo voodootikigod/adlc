@@ -259,6 +259,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       return localCache.get(r);
     };
 
+    const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+    let canonicalStoreOverride = null;
+    if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
+      const trimmed = storeOverride.trim();
+      canonicalStoreOverride = canonicalizeExisting(isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed));
+    }
+
     // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
     // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
     for (const raw of paths) {
@@ -268,6 +275,12 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         continue;
       }
       const canonicalAbs = canonicalizeExisting(abs);
+
+      // Check if target is a configured ticket store override (external or custom in-repo)
+      if (canonicalStoreOverride && (canonicalAbs === canonicalStoreOverride || canonicalAbs.startsWith(canonicalStoreOverride + '/'))) {
+        return deny(`frozen rail — custom ticket store override "${storeOverride}" is a protected trust root`);
+      }
+
       const root = findAdlcRoot(canonicalAbs, env) ?? findAdlcRoot(abs, env);
       if (root === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
 

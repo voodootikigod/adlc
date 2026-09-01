@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
@@ -3234,6 +3234,71 @@ test('validateBaseline: detects tampering with edits, warned, or flailStatus in 
     sData['sess-flail-tamper'].flailStatus = { verdict: 'clean', summary: '' };
     writeFileSync(sessionsFile, JSON.stringify(sData));
     assert.equal(tracker.validateBaseline('sess-flail-tamper'), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('decide: external ticket store override is protected as a frozen trust root', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  const externalStore = join(tmpdir(), `adlc-external-store-${Date.now()}.json`);
+  try {
+    writeFileSync(externalStore, JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: 'Ext', rails: ['src/frozen.js'] }] }));
+    const customEnv = { ...env, ADLC_TICKET_STORE: externalStore };
+
+    const payload = {
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: externalStore } },
+    };
+    const v = runFromStdin(JSON.stringify(payload), customEnv);
+    assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
+    assert.match(v.deny_reason, /frozen rail/);
+  } finally {
+    try { unlinkSync(externalStore); } catch {}
+    cleanup();
+  }
+});
+
+test('decide: external sharded ticket store directory is protected as a frozen trust root', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  const externalShardDir = join(tmpdir(), `adlc-external-shards-${Date.now()}`);
+  try {
+    mkdirSync(externalShardDir, { recursive: true });
+    const shardFile = join(externalShardDir, 'T1.json');
+    writeFileSync(shardFile, JSON.stringify({ id: 'T1', title: 'Ext Shard', rails: ['src/frozen.js'] }));
+    const customEnv = { ...env, ADLC_TICKET_STORE: externalShardDir };
+
+    const payload = {
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: shardFile } },
+    };
+    const v = runFromStdin(JSON.stringify(payload), customEnv);
+    assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
+    assert.match(v.deny_reason, /frozen rail/);
+  } finally {
+    try { rmSync(externalShardDir, { recursive: true, force: true }); } catch {}
+    cleanup();
+  }
+});
+
+test('decide: custom in-repo ticket store path is protected as a frozen trust root', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const customStore = join(root, 'config/custom-tickets.json');
+    mkdirSync(dirname(customStore), { recursive: true });
+    writeFileSync(customStore, JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: 'Custom In Repo', rails: ['src/frozen.js'] }] }));
+    const customEnv = { ...env, ADLC_TICKET_STORE: 'config/custom-tickets.json' };
+
+    const payload = {
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: customStore } },
+    };
+    const v = runFromStdin(JSON.stringify(payload), customEnv);
+    assert.equal(v.allow_tool, false);
+    assert.equal(v.decision, 'deny');
+    assert.match(v.deny_reason, /frozen rail/);
   } finally {
     cleanup();
   }
