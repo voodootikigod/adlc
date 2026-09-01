@@ -239,6 +239,7 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     depth: s?.depth ?? 0,
     totalCalls: s?.totalCalls ?? 0,
     mutatingCalls: s?.mutatingCalls ?? 0,
+    compacted: Boolean(s?.compacted),
     lastTranscriptSize: s?.lastTranscriptSize ?? null,
     lastTranscriptHash: s?.lastTranscriptHash ?? null,
   });
@@ -499,6 +500,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         s.compacted = true;
         s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         writeStore(store);
       });
@@ -529,6 +531,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         };
 
         s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
         store[sessionID] = s;
         writeStore(store);
 
@@ -623,6 +626,10 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
     return { decision: 'deny', reason: `active ticket ${active.id} declared in current-ticket.json but not found in tickets.json` };
+  }
+
+  if (tracker?.validateBaseline && !tracker.validateBaseline(sessionID)) {
+    return { decision: 'deny', reason: 'Session baseline signature mismatch (tampering detected).' };
   }
 
   const { tier } = computeRiskTier(ticket);

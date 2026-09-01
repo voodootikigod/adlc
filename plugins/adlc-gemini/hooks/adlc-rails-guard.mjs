@@ -335,8 +335,13 @@ export function runFromStdin(raw, envArg = process.env) {
 
   const isShell = isShellTool(toolName) || toolName === 'run_command' || toolName === 'execute' || toolName === 'bash' || toolName === 'execute_command' || toolName === 'terminal';
   const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
-  const primaryRoot = Array.from(distinctRoots)[0] ?? process.cwd();
-  const isMut = isShell ? (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: primaryRoot, toolArgs: args })) : cls !== 'readonly';
+  const shellCwd = args?.Cwd ?? args?.cwd;
+  if (shellCwd && typeof shellCwd === 'string') {
+    const shellRoot = findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env);
+    if (shellRoot) distinctRoots.add(shellRoot);
+  }
+  const cmdRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
+  const isMut = isShell ? (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -388,14 +393,6 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
 }
 
 export function resolveWorkspaceRoot(payload, env = process.env) {
-  const direct = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
-    .find((s) => typeof s === 'string' && s.trim());
-  if (direct) {
-    const candidate = isAbsolute(direct) ? direct : join(process.cwd(), direct);
-    const found = findAdlcRoot(candidate, env);
-    if (found) return found;
-  }
-
   const pathKeys = ['transcriptPath', 'transcript_path', 'artifactPath', 'artifact_path', 'logPath', 'log_path'];
   for (const pk of pathKeys) {
     const p = payload?.[pk];
@@ -403,6 +400,14 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
       const found = findAdlcRoot(dirname(p), env);
       if (found) return found;
     }
+  }
+
+  const allWorkspaces = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+    .filter((s) => typeof s === 'string' && s.trim());
+  for (const ws of allWorkspaces) {
+    const candidate = isAbsolute(ws) ? ws : join(process.cwd(), ws);
+    const found = findAdlcRoot(candidate, env);
+    if (found) return found;
   }
 
   const envCandidates = [
@@ -860,7 +865,9 @@ export function onStop(payload, { env = process.env } = {}) {
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          if (isVerificationCommand(cmd, { root, toolArgs: args, packageManifestMutated, shellMutated })) {
+          const cmdCwd = args?.Cwd ?? args?.cwd;
+          const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(isAbsolute(cmdCwd) ? cmdCwd : join(root, cmdCwd), env) : null) ?? root;
+          if (isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -869,7 +876,7 @@ export function onStop(payload, { env = process.env } = {}) {
             if (isExplicitSuccess && !isExplicitFailure) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root, toolArgs: args })) {
+          } else if (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;

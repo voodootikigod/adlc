@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -3053,6 +3053,89 @@ test('parseTranscriptRecords: reads regular file and safely handles non-file des
     // Non-existent or non-file returns empty array
     assert.deepEqual(parseTranscriptRecords(root, { readFull: true }), []);
     assert.deepEqual(parseTranscriptRecords(join(root, 'nonexistent.jsonl'), { readFull: true }), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop and runFromStdin: multi-root workspace binds verification to command Cwd', () => {
+  const repoA = setupTempRepo({ activeTicket: 'T1' });
+  const repoB = setupTempRepo({ activeTicket: 'T2' });
+  try {
+    const transcriptFile = join(repoB.root, 'transcript.jsonl');
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(repoB.root, 'src/feature/b.js'), CodeContent: 'impl' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: repoB.root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [repoA.root, repoB.root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-multi-root-cwd',
+    };
+    preInvocation(payload, { env: repoB.env });
+
+    // runFromStdin should detect node --test with Cwd=repoB as verification (non-mutating)
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'write_to_file', args: { TargetFile: join(repoB.root, 'src/feature/b.js') } } }), repoB.env);
+    const stdinPayload = {
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: repoB.root } },
+    };
+    const v = runFromStdin(JSON.stringify(stdinPayload), repoB.env);
+    assert.equal(v.decision, 'allow');
+
+    // onStop in repoB should succeed
+    const res = onStop(payload, { env: repoB.env });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    repoA.cleanup();
+    repoB.cleanup();
+  }
+});
+
+test('checkBuildGate: denies build when baseline signature in sessions.json is tampered', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('sess-bg-tamper', { isMutating: true });
+
+    // Tamper with sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    sData['sess-bg-tamper'].depth = 0;
+    sData['sess-bg-tamper'].baselineSig = 'invalid_sig';
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    const res = checkBuildGate({ sessionID: 'sess-bg-tamper', tracker, root, env });
+    assert.equal(res.decision, 'deny');
+    assert.match(res.reason, /Session baseline signature mismatch/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateBaseline: detects compacted flag tampering in sessions.json', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    tracker.markCompacted('sess-compact-tamper');
+    assert.equal(tracker.validateBaseline('sess-compact-tamper'), true);
+
+    // Tamper with compacted in sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const sData = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    sData['sess-compact-tamper'].compacted = false;
+    writeFileSync(sessionsFile, JSON.stringify(sData));
+
+    assert.equal(tracker.validateBaseline('sess-compact-tamper'), false);
   } finally {
     cleanup();
   }
