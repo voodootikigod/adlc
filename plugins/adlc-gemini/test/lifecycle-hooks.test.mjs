@@ -3989,3 +3989,105 @@ test('onStop: rejects npm test verification after shell mutation modified packag
   }
 });
 
+test('onStop: allows completion after read-only view of .adlc/tickets.json', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-read-tickets-ok',
+    };
+    preInvocation(payload, { env });
+
+    // 1. Read-only view_file on .adlc/tickets.json
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'view_file', args: { AbsolutePath: join(root, '.adlc', 'tickets.json') } },
+    }), env);
+
+    // 2. File edit
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// ok' } },
+    }), env);
+
+    // 3. Test verification
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+    }), env);
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, '.adlc', 'tickets.json') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// ok' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop', res.reason);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects completion when ledger is truncated while sessions.json remains', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-stop-ledger-trunc',
+    };
+    preInvocation(payload, { env });
+
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// ok' } },
+    }), env);
+
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+    }), env);
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// ok' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    // Truncate ledger file to drop last line
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    const raw = readFileSync(ledgerFile, 'utf8');
+    const ledgerLines = raw.split('\n').filter(Boolean);
+    writeFileSync(ledgerFile, ledgerLines.slice(0, -1).join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /ledger integrity verification failed/i);
+  } finally {
+    cleanup();
+  }
+});
+
+

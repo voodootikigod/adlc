@@ -339,7 +339,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     if (isShell) {
       if (enforcing) {
         const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? args?.script ?? '').trim();
-        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
+        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
       }
@@ -875,6 +875,20 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
+    if (tracker?.isCorrupted && tracker.isCorrupted()) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable under enforcement during Stop verification.',
+      };
+    }
+
+    if (tracker?.validateLedger && !tracker.validateLedger(sessionID)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session ledger integrity verification failed (tampering or truncation detected).',
+      };
+    }
+
     // Under enforcement, transcript evidence is parsed to evaluate all mutations first
     if (!transcriptPath || records.length === 0) {
       const active = initialActiveId ? { id: initialActiveId } : resolveActiveTicketId(root, env);
@@ -933,29 +947,28 @@ export function onStop(payload, { env = process.env } = {}) {
         const args = extractArgs({ toolCall: c });
         const filePaths = extractFilePaths({ toolCall: c });
 
-        if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p)) || (overrideEscaped && filePaths.some((p) => overrideEscaped.test(p)))) {
-          return {
-            decision: 'continue',
-            reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
-          };
-        }
-        if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
-          return {
-            decision: 'continue',
-            reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
-          };
-        }
-
         const isShell = isShellTool(name, args);
         const isMutating = !isShell && classifyTool(name) !== 'readonly';
         if (isMutating) mutatingCallSeq++;
 
         if (isMutating) {
+          if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p)) || (overrideEscaped && filePaths.some((p) => overrideEscaped.test(p)))) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
+            };
+          }
+          if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
+            };
+          }
           lastMutationCallIdx = currentCallIdx;
           if (filePaths.length === 0) {
             packageManifestMutated = true;
             const argsStr = JSON.stringify(args ?? {});
-            if (/(^|[=\s"';,/])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(argsStr)) {
+            if (/(^|[=\s"';,/])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.system_generated|transcript.*\.jsonl)/i.test(argsStr)) {
               return {
                 decision: 'continue',
                 reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
@@ -969,7 +982,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (isShell) {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
