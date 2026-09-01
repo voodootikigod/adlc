@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -578,6 +578,56 @@ test('ledger: ledger ahead of stale sessions.json fails closed under enforcement
     assert.equal(tracker.validateLedger(sessionID), false, 'ledger-ahead mismatch must fail closed');
     const gate = checkBuildGate({ sessionID, tracker, root, env });
     assert.equal(gate.decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: multi-session compaction maintains exact ledgerSeq and validation across all sessions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-multisess-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket('sess-A', 'T1');
+    tracker.recordActiveTicket('sess-B', 'T1');
+
+    tracker.recordToolCall('sess-A', { isMutating: true });
+    tracker.recordToolCall('sess-B', { isMutating: true });
+
+    // Add large valid edit payload to cross the 512 KiB compaction threshold
+    tracker.recordEdit('sess-A', 'x'.repeat(520 * 1024));
+
+    // Record tool call in sess-A triggering compaction
+    tracker.recordToolCall('sess-A', { isMutating: true });
+
+    // Both sessions must validate cleanly after compaction!
+    assert.equal(tracker.validateLedger('sess-A'), true, 'sess-A must validate after compaction');
+    assert.equal(tracker.validateLedger('sess-B'), true, 'sess-B must validate after compaction');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rails: mutating tool with command argument and no path fails closed as opaque mutator', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mutator-cmd-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const res = runFromStdin(JSON.stringify({
+      conversationId: 'sess-mutator-cmd',
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { command: 'echo hello' } },
+    }), env);
+
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /no inspectable target path/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

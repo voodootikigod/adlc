@@ -120,7 +120,9 @@ export function hasCodeExecutionArgs(args, depth = 0) {
  * NOT classified as shells and must fail closed as opaque mutators.
  */
 export function isShellTool(name, args = null) {
-  if (SHELL_TOOL_NAMES.has(normalizeToolName(name))) return true;
+  const norm = normalizeToolName(name);
+  if (SHELL_TOOL_NAMES.has(norm)) return true;
+  if (classifyTool(name) === 'mutating') return false;
   if (args && hasCommandLineArgs(args)) return true;
   return false;
 }

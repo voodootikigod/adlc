@@ -377,15 +377,29 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   function readLastLedgerHeader() {
     if (!existsSync(ledgerPath)) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+    let fd;
     try {
-      const raw = readFileSync(ledgerPath, 'utf8');
-      const lines = raw.split('\n').filter(Boolean);
+      const stat = lstatSync(ledgerPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > HARD_MAX_LEDGER_BYTES) return null;
+      if (stat.size === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+
+      const readSize = Math.min(stat.size, 64 * 1024);
+      const buf = Buffer.alloc(readSize);
+      fd = openSync(ledgerPath, 'r');
+      readSync(fd, buf, 0, readSize, stat.size - readSize);
+      const rawTail = buf.toString('utf8');
+      const lines = rawTail.split('\n').filter(Boolean);
       if (lines.length === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
       const last = JSON.parse(lines[lines.length - 1]);
       if (typeof last?.seq === 'number' && typeof last?.mac === 'string') {
         return { lastSeq: last.seq, lastMac: last.mac };
       }
-    } catch {}
+    } catch {
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
+    }
     return null;
   }
 
@@ -396,7 +410,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
       let header = readLastLedgerHeader();
       if (!header && existsSync(ledgerPath)) {
-        // Unparseable ledger header -> attempt replay, fail-closed if corrupted
+        // Unparseable ledger header or oversized file -> attempt replay, fail-closed if corrupted
         const replayed = replayLedger();
         if (replayed?._corrupted) {
           try {
@@ -459,12 +473,21 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
                 const snapMac = computeLedgerMac(curPrevMac, curSeq, snapPayload);
                 compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: snapMac, payload: snapPayload }));
                 curPrevMac = snapMac;
+                s.ledgerSeq = curSeq;
+                s.ledgerMac = snapMac;
+                s.baselineSig = computeBaselineSig(sid, s, root, env);
               }
               curSeq++;
               const newEntryMac = computeLedgerMac(curPrevMac, curSeq, payload);
               compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: newEntryMac, payload }));
               writeFileSync(tmpLedger, compactedLines.join('\n') + '\n', { mode: 0o600 });
               renameSync(tmpLedger, ledgerPath);
+              if (entry.sessionID && store[entry.sessionID]) {
+                store[entry.sessionID].ledgerSeq = curSeq;
+                store[entry.sessionID].ledgerMac = newEntryMac;
+                store[entry.sessionID].baselineSig = computeBaselineSig(entry.sessionID, store[entry.sessionID], root, env);
+              }
+              writeStore(store, entry.sessionID);
               return { seq: curSeq, mac: newEntryMac };
             } else if (lStat.size > HARD_MAX_LEDGER_BYTES) {
               // Compaction failed and file exceeds hard limit -> quarantine oversized ledger
@@ -708,15 +731,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         s.totalCalls = (s.totalCalls ?? 0) + 1;
         s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
         const lH = appendLedger({ type: 'recordToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store, sessionID);
+        curS.depth = s.depth;
+        curS.totalCalls = s.totalCalls;
+        curS.mutatingCalls = s.mutatingCalls;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
     },
     revertToolCall(sessionID, { isMutating = true } = {}) {
@@ -729,15 +757,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (s.totalCalls && s.totalCalls > 0) s.totalCalls -= 1;
         if (isMutating && s.mutatingCalls && s.mutatingCalls > 0) s.mutatingCalls -= 1;
         const lH = appendLedger({ type: 'revertToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store, sessionID);
+        curS.depth = s.depth;
+        curS.totalCalls = s.totalCalls;
+        curS.mutatingCalls = s.mutatingCalls;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
     },
     totalCalls(sessionID) {
@@ -769,15 +802,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           }
         }
         const lH = appendLedger({ type: 'recordActiveTicket', sessionID, activeTicketId, storeHash, initialPointer: pointerInfo });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store, sessionID);
+        if (s.initialActiveTicket) curS.initialActiveTicket = s.initialActiveTicket;
+        if (s.initialStoreHash) curS.initialStoreHash = s.initialStoreHash;
+        if (s.initialPointer) curS.initialPointer = s.initialPointer;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
     },
     initialTicket(sessionID) {
@@ -831,15 +869,18 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (!s) return;
         s.ended = true;
         const lH = appendLedger({ type: 'ended', sessionID });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
-        writeStore(store, sessionID);
+        curS.ended = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
     },
     recordTranscript(sessionID, transcriptPath) {
@@ -859,14 +900,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (curHash) s.lastTranscriptHash = curHash;
           s.lastTranscriptSize = stat.size;
           const lH = appendLedger({ type: 'recordTranscript', sessionID, initialTranscript, lastTranscriptHash: s.lastTranscriptHash, lastTranscriptSize: s.lastTranscriptSize });
+          const curStore = readStore();
+          const curS = curStore[sessionID] ?? s;
           if (lH) {
-            s.ledgerSeq = lH.seq;
-            s.ledgerMac = lH.mac;
+            curS.ledgerSeq = lH.seq;
+            curS.ledgerMac = lH.mac;
           }
-          s.updatedAt = Date.now();
-          s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-          store[sessionID] = s;
-          writeStore(store, sessionID);
+          if (s.initialTranscript) curS.initialTranscript = s.initialTranscript;
+          if (s.lastTranscriptHash) curS.lastTranscriptHash = s.lastTranscriptHash;
+          if (s.lastTranscriptSize) curS.lastTranscriptSize = s.lastTranscriptSize;
+          curS.updatedAt = Date.now();
+          curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+          curStore[sessionID] = curS;
+          writeStore(curStore, sessionID);
         });
       } catch {}
     },
@@ -893,14 +939,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         s.compacted = true;
         const lH = appendLedger({ type: 'compact', sessionID });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        writeStore(store, sessionID);
+        curS.compacted = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        writeStore(curStore, sessionID);
       });
     },
     recordEdit(sessionID, filePath, { transcriptSteps = [], transcriptLines = [] } = {}) {
@@ -929,14 +978,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         };
 
         const lH = appendLedger({ type: 'recordEdit', sessionID, filePath });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
         if (lH) {
-          s.ledgerSeq = lH.seq;
-          s.ledgerMac = lH.mac;
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        s.updatedAt = Date.now();
-        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
-        store[sessionID] = s;
-        writeStore(store, sessionID);
+        curS.edits = s.edits;
+        curS.warned = s.warned;
+        curS.flailStatus = s.flailStatus;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        writeStore(curStore, sessionID);
 
         const churns = detectEditChurn(s.edits, 3);
         const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
