@@ -84,6 +84,22 @@ export function readTranscriptPrefixBounded(filePath, maxBytes = 64 * 1024) {
   }
 }
 
+export function readTextFileBounded(filePath, maxBytes = 1024 * 1024) {
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString('utf8', 0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
 export function deriveRiskSignals(ticket) {
   const t = ticket ?? {};
   const signals = [];

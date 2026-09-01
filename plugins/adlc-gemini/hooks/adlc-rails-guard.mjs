@@ -17,7 +17,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -770,6 +770,13 @@ export function onStop(payload, { env = process.env } = {}) {
         reason: 'ADLC Rails-Guard: Untracked or missing tool execution records detected in transcript during Stop verification.',
       };
     }
+    const trackedTotal = tracker.totalCalls ? tracker.totalCalls(sessionID) : 0;
+    if (trackedTotal > 0 && callSeq !== trackedTotal) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Untracked or missing tool execution records detected in transcript during Stop verification.',
+      };
+    }
     if (trackedDepth === 0 && mutatingCallSeq > 0 && trackedInitialTicket) {
       return {
         decision: 'continue',
@@ -804,7 +811,20 @@ export function onStop(payload, { env = process.env } = {}) {
     const sessionsFile = join(root, '.adlc', 'sessions.json');
     if (existsSync(sessionsFile)) {
       try {
-        const sRaw = readFileSync(sessionsFile, 'utf8');
+        const sStat = lstatSync(sessionsFile);
+        if (!sStat.isFile() || sStat.isSymbolicLink() || sStat.size > 1024 * 1024) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
+          };
+        }
+        const sRaw = readTextFileBounded(sessionsFile, sStat.size);
+        if (!sRaw) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
+          };
+        }
         const sData = JSON.parse(sRaw);
         if (!sData || typeof sData !== 'object') {
           return {
