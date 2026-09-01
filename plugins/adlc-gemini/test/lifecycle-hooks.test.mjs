@@ -3303,3 +3303,44 @@ test('decide: custom in-repo ticket store path is protected as a frozen trust ro
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when shell commands modify external ticket store override', () => {
+  const { root, env, cleanup } = setupTempRepo({ activeTicket: 'T1', enforcement: '1' });
+  const externalStore = join(tmpdir(), `adlc-ext-shell-store-${Date.now()}.json`);
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    writeFileSync(externalStore, JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: 'Ext', rails: ['src/frozen.js'] }] }));
+    const customEnv = { ...env, ADLC_TICKET_STORE: externalStore };
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: `node -e 'require("fs").writeFileSync(process.env.ADLC_TICKET_STORE, "...")'`, Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-ext-shell-modify',
+    };
+    preInvocation(payload, { env: customEnv });
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: `node -e 'require("fs").writeFileSync(process.env.ADLC_TICKET_STORE, "...")'`, Cwd: root } } }), customEnv);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), customEnv);
+
+    const res = onStop(payload, { env: customEnv });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Shell modification of (trust-root|custom ticket)/);
+  } finally {
+    try { unlinkSync(externalStore); } catch {}
+    cleanup();
+  }
+});

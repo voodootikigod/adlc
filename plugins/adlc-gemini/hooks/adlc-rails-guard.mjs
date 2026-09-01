@@ -233,7 +233,24 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     // Step 2 — classify first. Reads and shell tools are never rail-gated in-session.
     if (cls === 'readonly') return allow();
-    if (isShellTool(tool)) return allow(); // run_command → CI diff gate
+    const args = extractArgs(payload);
+    const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+    let overrideEscaped = null;
+    if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
+      const trimmed = storeOverride.trim();
+      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      overrideEscaped = new RegExp('(^|[\\s=;,"\'/$.()[\\]])(' + escaped + '|ADLC_TICKET_STORE|ADLC_TICKETS)', 'i');
+    }
+
+    if (isShellTool(tool)) {
+      if (enforcing) {
+        const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
+        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.session-secret|\.store\.json)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
+          return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
+        }
+      }
+      return allow(); // run_command → CI diff gate
+    }
 
     const paths = extractFilePaths(payload);
 
@@ -242,7 +259,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     // 'mutating' name with no path is opaque (H2).
     if (!paths.length) {
       if (cls === 'other') {
-        const args = extractArgs(payload);
         if (enforcing && hasPathLikeArgs(args)) {
           return deny(`unclassified tool "${tool}" has uninspectable path-like arguments — failing closed`);
         }
@@ -259,7 +275,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       return localCache.get(r);
     };
 
-    const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
     let canonicalStoreOverride = null;
     if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
       const trimmed = storeOverride.trim();
@@ -840,6 +855,13 @@ export function onStop(payload, { env = process.env } = {}) {
       }
       return { decision: 'stop' };
     }
+    const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+    let overrideEscaped = null;
+    if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
+      const trimmed = storeOverride.trim();
+      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      overrideEscaped = new RegExp('(^|[\\s=;,"\'/$.()[\\]])(' + escaped + '|ADLC_TICKET_STORE|ADLC_TICKETS)', 'i');
+    }
 
     let callSeq = 0;
     let mutatingCallSeq = 0;
@@ -914,7 +936,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (isShell) {
           const cmd = (args?.CommandLine ?? args?.command ?? args?.cmd ?? args?.code ?? '').trim();
-          if (/(^|[=\s"';,/])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) && !isReadonlyCommand(cmd)) {
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
