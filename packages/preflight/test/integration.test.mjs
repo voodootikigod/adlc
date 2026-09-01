@@ -79,6 +79,30 @@ describe('runChecks all-required-pass', () => {
   });
 });
 
+// ── runChecks — custom dir option ─────────────────────────────────────────────
+
+describe('runChecks custom dir option', () => {
+  let dir;
+
+  before(() => {
+    dir = makeTmp();
+    initRepo(dir);
+  });
+
+  after(() => cleanTmp(dir));
+
+  it('supports custom dir option without creating .adlc', async () => {
+    const customDir = '.sdlc/.adlc';
+    const results = await runChecks({ cwd: dir, dir: customDir });
+    const writeResult = results.find((r) => r.name === 'write');
+    assert.ok(writeResult);
+    assert.equal(writeResult.status, 'pass');
+    assert.match(writeResult.detail, /\.sdlc\/\.adlc\/tmp\/preflight-test written and removed/);
+    assert.equal(existsSync(join(dir, customDir, 'tmp', 'preflight-test')), false);
+    assert.equal(existsSync(join(dir, '.adlc')), false, '.adlc should not have been created');
+  });
+});
+
 // ── runChecks — non-repo dir → git check fail ─────────────────────────────────
 
 describe('runChecks non-repo dir', () => {
@@ -205,5 +229,34 @@ describe('CLI --json output', () => {
     assert.ok(Array.isArray(parsed.checks), 'checks must be an array');
     assert.ok(typeof parsed.verdict === 'string', 'verdict must be a string');
     assert.ok(Array.isArray(parsed.failedNames), 'failedNames must be an array');
+  });
+});
+
+// ── CLI --dir option ──────────────────────────────────────────────────────────
+
+describe('CLI --dir option', () => {
+  let dir;
+
+  before(() => {
+    dir = makeTmp();
+    initRepo(dir);
+  });
+
+  after(() => cleanTmp(dir));
+
+  it('passes --dir flag and writes to custom adlc directory', () => {
+    const customDir = '.custom-adlc';
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, '--dir', customDir, '--json'],
+      { cwd: dir, encoding: 'utf8' }
+    );
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    const writeCheck = parsed.checks.find((c) => c.name === 'write');
+    assert.ok(writeCheck);
+    assert.equal(writeCheck.status, 'pass');
+    assert.match(writeCheck.detail, /\.custom-adlc\/tmp\/preflight-test written and removed/);
+    assert.equal(existsSync(join(dir, '.adlc')), false, '.adlc should not have been created');
   });
 });

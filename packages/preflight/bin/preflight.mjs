@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // preflight — ADLC D2 Phase 0 environment and permissions check.
-// Usage: preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
+// Usage: preflight [--dir "..."] [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 
 import { parseArgs, printJson } from '@adlc/core';
 import { runChecks, isBlankTestCmd, EMPTY_TEST_CMD_MESSAGE } from '../lib/runner.mjs';
@@ -9,6 +9,7 @@ import { renderTable, renderVerdict, computeVerdict } from '../lib/render.mjs';
 const { values: flags } = parseArgs({
   options: {
     'test-cmd':  { type: 'string' },
+    dir:         { type: 'string' },
     gh:          { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
     worktrees:   { type: 'boolean', default: false },
@@ -31,6 +32,7 @@ let results;
 try {
   results = await runChecks({
     cwd: process.cwd(),
+    dir: flags.dir,
     worktrees: flags.worktrees,
     testCmd: flags['test-cmd'],
     gh: flags.gh,
