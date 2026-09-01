@@ -146,3 +146,43 @@ test('decide(): relative workspacePaths ["."] with relative frozen rail target i
     process.chdir(origCwd);
   }
 });
+
+test('decide(): unclassified code executors with code/script args fail closed under enforcement', () => {
+  const root = adlcRepo({ rails: ['src/frozen.js'] });
+
+  // python_exec with code payload
+  const v1 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'python_exec', args: { code: "open('/repo/src/frozen.js','w').write('x')" } },
+  }, { env: ENF });
+  assert.equal(v1.allow_tool, false);
+  assert.equal(v1.decision, 'deny');
+  assert.match(v1.deny_reason, /uninspectable arguments/);
+
+  // eval_js with script payload
+  const v2 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'eval_js', args: { script: "fs.writeFileSync('src/frozen.js', 'x')" } },
+  }, { env: ENF });
+  assert.equal(v2.allow_tool, false);
+  assert.equal(v2.decision, 'deny');
+  assert.match(v2.deny_reason, /uninspectable arguments/);
+
+  // generate_code with code payload
+  const v3 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'generate_code', args: { code: "import os; os.remove('src/frozen.js')" } },
+  }, { env: ENF });
+  assert.equal(v3.allow_tool, false);
+  assert.equal(v3.decision, 'deny');
+  assert.match(v3.deny_reason, /uninspectable arguments/);
+
+  // When enforcement is off, unclassified tools without paths allow
+  const vOff = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'python_exec', args: { code: "print('hello')" } },
+  }, { env: {} });
+  assert.equal(vOff.allow_tool, true);
+  assert.equal(vOff.decision, 'allow');
+});
+

@@ -33,7 +33,7 @@ function realpathOr(p) {
     return p;
   }
 }
-import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
@@ -351,7 +351,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     // 'mutating' name with no path is opaque (H2).
     if (!paths.length) {
       if (cls === 'other') {
-        if (enforcing && (hasPathLikeArgs(args) || hasCommandLineArgs(args))) {
+        if (enforcing && (hasPathLikeArgs(args) || hasCommandLineArgs(args) || hasCodeExecutionArgs(args))) {
           return deny(`unclassified tool "${tool}" has uninspectable arguments — failing closed`);
         }
         return allow();
