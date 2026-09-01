@@ -250,6 +250,7 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     totalCalls: s?.totalCalls ?? 0,
     mutatingCalls: s?.mutatingCalls ?? 0,
     compacted: Boolean(s?.compacted),
+    ended: Boolean(s?.ended),
     edits: Array.isArray(s?.edits) ? s.edits : [],
     warned: Array.isArray(s?.warned) ? s.warned : [],
     flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? '', summary: s.flailStatus.summary ?? '' } : null,
@@ -383,17 +384,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
       const keys = Object.keys(data);
       if (keys.length > MAX_TRACKED_SESSIONS) {
-        const sorted = keys.sort((a, b) => {
-          const aLive = inMemorySessionSnapshots.has(snapKey(a));
-          const bLive = inMemorySessionSnapshots.has(snapKey(b));
-          if (aLive !== bLive) return aLive ? 1 : -1;
-          const aEnded = Boolean(data[a]?.ended);
-          const bEnded = Boolean(data[b]?.ended);
-          if (aEnded !== bEnded) return aEnded ? -1 : 1;
-          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
-        });
-        const toRemove = sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS);
-        for (const k of toRemove) delete data[k];
+        const endedKeys = keys.filter((k) => Boolean(data[k]?.ended));
+        if (endedKeys.length > 0) {
+          const sorted = endedKeys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
+          const toRemove = sorted.slice(0, Math.min(sorted.length, keys.length - MAX_TRACKED_SESSIONS));
+          for (const k of toRemove) delete data[k];
+        }
       }
 
       const tmpPath = `${storePath}.tmp.${process.pid}.${Date.now()}`;
@@ -516,6 +512,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const expected = computeBaselineSig(sessionID, s, root, env);
       if (!expected) return false;
       return s.baselineSig === expected;
+    },
+    markSessionEnded(sessionID) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID];
+        if (!s) return;
+        s.ended = true;
+        s.updatedAt = Date.now();
+        s.baselineSig = computeBaselineSig(sessionID, s, root, env);
+        store[sessionID] = s;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...s });
+        writeStore(store);
+      });
     },
     recordTranscript(sessionID, transcriptPath) {
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;

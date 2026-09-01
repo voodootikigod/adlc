@@ -739,7 +739,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // If package.json mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
   if (!packageManifestMutated) {
-    if (/^(npm\s+(test|run\s+(test|preflight|check)))\s*$/i.test(trimmed)) return true;
+    if (/^(npm\s+(test|run\s+(test|preflight)))\s*$/i.test(trimmed)) return true;
     if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)\s*$/i.test(trimmed)) return true;
     if (/^npx\s+--no-install\s+(mocha|jest|vitest)\s*$/i.test(trimmed)) return true;
   }
@@ -1245,6 +1245,10 @@ export function onStop(payload, { env = process.env } = {}) {
           };
         }
       } catch {}
+    }
+
+    if (tracker?.markSessionEnded) {
+      tracker.markSessionEnded(sessionID);
     }
 
     return { decision: 'stop' };

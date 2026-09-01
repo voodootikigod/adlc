@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
@@ -3600,6 +3601,119 @@ test('onStop: rejects Stop when current session entry is missing or evicted from
     const stopRes = onStop(payload, { env });
     assert.equal(stopRes.decision, 'continue');
     assert.match(stopRes.reason, /Session tracking entry was deleted, evicted, reset, or missing|Session baseline signature mismatch or missing tracking entry/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects npm run check as verification after file edits', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-check-script',
+    };
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm run check', Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Finished.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    preInvocation(payload, { env });
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } },
+    }), env);
+    runFromStdin(JSON.stringify({
+      ...payload,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm run check', Cwd: root } },
+    }), env);
+
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Active ticket has unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('subprocess integration: cjs shim executes across separate Node processes with durable baseline', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const cjsShim = join(import.meta.dirname, '..', 'hooks', 'adlc-rails-guard.cjs');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Done.' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-subprocess-123',
+    };
+
+    // 1. Process 1: PreInvocation
+    const proc1 = spawnSync(process.execPath, [cjsShim, 'preinvocation'], {
+      input: JSON.stringify(payload),
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+    });
+    assert.equal(proc1.status, 0);
+
+    // 2. Process 2: PreToolUse (write_to_file)
+    const proc2 = spawnSync(process.execPath, [cjsShim], {
+      input: JSON.stringify({
+        ...payload,
+        toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } },
+      }),
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+    });
+    assert.equal(proc2.status, 0);
+    const v2 = JSON.parse(proc2.stdout);
+    assert.equal(v2.allow_tool, true);
+
+    // 3. Process 3: PreToolUse (run_command: npm test)
+    const proc3 = spawnSync(process.execPath, [cjsShim], {
+      input: JSON.stringify({
+        ...payload,
+        toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+      }),
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+    });
+    assert.equal(proc3.status, 0);
+
+    // 4. Process 4: onStop
+    const proc4 = spawnSync(process.execPath, [cjsShim, 'stop'], {
+      input: JSON.stringify(payload),
+      env: { ...process.env, ...env },
+      encoding: 'utf8',
+    });
+    assert.equal(proc4.status, 0);
+    const stopOut = JSON.parse(proc4.stdout);
+    assert.equal(stopOut.decision, 'stop', stopOut.reason);
   } finally {
     cleanup();
   }
