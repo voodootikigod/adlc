@@ -378,7 +378,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (hasCommandLineArgs(args) && !cmd) {
           return deny('recognized shell tool has unparseable command arguments — failing closed');
         }
-        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
+        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
       }
@@ -1048,7 +1048,7 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (isShell) {
           const cmd = extractCommandString(args);
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',

@@ -186,80 +186,63 @@ const loadedSecretCache = new Map();
 function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
-  // Store secret in OS process-isolated runtime path inaccessible inside workspace
-  let secretDir;
-  try {
-    const uid = typeof process.getuid === 'function' ? process.getuid() : '0';
-    if (existsSync('/dev/shm')) {
-      secretDir = `/dev/shm/.adlc-secrets-${uid}`;
-    }
-  } catch {}
-  if (!secretDir) {
-    const uid = typeof process.getuid === 'function' ? process.getuid() : '0';
-    secretDir = join(tmpdir(), `.adlc-runtime-secrets-${uid}`);
-  }
-  const rootKey = createHash('sha256').update(root).digest('hex').slice(0, 16);
-  const secretFile = join(secretDir, `session-${rootKey}.secret`);
-
+  const userHome = homedir() || tmpdir();
+  const adlcConfigDir = join(userHome, '.adlc');
+  const masterKeyFile = join(adlcConfigDir, '.master-key');
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
 
   if (loadedSecretCache.has(root)) {
-    const cached = loadedSecretCache.get(root);
-    try {
-      if (!existsSync(secretFile)) return null; // Key disappeared -> tamper
-      const stat = lstatSync(secretFile);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024) return null;
-      if (uid !== null && stat.uid !== uid) return null;
-      if ((stat.mode & 0o077) !== 0) return null;
-      const raw = readFileSync(secretFile, 'utf8').trim();
-      if (raw !== cached) return null; // Key replaced -> tamper
-      return cached;
-    } catch {
-      return null;
-    }
+    return loadedSecretCache.get(root);
   }
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      if (existsSync(secretFile)) {
-        const stat = lstatSync(secretFile);
-        if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
-          if (uid !== null && stat.uid !== uid) return null;
-          if ((stat.mode & 0o077) !== 0) return null;
-          const raw = readFileSync(secretFile, 'utf8').trim();
-          if (raw.length >= 32) {
-            loadedSecretCache.set(root, raw);
-            return raw;
+  let masterKey = null;
+  try {
+    if (existsSync(masterKeyFile)) {
+      const stat = lstatSync(masterKeyFile);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+        if (uid === null || stat.uid === uid) {
+          if ((stat.mode & 0o077) === 0) {
+            const raw = readFileSync(masterKeyFile, 'utf8').trim();
+            if (raw.length >= 32) masterKey = raw;
           }
         }
-        return null;
       }
-      const secret = randomBytes(32).toString('hex');
-      if (!existsSync(secretDir)) {
-        try { mkdirSync(secretDir, { recursive: true, mode: 0o700 }); } catch {}
+    }
+  } catch {}
+
+  if (!masterKey) {
+    try {
+      if (!existsSync(adlcConfigDir)) {
+        mkdirSync(adlcConfigDir, { recursive: true, mode: 0o700 });
       }
-      writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
-      loadedSecretCache.set(root, secret);
-      return secret;
+      const newKey = randomBytes(32).toString('hex');
+      writeFileSync(masterKeyFile, newKey, { mode: 0o600, flag: 'wx' });
+      masterKey = newKey;
     } catch (err) {
       if (err.code === 'EEXIST') {
         try {
-          const stat = lstatSync(secretFile);
+          const stat = lstatSync(masterKeyFile);
           if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
-            if (uid !== null && stat.uid !== uid) return null;
-            if ((stat.mode & 0o077) !== 0) return null;
-            const raw = readFileSync(secretFile, 'utf8').trim();
-            if (raw.length >= 32) {
-              loadedSecretCache.set(root, raw);
-              return raw;
+            if (uid === null || stat.uid === uid) {
+              if ((stat.mode & 0o077) === 0) {
+                const raw = readFileSync(masterKeyFile, 'utf8').trim();
+                if (raw.length >= 32) masterKey = raw;
+              }
             }
           }
         } catch {}
       }
     }
-    sleepSyncWithJitter(10);
   }
-  return null;
+
+  if (!masterKey) return null;
+
+  const derivedSecret = createHmac('sha256', masterKey)
+    .update(`adlc-session-secret:${root}`)
+    .digest('hex');
+
+  loadedSecretCache.set(root, derivedSecret);
+  return derivedSecret;
 }
 
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {

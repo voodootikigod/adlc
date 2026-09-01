@@ -656,6 +656,38 @@ test('store: oversized filePath in recordEdit is bounded and does not corrupt se
   }
 });
 
+test('secrets: distinct repositories derive distinct authenticated baseline signatures from master key', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'repo-a-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'repo-b-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    for (const r of [rootA, rootB]) {
+      mkdirSync(join(r, '.adlc'), { recursive: true });
+      writeFileSync(join(r, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+      writeFileSync(join(r, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+    }
+
+    const trackerA = createPersistentTracker(rootA, env);
+    const trackerB = createPersistentTracker(rootB, env);
+
+    trackerA.recordActiveTicket('sess-test', 'T1');
+    trackerB.recordActiveTicket('sess-test', 'T1');
+
+    assert.equal(trackerA.validateBaseline('sess-test'), true);
+    assert.equal(trackerB.validateBaseline('sess-test'), true);
+
+    const storeA = JSON.parse(readFileSync(join(rootA, '.adlc', 'sessions.json'), 'utf8'));
+    const storeB = JSON.parse(readFileSync(join(rootB, '.adlc', 'sessions.json'), 'utf8'));
+
+    // Even with identical sessionID and ticket state, signatures are unique per repository!
+    assert.notEqual(storeA['sess-test'].baselineSig, storeB['sess-test'].baselineSig);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+
 
 
 

@@ -4339,6 +4339,28 @@ test('runFromStdin: denies shell command attempting to read session secrets unde
   }
 });
 
+test('runFromStdin: denies shell command attempting to read master key under enforcement', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat ~/.adlc/.master-key',
+          Cwd: root,
+        },
+      },
+    };
+    const res = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 
 
