@@ -251,13 +251,13 @@ export function runFromStdin(raw, env = process.env) {
     if (fallbackRoot) distinctRoots.add(fallbackRoot);
   }
 
-  const wsRoot = resolveWorkspaceRoot(payload, env);
-  if (wsRoot) distinctRoots.add(wsRoot);
+  const isShell = isShellTool(toolName) || toolName === 'run_command' || toolName === 'execute' || toolName === 'bash' || toolName === 'execute_command' || toolName === 'terminal';
+  const isMut = isShell || cls !== 'readonly';
 
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
-    tracker.recordToolCall(sessionID);
+    tracker.recordToolCall(sessionID, { isMutating: isMut });
     if (transcriptPath) tracker.recordTranscript(sessionID, transcriptPath);
     const active = resolveActiveTicketId(root, env);
     if (active.id) {
@@ -630,21 +630,12 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
         }
-        if (initialTranscript.hash && initialTranscript.size > 0) {
-          const prefixHash = computePrefixHash(transcriptPath, initialTranscript.size);
-          if (prefixHash !== initialTranscript.hash) {
+        if (initialTranscript.prefixHash && initialTranscript.prefixLen > 0) {
+          const curPrefix = computePrefixHash(transcriptPath, initialTranscript.prefixLen);
+          if (curPrefix !== initialTranscript.prefixHash) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Session transcript prefix content was modified during session.',
-            };
-          }
-        }
-        if (trackerInfo?.lastHash && trackerInfo?.lastSize && trackerInfo.lastSize > 0) {
-          const lastHash = computePrefixHash(transcriptPath, trackerInfo.lastSize);
-          if (lastHash !== trackerInfo.lastHash) {
-            return {
-              decision: 'continue',
-              reason: 'ADLC Rails-Guard: Session transcript content was modified during session.',
             };
           }
         }
@@ -804,6 +795,14 @@ export function onStop(payload, { env = process.env } = {}) {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session tracking store was corrupted or unreadable during verification.',
           };
+        }
+        if (sData[sessionID]) {
+          if (typeof sData[sessionID] !== 'object' || (trackedInitialTicket && sData[sessionID].initialActiveTicket !== trackedInitialTicket) || (active.id && sData[sessionID].initialActiveTicket && sData[sessionID].initialActiveTicket !== active.id) || (active.id && Object.keys(sData[sessionID]).length === 0)) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session tracking entry was deleted, reset, or modified during session.',
+            };
+          }
         }
       } catch {
         return {

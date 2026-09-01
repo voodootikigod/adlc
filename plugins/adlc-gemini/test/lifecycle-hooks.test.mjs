@@ -2469,3 +2469,35 @@ test('onStop: rejects Stop when transcript contains untracked injected tool call
     cleanup();
   }
 });
+
+test('onStop: rejects Stop when .adlc/sessions.json session entry is wiped to empty object', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-wipe-entry',
+    };
+    preInvocation(payload, { env });
+
+    // Wipe sessions.json session entry to empty object
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    writeFileSync(sessionsFile, JSON.stringify({ 'test-session-wipe-entry': {} }));
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session tracking entry was deleted, reset, or modified/);
+  } finally {
+    cleanup();
+  }
+});

@@ -272,16 +272,28 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   return {
-    recordToolCall(sessionID) {
+    recordToolCall(sessionID, { isMutating = true } = {}) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-        s.depth = (s.depth ?? 0) + 1;
+        if (isMutating) s.depth = (s.depth ?? 0) + 1;
+        s.totalCalls = (s.totalCalls ?? 0) + 1;
+        s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
         s.updatedAt = Date.now();
         store[sessionID] = s;
         writeStore(store);
       });
+    },
+    totalCalls(sessionID) {
+      if (!sessionID) return 0;
+      const store = readStore();
+      return store[sessionID]?.totalCalls ?? 0;
+    },
+    mutatingCalls(sessionID) {
+      if (!sessionID) return 0;
+      const store = readStore();
+      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? 0;
     },
     recordActiveTicket(sessionID, activeTicketId, storeHash) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
@@ -311,17 +323,15 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
-        const snapHash = computePrefixHash(transcriptPath, stat.size);
+        const prefixLen = Math.min(stat.size, 64 * 1024);
+        const prefixHash = computePrefixHash(transcriptPath, prefixLen);
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: snapHash, size: stat.size };
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, prefixHash, prefixLen, size: stat.size };
           }
-          if (snapHash) {
-            s.lastTranscriptHash = snapHash;
-            s.lastTranscriptSize = stat.size;
-          }
+          s.lastTranscriptSize = stat.size;
           s.updatedAt = Date.now();
           store[sessionID] = s;
           writeStore(store);
