@@ -1,9 +1,9 @@
 // flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, realpathSync } from 'node:fs';
+import { join, relative, isAbsolute } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 export const DEFAULT_FLAIL_THRESHOLD = 3;
@@ -87,12 +87,26 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  * Resolve transcript path for a given agy conversation ID or payload.
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
+  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
-  if (typeof direct === 'string') {
+  if (typeof direct === 'string' && direct.trim()) {
     try {
-      if (existsSync(direct) && statSync(direct).isFile()) return direct;
+      const real = realpathSync(direct);
+      if (statSync(real).isFile()) {
+        const allowedRoots = [appDataDir, tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])].filter(Boolean);
+        const isAllowed = allowedRoots.some((r) => {
+          try {
+            const realR = realpathSync(r);
+            const rel = relative(realR, real);
+            return !rel.startsWith('..') && !isAbsolute(rel);
+          } catch {
+            return false;
+          }
+        });
+        if (isAllowed) return real;
+      }
     } catch {
-      // not a regular file or inaccessible
+      // not a regular file, inaccessible, or outside allowed roots
     }
   }
 
@@ -104,7 +118,6 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
   if (!cid || typeof cid !== 'string') return null;
   if (cid.includes('..') || cid.includes('/') || cid.includes('\\')) return null;
 
-  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const transcriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl');
   try {
     if (existsSync(transcriptPath) && statSync(transcriptPath).isFile()) return transcriptPath;

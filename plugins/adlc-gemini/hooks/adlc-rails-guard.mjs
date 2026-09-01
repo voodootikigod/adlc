@@ -562,14 +562,14 @@ export function onStop(payload, { env = process.env } = {}) {
         callSeq++;
         const currentCallIdx = callSeq;
         const name = c?.name ?? c?.toolName ?? '';
-        const args = c?.args ?? c?.arguments ?? c?.params ?? c?.input ?? {};
-        const filePath = args?.TargetFile || args?.path || args?.filePath || args?.targetFile || args?.file || args?.TargetDirectory;
+        const args = extractArgs({ toolCall: c });
+        const filePaths = extractFilePaths({ toolCall: c });
         const isMutating = classifyTool(name) === 'mutating'
-          || (classifyTool(name) !== 'readonly' && Boolean(filePath));
+          || (classifyTool(name) !== 'readonly' && filePaths.length > 0);
 
         if (isMutating) {
           lastMutationCallIdx = currentCallIdx;
-          if (typeof filePath === 'string' && /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(filePath)) {
+          if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
             packageManifestMutated = true;
           }
         }
