@@ -366,6 +366,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   const MAX_LEDGER_BYTES = 512 * 1024; // 512 KiB write-side rotation threshold
+  const HARD_MAX_LEDGER_BYTES = 2 * 1024 * 1024; // 2 MiB hard limit
 
   function appendLedger(entry) {
     if (!ticketStoreExists(root, env)) return;
@@ -383,10 +384,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (lStat.isFile() && lStat.size + record.length > MAX_LEDGER_BYTES) {
             // Compact ledger: replay into compact state snapshot records
             const store = replayLedger();
-            if (store && Object.keys(store).length > 0) {
+            if (store && Object.keys(store).length > 0 && !store._corrupted) {
               const tmpLedger = `${ledgerPath}.tmp.${process.pid}.${Date.now()}`;
               const compactedLines = [];
               for (const [sid, s] of Object.entries(store)) {
+                if (sid === '_corrupted') continue;
                 compactedLines.push(JSON.stringify({
                   t: s.updatedAt ?? Date.now(),
                   type: 'snapshot',
@@ -408,6 +410,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               writeFileSync(tmpLedger, compactedLines.join('\n') + '\n', { mode: 0o600 });
               renameSync(tmpLedger, ledgerPath);
               return;
+            } else if (lStat.size > HARD_MAX_LEDGER_BYTES) {
+              // Compaction failed and file exceeds hard limit -> quarantine oversized ledger
+              const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
+              renameSync(ledgerPath, tombstone);
             }
           }
         } catch {}
@@ -678,8 +684,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     },
     validateBaseline(sessionID) {
       if (!sessionID) return true;
-      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
       const store = readStore();
+      if (store._corrupted && env?.ADLC_P4_ENFORCEMENT === '1') {
+        return false;
+      }
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
       const s = store[sessionID];
       if (snap) {
         if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store or evicted
@@ -828,6 +837,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return false;
       return lockFailures.has(sessionID);
     },
+    isCorrupted() {
+      const store = readStore();
+      return Boolean(store._corrupted);
+    },
   };
 }
 
@@ -866,6 +879,9 @@ export function decideBuildGate({ riskTier, degraded, bypass, sessionID } = {}) 
 export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env = process.env }) {
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { decision: 'allow', reason: 'enforcement inactive' };
+  }
+  if (tracker?.isCorrupted?.()) {
+    return { decision: 'deny', reason: 'Session tracking store is corrupted or unreadable under enforcement (fail closed).' };
   }
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');

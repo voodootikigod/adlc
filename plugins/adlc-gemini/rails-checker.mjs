@@ -94,7 +94,7 @@ const SHELL_TOOL_NAMES = new Set([
 
 export function hasCommandLineArgs(args) {
   if (!args || typeof args !== 'object') return false;
-  for (const key of ['CommandLine', 'command', 'cmd', 'code', 'script']) {
+  for (const key of ['CommandLine', 'command', 'cmd']) {
     if (typeof args[key] === 'string' && args[key].trim().length > 0) return true;
   }
   return false;
@@ -103,6 +103,8 @@ export function hasCommandLineArgs(args) {
 /**
  * True for a recognized shell/terminal execution tool (exact whole-name match
  * after normalization) or any tool carrying command-line execution arguments.
+ * Tools bearing arbitrary code/scripts (like python_exec, generate_code) are
+ * NOT classified as shells and must fail closed as opaque mutators.
  */
 export function isShellTool(name, args = null) {
   if (SHELL_TOOL_NAMES.has(normalizeToolName(name))) return true;

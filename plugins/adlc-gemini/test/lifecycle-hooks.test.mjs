@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -3808,6 +3808,51 @@ test('appendLedger: compacts snapshot records and accurately recovers session st
     assert.equal(freshTracker.depth(sessionID), 20);
     assert.equal(freshTracker.mutatingCalls(sessionID), 10);
     assert.equal(freshTracker.initialTicket(sessionID), 'T1');
+  } finally {
+    cleanup();
+  }
+});
+
+test('isShellTool: does not treat unknown code/script executors as trusted shells', async () => {
+  const { isShellTool } = await import('../rails-checker.mjs');
+  assert.equal(isShellTool('run_command', { CommandLine: 'ls' }), true);
+  assert.equal(isShellTool('bash', { command: 'echo 1' }), true);
+  assert.equal(isShellTool('python_exec', { code: 'print(1)' }), false);
+  assert.equal(isShellTool('generate_code', { script: 'main.py' }), false);
+  assert.equal(isShellTool('eval_js', { code: 'process.exit()' }), false);
+});
+
+test('checkBuildGate: corrupt sessions.json fails closed under enforcement', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const sessionID = 'sess-corrupted-test';
+    // Write corrupted sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    writeFileSync(sessionsFile, '{ invalid json');
+
+    const tracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID, tracker, root, env });
+    assert.equal(gate.decision, 'deny');
+    assert.match(gate.reason, /corrupted or unreadable/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('appendLedger: quarantines oversized unparseable ledger', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const sessionID = 'sess-oversized-test';
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    // Pre-populate with unparseable oversized data > 2 MiB
+    writeFileSync(ledgerFile, 'A'.repeat(3 * 1024 * 1024));
+
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(sessionID, { isMutating: true });
+
+    // Verify ledger was rotated/quarantined and new ledger is small
+    const stat = lstatSync(ledgerFile);
+    assert.ok(stat.size < 512 * 1024, `Expected new ledger < 512 KiB, got ${stat.size}`);
   } finally {
     cleanup();
   }
