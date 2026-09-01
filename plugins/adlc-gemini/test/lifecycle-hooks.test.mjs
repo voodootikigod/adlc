@@ -3503,3 +3503,56 @@ test('decide and onStop: mixed command/path arguments targeting frozen rails are
     cleanup();
   }
 });
+
+test('discoverRootFromTranscriptRecords: discovers root in headless mode using dest_file, outputPath, and nested payloads', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1', scope: ['src/**', 'dist/**'] });
+  const externalTranscript = join(tmpdir(), `headless-transcript-${Date.now()}.jsonl`);
+  try {
+    // 1. Transcript with dest_file and outputPath
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_file', args: { dest_file: join(root, 'src/app.js'), CodeContent: '// write' } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'bundle', args: { config: { outputPath: join(root, 'dist/bundle.js') } } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Done.' }),
+    ];
+    writeFileSync(externalTranscript, lines.join('\n') + '\n');
+
+    const headlessPayload = {
+      workspacePaths: [],
+      transcriptPath: externalTranscript,
+      conversationId: 'sess-headless-dest-file',
+    };
+
+    const headlessEnv = { ...env, PROJECT_ROOT: '', PWD: tmpdir() };
+
+    // PreInvocation discovers root from transcript records
+    const preRes = preInvocation(headlessPayload, { env: headlessEnv });
+    assert.ok(preRes);
+
+    const v1 = runFromStdin(JSON.stringify({ ...headlessPayload, toolCall: { name: 'write_file', args: { dest_file: join(root, 'src/app.js'), CodeContent: '// write' } } }), headlessEnv);
+    assert.equal(v1.allow_tool, true, v1.deny_reason);
+
+    const v2 = runFromStdin(JSON.stringify({ ...headlessPayload, toolCall: { name: 'bundle', args: { config: { outputPath: join(root, 'dist/bundle.js') } } } }), headlessEnv);
+    assert.equal(v2.allow_tool, true, v2.deny_reason);
+
+    const v3 = runFromStdin(JSON.stringify({ ...headlessPayload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), headlessEnv);
+    assert.equal(v3.allow_tool, true, v3.deny_reason);
+
+    // Stop completes successfully having resolved root from transcript
+    const stopRes = onStop(headlessPayload, { env: headlessEnv });
+    assert.equal(stopRes.decision, 'stop', stopRes.reason);
+  } finally {
+    try { unlinkSync(externalTranscript); } catch {}
+    cleanup();
+  }
+});

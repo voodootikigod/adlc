@@ -596,6 +596,31 @@ export function extractToolCalls(record) {
   return rawCalls.map(unwrapCall).filter(Boolean);
 }
 
+export function discoverRootFromTranscriptRecords(records, env = process.env) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  for (const r of records) {
+    const calls = extractToolCalls(r);
+    for (const c of calls) {
+      const paths = extractFilePaths({ toolCall: c });
+      const args = extractArgs({ toolCall: c });
+      const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory];
+      for (const cwd of cwdCandidates) {
+        if (typeof cwd === 'string' && cwd.trim()) {
+          paths.push(cwd.trim());
+        }
+      }
+      for (const p of paths) {
+        if (typeof p === 'string' && isAbsolute(p)) {
+          const canonical = canonicalizeExisting(p);
+          const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(p, env);
+          if (candidate) return candidate;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
     let root = resolveWorkspaceRoot(payload, env);
@@ -603,21 +628,7 @@ export function preInvocation(payload, { env = process.env } = {}) {
       const transcriptPath = resolveTranscriptPath({ payload, env });
       if (transcriptPath) {
         const records = parseTranscriptRecords(transcriptPath, { readFull: true });
-        for (const r of records) {
-          const calls = extractToolCalls(r);
-          for (const c of calls) {
-            const args = extractArgs({ toolCall: c });
-            const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
-            if (typeof p === 'string' && isAbsolute(p)) {
-              const candidate = findAdlcRoot(p, env);
-              if (candidate) {
-                root = candidate;
-                break;
-              }
-            }
-          }
-          if (root) break;
-        }
+        root = discoverRootFromTranscriptRecords(records, env);
       }
     }
     if (!root) return { injectSteps: [] };
@@ -788,21 +799,7 @@ export function onStop(payload, { env = process.env } = {}) {
     // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
     // discover root from absolute file paths in the transcript
     if (!root && records.length > 0) {
-      for (const r of records) {
-        const calls = extractToolCalls(r);
-        for (const c of calls) {
-          const args = extractArgs({ toolCall: c });
-          const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
-          if (typeof p === 'string' && isAbsolute(p)) {
-            const candidate = findAdlcRoot(p, env);
-            if (candidate) {
-              root = candidate;
-              break;
-            }
-          }
-        }
-        if (root) break;
-      }
+      root = discoverRootFromTranscriptRecords(records, env);
     }
 
     if (!root) {
