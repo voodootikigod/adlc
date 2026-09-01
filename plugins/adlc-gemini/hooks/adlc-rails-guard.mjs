@@ -69,7 +69,7 @@ export function findAdlcRoot(absPath) {
   let cur = absPath;
   const { root: fsRoot } = parse(cur);
   while (true) {
-    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json')) || existsSync(join(cur, '.adlc', 'current-ticket.json'))) return cur;
+    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) return cur;
     if (cur === fsRoot) return null;
     cur = dirname(cur);
   }

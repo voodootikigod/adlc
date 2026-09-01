@@ -2040,7 +2040,7 @@ test('onStop: rejects completion when shell indirectly removes .adlc/tickets.jso
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /Corrupt or unreadable ticket store|Trust-root files were corrupted/);
+    assert.match(res.reason, /Repository workspace root cannot be resolved|Corrupt or unreadable ticket store|Trust-root files were corrupted/);
   } finally {
     cleanup();
   }
