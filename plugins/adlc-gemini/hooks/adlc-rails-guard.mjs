@@ -340,6 +340,20 @@ function sanitizeGlobList(list, maxItems = 20) {
   return list.slice(0, maxItems).map(sanitizeGlobPattern).filter(Boolean);
 }
 
+export function extractToolCalls(record) {
+  if (!record || typeof record !== 'object') return [];
+  for (const k of ['toolCalls', 'tool_calls', 'calls']) {
+    if (Array.isArray(record[k])) return record[k];
+  }
+  for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
+    if (record[k] && typeof record[k] === 'object' && !Array.isArray(record[k])) return [record[k]];
+  }
+  if (typeof record.name === 'string' || typeof record.toolName === 'string' || typeof record.tool_name === 'string') {
+    return [record];
+  }
+  return [];
+}
+
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
     let root = resolveWorkspaceRoot(payload, env);
@@ -348,11 +362,9 @@ export function preInvocation(payload, { env = process.env } = {}) {
       if (transcriptPath) {
         const records = parseTranscriptRecords(transcriptPath);
         for (const r of records) {
-          const calls = Array.isArray(r.toolCalls) ? r.toolCalls
-            : (Array.isArray(r.tool_calls) ? r.tool_calls
-            : (r.toolCall ? [r.toolCall] : []));
+          const calls = extractToolCalls(r);
           for (const c of calls) {
-            const args = c?.args ?? c?.arguments ?? {};
+            const args = extractArgs({ toolCall: c });
             const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
             if (typeof p === 'string' && isAbsolute(p)) {
               const candidate = findAdlcRoot(p);
@@ -422,9 +434,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // Reject newlines, shell chaining, pipes, redirects, substitutions, or operators that can mask test failures
   if (/[\r\n;&|<>\$`]/.test(trimmed)) return false;
 
-  // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, and module preload/loader options
-  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
-  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=)/i.test(trimmed)) return false;
+  // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, destination/reporter flags, and module preload/loader options
+  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--test-reporter-destination|--output|--output-dir|--output-directory|--destination|-o|--grep|-g|--require|--import|--loader|--experimental-loader|-r)\b/i.test(trimmed)) return false;
+  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=|--test-reporter-destination=|--output=|--destination=)/i.test(trimmed)) return false;
 
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
@@ -499,11 +511,9 @@ export function onStop(payload, { env = process.env } = {}) {
     // discover root from absolute file paths in the transcript
     if (!root && records.length > 0) {
       for (const r of records) {
-        const calls = Array.isArray(r.toolCalls) ? r.toolCalls
-          : (Array.isArray(r.tool_calls) ? r.tool_calls
-          : (r.toolCall ? [r.toolCall] : []));
+        const calls = extractToolCalls(r);
         for (const c of calls) {
-          const args = c?.args ?? c?.arguments ?? {};
+          const args = extractArgs({ toolCall: c });
           const p = args.TargetFile ?? args.AbsolutePath ?? args.FilePath ?? args.Cwd ?? args.cwd;
           if (typeof p === 'string' && isAbsolute(p)) {
             const candidate = findAdlcRoot(p);
@@ -579,15 +589,12 @@ export function onStop(payload, { env = process.env } = {}) {
         };
       }
 
-      const calls = Array.isArray(r.toolCalls) ? r.toolCalls
-        : (Array.isArray(r.tool_calls) ? r.tool_calls
-        : (r.toolCall ? [r.toolCall]
-        : (r.name ? [r] : [])));
+      const calls = extractToolCalls(r);
 
       for (const c of calls) {
         callSeq++;
         const currentCallIdx = callSeq;
-        const name = c?.name ?? c?.toolName ?? '';
+        const name = extractToolName({ toolCall: c }) || (c?.name ?? c?.toolName ?? c?.tool_name ?? '');
         const args = extractArgs({ toolCall: c });
         const filePaths = extractFilePaths({ toolCall: c });
         const isMutating = classifyTool(name) === 'mutating'

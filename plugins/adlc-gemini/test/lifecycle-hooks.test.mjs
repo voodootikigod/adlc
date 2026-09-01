@@ -1260,3 +1260,66 @@ test('onStop: rejects tampering with transcript file', () => {
     cleanup();
   }
 });
+
+test('onStop: rejects node --test --test-reporter-destination', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }],
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test --test-reporter-destination=package.json' } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-dest-flag',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: recognizes tool_call and tool_name snake_case envelopes in transcript', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      tool_call: {
+        tool_name: 'write_to_file',
+        args: { TargetFile: 'src/feature.js' },
+      },
+    }),
+    JSON.stringify({
+      tool_call: {
+        tool_name: 'run_command',
+        args: { CommandLine: 'node --test' },
+      },
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-snake-case',
+    };
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'stop');
+  } finally {
+    cleanup();
+  }
+});
