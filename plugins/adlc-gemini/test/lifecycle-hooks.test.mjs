@@ -4182,6 +4182,65 @@ test('onStop: rejects Stop when sessions.json contains empty object {} and trans
   }
 });
 
+test('onStop: recognizes functionCall envelope with mutations and requires test verification', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        functionCall: {
+          name: 'write_to_file',
+          args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// edit' },
+        },
+      }),
+      JSON.stringify({ content: 'Attempting stop without running tests' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-function-call',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects transcript record with unrecognized tool envelope under enforcement', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        invalid_tool_envelope: 12345,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-bad-envelope',
+    };
+    preInvocation(payload, { env });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /schema corruption detected/i);
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 
 

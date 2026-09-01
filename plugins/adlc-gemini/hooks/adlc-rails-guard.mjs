@@ -212,8 +212,12 @@ function isToolPayload(p) {
 
 export function extractCommandString(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return '';
-  for (const key of ['CommandLine', 'command', 'cmd', 'code', 'script']) {
-    if (typeof args[key] === 'string' && args[key].trim().length > 0) return args[key].trim();
+  for (const [key, val] of Object.entries(args)) {
+    if (typeof val === 'string' && val.trim().length > 0) {
+      if (/(command|cmd|exec|shell|terminal|script|code|eval|run)/i.test(key)) {
+        return val.trim();
+      }
+    }
   }
   for (const val of Object.values(args)) {
     if (val && typeof val === 'object') {
@@ -571,11 +575,11 @@ function sanitizeGlobList(list, maxItems = 20) {
 export function unwrapCall(c) {
   let cur = c;
   while (cur && typeof cur === 'object') {
-    if (typeof cur.name === 'string' || typeof cur.toolName === 'string' || typeof cur.tool_name === 'string') {
+    if (typeof cur.name === 'string' || typeof cur.toolName === 'string' || typeof cur.tool_name === 'string' || typeof cur.functionName === 'string' || typeof cur.function_name === 'string') {
       return cur;
     }
     let unwrapped = false;
-    for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
+    for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload', 'functionCall', 'function_call', 'invocation', 'action', 'toolUse', 'tool_use']) {
       if (cur[k] && typeof cur[k] === 'object' && !Array.isArray(cur[k])) {
         cur = cur[k];
         unwrapped = true;
@@ -590,21 +594,27 @@ export function unwrapCall(c) {
 export function extractToolCalls(record) {
   if (!record || typeof record !== 'object') return [];
   let rawCalls = [];
-  for (const k of ['toolCalls', 'tool_calls', 'calls']) {
+  for (const k of [
+    'toolCalls', 'tool_calls', 'calls', 'actions', 'functionCalls', 'function_calls',
+    'invocations', 'toolUses', 'tool_uses', 'parts', 'steps',
+  ]) {
     if (Array.isArray(record[k])) {
       rawCalls = record[k];
       break;
     }
   }
   if (rawCalls.length === 0) {
-    for (const k of ['toolCall', 'tool_call', 'call', 'tool', 'payload']) {
+    for (const k of [
+      'toolCall', 'tool_call', 'call', 'tool', 'payload', 'action',
+      'functionCall', 'function_call', 'invocation', 'toolUse', 'tool_use',
+    ]) {
       if (record[k] && typeof record[k] === 'object' && !Array.isArray(record[k])) {
         rawCalls = [record[k]];
         break;
       }
     }
   }
-  if (rawCalls.length === 0 && (typeof record.name === 'string' || typeof record.toolName === 'string' || typeof record.tool_name === 'string')) {
+  if (rawCalls.length === 0 && (typeof record.name === 'string' || typeof record.toolName === 'string' || typeof record.tool_name === 'string' || typeof record.functionName === 'string' || typeof record.function_name === 'string')) {
     rawCalls = [record];
   }
   return rawCalls.map(unwrapCall).filter(Boolean);
@@ -960,6 +970,15 @@ export function onStop(payload, { env = process.env } = {}) {
       }
 
       const calls = extractToolCalls(r);
+      if (calls.length === 0 && enforcing) {
+        const hasCallKey = Object.keys(r).some((k) => /(tool|function|action|invocation)/i.test(k));
+        if (hasCallKey) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Transcript record contains unrecognized tool envelope — schema corruption detected.',
+          };
+        }
+      }
 
       for (const c of calls) {
         callSeq++;

@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, fstatSync, constants as fsConstants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
@@ -379,13 +379,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     if (!existsSync(ledgerPath)) return { lastSeq: 0, lastMac: '0'.repeat(64) };
     let fd;
     try {
-      const stat = lstatSync(ledgerPath);
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      const stat = fstatSync(fd);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > HARD_MAX_LEDGER_BYTES) return null;
       if (stat.size === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
 
       const readSize = Math.min(stat.size, 64 * 1024);
       const buf = Buffer.alloc(readSize);
-      fd = openSync(ledgerPath, 'r');
       readSync(fd, buf, 0, readSize, stat.size - readSize);
       const rawTail = buf.toString('utf8');
       const lines = rawTail.split('\n').filter(Boolean);
@@ -505,15 +505,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   function replayLedger() {
+    let fd;
     try {
       if (!existsSync(ledgerPath)) return null;
-      const stat = lstatSync(ledgerPath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 10 * 1024 * 1024) {
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > HARD_MAX_LEDGER_BYTES) {
         const s = Object.create(null);
         s._corrupted = true;
         return s;
       }
-      const raw = readFileSync(ledgerPath, 'utf8');
+      if (stat.size === 0) return null;
+      const buf = Buffer.alloc(stat.size);
+      readSync(fd, buf, 0, stat.size, 0);
+      const raw = buf.toString('utf8');
       const lines = raw.split('\n').filter(Boolean);
       if (lines.length === 0) return null;
       const store = Object.create(null);
@@ -569,13 +574,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (ev.initialTranscript) s.initialTranscript = ev.initialTranscript;
           if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
           if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
-        } else if (ev.type === 'recordActiveTicket') {
-          if (!s.initialActiveTicket && ev.activeTicketId) {
-            s.initialActiveTicket = ev.activeTicketId;
+        } else if (ev.type === 'recordActiveTicket' || ev.type === 'activeTicket') {
+          if (!s.initialActiveTicket && (ev.activeTicketId || ev.ticketId)) {
+            s.initialActiveTicket = ev.activeTicketId || ev.ticketId;
             s.initialStoreHash = ev.storeHash ?? null;
-            if (ev.initialPointer) s.initialPointer = ev.initialPointer;
+            if (ev.initialPointer || ev.pointer) s.initialPointer = ev.initialPointer || ev.pointer;
           }
-        } else if (ev.type === 'recordToolCall') {
+        } else if (ev.type === 'recordToolCall' || ev.type === 'toolCall') {
           s.depth = (s.depth ?? 0) + 1;
           s.totalCalls = (s.totalCalls ?? 0) + 1;
           if (ev.isMutating) s.mutatingCalls = (s.mutatingCalls ?? 0) + 1;
@@ -583,9 +588,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (s.depth > 0) s.depth -= 1;
           if (s.totalCalls > 0) s.totalCalls -= 1;
           if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
-        } else if (ev.type === 'recordEdit') {
+        } else if (ev.type === 'recordEdit' || ev.type === 'edit') {
           if (ev.filePath) {
-            s.edits.push(`Editing ${ev.filePath}`);
+            const bp = typeof ev.filePath === 'string' && ev.filePath.length > 512 ? ev.filePath.slice(0, 512) : ev.filePath;
+            s.edits.push(`Editing ${bp}`);
             if (s.edits.length > 200) s.edits = s.edits.slice(-200);
           }
         } else if (ev.type === 'compact') {
@@ -610,24 +616,27 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const s = Object.create(null);
       s._corrupted = true;
       return s;
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
     }
   }
 
   function readStore() {
+    let fd;
     try {
       if (existsSync(storePath)) {
-        const stat = lstatSync(storePath);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+        fd = openSync(storePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.isSymbolicLink() || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > 1024 * 1024) {
           const s = Object.create(null);
           s._corrupted = true;
           return s;
         }
-        const raw = readTextFileBounded(storePath, stat.size);
-        if (!raw) {
-          const s = Object.create(null);
-          s._corrupted = true;
-          return s;
-        }
+        const buf = Buffer.alloc(stat.size);
+        readSync(fd, buf, 0, stat.size, 0);
+        const raw = buf.toString('utf8');
         let parsed;
         try {
           parsed = JSON.parse(raw);
@@ -666,6 +675,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const s = Object.create(null);
       s._corrupted = true;
       return s;
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
     }
     return Object.create(null);
   }
@@ -678,11 +691,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const keys = Object.keys(data).filter((k) => k !== '_corrupted');
       for (const k of keys) {
         if (data[k] && typeof data[k] === 'object') {
-          if (Array.isArray(data[k].edits) && data[k].edits.length > 200) {
-            data[k].edits = data[k].edits.slice(-200);
+          if (Array.isArray(data[k].edits)) {
+            data[k].edits = data[k].edits
+              .filter((e) => typeof e === 'string')
+              .map((e) => (e.length > 512 ? e.slice(0, 512) : e))
+              .slice(-200);
           }
-          if (Array.isArray(data[k].warned) && data[k].warned.length > 20) {
-            data[k].warned = data[k].warned.slice(-20);
+          if (Array.isArray(data[k].warned)) {
+            data[k].warned = data[k].warned
+              .filter((w) => typeof w === 'string')
+              .map((w) => (w.length > 256 ? w.slice(0, 256) : w))
+              .slice(-20);
           }
           data[k].baselineSig = computeBaselineSig(k, data[k], root, env);
         }
@@ -699,8 +718,23 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         for (const k of toRemove) delete data[k];
       }
 
+      let serialized = JSON.stringify(data, null, 2);
+      if (serialized.length > 512 * 1024) {
+        const sorted = keys.filter((k) => k !== currentSessionID).sort((a, b) => {
+          const aEnded = Boolean(data[a]?.ended);
+          const bEnded = Boolean(data[b]?.ended);
+          if (aEnded !== bEnded) return aEnded ? -1 : 1;
+          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
+        });
+        for (const k of sorted) {
+          delete data[k];
+          serialized = JSON.stringify(data, null, 2);
+          if (serialized.length <= 512 * 1024) break;
+        }
+      }
+
       const tmpPath = `${storePath}.tmp.${process.pid}.${Date.now()}`;
-      writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      writeFileSync(tmpPath, serialized);
       renameSync(tmpPath, storePath);
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to write session store: ${err.message}`);
@@ -959,8 +993,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
         s.edits = s.edits ?? [];
         s.warned = s.warned ?? [];
-        if (filePath) {
-          s.edits.push(`Editing ${filePath}`);
+        if (filePath && typeof filePath === 'string') {
+          const bp = filePath.length > 512 ? filePath.slice(0, 512) : filePath;
+          s.edits.push(`Editing ${bp}`);
           if (s.edits.length > 200) s.edits = s.edits.slice(-200);
         }
 

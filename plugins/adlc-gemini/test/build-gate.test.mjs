@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -598,11 +598,10 @@ test('ledger: multi-session compaction maintains exact ledgerSeq and validation 
     tracker.recordToolCall('sess-A', { isMutating: true });
     tracker.recordToolCall('sess-B', { isMutating: true });
 
-    // Add large valid edit payload to cross the 512 KiB compaction threshold
-    tracker.recordEdit('sess-A', 'x'.repeat(520 * 1024));
-
-    // Record tool call in sess-A triggering compaction
-    tracker.recordToolCall('sess-A', { isMutating: true });
+    // Add valid edits across entries to cross the 512 KiB compaction threshold
+    for (let i = 0; i < 1200; i++) {
+      tracker.recordToolCall('sess-A', { isMutating: true });
+    }
 
     // Both sessions must validate cleanly after compaction!
     assert.equal(tracker.validateLedger('sess-A'), true, 'sess-A must validate after compaction');
@@ -632,6 +631,31 @@ test('rails: mutating tool with command argument and no path fails closed as opa
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('store: oversized filePath in recordEdit is bounded and does not corrupt sessions.json', () => {
+  const root = mkdtempSync(join(tmpdir(), 'oversized-edit-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket('sess-oversized', 'T1');
+
+    // Submit 2 MiB string to recordEdit
+    tracker.recordEdit('sess-oversized', 'a'.repeat(2 * 1024 * 1024));
+
+    // Store must remain uncorrupted and well within 512 KiB
+    const storeStat = statSync(join(root, '.adlc', 'sessions.json'));
+    assert.ok(storeStat.size < 50 * 1024, `store size ${storeStat.size} must be bounded`);
+    assert.equal(tracker.isCorrupted(), false);
+    assert.equal(tracker.validateBaseline('sess-oversized'), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 
 

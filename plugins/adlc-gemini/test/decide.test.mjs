@@ -230,7 +230,25 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(v9.allow_tool, false);
   assert.equal(v9.decision, 'deny');
   assert.match(v9.deny_reason, /shell modification of ticket store or trust-root rails/);
+
+  // camelCase command fields in unclassified executors fail closed
+  const v10 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'custom_runner', args: { shellCommand: "npm install" } },
+  }, { env: ENF });
+  assert.equal(v10.allow_tool, false);
+  assert.equal(v10.decision, 'deny');
+  assert.match(v10.deny_reason, /uninspectable arguments/);
+
+  const v11 = decide({
+    workspacePaths: [root],
+    toolCall: { name: 'task_runner', args: { commandText: "cargo test" } },
+  }, { env: ENF });
+  assert.equal(v11.allow_tool, false);
+  assert.equal(v11.decision, 'deny');
+  assert.match(v11.deny_reason, /uninspectable arguments/);
 });
+
 
 
 

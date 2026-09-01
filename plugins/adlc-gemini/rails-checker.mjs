@@ -96,7 +96,7 @@ const SHELL_TOOL_NAMES = new Set([
 export function hasCommandLineArgs(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
-    if (/^(CommandLine|command|cmd|command_line|exec|script_cmd)$/i.test(key) || /(^|_)(command|cmd)($|_)/i.test(key)) {
+    if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCommandLineArgs(val, depth + 1)) {
@@ -109,7 +109,7 @@ export function hasCommandLineArgs(args, depth = 0) {
 export function hasCodeExecutionArgs(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
-    if (/(code|script|eval|expression|program|snippet|inline)/i.test(key)) {
+    if (/(code|script|eval|expression|program|snippet|inline|payload)/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCodeExecutionArgs(val, depth + 1)) {
