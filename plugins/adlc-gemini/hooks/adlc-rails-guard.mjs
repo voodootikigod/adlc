@@ -462,9 +462,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   // Reject newlines, shell chaining, pipes, redirects, substitutions, tilde expansion, or operators that can mask test failures
   if (/[\r\n;&|<>\$`~]/.test(trimmed)) return false;
 
-  // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, destination/reporter flags, module preload/loader options, setup/teardown code, watch mode, snapshot updates, and coverage options
-  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--test-reporter-destination|--output|--output-dir|--output-directory|--destination|-o|--grep|-g|--require|--import|--loader|--experimental-loader|-r|--test-global-setup|--test-global-teardown|--test-update-snapshots|--test-coverage|--experimental-test-coverage|--watch|--watch-mode|--run)\b/i.test(trimmed)) return false;
-  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=|--test-reporter-destination=|--output=|--destination=|--test-global-setup=|--test-global-teardown=|--test-coverage=|--experimental-test-coverage=)/i.test(trimmed)) return false;
+  // Reject directory-redirecting flags, test-filtering/skipping flags, shard flags, destination/reporter flags, module preload/loader options, setup/teardown code, watch mode, snapshot updates, workspace narrowing, and coverage options
+  if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--test-reporter-destination|--output|--output-dir|--output-directory|--destination|-o|--grep|-g|--require|--import|--loader|--experimental-loader|-r|--test-global-setup|--test-global-teardown|--test-update-snapshots|--test-coverage|--experimental-test-coverage|--watch|--watch-mode|--run|-w|--workspace|--workspaces|--include-workspace-root)\b/i.test(trimmed)) return false;
+  if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=|--test-reporter-destination=|--output=|--destination=|--test-global-setup=|--test-global-teardown=|--test-coverage=|--experimental-test-coverage=|--workspace=)/i.test(trimmed)) return false;
 
   // Reject device paths like /dev/null, /dev/zero
   if (/(^|\s)\/dev\//i.test(trimmed)) return false;
@@ -506,9 +506,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // If package.json or shell mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
   if (!packageManifestMutated && !shellMutated) {
-    if (/^(npm\s+(test|run\s+(test|preflight|check)))(\s+|$)/i.test(trimmed)) return true;
-    if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)(\s+|$)/i.test(trimmed)) return true;
-    if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
+    if (/^(npm\s+(test|run\s+(test|preflight|check)))\s*$/i.test(trimmed)) return true;
+    if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)\s*$/i.test(trimmed)) return true;
+    if (/^npx\s+--no-install\s+(mocha|jest|vitest)\s*$/i.test(trimmed)) return true;
   }
 
   // Strict immutable verification runners: require full-suite execution from repository root with explicit CWD
@@ -523,8 +523,8 @@ export function isReadonlyCommand(cmd) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
-  // Any shell redirection, chaining, or piping could mutate state
-  if (/[\r\n;&|<>]/.test(trimmed)) return false;
+  // Any shell redirection, chaining, piping, substitution, assignment, grouping, or operator could mutate state
+  if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
   // Reject output redirection flags (e.g. git diff --output=file)
   if (/(^|\s)(--output|-o|--output-directory)\b/i.test(trimmed) || /--output=/i.test(trimmed)) return false;
   return /^(git\s+(status|diff|log|branch|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date)(\s+|$)/i.test(trimmed);
