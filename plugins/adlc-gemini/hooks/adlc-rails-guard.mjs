@@ -521,14 +521,13 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
     if (/^npx\s+--no-install\s+(mocha|jest|vitest)(\s+|$)/i.test(trimmed)) return true;
   }
 
-  // Strict immutable verification runners: require full-suite execution from repository root
+  // Strict immutable verification runners: require full-suite execution from repository root with explicit CWD
   if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
     const cwd = toolArgs?.Cwd ?? toolArgs?.cwd;
-    if (typeof cwd === 'string' && cwd) {
-      const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-      const realCwd = realpathOr(absCwd);
-      if (!realRoot || relative(realRoot, realCwd) !== '') return false;
-    }
+    if (typeof cwd !== 'string' || !cwd) return false;
+    const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
+    const realCwd = realpathOr(absCwd);
+    if (!realRoot || relative(realRoot, realCwd) !== '') return false;
     return true;
   }
 
@@ -639,6 +638,16 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (isMutating) {
           lastMutationCallIdx = currentCallIdx;
+          if (filePaths.length === 0) {
+            packageManifestMutated = true;
+            const argsStr = JSON.stringify(args ?? {});
+            if (/(^|[=\s"';,/])(\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(argsStr)) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
+              };
+            }
+          }
           if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
             packageManifestMutated = true;
           }

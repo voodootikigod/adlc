@@ -18,6 +18,21 @@ function failSafe(reason) {
   });
 }
 
+var MAX_STDIN_BYTES = 10 * 1024 * 1024; // 10 MiB limit
+async function readStdinBounded(maxBytes) {
+  var limit = typeof maxBytes === 'number' ? maxBytes : MAX_STDIN_BYTES;
+  var chunks = [];
+  var total = 0;
+  for await (var c of process.stdin) {
+    total += c.length;
+    if (total > limit) {
+      throw new Error('payload exceeds maximum allowed stdin size');
+    }
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 var subcmd = process.argv[2];
 if (subcmd === 'status' || subcmd === 'doctor') {
   var modPath = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
@@ -28,16 +43,14 @@ if (subcmd === 'status' || subcmd === 'doctor') {
     console.error('[ADLC ' + subcmd + ' error]', (err && err.message) || err);
     process.exit(1);
   });
-} else if (subcmd === 'preinvocation') {
+} else if (subcmd === 'preinvocation' || subcmd === 'pre-invocation') {
   process.on('uncaughtException', function () { emit({ injectSteps: [] }); });
   process.on('unhandledRejection', function () { emit({ injectSteps: [] }); });
   var modPre = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(modPre).href);
-      var chunks = [];
-      for await (var c of process.stdin) chunks.push(c);
-      var raw = Buffer.concat(chunks).toString('utf8');
+      var raw = await readStdinBounded();
       var payload = raw ? JSON.parse(raw) : {};
       emit(adapter.preInvocation(payload, { env: process.env }));
     } catch (_) { emit({ injectSteps: [] }); }
@@ -53,9 +66,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(modStop).href);
-      var chunks = [];
-      for await (var c of process.stdin) chunks.push(c);
-      var raw = Buffer.concat(chunks).toString('utf8');
+      var raw = await readStdinBounded();
       var payload = raw ? JSON.parse(raw) : {};
       emit(adapter.onStop(payload, { env: process.env }));
     } catch (_) { stopFail(); }
@@ -68,9 +79,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(mod).href);
-      var chunks = [];
-      for await (var c of process.stdin) chunks.push(c);
-      var raw = Buffer.concat(chunks).toString('utf8');
+      var raw = await readStdinBounded();
       emit(adapter.runFromStdin(raw, process.env));
     } catch (e) { failSafe('load/exec ' + (e && e.message)); }
   })();
