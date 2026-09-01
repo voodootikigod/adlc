@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, openSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -34,6 +34,25 @@ function isPidAlive(pid) {
     return process.kill(pid, 0);
   } catch (err) {
     return err.code !== 'ESRCH';
+  }
+}
+
+export function readTranscriptPrefixBounded(filePath, maxBytes = 64 * 1024) {
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0);
+    return {
+      prefixHash: createHash('sha256').update(buf.subarray(0, bytesRead)).digest('hex'),
+      prefixLength: bytesRead,
+    };
+  } catch {
+    return { prefixHash: null, prefixLength: 0 };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
   }
 }
 
@@ -267,23 +286,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
       try {
         const stat = lstatSync(transcriptPath);
-        let hash = null;
-        let byteLength = 0;
-        try {
-          const raw = readFileSync(transcriptPath, 'utf8');
-          hash = createHash('sha256').update(raw).digest('hex');
-          byteLength = Buffer.byteLength(raw, 'utf8');
-        } catch {}
+        const { prefixHash, prefixLength } = readTranscriptPrefixBounded(transcriptPath);
         withLock(sessionID, () => {
           const store = readStore();
           const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
           if (!s.initialTranscript) {
-            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash, byteLength };
+            s.initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, prefixHash, prefixLength, size: stat.size };
           }
-          if (hash) {
-            s.lastTranscriptHash = hash;
-            s.lastTranscriptByteLength = byteLength;
-          }
+          s.lastTranscriptSize = stat.size;
           s.updatedAt = Date.now();
           store[sessionID] = s;
           writeStore(store);

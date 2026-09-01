@@ -17,7 +17,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -611,11 +611,20 @@ export function onStop(payload, { env = process.env } = {}) {
             reason: 'ADLC Rails-Guard: Session transcript file identity (inode/device) changed during session.',
           };
         }
-        if (initialTranscript.byteLength && curStat.size < initialTranscript.byteLength) {
+        if (initialTranscript.size && curStat.size < initialTranscript.size) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
+        }
+        if (initialTranscript.prefixHash && initialTranscript.prefixLength > 0) {
+          const curPrefix = readTranscriptPrefixBounded(transcriptPath, initialTranscript.prefixLength);
+          if (curPrefix.prefixHash !== initialTranscript.prefixHash) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Session transcript prefix content was modified during session.',
+            };
+          }
         }
       } catch {
         return {

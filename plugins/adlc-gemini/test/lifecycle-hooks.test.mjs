@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { preInvocation, onStop, findAdlcRoot } from '../hooks/adlc-rails-guard.mjs';
+import { readTranscriptPrefixBounded } from '../build-gate-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
@@ -2280,6 +2281,61 @@ test('onStop: rejects Stop when transcript file shrinks in size (in-place trunca
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /Session transcript file size shrank/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects Stop when transcript prefix content is rewritten in place without changing file size', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const record1 = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js') } }],
+  });
+  const record2 = JSON.stringify({
+    type: 'PLANNER_RESPONSE',
+    tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+    exit_code: 0,
+  });
+  const initialContent = `${record1}\n${record2}\n`;
+  writeFileSync(transcriptFile, initialContent);
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-prefix-tamper',
+    };
+    // Initialize session state with initial prefix
+    preInvocation(payload, { env });
+
+    // Rewrite transcript with different prefix but pad to exact same byte length
+    const forgedRecord1 = JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, 'src/app.js') } }],
+    });
+    let forgedContent = `${forgedRecord1}\n${record2}\n`;
+    if (forgedContent.length < initialContent.length) {
+      forgedContent = forgedContent + ' '.repeat(initialContent.length - forgedContent.length);
+    }
+    writeFileSync(transcriptFile, forgedContent);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript prefix content was modified/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('readTranscriptPrefixBounded: reads and hashes up to maxBytes prefix cleanly', () => {
+  const { root, cleanup } = setupTempRepo();
+  const testFile = join(root, 'test-prefix.txt');
+  writeFileSync(testFile, 'Hello World! Bounded prefix reading test content.');
+  try {
+    const { prefixHash, prefixLength } = readTranscriptPrefixBounded(testFile, 12);
+    assert.equal(prefixLength, 12);
+    assert.ok(prefixHash && typeof prefixHash === 'string');
   } finally {
     cleanup();
   }
