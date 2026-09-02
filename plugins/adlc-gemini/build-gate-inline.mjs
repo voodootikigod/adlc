@@ -216,6 +216,39 @@ export function getMasterKeyRaw(env = process.env) {
   return null;
 }
 
+export function rotateMasterKey(env = process.env) {
+  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+  const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
+
+  try {
+    if (existsSync(masterKeyFile)) {
+      unlinkSync(masterKeyFile);
+    }
+    if (existsSync(legacyMasterKeyFile)) {
+      unlinkSync(legacyMasterKeyFile);
+    }
+  } catch (err) {
+    console.error(`[adlc-rails-guard] Warning: failed to unlink compromised master key file: ${err.message}`);
+  }
+
+  loadedSecretCache.clear();
+  console.error('[adlc-rails-guard] CRITICAL SECURITY ALERT: Master key disclosure detected! Global master key revoked, rotated, and session invalidated.');
+
+  try {
+    if (!existsSync(adlcPrivateDir)) {
+      mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
+    }
+    const newKey = randomBytes(32).toString('hex');
+    writeFileSync(masterKeyFile, newKey, { mode: 0o600, flag: 'w' });
+    return newKey;
+  } catch (err) {
+    console.error(`[adlc-rails-guard] Warning: failed to regenerate rotated master key: ${err.message}`);
+    return null;
+  }
+}
+
 export function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 

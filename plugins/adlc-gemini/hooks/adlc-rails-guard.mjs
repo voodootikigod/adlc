@@ -36,7 +36,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -1150,11 +1150,18 @@ export function postToolUse(payload, { env = process.env } = {}) {
       const secret = getOrCreateSessionSecret(root, env);
       const masterKey = getMasterKeyRaw(env);
       const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
-      if ((secret && rawOutput.includes(secret)) || (masterKey && rawOutput.includes(masterKey))) {
+      if (masterKey && rawOutput.includes(masterKey)) {
+        rotateMasterKey(env);
+        tracker.invalidateSession?.(sessionID);
+      } else if (secret && rawOutput.includes(secret)) {
         tracker.invalidateSession?.(sessionID);
       }
     }
-  } catch {}
+  } catch (err) {
+    if (env?.ADLC_P4_ENFORCEMENT === '1') {
+      return { decision: 'deny', allow_tool: false, reason: `ADLC Rails-Guard: Internal error in postToolUse under enforcement: ${err?.message ?? err}` };
+    }
+  }
   return { decision: 'allow', allow_tool: true };
 }
 
@@ -1338,7 +1345,15 @@ export function onStop(payload, { env = process.env } = {}) {
       const secret = getOrCreateSessionSecret(root, env);
       const masterKey = getMasterKeyRaw(env);
       const recordStr = JSON.stringify(r ?? {});
-      if ((secret && recordStr.includes(secret)) || (masterKey && recordStr.includes(masterKey))) {
+      if (masterKey && recordStr.includes(masterKey)) {
+        rotateMasterKey(env);
+        tracker.invalidateSession?.(sessionID);
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Master key disclosure detected in transcript. Global key revoked and rotated, session permanently invalidated.',
+        };
+      }
+      if (secret && recordStr.includes(secret)) {
         tracker.invalidateSession?.(sessionID);
         return {
           decision: 'continue',

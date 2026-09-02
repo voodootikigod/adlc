@@ -5490,6 +5490,9 @@ test('postToolUse and onStop: invalidate session if raw master key content is di
     const tracker = createPersistentTracker(root, env);
     assert.equal(tracker.isInvalidated(cid), true, 'Expected session to be marked invalidated');
 
+    const rotatedKey = getMasterKeyRaw(env);
+    assert.notEqual(rotatedKey, rawKey, 'Expected master key to be rotated upon disclosure');
+
     // onStop must reject due to secret disclosure
     const lines = [
       JSON.stringify({
@@ -5501,10 +5504,38 @@ test('postToolUse and onStop: invalidate session if raw master key content is di
     writeFileSync(transcriptFile, lines.join('\n') + '\n');
     const stopRes = onStop(payload, { env });
     assert.equal(stopRes.decision, 'continue');
-    assert.match(stopRes.reason, /Secret disclosure/i);
+    assert.match(stopRes.reason, /(Secret disclosure|Master key disclosure)/i);
   } finally {
     cleanup();
   }
+});
+
+test('adlc-rails-guard.cjs posttooluse: fails closed under enforcement on error or oversized stdin', () => {
+  const cjsPath = join(__dirname, '../hooks/adlc-rails-guard.cjs');
+
+  // 1. Oversized stdin under enforcement fails closed
+  const res1 = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+    input: 'x'.repeat(1024),
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_MAX_STDIN_BYTES: '512' },
+    encoding: 'utf8',
+  });
+  assert.equal(res1.status, 0);
+  const out1 = JSON.parse(res1.stdout);
+  assert.equal(out1.decision, 'deny');
+  assert.equal(out1.allow_tool, false);
+  assert.match(out1.reason, /maximum allowed stdin size|Internal error/i);
+
+  // 2. Adapter error under enforcement fails closed
+  const res2 = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+    input: JSON.stringify({}),
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
+    encoding: 'utf8',
+  });
+  assert.equal(res2.status, 0);
+  const out2 = JSON.parse(res2.stdout);
+  assert.equal(out2.decision, 'deny');
+  assert.equal(out2.allow_tool, false);
+  assert.match(out2.reason, /Internal error/i);
 });
 
 

@@ -18,7 +18,7 @@ function failSafe(reason) {
   });
 }
 
-var MAX_STDIN_BYTES = 10 * 1024 * 1024; // 10 MiB limit
+var MAX_STDIN_BYTES = parseInt(process.env.ADLC_MAX_STDIN_BYTES, 10) || (25 * 1024 * 1024); // 25 MiB default or configurable
 async function readStdinBounded(maxBytes) {
   var limit = typeof maxBytes === 'number' ? maxBytes : MAX_STDIN_BYTES;
   var chunks = [];
@@ -56,8 +56,12 @@ if (subcmd === 'status' || subcmd === 'doctor') {
     } catch (_) { emit({ injectSteps: [] }); }
   })();
 } else if (subcmd === 'posttooluse' || subcmd === 'post-tool-use') {
-  process.on('uncaughtException', function () { emit({ decision: 'allow', allow_tool: true }); });
-  process.on('unhandledRejection', function () { emit({ decision: 'allow', allow_tool: true }); });
+  var postFail = function (msg) {
+    var enf = process.env.ADLC_P4_ENFORCEMENT === '1';
+    emit(enf ? { decision: 'deny', allow_tool: false, reason: 'ADLC Rails-Guard: Internal error during PostToolUse hook under enforcement (' + (msg || 'unknown error') + ').' } : { decision: 'allow', allow_tool: true });
+  };
+  process.on('uncaughtException', function (e) { postFail('uncaught ' + (e && e.message)); });
+  process.on('unhandledRejection', function (e) { postFail('rejection ' + (e && e.message)); });
   var modPost = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
   (async function () {
     try {
@@ -65,7 +69,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
       var raw = await readStdinBounded();
       var payload = raw ? JSON.parse(raw) : {};
       emit(adapter.postToolUse(payload, { env: process.env }));
-    } catch (_) { emit({ decision: 'allow', allow_tool: true }); }
+    } catch (e) { postFail(e && e.message); }
   })();
 } else if (subcmd === 'stop') {
   var stopFail = function () {
