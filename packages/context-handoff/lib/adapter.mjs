@@ -227,6 +227,14 @@ export function classifyHandoffPath(root, rel) {
  * and a scanner that keys on the variable NAME is trivially evaded by
  * renaming it.
  *
+ * A `sed` command's `w` (write) directive accepts its filename glued directly
+ * on with NO space (`wfile`, verified against the real binary) as readily as
+ * `w file`, so `sed -n 'w.adlc/handoffs/x' ...` tokenizes to the single token
+ * `w.adlc/handoffs/x` — never `.adlc`, and never a token that reaches it as an
+ * ancestor either. Gated on the whole command containing `sed` (the same
+ * coarse scoping @adlc/core's own sed-write detection uses) so an unrelated
+ * token that merely starts with a lowercase `w` isn't split apart elsewhere.
+ *
  * @param {unknown} command
  * @returns {string[]}
  */
@@ -246,6 +254,7 @@ export function shellPathCandidates(command) {
       if (prefix !== '') out.add(prefix);
     }
   };
+  const isSedCommand = /\bsed\b/.test(command);
   // Strip quotes, then take whitespace/;|&-separated tokens.
   for (const raw of command.replace(/['"]/g, ' ').split(/[\s;|&()<>]+/)) {
     if (raw === '') continue;
@@ -253,6 +262,9 @@ export function shellPathCandidates(command) {
     if (raw.startsWith('-')) {
       const eq = raw.indexOf('=');
       if (eq > 0) addWithAncestors(raw.slice(eq + 1));
+    }
+    if (isSedCommand && /^w[./~]/.test(raw)) {
+      addWithAncestors(raw.slice(1));
     }
   }
   return [...out];

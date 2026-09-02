@@ -105,7 +105,11 @@ export function shellHasMutation(text) {
     /\b(?:patch|tar|unzip)\b/.test(text) ||
     /\bfind\b[^;&|]*(?:-delete|-exec(?:dir)?\b|-ok(?:dir)?\b)/.test(text) ||
     /\b(?:sed|perl)\s+[^;&|]*-(?:i|p?i)\b/.test(text) ||
-    /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s+\S+[^"\n]*"|'[^'\n]*\bw\s+\S+[^'\n]*')/.test(text) ||
+    // GNU sed's `w` command accepts the filename with no space (verified
+    // against the real binary). `\s*` deliberately over-matches some ordinary
+    // substitution text in exchange — this classifier already errs toward
+    // "mutating" on ambiguity.
+    /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s*\S+[^"\n]*"|'[^'\n]*\bw\s*\S+[^'\n]*')/.test(text) ||
     /\bawk\b[^;&|]*(?:\s-i(?:\s|=)|\s--in-place\b)/.test(text) ||
     /\b(?:node|python3?|ruby)\b[^;&|]*(?:writeFile|appendFile|rmSync|renameSync|copyFile|truncateSync|mkdirSync|write_text|write_bytes)/.test(text) ||
     /\bopen\s*\([^)]*,\s*['"][^'"]*[wax+][^'"]*['"]/.test(text) ||
@@ -206,7 +210,10 @@ export function shellIsPositivelyReadOnly(text) {
 
 /** A nominally read-only command smuggling a write via an output option. */
 export function shellHasWriteOption(text) {
-  return /\s--(?:output|output-file|test-reporter-destination|reporter-destination)(?:=|\s+)\S+/.test(text);
+  // The boundary before `--` also accepts a quote character, not only
+  // whitespace — a quoted option (`git diff "--output=x"`) was reading as
+  // read-only.
+  return /(?:^|[\s"'])--(?:output|output-file|test-reporter-destination|reporter-destination)(?:=|\s+)\S+/.test(text);
 }
 
 export function shellChangesCwd(text) {
@@ -232,7 +239,7 @@ export function collectShellPaths(text, out) {
     if (looksPathLike(value)) out.add(value);
   }
 
-  const sedWritePattern = /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s+([A-Za-z0-9_./@+-]+)[^"\n]*"|'[^'\n]*\bw\s+([A-Za-z0-9_./@+-]+)[^'\n]*')/g;
+  const sedWritePattern = /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s*([A-Za-z0-9_./@+-]+)[^"\n]*"|'[^'\n]*\bw\s*([A-Za-z0-9_./@+-]+)[^'\n]*')/g;
   let sedWrite;
   while ((sedWrite = sedWritePattern.exec(text)) !== null) {
     const value = sedWrite[1] ?? sedWrite[2];

@@ -151,6 +151,12 @@ test('a redirect or output-flag smuggled onto a read-only prefix is still denied
       'cat /dev/null > .adlc/manifest.d/pwned.jsonl',
       'cat /dev/null >> .adlc/manifest.d/pwned.jsonl',
       'git diff --output=.adlc/manifest.d/pwned.jsonl',
+      // Quoted output flag: the char before `--` is a quote, not whitespace —
+      // an earlier fix here missed this (adversarial-review round 3).
+      'git diff "--output=.adlc/manifest.d/pwned.jsonl"',
+      // Unspaced sed `w` — GNU sed accepts this with zero space, verified
+      // against the real binary; an earlier fix here required `\s+`.
+      "sed -n 'w.adlc/manifest.d/pwned.jsonl' /dev/null",
     ]) {
       const verdict = shell(cwd, 'successor-redirect', command);
       assert.equal(verdict.deny, true, `${command} must still be denied: ${JSON.stringify(verdict.reasons)}`);
