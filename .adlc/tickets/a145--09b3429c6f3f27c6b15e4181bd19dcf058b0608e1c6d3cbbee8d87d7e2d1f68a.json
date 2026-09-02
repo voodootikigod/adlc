@@ -1,0 +1,14 @@
+{
+  "allowedSuppressions": [],
+  "body": "GitHub issue: https://github.com/voodootikigod/adlc/issues/959\n\n=== CONTEXT ===\npackages/tickets/test/pointer.test.mjs 'atomic: the pointer is replaced by rename, never written in place' failed intermittently on CI windows-latest Node 18 (PR #955 run 33539527534): the assertion that a rename swaps in a NEW inode compared equal. Root cause: NTFS recycles 64-bit file indices, so a temp file created microseconds after the old pointer was deleted can legitimately reuse the same index \u2014 a CORRECT rename reads as same-inode on Windows. The production code (writeActiveTicket: temp-write + renameSync) is correct on both platforms; the test's inode-difference proxy is Unix-flavored. Retry passed with no code change; main's windows-18 leg passed the same morning \u2014 recycling hits occasionally, never reliably.\n\n=== TASK ===\nMake the assertion retry-bounded ON WIN32 ONLY: up to 10 write/stats cycles, pass when any one swap observes a fresh index. POSIX keeps the strict single-shot check. A plain in-place writer reuses the index every time on every platform, so the relaxed win32 check still kills the mutant \u2014 VERIFIED locally by temporarily replacing renameSync with a correct in-place write (the test fails) and restoring.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: the test passes on POSIX with a single swap (behavior unchanged on Linux/macOS). VERIFY: npm test in packages/tickets green locally.\n- AC2: the win32 path tolerates one recycled-index observation per swap but still fails against an in-place writer. VERIFY: the local mutant experiment (renameSync -> writeFileSync(path, readFileSync(temp))) fails the test.\n- AC3: the failure message names the win32 recycling allowance when on win32.\n- AC4: full packages/tickets suite green; issue #959 closes via the PR.",
+  "budget": "direct",
+  "category": "test",
+  "duration": 1,
+  "edges": [],
+  "id": "A145",
+  "rails": [],
+  "scope": [
+    "packages/tickets/test/pointer.test.mjs"
+  ],
+  "title": "tickets: pointer atomic-rename test tolerates NTFS file-index recycling (#959)"
+}

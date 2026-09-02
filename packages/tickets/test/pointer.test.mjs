@@ -486,19 +486,30 @@ test('atomic: the pointer is replaced by rename, never written in place', () => 
   // renaming a fresh file into place swaps in a NEW INODE, while an in-place
   // write reuses the existing one. Inode change is exactly the difference between
   // "readers see old or new" and "readers can see neither".
+  //
+  // Windows caveat (#959): NTFS recycles 64-bit file indices, so a temp file
+  // created microseconds after the previous pointer was deleted can legitimately
+  // land on the SAME index -- a correct rename can read as "same inode" there.
+  // Recycling is occasional, never reliable, so on win32 we retry the swap until
+  // one fresh index is observed (bounded), which a plain writeFileSync can never
+  // satisfy (it reuses the index every time, on every platform).
   const f = fixture(null);
   try {
     const path = join(f.root, '.adlc/current-ticket.json');
     writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
     const first = statSync(path).ino;
 
-    writeActiveTicket(f.root, { id: 'T2', ticketHash: hashOf(f.snapshot, 'T2') });
-    const second = statSync(path).ino;
+    const WIN32_SWAP_ATTEMPTS = 10;
+    let fresh = false;
+    for (let attempt = 0; attempt < (process.platform === 'win32' ? WIN32_SWAP_ATTEMPTS : 1); attempt++) {
+      writeActiveTicket(f.root, { id: 'T2', ticketHash: hashOf(f.snapshot, 'T2') });
+      if (statSync(path).ino !== first) { fresh = true; break; }
+    }
 
-    assert.notEqual(
-      second,
-      first,
-      'writeActiveTicket must rename a fresh file into place (new inode). Reusing the inode means it truncated and rewrote the live pointer, exposing a window where a concurrently-reading gate sees an empty trust root.',
+    assert.ok(
+      fresh,
+      'writeActiveTicket must rename a fresh file into place (new inode). Reusing the inode means it truncated and rewrote the live pointer, exposing a window where a concurrently-reading gate sees an empty trust root.' +
+        (process.platform === 'win32' ? ` (checked over ${WIN32_SWAP_ATTEMPTS} swaps; NTFS index recycling makes a single comparison flaky)` : ''),
     );
     assert.equal(JSON.parse(readFileSync(path, 'utf8')).id, 'T2');
   } finally { f.cleanup(); }
