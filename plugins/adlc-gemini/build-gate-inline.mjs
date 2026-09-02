@@ -1397,7 +1397,6 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         curS.updatedAt = Date.now();
         curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
         curStore[sessionID] = curS;
-        curStore._corrupted = true;
         inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
         writeStore(curStore, sessionID);
       });

@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
@@ -4987,7 +4987,7 @@ test('postToolUse and onStop: invalidate and reject session if secret disclosure
 
     // The session should now be invalidated in the tracker
     const tracker = createPersistentTracker(root, env);
-    assert.equal(tracker.isCorrupted(), true);
+    assert.equal(tracker.isInvalidated('sess-secret-leak'), true);
 
     // In addition, if transcript contains the secret, onStop must reject completion
     writeFileSync(transcriptFile, JSON.stringify({ content: `Disclosed: ${secret}` }) + '\n');
@@ -5656,6 +5656,52 @@ test('onStop: shell command under nested Cwd with relative traversal to auth-key
   } finally {
     cleanup();
   }
+});
+
+test('invalidateSession: invalidating session A does not lock out session B', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const tracker = createPersistentTracker(root, env);
+  const transcriptA = join(root, 'transcript-a.jsonl');
+  const transcriptB = join(root, 'transcript-b.jsonl');
+  writeFileSync(transcriptA, JSON.stringify({ content: 'Session A' }) + '\n');
+  writeFileSync(transcriptB, JSON.stringify({ content: 'Session B' }) + '\n');
+  try {
+    preInvocation({ workspacePaths: [root], transcriptPath: transcriptA, conversationId: 'session-A' }, { env });
+    preInvocation({ workspacePaths: [root], transcriptPath: transcriptB, conversationId: 'session-B' }, { env });
+
+    tracker.invalidateSession('session-A');
+
+    assert.equal(tracker.isInvalidated('session-A'), true, 'Session A must be invalidated');
+    assert.equal(tracker.isInvalidated('session-B'), false, 'Session B must NOT be invalidated');
+
+    // Verify session B can successfully stop
+    const stopB = onStop({
+      workspacePaths: [root],
+      transcriptPath: transcriptB,
+      conversationId: 'session-B',
+    }, { env });
+    assert.equal(stopB.decision, 'stop', 'Session B should stop cleanly');
+
+    // Verify session A is rejected
+    const stopA = onStop({
+      workspacePaths: [root],
+      transcriptPath: transcriptA,
+      conversationId: 'session-A',
+    }, { env });
+    assert.equal(stopA.decision, 'continue', 'Session A should be rejected');
+    assert.match(stopA.reason, /invalidated/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('getTrustRootSecretHomes: resolves safely when homedir is empty and protects tmpdir fallback', () => {
+  const customEnv = { ADLC_TEST_MODE: '1' };
+  const homes = getTrustRootSecretHomes(customEnv);
+  assert.ok(Array.isArray(homes) && homes.length >= 1, 'Should resolve at least one secret home');
+  const tmpHome = homes[0];
+  const testSecretPath = join(tmpHome, '.config', 'adlc', 'secrets', '.auth-key');
+  assert.equal(isTrustRootOrSecretPath(testSecretPath, customEnv), true, 'Secret path under resolved home must be protected');
 });
 
 

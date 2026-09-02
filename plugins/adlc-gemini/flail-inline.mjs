@@ -99,7 +99,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         const lstat = lstatSync(direct);
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
-          const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1' || process.env.NODE_TEST_CONTEXT !== undefined;
+          const isTest = (env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1');
           const allowedRoots = [
             appDataDir,
             env?.ANTIGRAVITY_WORKSPACE,

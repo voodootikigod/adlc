@@ -7,7 +7,7 @@
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, realpathSync, lstatSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 function canonicalizeExisting(p) {
   if (!p || typeof p !== 'string') return p;
@@ -249,8 +249,18 @@ export function extractCwdFromArgs(args, depth = 0) {
 
 export function getTrustRootSecretHomes(env = process.env) {
   const customHome = (env?.ADLC_HOME_DIR || '').replace(/\\/g, '/');
-  const realHome = (homedir() || tmpdir() || '').replace(/\\/g, '/');
-  const homes = [realHome];
+  let realHome = '';
+  try {
+    realHome = (homedir() || tmpdir() || '').replace(/\\/g, '/');
+  } catch {
+    try {
+      realHome = (tmpdir() || '').replace(/\\/g, '/');
+    } catch {
+      realHome = '';
+    }
+  }
+  const homes = [];
+  if (realHome) homes.push(realHome);
   if (customHome && customHome !== realHome) homes.push(customHome);
   return homes;
 }
