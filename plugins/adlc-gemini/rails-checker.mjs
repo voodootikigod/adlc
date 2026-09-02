@@ -98,6 +98,7 @@ export function hasCommandLineArgs(args, depth = 0) {
   for (const [key, val] of Object.entries(args)) {
     if (/(command|cmd|exec|shell|terminal|script|code|eval|run)/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
+      if (Array.isArray(val) && val.length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCommandLineArgs(val, depth + 1)) {
       return true;
@@ -111,6 +112,7 @@ export function hasCodeExecutionArgs(args, depth = 0) {
   for (const [key, val] of Object.entries(args)) {
     if (/^(code|script|eval|expression|program|snippet|inline|payload)$/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
+      if (Array.isArray(val) && val.length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCodeExecutionArgs(val, depth + 1)) {
       return true;

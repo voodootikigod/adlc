@@ -3868,7 +3868,7 @@ test('checkBuildGate: corrupt sessions.json fails closed under enforcement', () 
   }
 });
 
-test('appendLedger: quarantines oversized unparseable ledger', () => {
+test('appendLedger: quarantines oversized unparseable ledger and fails closed', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
   try {
     const sessionID = 'sess-oversized-test';
@@ -3879,9 +3879,10 @@ test('appendLedger: quarantines oversized unparseable ledger', () => {
     const tracker = createPersistentTracker(root, env);
     tracker.recordToolCall(sessionID, { isMutating: true });
 
-    // Verify ledger was rotated/quarantined and new ledger is small
-    const stat = lstatSync(ledgerFile);
-    assert.ok(stat.size < 512 * 1024, `Expected new ledger < 512 KiB, got ${stat.size}`);
+    // Verify quarantine marker was created and tracker fails closed
+    assert.equal(existsSync(join(root, '.adlc', '.ledger-quarantine')), true, 'Quarantine marker must exist');
+    assert.equal(tracker.isCorrupted(), true, 'Tracker must be marked corrupted');
+    assert.equal(tracker.isInvalidated(sessionID), true, 'Session must be invalidated');
   } finally {
     cleanup();
   }
@@ -5601,21 +5602,38 @@ test('postToolUse: master key disclosure inside structured non-string output tri
   }
 });
 
-test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE outside test mode', () => {
+test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE outside test mode and honors it inside', () => {
   const cjsPath = join(__dirname, '../hooks/adlc-rails-guard.cjs');
-  const envWithoutTest = { ...process.env };
-  delete envWithoutTest.ADLC_TEST_MODE;
-  delete envWithoutTest.NODE_ENV;
+  const stubFile = join(tmpdir(), `stub-adapter-${Date.now()}.mjs`);
+  writeFileSync(stubFile, 'export function postToolUse() { return { decision: "stub-special-decision", allow_tool: true }; }\n');
 
-  const res = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
-    input: JSON.stringify({}),
-    env: { ...envWithoutTest, ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
-    encoding: 'utf8',
-  });
-  assert.equal(res.status, 0);
-  const out = JSON.parse(res.stdout);
-  assert.equal(out.decision, 'allow');
-  assert.equal(out.allow_tool, true);
+  try {
+    const envWithoutTest = { ...process.env };
+    delete envWithoutTest.ADLC_TEST_MODE;
+    delete envWithoutTest.NODE_ENV;
+
+    // 1. Outside test mode -> real adapter loaded (decision: 'allow')
+    const resReal = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+      input: JSON.stringify({}),
+      env: { ...envWithoutTest, ADLC_AGY_ADAPTER_OVERRIDE: stubFile },
+      encoding: 'utf8',
+    });
+    assert.equal(resReal.status, 0);
+    const outReal = JSON.parse(resReal.stdout);
+    assert.equal(outReal.decision, 'allow');
+
+    // 2. Inside test mode -> stub adapter loaded (decision: 'stub-special-decision')
+    const resStub = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+      input: JSON.stringify({}),
+      env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: stubFile },
+      encoding: 'utf8',
+    });
+    assert.equal(resStub.status, 0);
+    const outStub = JSON.parse(resStub.stdout);
+    assert.equal(outStub.decision, 'stub-special-decision');
+  } finally {
+    try { unlinkSync(stubFile); } catch {}
+  }
 });
 
 test('onStop: shell command under nested Cwd with relative traversal to auth-key is caught and rejected', () => {

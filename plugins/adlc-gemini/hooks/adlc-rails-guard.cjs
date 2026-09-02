@@ -34,7 +34,7 @@ async function readStdinBounded(maxBytes) {
 }
 
 function resolveAdapterPath() {
-  if ((process.env.ADLC_TEST_MODE === '1' || process.env.NODE_ENV === 'test') && process.env.ADLC_AGY_ADAPTER_OVERRIDE) {
+  if (process.env.ADLC_TEST_MODE === '1' && process.env.ADLC_AGY_ADAPTER_OVERRIDE) {
     return process.env.ADLC_AGY_ADAPTER_OVERRIDE;
   }
   return __dirname + '/adlc-rails-guard.mjs';

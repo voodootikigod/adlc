@@ -214,9 +214,12 @@ function isToolPayload(p) {
 export function extractCommandString(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return '';
   for (const [key, val] of Object.entries(args)) {
-    if (typeof val === 'string' && val.trim().length > 0) {
-      if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
+    if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) {
         return val.trim();
+      }
+      if (Array.isArray(val) && val.length > 0) {
+        return val.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ').trim();
       }
     }
   }
@@ -229,26 +232,35 @@ export function extractCommandString(args, depth = 0) {
   return '';
 }
 
-export function extractCwdFromArgs(args, depth = 0) {
-  if (!args || typeof args !== 'object' || depth > 5) return null;
-  for (const [key, val] of Object.entries(args)) {
-    if (typeof val === 'string' && val.trim().length > 0) {
-      if (/^(cwd|workdir|workingDirectory|projectRoot|dir|directory)$/i.test(key) || /(^|_)(cwd|workdir)($|_)/i.test(key)) {
-        return val.trim();
-      }
-    }
-  }
-  for (const val of Object.values(args)) {
-    if (val && typeof val === 'object') {
-      const nested = extractCwdFromArgs(val, depth + 1);
-      if (nested) return nested;
+export function extractCwdFromArgs(args) {
+  if (!args || typeof args !== 'object') return null;
+  // Check canonical top-level fields first (strict order, no decoy ambiguity)
+  const direct = [
+    args.Cwd,
+    args.cwd,
+    args.workdir,
+    args.workDir,
+    args.working_dir,
+    args.workingDir,
+    args.workingDirectory,
+    args.options?.Cwd,
+    args.options?.cwd,
+    args.params?.Cwd,
+    args.params?.cwd,
+    args.payload?.Cwd,
+    args.payload?.cwd,
+  ];
+  for (const c of direct) {
+    if (typeof c === 'string' && c.trim().length > 0) {
+      return c.trim();
     }
   }
   return null;
 }
 
 export function getTrustRootSecretHomes(env = process.env) {
-  const customHome = (env?.ADLC_HOME_DIR || '').replace(/\\/g, '/');
+  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
+  const customHome = (isTest ? env?.ADLC_HOME_DIR || '' : '').replace(/\\/g, '/');
   let realHome = '';
   try {
     realHome = (homedir() || tmpdir() || '').replace(/\\/g, '/');
@@ -898,6 +910,14 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
   if (!cmd || typeof cmd !== 'string') return false;
   const norm = cmd.replace(/\\/g, '/');
   if (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(norm))) return true;
+
+  // Catch unescaped shell wildcards near candidate secret paths (e.g. "cat .master-k?y", "cat *auth*key*")
+  if (/(master[\w*?.-]*key|auth[\w*?.-]*key|session[\w*?.-]*secret|tickets?[\w*?.-]*json|session[\w*?.-]*ledger)/i.test(norm)) {
+    return true;
+  }
+  if (/(^|[\s=;,"'\/\\$.()[\]])\.(adlc|master|auth|session|adlc-secrets)[\w*?.-]*/i.test(norm)) {
+    return true;
+  }
 
   // Normalize away quoting, escapes, and glob metacharacters:
   // e.g. ".[m]aster-key", ".\m\a\s\t\e\r-k\e\y", "'.master-key'", etc.

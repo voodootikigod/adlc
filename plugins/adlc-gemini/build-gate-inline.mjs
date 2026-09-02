@@ -183,8 +183,18 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 const loadedSecretCache = new Map();
 
+function resolveUserHome(env = process.env) {
+  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
+  if (isTest && env?.ADLC_HOME_DIR) return env.ADLC_HOME_DIR;
+  try {
+    return homedir() || tmpdir();
+  } catch {
+    return tmpdir();
+  }
+}
+
 export function getMasterKeyRaw(env = process.env) {
-  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
+  const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
   const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
@@ -217,7 +227,7 @@ export function getMasterKeyRaw(env = process.env) {
 }
 
 export function rotateMasterKey(env = process.env) {
-  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
+  const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
   const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
@@ -251,7 +261,7 @@ export function rotateMasterKey(env = process.env) {
 export function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
-  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
+  const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
 
@@ -538,13 +548,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             if (lStat.size > HARD_MAX_LEDGER_BYTES) {
               const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
               renameSync(ledgerPath, tombstone);
-              header = { lastSeq: 0, lastMac: '0'.repeat(64) };
-            } else {
-              return null;
+              writeFileSync(join(adlcDir, '.ledger-quarantine'), JSON.stringify({ quarantinedAt: Date.now(), reason: 'oversized_corrupt_ledger' }), { mode: 0o600 });
             }
-          } catch {
-            return null;
-          }
+          } catch {}
+          return null;
         } else {
           header = { lastSeq: 0, lastMac: '0'.repeat(64) };
         }
@@ -1337,6 +1344,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       return lockFailures.has(sessionID);
     },
     isCorrupted() {
+      if (existsSync(join(adlcDir, '.ledger-quarantine'))) return true;
       const store = readStore();
       return Boolean(store._corrupted);
     },
@@ -1403,6 +1411,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     },
     isInvalidated(sessionID) {
       if (!sessionID) return false;
+      if (existsSync(join(adlcDir, '.ledger-quarantine'))) return true;
       const store = readStore();
       if (store[sessionID]?.invalidated) return true;
       const snap = inMemorySessionSnapshots.get(snapKey(sessionID));

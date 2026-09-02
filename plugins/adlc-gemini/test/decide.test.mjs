@@ -354,6 +354,75 @@ test('decide(): shell command with relative symlink under non-default Cwd target
   }
 });
 
+test('decide(): shell command with wildcard .master-k?y is denied', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-wildcard-'));
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat .master-k?y',
+        },
+      },
+    }, { env: { ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('decide(): shell tool with array-valued command argument is denied for secret access', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-array-cmd-'));
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          cmd: ['cat', '~/.config/adlc/secrets/.auth-key'],
+        },
+      },
+    }, { env: { ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested dir', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-decoy-cwd-'));
+  const fakeSecretsDir = join(root, 'fake-home', '.config', 'adlc', 'secrets');
+  mkdirSync(fakeSecretsDir, { recursive: true });
+  const fakeAuthKey = join(fakeSecretsDir, '.auth-key');
+  writeFileSync(fakeAuthKey, 'secret-data');
+
+  const symlinkPath = join(root, 'decoy-secret-link');
+  symlinkSync(fakeAuthKey, symlinkPath);
+
+  const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat decoy-secret-link',
+          Cwd: root,
+          decoy: { dir: '/tmp/empty-decoy-dir' },
+        },
+      },
+    }, { env });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 
