@@ -784,8 +784,8 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   if (/\s+(--help|--version|-v|-h)(\s+|$)/i.test(trimmed)) return false;
   if (/^(adlc|npx\s+(--no-install\s+)?adlc)\s+(ticket|doctor|status|help|version|list)/i.test(trimmed)) return false;
 
-  // If package.json mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
-  if (!packageManifestMutated) {
+  // If package.json mutations or shell mutations occurred, mutable npm script aliases and local npx runners cannot be trusted as verification
+  if (!packageManifestMutated && !shellMutated) {
     if (/^(npm\s+(test|run\s+(test|preflight)))\s*$/i.test(trimmed)) return true;
     if (/^(adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight)\s*$/i.test(trimmed)) return true;
     if (/^npx\s+--no-install\s+(mocha|jest|vitest)\s*$/i.test(trimmed)) return true;
@@ -822,6 +822,29 @@ export function isReadonlyCommand(cmd) {
   if (/(session-secret|adlc.*secret|\.adlc\/sessions|session-ledger)/i.test(trimmed)) return false;
 
   return /^(git\s+(status|diff|log|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
+}
+
+export function postToolUse(payload, { env = process.env } = {}) {
+  try {
+    const sessionID = resolveSessionId({ payload, env });
+    const distinctRoots = new Set();
+    const wsRoot = resolveWorkspaceRoot(payload, env);
+    if (wsRoot) distinctRoots.add(wsRoot);
+    const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+    if (transcriptPath) {
+      const transcriptRoot = findAdlcRoot(transcriptPath, env);
+      if (transcriptRoot) distinctRoots.add(transcriptRoot);
+    }
+    const exitCode = payload?.exit_code ?? payload?.exitCode ?? payload?.result?.exitCode ?? payload?.toolResult?.exitCode;
+    for (const root of distinctRoots) {
+      const tracker = createPersistentTracker(root, env);
+      tracker.recordToolResult(sessionID, {
+        exitCode: typeof exitCode === 'number' ? exitCode : null,
+        transcriptPath,
+      });
+    }
+  } catch {}
+  return { decision: 'allow', allow_tool: true };
 }
 
 export function onStop(payload, { env = process.env } = {}) {
@@ -878,8 +901,8 @@ export function onStop(payload, { env = process.env } = {}) {
     const trackerInfo = tracker.lastTranscript ? tracker.lastTranscript(sessionID) : { initial: tracker.initialTranscript(sessionID) };
     const initialTranscript = trackerInfo?.initial;
     let curStat = null;
-    if (initialTranscript && transcriptPath) {
-      if (initialTranscript.path && transcriptPath !== initialTranscript.path) {
+    if (transcriptPath && (initialTranscript || trackerInfo?.lastHash)) {
+      if (initialTranscript?.path && transcriptPath !== initialTranscript.path) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: Session transcript path changed during session.',
@@ -887,19 +910,19 @@ export function onStop(payload, { env = process.env } = {}) {
       }
       try {
         curStat = lstatSync(transcriptPath);
-        if (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev) {
+        if (initialTranscript && (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev)) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session transcript file identity (inode/device) changed during session.',
           };
         }
-        if (initialTranscript.size && curStat.size < initialTranscript.size) {
+        if (initialTranscript?.size && curStat.size < initialTranscript.size) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session transcript file size shrank unexpectedly during session.',
           };
         }
-        if (initialTranscript.hash && initialTranscript.size > 0) {
+        if (initialTranscript?.hash && initialTranscript.size > 0) {
           const prefixHash = computePrefixHash(transcriptPath, initialTranscript.size);
           if (prefixHash !== initialTranscript.hash) {
             return {

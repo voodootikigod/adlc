@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
@@ -3877,7 +3877,7 @@ test('appendLedger: quarantines oversized unparseable ledger', () => {
   }
 });
 
-test('onStop: allows verification via npm test after shell edit mutation', () => {
+test('onStop: allows verification via node --test after shell edit mutation', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   try {
@@ -3894,10 +3894,10 @@ test('onStop: allows verification via npm test after shell edit mutation', () =>
       toolCall: { name: 'run_command', args: { CommandLine: 'sed -i "s/foo/bar/g" src/app.js', Cwd: root } },
     }), env);
 
-    // 2. Full test suite run
+    // 2. Full test suite run using immutable runner
     runFromStdin(JSON.stringify({
       ...payload,
-      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+      toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
     }), env);
 
     const lines = [
@@ -3907,7 +3907,7 @@ test('onStop: allows verification via npm test after shell edit mutation', () =>
       }),
       JSON.stringify({
         type: 'PLANNER_RESPONSE',
-        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }],
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
         exit_code: 0,
       }),
     ];
@@ -4359,6 +4359,94 @@ test('runFromStdin: denies shell command attempting to read master key under enf
     cleanup();
   }
 });
+
+test('onStop: rejects npm test after non-readonly shell mutation, requiring immutable node --test', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'touch src/newfile.js', Cwd: root } },
+        ],
+        exit_code: 0,
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+        ],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Attempting stop' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-shell-mut-npm-test',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects same-size in-place rewrite of test result from exit_code 1 to 0', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'write_to_file', args: { TargetFile: join(root, 'src/app.js'), CodeContent: '// edit' } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 1,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-tamper-exit-code',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+    tracker.recordToolCall(payload.conversationId, { isMutating: false });
+
+    // PostToolUse records the test result with exit_code 1 and actual transcript hash
+    postToolUse({ ...payload, exit_code: 1 }, { env });
+
+    // Tamperer modifies exit_code in-place from 1 to 0 (same length)
+    const tampered = readFileSync(transcriptFile, 'utf8').replace(/"exit_code":\s*1/, '"exit_code":0');
+    writeFileSync(transcriptFile, tampered);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Session transcript (prefix )?content was modified during session/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

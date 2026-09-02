@@ -12,6 +12,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs posttooluse",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
     "PreInvocation": [
       {
         "matcher": ".*",

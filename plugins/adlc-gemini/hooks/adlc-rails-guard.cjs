@@ -55,6 +55,18 @@ if (subcmd === 'status' || subcmd === 'doctor') {
       emit(adapter.preInvocation(payload, { env: process.env }));
     } catch (_) { emit({ injectSteps: [] }); }
   })();
+} else if (subcmd === 'posttooluse' || subcmd === 'post-tool-use') {
+  process.on('uncaughtException', function () { emit({ decision: 'allow', allow_tool: true }); });
+  process.on('unhandledRejection', function () { emit({ decision: 'allow', allow_tool: true }); });
+  var modPost = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  (async function () {
+    try {
+      var adapter = await import(require('node:url').pathToFileURL(modPost).href);
+      var raw = await readStdinBounded();
+      var payload = raw ? JSON.parse(raw) : {};
+      emit(adapter.postToolUse(payload, { env: process.env }));
+    } catch (_) { emit({ decision: 'allow', allow_tool: true }); }
+  })();
 } else if (subcmd === 'stop') {
   var stopFail = function () {
     var enf = process.env.ADLC_P4_ENFORCEMENT === '1';

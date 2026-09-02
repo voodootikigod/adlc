@@ -595,6 +595,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           }
           if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
           if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+        } else if (ev.type === 'recordToolResult' || ev.type === 'toolResult') {
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+          if (typeof ev.exitCode === 'number') s.lastExitCode = ev.exitCode;
         }
         s.updatedAt = ev.t ?? Date.now();
         s.ledgerSeq = parsed.seq;
@@ -956,6 +960,47 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         lastHash: s.lastTranscriptHash ?? null,
         lastSize: s.lastTranscriptSize ?? null,
       };
+    },
+    recordToolResult(sessionID, { exitCode, transcriptPath } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      try {
+        let stat = null;
+        if (transcriptPath) {
+          try { stat = lstatSync(transcriptPath); } catch {}
+        }
+        withLock(sessionID, () => {
+          const store = readStore();
+          const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+          if (stat && stat.size > 0) {
+            const curHash = computePrefixHash(transcriptPath, stat.size);
+            if (curHash) s.lastTranscriptHash = curHash;
+            s.lastTranscriptSize = stat.size;
+          }
+          if (typeof exitCode === 'number') {
+            s.lastExitCode = exitCode;
+          }
+          const lH = appendLedger({
+            type: 'recordToolResult',
+            sessionID,
+            exitCode: typeof exitCode === 'number' ? exitCode : null,
+            lastTranscriptHash: s.lastTranscriptHash ?? null,
+            lastTranscriptSize: s.lastTranscriptSize ?? null,
+          });
+          const curStore = readStore();
+          const curS = curStore[sessionID] ?? s;
+          if (lH) {
+            curS.ledgerSeq = lH.seq;
+            curS.ledgerMac = lH.mac;
+          }
+          if (s.lastTranscriptHash) curS.lastTranscriptHash = s.lastTranscriptHash;
+          if (s.lastTranscriptSize) curS.lastTranscriptSize = s.lastTranscriptSize;
+          if (typeof s.lastExitCode === 'number') curS.lastExitCode = s.lastExitCode;
+          curS.updatedAt = Date.now();
+          curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+          curStore[sessionID] = curS;
+          writeStore(curStore, sessionID);
+        });
+      } catch {}
     },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
