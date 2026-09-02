@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -4778,6 +4778,67 @@ test('onStop: rejects Stop when an existing test file was deleted during session
     cleanup();
   }
 });
+
+test('getTestFilesMap and hasDiscoverableTests: recursively discovers nested monorepo test suites', () => {
+  const { root, cleanup } = setupTempRepo({ enforcement: '1' });
+  try {
+    // Create nested package test suites
+    mkdirSync(join(root, 'packages', 'nested-core', 'test'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'nested-core', 'test', 'core.test.mjs'), 'import test from "node:test";\n');
+    mkdirSync(join(root, 'plugins', 'custom-plugin', 'test'), { recursive: true });
+    writeFileSync(join(root, 'plugins', 'custom-plugin', 'test', 'plugin.test.js'), 'import test from "node:test";\n');
+
+    const testMap = getTestFilesMap(root);
+    assert.ok(testMap['packages/nested-core/test/core.test.mjs']);
+    assert.ok(testMap['plugins/custom-plugin/test/plugin.test.js']);
+    assert.ok(hasDiscoverableTests(root));
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateBaseline and validateLedger: fail closed when sessions.json baseline fields are tampered with', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket('sess-tamper-baseline', 'T1', 'store-hash-1');
+    tracker.recordToolCall('sess-tamper-baseline', { isMutating: true });
+
+    assert.equal(tracker.validateBaseline('sess-tamper-baseline'), true);
+    assert.equal(tracker.validateLedger('sess-tamper-baseline'), true);
+
+    // Tamper with initialActiveTicket in sessions.json
+    const sessionsFile = join(root, '.adlc', 'sessions.json');
+    const store = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+    store['sess-tamper-baseline'].initialActiveTicket = 'TAMPERED_TICKET_ID';
+    writeFileSync(sessionsFile, JSON.stringify(store));
+
+    // Must fail closed because it disagrees with canonical ledger
+    assert.equal(tracker.validateBaseline('sess-tamper-baseline'), false);
+    assert.equal(tracker.validateLedger('sess-tamper-baseline'), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('createPersistentTracker: rejects symlinked session ledger file', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const externalTarget = join(tmpdir(), `external-target-${Date.now()}.jsonl`);
+  writeFileSync(externalTarget, '');
+  try {
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    symlinkSync(externalTarget, ledgerFile);
+
+    const tracker = createPersistentTracker(root, env);
+    // Attempting to append to a symlinked ledger must fail closed (return null) and not write to external target
+    const res = tracker.recordToolCall('sess-symlink', { isMutating: true });
+    assert.equal(readFileSync(externalTarget, 'utf8'), '');
+  } finally {
+    try { unlinkSync(externalTarget); } catch {}
+    cleanup();
+  }
+});
+
 
 
 

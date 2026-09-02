@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, fstatSync, readdirSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, writeSync, closeSync, appendFileSync, fstatSync, readdirSync, constants as fsConstants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
@@ -248,30 +248,37 @@ function getOrCreateSessionSecret(root, env = process.env) {
 export function getTestFilesMap(root) {
   const map = {};
   if (!root || typeof root !== 'string') return map;
-  try {
-    for (const d of ['test', 'tests', 'spec', 'specs']) {
-      const p = join(root, d);
-      if (existsSync(p)) {
-        try {
-          const stat = lstatSync(p);
-          if (stat.isDirectory()) {
-            const entries = readdirSync(p, { recursive: true }).sort();
-            for (const entry of entries) {
-              const str = typeof entry === 'string' ? entry : entry?.name;
-              if (str && (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(str) || /^test-.*\.m?js$/i.test(str))) {
-                const fullP = join(p, str);
-                if (existsSync(fullP) && lstatSync(fullP).isFile()) {
-                  const relPath = relative(root, fullP).replace(/\\/g, '/');
-                  map[relPath] = createHash('sha256').update(readFileSync(fullP)).digest('hex');
-                }
-              }
-            }
+  const IGNORED_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.adlc', 'coverage', '.cache']);
+
+  function scan(dir, depth = 0) {
+    if (depth > 6) return;
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          if (IGNORED_DIRS.has(entry.name)) continue;
+          scan(join(dir, entry.name), depth + 1);
+        } else if (entry.isFile()) {
+          const name = entry.name;
+          if (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(name) || /^test-.*\.m?js$/i.test(name)) {
+            const fullP = join(dir, name);
+            const relPath = relative(root, fullP).replace(/\\/g, '/');
+            try {
+              map[relPath] = createHash('sha256').update(readFileSync(fullP)).digest('hex');
+            } catch {}
           }
-        } catch {}
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
+
+  scan(root);
   return map;
+}
+
+export function hasDiscoverableTests(root) {
+  const map = getTestFilesMap(root);
+  return Object.keys(map).length > 0;
 }
 
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
@@ -399,11 +406,19 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   function readLastLedgerHeader() {
     if (!existsSync(ledgerPath)) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+    try {
+      const linkStat = lstatSync(ledgerPath);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > HARD_MAX_LEDGER_BYTES) return null;
+    } catch {
+      return null;
+    }
     let fd;
     try {
-      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
       const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > HARD_MAX_LEDGER_BYTES) return null;
+      const postLinkStat = lstatSync(ledgerPath);
+      if (!stat.isFile() || postLinkStat.isSymbolicLink() || stat.ino !== postLinkStat.ino || stat.dev !== postLinkStat.dev || stat.size > HARD_MAX_LEDGER_BYTES) return null;
       if (stat.size === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
 
       const readSize = Math.min(stat.size, 64 * 1024);
@@ -529,17 +544,30 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         } catch {}
       }
 
-      // Final check: Never append if it would cause the ledger to exceed HARD_MAX_LEDGER_BYTES
+      // Final check: Never append if it would cause the ledger to exceed HARD_MAX_LEDGER_BYTES or if symlink
       if (existsSync(ledgerPath)) {
         try {
           const lStat = lstatSync(ledgerPath);
-          if (lStat.isFile() && lStat.size + Buffer.byteLength(record, 'utf8') > HARD_MAX_LEDGER_BYTES) {
+          if (lStat.isSymbolicLink() || !lStat.isFile() || lStat.size + Buffer.byteLength(record, 'utf8') > HARD_MAX_LEDGER_BYTES) {
             return null;
           }
-        } catch {}
+        } catch {
+          return null;
+        }
       }
 
-      appendFileSync(ledgerPath, record, { mode: 0o600 });
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      const appendFd = openSync(ledgerPath, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | nofollow, 0o600);
+      try {
+        const postStat = fstatSync(appendFd);
+        const lStat = lstatSync(ledgerPath);
+        if (lStat.isSymbolicLink() || postStat.ino !== lStat.ino || postStat.dev !== lStat.dev) {
+          return null;
+        }
+        writeSync(appendFd, record);
+      } finally {
+        try { closeSync(appendFd); } catch {}
+      }
       return { seq, mac };
     } catch {}
     return null;
@@ -549,9 +577,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     let fd;
     try {
       if (!existsSync(ledgerPath)) return null;
-      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      const linkStat = lstatSync(ledgerPath);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
+        const s = Object.create(null);
+        s._corrupted = true;
+        return s;
+      }
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
       const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.isSymbolicLink() || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > HARD_MAX_LEDGER_BYTES) {
+      if (!stat.isFile() || stat.ino !== linkStat.ino || stat.dev !== linkStat.dev || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > HARD_MAX_LEDGER_BYTES) {
         const s = Object.create(null);
         s._corrupted = true;
         return s;
@@ -673,9 +708,16 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     let fd;
     try {
       if (existsSync(storePath)) {
-        fd = openSync(storePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+        const linkStat = lstatSync(storePath);
+        if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > 1024 * 1024) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+        fd = openSync(storePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
         const stat = fstatSync(fd);
-        if (!stat.isFile() || stat.isSymbolicLink() || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > 1024 * 1024) {
+        if (!stat.isFile() || stat.ino !== linkStat.ino || stat.dev !== linkStat.dev || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > 1024 * 1024) {
           const s = Object.create(null);
           s._corrupted = true;
           return s;
@@ -776,6 +818,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           delete data[k];
           serialized = JSON.stringify(data, null, 2);
           if (serialized.length <= 512 * 1024) break;
+        }
+      }
+
+      if (existsSync(storePath)) {
+        const linkStat = lstatSync(storePath);
+        if (linkStat.isSymbolicLink()) {
+          console.error(`[adlc-rails-guard] Refusing to write through symlinked session store: ${storePath}`);
+          return;
         }
       }
 
@@ -944,6 +994,18 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!s.baselineSig) {
         return !hasTrackedState && env?.ADLC_P4_ENFORCEMENT !== '1';
       }
+
+      // Canonical baseline comparison against ledger
+      const ledgerStore = replayLedger();
+      if (ledgerStore && !ledgerStore._corrupted && ledgerStore[sessionID]) {
+        const lEntry = ledgerStore[sessionID];
+        if (lEntry.initialActiveTicket && s.initialActiveTicket !== lEntry.initialActiveTicket) return false;
+        if (lEntry.initialStoreHash && s.initialStoreHash !== lEntry.initialStoreHash) return false;
+        if (lEntry.initialPointer && JSON.stringify(s.initialPointer) !== JSON.stringify(lEntry.initialPointer)) return false;
+        if (lEntry.initialTranscript && JSON.stringify(s.initialTranscript) !== JSON.stringify(lEntry.initialTranscript)) return false;
+        if (lEntry.initialTestFiles && JSON.stringify(s.initialTestFiles) !== JSON.stringify(lEntry.initialTestFiles)) return false;
+      }
+
       const expected = computeBaselineSig(sessionID, s, root, env);
       if (!expected) return false;
       return s.baselineSig === expected;
@@ -1178,14 +1240,18 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const store = readStore();
         if (store._corrupted) return false;
         const entry = store[sessionID];
-        if (entry && typeof entry.ledgerSeq === 'number' && entry.ledgerSeq > 0) {
-          const replayedEntry = replayed[sessionID];
+        const replayedEntry = replayed[sessionID];
+        if (entry && replayedEntry) {
           if (
-            !replayedEntry ||
-            replayedEntry.ledgerSeq !== entry.ledgerSeq ||
+            (replayedEntry.ledgerSeq ?? 0) !== (entry.ledgerSeq ?? 0) ||
             (replayedEntry.depth ?? 0) !== (entry.depth ?? 0) ||
             (replayedEntry.totalCalls ?? 0) !== (entry.totalCalls ?? 0) ||
-            (replayedEntry.mutatingCalls ?? 0) !== (entry.mutatingCalls ?? 0)
+            (replayedEntry.mutatingCalls ?? 0) !== (entry.mutatingCalls ?? 0) ||
+            (replayedEntry.initialActiveTicket && entry.initialActiveTicket !== replayedEntry.initialActiveTicket) ||
+            (replayedEntry.initialStoreHash && entry.initialStoreHash !== replayedEntry.initialStoreHash) ||
+            (replayedEntry.initialPointer && JSON.stringify(entry.initialPointer) !== JSON.stringify(replayedEntry.initialPointer)) ||
+            (replayedEntry.initialTranscript && JSON.stringify(entry.initialTranscript) !== JSON.stringify(replayedEntry.initialTranscript)) ||
+            (replayedEntry.initialTestFiles && JSON.stringify(entry.initialTestFiles) !== JSON.stringify(replayedEntry.initialTestFiles))
           ) {
             return false;
           }

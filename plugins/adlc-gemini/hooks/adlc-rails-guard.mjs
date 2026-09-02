@@ -36,7 +36,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -821,29 +821,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   return false;
 }
 
-export function hasDiscoverableTests(root) {
-  if (!root || typeof root !== 'string') return false;
-  try {
-    for (const d of ['test', 'tests', 'spec', 'specs']) {
-      const p = join(root, d);
-      if (existsSync(p)) {
-        try {
-          const stat = lstatSync(p);
-          if (stat.isDirectory()) {
-            const entries = readdirSync(p, { recursive: true });
-            for (const entry of entries) {
-              const str = typeof entry === 'string' ? entry : entry?.name;
-              if (str && (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(str) || /^test-.*\.m?js$/i.test(str))) {
-                return true;
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-  return false;
-}
+export { hasDiscoverableTests };
 
 export function isReadonlyCommand(cmd) {
   if (typeof cmd !== 'string' || !cmd) return false;
