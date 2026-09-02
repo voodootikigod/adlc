@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
-import { resolveActiveTicketId, isShellTool, classifyTool } from './rails-checker.mjs';
+import { resolveActiveTicketId, isShellTool, classifyTool, extractCommandString } from './rails-checker.mjs';
 import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;

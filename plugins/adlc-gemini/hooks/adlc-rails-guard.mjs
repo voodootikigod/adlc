@@ -34,7 +34,8 @@ function realpathOr(p) {
     return p;
   }
 }
-import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
+import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS, extractCommandString } from '../rails-checker.mjs';
+export { extractCommandString };
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
@@ -211,33 +212,6 @@ function isToolPayload(p) {
   return Boolean(p) && typeof p === 'object' && !Array.isArray(p);
 }
 
-export function extractCommandString(args, depth = 0) {
-  if (!args || typeof args !== 'object' || depth > 5) return '';
-  for (const [key, val] of Object.entries(args)) {
-    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
-      continue;
-    }
-    if (/^(command|cmd|commandline|command_line|exec|shell|terminal|script|eval|run|query|action|operation|program|payload)$/i.test(key)) {
-      if (typeof val === 'string' && val.trim().length > 0) {
-        return val.trim();
-      }
-      if (Array.isArray(val) && val.length > 0) {
-        return val.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ').trim();
-      }
-    }
-  }
-  for (const [key, val] of Object.entries(args)) {
-    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
-      continue;
-    }
-    if (val && typeof val === 'object') {
-      const nested = extractCommandString(val, depth + 1);
-      if (nested) return nested;
-    }
-  }
-  return '';
-}
-
 export function extractCwdFromArgs(args) {
   if (!args || typeof args !== 'object') return null;
   // Check canonical top-level fields first (strict order, no decoy ambiguity)
@@ -334,10 +308,9 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     if (!tool) {
       return enforcing ? deny('tool payload exposes no tool name while enforcing — failing closed') : allow();
     }
-    const cls = classifyTool(tool);
-
     const wsRoot = resolveWorkspaceRoot(payload, env);
     const args = extractArgs(payload);
+    const cls = classifyTool(tool, args);
     const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
     let overrideEscaped = null;
     if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
@@ -411,10 +384,10 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         }
         if (effectiveRoot === null) continue; // absolute path, not an ADLC repo → no-op allow (G2)
 
-        const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, root: effectiveRoot, env });
+        const verdictCanonical = checkRail({ filePath: canonicalAbs, tool, toolArgs: args, root: effectiveRoot, env });
         if (verdictCanonical.decision === 'deny') return deny(`frozen rail — ${verdictCanonical.reason}`);
 
-        const verdict = checkRail({ filePath: abs, tool, root: effectiveRoot, env });
+        const verdict = checkRail({ filePath: abs, tool, toolArgs: args, root: effectiveRoot, env });
         if (verdict.decision === 'deny') return deny(`frozen rail — ${verdict.reason}`);
 
         const pathTracker = getTracker(effectiveRoot);
@@ -539,10 +512,10 @@ export function runFromStdin(raw, envArg = process.env) {
   // must not first count as a tool call against the session — repeated
   // malformed envelopes would poison persistent depth and deny later edits.
   if (!toolName) return decide(payload, { env, trackerCache });
-  const cls = classifyTool(toolName);
+  const args = extractArgs(payload);
+  const cls = classifyTool(toolName, args);
 
   const sessionID = resolveSessionId({ payload, env });
-  const args = extractArgs(payload);
 
   const paths = extractFilePaths(payload);
   const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory, payload?.cwd, payload?.workspaceRoot];

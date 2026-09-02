@@ -121,6 +121,33 @@ export function hasCodeExecutionArgs(args, depth = 0) {
   return false;
 }
 
+export function extractCommandString(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return '';
+  for (const [key, val] of Object.entries(args)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
+    if (/^(command|cmd|commandline|command_line|exec|shell|terminal|script|eval|run|query|action|operation|program|payload)$/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) {
+        return val.trim();
+      }
+      if (Array.isArray(val) && val.length > 0) {
+        return val.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ').trim();
+      }
+    }
+  }
+  for (const [key, val] of Object.entries(args)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
+    if (val && typeof val === 'object') {
+      const nested = extractCommandString(val, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
 /**
  * True for a recognized shell/terminal execution tool (exact whole-name match
  * after normalization). Tools bearing arbitrary code/scripts or unclassified
@@ -365,7 +392,11 @@ function flipCase(s) {
 
 /** Find the declared rail (original spelling) that exactly or glob-matches `path`. */
 function findRailHit(path, rails) {
-  return rails.find((rail) => rail === path || globMatch(rail, path));
+  const normPath = typeof path === 'string' ? path.replace(/\\/g, '/') : '';
+  return rails.find((rail) => {
+    const normRail = typeof rail === 'string' ? rail.replace(/\\/g, '/') : '';
+    return normRail === normPath || globMatch(normRail, normPath);
+  });
 }
 
 /**
@@ -373,8 +404,8 @@ function findRailHit(path, rails) {
  * denied. Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
  * Preconditions are delegated to railPreconditions (single source of truth).
  */
-export function checkRail({ filePath, tool, root = process.cwd(), env = process.env, isCaseInsensitiveFsFn = isCaseInsensitiveFs }) {
-  if (classifyTool(tool) === 'readonly') {
+export function checkRail({ filePath, tool, toolArgs = null, root = process.cwd(), env = process.env, isCaseInsensitiveFsFn = isCaseInsensitiveFs }) {
+  if (classifyTool(tool, toolArgs) === 'readonly') {
     return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
   const pre = railPreconditions({ root, env });
@@ -383,7 +414,12 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
 
   // Enforcing: match BOTH the lexical path and the symlink-resolved real path (so a
   // symlink alias whose target is a frozen rail can't slip past a name check).
-  const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
+  const candidates = new Set([
+    canonicalizePath(filePath, root),
+    resolveRailPath(filePath, root),
+    (isAbsolute(filePath) ? filePath : join(root, filePath)).replace(/\\/g, '/'),
+    realpathOr(filePath).replace(/\\/g, '/')
+  ]);
   const insensitive = isCaseInsensitiveFsFn(root);
   for (const path of candidates) {
     let hit = findRailHit(path, pre.rails);

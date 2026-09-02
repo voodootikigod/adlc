@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decide } from '../hooks/adlc-rails-guard.mjs';
+import { checkRail } from '../rails-checker.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
@@ -515,6 +516,80 @@ test('decide(): structured write targeting node_modules/.bin/mocha or test runne
     assert.equal(res2.allow_tool, false);
     assert.equal(res2.decision, 'deny');
     assert.match(res2.deny_reason, /strictly prohibited|trust-root/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('checkRail: denies write to absolute out-of-repo ADLC_TICKET_STORE path on its own', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cr-repo-'));
+  const externalDir = mkdtempSync(join(tmpdir(), 'adlc-cr-external-'));
+  const extStore = join(externalDir, 'tickets.json');
+  writeFileSync(extStore, JSON.stringify({
+    version: 1,
+    activeTicket: 'T-EXT',
+    tickets: [{ id: 'T-EXT', title: 'External Ticket', status: 'open', rails: ['src/frozen/**'] }],
+  }));
+  try {
+    const res = checkRail({
+      filePath: extStore,
+      tool: 'write_to_file',
+      toolArgs: { TargetFile: extStore },
+      root,
+      env: { ADLC_TICKET_STORE: extStore, ADLC_TICKET: 'T-EXT', ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' },
+    });
+    assert.equal(res.decision, 'deny');
+    assert.match(res.reason, /frozen rail/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+    try { rmSync(externalDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('decide: PURE_READS tool carrying write-target or command args degrades to other and is denied if targeting frozen rail', () => {
+  const root = adlcRepo({ rails: ['frozen.txt'], id: 'T1' });
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'view_file',
+        args: {
+          TargetFile: join(root, 'frozen.txt'),
+        },
+      },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /frozen rail/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript containing prior shell calls', () => {
+  const root = adlcRepo({ rails: ['frozen.txt'], id: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  writeFileSync(transcriptFile, [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'echo "hello"', Cwd: root } }],
+      exit_code: 0,
+    }),
+  ].join('\n') + '\n');
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-shell-trans',
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'ls',
+          Cwd: root,
+        },
+      },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, true);
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch {}
   }

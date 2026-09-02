@@ -63,8 +63,18 @@ if (subcmd === 'status' || subcmd === 'doctor') {
     } catch (_) { emit({ injectSteps: [] }); }
   })();
 } else if (subcmd === 'posttooluse' || subcmd === 'post-tool-use') {
-  process.on('uncaughtException', function () { emit({ decision: 'allow', allow_tool: true }); });
-  process.on('unhandledRejection', function () { emit({ decision: 'allow', allow_tool: true }); });
+  var postFail = function () {
+    try {
+      if (process.env.ADLC_P4_ENFORCEMENT === '1') {
+        var shmDir = '/dev/shm/.adlc';
+        try { require('node:fs').mkdirSync(shmDir, { recursive: true }); } catch (_) {}
+        require('node:fs').writeFileSync(shmDir + '/posttooluse-crash-' + process.pid, 'posttooluse error');
+      }
+    } catch (_) {}
+    emit({ decision: 'allow', allow_tool: true });
+  };
+  process.on('uncaughtException', postFail);
+  process.on('unhandledRejection', postFail);
   var modPost = resolveAdapterPath();
   (async function () {
     try {
@@ -72,7 +82,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
       var raw = await readStdinBounded();
       var payload = raw ? JSON.parse(raw) : {};
       emit(adapter.postToolUse(payload, { env: process.env }));
-    } catch (_) { emit({ decision: 'allow', allow_tool: true }); }
+    } catch (_) { postFail(); }
   })();
 } else if (subcmd === 'stop') {
   var stopFail = function () {
