@@ -4447,6 +4447,31 @@ test('onStop: rejects same-size in-place rewrite of test result from exit_code 1
   }
 });
 
+test('createPersistentTracker: recordEdit bounds oversized filePath before ledger append and preserves ledger integrity', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+  try {
+    const tracker = createPersistentTracker(root, env);
+    const hugePath = 'src/' + 'a'.repeat(2 * 1024 * 1024) + '.js'; // 2 MiB string
+    tracker.recordEdit('sess-huge-path', hugePath);
+
+    assert.ok(existsSync(ledgerFile));
+    const ledgerContent = readFileSync(ledgerFile, 'utf8');
+    const lines = ledgerContent.split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.payload.type, 'recordEdit');
+    // Ensure the stored filePath in payload is bounded to 512 chars, NOT the 2 MiB string
+    assert.ok(parsed.payload.filePath.length <= 512);
+    assert.ok(Buffer.byteLength(lines[0], 'utf8') < 2048);
+
+    // Ledger validation succeeds
+    assert.equal(tracker.validateLedger('sess-huge-path'), true);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

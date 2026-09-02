@@ -763,11 +763,11 @@ export const GEMINI_INTEGRATION = {
   surfaces: [
     {
       key: 'hooks',
-      count: 3,
+      count: 4,
       label: 'hooks',
-      title: 'PreToolUse, PreInvocation, and Stop lifecycle hooks',
-      detail: 'The PreToolUse hook denies frozen rail edits in-session. PreInvocation injects active ticket context, and Stop intercepts unverified completion.',
-      items: ['PreToolUse', 'PreInvocation', 'Stop'],
+      title: 'PreToolUse, PostToolUse, PreInvocation, and Stop lifecycle hooks',
+      detail: 'The PreToolUse hook denies frozen rail edits in-session. PostToolUse authenticates executed tool results and transcript hashes, PreInvocation injects active ticket context, and Stop intercepts unverified completion.',
+      items: ['PreToolUse', 'PostToolUse', 'PreInvocation', 'Stop'],
     },
     {
       key: 'skills',

@@ -360,6 +360,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
 
   const MAX_LEDGER_BYTES = 512 * 1024; // 512 KiB write-side rotation threshold
   const HARD_MAX_LEDGER_BYTES = 2 * 1024 * 1024; // 2 MiB hard limit
+  const MAX_LEDGER_RECORD_BYTES = 16 * 1024; // 16 KiB hard limit per individual record
 
   function computeLedgerMac(prevMac, seq, data) {
     const secret = getOrCreateSessionSecret(root, env);
@@ -395,7 +396,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   function appendLedger(entry) {
-    if (!ticketStoreExists(root, env)) return;
+    if (!ticketStoreExists(root, env)) return null;
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
 
@@ -411,10 +412,10 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               renameSync(ledgerPath, tombstone);
               header = { lastSeq: 0, lastMac: '0'.repeat(64) };
             } else {
-              return;
+              return null;
             }
           } catch {
-            return;
+            return null;
           }
         } else {
           header = { lastSeq: 0, lastMac: '0'.repeat(64) };
@@ -428,7 +429,12 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const mac = computeLedgerMac(prevMac, seq, payload);
       const record = JSON.stringify({ seq, prevMac, mac, payload }) + '\n';
 
-      // Check if ledger exceeds rotation threshold
+      // Enforce individual record size bound to prevent multi-megabyte writes
+      if (Buffer.byteLength(record, 'utf8') > MAX_LEDGER_RECORD_BYTES) {
+        return null;
+      }
+
+      // Check if ledger exceeds rotation threshold or hard limit
       if (existsSync(ledgerPath)) {
         try {
           const lStat = lstatSync(ledgerPath);
@@ -471,20 +477,34 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               curSeq++;
               const newEntryMac = computeLedgerMac(curPrevMac, curSeq, payload);
               compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: newEntryMac, payload }));
-              writeFileSync(tmpLedger, compactedLines.join('\n') + '\n', { mode: 0o600 });
-              renameSync(tmpLedger, ledgerPath);
-              if (entry.sessionID && store[entry.sessionID]) {
-                store[entry.sessionID].ledgerSeq = curSeq;
-                store[entry.sessionID].ledgerMac = newEntryMac;
-                store[entry.sessionID].baselineSig = computeBaselineSig(entry.sessionID, store[entry.sessionID], root, env);
+              const fullCompacted = compactedLines.join('\n') + '\n';
+              if (Buffer.byteLength(fullCompacted, 'utf8') <= HARD_MAX_LEDGER_BYTES) {
+                writeFileSync(tmpLedger, fullCompacted, { mode: 0o600 });
+                renameSync(tmpLedger, ledgerPath);
+                if (entry.sessionID && store[entry.sessionID]) {
+                  store[entry.sessionID].ledgerSeq = curSeq;
+                  store[entry.sessionID].ledgerMac = newEntryMac;
+                  store[entry.sessionID].baselineSig = computeBaselineSig(entry.sessionID, store[entry.sessionID], root, env);
+                }
+                writeStore(store, entry.sessionID);
+                return { seq: curSeq, mac: newEntryMac };
               }
-              writeStore(store, entry.sessionID);
-              return { seq: curSeq, mac: newEntryMac };
-            } else if (lStat.size > HARD_MAX_LEDGER_BYTES) {
+            }
+            if (lStat.size > HARD_MAX_LEDGER_BYTES) {
               // Compaction failed and file exceeds hard limit -> quarantine oversized ledger
               const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
               renameSync(ledgerPath, tombstone);
             }
+          }
+        } catch {}
+      }
+
+      // Final check: Never append if it would cause the ledger to exceed HARD_MAX_LEDGER_BYTES
+      if (existsSync(ledgerPath)) {
+        try {
+          const lStat = lstatSync(ledgerPath);
+          if (lStat.isFile() && lStat.size + Buffer.byteLength(record, 'utf8') > HARD_MAX_LEDGER_BYTES) {
+            return null;
           }
         } catch {}
       }
@@ -922,7 +942,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           let initialTranscript = s.initialTranscript ?? null;
           if (!s.initialTranscript) {
             const curHash = computePrefixHash(transcriptPath, stat.size);
-            initialTranscript = { path: transcriptPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
+            const boundedPath = transcriptPath.length > 512 ? transcriptPath.slice(0, 512) : transcriptPath;
+            initialTranscript = { path: boundedPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
             s.initialTranscript = initialTranscript;
           }
           const curHash = computePrefixHash(transcriptPath, stat.size);
@@ -1029,9 +1050,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
         s.edits = s.edits ?? [];
         s.warned = s.warned ?? [];
-        if (filePath && typeof filePath === 'string') {
-          const bp = filePath.length > 512 ? filePath.slice(0, 512) : filePath;
-          s.edits.push(`Editing ${bp}`);
+        const boundedPath = typeof filePath === 'string' ? (filePath.length > 512 ? filePath.slice(0, 512) : filePath) : null;
+        if (boundedPath) {
+          s.edits.push(`Editing ${boundedPath}`);
           if (s.edits.length > 200) s.edits = s.edits.slice(-200);
         }
 
@@ -1048,7 +1069,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           updatedAt: Date.now(),
         };
 
-        const lH = appendLedger({ type: 'recordEdit', sessionID, filePath });
+        const lH = appendLedger({ type: 'recordEdit', sessionID, filePath: boundedPath });
         const curStore = readStore();
         const curS = curStore[sessionID] ?? s;
         if (lH) {
