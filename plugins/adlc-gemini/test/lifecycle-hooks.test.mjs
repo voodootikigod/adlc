@@ -3478,7 +3478,7 @@ test('decide and onStop: unknown command-shaped tools (custom_shell / terminal_m
     const lines = [
       JSON.stringify({
         type: 'PLANNER_RESPONSE',
-        tool_calls: [{ name: 'terminal_modify', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } }],
+        tool_calls: [{ name: 'custom_shell', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } }],
       }),
       JSON.stringify({ content: 'Attempting stop without test' }),
     ];
@@ -3487,7 +3487,7 @@ test('decide and onStop: unknown command-shaped tools (custom_shell / terminal_m
     preInvocation(payload, { env });
     runFromStdin(JSON.stringify({
       ...payload,
-      toolCall: { name: 'terminal_modify', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } },
+      toolCall: { name: 'custom_shell', args: { CommandLine: 'echo "mod" > src/app.js', Cwd: root } },
     }), env);
 
     const stopRes = onStop(payload, { env });
@@ -4838,6 +4838,95 @@ test('createPersistentTracker: rejects symlinked session ledger file', () => {
     cleanup();
   }
 });
+
+test('decide: denies structured target payloads via terminal_modify and custom_shell targeting trust root', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload1 = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'terminal_modify',
+        args: {
+          TargetFile: join(root, '.adlc', 'tickets.json'),
+          CodeContent: '{"tickets":{}}',
+        },
+      },
+    };
+    const res1 = runFromStdin(JSON.stringify(payload1), env);
+    assert.equal(res1.allow_tool, false);
+    assert.match(res1.deny_reason, /frozen rail/i);
+
+    const payload2 = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'custom_shell',
+        args: {
+          TargetFile: join(root, '.adlc', 'tickets.json'),
+          CodeContent: '{"tickets":{}}',
+        },
+      },
+    };
+    const res2 = runFromStdin(JSON.stringify(payload2), env);
+    assert.equal(res2.allow_tool, false);
+    assert.match(res2.deny_reason, /frozen rail/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('getTestFilesMap and onStop: discovers and protects deep test suites beyond 6 directory levels', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    // Create test suite 8 levels deep: nested/d1/d2/d3/d4/d5/d6/d7/deep.test.js
+    const deepDir = join(root, 'nested', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7');
+    mkdirSync(deepDir, { recursive: true });
+    const deepFile = join(deepDir, 'deep.test.js');
+    writeFileSync(deepFile, 'import test from "node:test"; test("deep", () => {});\n');
+
+    const testMap = getTestFilesMap(root);
+    assert.ok(testMap['nested/d1/d2/d3/d4/d5/d6/d7/deep.test.js']);
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-deep-test',
+    };
+    preInvocation(payload, { env });
+
+    // Modify the deep test file (weakening it)
+    writeFileSync(deepFile, '// weakened\n');
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 0,
+        content: 'ℹ tests 1\nℹ pass 1\n',
+      }),
+      JSON.stringify({ content: 'Done' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /Pre-existing test file .* was modified during session, weakening the verification suite/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

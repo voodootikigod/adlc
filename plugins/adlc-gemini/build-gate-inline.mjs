@@ -249,10 +249,17 @@ export function getTestFilesMap(root) {
   const map = {};
   if (!root || typeof root !== 'string') return map;
   const IGNORED_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.adlc', 'coverage', '.cache']);
+  const visitedRealpaths = new Set();
 
   function scan(dir, depth = 0) {
-    if (depth > 6) return;
+    if (depth > 32) return;
     try {
+      try {
+        const real = realpathSync(dir);
+        if (visitedRealpaths.has(real)) return;
+        visitedRealpaths.add(real);
+      } catch {}
+
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.isDirectory()) {

@@ -394,17 +394,20 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const isShell = isShellTool(tool, args);
 
     if (isShell) {
-      if (enforcing) {
-        const cmd = extractCommandString(args);
-        if (hasCommandLineArgs(args) && !cmd) {
-          return deny('recognized shell tool has unparseable command arguments — failing closed');
+      const cmd = extractCommandString(args);
+      if (cmd) {
+        if (enforcing) {
+          const normCmd = cmd.replace(/\\/g, '/');
+          if (((overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || /(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(normCmd)) && !isReadonlyCommand(cmd)) {
+            return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
+          }
         }
-        const normCmd = cmd.replace(/\\/g, '/');
-        if (((overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || /(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(normCmd)) && !isReadonlyCommand(cmd)) {
-          return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
+        if (!paths.length) {
+          return allow(); // pure command runner with no structured target paths
         }
+      } else if (hasCommandLineArgs(args)) {
+        return enforcing ? deny('recognized shell tool has unparseable command arguments — failing closed') : allow();
       }
-      return allow(); // pure command runner with no rail paths
     }
 
     // Step 2 (cont.) — an 'other' tool with NO path and no mutating hint is not a file

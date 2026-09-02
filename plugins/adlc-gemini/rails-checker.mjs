@@ -26,7 +26,7 @@ export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.jso
 // classify as mutating even though they also contain the read word "search".
 // Shell writes are intentionally NOT gated in-session (Turing-complete shell);
 // they fall to the CI diff gate.
-export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append'];
+export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append', 'modify'];
 
 // The Cursor preToolUse hook is wired with a catch-all matcher (".*") so EVERY
 // tool call reaches the guard and the classifier is the single decision point —
@@ -90,7 +90,7 @@ const SHELL_TOOL_NAMES = new Set([
   'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
   'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
-  'customshell', 'terminalmodify',
+  'customshell',
 ]);
 
 export function hasCommandLineArgs(args, depth = 0) {
@@ -126,8 +126,13 @@ export function hasCodeExecutionArgs(args, depth = 0) {
  */
 export function isShellTool(name, args = null) {
   const norm = normalizeToolName(name);
-  if (SHELL_TOOL_NAMES.has(norm)) return true;
-  return false;
+  if (!SHELL_TOOL_NAMES.has(norm)) return false;
+  if (args && typeof args === 'object') {
+    const hasCmd = hasCommandLineArgs(args);
+    const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination);
+    if (hasTarget && !hasCmd) return false;
+  }
+  return true;
 }
 
 /**
