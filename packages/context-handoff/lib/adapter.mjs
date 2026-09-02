@@ -231,9 +231,12 @@ export function classifyHandoffPath(root, rel) {
  * on with NO space (`wfile`, verified against the real binary) as readily as
  * `w file`, so `sed -n 'w.adlc/handoffs/x' ...` tokenizes to the single token
  * `w.adlc/handoffs/x` — never `.adlc`, and never a token that reaches it as an
- * ancestor either. Gated on the whole command containing `sed` (the same
- * coarse scoping @adlc/core's own sed-write detection uses) so an unrelated
- * token that merely starts with a lowercase `w` isn't split apart elsewhere.
+ * ancestor either. The `w` may also carry a leading sed ADDRESS — `1w file`,
+ * `1,5w file` (real syntax, verified against the real binary) — so the strip
+ * also eats a leading `[0-9,$!]*` before the `w`, not just the `w` itself.
+ * Gated on the whole command containing `sed` (the same coarse scoping
+ * @adlc/core's own sed-write detection uses) so an unrelated token that
+ * merely starts with a lowercase `w` isn't split apart elsewhere.
  *
  * @param {unknown} command
  * @returns {string[]}
@@ -263,8 +266,9 @@ export function shellPathCandidates(command) {
       const eq = raw.indexOf('=');
       if (eq > 0) addWithAncestors(raw.slice(eq + 1));
     }
-    if (isSedCommand && /^w[./~]/.test(raw)) {
-      addWithAncestors(raw.slice(1));
+    if (isSedCommand) {
+      const sedWrite = raw.match(/^[0-9,$!]*w([./~].*)$/);
+      if (sedWrite) addWithAncestors(sedWrite[1]);
     }
   }
   return [...out];

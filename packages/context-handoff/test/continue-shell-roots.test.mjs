@@ -157,6 +157,12 @@ test('a redirect or output-flag smuggled onto a read-only prefix is still denied
       // Unspaced sed `w` — GNU sed accepts this with zero space, verified
       // against the real binary; an earlier fix here required `\s+`.
       "sed -n 'w.adlc/manifest.d/pwned.jsonl' /dev/null",
+      // Flag quoted alone, value a separate argument — the shell strips the
+      // quotes before git sees it, identical to the unquoted form (round 4).
+      'git diff "--output" .adlc/manifest.d/pwned.jsonl',
+      // Line-address-prefixed sed write, no space — the digit before `w` is
+      // a word character, so a plain `\b` boundary misses it (round 4).
+      "sed -n '1w.adlc/manifest.d/pwned.jsonl' /dev/null",
     ]) {
       const verdict = shell(cwd, 'successor-redirect', command);
       assert.equal(verdict.deny, true, `${command} must still be denied: ${JSON.stringify(verdict.reasons)}`);

@@ -108,6 +108,24 @@ test('write option smuggled inside quotes: git diff "--output=x" (regression)', 
   assert.equal(c.writeOption, true);
 });
 
+test('write option: flag quoted alone, value a separate argument (regression)', () => {
+  // `"--output"` closes its own quote right after the option name, with no
+  // `=` or whitespace directly after it in the raw text — the shell strips
+  // the quotes before git ever sees it, so this is identical to unquoted
+  // `git diff --output file`.
+  assert.equal(shellHasWriteOption('git diff "--output" .adlc/handoffs/x'), true);
+  assert.equal(shellHasWriteOption("git diff '--output' .adlc/handoffs/x"), true);
+});
+
+test('sed write with a line-address prefix and no space (regression)', () => {
+  // `1w file` / `1,5w file` are real sed syntax (verified against the real
+  // binary) — the digit immediately before `w` is a WORD character, so a
+  // plain `\b` boundary never fires there.
+  assert.equal(shellHasMutation("sed -n '1w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(shellHasMutation("sed -n '1,5w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(classifyShellCommand("sed -n '1w.adlc/handoffs/x' /dev/null").readOnly, false);
+});
+
 // ---- cwd changes + expansion ----
 test('cwd change detected', () => assert.equal(shellChangesCwd('cd sub && echo x > f'), true));
 test('expansion detected: $VAR / $( / backtick / glob', () => {
