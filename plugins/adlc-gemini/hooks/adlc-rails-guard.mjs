@@ -268,8 +268,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     }
     const cls = classifyTool(tool);
 
-    // Step 2 — classify first. Reads and shell tools are never rail-gated in-session.
-    if (cls === 'readonly') return allow();
     const wsRoot = resolveWorkspaceRoot(payload, env);
     const args = extractArgs(payload);
     const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
@@ -281,6 +279,36 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     }
 
     const paths = extractFilePaths(payload);
+
+    // CRITICAL: Forbid ANY tool (readonly, mutating, or other) from accessing master key or trust-root secrets!
+    const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
+    const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
+    const globalAdlcDir = `${homeDir}/.adlc`;
+    const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+    const newSecretsDir = `${homeDir}/.config/adlc`;
+
+    const isMasterKeyOrSecret = (p) => {
+      if (!p) return false;
+      if (p === legacyMasterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
+      if (p === newAuthKeyFile || p === newSecretsDir || p.startsWith(newSecretsDir + '/')) return true;
+      if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
+      if (typeof p === 'string' && (p.startsWith('~/.adlc') || p.startsWith('~\\.adlc') || p.startsWith('~/.config/adlc') || p.startsWith('~\\.config\\adlc'))) return true;
+      return false;
+    };
+
+    for (const raw of paths) {
+      const { abs } = anchorPath(raw, payload);
+      const canonicalAbs = canonicalizeExisting(abs);
+      const normRaw = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
+      const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
+      const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
+      if (isMasterKeyOrSecret(normAbs) || isMasterKeyOrSecret(normCanonical) || isMasterKeyOrSecret(normRaw)) {
+        return deny('frozen rail — modification of master key or trust-root session secrets is strictly prohibited (access or disclosure forbidden)');
+      }
+    }
+
+    // Step 2 — classify first. Reads of non-secret files are allowed.
+    if (cls === 'readonly') return allow();
 
     if (paths.length > 0) {
       const localCache = trackerCache ?? new Map();
@@ -962,6 +990,22 @@ export function isReadonlyCommand(cmd, { root = process.cwd() } = {}) {
         }
         if (isTrustRootSecretAccess(t) || isTrustRootSecretAccess(resolved)) {
           return false;
+        }
+        try {
+          if (existsSync(resolved) || lstatSync(resolved).isSymbolicLink()) {
+            const real = realpathSync(resolved);
+            const realRel = relative(root, real);
+            if (realRel.startsWith('..') || isAbsolute(realRel)) {
+              return false;
+            }
+            if (isTrustRootSecretAccess(real)) {
+              return false;
+            }
+          }
+        } catch {
+          try {
+            if (lstatSync(resolved).isSymbolicLink()) return false;
+          } catch {}
         }
       }
       if (isUnauthorizedWorkspaceEscape(t) || isTrustRootSecretAccess(t)) {

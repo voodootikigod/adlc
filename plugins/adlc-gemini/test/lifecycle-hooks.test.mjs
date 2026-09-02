@@ -39,8 +39,13 @@ function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope =
   mkdirSync(join(root, 'test'), { recursive: true });
   writeFileSync(join(root, 'test', 'sample.test.js'), 'import test from "node:test"; test("sample", () => {});\n');
 
+  const testHome = join(root, '.home');
+  mkdirSync(testHome, { recursive: true });
+
   const env = {
     ADLC_P4_ENFORCEMENT: enforcement,
+    ADLC_TEST_MODE: '1',
+    ADLC_HOME_DIR: testHome,
   };
 
   return {
@@ -5160,46 +5165,129 @@ test('getTestFilesMap and onStop: baselines test/foo.js, test/foo.cjs, test/foo_
 
 test('getOrCreateSessionSecret: rejects world-readable legacy master key with mode 0644', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
-  const home = homedir() || '';
-  const legacyDir = join(home, '.adlc');
+  const tmpHome = join(root, 'custom-isolated-home');
+  const legacyDir = join(tmpHome, '.adlc');
   const legacyKey = join(legacyDir, '.master-key');
-  const privateDir = join(home, '.config', 'adlc', 'secrets');
+  const privateDir = join(tmpHome, '.config', 'adlc', 'secrets');
   const authKey = join(privateDir, '.auth-key');
-  let backupAuthKey = null;
-  let backupLegacyKey = null;
   try {
-    if (existsSync(authKey)) {
-      backupAuthKey = readFileSync(authKey);
-      unlinkSync(authKey);
-    }
-    if (existsSync(legacyKey)) {
-      backupLegacyKey = readFileSync(legacyKey);
-    }
-
     mkdirSync(legacyDir, { recursive: true });
-    // Write world-readable legacy key
     writeFileSync(legacyKey, 'a'.repeat(64), { mode: 0o644 });
     chmodSync(legacyKey, 0o644);
 
-    const secret = getOrCreateSessionSecret(root, env);
-    // Because legacy key had mode 0644, it must NOT be used as the master key!
-    // Instead, a new auth-key must be generated in privateDir with secure mode
+    const testEnv = { ...env, ADLC_HOME_DIR: tmpHome };
+    const secret = getOrCreateSessionSecret(root, testEnv);
     assert.ok(secret);
     assert.ok(existsSync(authKey));
     const authStat = statSync(authKey);
     assert.equal(authStat.mode & 0o077, 0);
   } finally {
-    if (backupAuthKey !== null) {
-      writeFileSync(authKey, backupAuthKey, { mode: 0o600 });
-    }
-    if (backupLegacyKey !== null) {
-      writeFileSync(legacyKey, backupLegacyKey, { mode: 0o600 });
-    } else if (existsSync(legacyKey)) {
-      try { unlinkSync(legacyKey); } catch {}
-    }
     cleanup();
   }
 });
+
+test('decide: denies view_file and readonly tools targeting master key or session secret', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const targets = [
+      '~/.config/adlc/secrets/.auth-key',
+      '~/.adlc/.master-key',
+      join(root, '.adlc', '.session-secret'),
+      join(root, '.adlc', 'sessions.json'),
+      join(root, '.adlc', 'session-ledger.jsonl'),
+    ];
+
+    for (const target of targets) {
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'view_file',
+          args: { AbsolutePath: target },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for view_file on: ${target}`);
+      assert.match(res.deny_reason, /frozen rail — (modification|access).*master key or trust-root session secrets/i);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('isReadonlyCommand: rejects symlink in workspace pointing to secrets or outside workspace', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    // Create symlink pointing outside workspace to /etc/passwd
+    const externalLink = join(root, 'link-passwd');
+    try {
+      symlinkSync('/etc/passwd', externalLink);
+      assert.equal(isReadonlyCommand(`cat ${externalLink}`, { root }), false);
+      assert.equal(isReadonlyCommand('cat link-passwd', { root }), false);
+    } catch {}
+
+    // Create symlink pointing to session secret
+    const secretLink = join(root, 'link-secret');
+    try {
+      symlinkSync(join(root, '.adlc', '.session-secret'), secretLink);
+      assert.equal(isReadonlyCommand(`cat ${secretLink}`, { root }), false);
+      assert.equal(isReadonlyCommand('cat link-secret', { root }), false);
+    } catch {}
+  } finally {
+    cleanup();
+  }
+});
+
+test('getTestFilesMap and onStop: discovers and protects .jsx, .mts, and .cts test files', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    mkdirSync(join(root, 'test'), { recursive: true });
+    writeFileSync(join(root, 'test/Button.test.jsx'), '// jsx test');
+    writeFileSync(join(root, 'test/handler.test.mts'), '// mts test');
+    writeFileSync(join(root, 'test/service.test.cts'), '// cts test');
+
+    const testMap = getTestFilesMap(root);
+    assert.ok(testMap['test/Button.test.jsx']);
+    assert.ok(testMap['test/handler.test.mts']);
+    assert.ok(testMap['test/service.test.cts']);
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-modern-ext-tests',
+    };
+    preInvocation(payload, { env });
+
+    // Modifying Button.test.jsx must cause onStop to reject
+    writeFileSync(join(root, 'test/Button.test.jsx'), '// weakened');
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 0,
+        content: 'ℹ tests 4\nℹ pass 4\n',
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const resMod = onStop(payload, { env });
+    assert.equal(resMod.decision, 'continue');
+    assert.match(resMod.reason, /Pre-existing test file "test\/Button\.test\.jsx" was modified during session/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

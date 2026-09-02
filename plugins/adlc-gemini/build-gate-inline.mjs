@@ -186,7 +186,7 @@ const loadedSecretCache = new Map();
 export function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
-  const userHome = homedir() || tmpdir();
+  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
   const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
@@ -258,7 +258,7 @@ export function getOrCreateSessionSecret(root, env = process.env) {
 
 export function isNodeTestFile(fileName, relPath) {
   if (!fileName || typeof fileName !== 'string') return false;
-  if (!/\.(m?js|cjs|ts|tsx)$/i.test(fileName)) return false;
+  if (!/\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName)) return false;
 
   const parts = relPath.replace(/\\/g, '/').split('/');
   // Any file under a tests? or specs? directory
@@ -268,9 +268,9 @@ export function isNodeTestFile(fileName, relPath) {
 
   // Common Node test patterns anywhere in workspace:
   // *.test.js, *.spec.js, *_test.js, *-test.js, test-*.js, test.js
-  if (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(fileName) ||
-      /^test-.*|.*[-_]test\.(m?js|cjs|ts|tsx)$/i.test(fileName) ||
-      /^test\.(m?js|cjs|ts|tsx)$/i.test(fileName)) {
+  if (/\.(test|spec)\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName) ||
+      /^test-.*|.*[-_]test\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName) ||
+      /^test\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName)) {
     return true;
   }
 
@@ -1040,7 +1040,13 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         }
         if (snap.compacted && !s.compacted) return false;
       }
-      if (!s) return true;
+      if (!s) {
+        const ledgerStore = replayLedger();
+        if (ledgerStore && ledgerStore[sessionID] && ((ledgerStore[sessionID].mutatingCalls ?? 0) > 0)) {
+          return false; // Wiped store after recorded mutations!
+        }
+        return true;
+      }
       if (s.invalidated) return false;
       const hasTrackedState = (s.totalCalls ?? 0) > 0 || (s.depth ?? 0) > 0 || (s.mutatingCalls ?? 0) > 0 || Boolean(s.initialActiveTicket) || Boolean(s.initialTranscript);
       if (!s.baselineSig) {
