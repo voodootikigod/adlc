@@ -212,8 +212,10 @@ export function getOrCreateSessionSecret(root, env = process.env) {
       const stat = lstatSync(legacyMasterKeyFile);
       if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
         if (uid === null || stat.uid === uid) {
-          const raw = readFileSync(legacyMasterKeyFile, 'utf8').trim();
-          if (raw.length >= 32) masterKey = raw;
+          if ((stat.mode & 0o077) === 0) {
+            const raw = readFileSync(legacyMasterKeyFile, 'utf8').trim();
+            if (raw.length >= 32) masterKey = raw;
+          }
         }
       }
     }
@@ -254,6 +256,27 @@ export function getOrCreateSessionSecret(root, env = process.env) {
   return derivedSecret;
 }
 
+export function isNodeTestFile(fileName, relPath) {
+  if (!fileName || typeof fileName !== 'string') return false;
+  if (!/\.(m?js|cjs|ts|tsx)$/i.test(fileName)) return false;
+
+  const parts = relPath.replace(/\\/g, '/').split('/');
+  // Any file under a tests? or specs? directory
+  if (parts.some((p) => /^(tests?|specs?)$/i.test(p))) {
+    return true;
+  }
+
+  // Common Node test patterns anywhere in workspace:
+  // *.test.js, *.spec.js, *_test.js, *-test.js, test-*.js, test.js
+  if (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(fileName) ||
+      /^test-.*|.*[-_]test\.(m?js|cjs|ts|tsx)$/i.test(fileName) ||
+      /^test\.(m?js|cjs|ts|tsx)$/i.test(fileName)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function getTestFilesMap(root) {
   const map = {};
   if (!root || typeof root !== 'string') return map;
@@ -276,9 +299,9 @@ export function getTestFilesMap(root) {
           scan(join(dir, entry.name), depth + 1);
         } else if (entry.isFile()) {
           const name = entry.name;
-          if (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(name) || /^test-.*\.m?js$/i.test(name)) {
-            const fullP = join(dir, name);
-            const relPath = relative(root, fullP).replace(/\\/g, '/');
+          const fullP = join(dir, name);
+          const relPath = relative(root, fullP).replace(/\\/g, '/');
+          if (isNodeTestFile(name, relPath)) {
             try {
               map[relPath] = createHash('sha256').update(readFileSync(fullP)).digest('hex');
             } catch {}
@@ -312,6 +335,7 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     mutatingCalls: s?.mutatingCalls ?? 0,
     compacted: Boolean(s?.compacted),
     ended: Boolean(s?.ended),
+    inv: Boolean(s?.invalidated),
     edits: Array.isArray(s?.edits) ? s.edits : [],
     warned: Array.isArray(s?.warned) ? s.warned : [],
     flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? '', summary: s.flailStatus.summary ?? '' } : null,
@@ -519,6 +543,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
                   mutatingCalls: s.mutatingCalls ?? 0,
                   compacted: Boolean(s.compacted),
                   ended: Boolean(s.ended),
+                  invalidated: Boolean(s.invalidated),
                   edits: Array.isArray(s.edits) ? s.edits : [],
                   warned: Array.isArray(s.warned) ? s.warned : [],
                   initialActiveTicket: s.initialActiveTicket ?? null,
@@ -658,6 +683,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
           s.compacted = Boolean(ev.compacted);
           s.ended = Boolean(ev.ended);
+          s.invalidated = Boolean(ev.invalidated);
           s.edits = Array.isArray(ev.edits) ? ev.edits : s.edits ?? [];
           s.warned = Array.isArray(ev.warned) ? ev.warned : s.warned ?? [];
           if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
@@ -701,6 +727,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
           if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
           if (typeof ev.exitCode === 'number') s.lastExitCode = ev.exitCode;
+        } else if (ev.type === 'invalidated') {
+          s.invalidated = true;
         }
         s.updatedAt = ev.t ?? Date.now();
         s.ledgerSeq = parsed.seq;
@@ -754,6 +782,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           s._corrupted = true;
           return s;
         }
+        if (parsed._corrupted) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
         const store = Object.create(null);
         for (const [k, v] of Object.entries(parsed)) {
           const safeKey = sanitizeSessionId(k);
@@ -795,6 +828,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const keys = Object.keys(data).filter((k) => k !== '_corrupted');
       for (const k of keys) {
         if (data[k] && typeof data[k] === 'object') {
+          if (data[k].invalidated) data[k].invalidated = true;
           if (Array.isArray(data[k].edits)) {
             data[k].edits = data[k].edits
               .filter((e) => typeof e === 'string')
@@ -1000,12 +1034,14 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const s = store[sessionID];
       if (snap) {
         if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store or evicted
+        if (s.invalidated || snap.invalidated) return false;
         if ((s.depth ?? 0) < (snap.depth ?? 0) || (s.mutatingCalls ?? 0) < (snap.mutatingCalls ?? 0) || (s.totalCalls ?? 0) < (snap.totalCalls ?? 0)) {
           return false; // Counters artificially lowered
         }
         if (snap.compacted && !s.compacted) return false;
       }
       if (!s) return true;
+      if (s.invalidated) return false;
       const hasTrackedState = (s.totalCalls ?? 0) > 0 || (s.depth ?? 0) > 0 || (s.mutatingCalls ?? 0) > 0 || Boolean(s.initialActiveTicket) || Boolean(s.initialTranscript);
       if (!s.baselineSig) {
         return !hasTrackedState && env?.ADLC_P4_ENFORCEMENT !== '1';
@@ -1015,6 +1051,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       const ledgerStore = replayLedger();
       if (ledgerStore && !ledgerStore._corrupted && ledgerStore[sessionID]) {
         const lEntry = ledgerStore[sessionID];
+        if (lEntry.invalidated) return false;
         if (lEntry.initialActiveTicket && s.initialActiveTicket !== lEntry.initialActiveTicket) return false;
         if (lEntry.initialStoreHash && s.initialStoreHash !== lEntry.initialStoreHash) return false;
         if (lEntry.initialPointer && JSON.stringify(s.initialPointer) !== JSON.stringify(lEntry.initialPointer)) return false;
@@ -1267,7 +1304,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             (replayedEntry.initialStoreHash && entry.initialStoreHash !== replayedEntry.initialStoreHash) ||
             (replayedEntry.initialPointer && JSON.stringify(entry.initialPointer) !== JSON.stringify(replayedEntry.initialPointer)) ||
             (replayedEntry.initialTranscript && JSON.stringify(entry.initialTranscript) !== JSON.stringify(replayedEntry.initialTranscript)) ||
-            (replayedEntry.initialTestFiles && JSON.stringify(entry.initialTestFiles) !== JSON.stringify(replayedEntry.initialTestFiles))
+            (replayedEntry.initialTestFiles && JSON.stringify(entry.initialTestFiles) !== JSON.stringify(replayedEntry.initialTestFiles)) ||
+            replayedEntry.invalidated ||
+            entry.invalidated
           ) {
             return false;
           }
@@ -1276,15 +1315,36 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       return true;
     },
     invalidateSession(sessionID) {
-      if (!sessionID) return;
+      if (!sessionID || !ticketStoreExists(root, env)) return;
       withLock(sessionID, () => {
         const store = readStore();
-        if (store[sessionID]) {
-          delete store[sessionID];
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        s.invalidated = true;
+        const lH = appendLedger({ type: 'invalidated', sessionID, reason: 'secret_disclosure' });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
         }
-        store._corrupted = true;
-        writeStore(store, sessionID);
+        curS.invalidated = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        curStore._corrupted = true;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
+    },
+    isInvalidated(sessionID) {
+      if (!sessionID) return false;
+      const store = readStore();
+      if (store[sessionID]?.invalidated) return true;
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
+      if (snap?.invalidated) return true;
+      const replayed = replayLedger();
+      if (replayed?.[sessionID]?.invalidated) return true;
+      return false;
     },
   };
 }

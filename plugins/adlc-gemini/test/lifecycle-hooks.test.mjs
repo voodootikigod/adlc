@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -4987,11 +4987,220 @@ test('postToolUse and onStop: invalidate and reject session if secret disclosure
     writeFileSync(transcriptFile, JSON.stringify({ content: `Disclosed: ${secret}` }) + '\n');
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /(Secret disclosure detected in session transcript|Session tracking store was corrupted)/i);
+    assert.match(res.reason, /(Secret disclosure detected in session transcript|Session tracking store was corrupted|Session invalidated due to secret disclosure)/i);
   } finally {
     cleanup();
   }
 });
+
+test('decide: denies structured writes targeting ~/.config/adlc/secrets/.auth-key and ~/.config/adlc', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const home = homedir() || '';
+  try {
+    const targets = [
+      join(home, '.config', 'adlc', 'secrets', '.auth-key'),
+      '~/.config/adlc/secrets/.auth-key',
+      join(home, '.config', 'adlc', 'secrets'),
+    ];
+
+    for (const target of targets) {
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'write_to_file',
+          args: { TargetFile: target, CodeContent: 'tampered-key' },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for target: ${target}`);
+      assert.match(res.deny_reason, /strictly prohibited|frozen rail/i);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('postToolUse and fresh process: secret disclosure invalidation is durable in ledger across fresh tracker instances', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const sessionID = 'durable-leak-sess';
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: sessionID,
+    };
+    preInvocation(payload, { env });
+
+    const secret = getOrCreateSessionSecret(root, env);
+    assert.ok(secret);
+
+    // Disclose secret in postToolUse
+    postToolUse({
+      ...payload,
+      output: `Leaked secret: ${secret}`,
+    }, { env });
+
+    // In a completely fresh process / tracker instance
+    const freshTracker = createPersistentTracker(root, env);
+    assert.equal(freshTracker.isInvalidated(sessionID), true);
+
+    // Any subsequent tool call in this session must be denied
+    const mutatePayload = {
+      ...payload,
+      toolCall: {
+        name: 'replace_file_content',
+        args: { TargetFile: join(root, 'src/feature/code.js'), ReplacementContent: 'x' },
+      },
+    };
+    const decideRes = runFromStdin(JSON.stringify(mutatePayload), env);
+    assert.equal(decideRes.allow_tool, false);
+    assert.match(decideRes.deny_reason, /session invalidated due to secret disclosure/i);
+
+    // onStop must also reject
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /(Session invalidated due to secret disclosure|Session tracking store was corrupted)/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('isReadonlyCommand: rejects file reading commands targeting paths outside workspace', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const externalReads = [
+      'cat /proc/self/environ',
+      'cat /tmp/other-secret',
+      'head /etc/passwd',
+      'tail /var/log/syslog',
+      'cat ../external.txt',
+    ];
+
+    for (const cmd of externalReads) {
+      assert.equal(isReadonlyCommand(cmd, { root }), false, `Expected non-readonly for: ${cmd}`);
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: cmd, Cwd: root },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for: ${cmd}`);
+    }
+
+    // Inside workspace should be allowed
+    writeFileSync(join(root, 'package.json'), '{}');
+    assert.equal(isReadonlyCommand('cat package.json', { root }), true);
+    assert.equal(isReadonlyCommand('head package.json', { root }), true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('getTestFilesMap and onStop: baselines test/foo.js, test/foo.cjs, test/foo_test.js, test/test.js and rejects modification/deletion', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    mkdirSync(join(root, 'test'), { recursive: true });
+    writeFileSync(join(root, 'test/foo.js'), 'console.log("foo test");');
+    writeFileSync(join(root, 'test/foo.cjs'), 'console.log("foo cjs test");');
+    writeFileSync(join(root, 'test/foo_test.js'), 'console.log("foo_test");');
+    writeFileSync(join(root, 'test/test.js'), 'console.log("test.js");');
+
+    const testMap = getTestFilesMap(root);
+    assert.ok(testMap['test/foo.js']);
+    assert.ok(testMap['test/foo.cjs']);
+    assert.ok(testMap['test/foo_test.js']);
+    assert.ok(testMap['test/test.js']);
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-node-tests',
+    };
+    preInvocation(payload, { env });
+
+    // Modifying test/foo.js must cause onStop to reject
+    writeFileSync(join(root, 'test/foo.js'), 'console.log("weakened");');
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 0,
+        content: 'ℹ tests 4\nℹ pass 4\n',
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const resMod = onStop(payload, { env });
+    assert.equal(resMod.decision, 'continue');
+    assert.match(resMod.reason, /Pre-existing test file "test\/foo\.js" was modified during session/i);
+
+    // Deleting test/foo.cjs must also cause onStop to reject
+    unlinkSync(join(root, 'test/foo.cjs'));
+    const resDel = onStop(payload, { env });
+    assert.equal(resDel.decision, 'continue');
+    assert.match(resDel.reason, /Pre-existing test file "test\/foo\.cjs" was deleted or renamed/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('getOrCreateSessionSecret: rejects world-readable legacy master key with mode 0644', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const home = homedir() || '';
+  const legacyDir = join(home, '.adlc');
+  const legacyKey = join(legacyDir, '.master-key');
+  const privateDir = join(home, '.config', 'adlc', 'secrets');
+  const authKey = join(privateDir, '.auth-key');
+  let backupAuthKey = null;
+  let backupLegacyKey = null;
+  try {
+    if (existsSync(authKey)) {
+      backupAuthKey = readFileSync(authKey);
+      unlinkSync(authKey);
+    }
+    if (existsSync(legacyKey)) {
+      backupLegacyKey = readFileSync(legacyKey);
+    }
+
+    mkdirSync(legacyDir, { recursive: true });
+    // Write world-readable legacy key
+    writeFileSync(legacyKey, 'a'.repeat(64), { mode: 0o644 });
+    chmodSync(legacyKey, 0o644);
+
+    const secret = getOrCreateSessionSecret(root, env);
+    // Because legacy key had mode 0644, it must NOT be used as the master key!
+    // Instead, a new auth-key must be generated in privateDir with secure mode
+    assert.ok(secret);
+    assert.ok(existsSync(authKey));
+    const authStat = statSync(authKey);
+    assert.equal(authStat.mode & 0o077, 0);
+  } finally {
+    if (backupAuthKey !== null) {
+      writeFileSync(authKey, backupAuthKey, { mode: 0o600 });
+    }
+    if (backupLegacyKey !== null) {
+      writeFileSync(legacyKey, backupLegacyKey, { mode: 0o600 });
+    } else if (existsSync(legacyKey)) {
+      try { unlinkSync(legacyKey); } catch {}
+    }
+    cleanup();
+  }
+});
+
 
 
 

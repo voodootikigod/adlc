@@ -270,6 +270,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     // Step 2 — classify first. Reads and shell tools are never rail-gated in-session.
     if (cls === 'readonly') return allow();
+    const wsRoot = resolveWorkspaceRoot(payload, env);
     const args = extractArgs(payload);
     const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
     let overrideEscaped = null;
@@ -309,14 +310,17 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
         const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
         const homeDir = (homedir() || '').replace(/\\/g, '/');
-        const masterKeyFile = `${homeDir}/.adlc/.master-key`;
+        const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
         const globalAdlcDir = `${homeDir}/.adlc`;
+        const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+        const newSecretsDir = `${homeDir}/.config/adlc`;
 
         const isMasterKeyOrSecret = (p) => {
           if (!p) return false;
-          if (p === masterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
-          if (/(^|\/|\b)(\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
-          if (normRaw.startsWith('~/.adlc') || normRaw.startsWith('~\\.adlc')) return true;
+          if (p === legacyMasterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
+          if (p === newAuthKeyFile || p === newSecretsDir || p.startsWith(newSecretsDir + '/')) return true;
+          if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
+          if (normRaw.startsWith('~/.adlc') || normRaw.startsWith('~\\.adlc') || normRaw.startsWith('~/.config/adlc') || normRaw.startsWith('~\\.config\\adlc')) return true;
           return false;
         };
 
@@ -360,6 +364,9 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
         // Check build-gate backstop for structured mutators and unknown ('other') tools
         if (cls !== 'readonly' && enforcing) {
+          if (pathTracker?.isInvalidated?.(sessionID)) {
+            return deny('session invalidated due to secret disclosure — failing closed');
+          }
           if (sessionID === 'default_session') {
             console.error('[adlc-rails-guard] Advisory: session ID unresolvable (default_session); depth counter shared across unresolvable sessions.');
           }
@@ -394,10 +401,15 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const isShell = isShellTool(tool, args);
 
     if (isShell) {
+      const sessionID = resolveSessionId({ payload, env });
+      const pathTracker = wsRoot ? (trackerCache?.get(wsRoot) ?? createPersistentTracker(wsRoot, env)) : null;
+      if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
+        return deny('session invalidated due to secret disclosure — failing closed');
+      }
       const cmd = extractCommandString(args);
       if (cmd) {
         if (enforcing) {
-          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd)) {
+          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: wsRoot ?? process.cwd() })) {
             return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
           }
           if (isUnauthorizedWorkspaceEscape(cmd)) {
@@ -502,7 +514,7 @@ export function runFromStdin(raw, envArg = process.env) {
     if (shellRoot) distinctRoots.add(shellRoot);
   }
   const cmdRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
-  const isMut = isShell ? (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: cmdRoot }) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -832,13 +844,13 @@ export function isUnauthorizedWorkspaceEscape(cmd) {
   if (!cmd || typeof cmd !== 'string') return false;
   const norm = cmd.replace(/\\/g, '/');
   // Explicit references to home, root, etc, or system dirs
-  if (/(^|[\s=;,"'\/\\$.()[\]])(~|\$HOME|\$\{HOME\}|\/home(\/|\b)|\/root(\/|\b)|\/etc(\/|\b)|\/dev\/shm(\/|\b))/i.test(norm)) {
+  if (/(^|[\s=;,"'\/\\$.()[\]])(~|\$HOME|\$\{HOME\}|\/home(\/|\b)|\/root(\/|\b)|\/etc(\/|\b)|\/proc(\/|\b)|\/sys(\/|\b)|\/dev(\/|\b)|\/tmp(\/|\b)|\/var(\/|\b))/i.test(norm)) {
     return true;
   }
   // Searching via find with -exec, -execdir, -ok, -delete or outside cwd
   if (/\bfind\b/i.test(norm)) {
     if (/(-exec|-execdir|-ok|-delete)/i.test(norm)) return true;
-    if (/(^|\s)(\/|\.\.|\/home|~|\$HOME)/i.test(norm)) return true;
+    if (/(^|\s)(\/|\.\.|\/home|~|\$HOME|\/tmp|\/proc|\/var)/i.test(norm)) return true;
   }
   // Parent directory traversal escaping root
   if (/(^|[\s=;,"'\/\\$.()[\]])(\.\.\/)/.test(norm)) {
@@ -866,7 +878,7 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
   return false;
 }
 
-export function isReadonlyCommand(cmd) {
+export function isReadonlyCommand(cmd, { root = process.cwd() } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -935,11 +947,22 @@ export function isReadonlyCommand(cmd) {
   }
 
   const safeBins = ['ls', 'pwd', 'cat', 'head', 'tail', 'which', 'uname', 'whoami', 'date', 'echo', 'printf'];
+  const fileReaderBins = new Set(['cat', 'head', 'tail', 'ls']);
   if (safeBins.includes(bin)) {
     for (let i = 1; i < tokens.length; i++) {
       const t = tokens[i];
       if (/^(-o|--output|--output-directory)$/i.test(t) || /^--output=/i.test(t)) {
         return false;
+      }
+      if (!t.startsWith('-') && fileReaderBins.has(bin)) {
+        const resolved = isAbsolute(t) ? t : resolve(root, t);
+        const rel = relative(root, resolved);
+        if (rel.startsWith('..') || isAbsolute(rel)) {
+          return false;
+        }
+        if (isTrustRootSecretAccess(t) || isTrustRootSecretAccess(resolved)) {
+          return false;
+        }
       }
       if (isUnauthorizedWorkspaceEscape(t) || isTrustRootSecretAccess(t)) {
         return false;
@@ -1029,6 +1052,12 @@ export function onStop(payload, { env = process.env } = {}) {
     } catch {}
 
     const tracker = createPersistentTracker(root, env);
+    if (tracker.isInvalidated?.(sessionID)) {
+      return {
+        decision: 'continue',
+        reason: 'ADLC Rails-Guard: Session invalidated due to secret disclosure.',
+      };
+    }
     const trackedInitialTicket = tracker.initialTicket(sessionID);
     const trackedInitialHash = tracker.initialStoreHash(sessionID);
     const initialActiveId = trackedInitialTicket ?? initialActive.id;
