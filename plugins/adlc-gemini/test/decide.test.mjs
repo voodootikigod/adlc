@@ -288,6 +288,40 @@ test('decide(): shell tool carrying both trust-root secret CommandLine AND benig
   }
 });
 
+test('decide(): shell command reading master key or trust-root secret is denied even with ADLC_P4_ENFORCEMENT unset', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-advisory-secret-'));
+  const ADVISORY_ENV = { ADLC_TEST_MODE: '1' }; // No ADLC_P4_ENFORCEMENT
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
+        },
+      },
+    }, { env: ADVISORY_ENV });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
+
+    const res2 = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat .adlc/.session-secret',
+        },
+      },
+    }, { env: ADVISORY_ENV });
+    assert.equal(res2.allow_tool, false);
+    assert.equal(res2.decision, 'deny');
+    assert.match(res2.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 import { isShellTool } from '../rails-checker.mjs';
@@ -5547,6 +5547,27 @@ test('getOrCreateSessionSecret: handles EEXIST race recovery and derives secret 
 
     const secret = getOrCreateSessionSecret(root, env);
     assert.ok(secret && secret.length === 64, 'Expected valid derived session secret from pre-existing key');
+  } finally {
+    cleanup();
+  }
+});
+
+test('postToolUse: master key disclosure triggers rotation even when no ADLC root resolves', () => {
+  const { env, cleanup } = setupTempRepo({ enforcement: '1' });
+  try {
+    const rawKey = getMasterKeyRaw(env) || rotateMasterKey(env);
+    assert.ok(rawKey && rawKey.length >= 32);
+
+    // Call postToolUse with empty workspacePaths and no transcriptPath
+    const payload = {
+      workspacePaths: [],
+      conversationId: 'headless-no-root-leak',
+      output: `Leaked master key in headless output: ${rawKey}`,
+    };
+    postToolUse(payload, { env });
+
+    const newKey = getMasterKeyRaw(env);
+    assert.notEqual(newKey, rawKey, 'Expected master key to be rotated upon disclosure even without root');
   } finally {
     cleanup();
   }

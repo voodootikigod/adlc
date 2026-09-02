@@ -418,16 +418,20 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const isShell = isShellTool(tool, args);
     const cmd = extractCommandString(args);
 
-    if (cmd && enforcing) {
+    if (cmd) {
       const cmdRoot = wsRoot ?? process.cwd();
+      // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
       if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
         return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
       }
-      if (isUnauthorizedWorkspaceEscape(cmd)) {
-        return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+      if (hasShellTrustRootSecretAccess(cmd, { root: cmdRoot, env })) {
+        return deny('shell access to master key or trust-root session secrets is strictly prohibited');
       }
       if (hasShellSymlinkOrSecretEscape(cmd, { root: cmdRoot, env })) {
         return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
+      }
+      if (enforcing && isUnauthorizedWorkspaceEscape(cmd)) {
+        return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
       }
     }
 
@@ -1089,6 +1093,16 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
 export function postToolUse(payload, { env = process.env } = {}) {
   try {
     const sessionID = resolveSessionId({ payload, env });
+    const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
+
+    // Master key disclosure check is global and does not require an ADLC root to resolve:
+    const masterKey = getMasterKeyRaw(env);
+    if (masterKey && rawOutput.includes(masterKey)) {
+      rotateMasterKey(env);
+      const wsRoot = resolveWorkspaceRoot(payload, env) ?? (findAdlcRoot(process.cwd(), env) || process.cwd());
+      createPersistentTracker(wsRoot, env)?.invalidateSession?.(sessionID);
+    }
+
     const distinctRoots = new Set();
     const wsRoot = resolveWorkspaceRoot(payload, env);
     if (wsRoot) distinctRoots.add(wsRoot);
@@ -1105,14 +1119,9 @@ export function postToolUse(payload, { env = process.env } = {}) {
         transcriptPath,
       });
 
-      // Invalidate session if tool output disclosed session secret or raw master key
+      // Invalidate session if tool output disclosed derived session secret
       const secret = getOrCreateSessionSecret(root, env);
-      const masterKey = getMasterKeyRaw(env);
-      const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
-      if (masterKey && rawOutput.includes(masterKey)) {
-        rotateMasterKey(env);
-        tracker.invalidateSession?.(sessionID);
-      } else if (secret && rawOutput.includes(secret)) {
+      if (secret && rawOutput.includes(secret)) {
         tracker.invalidateSession?.(sessionID);
       }
     }
