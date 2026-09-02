@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +36,8 @@ function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope =
   }
 
   writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+  mkdirSync(join(root, 'test'), { recursive: true });
+  writeFileSync(join(root, 'test', 'sample.test.js'), 'import test from "node:test"; test("sample", () => {});\n');
 
   const env = {
     ADLC_P4_ENFORCEMENT: enforcement,
@@ -3403,6 +3405,8 @@ test('lifecycle: full lifecycle on plain workspace with external ticket store', 
   const plainWs = join(tmpdir(), `adlc-plain-lifecycle-${Date.now()}`);
   mkdirSync(join(plainWs, 'src'), { recursive: true });
   writeFileSync(join(plainWs, 'src', 'editable.js'), '// work');
+  mkdirSync(join(plainWs, 'test'), { recursive: true });
+  writeFileSync(join(plainWs, 'test', 'sample.test.js'), 'import test from "node:test"; test("ok", () => {});\n');
   const transcriptFile = join(plainWs, 'transcript.jsonl');
 
   const externalStore = join(tmpdir(), `adlc-plain-life-store-${Date.now()}.json`);
@@ -4574,6 +4578,111 @@ test('runFromStdin: denies shell command with Windows backslashes targeting .mas
     cleanup();
   }
 });
+
+test('runFromStdin: denies structured write targeting ~/.adlc/.master-key even when outside workspace', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'write_to_file',
+        args: {
+          TargetFile: join(homedir(), '.adlc', '.master-key'),
+          CodeContent: 'tampered-key-content',
+        },
+      },
+    };
+    const res = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /modification of master key or trust-root session secrets is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects node --test verification when all test files were deleted', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    // Delete discoverable tests in workspace
+    rmSync(join(root, 'test'), { recursive: true, force: true });
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 0,
+        content: 'ℹ tests 0\nℹ pass 0\n',
+      }),
+      JSON.stringify({ content: 'Done' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-zero-tests-deleted',
+    };
+    preInvocation(payload, { env });
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects node --test verification when output indicates zero tests executed', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } },
+        ],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } },
+        ],
+        exit_code: 0,
+        content: 'ℹ tests 0\nℹ pass 0\nℹ duration_ms 1.2\n',
+      }),
+      JSON.stringify({ content: 'Done' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-zero-tests-output',
+    };
+    preInvocation(payload, { env });
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'replace_file_content', args: { TargetFile: join(root, 'src/feature/code.js') } } }), env);
+    runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

@@ -5,8 +5,9 @@
 // editor-agnostic checkRail() and emits agy's { allow_tool, deny_reason } verdict.
 // Deny path imports ONLY node: builtins + the sibling checker (→ @adlc/core).
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, realpathSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, lstatSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 
 function canonicalizeExisting(p) {
   if (!p || typeof p !== 'string') return p;
@@ -302,6 +303,26 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           continue;
         }
         const canonicalAbs = canonicalizeExisting(abs);
+
+        // Deny modification of global master key, host secrets, or session store files
+        const normRaw = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
+        const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
+        const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
+        const homeDir = (homedir() || '').replace(/\\/g, '/');
+        const masterKeyFile = `${homeDir}/.adlc/.master-key`;
+        const globalAdlcDir = `${homeDir}/.adlc`;
+
+        const isMasterKeyOrSecret = (p) => {
+          if (!p) return false;
+          if (p === masterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
+          if (/(^|\/|\b)(\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
+          if (normRaw.startsWith('~/.adlc') || normRaw.startsWith('~\\.adlc')) return true;
+          return false;
+        };
+
+        if (isMasterKeyOrSecret(normAbs) || isMasterKeyOrSecret(normCanonical) || isMasterKeyOrSecret(normRaw)) {
+          return deny('frozen rail — modification of master key or trust-root session secrets is strictly prohibited');
+        }
 
         // Check if target is a configured ticket store override (external or custom in-repo)
         if (canonicalStoreOverride && (canonicalAbs === canonicalStoreOverride || canonicalAbs.startsWith(canonicalStoreOverride + '/'))) {
@@ -800,6 +821,30 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
   return false;
 }
 
+export function hasDiscoverableTests(root) {
+  if (!root || typeof root !== 'string') return false;
+  try {
+    for (const d of ['test', 'tests', 'spec', 'specs']) {
+      const p = join(root, d);
+      if (existsSync(p)) {
+        try {
+          const stat = lstatSync(p);
+          if (stat.isDirectory()) {
+            const entries = readdirSync(p, { recursive: true });
+            for (const entry of entries) {
+              const str = typeof entry === 'string' ? entry : entry?.name;
+              if (str && (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(str) || /^test-.*\.m?js$/i.test(str))) {
+                return true;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  return false;
+}
+
 export function isReadonlyCommand(cmd) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
@@ -1145,7 +1190,11 @@ export function onStop(payload, { env = process.env } = {}) {
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
             const isExplicitFailure = (typeof exitCode === 'number' && exitCode !== 0) || status === 'ERROR' || status === 'error' || r?.success === false;
 
-            if (isExplicitSuccess && !isExplicitFailure) {
+            const outStr = typeof r?.content === 'string' ? r.content : (typeof r?.output === 'string' ? r.output : JSON.stringify(r ?? {}));
+            const isZeroTests = /\b(tests|pass)\s+0\b/i.test(outStr) || /\b0\s+(tests|passing)\b/i.test(outStr);
+            const hasTests = hasDiscoverableTests(cmdRoot);
+
+            if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
           } else if (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) {
