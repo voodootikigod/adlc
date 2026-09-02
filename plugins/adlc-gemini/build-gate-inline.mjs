@@ -2,13 +2,13 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, writeSync, closeSync, appendFileSync, fstatSync, readdirSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, writeSync, closeSync, appendFileSync, fstatSync, readdirSync, realpathSync, constants as fsConstants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
-import { resolveActiveTicketId } from './rails-checker.mjs';
-import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps } from './flail-inline.mjs';
+import { resolveActiveTicketId, isShellTool, classifyTool } from './rails-checker.mjs';
+import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
@@ -261,8 +261,8 @@ export function isNodeTestFile(fileName, relPath) {
   if (!/\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName)) return false;
 
   const parts = relPath.replace(/\\/g, '/').split('/');
-  // Any file under a tests? or specs? directory
-  if (parts.some((p) => /^(tests?|specs?)$/i.test(p))) {
+  // Any file under a tests? or specs? or __tests__ or __specs__ directory
+  if (parts.some((p) => /^(tests?|specs?|__tests?__|__specs?__)$/i.test(p))) {
     return true;
   }
 
@@ -281,25 +281,36 @@ export function getTestFilesMap(root) {
   const map = {};
   if (!root || typeof root !== 'string') return map;
   const IGNORED_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.adlc', 'coverage', '.cache']);
-  const visitedRealpaths = new Set();
 
-  function scan(dir, depth = 0) {
+  function scan(dir, depth = 0, ancestorRealpaths = new Set()) {
     if (depth > 32) return;
     try {
+      let real = dir;
       try {
-        const real = realpathSync(dir);
-        if (visitedRealpaths.has(real)) return;
-        visitedRealpaths.add(real);
+        real = realpathSync(dir);
+        if (ancestorRealpaths.has(real)) return;
       } catch {}
+      const branchAncestors = new Set(ancestorRealpaths);
+      branchAncestors.add(real);
 
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.isDirectory()) {
+        const fullP = join(dir, entry.name);
+        let isDir = false;
+        let isF = false;
+        try {
+          const st = statSync(fullP);
+          isDir = st.isDirectory();
+          isF = st.isFile();
+        } catch {
+          isDir = entry.isDirectory();
+          isF = entry.isFile();
+        }
+        if (isDir) {
           if (IGNORED_DIRS.has(entry.name)) continue;
-          scan(join(dir, entry.name), depth + 1);
-        } else if (entry.isFile()) {
+          scan(fullP, depth + 1, branchAncestors);
+        } else if (isF) {
           const name = entry.name;
-          const fullP = join(dir, name);
           const relPath = relative(root, fullP).replace(/\\/g, '/');
           if (isNodeTestFile(name, relPath)) {
             try {
@@ -315,9 +326,11 @@ export function getTestFilesMap(root) {
   return map;
 }
 
-export function hasDiscoverableTests(root) {
+export function hasDiscoverableTests(root, filterDir = null) {
   const map = getTestFilesMap(root);
-  return Object.keys(map).length > 0;
+  if (!filterDir) return Object.keys(map).length > 0;
+  const relFilter = relative(root, filterDir).replace(/\\/g, '/');
+  return Object.keys(map).some((k) => k === relFilter || k.startsWith(relFilter + '/'));
 }
 
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
@@ -1042,8 +1055,25 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       }
       if (!s) {
         const ledgerStore = replayLedger();
-        if (ledgerStore && ledgerStore[sessionID] && ((ledgerStore[sessionID].mutatingCalls ?? 0) > 0)) {
+        if (ledgerStore && ledgerStore[sessionID] && ((ledgerStore[sessionID].mutatingCalls ?? 0) > 0 || (ledgerStore[sessionID].totalCalls ?? 0) > 0)) {
           return false; // Wiped store after recorded mutations!
+        }
+        if (env?.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
+          const tPath = resolveTranscriptPath({ conversationId: sessionID, env });
+          if (tPath) {
+            const records = parseTranscriptRecords(tPath);
+            const hasMutations = records.some((r) => {
+              const calls = r?.tool_calls ?? (r?.toolCall ? [r.toolCall] : []);
+              return calls.some((c) => {
+                const name = c?.name ?? '';
+                const args = c?.args ?? {};
+                return !isShellTool(name, args) && classifyTool(name) !== 'readonly';
+              });
+            });
+            if (hasMutations) {
+              return false; // Wiped store and ledger mid-session while transcript has file mutations!
+            }
+          }
         }
         return true;
       }
@@ -1426,6 +1456,23 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
 
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
+  if (tier === 'high' && env.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
+    const tPath = resolveTranscriptPath({ conversationId: sessionID, env });
+    if (tPath) {
+      const records = parseTranscriptRecords(tPath);
+      const hasMutations = records.some((r) => {
+        const calls = r?.tool_calls ?? (r?.toolCall ? [r.toolCall] : []);
+        return calls.some((c) => {
+          const name = c?.name ?? '';
+          const args = c?.args ?? {};
+          return !isShellTool(name, args) && classifyTool(name) !== 'readonly';
+        });
+      });
+      if (hasMutations && depth === 0) {
+        return { decision: 'deny', reason: 'high-risk ticket build denied: session tracking store was removed mid-session while transcript contains prior mutations' };
+      }
+    }
+  }
   const parsedThreshold = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH_THRESHOLD ?? '', 10);
   const depthThreshold = Number.isNaN(parsedThreshold) ? DEFAULT_DEPTH_THRESHOLD : parsedThreshold;
   const degraded = depth >= depthThreshold || Boolean(tracker?.isCompacted?.(sessionID)) || Boolean(tracker?.isLockFailed?.(sessionID));

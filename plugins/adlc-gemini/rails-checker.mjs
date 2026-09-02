@@ -96,7 +96,7 @@ const SHELL_TOOL_NAMES = new Set([
 export function hasCommandLineArgs(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
-    if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
+    if (/(command|cmd|exec|shell|terminal|script|code|eval|run)/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCommandLineArgs(val, depth + 1)) {
@@ -109,7 +109,7 @@ export function hasCommandLineArgs(args, depth = 0) {
 export function hasCodeExecutionArgs(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return false;
   for (const [key, val] of Object.entries(args)) {
-    if (/(code|script|eval|expression|program|snippet|inline|payload)/i.test(key)) {
+    if (/^(code|script|eval|expression|program|snippet|inline|payload)$/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) return true;
     }
     if (val && typeof val === 'object' && hasCodeExecutionArgs(val, depth + 1)) {
@@ -128,9 +128,8 @@ export function isShellTool(name, args = null) {
   const norm = normalizeToolName(name);
   if (!SHELL_TOOL_NAMES.has(norm)) return false;
   if (args && typeof args === 'object') {
-    const hasCmd = hasCommandLineArgs(args);
-    const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination);
-    if (hasTarget && !hasCmd) return false;
+    const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
+    if (hasTarget) return false;
   }
   return true;
 }

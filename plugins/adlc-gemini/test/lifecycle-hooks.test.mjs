@@ -11,6 +11,7 @@ import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, p
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
+import { isShellTool } from '../rails-checker.mjs';
 
 function setupTempRepo({ activeTicket = 'T1', rails = ['src/frozen.js'], scope = ['src/feature/**'], enforcement = '1', sharded = false } = {}) {
   const root = join(tmpdir(), `adlc-gemini-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -5360,6 +5361,109 @@ test('decide and onStop: denies shell reads and writes through symlinks targetin
     cleanup();
   }
 });
+
+test('isShellTool: reclassifies disguised exec tool carrying TargetFile as non-shell (mutating)', () => {
+  const args = { TargetFile: '.adlc/tickets.json', operation: 'overwrite', content: 'hack' };
+  assert.equal(isShellTool('exec', args), false);
+  assert.equal(isShellTool('bash', args), false);
+  assert.equal(isShellTool('run', args), false);
+});
+
+test('onStop: disguised exec-named mutator targeting frozen rail is caught and rejected', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-disguised-exec',
+    };
+    preInvocation(payload, { env });
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'exec', args: { TargetFile: join(root, '.adlc/tickets.json'), operation: 'overwrite', content: '{}' } }],
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Active ticket contract or trust-root store was modified during session/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('getTestFilesMap: discovers symlinked test directories and files under __tests__', () => {
+  const { root, cleanup } = setupTempRepo();
+  try {
+    // 1. Files under __tests__
+    mkdirSync(join(root, '__tests__'), { recursive: true });
+    writeFileSync(join(root, '__tests__/unit.js'), 'console.log("unit test");');
+
+    // 2. Symlinked test directory
+    const realTestsDir = join(root, 'actual_tests');
+    mkdirSync(realTestsDir, { recursive: true });
+    writeFileSync(join(realTestsDir, 'suite.js'), 'console.log("suite");');
+    const symlinkDir = join(root, 'specs');
+    symlinkSync(realTestsDir, symlinkDir);
+
+    const map = getTestFilesMap(root);
+    assert.ok(map['__tests__/unit.js'], 'Expected __tests__/unit.js to be discovered');
+    assert.ok(map['specs/suite.js'], 'Expected specs/suite.js through symlink to be discovered');
+  } finally {
+    cleanup();
+  }
+});
+
+test('checkBuildGate and validateBaseline: fail closed when sessions.json and session-ledger.jsonl are both deleted mid-session', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const cid = 'sess-wiped-tracking';
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: cid,
+    };
+    preInvocation(payload, { env });
+
+    // Mark high-risk ticket
+    const ticketStore = {
+      version: 1,
+      tickets: [{ id: 'T1', title: 'High Risk Arch', category: 'architecture', rails: [], scope: ['src/**'] }],
+    };
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify(ticketStore));
+
+    // Add tool call to transcript
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src/code.js'), CodeContent: 'x' } }],
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    // Wipe both sessions.json and session-ledger.jsonl
+    unlinkSync(join(root, '.adlc', 'sessions.json'));
+    if (existsSync(join(root, '.adlc', 'session-ledger.jsonl'))) {
+      unlinkSync(join(root, '.adlc', 'session-ledger.jsonl'));
+    }
+
+    const tracker = createPersistentTracker(root, env);
+    // validateBaseline must fail closed because transcript has tool calls but tracking was wiped!
+    assert.equal(tracker.validateBaseline(cid), false);
+
+    // checkBuildGate must also deny
+    const gateRes = checkBuildGate({ sessionID: cid, tracker, root, env });
+    assert.equal(gateRes.decision, 'deny');
+    assert.match(gateRes.reason, /(tampering detected|Session baseline signature mismatch|tracking store was removed mid-session)/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 
