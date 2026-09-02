@@ -294,7 +294,11 @@ export function isTrustRootOrSecretPath(p, env = process.env) {
       if (norm === realNode || norm.startsWith(realNode + '/')) return true;
     } catch {}
   }
-  if (/(^|\/)(node|node\.exe)$/i.test(norm) || /(^|\/)node_modules\/\.bin\/node(\.exe)?$/i.test(norm)) return true;
+  if (/(^|\/)(node|node\.exe)$/i.test(norm) ||
+      /(^|\/)node_modules\/\.bin\/(node|mocha|jest|vitest|npm|npx|adlc)(\.exe|\.cmd|\.ps1)?$/i.test(norm) ||
+      /(^|\/)(\.mocharc(\.(js|cjs|mjs|json|yaml|yml))?|jest\.config\.(js|cjs|mjs|ts|json)|vitest\.config\.(js|cjs|mjs|ts))$/i.test(norm)) {
+    return true;
+  }
 
   const homes = getTrustRootSecretHomes(env);
   for (const homeDir of homes) {
@@ -1470,7 +1474,7 @@ export function onStop(payload, { env = process.env } = {}) {
               };
             }
           }
-          if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) {
+          if (filePaths.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p) || /(^|[/\\])(node_modules[/\\]\.bin|[/\\]\.bin[/\\]|\.mocharc|jest\.config|vitest\.config)/i.test(p))) {
             packageManifestMutated = true;
           }
         }

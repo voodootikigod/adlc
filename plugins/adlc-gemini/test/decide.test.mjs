@@ -485,6 +485,41 @@ test('decide(): shell command with absolute path outside workspace is denied und
   }
 });
 
+test('decide(): structured write targeting node_modules/.bin/mocha or test runner configs is denied as trust root violation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-mocha-target-'));
+  try {
+    const res1 = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'write_to_file',
+        args: {
+          TargetFile: join(root, 'node_modules/.bin/mocha'),
+          CodeContent: '#!/bin/sh\nexit 0\n',
+        },
+      },
+    }, { env: { ADLC_TEST_MODE: '1' } });
+    assert.equal(res1.allow_tool, false);
+    assert.equal(res1.decision, 'deny');
+    assert.match(res1.deny_reason, /strictly prohibited|trust-root/i);
+
+    const res2 = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'write_to_file',
+        args: {
+          TargetFile: join(root, '.mocharc.json'),
+          CodeContent: '{"timeout": 1000}\n',
+        },
+      },
+    }, { env: { ADLC_TEST_MODE: '1' } });
+    assert.equal(res2.allow_tool, false);
+    assert.equal(res2.decision, 'deny');
+    assert.match(res2.deny_reason, /strictly prohibited|trust-root/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 
