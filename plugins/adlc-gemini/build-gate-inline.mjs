@@ -259,7 +259,8 @@ export function rotateMasterKey(env = process.env) {
 }
 
 export function getOrCreateSessionSecret(root, env = process.env) {
-  if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
+  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
+  if (isTest && env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
   const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');

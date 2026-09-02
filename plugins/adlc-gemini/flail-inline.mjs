@@ -2,7 +2,7 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, fstatSync, realpathSync, constants as fsConstants } from 'node:fs';
-import { join, relative, isAbsolute, dirname, parse } from 'node:path';
+import { join, relative, isAbsolute, dirname, parse, basename } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
@@ -69,16 +69,29 @@ export function detectRepeatedErrors(steps, maxRepeat = DEFAULT_ERROR_REPEAT_THR
  */
 export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
   const counts = new Map();
+  const baseCounts = new Map();
+  let totalEdits = 0;
   for (const line of logLines) {
     const match = typeof line === 'string' ? line.match(/^Editing\s+(.+)$/) : null;
     if (match?.[1]) {
+      totalEdits++;
       const path = match[1].trim();
       counts.set(path, (counts.get(path) ?? 0) + 1);
+      const base = basename(path).replace(/\d+/g, '#');
+      baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
     }
   }
   const result = [];
   for (const [path, count] of counts.entries()) {
     if (count >= threshold) result.push({ path, count });
+  }
+  for (const [base, count] of baseCounts.entries()) {
+    if (base.includes('#') && count >= threshold && !result.some((r) => r.path === base)) {
+      result.push({ path: `pattern:${base}`, count });
+    }
+  }
+  if (totalEdits >= threshold * 4 && result.length === 0) {
+    result.push({ path: 'total_edits_velocity', count: totalEdits });
   }
   return result;
 }
@@ -104,8 +117,7 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
             appDataDir,
             env?.ANTIGRAVITY_WORKSPACE,
             env?.WORKSPACE_ROOT,
-            ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : []),
-            ...(isTest ? [tmpdir()] : []),
+            ...(isTest ? [tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])] : []),
           ];
           let isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {

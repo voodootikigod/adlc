@@ -444,6 +444,26 @@ test('decide(): structured write targeting node binary is denied as trust root v
   }
 });
 
+test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-bare-dotdot-'));
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cd ..; ls',
+        },
+      },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /outside workspace|escapes/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 

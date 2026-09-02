@@ -5,7 +5,7 @@ import { dirname, join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-
+process.env.ADLC_TEST_MODE = '1';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, isVerificationCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
@@ -826,6 +826,10 @@ test('onStop: rejects symlinked test path resolving outside repository root', ()
   const symlinkPath = join(root, 'test', 'linked.test.mjs');
   symlinkSync(externalTest, symlinkPath);
 
+  // Directly verify that isVerificationCommand refuses positional path escaping root via symlink
+  const isVer = isVerificationCommand('node --test test/linked.test.mjs', { root, toolArgs: { Cwd: root } });
+  assert.equal(isVer, false, 'Symlink escaping root must not be accepted as verification command');
+
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
@@ -847,7 +851,7 @@ test('onStop: rejects symlinked test path resolving outside repository root', ()
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /(unverified file edits|Shell modification of trust-root store)/);
+    assert.match(res.reason, /Shell modification of trust-root store or transcript is strictly prohibited/);
   } finally {
     try { rmSync(externalTest, { force: true }); } catch (_) {}
     cleanup();
@@ -3423,6 +3427,7 @@ test('lifecycle: full lifecycle on plain workspace with external ticket store', 
     }));
     const env = {
       ADLC_P4_ENFORCEMENT: '1',
+      ADLC_TEST_MODE: '1',
       ADLC_TICKET_STORE: externalStore,
       ADLC_TICKET: 'T1',
     };

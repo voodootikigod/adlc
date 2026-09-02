@@ -917,8 +917,8 @@ export function isUnauthorizedWorkspaceEscape(cmd) {
     if (/(-exec|-execdir|-ok|-delete)/i.test(norm)) return true;
     if (/(^|\s)(\/|\.\.|\/home|~|\$HOME|\/tmp|\/proc|\/var)/i.test(norm)) return true;
   }
-  // Parent directory traversal escaping root
-  if (/(^|[\s=;,"'\/\\$.()[\]])(\.\.\/)/.test(norm)) {
+  // Parent directory traversal escaping root: matches "../", bare "..", "cd ..", etc.
+  if (/(^|[\s=;,"'\/\\$.()[\]])\.\.(?=$|[\s=;,"'\/\\$.()[\]])/.test(norm)) {
     return true;
   }
   return false;

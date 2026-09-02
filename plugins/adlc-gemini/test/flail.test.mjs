@@ -81,6 +81,14 @@ test('detectEditChurn identifies files edited >= threshold times', () => {
   assert.equal(churning[0].count, 3);
 });
 
+test('detectEditChurn identifies rotating filenames matching numbered patterns', () => {
+  const logs = ['Editing scratch1.js', 'Editing scratch2.js', 'Editing scratch3.js'];
+  const churning = detectEditChurn(logs, 3);
+  assert.equal(churning.length, 1);
+  assert.equal(churning[0].path, 'pattern:scratch#.js');
+  assert.equal(churning[0].count, 3);
+});
+
 test('parseTranscriptLines extracts content and error text from JSONL transcript files', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'flail-test-'));
   try {
