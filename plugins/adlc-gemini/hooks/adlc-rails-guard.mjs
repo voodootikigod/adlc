@@ -36,7 +36,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -397,9 +397,11 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       const cmd = extractCommandString(args);
       if (cmd) {
         if (enforcing) {
-          const normCmd = cmd.replace(/\\/g, '/');
-          if (((overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || /(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(normCmd)) && !isReadonlyCommand(cmd)) {
+          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd)) {
             return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
+          }
+          if (isUnauthorizedWorkspaceEscape(cmd)) {
+            return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
           }
         }
         if (!paths.length) {
@@ -826,6 +828,44 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
 export { hasDiscoverableTests };
 
+export function isUnauthorizedWorkspaceEscape(cmd) {
+  if (!cmd || typeof cmd !== 'string') return false;
+  const norm = cmd.replace(/\\/g, '/');
+  // Explicit references to home, root, etc, or system dirs
+  if (/(^|[\s=;,"'\/\\$.()[\]])(~|\$HOME|\$\{HOME\}|\/home(\/|\b)|\/root(\/|\b)|\/etc(\/|\b)|\/dev\/shm(\/|\b))/i.test(norm)) {
+    return true;
+  }
+  // Searching via find with -exec, -execdir, -ok, -delete or outside cwd
+  if (/\bfind\b/i.test(norm)) {
+    if (/(-exec|-execdir|-ok|-delete)/i.test(norm)) return true;
+    if (/(^|\s)(\/|\.\.|\/home|~|\$HOME)/i.test(norm)) return true;
+  }
+  // Parent directory traversal escaping root
+  if (/(^|[\s=;,"'\/\\$.()[\]])(\.\.\/)/.test(norm)) {
+    return true;
+  }
+  return false;
+}
+
+export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
+  if (!cmd || typeof cmd !== 'string') return false;
+  const norm = cmd.replace(/\\/g, '/');
+  if (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(norm))) return true;
+
+  // Normalize away quoting, escapes, and glob metacharacters:
+  // e.g. ".[m]aster-key", ".\m\a\s\t\e\r-k\e\y", "'.master-key'", etc.
+  const deobfuscated = norm.replace(/[[\]{}()\\*?`"'$]/g, '');
+
+  if (/(master-?key|auth-?key|session-?secret|tickets?\.json|session-?ledger|current-?ticket)/i.test(deobfuscated)) {
+    return true;
+  }
+  if (/(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.env\.local)/i.test(norm) ||
+      /(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.env\.local)/i.test(deobfuscated)) {
+    return true;
+  }
+  return false;
+}
+
 export function isReadonlyCommand(cmd) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
@@ -834,8 +874,7 @@ export function isReadonlyCommand(cmd) {
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
 
   // Reject commands targeting session secrets, session store, or ledger
-  const normTrimmed = trimmed.replace(/\\/g, '/');
-  if (/(session-secret|adlc.*secret|\.adlc[/]sessions|session-ledger|\.master-key)/i.test(normTrimmed)) return false;
+  if (isUnauthorizedWorkspaceEscape(trimmed) || isTrustRootSecretAccess(trimmed)) return false;
 
   const tokens = tokenizeCommand(trimmed);
   if (tokens.length === 0) return false;
@@ -902,6 +941,9 @@ export function isReadonlyCommand(cmd) {
       if (/^(-o|--output|--output-directory)$/i.test(t) || /^--output=/i.test(t)) {
         return false;
       }
+      if (isUnauthorizedWorkspaceEscape(t) || isTrustRootSecretAccess(t)) {
+        return false;
+      }
     }
     return true;
   }
@@ -927,6 +969,15 @@ export function postToolUse(payload, { env = process.env } = {}) {
         exitCode: typeof exitCode === 'number' ? exitCode : null,
         transcriptPath,
       });
+
+      // Invalidate session if tool output disclosed session secret
+      const secret = getOrCreateSessionSecret(root, env);
+      if (secret) {
+        const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
+        if (rawOutput.includes(secret)) {
+          tracker.invalidateSession?.(sessionID);
+        }
+      }
     }
   } catch {}
   return { decision: 'allow', allow_tool: true };
@@ -1465,6 +1516,19 @@ export function onStop(payload, { env = process.env } = {}) {
           return {
             decision: 'continue',
             reason: 'ADLC Rails-Guard: Session transcript was modified concurrently during Stop verification.',
+          };
+        }
+      } catch {}
+    }
+
+    if (transcriptPath && existsSync(transcriptPath)) {
+      try {
+        const rawTranscript = readFileSync(transcriptPath, 'utf8');
+        const secret = getOrCreateSessionSecret(root, env);
+        if (secret && rawTranscript.includes(secret)) {
+          return {
+            decision: 'continue',
+            reason: 'ADLC Rails-Guard: Secret disclosure detected in session transcript. Session invalidated.',
           };
         }
       } catch {}

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -4926,6 +4926,73 @@ test('getTestFilesMap and onStop: discovers and protects deep test suites beyond
     cleanup();
   }
 });
+
+test('decide: denies obfuscated shell commands targeting master key or escaping workspace', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const commands = [
+      "find /home -type f -name '.[m]aster-key' -exec cat {} +",
+      "find .. -name '.[a]dlc' -exec ls {} +",
+      "cat ~/.adlc/.master-key",
+      "cat $HOME/.config/adlc/secrets/.auth-key",
+      "cat /dev/shm/.adlc/secrets",
+      "find /etc -name 'passwd'",
+      "cat ../../../.adlc/.master-key",
+      "cat '.[m]aster-key'",
+      'cat ".[a]dlc/session-secret"',
+    ];
+
+    for (const cmd of commands) {
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: cmd, Cwd: root },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for: ${cmd}`);
+      assert.match(res.deny_reason, /(strictly prohibited|filesystem paths outside workspace)/i);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('postToolUse and onStop: invalidate and reject session if secret disclosure occurs', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-secret-leak',
+    };
+    preInvocation(payload, { env });
+
+    const secret = getOrCreateSessionSecret(root, env);
+    assert.ok(secret);
+
+    // Simulate tool output that leaks the secret
+    postToolUse({
+      ...payload,
+      output: `Leaked secret: ${secret}`,
+    }, { env });
+
+    // The session should now be invalidated in the tracker
+    const tracker = createPersistentTracker(root, env);
+    assert.equal(tracker.isCorrupted(), true);
+
+    // In addition, if transcript contains the secret, onStop must reject completion
+    writeFileSync(transcriptFile, JSON.stringify({ content: `Disclosed: ${secret}` }) + '\n');
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /(Secret disclosure detected in session transcript|Session tracking store was corrupted)/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

@@ -183,12 +183,13 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 const loadedSecretCache = new Map();
 
-function getOrCreateSessionSecret(root, env = process.env) {
+export function getOrCreateSessionSecret(root, env = process.env) {
   if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
 
   const userHome = homedir() || tmpdir();
-  const adlcConfigDir = join(userHome, '.adlc');
-  const masterKeyFile = join(adlcConfigDir, '.master-key');
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+  const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
 
   if (loadedSecretCache.has(root)) {
@@ -207,13 +208,21 @@ function getOrCreateSessionSecret(root, env = process.env) {
           }
         }
       }
+    } else if (existsSync(legacyMasterKeyFile)) {
+      const stat = lstatSync(legacyMasterKeyFile);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+        if (uid === null || stat.uid === uid) {
+          const raw = readFileSync(legacyMasterKeyFile, 'utf8').trim();
+          if (raw.length >= 32) masterKey = raw;
+        }
+      }
     }
   } catch {}
 
   if (!masterKey) {
     try {
-      if (!existsSync(adlcConfigDir)) {
-        mkdirSync(adlcConfigDir, { recursive: true, mode: 0o700 });
+      if (!existsSync(adlcPrivateDir)) {
+        mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
       }
       const newKey = randomBytes(32).toString('hex');
       writeFileSync(masterKeyFile, newKey, { mode: 0o600, flag: 'wx' });
@@ -1265,6 +1274,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         }
       }
       return true;
+    },
+    invalidateSession(sessionID) {
+      if (!sessionID) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        if (store[sessionID]) {
+          delete store[sessionID];
+        }
+        store._corrupted = true;
+        writeStore(store, sessionID);
+      });
     },
   };
 }
