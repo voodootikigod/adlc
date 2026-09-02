@@ -536,12 +536,10 @@ export function runFromStdin(raw, envArg = process.env) {
   const isShell = isShellTool(toolName, args);
   const cmd = extractCommandString(args);
   const shellCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-  if (shellCwd && typeof shellCwd === 'string') {
-    const shellRoot = findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env);
-    if (shellRoot) distinctRoots.add(shellRoot);
-  }
-  const cmdRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: cmdRoot, env }) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
+  const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(wsRoot ?? process.cwd(), shellCwd)) : null) ?? wsRoot ?? process.cwd();
+  const repoRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
+  if (repoRoot) distinctRoots.add(repoRoot);
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -1384,14 +1382,15 @@ export function onStop(payload, { env = process.env } = {}) {
           const cmd = extractCommandString(args);
           const normCmd = cmd.replace(/\\/g, '/');
           const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-          const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(isAbsolute(cmdCwd) ? cmdCwd : join(root, cmdCwd), env) : null) ?? root;
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root: cmdRoot, env })) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
+          const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(root, cmdCwd)) : null) ?? root;
+          const repoRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? root;
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root: actualCwd, env })) && !isReadonlyCommand(cmd, { root: actualCwd, env })) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          if (isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
+          if (isVerificationCommand(cmd, { root: repoRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -1399,12 +1398,12 @@ export function onStop(payload, { env = process.env } = {}) {
 
             const outStr = typeof r?.content === 'string' ? r.content : (typeof r?.output === 'string' ? r.output : JSON.stringify(r ?? {}));
             const isZeroTests = /\b(tests|pass)\s+0\b/i.test(outStr) || /\b0\s+(tests|passing)\b/i.test(outStr);
-            const hasTests = hasDiscoverableTests(cmdRoot);
+            const hasTests = hasDiscoverableTests(repoRoot);
 
             if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) {
+          } else if (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args })) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;

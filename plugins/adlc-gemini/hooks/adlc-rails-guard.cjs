@@ -33,9 +33,16 @@ async function readStdinBounded(maxBytes) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+function resolveAdapterPath() {
+  if ((process.env.ADLC_TEST_MODE === '1' || process.env.NODE_ENV === 'test') && process.env.ADLC_AGY_ADAPTER_OVERRIDE) {
+    return process.env.ADLC_AGY_ADAPTER_OVERRIDE;
+  }
+  return __dirname + '/adlc-rails-guard.mjs';
+}
+
 var subcmd = process.argv[2];
 if (subcmd === 'status' || subcmd === 'doctor') {
-  var modPath = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var modPath = resolveAdapterPath();
   import(require('node:url').pathToFileURL(modPath).href).then(function (adapter) {
     if (subcmd === 'status') adapter.printStatus();
     else adapter.printDoctor();
@@ -46,7 +53,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
 } else if (subcmd === 'preinvocation' || subcmd === 'pre-invocation') {
   process.on('uncaughtException', function () { emit({ injectSteps: [] }); });
   process.on('unhandledRejection', function () { emit({ injectSteps: [] }); });
-  var modPre = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var modPre = resolveAdapterPath();
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(modPre).href);
@@ -58,7 +65,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
 } else if (subcmd === 'posttooluse' || subcmd === 'post-tool-use') {
   process.on('uncaughtException', function () { emit({ decision: 'allow', allow_tool: true }); });
   process.on('unhandledRejection', function () { emit({ decision: 'allow', allow_tool: true }); });
-  var modPost = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var modPost = resolveAdapterPath();
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(modPost).href);
@@ -74,7 +81,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
   };
   process.on('uncaughtException', stopFail);
   process.on('unhandledRejection', stopFail);
-  var modStop = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var modStop = resolveAdapterPath();
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(modStop).href);
@@ -87,7 +94,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
   process.on('uncaughtException', function (e) { failSafe('uncaught ' + (e && e.message)); });
   process.on('unhandledRejection', function (e) { failSafe('rejection ' + (e && e.message)); });
 
-  var mod = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var mod = resolveAdapterPath();
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(mod).href);

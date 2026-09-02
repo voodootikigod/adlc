@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -847,7 +847,7 @@ test('onStop: rejects symlinked test path resolving outside repository root', ()
     };
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /unverified file edits/);
+    assert.match(res.reason, /(unverified file edits|Shell modification of trust-root store)/);
   } finally {
     try { rmSync(externalTest, { force: true }); } catch (_) {}
     cleanup();
@@ -5526,7 +5526,7 @@ test('adlc-rails-guard.cjs posttooluse: exits 0 and emits allow verdict without 
   // Adapter error also fails safe to allow so host turn is not aborted
   const res2 = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
     input: JSON.stringify({}),
-    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
     encoding: 'utf8',
   });
   assert.equal(res2.status, 0);
@@ -5596,6 +5596,63 @@ test('postToolUse: master key disclosure inside structured non-string output tri
 
     const tracker = createPersistentTracker(root, env);
     assert.equal(tracker.isInvalidated('sess-structured-output-leak'), true, 'Expected session to be marked invalidated');
+  } finally {
+    cleanup();
+  }
+});
+
+test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE outside test mode', () => {
+  const cjsPath = join(__dirname, '../hooks/adlc-rails-guard.cjs');
+  const envWithoutTest = { ...process.env };
+  delete envWithoutTest.ADLC_TEST_MODE;
+  delete envWithoutTest.NODE_ENV;
+
+  const res = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+    input: JSON.stringify({}),
+    env: { ...envWithoutTest, ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
+    encoding: 'utf8',
+  });
+  assert.equal(res.status, 0);
+  const out = JSON.parse(res.stdout);
+  assert.equal(out.decision, 'allow');
+  assert.equal(out.allow_tool, true);
+});
+
+test('onStop: shell command under nested Cwd with relative traversal to auth-key is caught and rejected', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const subDir = join(root, 'packages', 'deep', 'sub');
+  mkdirSync(subDir, { recursive: true });
+
+  const authKey = join(env.ADLC_HOME_DIR, '.config', 'adlc', 'secrets', '.auth-key');
+  const relTraversal = relative(subDir, authKey);
+
+  try {
+    const cid = 'sess-stop-nested-cwd';
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: cid,
+    };
+    preInvocation(payload, { env });
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{
+          name: 'run_command',
+          args: {
+            CommandLine: `cat ${relTraversal}`,
+            Cwd: subDir,
+          },
+        }],
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /(Shell modification of trust-root store|strictly prohibited)/i);
   } finally {
     cleanup();
   }
