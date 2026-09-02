@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decide } from '../hooks/adlc-rails-guard.mjs';
@@ -317,6 +317,38 @@ test('decide(): shell command reading master key or trust-root secret is denied 
     assert.equal(res2.allow_tool, false);
     assert.equal(res2.decision, 'deny');
     assert.match(res2.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('decide(): shell command with relative symlink under non-default Cwd targeting secret is denied', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-cwd-symlink-'));
+  const subDir = join(root, 'nested', 'subdir');
+  mkdirSync(subDir, { recursive: true });
+  const fakeSecretsDir = join(root, 'fake-home', '.config', 'adlc', 'secrets');
+  mkdirSync(fakeSecretsDir, { recursive: true });
+  const fakeAuthKey = join(fakeSecretsDir, '.auth-key');
+  writeFileSync(fakeAuthKey, 'secret-data');
+
+  const symlinkPath = join(subDir, 'secret-link');
+  symlinkSync(fakeAuthKey, symlinkPath);
+
+  const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat secret-link',
+          Cwd: subDir,
+        },
+      },
+    }, { env });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch {}
   }

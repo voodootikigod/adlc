@@ -5573,6 +5573,34 @@ test('postToolUse: master key disclosure triggers rotation even when no ADLC roo
   }
 });
 
+test('postToolUse: master key disclosure inside structured non-string output triggers rotation', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  try {
+    const rawKey = getMasterKeyRaw(env) || rotateMasterKey(env);
+    assert.ok(rawKey && rawKey.length >= 32);
+
+    // Call postToolUse with non-string structured output: { stdout, stderr, exitCode }
+    const payload = {
+      workspacePaths: [root],
+      conversationId: 'sess-structured-output-leak',
+      output: {
+        stdout: `build completed. Key: ${rawKey}`,
+        stderr: '',
+        exitCode: 0,
+      },
+    };
+    postToolUse(payload, { env });
+
+    const newKey = getMasterKeyRaw(env);
+    assert.notEqual(newKey, rawKey, 'Expected master key to be rotated upon disclosure in structured output');
+
+    const tracker = createPersistentTracker(root, env);
+    assert.equal(tracker.isInvalidated('sess-structured-output-leak'), true, 'Expected session to be marked invalidated');
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

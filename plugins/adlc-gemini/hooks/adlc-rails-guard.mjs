@@ -419,7 +419,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const cmd = extractCommandString(args);
 
     if (cmd) {
-      const cmdRoot = wsRoot ?? process.cwd();
+      const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
+      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(wsRoot ?? process.cwd(), cmdCwd)) : null) ?? wsRoot ?? process.cwd();
       // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
       if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
         return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
@@ -1093,7 +1094,8 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
 export function postToolUse(payload, { env = process.env } = {}) {
   try {
     const sessionID = resolveSessionId({ payload, env });
-    const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
+    const payloadStr = JSON.stringify(payload ?? {});
+    const rawOutput = (typeof payload?.output === 'string' ? payload.output + '\n' : '') + payloadStr;
 
     // Master key disclosure check is global and does not require an ADLC root to resolve:
     const masterKey = getMasterKeyRaw(env);
