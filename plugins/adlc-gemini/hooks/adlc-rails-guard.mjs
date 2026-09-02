@@ -36,7 +36,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -1445,6 +1445,26 @@ export function onStop(payload, { env = process.env } = {}) {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: File edits occurred after the last test run. Test suite must be re-run before completing.',
         };
+      }
+    }
+
+    // Verify that pre-existing test files were not weakened or removed
+    const initialTestFiles = tracker.initialTestFiles ? tracker.initialTestFiles(sessionID) : null;
+    if (initialTestFiles && typeof initialTestFiles === 'object' && Object.keys(initialTestFiles).length > 0) {
+      const currentTestFiles = getTestFilesMap(root);
+      for (const [relPath, origHash] of Object.entries(initialTestFiles)) {
+        if (!currentTestFiles[relPath]) {
+          return {
+            decision: 'continue',
+            reason: `ADLC Rails-Guard: Pre-existing test file "${relPath}" was deleted or renamed.`,
+          };
+        }
+        if (currentTestFiles[relPath] !== origHash) {
+          return {
+            decision: 'continue',
+            reason: `ADLC Rails-Guard: Pre-existing test file "${relPath}" was modified during session, weakening the verification suite.`,
+          };
+        }
       }
     }
 

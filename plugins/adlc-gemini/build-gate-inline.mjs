@@ -2,9 +2,9 @@
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, fstatSync, constants as fsConstants } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, closeSync, appendFileSync, fstatSync, readdirSync, constants as fsConstants } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId } from './rails-checker.mjs';
@@ -245,6 +245,35 @@ function getOrCreateSessionSecret(root, env = process.env) {
   return derivedSecret;
 }
 
+export function getTestFilesMap(root) {
+  const map = {};
+  if (!root || typeof root !== 'string') return map;
+  try {
+    for (const d of ['test', 'tests', 'spec', 'specs']) {
+      const p = join(root, d);
+      if (existsSync(p)) {
+        try {
+          const stat = lstatSync(p);
+          if (stat.isDirectory()) {
+            const entries = readdirSync(p, { recursive: true }).sort();
+            for (const entry of entries) {
+              const str = typeof entry === 'string' ? entry : entry?.name;
+              if (str && (/\.(test|spec)\.(m?js|cjs|ts|tsx)$/i.test(str) || /^test-.*\.m?js$/i.test(str))) {
+                const fullP = join(p, str);
+                if (existsSync(fullP) && lstatSync(fullP).isFile()) {
+                  const relPath = relative(root, fullP).replace(/\\/g, '/');
+                  map[relPath] = createHash('sha256').update(readFileSync(fullP)).digest('hex');
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  return map;
+}
+
 function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
   const secretKey = getOrCreateSessionSecret(root, env);
   if (!secretKey) return null;
@@ -254,6 +283,7 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     h: s?.initialStoreHash ?? null,
     p: s?.initialPointer ?? null,
     tr: s?.initialTranscript ?? null,
+    tf: s?.initialTestFiles ?? null,
     depth: s?.depth ?? 0,
     totalCalls: s?.totalCalls ?? 0,
     mutatingCalls: s?.mutatingCalls ?? 0,
@@ -590,6 +620,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             s.initialActiveTicket = ev.activeTicketId || ev.ticketId;
             s.initialStoreHash = ev.storeHash ?? null;
             if (ev.initialPointer || ev.pointer) s.initialPointer = ev.initialPointer || ev.pointer;
+            if (ev.initialTestFiles) s.initialTestFiles = ev.initialTestFiles;
           }
         } else if (ev.type === 'recordToolCall' || ev.type === 'toolCall') {
           s.depth = (s.depth ?? 0) + 1;
@@ -841,6 +872,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (!s.initialActiveTicket && activeTicketId) {
           s.initialActiveTicket = activeTicketId;
           s.initialStoreHash = storeHash ?? null;
+          s.initialTestFiles = getTestFilesMap(root);
           const currentFile = join(root, '.adlc', 'current-ticket.json');
           if (existsSync(currentFile)) {
             try {
@@ -850,7 +882,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
             } catch {}
           }
         }
-        const lH = appendLedger({ type: 'recordActiveTicket', sessionID, activeTicketId, storeHash, initialPointer: pointerInfo });
+        const lH = appendLedger({ type: 'recordActiveTicket', sessionID, activeTicketId, storeHash, initialPointer: pointerInfo, initialTestFiles: s.initialTestFiles });
         const curStore = readStore();
         const curS = curStore[sessionID] ?? s;
         if (lH) {
@@ -860,6 +892,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (s.initialActiveTicket) curS.initialActiveTicket = s.initialActiveTicket;
         if (s.initialStoreHash) curS.initialStoreHash = s.initialStoreHash;
         if (s.initialPointer) curS.initialPointer = s.initialPointer;
+        if (s.initialTestFiles) curS.initialTestFiles = s.initialTestFiles;
         curS.updatedAt = Date.now();
         curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
         curStore[sessionID] = curS;
@@ -881,6 +914,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!sessionID) return null;
       const store = readStore();
       return store[sessionID]?.initialPointer ?? null;
+    },
+    initialTestFiles(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialTestFiles ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialTestFiles ?? null;
     },
     hasSnapshot(sessionID) {
       if (!sessionID) return false;
