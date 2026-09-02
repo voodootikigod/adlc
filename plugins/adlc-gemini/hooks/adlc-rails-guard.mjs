@@ -178,15 +178,15 @@ export function findAdlcRoot(absPath, env = process.env) {
   return null;
 }
 
-/** Make a raw target path absolute using workspacePaths[0]; report if we could. */
 export function anchorPath(rawPath, payload) {
   if (!rawPath) return { abs: null, anchored: false };
-  if (isAbsolute(rawPath)) return { abs: rawPath, anchored: true };
+  const normRawPath = typeof rawPath === 'string' ? rawPath.replace(/\\/g, '/') : rawPath;
+  if (isAbsolute(normRawPath)) return { abs: normRawPath, anchored: true };
   const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
     .find((s) => typeof s === 'string' && s.trim());
   if (ws) {
     const absWs = isAbsolute(ws) ? ws : resolve(process.cwd(), ws);
-    return { abs: join(absWs, rawPath), anchored: true };
+    return { abs: join(absWs, normRawPath), anchored: true };
   }
   return { abs: null, anchored: false };
 }
@@ -378,7 +378,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (hasCommandLineArgs(args) && !cmd) {
           return deny('recognized shell tool has unparseable command arguments — failing closed');
         }
-        if (((overrideEscaped && overrideEscaped.test(cmd)) || /(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(cmd)) && !isReadonlyCommand(cmd)) {
+        const normCmd = cmd.replace(/\\/g, '/');
+        if (((overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || /(^|[\s=;,"'\/\\$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc)/i.test(normCmd)) && !isReadonlyCommand(cmd)) {
           return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
         }
       }
@@ -807,7 +808,8 @@ export function isReadonlyCommand(cmd) {
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
 
   // Reject commands targeting session secrets, session store, or ledger
-  if (/(session-secret|adlc.*secret|\.adlc\/sessions|session-ledger|\.master-key)/i.test(trimmed)) return false;
+  const normTrimmed = trimmed.replace(/\\/g, '/');
+  if (/(session-secret|adlc.*secret|\.adlc[/]sessions|session-ledger|\.master-key)/i.test(normTrimmed)) return false;
 
   const tokens = tokenizeCommand(trimmed);
   if (tokens.length === 0) return false;
@@ -815,33 +817,55 @@ export function isReadonlyCommand(cmd) {
 
   if (bin === 'git') {
     if (tokens.length < 2) return false;
-    const subcmd = tokens[1];
-    const allowedSubcmds = ['status', 'diff', 'log', 'rev-parse', 'show', 'branch'];
-    if (!allowedSubcmds.includes(subcmd)) return false;
+    let hasNoPager = false;
+    let subcmd = null;
+    const subcmdArgs = [];
 
-    // Scan all git tokens for external helper, configuration override, or output flags
     for (let i = 1; i < tokens.length; i++) {
       const t = tokens[i];
-      // Reject external diff/textconv helpers, output redirection, custom execution paths, and config overrides
-      if (/^(-o|--output|--output-directory|--ext-diff|--no-ext-diff|--textconv|--no-textconv|--exec-path|--work-tree|--git-dir|-c|--config-env)$/i.test(t)) {
+      if (t === '--no-pager') {
+        hasNoPager = true;
+        continue;
+      }
+      // Any global options like -c, -C, --exec-path, --work-tree, --git-dir, --config-env are rejected
+      if (/^(-c|-C|--exec-path|--work-tree|--git-dir|--config-env)$/i.test(t) ||
+          /^--(exec-path|work-tree|git-dir|config-env)=/i.test(t) ||
+          /(diff\.external|diff\.textconv|core\.pager|pager\.|alias\.|!)/i.test(t)) {
         return false;
       }
-      if (/^--(output|output-directory|ext-diff|textconv|exec-path|work-tree|git-dir|config-env)=/i.test(t)) {
-        return false;
+      if (!subcmd && !t.startsWith('-')) {
+        subcmd = t;
+      } else {
+        subcmdArgs.push(t);
       }
-      if (/(diff\.external|diff\.textconv|core\.pager|pager\.|alias\.|!)/i.test(t)) {
+    }
+
+    const allowedSubcmds = ['status', 'diff', 'log', 'rev-parse', 'show', 'branch'];
+    if (!subcmd || !allowedSubcmds.includes(subcmd)) return false;
+
+    // Scan all args for output, external diff/textconv helpers, or config overrides
+    for (const t of subcmdArgs) {
+      if (/^(-o|--output|--output-directory|--ext-diff|--textconv)$/i.test(t) ||
+          /^--(output|output-directory|ext-diff|textconv)=/i.test(t)) {
         return false;
       }
     }
 
-    if (subcmd === 'branch') {
-      if (tokens.slice(2).some((t) => /^(-[dDmMcfuU]|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|-u)$/i.test(t))) {
+    if (subcmd === 'diff' || subcmd === 'log' || subcmd === 'show') {
+      // To guarantee no external helper or pager execution, diff/log/show MUST explicitly pass --no-ext-diff AND --no-pager
+      const hasNoExtDiff = subcmdArgs.includes('--no-ext-diff');
+      if (!hasNoExtDiff || !hasNoPager) {
         return false;
       }
-      for (const t of tokens.slice(2)) {
+    } else if (subcmd === 'branch') {
+      if (subcmdArgs.some((t) => /^(-[dDmMcfuU]|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|-u)$/i.test(t))) {
+        return false;
+      }
+      for (const t of subcmdArgs) {
         if (!t.startsWith('-')) return false; // Positional branch argument (creating/modifying branch)
       }
     }
+
     return true;
   }
 
@@ -1106,7 +1130,8 @@ export function onStop(payload, { env = process.env } = {}) {
 
         if (isShell) {
           const cmd = extractCommandString(args);
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(cmd) || (overrideEscaped && overrideEscaped.test(cmd))) && !isReadonlyCommand(cmd)) {
+          const normCmd = cmd.replace(/\\/g, '/');
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd)))) && !isReadonlyCommand(cmd)) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',

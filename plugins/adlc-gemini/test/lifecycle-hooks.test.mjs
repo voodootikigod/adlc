@@ -4474,15 +4474,21 @@ test('createPersistentTracker: recordEdit bounds oversized filePath before ledge
 
 test('isReadonlyCommand: rejects external-diff, textconv, and config override git commands', () => {
   assert.equal(isReadonlyCommand('git status'), true);
-  assert.equal(isReadonlyCommand('git diff'), true);
-  assert.equal(isReadonlyCommand('git log -n 5'), true);
   assert.equal(isReadonlyCommand('git rev-parse HEAD'), true);
-  assert.equal(isReadonlyCommand('git show HEAD'), true);
   assert.equal(isReadonlyCommand('git branch -a'), true);
 
-  // Reject external diff/textconv helpers and config overrides
+  // git diff/log/show require both --no-pager AND --no-ext-diff to guarantee no external helper execution
+  assert.equal(isReadonlyCommand('git --no-pager diff --no-ext-diff'), true);
+  assert.equal(isReadonlyCommand('git --no-pager log --no-ext-diff -n 5'), true);
+  assert.equal(isReadonlyCommand('git --no-pager show --no-ext-diff HEAD'), true);
+
+  // Without both --no-pager and --no-ext-diff, diff/log/show can invoke configured helpers
+  assert.equal(isReadonlyCommand('git diff'), false);
+  assert.equal(isReadonlyCommand('git log -n 5'), false);
+  assert.equal(isReadonlyCommand('git show HEAD'), false);
   assert.equal(isReadonlyCommand('git diff --ext-diff'), false);
-  assert.equal(isReadonlyCommand('git diff --no-ext-diff'), false);
+  assert.equal(isReadonlyCommand('git diff --no-ext-diff'), false); // missing --no-pager
+  assert.equal(isReadonlyCommand('git --no-pager diff'), false); // missing --no-ext-diff
   assert.equal(isReadonlyCommand('git diff --textconv'), false);
   assert.equal(isReadonlyCommand('git diff --output=diff.txt'), false);
   assert.equal(isReadonlyCommand('git diff -o diff.txt'), false);
@@ -4494,7 +4500,7 @@ test('isReadonlyCommand: rejects external-diff, textconv, and config override gi
   assert.equal(isReadonlyCommand('git checkout main'), false);
 });
 
-test('onStop: treats git diff with external helpers as mutating and requires verification', () => {
+test('onStop: treats git diff without --no-ext-diff or with external helpers as mutating and requires verification', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   try {
@@ -4502,7 +4508,7 @@ test('onStop: treats git diff with external helpers as mutating and requires ver
       JSON.stringify({
         type: 'PLANNER_RESPONSE',
         tool_calls: [
-          { name: 'run_command', args: { CommandLine: 'git diff --ext-diff', Cwd: root } },
+          { name: 'run_command', args: { CommandLine: 'git diff', Cwd: root } },
         ],
         exit_code: 0,
       }),
@@ -4513,7 +4519,7 @@ test('onStop: treats git diff with external helpers as mutating and requires ver
     const payload = {
       workspacePaths: [root],
       transcriptPath: transcriptFile,
-      conversationId: 'sess-git-ext-diff',
+      conversationId: 'sess-git-bare-diff',
     };
     preInvocation(payload, { env });
     const tracker = createPersistentTracker(root, env);
@@ -4522,6 +4528,48 @@ test('onStop: treats git diff with external helpers as mutating and requires ver
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
     assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runFromStdin: denies shell command with Windows backslashes attempting to access .adlc or ticket store', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'powershell -Command Remove-Item .\\.adlc\\tickets.json',
+          Cwd: root,
+        },
+      },
+    };
+    const res = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails is strictly prohibited/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('runFromStdin: denies shell command with Windows backslashes targeting .master-key or session secret', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  try {
+    const payload = {
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'type ~\\.adlc\\.master-key',
+          Cwd: root,
+        },
+      },
+    };
+    const res = runFromStdin(JSON.stringify(payload), env);
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails is strictly prohibited/);
   } finally {
     cleanup();
   }
