@@ -19,12 +19,15 @@ export const ERROR_LINE_RE = /error|exception|failed|cannot|ENOENT|FAIL|ERR!/i;
  */
 export function normalizeError(line) {
   if (typeof line !== 'string') return '';
+  if (line.length > 2048) line = line.slice(0, 2048);
   return line
     .toLowerCase()
     .replace(/0x[0-9a-f]+/gi, '')
     .replace(/"[^"]*"/g, '')
     .replace(/'[^']*'/g, '')
-    .replace(/(?:\b[A-Za-z]:\\[^\s]*|(?:\/|\b[\w.-]+\/)[^\s]*)/g, '')
+    .replace(/\b[A-Za-z]:\\[^\s]*/g, '')
+    .replace(/\b\S+\/[^\s]*/g, '')
+    .replace(/\/[^\s]*/g, '')
     .replace(/\d+/g, '')
     .replace(/\s+/g, ' ')
     .trim();

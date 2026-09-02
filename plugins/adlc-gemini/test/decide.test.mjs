@@ -464,6 +464,27 @@ test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcem
   }
 });
 
+test('decide(): shell command with absolute path outside workspace is denied under containment check', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-containment-'));
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: 'cat /opt/secrets/prod.env',
+          Cwd: root,
+        },
+      },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /outside workspace/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 

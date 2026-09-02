@@ -395,6 +395,7 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
     flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? '', summary: s.flailStatus.summary ?? '' } : null,
     lastTranscriptSize: s?.lastTranscriptSize ?? null,
     lastTranscriptHash: s?.lastTranscriptHash ?? null,
+    lastExitCode: typeof s?.lastExitCode === 'number' ? s.lastExitCode : null,
     ledgerSeq: s?.ledgerSeq ?? 0,
     ledgerMac: s?.ledgerMac ?? null,
   });
@@ -1495,7 +1496,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
 
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
-  if (tier === 'high' && env.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
+  if (env.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
     const tPath = resolveTranscriptPath({ conversationId: sessionID, env });
     if (tPath) {
       const records = parseTranscriptRecords(tPath);
@@ -1508,7 +1509,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
         });
       });
       if (hasMutations && depth === 0) {
-        return { decision: 'deny', reason: 'high-risk ticket build denied: session tracking store was removed mid-session while transcript contains prior mutations' };
+        return { decision: 'deny', reason: 'ticket build denied: session tracking store was removed mid-session while transcript contains prior mutations' };
       }
     }
   }

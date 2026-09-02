@@ -214,7 +214,10 @@ function isToolPayload(p) {
 export function extractCommandString(args, depth = 0) {
   if (!args || typeof args !== 'object' || depth > 5) return '';
   for (const [key, val] of Object.entries(args)) {
-    if (/(command|cmd|exec|shell|terminal|script|code|eval|run|query|action|instruction|operation|program|snippet|payload)/i.test(key)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
+    if (/^(command|cmd|commandline|command_line|exec|shell|terminal|script|eval|run|query|action|operation|program|payload)$/i.test(key)) {
       if (typeof val === 'string' && val.trim().length > 0) {
         return val.trim();
       }
@@ -223,7 +226,10 @@ export function extractCommandString(args, depth = 0) {
       }
     }
   }
-  for (const val of Object.values(args)) {
+  for (const [key, val] of Object.entries(args)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
     if (val && typeof val === 'object') {
       const nested = extractCommandString(val, depth + 1);
       if (nested) return nested;
@@ -448,22 +454,23 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     }
 
     const isShell = isShellTool(tool, args);
-    const cmd = extractCommandString(args);
+    const cmd = isShell ? extractCommandString(args) : '';
 
     if (cmd) {
       const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(wsRoot ?? process.cwd(), cmdCwd)) : null) ?? wsRoot ?? process.cwd();
+      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (wsRoot ? resolve(wsRoot, cmdCwd) : null)) : null) ?? wsRoot ?? null;
+      const effectiveRoot = cmdRoot ?? process.cwd();
       // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
-      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
+      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: effectiveRoot, env })) {
         return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
       }
-      if (hasShellTrustRootSecretAccess(cmd, { root: cmdRoot, env })) {
+      if (hasShellTrustRootSecretAccess(cmd, { root: effectiveRoot, env })) {
         return deny('shell access to master key or trust-root session secrets is strictly prohibited');
       }
-      if (hasShellSymlinkOrSecretEscape(cmd, { root: cmdRoot, env })) {
+      if (hasShellSymlinkOrSecretEscape(cmd, { root: effectiveRoot, env })) {
         return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
       }
-      if (enforcing && isUnauthorizedWorkspaceEscape(cmd)) {
+      if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: cmdRoot })) {
         return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
       }
     }
@@ -905,7 +912,7 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
 export { hasDiscoverableTests };
 
-export function isUnauthorizedWorkspaceEscape(cmd) {
+export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
   const norm = cmd.replace(/\\/g, '/');
   // Explicit references to home, root, etc, or system dirs
@@ -921,6 +928,27 @@ export function isUnauthorizedWorkspaceEscape(cmd) {
   if (/(^|[\s=;,"'\/\\$.()[\]])\.\.(?=$|[\s=;,"'\/\\$.()[\]])/.test(norm)) {
     return true;
   }
+
+  // Path containment check against root: check any path-shaped tokens
+  if (root && typeof root === 'string') {
+    const tokens = tokenizeCommand(cmd);
+    for (const rawToken of tokens) {
+      if (!rawToken || rawToken.length > 4096) continue;
+      let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
+      if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
+      if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
+      if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
+      // If token is an absolute path (excluding standard system binary locations /bin, /usr/bin)
+      if (t.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(t)) {
+        if (/^\/(bin|usr\/bin|usr\/local\/bin)\b/.test(t)) continue;
+        const rel = relative(root, t);
+        if (rel.startsWith('..') || isAbsolute(rel)) {
+          return true;
+        }
+      }
+    }
+  }
+
   return false;
 }
 
@@ -953,6 +981,11 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
 
 export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
+
+  // Catch wildcard globs targeting dotfiles or candidate secret names
+  if (/(cat|head|tail|less|more|od|xxd|strings|source|\.)\s+.*(\.\*|\*\.|\*auth|\*master|\*secret|\*ticket|\*ledger)/i.test(cmd)) {
+    return true;
+  }
   const tokens = tokenizeCommand(cmd);
   const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
   if (redirectMatches) {
@@ -1032,7 +1065,7 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
 
   // Reject commands targeting session secrets, session store, or ledger
-  if (isUnauthorizedWorkspaceEscape(trimmed) || isTrustRootSecretAccess(trimmed)) return false;
+  if (isUnauthorizedWorkspaceEscape(trimmed, { root }) || isTrustRootSecretAccess(trimmed)) return false;
   if (hasShellSymlinkOrSecretEscape(trimmed, { root, env })) return false;
 
   const tokens = tokenizeCommand(trimmed);
@@ -1127,7 +1160,7 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
           } catch {}
         }
       }
-      if (isUnauthorizedWorkspaceEscape(t) || isTrustRootSecretAccess(t)) {
+      if (isUnauthorizedWorkspaceEscape(t, { root }) || isTrustRootSecretAccess(t)) {
         return false;
       }
     }

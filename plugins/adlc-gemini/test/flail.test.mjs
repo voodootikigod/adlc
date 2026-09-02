@@ -28,6 +28,15 @@ test('normalizeError strips line numbers, hex, quotes, absolute paths, and digit
   assert.equal(norm1, 'error: failed to build target at line ()');
 });
 
+test('normalizeError handles adversarial long inputs without quadratic backtracking', () => {
+  const adversarial = 'error: ' + 'a.'.repeat(50000);
+  const start = Date.now();
+  const res = normalizeError(adversarial);
+  const duration = Date.now() - start;
+  assert.ok(duration < 200, `Expected duration < 200ms, got ${duration}ms`);
+  assert.ok(typeof res === 'string');
+});
+
 test('detectRepeatedErrors detects error signatures repeating >= maxRepeat times', () => {
   const lines = [
     'Error: Failed to compile src/a.js at line 10',
