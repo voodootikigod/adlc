@@ -5535,6 +5535,23 @@ test('adlc-rails-guard.cjs posttooluse: exits 0 and emits allow verdict without 
   assert.equal(out2.allow_tool, true);
 });
 
+test('getOrCreateSessionSecret: handles EEXIST race recovery and derives secret cleanly', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  try {
+    const userHome = env.ADLC_HOME_DIR;
+    const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+    const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+    mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
+    const preExistingKey = 'a'.repeat(64);
+    writeFileSync(masterKeyFile, preExistingKey, { mode: 0o600 });
+
+    const secret = getOrCreateSessionSecret(root, env);
+    assert.ok(secret && secret.length === 64, 'Expected valid derived session secret from pre-existing key');
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

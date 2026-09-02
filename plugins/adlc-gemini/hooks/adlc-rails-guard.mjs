@@ -247,6 +247,32 @@ export function extractCwdFromArgs(args, depth = 0) {
   return null;
 }
 
+export function getTrustRootSecretHomes(env = process.env) {
+  const customHome = (env?.ADLC_HOME_DIR || '').replace(/\\/g, '/');
+  const realHome = (homedir() || tmpdir() || '').replace(/\\/g, '/');
+  const homes = [realHome];
+  if (customHome && customHome !== realHome) homes.push(customHome);
+  return homes;
+}
+
+export function isTrustRootOrSecretPath(p, env = process.env) {
+  if (!p || typeof p !== 'string') return false;
+  const norm = p.replace(/\\/g, '/');
+  const homes = getTrustRootSecretHomes(env);
+  for (const homeDir of homes) {
+    if (!homeDir) continue;
+    const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
+    const globalAdlcDir = `${homeDir}/.adlc`;
+    const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+    const newSecretsDir = `${homeDir}/.config/adlc`;
+    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
+    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
+  }
+  if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
+  if (norm.startsWith('~/.adlc') || norm.startsWith('~\\.adlc') || norm.startsWith('~/.config/adlc') || norm.startsWith('~\\.config\\adlc')) return true;
+  return false;
+}
+
 /**
  * Pure decision over a parsed agy PreToolUse payload → agy verdict.
  * Never throws (the caller also wraps it). Implements the §5 decision tree.
@@ -281,28 +307,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const paths = extractFilePaths(payload);
 
     // CRITICAL: Forbid ANY tool (readonly, mutating, or other) from accessing master key or trust-root secrets!
-    const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
-    const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
-    const globalAdlcDir = `${homeDir}/.adlc`;
-    const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
-    const newSecretsDir = `${homeDir}/.config/adlc`;
-
-    const isMasterKeyOrSecret = (p) => {
-      if (!p) return false;
-      if (p === legacyMasterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
-      if (p === newAuthKeyFile || p === newSecretsDir || p.startsWith(newSecretsDir + '/')) return true;
-      if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
-      if (typeof p === 'string' && (p.startsWith('~/.adlc') || p.startsWith('~\\.adlc') || p.startsWith('~/.config/adlc') || p.startsWith('~\\.config\\adlc'))) return true;
-      return false;
-    };
-
     for (const raw of paths) {
       const { abs } = anchorPath(raw, payload);
       const canonicalAbs = canonicalizeExisting(abs);
       const normRaw = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
       const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
       const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
-      if (isMasterKeyOrSecret(normAbs) || isMasterKeyOrSecret(normCanonical) || isMasterKeyOrSecret(normRaw)) {
+      if (isTrustRootOrSecretPath(normAbs, env) || isTrustRootOrSecretPath(normCanonical, env) || isTrustRootOrSecretPath(normRaw, env)) {
         return deny('frozen rail — modification of master key or trust-root session secrets is strictly prohibited (access or disclosure forbidden)');
       }
     }
@@ -332,29 +343,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           continue;
         }
         const canonicalAbs = canonicalizeExisting(abs);
-
-        // Deny modification of global master key, host secrets, or session store files
-        const normRaw = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
-        const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
-        const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
-        const homeDir = (homedir() || '').replace(/\\/g, '/');
-        const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
-        const globalAdlcDir = `${homeDir}/.adlc`;
-        const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
-        const newSecretsDir = `${homeDir}/.config/adlc`;
-
-        const isMasterKeyOrSecret = (p) => {
-          if (!p) return false;
-          if (p === legacyMasterKeyFile || p === globalAdlcDir || p.startsWith(globalAdlcDir + '/')) return true;
-          if (p === newAuthKeyFile || p === newSecretsDir || p.startsWith(newSecretsDir + '/')) return true;
-          if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger)/i.test(p)) return true;
-          if (normRaw.startsWith('~/.adlc') || normRaw.startsWith('~\\.adlc') || normRaw.startsWith('~/.config/adlc') || normRaw.startsWith('~\\.config\\adlc')) return true;
-          return false;
-        };
-
-        if (isMasterKeyOrSecret(normAbs) || isMasterKeyOrSecret(normCanonical) || isMasterKeyOrSecret(normRaw)) {
-          return deny('frozen rail — modification of master key or trust-root session secrets is strictly prohibited');
-        }
 
         // Check if target is a configured ticket store override (external or custom in-repo)
         if (canonicalStoreOverride && (canonicalAbs === canonicalStoreOverride || canonicalAbs.startsWith(canonicalStoreOverride + '/'))) {
@@ -412,7 +400,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           const flailBypass = env?.ADLC_FLAIL_BYPASS === '1';
 
           if (flailRes?.verdict === 'loop_blocked') {
-            return deny(`flail-guard — ${flailMessage(flailRes)}`);
+            const firstChurn = flailRes?.churning?.[0] ?? { path: abs, count: 3 };
+            return deny(`flail-guard — ${flailMessage(firstChurn)}`);
           }
           if (flailRes?.verdict === 'flail') {
             if (flailEnforcing && !flailBypass) {
@@ -922,21 +911,6 @@ export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env =
     }
   }
 
-  const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
-  const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
-  const globalAdlcDir = `${homeDir}/.adlc`;
-  const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
-  const newSecretsDir = `${homeDir}/.config/adlc`;
-
-  const isSecretTarget = (p) => {
-    if (!p) return false;
-    const norm = p.replace(/\\/g, '/');
-    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
-    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
-    if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
-    return false;
-  };
-
   for (const rawToken of tokens) {
     if (!rawToken || rawToken.length > 4096) continue;
     let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
@@ -948,7 +922,7 @@ export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env =
     try {
       if (existsSync(absCandidate) || lstatSync(absCandidate).isSymbolicLink()) {
         const canonical = realpathSync(absCandidate);
-        if (isSecretTarget(canonical)) {
+        if (isTrustRootOrSecretPath(canonical, env)) {
           return true;
         }
       }
@@ -968,21 +942,6 @@ export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env =
     }
   }
 
-  const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
-  const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
-  const globalAdlcDir = `${homeDir}/.adlc`;
-  const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
-  const newSecretsDir = `${homeDir}/.config/adlc`;
-
-  const isSecretTarget = (p) => {
-    if (!p) return false;
-    const norm = p.replace(/\\/g, '/');
-    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
-    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
-    if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
-    return false;
-  };
-
   for (const rawToken of tokens) {
     if (!rawToken || rawToken.length > 4096) continue;
     let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
@@ -995,7 +954,7 @@ export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env =
       const isSymlink = lstatSync(absCandidate).isSymbolicLink();
       if (isSymlink || existsSync(absCandidate)) {
         const canonical = realpathSync(absCandidate);
-        if (isSecretTarget(canonical)) {
+        if (isTrustRootOrSecretPath(canonical, env)) {
           return true;
         }
         if (isSymlink) {

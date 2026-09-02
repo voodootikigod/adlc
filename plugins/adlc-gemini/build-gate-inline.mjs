@@ -271,17 +271,7 @@ export function getOrCreateSessionSecret(root, env = process.env) {
       masterKey = newKey;
     } catch (err) {
       if (err.code === 'EEXIST') {
-        try {
-          const stat = lstatSync(masterKeyFile);
-          if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
-            if (uid === null || stat.uid === uid) {
-              if ((stat.mode & 0o077) === 0) {
-                const raw = readFileSync(masterKeyFile, 'utf8').trim();
-                if (raw.length >= 32) masterKey = raw;
-              }
-            }
-          }
-        } catch {}
+        masterKey = getMasterKeyRaw(env);
       }
     }
   }
