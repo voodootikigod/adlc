@@ -4472,6 +4472,62 @@ test('createPersistentTracker: recordEdit bounds oversized filePath before ledge
   }
 });
 
+test('isReadonlyCommand: rejects external-diff, textconv, and config override git commands', () => {
+  assert.equal(isReadonlyCommand('git status'), true);
+  assert.equal(isReadonlyCommand('git diff'), true);
+  assert.equal(isReadonlyCommand('git log -n 5'), true);
+  assert.equal(isReadonlyCommand('git rev-parse HEAD'), true);
+  assert.equal(isReadonlyCommand('git show HEAD'), true);
+  assert.equal(isReadonlyCommand('git branch -a'), true);
+
+  // Reject external diff/textconv helpers and config overrides
+  assert.equal(isReadonlyCommand('git diff --ext-diff'), false);
+  assert.equal(isReadonlyCommand('git diff --no-ext-diff'), false);
+  assert.equal(isReadonlyCommand('git diff --textconv'), false);
+  assert.equal(isReadonlyCommand('git diff --output=diff.txt'), false);
+  assert.equal(isReadonlyCommand('git diff -o diff.txt'), false);
+  assert.equal(isReadonlyCommand('git -c diff.external=malicious diff'), false);
+  assert.equal(isReadonlyCommand('git --config-env=diff.external=ENV_VAR diff'), false);
+  assert.equal(isReadonlyCommand('git log --ext-diff'), false);
+  assert.equal(isReadonlyCommand('git show --textconv'), false);
+  assert.equal(isReadonlyCommand('git branch new-feature-branch'), false);
+  assert.equal(isReadonlyCommand('git checkout main'), false);
+});
+
+test('onStop: treats git diff with external helpers as mutating and requires verification', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: 'git diff --ext-diff', Cwd: root } },
+        ],
+        exit_code: 0,
+      }),
+      JSON.stringify({ content: 'Attempting stop' }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-git-ext-diff',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall(payload.conversationId, { isMutating: true });
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /unverified file edits/i);
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 
 

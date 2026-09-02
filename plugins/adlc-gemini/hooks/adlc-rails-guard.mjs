@@ -805,23 +805,58 @@ export function isReadonlyCommand(cmd) {
   if (!trimmed) return false;
   // Any shell redirection, chaining, piping, substitution, assignment, grouping, or operator could mutate state
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
-  // Reject output redirection flags (e.g. git diff --output=file)
-  if (/(^|\s)(--output|-o|--output-directory)\b/i.test(trimmed) || /--output=/i.test(trimmed)) return false;
 
-  // Treat git branch as mutating unless only read-only listing flags are supplied with no new branch name
-  if (/^git\s+branch\b/i.test(trimmed)) {
-    if (/(^|\s)(-[dDmMcfuU]|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|-u)\b/i.test(trimmed)) return false;
-    const tokens = tokenizeCommand(trimmed).slice(2);
-    for (const t of tokens) {
-      if (!t.startsWith('-')) return false; // positional branch argument (creating/modifying branch)
+  // Reject commands targeting session secrets, session store, or ledger
+  if (/(session-secret|adlc.*secret|\.adlc\/sessions|session-ledger|\.master-key)/i.test(trimmed)) return false;
+
+  const tokens = tokenizeCommand(trimmed);
+  if (tokens.length === 0) return false;
+  const bin = tokens[0];
+
+  if (bin === 'git') {
+    if (tokens.length < 2) return false;
+    const subcmd = tokens[1];
+    const allowedSubcmds = ['status', 'diff', 'log', 'rev-parse', 'show', 'branch'];
+    if (!allowedSubcmds.includes(subcmd)) return false;
+
+    // Scan all git tokens for external helper, configuration override, or output flags
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      // Reject external diff/textconv helpers, output redirection, custom execution paths, and config overrides
+      if (/^(-o|--output|--output-directory|--ext-diff|--no-ext-diff|--textconv|--no-textconv|--exec-path|--work-tree|--git-dir|-c|--config-env)$/i.test(t)) {
+        return false;
+      }
+      if (/^--(output|output-directory|ext-diff|textconv|exec-path|work-tree|git-dir|config-env)=/i.test(t)) {
+        return false;
+      }
+      if (/(diff\.external|diff\.textconv|core\.pager|pager\.|alias\.|!)/i.test(t)) {
+        return false;
+      }
+    }
+
+    if (subcmd === 'branch') {
+      if (tokens.slice(2).some((t) => /^(-[dDmMcfuU]|--delete|--move|--copy|--force|--set-upstream-to|--unset-upstream|-u)$/i.test(t))) {
+        return false;
+      }
+      for (const t of tokens.slice(2)) {
+        if (!t.startsWith('-')) return false; // Positional branch argument (creating/modifying branch)
+      }
     }
     return true;
   }
 
-  // Reject commands targeting session secrets, session store, or ledger
-  if (/(session-secret|adlc.*secret|\.adlc\/sessions|session-ledger)/i.test(trimmed)) return false;
+  const safeBins = ['ls', 'pwd', 'cat', 'head', 'tail', 'which', 'uname', 'whoami', 'date', 'echo', 'printf'];
+  if (safeBins.includes(bin)) {
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (/^(-o|--output|--output-directory)$/i.test(t) || /^--output=/i.test(t)) {
+        return false;
+      }
+    }
+    return true;
+  }
 
-  return /^(git\s+(status|diff|log|rev-parse|show)|ls|pwd|cat|head|tail|which|uname|whoami|date|echo|printf)(\s+|$)/i.test(trimmed);
+  return false;
 }
 
 export function postToolUse(payload, { env = process.env } = {}) {
