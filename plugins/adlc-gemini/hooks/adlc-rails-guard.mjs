@@ -437,11 +437,15 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       const cmd = extractCommandString(args);
       if (cmd) {
         if (enforcing) {
-          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: wsRoot ?? process.cwd() })) {
+          const cmdRoot = wsRoot ?? process.cwd();
+          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
             return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
           }
           if (isUnauthorizedWorkspaceEscape(cmd)) {
             return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+          }
+          if (hasShellSymlinkOrSecretEscape(cmd, { root: cmdRoot, env })) {
+            return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
           }
         }
         if (!paths.length) {
@@ -542,7 +546,7 @@ export function runFromStdin(raw, envArg = process.env) {
     if (shellRoot) distinctRoots.add(shellRoot);
   }
   const cmdRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(isAbsolute(shellCwd) ? shellCwd : join(wsRoot ?? process.cwd(), shellCwd), env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: cmdRoot }) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: cmdRoot, env }) && !isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -906,7 +910,110 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
   return false;
 }
 
-export function isReadonlyCommand(cmd, { root = process.cwd() } = {}) {
+export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env = process.env } = {}) {
+  if (!cmd || typeof cmd !== 'string') return false;
+  const tokens = tokenizeCommand(cmd);
+  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
+  if (redirectMatches) {
+    for (const rm of redirectMatches) {
+      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
+      if (target) tokens.push(target);
+    }
+  }
+
+  const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
+  const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
+  const globalAdlcDir = `${homeDir}/.adlc`;
+  const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+  const newSecretsDir = `${homeDir}/.config/adlc`;
+
+  const isSecretTarget = (p) => {
+    if (!p) return false;
+    const norm = p.replace(/\\/g, '/');
+    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
+    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
+    if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
+    return false;
+  };
+
+  for (const rawToken of tokens) {
+    if (!rawToken || rawToken.length > 4096) continue;
+    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
+    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
+    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
+    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
+
+    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+    try {
+      if (existsSync(absCandidate) || lstatSync(absCandidate).isSymbolicLink()) {
+        const canonical = realpathSync(absCandidate);
+        if (isSecretTarget(canonical)) {
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env = process.env } = {}) {
+  if (!cmd || typeof cmd !== 'string') return false;
+  const tokens = tokenizeCommand(cmd);
+  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
+  if (redirectMatches) {
+    for (const rm of redirectMatches) {
+      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
+      if (target) tokens.push(target);
+    }
+  }
+
+  const homeDir = (env?.ADLC_HOME_DIR || homedir() || '').replace(/\\/g, '/');
+  const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
+  const globalAdlcDir = `${homeDir}/.adlc`;
+  const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+  const newSecretsDir = `${homeDir}/.config/adlc`;
+
+  const isSecretTarget = (p) => {
+    if (!p) return false;
+    const norm = p.replace(/\\/g, '/');
+    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
+    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
+    if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
+    return false;
+  };
+
+  for (const rawToken of tokens) {
+    if (!rawToken || rawToken.length > 4096) continue;
+    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
+    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
+    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
+    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
+
+    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+    try {
+      const isSymlink = lstatSync(absCandidate).isSymbolicLink();
+      if (isSymlink || existsSync(absCandidate)) {
+        const canonical = realpathSync(absCandidate);
+        if (isSecretTarget(canonical)) {
+          return true;
+        }
+        if (isSymlink) {
+          const rel = relative(root, canonical);
+          if (rel.startsWith('..') || isAbsolute(rel)) {
+            return true;
+          }
+        }
+      }
+    } catch {
+      try {
+        if (lstatSync(absCandidate).isSymbolicLink()) return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
+export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -915,6 +1022,7 @@ export function isReadonlyCommand(cmd, { root = process.cwd() } = {}) {
 
   // Reject commands targeting session secrets, session store, or ledger
   if (isUnauthorizedWorkspaceEscape(trimmed) || isTrustRootSecretAccess(trimmed)) return false;
+  if (hasShellSymlinkOrSecretEscape(trimmed, { root, env })) return false;
 
   const tokens = tokenizeCommand(trimmed);
   if (tokens.length === 0) return false;
@@ -1281,14 +1389,14 @@ export function onStop(payload, { env = process.env } = {}) {
         if (isShell) {
           const cmd = extractCommandString(args);
           const normCmd = cmd.replace(/\\/g, '/');
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd)))) && !isReadonlyCommand(cmd)) {
+          const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
+          const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(isAbsolute(cmdCwd) ? cmdCwd : join(root, cmdCwd), env) : null) ?? root;
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root: cmdRoot, env })) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-          const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(isAbsolute(cmdCwd) ? cmdCwd : join(root, cmdCwd), env) : null) ?? root;
           if (isVerificationCommand(cmd, { root: cmdRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;

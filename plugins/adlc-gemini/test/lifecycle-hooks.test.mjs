@@ -5288,6 +5288,80 @@ test('getTestFilesMap and onStop: discovers and protects .jsx, .mts, and .cts te
   }
 });
 
+test('decide and onStop: denies shell reads and writes through symlinks targeting trust root', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    const sessionSecretFile = join(root, '.adlc', '.session-secret');
+    writeFileSync(sessionSecretFile, 'secret-content');
+
+    // Create innocent-looking symlink inside workspace pointing to session secret
+    const innocentLink = join(root, 'innocent-link.txt');
+    symlinkSync(sessionSecretFile, innocentLink);
+
+    // 1. Live PreToolUse decide() check on reads through symlink (grep, base64, cat)
+    const readCommands = [
+      'grep "" innocent-link.txt',
+      'base64 innocent-link.txt',
+      'cat innocent-link.txt',
+      'head innocent-link.txt',
+    ];
+    for (const cmd of readCommands) {
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: cmd, Cwd: root },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for read command: ${cmd}`);
+      assert.match(res.deny_reason, /strictly prohibited|symlink targeting trust root/i);
+    }
+
+    // 2. Live PreToolUse decide() check on writes through symlink (echo >, tee, cp)
+    const writeCommands = [
+      'echo "pwned" > innocent-link.txt',
+      'tee innocent-link.txt',
+      'cp package.json innocent-link.txt',
+    ];
+    for (const cmd of writeCommands) {
+      const payload = {
+        workspacePaths: [root],
+        toolCall: {
+          name: 'run_command',
+          args: { CommandLine: cmd, Cwd: root },
+        },
+      };
+      const res = runFromStdin(JSON.stringify(payload), env);
+      assert.equal(res.allow_tool, false, `Expected deny for write command: ${cmd}`);
+      assert.match(res.deny_reason, /strictly prohibited|symlink targeting trust root/i);
+    }
+
+    // 3. onStop audit check: if transcript records a command targeting the symlink, onStop must reject
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-symlink-audit',
+    };
+    preInvocation(payload, { env });
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'grep "" innocent-link.txt', Cwd: root } }],
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Shell modification of trust-root store or transcript is strictly prohibited/i);
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 
 
