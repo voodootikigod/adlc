@@ -982,8 +982,8 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
 export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
 
-  // Catch wildcard globs targeting dotfiles or candidate secret names
-  if (/(cat|head|tail|less|more|od|xxd|strings|source|\.)\s+.*(\.\*|\*\.|\*auth|\*master|\*secret|\*ticket|\*ledger)/i.test(cmd)) {
+  // Catch wildcard globs targeting dotfiles or candidate secret names, or unexpanded globs with file readers
+  if (/\b(cat|head|tail|less|more|od|xxd|strings|source|\.)\s+.*[*?[\]{}]/i.test(cmd)) {
     return true;
   }
   const tokens = tokenizeCommand(cmd);

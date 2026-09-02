@@ -321,6 +321,8 @@ export function isNodeTestFile(fileName, relPath) {
 export function getTestFilesMap(root) {
   const map = {};
   if (!root || typeof root !== 'string') return map;
+  let realRoot = root;
+  try { realRoot = realpathSync(root); } catch {}
   const IGNORED_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.adlc', 'coverage', '.cache']);
 
   function scan(dir, depth = 0, ancestorRealpaths = new Set()) {
@@ -329,14 +331,36 @@ export function getTestFilesMap(root) {
       let real = dir;
       try {
         real = realpathSync(dir);
+        const relFromRoot = relative(realRoot, real);
+        if (relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) return;
         if (ancestorRealpaths.has(real)) return;
-      } catch {}
+      } catch {
+        return;
+      }
       const branchAncestors = new Set(ancestorRealpaths);
       branchAncestors.add(real);
 
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullP = join(dir, entry.name);
+        let isSymlink = false;
+        try {
+          const lst = lstatSync(fullP);
+          isSymlink = lst.isSymbolicLink();
+        } catch {}
+
+        if (isSymlink) {
+          try {
+            const targetReal = realpathSync(fullP);
+            const relFromRoot = relative(realRoot, targetReal);
+            if (relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) {
+              continue; // Symlink escaping workspace root is skipped
+            }
+          } catch {
+            continue;
+          }
+        }
+
         let isDir = false;
         let isF = false;
         try {
@@ -427,7 +451,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     const nonce = `${pid}-${Date.now()}-${Math.random()}`;
     let acquired = false;
 
-    for (let attempt = 0; attempt < 100; attempt++) {
+    for (let attempt = 0; attempt < 250; attempt++) {
       try {
         mkdirSync(lockDir);
         const tmpOwner = `${lockDir}/owner.json.tmp.${pid}.${Date.now()}`;
@@ -443,17 +467,17 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
               try {
                 const raw = readFileSync(ownerFile, 'utf8');
                 const owner = JSON.parse(raw);
-                const isStale = Date.now() - (owner.time ?? 0) > 3000;
+                const isStale = Date.now() - (owner.time ?? 0) > LOCK_TTL_MS;
                 const isDead = !isPidAlive(owner.pid);
                 if (isStale && isDead) isStaleAndDead = true;
               } catch {
                 // Malformed owner.json (crashed/partial write)
                 const stat = lstatSync(lockDir);
-                if (Date.now() - stat.mtimeMs > 3000) isStaleAndDead = true;
+                if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
               }
             } else {
               const stat = lstatSync(lockDir);
-              if (Date.now() - stat.mtimeMs > 3000) isStaleAndDead = true;
+              if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
             }
             if (isStaleAndDead) {
               const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -465,7 +489,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           } catch {}
         }
       }
-      sleepSyncWithJitter(10);
+      sleepSyncWithJitter(25);
     }
 
     if (!acquired) {
@@ -1097,23 +1121,6 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         if (ledgerStore && ledgerStore[sessionID] && ((ledgerStore[sessionID].mutatingCalls ?? 0) > 0 || (ledgerStore[sessionID].totalCalls ?? 0) > 0)) {
           return false; // Wiped store after recorded mutations!
         }
-        if (env?.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
-          const tPath = resolveTranscriptPath({ conversationId: sessionID, env });
-          if (tPath) {
-            const records = parseTranscriptRecords(tPath);
-            const hasMutations = records.some((r) => {
-              const calls = r?.tool_calls ?? (r?.toolCall ? [r.toolCall] : []);
-              return calls.some((c) => {
-                const name = c?.name ?? '';
-                const args = c?.args ?? {};
-                return !isShellTool(name, args) && classifyTool(name) !== 'readonly';
-              });
-            });
-            if (hasMutations) {
-              return false; // Wiped store and ledger mid-session while transcript has file mutations!
-            }
-          }
-        }
         return true;
       }
       if (s.invalidated) return false;
@@ -1497,7 +1504,7 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
   if (env.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
-    const tPath = resolveTranscriptPath({ conversationId: sessionID, env });
+    const tPath = resolveTranscriptPath({ conversationId: sessionID, env }) || (existsSync(join(root, 'transcript.jsonl')) ? join(root, 'transcript.jsonl') : null);
     if (tPath) {
       const records = parseTranscriptRecords(tPath);
       const hasMutations = records.some((r) => {
@@ -1505,7 +1512,14 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
         return calls.some((c) => {
           const name = c?.name ?? '';
           const args = c?.args ?? {};
-          return !isShellTool(name, args) && classifyTool(name) !== 'readonly';
+          if (isShellTool(name, args)) {
+            const cmd = extractCommandString(args);
+            if (!cmd) return false;
+            if (/^(node\s+--test|npm\s+test|npm\s+t\b|pnpm\s+test|yarn\s+test)\b/i.test(cmd)) return false;
+            if (/^(echo|printf|pwd|ls|dir)\b[^><|;&]*$/i.test(cmd)) return false;
+            return true;
+          }
+          return classifyTool(name, args) !== 'readonly';
         });
       });
       if (hasMutations && depth === 0) {

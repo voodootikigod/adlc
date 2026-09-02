@@ -147,11 +147,18 @@ export function isShellTool(name, args = null) {
  *  3. everything else is 'other', which checkRail CHECKS (treats as a mutation),
  *     so an unrecognized tool carrying a rail path is denied, not waved through.
  */
-export function classifyTool(name) {
+export function classifyTool(name, args = null) {
   const n = normalizeToolName(name);
   if (!n) return 'other';
   if (MUTATING_TOOL_HINTS.some((h) => n.includes(h))) return 'mutating';
-  if (PURE_READS.has(n)) return 'readonly';
+  if (PURE_READS.has(n)) {
+    if (args && typeof args === 'object') {
+      const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
+      const hasCmd = hasCommandLineArgs(args);
+      if (hasTarget || hasCmd) return 'other';
+    }
+    return 'readonly';
+  }
   return 'other';
 }
 
