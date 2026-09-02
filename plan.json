@@ -114,23 +114,6 @@
       "edges": [],
       "tier": "cheap",
       "pool_hint": "gemini"
-    },
-    {
-      "id": "t-agy-945",
-      "title": "Complete Antigravity / Gemini detection in universal install.sh (#945)",
-      "body": "GitHub Issue: https://github.com/voodootikigod/adlc/issues/945\n\n=== CONTEXT ===\napps/docs/public/install.sh provides the universal installer for all harnesses. We need to ensure agy / jetski detection and native plugin registration are completely supported and verified by test/install-sh.test.mjs.\n\n=== TASK ===\n1. Inspect apps/docs/public/install.sh to ensure 'agy' and 'jetski' binaries are detected on PATH and invoke @adlc/gemini installer.\n2. Update test/install-sh.test.mjs and test/install-digests.json to assert agy detection and pass the digest pinning test.\n3. Update docs/integrations/gemini.md to document the universal installer support.\n\n=== ACCEPTANCE CRITERIA ===\n- AC1: apps/docs/public/install.sh detects agy/jetski.\n- AC2: node --test test/install-sh.test.mjs passes.\n- AC3: docs/integrations/gemini.md accurately reflects universal install availability.",
-      "scope": [
-        "apps/docs/public/install.sh",
-        "test/install-sh.test.mjs",
-        "test/install-digests.json",
-        "docs/integrations/gemini.md"
-      ],
-      "rails": [
-        "packages/cli/**"
-      ],
-      "edges": [],
-      "tier": "mid",
-      "pool_hint": "gemini"
     }
   ]
 }

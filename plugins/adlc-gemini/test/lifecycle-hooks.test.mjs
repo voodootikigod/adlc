@@ -5734,6 +5734,20 @@ test('isVerificationCommand: rejects node --test when shadowed by local node bin
   }
 });
 
+test('isVerificationCommand: rejects node --test when shadowed by node_modules/.bin/node', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const binDir = join(root, 'node_modules', '.bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeNode = join(binDir, 'node');
+  writeFileSync(fakeNode, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  try {
+    const isVer = isVerificationCommand('node --test', { root, toolArgs: { Cwd: root } });
+    assert.equal(isVer, false, 'node_modules/.bin/node binary must not shadow system node runner');
+  } finally {
+    cleanup();
+  }
+});
+
 test('onStop: rejects completion when transcript records mutation outside repository workspace', () => {
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');

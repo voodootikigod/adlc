@@ -83,17 +83,17 @@ test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed 
   // fail this test. The point of this test is the payload assertion below.
   const out = execFileSync(process.execPath, [SHIM], {
     input: '{}', encoding: 'utf8',
-    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },
+    env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },
   });
   const v = JSON.parse(out);
   assert.equal(v.allow_tool, false);           // fail CLOSED under enforcement
   assert.equal(v.decision, 'deny');
-  assert.ok(/ADLC rails-guard/.test(v.deny_reason ?? ''));
+  assert.ok(/ADLC rails-guard:\s*load\/exec/i.test(v.deny_reason ?? ''));
 });
 test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', () => {
   const out = execFileSync(process.execPath, [SHIM], {
     input: '{}', encoding: 'utf8',
-    env: { ...process.env, ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },  // no ADLC_P4_ENFORCEMENT
+    env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },  // no ADLC_P4_ENFORCEMENT
   });
   assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
 });

@@ -288,7 +288,7 @@ export function isTrustRootOrSecretPath(p, env = process.env) {
       if (norm === realNode || norm.startsWith(realNode + '/')) return true;
     } catch {}
   }
-  if (/(^|\/)(node|node\.exe)$/i.test(norm)) return true;
+  if (/(^|\/)(node|node\.exe)$/i.test(norm) || /(^|\/)node_modules\/\.bin\/node(\.exe)?$/i.test(norm)) return true;
 
   const homes = getTrustRootSecretHomes(env);
   for (const homeDir of homes) {
@@ -889,7 +889,12 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // Strict immutable verification runners: require full-suite execution from repository root with explicit CWD
   if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
-    if (root && (existsSync(join(root, 'node')) || existsSync(join(root, 'node.exe')))) {
+    if (root && (
+      existsSync(join(root, 'node')) ||
+      existsSync(join(root, 'node.exe')) ||
+      existsSync(join(root, 'node_modules', '.bin', 'node')) ||
+      existsSync(join(root, 'node_modules', '.bin', 'node.exe'))
+    )) {
       return false;
     }
     return true;
