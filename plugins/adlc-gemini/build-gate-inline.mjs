@@ -183,20 +183,13 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 const loadedSecretCache = new Map();
 
-export function getOrCreateSessionSecret(root, env = process.env) {
-  if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
-
+export function getMasterKeyRaw(env = process.env) {
   const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
   const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
 
-  if (loadedSecretCache.has(root)) {
-    return loadedSecretCache.get(root);
-  }
-
-  let masterKey = null;
   try {
     if (existsSync(masterKeyFile)) {
       const stat = lstatSync(masterKeyFile);
@@ -204,7 +197,7 @@ export function getOrCreateSessionSecret(root, env = process.env) {
         if (uid === null || stat.uid === uid) {
           if ((stat.mode & 0o077) === 0) {
             const raw = readFileSync(masterKeyFile, 'utf8').trim();
-            if (raw.length >= 32) masterKey = raw;
+            if (raw.length >= 32) return raw;
           }
         }
       }
@@ -214,12 +207,27 @@ export function getOrCreateSessionSecret(root, env = process.env) {
         if (uid === null || stat.uid === uid) {
           if ((stat.mode & 0o077) === 0) {
             const raw = readFileSync(legacyMasterKeyFile, 'utf8').trim();
-            if (raw.length >= 32) masterKey = raw;
+            if (raw.length >= 32) return raw;
           }
         }
       }
     }
   } catch {}
+  return null;
+}
+
+export function getOrCreateSessionSecret(root, env = process.env) {
+  if (env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
+
+  const userHome = env?.ADLC_HOME_DIR || homedir() || tmpdir();
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+
+  if (loadedSecretCache.has(root)) {
+    return loadedSecretCache.get(root);
+  }
+
+  let masterKey = getMasterKeyRaw(env);
 
   if (!masterKey) {
     try {

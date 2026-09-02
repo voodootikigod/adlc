@@ -211,7 +211,7 @@ test('decide(): unclassified code executors with code/script args fail closed un
   }, { env: ENF });
   assert.equal(v7.allow_tool, false);
   assert.equal(v7.decision, 'deny');
-  assert.match(v7.deny_reason, /uninspectable arguments/);
+  assert.match(v7.deny_reason, /uninspectable arguments|shell modification of ticket store or trust-root rails/);
 
   // nested cmd argument in unclassified executor
   const v8 = decide({
@@ -220,7 +220,7 @@ test('decide(): unclassified code executors with code/script args fail closed un
   }, { env: ENF });
   assert.equal(v8.allow_tool, false);
   assert.equal(v8.decision, 'deny');
-  assert.match(v8.deny_reason, /uninspectable arguments/);
+  assert.match(v8.deny_reason, /uninspectable arguments|shell modification of ticket store or trust-root rails/);
 
   // recognized shell tool with nested CommandLine targeting trust root is denied
   const v9 = decide({
@@ -264,6 +264,28 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.equal(v13.allow_tool, false);
   assert.equal(v13.decision, 'deny');
   assert.match(v13.deny_reason, /shell modification of ticket store or trust-root rails/);
+});
+
+test('decide(): shell tool carrying both trust-root secret CommandLine AND benign TargetFile is denied under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-cmd-target-'));
+  const ENF = { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' };
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'bash',
+        args: {
+          CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
+          TargetFile: 'notes.txt',
+        },
+      },
+    }, { env: ENF });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
 });
 
 

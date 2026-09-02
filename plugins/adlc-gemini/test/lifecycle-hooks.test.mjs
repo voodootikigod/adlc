@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
+import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 import { isShellTool } from '../rails-checker.mjs';
@@ -5463,6 +5463,50 @@ test('checkBuildGate and validateBaseline: fail closed when sessions.json and se
     cleanup();
   }
 });
+
+test('postToolUse and onStop: invalidate session if raw master key content is disclosed', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1', activeTicket: 'T1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  try {
+    getOrCreateSessionSecret(root, env);
+    const rawKey = getMasterKeyRaw(env);
+    assert.ok(rawKey && rawKey.length >= 32, 'Expected raw master key to be created/retrievable');
+
+    const cid = 'sess-raw-key-leak';
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: cid,
+    };
+    preInvocation(payload, { env });
+
+    // Simulate tool output that leaks the raw master key
+    postToolUse({
+      workspacePaths: [root],
+      conversationId: cid,
+      output: `Secret leaked: ${rawKey}`,
+    }, { env });
+
+    const tracker = createPersistentTracker(root, env);
+    assert.equal(tracker.isInvalidated(cid), true, 'Expected session to be marked invalidated');
+
+    // onStop must reject due to secret disclosure
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+        output: `Output: ${rawKey}`,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    const stopRes = onStop(payload, { env });
+    assert.equal(stopRes.decision, 'continue');
+    assert.match(stopRes.reason, /Secret disclosure/i);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

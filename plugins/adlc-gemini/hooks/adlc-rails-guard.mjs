@@ -36,7 +36,7 @@ function realpathOr(p) {
 }
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -427,6 +427,20 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     }
 
     const isShell = isShellTool(tool, args);
+    const cmd = extractCommandString(args);
+
+    if (cmd && enforcing) {
+      const cmdRoot = wsRoot ?? process.cwd();
+      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
+        return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
+      }
+      if (isUnauthorizedWorkspaceEscape(cmd)) {
+        return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+      }
+      if (hasShellSymlinkOrSecretEscape(cmd, { root: cmdRoot, env })) {
+        return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
+      }
+    }
 
     if (isShell) {
       const sessionID = resolveSessionId({ payload, env });
@@ -434,20 +448,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
         return deny('session invalidated due to secret disclosure — failing closed');
       }
-      const cmd = extractCommandString(args);
       if (cmd) {
-        if (enforcing) {
-          const cmdRoot = wsRoot ?? process.cwd();
-          if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: cmdRoot, env })) {
-            return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
-          }
-          if (isUnauthorizedWorkspaceEscape(cmd)) {
-            return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
-          }
-          if (hasShellSymlinkOrSecretEscape(cmd, { root: cmdRoot, env })) {
-            return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
-          }
-        }
         if (!paths.length) {
           return allow(); // pure command runner with no structured target paths
         }
@@ -1145,13 +1146,12 @@ export function postToolUse(payload, { env = process.env } = {}) {
         transcriptPath,
       });
 
-      // Invalidate session if tool output disclosed session secret
+      // Invalidate session if tool output disclosed session secret or raw master key
       const secret = getOrCreateSessionSecret(root, env);
-      if (secret) {
-        const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
-        if (rawOutput.includes(secret)) {
-          tracker.invalidateSession?.(sessionID);
-        }
+      const masterKey = getMasterKeyRaw(env);
+      const rawOutput = typeof payload?.output === 'string' ? payload.output : JSON.stringify(payload?.result ?? payload?.toolResult ?? '');
+      if ((secret && rawOutput.includes(secret)) || (masterKey && rawOutput.includes(masterKey))) {
+        tracker.invalidateSession?.(sessionID);
       }
     }
   } catch {}
@@ -1332,6 +1332,17 @@ export function onStop(payload, { env = process.env } = {}) {
         return {
           decision: 'continue',
           reason: 'ADLC Rails-Guard: Corrupted or unparseable transcript records detected under enforcement during Stop verification.',
+        };
+      }
+
+      const secret = getOrCreateSessionSecret(root, env);
+      const masterKey = getMasterKeyRaw(env);
+      const recordStr = JSON.stringify(r ?? {});
+      if ((secret && recordStr.includes(secret)) || (masterKey && recordStr.includes(masterKey))) {
+        tracker.invalidateSession?.(sessionID);
+        return {
+          decision: 'continue',
+          reason: 'ADLC Rails-Guard: Secret disclosure detected in transcript. Session is permanently invalidated.',
         };
       }
 

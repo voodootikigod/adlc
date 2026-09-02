@@ -128,8 +128,9 @@ export function isShellTool(name, args = null) {
   const norm = normalizeToolName(name);
   if (!SHELL_TOOL_NAMES.has(norm)) return false;
   if (args && typeof args === 'object') {
+    const hasCmd = hasCommandLineArgs(args);
     const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
-    if (hasTarget) return false;
+    if (hasTarget && !hasCmd) return false;
   }
   return true;
 }
