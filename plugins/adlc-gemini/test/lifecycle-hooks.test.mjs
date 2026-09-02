@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
+import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, isVerificationCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
@@ -5720,6 +5720,63 @@ test('getTrustRootSecretHomes: resolves safely when homedir is empty and protect
   const tmpHome = homes[0];
   const testSecretPath = join(tmpHome, '.config', 'adlc', 'secrets', '.auth-key');
   assert.equal(isTrustRootOrSecretPath(testSecretPath, customEnv), true, 'Secret path under resolved home must be protected');
+});
+
+test('isVerificationCommand: rejects node --test when shadowed by local node binary in repo root', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const fakeNode = join(root, 'node');
+  writeFileSync(fakeNode, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  try {
+    const isVer = isVerificationCommand('node --test', { root, toolArgs: { Cwd: root } });
+    assert.equal(isVer, false, 'Local ./node binary must not shadow system node runner');
+  } finally {
+    cleanup();
+  }
+});
+
+test('onStop: rejects completion when transcript records mutation outside repository workspace', () => {
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const outsidePath = join(tmpdir(), `outside-mutation-${Date.now()}.txt`);
+  writeFileSync(outsidePath, 'hello\n');
+
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'sess-outside-mutation',
+    };
+    preInvocation(payload, { env });
+
+    const lines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{
+          name: 'write_to_file',
+          args: {
+            TargetFile: outsidePath,
+            CodeContent: 'tampered\n',
+          },
+        }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{
+          name: 'run_command',
+          args: { CommandLine: 'node --test', Cwd: root },
+        }],
+        exit_code: 0,
+      }),
+    ];
+    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /File modification outside repository workspace detected/);
+  } finally {
+    try { unlinkSync(outsidePath); } catch {}
+    cleanup();
+  }
 });
 
 

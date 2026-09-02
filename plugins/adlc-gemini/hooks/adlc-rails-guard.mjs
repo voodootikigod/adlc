@@ -280,6 +280,16 @@ export function getTrustRootSecretHomes(env = process.env) {
 export function isTrustRootOrSecretPath(p, env = process.env) {
   if (!p || typeof p !== 'string') return false;
   const norm = p.replace(/\\/g, '/');
+  if (process.execPath) {
+    const nodeBin = process.execPath.replace(/\\/g, '/');
+    if (norm === nodeBin || norm.startsWith(nodeBin + '/')) return true;
+    try {
+      const realNode = realpathSync(process.execPath).replace(/\\/g, '/');
+      if (norm === realNode || norm.startsWith(realNode + '/')) return true;
+    } catch {}
+  }
+  if (/(^|\/)(node|node\.exe)$/i.test(norm)) return true;
+
   const homes = getTrustRootSecretHomes(env);
   for (const homeDir of homes) {
     if (!homeDir) continue;
@@ -879,6 +889,9 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   // Strict immutable verification runners: require full-suite execution from repository root with explicit CWD
   if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
+    if (root && (existsSync(join(root, 'node')) || existsSync(join(root, 'node.exe')))) {
+      return false;
+    }
     return true;
   }
 
@@ -1386,10 +1399,26 @@ export function onStop(payload, { env = process.env } = {}) {
               reason: 'ADLC Rails-Guard: Active ticket contract or trust-root store was modified during session.',
             };
           }
+          if (filePaths.some((p) => isTrustRootOrSecretPath(p, env))) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: Tampering with trust-root secret or executable is strictly prohibited.',
+            };
+          }
           if (filePaths.some((p) => /(^|[/\\]|\.system_generated[/\\]logs[/\\])transcript.*\.jsonl$/i.test(p))) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Tampering with session transcript files is strictly prohibited.',
+            };
+          }
+          if (filePaths.some((p) => {
+            const abs = isAbsolute(p) ? p : resolve(root, p);
+            const rel = relative(root, abs);
+            return rel.startsWith('..') || isAbsolute(rel);
+          })) {
+            return {
+              decision: 'continue',
+              reason: 'ADLC Rails-Guard: File modification outside repository workspace detected.',
             };
           }
           lastMutationCallIdx = currentCallIdx;

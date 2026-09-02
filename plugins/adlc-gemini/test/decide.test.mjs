@@ -423,6 +423,27 @@ test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested d
   }
 });
 
+test('decide(): structured write targeting node binary is denied as trust root violation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-node-target-'));
+  try {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'write_to_file',
+        args: {
+          TargetFile: process.execPath,
+          CodeContent: '#!/bin/sh\necho "fake node"\nexit 0\n',
+        },
+      },
+    }, { env: { ADLC_TEST_MODE: '1' } });
+    assert.equal(res.allow_tool, false);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /strictly prohibited|trust-root/i);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
 
 
 
