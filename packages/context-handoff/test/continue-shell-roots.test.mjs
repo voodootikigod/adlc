@@ -102,8 +102,58 @@ test('a same-named directory outside the ledger is not covered', () => {
     }
     // Inside `.adlc` is a different matter, and deliberately so: every token's
     // ancestors are candidates, so `.adlc` itself reaches the protected tree.
-    // That predates this change and is the documented trade — a neighbour under
-    // `.adlc` is denied rather than the guard approximating shell semantics.
+    // That predates this change and is the documented trade — a MUTATING
+    // neighbour under `.adlc` is denied rather than the guard approximating
+    // shell semantics.
     assert.equal(shell(cwd, 'successor-near', 'rm -rf .adlc/handoffs-archive').deny, true);
+  });
+});
+
+test('a positively read-only neighbour under .adlc is not covered', () => {
+  withTempRepo((cwd) => {
+    continued(cwd, 'denier-read', 'successor-read');
+    // Same `.adlc`-ancestor shape as the denied case above, but nothing here can
+    // delete anything — the guard's own rationale (deletion reaching the deny
+    // store) does not apply, and the `Read` tool already bypasses this check
+    // entirely for the identical bytes, so blocking these was pure friction.
+    for (const command of [
+      'ls .adlc/manifest.d',
+      'cat .adlc/handoffs-archive/note.txt',
+      'grep -i autopilot .adlc/manifest.d/x.jsonl',
+      'git status .adlc',
+    ]) {
+      const verdict = shell(cwd, 'successor-read', command);
+      assert.equal(verdict.deny, false, `${command} must be allowed: ${JSON.stringify(verdict.reasons)}`);
+    }
+    // A command mixing a read-only prefix with a later mutator is NOT positively
+    // read-only (shellIsPositivelyReadOnly requires every segment to match), so
+    // it must still fall through to the existing protected-target check.
+    assert.equal(
+      shell(cwd, 'successor-read', 'ls .adlc && rm -rf .adlc/handoffs').deny,
+      true,
+    );
+  });
+});
+
+test('a redirect or output-flag smuggled onto a read-only prefix is still denied (regression)', () => {
+  withTempRepo((cwd) => {
+    continued(cwd, 'denier-redirect', 'successor-redirect');
+    // shellIsPositivelyReadOnly alone only checks the LEADING command name per
+    // segment — `cat x > y` and `git diff --output=y` both start with an
+    // allowlisted verb, so that classifier alone reads them as read-only even
+    // though both overwrite `y`. The guard must use the full ladder
+    // (`readOnly && !writeOption`, which also ANDs in the redirect-aware
+    // `!shellHasMutation`) so these still hit the protected-target check.
+    for (const command of [
+      // Redirect target reaches `.adlc` only as an ancestor (the same "covers"
+      // shape as the allowed read-only case above) — proves this isn't caught
+      // merely because the argument being read is itself under `.adlc/`.
+      'cat /dev/null > .adlc/manifest.d/pwned.jsonl',
+      'cat /dev/null >> .adlc/manifest.d/pwned.jsonl',
+      'git diff --output=.adlc/manifest.d/pwned.jsonl',
+    ]) {
+      const verdict = shell(cwd, 'successor-redirect', command);
+      assert.equal(verdict.deny, true, `${command} must still be denied: ${JSON.stringify(verdict.reasons)}`);
+    }
   });
 });
