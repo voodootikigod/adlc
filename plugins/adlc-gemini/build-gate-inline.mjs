@@ -223,14 +223,11 @@ export function rotateMasterKey(env = process.env) {
   const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
 
   try {
-    if (existsSync(masterKeyFile)) {
-      unlinkSync(masterKeyFile);
-    }
     if (existsSync(legacyMasterKeyFile)) {
       unlinkSync(legacyMasterKeyFile);
     }
   } catch (err) {
-    console.error(`[adlc-rails-guard] Warning: failed to unlink compromised master key file: ${err.message}`);
+    console.error(`[adlc-rails-guard] Warning: failed to unlink legacy master key file: ${err.message}`);
   }
 
   loadedSecretCache.clear();
@@ -241,7 +238,9 @@ export function rotateMasterKey(env = process.env) {
       mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
     }
     const newKey = randomBytes(32).toString('hex');
-    writeFileSync(masterKeyFile, newKey, { mode: 0o600, flag: 'w' });
+    const tmpFile = `${masterKeyFile}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmpFile, newKey, { mode: 0o600 });
+    renameSync(tmpFile, masterKeyFile);
     return newKey;
   } catch (err) {
     console.error(`[adlc-rails-guard] Warning: failed to regenerate rotated master key: ${err.message}`);

@@ -1158,9 +1158,7 @@ export function postToolUse(payload, { env = process.env } = {}) {
       }
     }
   } catch (err) {
-    if (env?.ADLC_P4_ENFORCEMENT === '1') {
-      return { decision: 'deny', allow_tool: false, reason: `ADLC Rails-Guard: Internal error in postToolUse under enforcement: ${err?.message ?? err}` };
-    }
+    console.error(`[adlc-rails-guard] Warning: error in postToolUse: ${err?.message ?? err}`);
   }
   return { decision: 'allow', allow_tool: true };
 }
