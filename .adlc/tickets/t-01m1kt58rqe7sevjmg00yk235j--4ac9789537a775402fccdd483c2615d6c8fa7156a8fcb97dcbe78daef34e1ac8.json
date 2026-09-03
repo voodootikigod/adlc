@@ -27,7 +27,11 @@
     "docs/integrations/opencode.md",
     "docs/integrations/pi.md",
     "docs/integrations/gemini.md",
-    "docs/integrations/copilot.md"
+    "docs/integrations/copilot.md",
+    "apps/docs/content/docs/integrations/codex.mdx",
+    "apps/docs/lib/integration-facts.mjs",
+    "apps/docs/test/codex-docs-current.test.mjs",
+    "apps/docs/test/integration-facts.test.mjs"
   ],
   "title": "deny-remediation: packaging-fault reporting, unusable/unsafe recovery text, init harness mislabel, docs"
 }
