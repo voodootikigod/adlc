@@ -12,15 +12,37 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
 import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
 
+// Every harness --harness may name (bin/adlc-init.mjs validates against this
+// same list before scaffold() ever sees a value — this module trusts its
+// caller rather than re-validating).
+export const KNOWN_HARNESSES = Object.freeze([
+  'codex',
+  'cursor',
+  'copilot',
+  'claude-code',
+  'pi',
+  'opencode',
+  'gemini',
+]);
+
+/**
+ * #970 D7: the old ternary here special-cased only cursor/copilot and
+ * silently folded EVERY other harness value — including the real names of
+ * claude-code/pi/opencode/gemini — into "codex". A fresh repo scaffolded
+ * from inside any of those four hosts got a config claiming codex, with no
+ * warning; the harness that actually enforced never matched what the
+ * config recorded. Registers whichever harness was actually named; `codex`
+ * remains the fallback ONLY when none was given at all, and that fallback
+ * is now WARNED at the call site below rather than silently assumed.
+ */
 function configForHarness(harness) {
-  const harnesses = harness === 'cursor'
-    ? { cursor: { railEnforcement: 'auto' } }
-    : harness === 'copilot'
-      ? { copilot: { railEnforcement: 'auto' } }
-      : { codex: { railEnforcement: 'auto' } };
+  const resolved = harness ?? 'codex';
+  const harnesses = { [resolved]: { railEnforcement: 'auto' } };
   // securityMode is required for config-integrity once a config is committed;
   // acknowledgedNewRailBypass must NOT be self-set here — that is a protected-base
   // ceremony field. Keep generated configs local until that ceremony runs.
+  // "unsigned-fallback" accepts unsigned gate-manifest entries as valid —
+  // see README.md's Security modes section for what a stronger mode buys.
   return `${JSON.stringify({ version: 1, securityMode: 'unsigned-fallback', harnesses }, null, 2)}\n`;
 }
 
@@ -395,7 +417,12 @@ jobs:
 
 export function scaffold({ root = '.', codexAgents = true, harness = null } = {}) {
   const target = canonicalTarget(root);
-  const result = { root: target, created: [], updated: [], unchanged: [], warnings: [] };
+  // `notices` is advisory-only and deliberately separate from `warnings`:
+  // the CLI's `ok`/exit-code contract is `warnings.length === 0` (a broken
+  // or ambiguous store state — automation keys off it), and the single most
+  // common invocation, bare `adlc init`, would otherwise report failure by
+  // default the moment this D7 nudge exists (#970).
+  const result = { root: target, created: [], updated: [], unchanged: [], warnings: [], notices: [] };
   const copilot = harness === 'copilot';
   if (harness === 'cursor' || copilot) codexAgents = false;
 
@@ -412,6 +439,15 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   mkdirSync(join(target, '.adlc/specs'), { recursive: true });
   rejectSymlinkComponents(target, '.adlc/specs');
   writeMissing(target, '.adlc/config.json', configForHarness(harness), result);
+  // #970 D7: only when a config was actually WRITTEN this call — an
+  // idempotent re-scaffold of an existing config must not re-warn, and
+  // there is nothing to warn about if nothing was written.
+  if (harness == null && result.created.includes('.adlc/config.json')) {
+    result.notices.push(
+      'no --harness passed; .adlc/config.json registered "codex" as a guess. Pass ' +
+        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,
+    );
+  }
   ensureTicketStore(target, result);
   ensureGitignore(target, result);
 
