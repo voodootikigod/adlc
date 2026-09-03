@@ -167,6 +167,14 @@ test('scaffold with no --harness at all still defaults to codex, but NOTICES rat
     for (const name of ['cursor', 'copilot', 'claude-code', 'pi', 'opencode', 'gemini']) {
       assert.match(result.notices[0], new RegExp(name), `notice must name ${name} as a recognized value`);
     }
+    // Pins the exact `--harness <a|b|c>` placeholder syntax (mutation
+    // regression: an operator that flips `<` to `>=` inside the template
+    // literal changes printed text no earlier assertion here observed).
+    assert.match(
+      result.notices[0],
+      /--harness <codex\|cursor\|copilot\|claude-code\|pi\|opencode\|gemini>/,
+      'notice must render the accepted values as a literal <a|b|c> placeholder',
+    );
   });
 });
 
