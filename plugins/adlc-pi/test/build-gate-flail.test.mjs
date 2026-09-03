@@ -89,7 +89,15 @@ test('AC1: high-risk ticket + degraded context denies a structured write', async
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('AC1: the context-handoff deny outranks the build gate above the handoff band', async () => {
+// Both tests below assert handoff-vs-build-gate PRECEDENCE, which only holds
+// while the handoff call site in extension.mjs is live. It is disconnected
+// (CONTEXT_ROT_HANDOFF_ENABLED = false, see handoff-deny.test.mjs) pending
+// stabilization, so they skip together with that suite. Reconnect both at
+// once.
+const HANDOFF_DISCONNECTED_REASON =
+  'context-rot handoff wiring disconnected pending stabilization — see CONTEXT_ROT_HANDOFF_ENABLED in ../lib/extension.mjs';
+
+test('AC1: the context-handoff deny outranks the build gate above the handoff band', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
   const root = makeRepo();
   try {
     const { pi, ctx } = await boot(root, DEFAULT_CONTEXT_PERCENT_THRESHOLD + 5);
@@ -102,7 +110,7 @@ test('AC1: the context-handoff deny outranks the build gate above the handoff ba
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('AC1: below both bands allows; normal-risk ticket is not build-gated', async () => {
+test('AC1: below both bands allows; normal-risk ticket is not build-gated', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
   const root = makeRepo();
   try {
     const low = await boot(root, 30);

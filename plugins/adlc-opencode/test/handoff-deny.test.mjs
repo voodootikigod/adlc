@@ -2,8 +2,23 @@
 // Drives the REAL exported plugin factory's `tool.execute.before` /
 // `permission.ask` handlers, never a re-implementation of them.
 
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
+
+// Kill switch: every test below drives index.mjs's tool.execute.before /
+// permission.ask handlers, whose handoff call sites are disconnected
+// (CONTEXT_ROT_HANDOFF_ENABLED = false in ../index.mjs) — a real deny can no
+// longer fire, so these skip together rather than assert one. Flip the flag
+// and delete this wrapper (restoring the plain `test` import above) to
+// reconnect.
+const HANDOFF_DISCONNECTED_REASON =
+  'context-rot handoff wiring disconnected pending stabilization — see CONTEXT_ROT_HANDOFF_ENABLED in ../index.mjs';
+function test(name, optionsOrFn, maybeFn) {
+  if (typeof optionsOrFn === 'function') {
+    return nodeTest(name, { skip: HANDOFF_DISCONNECTED_REASON }, optionsOrFn);
+  }
+  return nodeTest(name, { ...optionsOrFn, skip: HANDOFF_DISCONNECTED_REASON }, maybeFn);
+}
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

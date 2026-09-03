@@ -2,8 +2,22 @@
 // Drives the REAL extension's tool_call handler through the same fake pi
 // harness extension.test.mjs uses, never a re-implementation of it.
 
-import { test, after } from 'node:test';
+import { test as nodeTest, after } from 'node:test';
 import assert from 'node:assert/strict';
+
+// Kill switch: every test below drives extension.mjs's tool_call handler,
+// whose handoff call site is disconnected (CONTEXT_ROT_HANDOFF_ENABLED =
+// false in ../lib/extension.mjs) — a real deny can no longer fire, so these
+// skip together rather than assert one. Flip the flag and delete this
+// wrapper (restoring the plain `test` import above) to reconnect.
+const HANDOFF_DISCONNECTED_REASON =
+  'context-rot handoff wiring disconnected pending stabilization — see CONTEXT_ROT_HANDOFF_ENABLED in ../lib/extension.mjs';
+function test(name, optionsOrFn, maybeFn) {
+  if (typeof optionsOrFn === 'function') {
+    return nodeTest(name, { skip: HANDOFF_DISCONNECTED_REASON }, optionsOrFn);
+  }
+  return nodeTest(name, { ...optionsOrFn, skip: HANDOFF_DISCONNECTED_REASON }, maybeFn);
+}
 import {
   mkdtempSync,
   mkdirSync,

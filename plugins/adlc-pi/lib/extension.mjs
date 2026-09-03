@@ -7,6 +7,12 @@
 // contract: write/edit carry input.path, bash carries input.command) onto
 // those pieces. index.ts is a typed shim around createExtension().
 
+// Kill switch: the context-rot handoff deny-set (slice 5) is not yet stable
+// enough for real sessions — it was blocking edits/shell wholesale across
+// workstreams. checkHandoff() and its test suite stay intact; flip this back
+// to true to reconnect once it has baked longer.
+const CONTEXT_ROT_HANDOFF_ENABLED = false;
+
 import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {
@@ -424,26 +430,28 @@ export function createExtension({ env = process.env } = {}) {
       // NOT ticket-scoped: an open deny record is a session-trust fact, so it
       // must hold even when no ticket is active — every gate below this line
       // returns early without a ticket.
-      const handoff = checkHandoff({
-        toolName: event.toolName,
-        input: event.input,
-        sessionId: handoffSessionId,
-        usage: handoffUsage(ctx),
-        ticketId: active.ticketId ?? null,
-        root: activeCwd,
-        manifestKey,
-        sticky: handoffSticky,
-        adlcRoots: handoffAdlcRoots,
-        storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
-      });
-      if (handoff.decision === 'deny') {
-        ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
-        noteGate({
-          ctx,
-          type: 'handoff-deny',
-          detail: { tool: event.toolName, reasons: handoff.reasons },
+      if (CONTEXT_ROT_HANDOFF_ENABLED) {
+        const handoff = checkHandoff({
+          toolName: event.toolName,
+          input: event.input,
+          sessionId: handoffSessionId,
+          usage: handoffUsage(ctx),
+          ticketId: active.ticketId ?? null,
+          root: activeCwd,
+          manifestKey,
+          sticky: handoffSticky,
+          adlcRoots: handoffAdlcRoots,
+          storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
         });
-        return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        if (handoff.decision === 'deny') {
+          ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
+          noteGate({
+            ctx,
+            type: 'handoff-deny',
+            detail: { tool: event.toolName, reasons: handoff.reasons },
+          });
+          return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        }
       }
 
       if (active.ticketId && (active.error || !active.ticket)) {

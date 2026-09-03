@@ -417,19 +417,19 @@ test('malformed stdin fails closed', () => {
   assert.match(r.out, /malformed hook payload JSON/);
 });
 
-test('hooks.json wires the handoff hook on the PreToolUse mutation matcher', () => {
+// adlc-handoff-gate.mjs itself stays fully implemented and tested above —
+// only its hooks.json wiring is pulled, so real sessions never invoke it
+// while it is not yet ready. Re-add the removed PreToolUse entry (see git
+// history on this test / plugins/adlc-codex/hooks/hooks.json) to reconnect,
+// and restore the matcher-coverage assertions this test carried before.
+test('hooks.json does not wire the handoff hook — disconnected pending stabilization', () => {
   const wiring = JSON.parse(readFileSync(join(HOOKS_DIR, 'hooks.json'), 'utf8'));
   const pre = wiring.hooks.PreToolUse;
   assert.ok(Array.isArray(pre) && pre.length > 0);
   const entry = pre.find((group) =>
     group.hooks.some((h) => h.command.includes('adlc-handoff-gate.mjs')),
   );
-  assert.ok(entry, 'PreToolUse must run adlc-handoff-gate.mjs');
-  // The matcher must cover both structured edits and the shell, or the
-  // fail-closed-all rule has a hole the deny-set cannot see.
-  for (const tool of ['apply_patch', 'write', 'Edit', 'Bash', 'exec_command', 'write_stdin']) {
-    assert.match(tool, new RegExp(entry.matcher), `matcher must cover ${tool}`);
-  }
+  assert.ok(!entry, 'PreToolUse must not run adlc-handoff-gate.mjs');
 });
 
 test('the plugin ships the new hook and its resolver', () => {
