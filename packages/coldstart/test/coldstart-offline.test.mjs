@@ -103,6 +103,23 @@ describe('checkTicketOffline (unit)', () => {
     assert.equal(result.gaps.length, 1);
     assert.equal(result.gaps[0].what, 'invalid duration');
   });
+
+  it('rejects a null ticket without throwing', () => {
+    const result = checkTicketOffline(null, allTickets);
+    assert.equal(result.id, '?');
+    assert.equal(result.gaps.length, 1);
+    assert.equal(result.gaps[0].what, 'invalid ticket');
+    assert.equal(result.usage, null);
+    assert.equal(result.cached, false);
+    assert.equal(result.offline, true);
+  });
+
+  it('rejects a non-object ticket without throwing', () => {
+    const result = checkTicketOffline('not-a-ticket', allTickets);
+    assert.equal(result.id, '?');
+    assert.equal(result.gaps.length, 1);
+    assert.equal(result.gaps[0].what, 'invalid ticket');
+  });
 });
 
 // ── checkAllOffline (unit) ───────────────────────────────────────────────────
