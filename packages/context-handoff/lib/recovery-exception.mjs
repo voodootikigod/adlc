@@ -290,14 +290,14 @@ function quotePathForDisplay(p) {
  * @returns {string}
  */
 export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
-  return (
+  const message =
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
     `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
     'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
-    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.'
-  );
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.';
+  return message;
 }
 
 /**
@@ -343,11 +343,11 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   // exception as --write) and needs no key; a human operator holding
   // ADLC_MANIFEST_KEY adds --write themselves after reviewing why the deny
   // fired.
-  return (
+  const dryRunCommand =
     `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
     ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
-    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.'
-  );
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return dryRunCommand;
 }
 
 /**
