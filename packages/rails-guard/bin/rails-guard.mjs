@@ -239,7 +239,7 @@ function resolveContents(file) {
 }
 
 // --- run checks ---
-const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean } =
+const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean, sanctionedAdditions } =
   runChecks({
     changedFiles: files, diffText: diff, cliRails, ticket, isFenced, resolveContents,
     sanctionedAdditions: new Set(values['sanctioned-add'] ?? []),
@@ -251,6 +251,7 @@ const result = buildResult({
   railGlobError,
   railsDiffEmpty,
   suppressionsClean,
+  sanctionedAdditions,
   base,
   ticket,
 });
@@ -269,6 +270,10 @@ if (values.json) {
     // one. Advisory, on stderr, so piping stdout is unaffected.
     console.error('note: CI also runs scripts/rails-guard-ci.mjs, which is stricter ' +
       '(it rejects changes to existing tickets in .adlc/tickets.json). Run `npm run preflight` for the full set.');
+    if (sanctionedAdditions.length > 0) {
+      console.error(`note: --sanctioned-add exempted ${sanctionedAdditions.length} rail path(s) from this check: ` +
+        sanctionedAdditions.join(', '));
+    }
   } else {
     console.error(formatViolations(violations));
   }
@@ -295,6 +300,7 @@ if (values.record && violations.length === 0) {
     base,
     railsDiffEmpty: true,
     suppressionsClean: true,
+    sanctionedAdditions,
     railFiles,
   }, undefined, { key: getKey() });
 }

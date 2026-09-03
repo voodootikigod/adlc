@@ -25,6 +25,7 @@ import { parseAddedLines, findSuppressions, isMarkerAllowed } from './suppressio
  *   violations: Array,
  *   railsDiffEmpty: boolean,
  *   suppressionsClean: boolean,
+ *   sanctionedAdditions: string[],
  * }}
  *
  * Violation shape:
@@ -35,11 +36,13 @@ export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced, 
   const { globs: railGlobs, error: railGlobError } = resolveRailGlobs(cliRails, ticket);
 
   const violations = [];
+  let sanctionedAdditionsOut = [];
 
   // CHECK 1: rail edits
   if (railGlobs.length > 0) {
     const railEdits = checkRailEdits(changedFiles, railGlobs, resolveContents, sanctionedAdditions ?? null);
-    violations.push(...railEdits);
+    violations.push(...railEdits.violations);
+    sanctionedAdditionsOut = [...new Set(railEdits.sanctioned.map((s) => s.file))].sort();
   }
 
   const railsDiffEmpty = violations.filter((v) => v.type === 'rail-edit').length === 0;
@@ -69,5 +72,6 @@ export function runChecks({ changedFiles, diffText, cliRails, ticket, isFenced, 
     violations,
     railsDiffEmpty,
     suppressionsClean,
+    sanctionedAdditions: sanctionedAdditionsOut,
   };
 }
