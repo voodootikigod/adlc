@@ -366,6 +366,40 @@ describe('signalGraphCoupling', () => {
     const score = signalGraphCoupling(a, b, null, ['src/a.ts', 'src/b.ts']);
     assert.equal(score, 0);
   });
+
+  test('sub-1.0 fileCoupling score is not inflated by the loop initial value', () => {
+    // maxCoupling must start at 0: if it started at 1, a real coupling score
+    // below 1.0 (e.g. 0.5) would never exceed the initial value, so the
+    // final score would wrongly stay pinned near the 0.7 cap instead of
+    // scaling down with the actual coupling strength.
+    const a = mkTicket('A', { scope: ['src/services/user.ts'] });
+    const b = mkTicket('B', { scope: ['src/db/repo.ts'] });
+    const repoFiles = ['src/services/user.ts', 'src/db/repo.ts'];
+    const graphCouplingData = {
+      fileCoupling: {
+        'src/services/user.ts|src/db/repo.ts': 0.5,
+      },
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.35);
+  });
+
+  test('a null fileCoupling map is ignored, falling through to the edges array', () => {
+    // typeof null === 'object', so the guard must require fileCoupling to be
+    // truthy AND an object — not either/or — or a null map would be treated
+    // as present and indexing into it would throw instead of falling back.
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      fileCoupling: null,
+      edges: [
+        { from: 'src/services/order.ts', to: 'src/payment/gateway.ts', weight: 1.0 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.7);
+  });
 });
 
 describe('pairScore — hard veto', () => {

@@ -25,6 +25,19 @@ function withTickets(fn) {
   }
 }
 
+describe('merge-forecast CLI --help', () => {
+  test('lists --graph-coupling with its description', () => {
+    const res = spawnSync(process.execPath, [CLI, '--help'], {
+      encoding: 'utf8', cwd: repoRoot,
+    });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.ok(
+      res.stdout.includes('--graph-coupling <path>    Path to semantic call/symbol graph coupling JSON'),
+      `expected help text to include the --graph-coupling entry, got:\n${res.stdout}`
+    );
+  });
+});
+
 describe('merge-forecast CLI parameter validation', () => {
   // parseInt/parseFloat accepted a numeric PREFIX ('1e2' → 1, '2.9' → 2,
   // '0.95junk' → 0.95) and the range checks then validated the truncated value.
