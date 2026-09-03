@@ -374,6 +374,22 @@ test('testTargetFor maps plugins/<x>/hooks|lib|agents|mcp to their own test dir 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor unions plugins/<x>/hooks/test with the plugin-root test dir when both exist (regression)', () => {
+  // A plugin's contract tests may live at the plugin ROOT rather than nested
+  // under hooks/ — plugins/adlc-copilot/test/rails-guard-contract.test.mjs is
+  // what actually covers plugins/adlc-copilot/hooks/adlc-rails-guard.mjs's
+  // mutation classifier. Crediting only hooks/test/ (the pre-fix behavior)
+  // silently dropped that coverage from the fast command, and CI reported a
+  // false SURVIVED for a mutant only the plugin-root suite actually kills.
+  const root = fixtureRoot(['plugins/adlc-copilot/hooks/test', 'plugins/adlc-copilot/test']);
+  try {
+    assert.equal(
+      testTargetFor('plugins/adlc-copilot/hooks/x.mjs', root),
+      'plugins/adlc-copilot/hooks/test/*.test.mjs plugins/adlc-copilot/test/*.test.mjs',
+    );
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor maps plugins/<x>/ source to its test directory glob', () => {
   const root = fixtureRoot(['plugins/adlc-cursor/test']);
   try {
