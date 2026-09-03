@@ -158,6 +158,21 @@ describe('loadTicketsForTier merges duplicate ticket ids with base-tip precedenc
     } finally { cleanup(dir); }
   });
 
+  it('a custom ticket table whose top-level JSON is not an object (e.g. bare `null`) fails closed, never crashes uncaught', () => {
+    // `'tickets' in parsed` throws a TypeError if `parsed` is null (or any
+    // non-object) — the top-level-shape guard must reject it BEFORE that `in`
+    // check runs, with the same clean operational-error message every other
+    // malformed-table case uses, not an uncaught crash with unrelated text.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), 'null');
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 1, 'a bare `null` ticket table must be a clean operational error');
+      assert.match(r.stderr, /does not contain a JSON object/);
+    } finally { cleanup(dir); }
+  });
+
   it('a genuinely absent `tickets` key still reads as an empty table (no regression)', () => {
     const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
     try {
