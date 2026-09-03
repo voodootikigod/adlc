@@ -2330,9 +2330,15 @@ async function handoff(input) {
 
   if (!result.deny) return;
 
+  // Lead with the fresh-session path (#970 D5): it always works, needs no
+  // key, and does not depend on same-session `resume` being refused (exit 2
+  // by design) — the OLD ordering named the same-session-restricted command
+  // first, so the first thing tried in the state that hit the deny was
+  // guaranteed not to work there.
   return denyHandoff(
-    `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
-      `or continue in a fresh session. Agent Shell cannot clear deny-set.\n\n` +
+    `mutation denied (${result.reasons.join(', ')}). Continue in a fresh session or subagent — that always ` +
+      'works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair from a ' +
+      'DIFFERENT session than this one (same-session resume is refused). Agent Shell cannot clear deny-set.\n\n' +
       `${CAPTURE_INSTRUCTION}\n\n${recoveryDiagnostic(sessionId)}`
   );
 }

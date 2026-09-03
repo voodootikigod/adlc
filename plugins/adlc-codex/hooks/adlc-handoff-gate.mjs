@@ -294,7 +294,9 @@ export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, se
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write". \`pwd\` remains usable in the interim.`
+    `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
+    'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.'
   );
 }
 
@@ -327,7 +329,13 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   if (interpreterDisplay === null || scriptDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  // Deliberately NOT `--write` — see the canonical function's comment
+  // (recovery-exception.mjs) for the full rationale (issue #970 D6).
+  return (
+    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
+    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.'
+  );
 }
 
 /**
@@ -1253,9 +1261,13 @@ async function main() {
 
   if (!result.deny) process.exit(0);
 
+  // Lead with the fresh-session path (#970 D5): see the identical note in
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs.
   fail(
-    `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
-      `or continue in a fresh session. Agent shell cannot clear the deny-set.\n\n${recoveryDiagnostic(sessionId)}`
+    `mutation denied (${result.reasons.join(', ')}). Continue in a fresh session or subagent — that always ` +
+      'works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair from a ' +
+      `DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear the ` +
+      `deny-set.\n\n${recoveryDiagnostic(sessionId)}`
   );
 }
 

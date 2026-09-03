@@ -602,7 +602,23 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag --write/);
+  assert.match(r.out, /bypass --session consumer-diag \(dry run/);
+});
+
+// #970 D5: see the identical test/rationale in
+// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs.
+test('the assembled deny message leads with the fresh-session path before naming same-session-restricted `adlc handoff resume` (D5)', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-ordering',
+    seedDeny: seedForeignDeny('denier-ordering'),
+  });
+  assert.equal(r.verdict, 'deny');
+  const freshSessionIdx = r.out.indexOf('fresh session');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${r.out}`);
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
 });
 
 test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
@@ -723,7 +739,9 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   // via this file's own trusted local twins.
   const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
   const out = recoveryDiagnostic('sess-a');
-  assert.match(out, /bypass --session sess-a --write/);
+  // #970 D6: dry-run form only, no directly-runnable --write.
+  assert.match(out, /bypass --session sess-a \(dry run/);
+  assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });
 

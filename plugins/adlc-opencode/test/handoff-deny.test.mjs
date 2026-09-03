@@ -1053,6 +1053,36 @@ test('the deny message carries the session id and a recovery command against the
   }
 });
 
+// #970 D5: see the identical test/rationale in
+// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs. Same-session
+// `adlc handoff resume` exits 2 by design, so the OLD ordering named the one
+// recommendation guaranteed not to work in the state that reads it first.
+test('the assembled deny message leads with the fresh-session path before naming same-session-restricted `adlc handoff resume` (D5)', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-ordering');
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'consumer-ordering', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        const freshSessionIdx = err.message.indexOf('fresh session');
+        const resumeIdx = err.message.indexOf('adlc handoff resume');
+        assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${err.message}`);
+        assert.ok(resumeIdx >= 0, `no resume mention:\n${err.message}`);
+        assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${err.message}`);
+        assert.match(err.message, /DIFFERENT session/);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a depth-band self-deny recovers this session, through the real hook', async () => {
   const dir = repo();
   try {

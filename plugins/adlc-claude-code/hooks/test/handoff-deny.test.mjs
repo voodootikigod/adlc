@@ -570,7 +570,37 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag --write/);
+  assert.match(r.out, /bypass --session consumer-diag \(dry run/);
+});
+
+// #970 D5: the OLD message named the same-session-restricted `adlc handoff
+// resume` FIRST — the one recommendation guaranteed not to work in the exact
+// state that reads it (same-session resume exits 2 by design). The
+// always-works fresh-session/subagent path must be read first, and `resume`
+// must be explicitly flagged as needing a DIFFERENT session.
+test('the assembled deny message leads with the fresh-session path before naming same-session-restricted `adlc handoff resume` (D5)', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-ordering',
+    toolName: 'Edit',
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-ordering',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+    },
+  });
+  assert.equal(r.verdict, 'deny');
+  const freshSessionIdx = r.out.indexOf('fresh session');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${r.out}`);
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
 });
 
 test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
@@ -871,7 +901,7 @@ test('a stale/inaccessible CLAUDE_PROJECT_DIR still denies an ORDINARY edit, but
   });
   assert.equal(r.verdict, 'deny', r.out);
   assert.match(r.out, /could not enter the project directory/);
-  assert.match(r.out, /bypass --session consumer-stale-dir-deny --write/);
+  assert.match(r.out, /bypass --session consumer-stale-dir-deny \(dry run/);
 });
 
 // --- recordRecoveryUnderBand: env allowlist (mirrors the Codex hook) -------
@@ -1058,7 +1088,12 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   // resulting command is real (matches the shape the matcher itself accepts).
   const { recoveryDiagnostic } = await import('../adlc-hook.mjs');
   const out = recoveryDiagnostic('sess-a');
-  assert.match(out, /bypass --session sess-a --write/);
+  // #970 D6: the auto-printed command is the dry-run form only (no --write) —
+  // matches the shape the matcher itself accepts, without handing over a
+  // directly-runnable mutating command. See handoff-deny.test.mjs's own D6
+  // test below for the negative-space guard.
+  assert.match(out, /bypass --session sess-a \(dry run/);
+  assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });
 

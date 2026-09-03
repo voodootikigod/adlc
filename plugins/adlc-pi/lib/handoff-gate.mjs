@@ -643,6 +643,14 @@ export function formatRecoveryCommand({
   if (interpreterDisplay === null || scriptDisplay === null || dirDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, adlcDir, sessionId, unbound });
   }
+  // #970 D6 does NOT apply here: unlike claude-code/codex's bare, unlabeled
+  // auto-print, every caller of this function (handoffRecoveryDiagnostic)
+  // wraps the command in an explicit "One-shot host-side grant (needs
+  // ADLC_MANIFEST_KEY...)" label before ever showing it — the key
+  // requirement is stated up front, not hidden, and the grant is
+  // single-use by construction. Stripping --write here breaks the
+  // legitimate store-fault/foreign-deny recovery path a real key holder
+  // depends on (see the "printed command actually lifts it" test).
   return (
     `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
     `${unboundClause(unbound)} --dir ${dirDisplay} --write`

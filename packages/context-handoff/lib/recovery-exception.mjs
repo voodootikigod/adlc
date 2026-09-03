@@ -294,7 +294,9 @@ export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, se
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write". \`pwd\` remains usable in the interim.`
+    `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
+    'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.'
   );
 }
 
@@ -333,7 +335,19 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   if (interpreterDisplay === null || scriptDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  // Deliberately NOT `--write`: a mutating, directly copy-pasteable command
+  // handed automatically to whoever (or whatever) reads a deny message is the
+  // gate's own escape hatch offered at the moment of maximum incentive to use
+  // it (issue #970 D6; ADLC.md rule 6 — never weaken a gate). This dry-run
+  // form is safe to auto-print (inspects only, matches the SAME recovery
+  // exception as --write) and needs no key; a human operator holding
+  // ADLC_MANIFEST_KEY adds --write themselves after reviewing why the deny
+  // fired.
+  return (
+    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
+    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.'
+  );
 }
 
 /**

@@ -511,13 +511,16 @@ export function checkHandoff({
   if (sticky) sticky.record(sessionId, result.denyEverWritten);
 
   if (!result.deny) return { decision: 'allow' };
+  // Lead with the fresh-session path (#970 D5): see the identical note in
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs.
   return {
     decision: 'deny',
     reasons: result.reasons,
     reason:
-      `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
-      '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      `cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
+      `context-rot handoff deny (${result.reasons.join(', ')}). Continue in a fresh session or subagent — ` +
+      'that always works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair ' +
+      'from a DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear ' +
+      `the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
   };
 }
 

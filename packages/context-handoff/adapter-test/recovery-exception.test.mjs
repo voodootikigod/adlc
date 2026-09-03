@@ -7,6 +7,7 @@ import {
   matchRecoveryCommand,
   isBareInspectionPwd,
   formatRecoveryCommand,
+  formatUnsafeInstallPathMessage,
   formatNoSessionIdMessage,
 } from '../lib/recovery-exception.mjs';
 
@@ -207,7 +208,7 @@ test('formatRecoveryCommand — quotes paths containing a space', () => {
     scriptPath: '/Users/alice/My Project/adlc/handoff.mjs',
     sessionId: 'sess-1',
   });
-  assert.match(out, /^'\/Users\/alice\/My Project\/node' '\/Users\/alice\/My Project\/adlc\/handoff\.mjs' bypass --session sess-1 --write$/);
+  assert.match(out, /^'\/Users\/alice\/My Project\/node' '\/Users\/alice\/My Project\/adlc\/handoff\.mjs' bypass --session sess-1 \(dry run/);
 });
 
 test('formatRecoveryCommand — does not quote a plain path', () => {
@@ -218,8 +219,40 @@ test('formatRecoveryCommand — does not quote a plain path', () => {
   });
   assert.equal(
     out,
-    "/usr/local/bin/node /repo/packages/context-handoff/bin/handoff.mjs bypass --session sess-1 --write",
+    "/usr/local/bin/node /repo/packages/context-handoff/bin/handoff.mjs bypass --session sess-1 " +
+      "(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding " +
+      "ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.",
   );
+});
+
+// D6 (#970): the assembled diagnostic must never hand over a directly
+// copy-pasteable MUTATING command — the old contract appended ` --write`
+// straight onto the printed `bypass --session <id>` line, which any reader
+// (including an agent under pressure) could paste as-is to clear its own
+// deny. This is the negative-space test the two exact-string tests above
+// only prove by coincidence of their fixtures — this one is the durable guard.
+test('formatRecoveryCommand — never emits a directly-runnable `--write` line (D6)', () => {
+  const out = formatRecoveryCommand({
+    interpreterPath: '/usr/local/bin/node',
+    scriptPath: '/repo/handoff.mjs',
+    sessionId: 'sess-1',
+  });
+  assert.doesNotMatch(
+    out,
+    /bypass --session \S+(?: --\S+)* --write\b/,
+    'the printed command must not carry --write onto a single copy-pasteable line',
+  );
+  assert.match(out, /ADLC_MANIFEST_KEY/, 'must name what actually gates a real bypass');
+});
+
+test('formatUnsafeInstallPathMessage — never emits a directly-runnable `--write` line (D6)', () => {
+  const out = formatUnsafeInstallPathMessage({
+    interpreterPath: "/repo/it's-mine/node",
+    scriptPath: '/repo/handoff.mjs',
+    sessionId: 'sess-1',
+  });
+  assert.doesNotMatch(out, /bypass --session \S+(?: --\S+)* --write\b/);
+  assert.match(out, /ADLC_MANIFEST_KEY/);
 });
 
 test('formatRecoveryCommand — a sessionId outside VALUE_GRAMMAR is never interpolated into the diagnostic', () => {
@@ -249,7 +282,7 @@ test('formatRecoveryCommand — a VALUE_GRAMMAR-safe sessionId still formats nor
     scriptPath: '/repo/handoff.mjs',
     sessionId: 'sess-abc.123_ok',
   });
-  assert.match(out, /--session sess-abc\.123_ok --write$/);
+  assert.match(out, /--session sess-abc\.123_ok \(dry run/);
 });
 
 test('formatRecoveryCommand — an interpreterPath containing an apostrophe degrades to the unsafe-path message, never a broken command', () => {
