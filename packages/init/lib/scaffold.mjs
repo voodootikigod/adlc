@@ -420,9 +420,9 @@ jobs:
  * broken/ambiguous store state: bin/adlc-init.mjs excludes exactly this
  * class from its `ok`/exit-code decision, so the single most common
  * invocation — bare `adlc init`, no --harness — still exits 0. The message
- * still lives in `warnings`, the one documented, --json-visible contract
- * (round 2 review correction: an earlier version of this fix used a second,
- * undocumented `notices` array a --json caller would never think to check).
+ * still lives in `warnings`, the one documented, --json-visible contract —
+ * not a second, undocumented `notices` array a --json caller would never
+ * think to check.
  */
 export const HARNESS_GUESS_WARNING_PREFIX = 'no --harness passed;';
 
@@ -451,10 +451,14 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   mkdirSync(join(target, '.adlc/specs'), { recursive: true });
   rejectSymlinkComponents(target, '.adlc/specs');
   writeMissing(target, '.adlc/config.json', configForHarness(harness), result);
-  // #970 D7: only when a config was actually WRITTEN this call — an
-  // idempotent re-scaffold of an existing config must not re-warn, and
-  // there is nothing to warn about if nothing was written.
-  if (harness == null && result.created.includes('.adlc/config.json')) {
+  // #970 D7: the ambiguity this warns about is a property of THIS
+  // invocation's arguments — no --harness was passed — not of whether a
+  // write happened. Gating on result.created alone means a re-run against an
+  // existing config stays silent even when that config is itself a stale
+  // guess from an earlier no-harness run: the operator asking again with no
+  // --harness gets no signal that the ambiguity is still unresolved. Warn
+  // whenever harness is null, regardless of create/update/unchanged state.
+  if (harness == null) {
     result.warnings.push(
       `${HARNESS_GUESS_WARNING_PREFIX} .adlc/config.json registered "codex" as a guess. Pass ` +
         `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,

@@ -976,16 +976,15 @@ export function checkHandoff({
   return {
     decision: 'deny',
     reasons: result.reasons,
-    // #970 D5 does NOT apply here (round 2 review considered and refuted —
-    // see PR body): "continue in a fresh session" is only true advice
-    // where a fresh session genuinely escapes the deny. Pi's deny record
-    // is repo-persistent and session-trust-scoped, so a new session walks
-    // straight back into it — this is PRE-EXISTING, deliberately tested
-    // behavior (see "a deny with no usable session id still refuses the
-    // fresh-session lie" / "the self-deny label is pinned too" in
-    // handoff-deny.test.mjs, predating this ticket), not an oversight D5
-    // should override. Saying otherwise sent operators round a loop that
-    // could not terminate.
+    // #970 D5 does not apply here: "continue in a fresh session" is only
+    // true advice where a fresh session genuinely escapes the deny. Pi's
+    // deny record is repo-persistent and session-trust-scoped, so a new
+    // session walks straight back into it — this is pre-existing,
+    // deliberately tested behavior (see "a deny with no usable session id
+    // still refuses the fresh-session lie" / "the self-deny label is pinned
+    // too" in handoff-deny.test.mjs, predating this ticket), not an
+    // oversight D5 should override. Saying otherwise sent operators round a
+    // loop that could not terminate.
     reason:
       `context-rot handoff deny (${result.reasons.join(', ')}). The deny is recorded in the repo and ` +
       'scoped to session trust rather than to a ticket: it holds for new sessions here until an operator ' +

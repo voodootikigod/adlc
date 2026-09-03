@@ -195,11 +195,29 @@ test('scaffold with no --harness at all still defaults to codex, but WARNS rathe
   });
 });
 
-test('an idempotent re-scaffold with no --harness does not re-warn once the config already exists (D7)', () => {
+test('an idempotent re-scaffold with no --harness re-warns every time (D7)', () => {
+  // Gating the warning on result.created would mean a second no-harness run
+  // against an already-existing config stays silent — even one whose
+  // config.json is itself a stale guess from an earlier no-harness run. The
+  // ambiguity is a property of THIS invocation's arguments (no --harness
+  // passed), not of whether a write happened this time, so it must be
+  // reported every time.
   fixture((root) => {
-    scaffold({ root });
+    const first = scaffold({ root });
+    assert.equal(first.warnings.length, 1);
     const second = scaffold({ root });
-    assert.deepEqual(second.warnings, [], 'nothing new was written, so nothing new to warn about');
+    assert.equal(second.warnings.length, 1, 'omitting --harness is still ambiguous on a re-run');
+    assert.match(second.warnings[0], /--harness/);
+    assert.match(second.warnings[0], /codex/);
+  });
+});
+
+test('a re-scaffold that DOES pass --harness never warns, whether or not the config already exists', () => {
+  fixture((root) => {
+    const first = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(first.warnings, []);
+    const second = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(second.warnings, [], '--harness was given both times, so nothing is ambiguous');
   });
 });
 
@@ -338,9 +356,13 @@ test('scaffold warns for a directory store with a corrupt manifest rather than r
 });
 
 test('the ticket-store step is idempotent: a second scaffold reports it unchanged, not recreated', () => {
+  // An explicit --harness keeps this test's concern (ticket-store
+  // idempotency) isolated from the separate no-harness warning contract:
+  // that warning fires on every no-harness call, regardless of
+  // create/update/unchanged state — see the D7 tests above.
   fixture((root) => {
-    scaffold({ root, codexAgents: false });
-    const second = scaffold({ root, codexAgents: false });
+    scaffold({ root, harness: 'codex', codexAgents: false });
+    const second = scaffold({ root, harness: 'codex', codexAgents: false });
     assert.equal(second.warnings.length, 0);
     assert.ok(second.unchanged.includes('.adlc/tickets/.store.json'));
     assert.ok(second.unchanged.includes('.adlc/ticket-archive/.store.json'));
