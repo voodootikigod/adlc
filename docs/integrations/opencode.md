@@ -80,6 +80,9 @@ the enforcing hook only runs once the plugin package is registered.) Phase A com
 
 ## Install
 
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement.
+
 Two commands (peer dependency: `@opencode-ai/plugin` >= 1.17.13 — the version
 whose documented hook contract the enforce-by-default posture is pinned against):
 

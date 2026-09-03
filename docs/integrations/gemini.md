@@ -13,6 +13,9 @@ Native ADLC integration for the Google Gemini agent harnesses (Antigravity `agy`
 
 ## Install
 
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement.
+
 > **⚠️ Fail-open, CI is the real backstop.** The in-session `PreToolUse` rail hook
 > installed below is **advisory only** — the host fails **OPEN** on a non-zero hook
 > exit (crash, timeout, unsupported platform), so a frozen-rail write can slip

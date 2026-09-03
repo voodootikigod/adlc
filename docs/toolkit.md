@@ -22,6 +22,23 @@ through the stable `adlc <tool>` dispatcher.
 | Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
 | Continuous / §6 | What is the recorded token spend shape, and does it match the barbell? | [`adlc spend`](./tools/spend.md) |
 
+## Version requirements
+
+`@adlc/cli` and every native harness plugin (`@adlc/claude-code`, `@adlc/codex`,
+`@adlc/cursor`, `@adlc/opencode`, `@adlc/pi`, `@adlc/gemini`, `@adlc/copilot`) are
+released in lockstep — install matching `major.minor` versions of the CLI and
+whichever plugin(s) you use. A version-skewed pair (an older CLI against a newer
+plugin package, or vice versa) can hit a resolution or contract mismatch that
+neither side's own tests exercise, since each package's suite only tests itself.
+
+```sh
+npm install -g @adlc/cli@latest
+```
+
+reinstalls the CLI at the same version as whatever plugin(s) you install alongside
+it in the same command. See each harness's own integration doc
+(`docs/integrations/*.md`) for host-specific install steps.
+
 ## P5: recorder vs. reviewer seam
 
 **This is a deliberate design decision, not a gap:** `adlc prosecute` makes zero model

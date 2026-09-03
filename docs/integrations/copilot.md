@@ -50,7 +50,8 @@ sibling); `lib/prosecutor.mjs` is a reference-equal re-export shim over
 
 ## Install
 
-ADLC releases the CLI and Copilot plugin in lockstep. Install the gate toolkit
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement. Install the gate toolkit
 first, then add the plugin from this repo's marketplace:
 
 ```sh
