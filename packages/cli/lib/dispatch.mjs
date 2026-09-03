@@ -60,26 +60,46 @@ export function packageJsonFromEntry(packageName) {
  * package.json — an exports/layout defect in the package ITSELF, which
  * reinstalling the identical broken package cannot fix; see issue #970).
  *
- * `resolveSubpath`/`resolveEntry` are injectable seams so this classification
- * logic is unit-testable without a real broken package on disk: constructing
- * one in this monorepo would need a real `npm install` (workspace symlinking)
- * mid-test, which is impractical. Default to the real primary rung
- * (`require.resolve('<pkg>/package.json')`) and `packageJsonFromEntry`.
+ * The distinction is decided by actually probing the BARE package name
+ * (round-2 review, finding 5) — not by trusting the specific subpath error
+ * CODE as a proxy for it. An earlier version fell through to the
+ * entry-based rung only for `ERR_PACKAGE_PATH_NOT_EXPORTED` specifically
+ * and treated every OTHER subpath failure as absence, which reproduced the
+ * exact misclassification #970 exists to fix one level up: a package whose
+ * subpath rung fails for some other reason, but whose bare name still
+ * resolves, is installed with a packaging fault, not missing.
+ *
+ * `resolveSubpath`/`resolveEntry`/`resolveBare` are injectable seams so this
+ * classification logic is unit-testable without a real broken package on
+ * disk: constructing one in this monorepo would need a real `npm install`
+ * (workspace symlinking) mid-test, which is impractical. Default to the
+ * real rungs (`require.resolve('<pkg>/package.json')`,
+ * `packageJsonFromEntry`, `require.resolve('<pkg>')`).
  * @param {string} packageName
- * @param {{ resolveSubpath?: (name: string) => string, resolveEntry?: (name: string) => string|null }} [seams]
+ * @param {{ resolveSubpath?: (name: string) => string, resolveEntry?: (name: string) => string|null, resolveBare?: (name: string) => string }} [seams]
  * @returns {{ path: string|null, code: 'resolved'|'not-a-dependency'|'packaging-fault' }}
  */
 export function classifyPackageJson(
   packageName,
-  { resolveSubpath = (name) => require.resolve(`${name}/package.json`), resolveEntry = packageJsonFromEntry } = {},
+  {
+    resolveSubpath = (name) => require.resolve(`${name}/package.json`),
+    resolveEntry = packageJsonFromEntry,
+    resolveBare = (name) => require.resolve(name),
+  } = {},
 ) {
   try {
     return { path: resolveSubpath(packageName), code: 'resolved' };
-  } catch (err) {
-    if (err?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') return { path: null, code: 'not-a-dependency' };
+  } catch {
+    /* any subpath failure falls through to the precise classification below */
   }
   const viaEntry = resolveEntry(packageName);
-  return viaEntry ? { path: viaEntry, code: 'resolved' } : { path: null, code: 'packaging-fault' };
+  if (viaEntry) return { path: viaEntry, code: 'resolved' };
+  try {
+    resolveBare(packageName);
+    return { path: null, code: 'packaging-fault' };
+  } catch {
+    return { path: null, code: 'not-a-dependency' };
+  }
 }
 
 export function packageJsonDiagnostic(packageName) {

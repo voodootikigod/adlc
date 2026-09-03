@@ -688,7 +688,13 @@ test('the deny text carries a session-bound recovery command', async () => {
     assert.equal(verdict.block, true);
     assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
     assert.match(verdict.reason, /bypass --session my-session /, 'bound to this session');
-    assert.match(verdict.reason, / --write(\s|$)/, 'copy-pasteable and persisting');
+    // D6 (round 2 review): the auto-printed command is the dry-run form
+    // only — --write is never directly appended to the copy-pasteable
+    // `--dir <path>` prefix — with the key requirement explained
+    // separately (as prose elsewhere in the message), matching
+    // claude-code/codex/opencode.
+    assert.doesNotMatch(verdict.reason, /--dir \S+ --write\b/);
+    assert.match(verdict.reason, /ADLC_MANIFEST_KEY/, 'names what actually gates a real bypass');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -740,12 +746,17 @@ test('the recovery command degrades rather than emitting a broken one', () => {
   };
   assert.equal(
     formatRecoveryCommand(base),
-    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc --write',
+    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc' +
+      ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+      'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.',
   );
   assert.match(
     formatRecoveryCommand({ ...base, unbound: true }),
     /bypass --session sess-a --unbound-reason \S+ --dir /,
   );
+  // D6 (round 2 review): the auto-printed command must never carry --write
+  // directly appended to the copy-pasteable prefix.
+  assert.doesNotMatch(formatRecoveryCommand(base), /--dir \S+ --write\b/);
 
   // A path needing quoting is quoted; one that cannot be quoted at all degrades
   // to prose rather than a command that would break out of its own quoting.
@@ -852,12 +863,13 @@ test('the printed command actually clears a real band-generated foreign deny', a
     assert.equal(denied.decision, 'deny');
     assert.match(denied.reason, /D3:unauthorized_open:sess-A/);
 
-    // Pull the command out of the message exactly as an operator would.
-    const command = denied.reason
-      .split('\n')
-      .find((line) => line.includes('bypass --session'))
-      ?.replace(/^[^:]*: /, '');
-    assert.ok(command, `no command line in:\n${denied.reason}`);
+    // Pull the command out of the message exactly as an operator would, then
+    // deliberately add --write themselves (D6: the auto-printed form never
+    // carries it).
+    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+    assert.ok(printedLine, `no command line in:\n${denied.reason}`);
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '').split(' (dry run')[0];
+    const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
       shell: true,
@@ -865,7 +877,7 @@ test('the printed command actually clears a real band-generated foreign deny', a
       env: { ...process.env, ADLC_MANIFEST_KEY: key },
       encoding: 'utf8',
     });
-    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
+    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
 
     assert.equal(askB().decision, 'allow', 'the printed command must actually unblock the caller');
     assert.equal(askB().decision, 'deny', 'and be consumed by that one mutation, as the text says');
@@ -1618,10 +1630,13 @@ test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', ()
   );
 });
 
-test('the command printed for a store fault actually lifts it', () => {
+test('the command printed for a store fault, with --write deliberately added by a human, actually lifts it', () => {
   // The end-to-end check that would have caught my own false claim: run the
-  // exact string the store-fault message prints and see whether the next call
-  // is allowed. It is — the unbound form lifts D0 where a bound one does not.
+  // printed dry-run command (as a human operator would, after reading it and
+  // deliberately adding --write themselves — round 2 review: the auto-printed
+  // form itself must never carry --write, see D6) and see whether the next
+  // call is allowed. It is — the unbound form lifts D0 where a bound one does
+  // not.
   const key = 'k'.repeat(64);
   const root = makeRepo();
   try {
@@ -1640,11 +1655,11 @@ test('the command printed for a store fault actually lifts it', () => {
     const denied = ask();
     assert.deepEqual(denied.reasons, ['D0:deny_store_unavailable'], 'a clean store fault, nothing else');
 
-    const command = denied.reason
-      .split('\n')
-      .find((line) => line.includes('bypass --session'))
-      ?.replace(/^[^:]*: /, '');
-    assert.ok(command, `no command printed for a store fault:\n${denied.reason}`);
+    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+    assert.ok(printedLine, `no command printed for a store fault:\n${denied.reason}`);
+    assert.doesNotMatch(printedLine, /--dir \S+ --write\b/, 'the auto-printed command must never carry --write directly (D6)');
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '').split(' (dry run')[0];
+    const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
       shell: true,
@@ -1652,8 +1667,8 @@ test('the command printed for a store fault actually lifts it', () => {
       env: { ...process.env, ADLC_MANIFEST_KEY: key },
       encoding: 'utf8',
     });
-    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
-    assert.equal(ask().decision, 'allow', 'the printed command must lift the store fault');
+    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
+    assert.equal(ask().decision, 'allow', 'the printed command, with --write deliberately added, must lift the store fault');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

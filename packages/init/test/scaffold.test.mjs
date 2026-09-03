@@ -168,46 +168,53 @@ test('scaffold --harness codex (or no --harness) still defaults codexAgents to t
   });
 });
 
-test('scaffold with no --harness at all still defaults to codex, but NOTICES rather than mislabeling silently — and never fails the run (D7)', () => {
+test('scaffold with no --harness at all still defaults to codex, but WARNS rather than mislabeling silently (D7)', () => {
   fixture((root) => {
     const result = scaffold({ root });
     const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
     assert.equal(cfg.harnesses.codex.railEnforcement, 'auto');
-    // Deliberately NOT `warnings`: the CLI's ok/exit-code contract keys off
-    // that array (a broken/ambiguous store state), and bare `adlc init` —
-    // the single most common invocation — must not start failing by
-    // default the moment this advisory nudge exists.
-    assert.deepEqual(result.warnings, []);
-    assert.equal(result.notices.length, 1);
-    assert.match(result.notices[0], /--harness/);
-    assert.match(result.notices[0], /codex/);
+    // Round-2 review, correcting round 1's `notices` split: the harness
+    // guess belongs in `result.warnings` — the one documented,
+    // JSON-consumer-visible contract (bin/adlc-init.mjs's own `ok =
+    // warnings.length === 0` reporting path) — not a second, undocumented
+    // channel a --json caller would never think to check.
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /--harness/);
+    assert.match(result.warnings[0], /codex/);
     for (const name of ['cursor', 'copilot', 'claude-code', 'pi', 'opencode', 'gemini']) {
-      assert.match(result.notices[0], new RegExp(name), `notice must name ${name} as a recognized value`);
+      assert.match(result.warnings[0], new RegExp(name), `warning must name ${name} as a recognized value`);
     }
     // Pins the exact `--harness <a|b|c>` placeholder syntax (mutation
     // regression: an operator that flips `<` to `>=` inside the template
     // literal changes printed text no earlier assertion here observed).
     assert.match(
-      result.notices[0],
+      result.warnings[0],
       /--harness <codex\|cursor\|copilot\|claude-code\|pi\|opencode\|gemini>/,
-      'notice must render the accepted values as a literal <a|b|c> placeholder',
+      'warning must render the accepted values as a literal <a|b|c> placeholder',
     );
   });
 });
 
-test('an idempotent re-scaffold with no --harness does not re-notice once the config already exists (D7)', () => {
+test('an idempotent re-scaffold with no --harness does not re-warn once the config already exists (D7)', () => {
   fixture((root) => {
     scaffold({ root });
     const second = scaffold({ root });
-    assert.deepEqual(second.notices, [], 'nothing new was written, so nothing new to notice');
+    assert.deepEqual(second.warnings, [], 'nothing new was written, so nothing new to warn about');
   });
 });
 
-test('CLI exits 0 for a bare `adlc init` with no --harness (the notice must never fail the run) (D7)', () => {
+test('CLI still exits 0 for a bare `adlc init` with no --harness, even though it now carries a warning (D7)', () => {
+  // The harness guess is advisory, not a broken/ambiguous store — it must
+  // not turn the single most common invocation, bare `adlc init`, into a
+  // failing run by default. The CLI's ok/exit-code contract distinguishes
+  // this ADVISORY_WARNING_PREFIX class from every OTHER warning (a broken
+  // store, a corrupt manifest) rather than treating result.warnings as
+  // uniformly fatal.
   fixture((root) => {
     const result = JSON.parse(execFileSync(process.execPath, [BIN, '--root', root, '--json'], { encoding: 'utf8' }));
     assert.equal(result.ok, true);
-    assert.equal(result.notices.length, 1);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /--harness/);
   });
 });
 
@@ -229,7 +236,10 @@ test('fresh scaffold yields a usable ticket store: create --write succeeds and r
     // silent bookkeeping regression here is exactly the hollow-test class T55 warns of.
     assert.ok(scaffolded.created.includes('.adlc/tickets/.store.json'));
     assert.ok(scaffolded.created.includes('.adlc/ticket-archive/.store.json'));
-    assert.equal(scaffolded.warnings.length, 0);
+    // The one expected warning here is the D7 harness-guess advisory (no
+    // --harness was passed) — the ticket-store provisioning itself must
+    // still carry none.
+    assert.deepEqual(scaffolded.warnings, scaffolded.warnings.filter((w) => w.includes('--harness')));
 
     const input = join(root, 'ticket.json');
     writeFileSync(input, JSON.stringify({ id: 'T1', title: 'first ticket' }));

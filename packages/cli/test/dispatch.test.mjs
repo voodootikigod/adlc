@@ -291,10 +291,12 @@ test('AC1: classifyPackageJson resolves normally when the primary rung succeeds'
   assert.deepEqual(result, { path: '/fake/path/package.json', code: 'resolved' });
 });
 
-test('AC1: classifyPackageJson reports not-a-dependency when the package is not resolvable at all', () => {
+test('AC1: classifyPackageJson reports not-a-dependency when the package is not resolvable at all (bare resolve also fails)', () => {
   const err = Object.assign(new Error('nope'), { code: 'MODULE_NOT_FOUND' });
   const result = classifyPackageJson('@adlc/nonexistent-xyz', {
     resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw err; },
   });
   assert.deepEqual(result, { path: null, code: 'not-a-dependency' });
 });
@@ -304,8 +306,30 @@ test('AC1: classifyPackageJson reports packaging-fault when an exports map omits
   const result = classifyPackageJson('@adlc/broken-exports', {
     resolveSubpath: () => { throw err; },
     resolveEntry: () => null,
+    resolveBare: () => '/fake/node_modules/@adlc/broken-exports/index.mjs',
   });
   assert.deepEqual(result, { path: null, code: 'packaging-fault' });
+});
+
+// Round-2 review, finding 5: the ORIGINAL classifier trusted the specific
+// error CODE (only ERR_PACKAGE_PATH_NOT_EXPORTED fell through to the entry
+// rung) as a proxy for "the package is genuinely installed" — but any OTHER
+// subpath failure (e.g. MODULE_NOT_FOUND for a reason that is not "the
+// package itself is absent") was classified as not-a-dependency without
+// ever actually checking whether the BARE package resolves. That is the
+// same misclassification class #970 exists to fix, one level up.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the subpath rung throws something OTHER than ERR_PACKAGE_PATH_NOT_EXPORTED but the bare package still resolves', () => {
+  const err = Object.assign(new Error('module not found'), { code: 'MODULE_NOT_FOUND' });
+  const result = classifyPackageJson('@adlc/oddly-broken', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+    resolveBare: () => '/real/node_modules/@adlc/oddly-broken/index.mjs',
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'the bare package resolving proves it is installed — the missing package.json is a fault in it, not an absence',
+  );
 });
 
 test('AC1: classifyPackageJson still resolves via the entry-based fallback when it succeeds (regression: must not always report packaging-fault on ERR_PACKAGE_PATH_NOT_EXPORTED)', () => {

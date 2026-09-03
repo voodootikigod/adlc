@@ -415,14 +415,20 @@ jobs:
         run: npm i -g @adlc/cli
 `;
 
+/**
+ * Every `result.warnings` entry naming this prefix is ADVISORY, not a
+ * broken/ambiguous store state: bin/adlc-init.mjs excludes exactly this
+ * class from its `ok`/exit-code decision, so the single most common
+ * invocation — bare `adlc init`, no --harness — still exits 0. The message
+ * still lives in `warnings`, the one documented, --json-visible contract
+ * (round 2 review correction: an earlier version of this fix used a second,
+ * undocumented `notices` array a --json caller would never think to check).
+ */
+export const HARNESS_GUESS_WARNING_PREFIX = 'no --harness passed;';
+
 export function scaffold({ root = '.', codexAgents = true, harness = null } = {}) {
   const target = canonicalTarget(root);
-  // `notices` is advisory-only and deliberately separate from `warnings`:
-  // the CLI's `ok`/exit-code contract is `warnings.length === 0` (a broken
-  // or ambiguous store state — automation keys off it), and the single most
-  // common invocation, bare `adlc init`, would otherwise report failure by
-  // default the moment this D7 nudge exists (#970).
-  const result = { root: target, created: [], updated: [], unchanged: [], warnings: [], notices: [] };
+  const result = { root: target, created: [], updated: [], unchanged: [], warnings: [] };
   const copilot = harness === 'copilot';
   // Codex agent templates default on for `codex` (and for no --harness at
   // all, since that path also defaults the CONFIG to codex — see the
@@ -449,8 +455,8 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   // idempotent re-scaffold of an existing config must not re-warn, and
   // there is nothing to warn about if nothing was written.
   if (harness == null && result.created.includes('.adlc/config.json')) {
-    result.notices.push(
-      'no --harness passed; .adlc/config.json registered "codex" as a guess. Pass ' +
+    result.warnings.push(
+      `${HARNESS_GUESS_WARNING_PREFIX} .adlc/config.json registered "codex" as a guess. Pass ` +
         `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,
     );
   }

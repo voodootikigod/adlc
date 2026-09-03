@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { KNOWN_HARNESSES, scaffold } from '../lib/scaffold.mjs';
+import { HARNESS_GUESS_WARNING_PREFIX, KNOWN_HARNESSES, scaffold } from '../lib/scaffold.mjs';
 
 function usage() {
   console.log(`adlc init [--root <path>] [--json] [--no-codex-agents] [--harness <${KNOWN_HARNESSES.join('|')}>]
@@ -43,15 +43,19 @@ try {
   else {
     const result = scaffold(options);
     // Warnings mark a store left in a broken/ambiguous state — never report
-    // unqualified success for those, so automation keying off ok/exit notices.
-    const ok = result.warnings.length === 0;
+    // unqualified success for those, so automation keying off ok/exit
+    // notices. The harness-guess advisory is the one documented exception:
+    // it lives in `result.warnings` too (the single, --json-visible
+    // contract), but does not itself fail the run — bare `adlc init`, the
+    // single most common invocation, must stay exit 0 by default.
+    const hardWarnings = result.warnings.filter((w) => !w.startsWith(HARNESS_GUESS_WARNING_PREFIX));
+    const ok = hardWarnings.length === 0;
     if (options.json) console.log(JSON.stringify({ ok, ...result }, null, 2));
     else {
       console.log(`ADLC initialized at ${result.root}`);
       for (const path of result.created) console.log(`  created ${path}`);
       for (const path of result.updated) console.log(`  updated ${path}`);
       for (const warning of result.warnings) console.warn(`  warning: ${warning}`);
-      for (const notice of result.notices ?? []) console.warn(`  notice: ${notice}`);
       if (result.created.length === 0 && result.updated.length === 0 && result.warnings.length === 0) console.log('  already current');
     }
     if (!ok) process.exitCode = 1;

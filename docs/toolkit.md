@@ -30,6 +30,9 @@ released in lockstep — install matching `major.minor` versions of the CLI and
 whichever plugin(s) you use. A version-skewed pair (an older CLI against a newer
 plugin package, or vice versa) can hit a resolution or contract mismatch that
 neither side's own tests exercise, since each package's suite only tests itself.
+**1.11.0 is the current practical floor** across the suite (older releases predate
+fixes several plugins now assume); use `@latest` unless you have a specific reason
+to pin lower.
 
 ```sh
 npm install -g @adlc/cli@latest
