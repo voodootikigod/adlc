@@ -798,6 +798,12 @@ test('degradeMessage degrades to a readable instruction when the id cannot be qu
   assert.doesNotMatch(unsafe, /rm -rf/);
   assert.match(unsafe, /\.adlc\/handoffs\/denies/);
   assert.doesNotMatch(unsafe, /--deny-session <id> --write/, 'the no-safe-id fallback must not auto-carry --write either');
+  // Exact text, placeholder included (mutation regression: a corrupted
+  // `<id>` delimiter is a defect an operator would paste verbatim).
+  assert.match(
+    unsafe,
+    /`adlc handoff continue --deny-session <id>` \(add --write yourself once ready to mutate\)\.$/m,
+  );
 });
 
 test('degradeMessage describes the session it is actually talking about', () => {
