@@ -66,6 +66,33 @@ test('a symlinked pointer fails CLOSED, never followed to an external target (PO
   assert.equal(res.ok, false, 'a symlinked pointer must deny, even when the target carries a well-formed pointer');
 });
 
+// POSIX only: Windows symlink creation needs elevated privileges in CI.
+test('a dangling symlink at the pointer path fails CLOSED, not "no active ticket" (POSIX)', { skip: process.platform === 'win32' }, () => {
+  // existsSync FOLLOWS symlinks: a symlink to a NONEXISTENT target used to read
+  // as existsSync(path) === false, so readActiveTicketPointer's old top-level
+  // check treated it as genuinely absent — present:false, ok:true — silently
+  // disabling enforcement entirely rather than denying on a present-but-broken
+  // pointer (agy cross-model review, round 7).
+  const root = repo((p) => symlinkSync(join(dirname(p), 'nonexistent-target.json'), p));
+  const res = readActiveTicketPointer(root);
+  assert.equal(res.ok, false, 'a dangling symlink must deny, never resolve to "no active ticket"');
+});
+
+// POSIX only: Windows symlink creation needs elevated privileges in CI.
+test('a symlinked .adlc directory fails CLOSED, never followed to an external directory (POSIX)', { skip: process.platform === 'win32' }, () => {
+  // O_NOFOLLOW on the pointer file's own open only protects the LAST path
+  // component. An attacker able to replace the PARENT directory (.adlc) with a
+  // symlink to an external directory could otherwise redirect the read even
+  // though the leaf-level checks all "pass" against whatever .adlc now resolves
+  // to (agy cross-model review, round 7).
+  const root = mkdtempSync(join(tmpdir(), 'adlc-pointer-dos-'));
+  const external = mkdtempSync(join(tmpdir(), 'adlc-pointer-external-'));
+  writeFileSync(join(external, 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  symlinkSync(external, join(root, '.adlc'));
+  const res = readActiveTicketPointer(root);
+  assert.equal(res.ok, false, 'a symlinked .adlc must deny, even when the redirected target carries a well-formed pointer');
+});
+
 test('a well-formed small pointer still resolves (bounding must not regress the happy path)', () => {
   const root = repo((p) => writeFileSync(p, JSON.stringify({ id: 'T1', ticketHash: 'a'.repeat(64) })));
   const res = readActiveTicketPointer(root);
