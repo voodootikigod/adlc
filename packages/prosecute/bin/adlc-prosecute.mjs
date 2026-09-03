@@ -355,18 +355,53 @@ function tierChangedFiles(base, root) {
   return [...new Set([...tracked, ...untracked, ...renamedSources(mergeBase, root)])];
 }
 
+// Merge ticket tables from every source by id (#905 follow-up). A branch cut
+// BEFORE a ticket completes on the base still carries its own stale, not-yet-
+// completed copy; classifyTrustRootTier's per-object filter only exempts a
+// ticket when the OBJECT IT SEES says completed: true, so an ungrouped union
+// leaves that stale copy contributing its rails forever, even after the base
+// tip completes the same ticket.
+//
+// `sources` is ordered base-tip first: for a shared id, the FIRST occurrence's
+// scalar fields (completed included) win — matching rail-freeze's own trust
+// anchor, "completed is read from the BASE TIP, never HEAD" — so a base-active
+// ticket still overrides a HEAD-only completion claim (the security property
+// #905 already established: a HEAD-only edit cannot self-exempt a ticket the
+// base still freezes). Every source's `rails` are UNIONED onto the surviving
+// record, so a rail widened at HEAD before the base saw it is not lost — this
+// preserves the pre-existing "adding a source can only widen, never narrow"
+// contract for the rails dimension specifically.
+function mergeTicketsById(sources) {
+  const byId = new Map();
+  for (const list of sources) {
+    for (const ticket of Array.isArray(list) ? list : []) {
+      if (!ticket || typeof ticket.id !== 'string') continue;
+      const existing = byId.get(ticket.id);
+      const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+      if (!existing) {
+        byId.set(ticket.id, { ...ticket, rails: [...rails] });
+        continue;
+      }
+      const merged = new Set(existing.rails);
+      for (const r of rails) merged.add(r);
+      existing.rails = [...merged];
+    }
+  }
+  return [...byId.values()];
+}
+
 function loadTicketsForTier(dir, root, base) {
   // UNION, never replace: rails from the base and from the worktree both apply.
   // The classifier ORs deny-paths across tickets, so adding a source can only
   // widen the trust-root surface (fail-safe), never narrow it. Read at the base
   // TIP deliberately (not the merge-base): a ticket added on the base after the
   // branch point still contributes its rails — widening only, so fail-safe.
-  const tickets = [...readBaseTickets(root, base), ...readCanonicalTickets(root)];
+  const sources = [readBaseTickets(root, base), readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
-    tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));
+    sources.push(readTicketArray(join(resolvedDir, 'tickets.json')));
   }
-  return tickets;
+  return mergeTicketsById(sources);
 }
 
 const { values, positionals } = parseArgs({

@@ -115,7 +115,10 @@ enforcement package, a gated-artifact producer, an exact trust-root file, or a r
 deny-path declared by any ticket. A ticket marked `completed: true` (strict boolean)
 contributes no rails deny-path reason — its rails auto-expire, matching rail-freeze's own
 completion-lifecycle reading, so a change under `packages/` does not stay trust-root tier
-forever just because some long-finished ticket once declared `packages/**` as a rail.
+forever just because some long-finished ticket once declared `packages/**` as a rail. Duplicate
+ticket ids from the base and worktree ticket tables are merged before classification with the
+base tip winning for `completed`, so this still holds for a branch cut before the ticket
+completed on the base.
 
 ## Exit codes
 

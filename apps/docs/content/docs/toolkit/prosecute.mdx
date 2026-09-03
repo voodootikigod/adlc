@@ -49,7 +49,10 @@ resolved revision. These are trust-boundary controls against faked review eviden
 a gated-artifact producer, an exact trust-root file, or a rails deny-path declared by any
 ticket. A **completed** ticket (`completed: true`) contributes no rails deny-path reason —
 its rails auto-expire, so a change under `packages/` is not trust-root tier forever just
-because a long-finished ticket once declared `packages/**` as a rail.
+because a long-finished ticket once declared `packages/**` as a rail. Duplicate ticket ids
+across the base and worktree ticket tables are merged before classification, base tip
+winning for `completed`, so a branch cut before the ticket completed on the base still
+benefits.
 
 ## Exit codes
 

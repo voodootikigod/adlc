@@ -118,8 +118,12 @@ to `.adlc/tickets.json`), so rails declared under a custom `--dir` are not invis
 tier. A **completed** ticket's rails (`completed: true`, strict boolean) contribute no
 rails-deny-path reason — they auto-expire, matching rail-freeze's own T36 completion
 lifecycle reading, so a change under `packages/` does not tier forever just because some
-long-finished ticket once declared `packages/**` as a rail (#905). For such a change, a
-passing P5 **additionally** requires a `cross-model-review`
+long-finished ticket once declared `packages/**` as a rail (#905). Duplicate ticket ids
+across the base and worktree/HEAD ticket tables are merged before classification, with
+the base tip winning for `completed` and rails unioned across copies — so a branch cut
+before a ticket completes on the base still benefits once the base tip completes it, and a
+HEAD-only completion claim still cannot exempt a ticket the base tip keeps active. For such
+a change, a passing P5 **additionally** requires a `cross-model-review`
 **`approve`** in the manifest whose `provider` is distinct from the author and whose
 `revision` equals the reviewed revision. Missing → exit 2.
 
