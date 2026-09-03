@@ -2228,6 +2228,54 @@ test('onStop: rejects mid-session active ticket pointer change', () => {
   }
 });
 
+test('onStop: rejects Stop when the pointer becomes a symlink after a mutating shell command', () => {
+  // Codex cross-model review (round 5): the shellMutated post-check delegates id
+  // comparison to resolveActiveTicketId, whose bounded reader follows symlinks —
+  // so a shell swapping the pointer for a symlink to external content carrying
+  // the SAME id would pass an id-only comparison undetected. This pins the
+  // dedicated lstat/isSymbolicLink check added ahead of that comparison.
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'echo "hello" > src/app.js', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  const externalTarget = join(tmpdir(), `adlc-pointer-swap-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(externalTarget, JSON.stringify({ id: 'T1' })); // same id as the real pointer
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-pointer-symlink',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('test-session-pointer-symlink', { isMutating: true });
+    tracker.recordToolCall('test-session-pointer-symlink', { isMutating: false });
+    tracker.recordTranscript('test-session-pointer-symlink', transcriptFile);
+
+    const currentFile = join(root, '.adlc', 'current-ticket.json');
+    unlinkSync(currentFile);
+    symlinkSync(externalTarget, currentFile);
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /pointer became a symlink/);
+  } finally {
+    try { unlinkSync(externalTarget); } catch {}
+    cleanup();
+  }
+});
+
 test('onStop: resolves transcript using ADLC_SESSION_ID when payload omits conversationId', () => {
   const cid = `session-env-${Date.now()}`;
   const appDataDir = join(tmpdir(), `adlc-brain-${Date.now()}`);

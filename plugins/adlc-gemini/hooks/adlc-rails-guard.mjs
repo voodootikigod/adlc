@@ -1683,6 +1683,18 @@ export function onStop(payload, { env = process.env } = {}) {
         try {
           const currentFile = join(root, '.adlc', 'current-ticket.json');
           if (existsSync(currentFile)) {
+            // lstat (no-follow) BEFORE handing off to the canonical reader: that
+            // reader opens the path normally and stats the RESOLVED target, so a
+            // shell swapping the pointer for a symlink to external content with a
+            // matching id would otherwise pass the id-comparison below undetected
+            // (agy cross-model review).
+            const currentLstat = lstatSync(currentFile);
+            if (currentLstat.isSymbolicLink()) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Active ticket pointer became a symlink during shell execution.',
+              };
+            }
             const currentResolved = resolveActiveTicketId(root, env);
             if (currentResolved.conflict) {
               return {
