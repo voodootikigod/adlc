@@ -1851,6 +1851,14 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
     cliPath: null,
   });
   assert.match(storeFault, /--unbound-reason/, 'a bound grant does not lift a store fault');
+  // Exact text, placeholders included (mutation regression: a corrupted
+  // `<id>`/`<text>` placeholder delimiter is a defect an operator would
+  // paste verbatim, same class as any other malformed placeholder in this
+  // file — see the CLI-cannot-be-resolved / store-fault fallback below).
+  assert.match(
+    storeFault,
+    /`adlc handoff bypass --session <id> --unbound-reason <text>` \(add --write yourself once ready to mutate\) — a bound grant does not lift a store fault\./,
+  );
 
   const ordinary = handoffRecoveryDiagnostic({
     sessionId: 'sess-a',

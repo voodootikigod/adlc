@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { newestOpenDeny } from '../adlc-hook.mjs';
+import { formatBlockingDenyMessage, newestOpenDeny } from '../adlc-hook.mjs';
 import { dispatch, ENFORCING_MODES } from '../adlc-hook-run.mjs';
 import { CAPTURE_INSTRUCTION } from '../handoff-gate.mjs';
 import { SUPERVISOR_ENV_MARKER, buildBootstrapPrompt, superviseChildEnv } from '@adlc/context-handoff';
@@ -292,6 +292,33 @@ test('a session with no auth is given the exact command that unblocks the repo',
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// Mutation regression: formatBlockingDenyMessage's `command === null` branch
+// (a stale/incompatible install whose loaded package does not export
+// formatContinueCommand) is otherwise unreachable through the full
+// dynamic-import hook path without faking that install — pinning its exact
+// text directly, placeholders included, is what catches a corrupted
+// `<id>` delimiter the way the real-command branch above already does.
+test('formatBlockingDenyMessage exact text, both branches, placeholders included', () => {
+  const real = formatBlockingDenyMessage('ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session real-session');
+  assert.equal(
+    real,
+    'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
+      'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Add ' +
+      '--write yourself once ready to mutate — it is deliberately not printed pre-filled. Run:\n  ' +
+      'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session real-session',
+  );
+
+  const fallback = formatBlockingDenyMessage(null);
+  assert.equal(
+    fallback,
+    'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
+      'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Add ' +
+      '--write yourself once ready to mutate — it is deliberately not printed pre-filled. Run:\n  ' +
+      'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id>   (read <id> from .adlc/handoffs/denies/)',
+  );
+  assert.doesNotMatch(fallback, /--deny-session <id> --write/);
 });
 
 test('the newest open deny is the one named', () => {

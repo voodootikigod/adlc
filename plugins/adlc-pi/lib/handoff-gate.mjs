@@ -803,7 +803,7 @@ export function handoffRecoveryDiagnostic({
         'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin, ' +
         'run from the denied repo: ' +
         (storeFault
-          ? // #970 D6: no --write on the auto-printed command — same dry-run-only
+          ? // No --write on the auto-printed command — same dry-run-only
             // contract formatRecoveryCommand (recovery-exception.mjs) follows —
             // a human holding ADLC_MANIFEST_KEY adds it after review.
             '`adlc handoff bypass --session <id> --unbound-reason <text>` (add --write yourself once ready ' +

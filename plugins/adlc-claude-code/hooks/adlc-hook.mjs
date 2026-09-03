@@ -2499,12 +2499,29 @@ async function handoffStart(input) {
   if (!newest) return;
   const command =
     typeof api.formatContinueCommand === 'function' ? api.formatContinueCommand(newest.session_id) : null;
-  const msg =
+  const msg = formatBlockingDenyMessage(command);
+  emit({ hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg });
+}
+
+/**
+ * The (b)-branch message text, factored out so its exact wording — including
+ * the `command === null` fallback (a stale/incompatible install whose loaded
+ * package does not export `formatContinueCommand`) — is unit-testable
+ * without needing to fake that install through the full dynamic-import path.
+ * No `--write` in either branch (issue #970 D6): this is `additionalContext`
+ * fed to a model as context, so a mutating command handed over pre-filled is
+ * exactly the escape hatch D6 exists to close.
+ * @param {string|null} command `api.formatContinueCommand(...)` result, or
+ *   null when that export is unavailable or refused to format (unsafe id).
+ * @returns {string}
+ */
+export function formatBlockingDenyMessage(command) {
+  return (
     'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
     'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Add ' +
     '--write yourself once ready to mutate — it is deliberately not printed pre-filled. Run:\n  ' +
-    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id>   (read <id> from .adlc/handoffs/denies/)');
-  emit({ hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg });
+    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id>   (read <id> from .adlc/handoffs/denies/)')
+  );
 }
 
 /**
