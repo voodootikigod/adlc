@@ -17,7 +17,7 @@
 // understand as "no pointer" is a fail-OPEN hole in a trust root: it silently
 // disables enforcement. Deactivation is deleting the file, not writing `{}`.
 
-import { existsSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { existsSync, lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 
 export const CURRENT_TICKET_FILE = '.adlc/current-ticket.json';
@@ -28,21 +28,48 @@ const MAX_POINTER_BYTES = 64 * 1024;
 
 // Read up to MAX_POINTER_BYTES of a REGULAR file without blocking. The pointer
 // root can be untrusted (issue #341: a harness may resolve it from an event
-// payload), so open O_NONBLOCK — a FIFO/device then never blocks the reader —
-// verify the type on the OPEN fd (a path swap after the check cannot matter; the
-// fd is bound to the inode), and read a bounded amount. Returns the text, or null
-// for a non-regular file or any error; the caller fails CLOSED on null.
+// payload), so:
+//
+// 1. lstatSync FIRST, not just O_NOFOLLOW on the open (cross-platform finding,
+//    mirrors @adlc/gate-manifest/lib/lineage.mjs and
+//    @adlc/tickets/lib/manifest-segments.mjs's readBoundedJsonNoFollow exactly):
+//    O_NOFOLLOW's enforcement is not portable — Windows CI showed a symlinked
+//    marker silently followed elsewhere in this repo, since O_NOFOLLOW is not
+//    reliably honored there (Windows symlinks are reparse points, handled
+//    differently than POSIX symlinks by Node's fs layer). lstatSync + isFile()
+//    is a portable, OS-independent check that rejects a symlink OR an oversized
+//    pointer outright — a caller must never treat a truncated-but-parseable
+//    prefix (valid JSON followed by padding; JSON.parse ignores trailing
+//    whitespace) as a legitimate, unmodified pointer (agy cross-model review,
+//    round 6: a hand-rolled caller-side lstat check left a race between it and
+//    a separate open call — closing it here, once, for every harness).
+// 2. O_NOFOLLOW stays on the open for its atomicity where it IS honored, and the
+//    post-open fstat re-verifies type and size on the OPENED fd (a path swap
+//    after a successful open cannot matter; the fd is bound to the inode) —
+//    the final, authoritative check regardless of what the open actually
+//    resolved to.
+//
+// Returns the text, or null for a symlink, non-regular file, oversized file, or
+// any error; the caller fails CLOSED on null.
 function readPointerFileBounded(path) {
+  let lst;
+  try {
+    lst = lstatSync(path);
+  } catch {
+    return null;
+  }
+  if (!lst.isFile() || lst.size > MAX_POINTER_BYTES) return null;
+
   let fd;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
   } catch {
     return null;
   }
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile()) return null; // FIFO / directory / device → refuse
-    const length = Math.min(stat.size, MAX_POINTER_BYTES);
+    if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return null; // FIFO / directory / device / oversized → refuse
+    const length = stat.size;
     const buf = Buffer.allocUnsafe(length);
     // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
     // rsize caps), so a single readSync could truncate a larger pointer.

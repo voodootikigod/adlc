@@ -2229,11 +2229,17 @@ test('onStop: rejects mid-session active ticket pointer change', () => {
 });
 
 test('onStop: rejects Stop when the pointer becomes a symlink after a mutating shell command', () => {
-  // Codex cross-model review (round 5): the shellMutated post-check delegates id
-  // comparison to resolveActiveTicketId, whose bounded reader follows symlinks —
-  // so a shell swapping the pointer for a symlink to external content carrying
-  // the SAME id would pass an id-only comparison undetected. This pins the
-  // dedicated lstat/isSymbolicLink check added ahead of that comparison.
+  // Codex cross-model review (round 5/6): an earlier fix added a caller-side
+  // lstat/isSymbolicLink check here, but that left a TOCTOU gap (lstat the path,
+  // then reopen it by name) and was later found redundant besides — the
+  // canonical reader (packages/tickets/lib/pointer.mjs) now rejects a symlinked
+  // pointer atomically via O_NOFOLLOW (plus a portable pre-open lstat, since
+  // O_NOFOLLOW enforcement is not reliable on Windows). resolveActiveTicketId
+  // then fails closed, and onStop's active-ticket-id comparison (captured before
+  // this shellMutated block even runs) denies BEFORE reaching it. This is now an
+  // end-to-end integration pin of that canonical-reader fix, not of any
+  // adlc-gemini-local check — see packages/tickets/test/pointer-bounded.test.mjs
+  // for the reader-level unit coverage.
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
@@ -2269,7 +2275,7 @@ test('onStop: rejects Stop when the pointer becomes a symlink after a mutating s
     symlinkSync(externalTarget, currentFile);
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /pointer became a symlink/);
+    assert.match(res.reason, /Active ticket ID changed from T1 to none/);
   } finally {
     try { unlinkSync(externalTarget); } catch {}
     cleanup();
@@ -2277,12 +2283,17 @@ test('onStop: rejects Stop when the pointer becomes a symlink after a mutating s
 });
 
 test('onStop: rejects Stop when the pointer grows beyond 64 KiB after a mutating shell command', () => {
-  // Codex cross-model review (round 6): the canonical reader TRUNCATES an
-  // oversized pointer to its 64 KiB cap and parses the prefix, rather than
-  // refusing it outright the way the original lstat-based size check did.
-  // JSON.parse tolerates trailing whitespace after a complete value, so valid
-  // JSON followed by >64 KiB of padding parses successfully and would pass an
-  // id-only comparison. This pins the dedicated size check added ahead of it.
+  // Codex cross-model review (round 6): the canonical reader used to TRUNCATE an
+  // oversized pointer to its 64 KiB cap and parse the prefix, rather than
+  // refusing it outright — JSON.parse tolerates trailing whitespace after a
+  // complete value, so valid JSON followed by >64 KiB of padding parsed
+  // successfully and would have passed an id-only comparison. The canonical
+  // reader (packages/tickets/lib/pointer.mjs) now rejects any pointer over the
+  // cap outright, and onStop's active-ticket-id comparison (captured before this
+  // shellMutated block even runs) denies on that failure. This is now an
+  // end-to-end integration pin of the canonical-reader fix — see
+  // packages/tickets/test/pointer-bounded.test.mjs for the reader-level unit
+  // coverage.
   const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   const lines = [
@@ -2317,7 +2328,7 @@ test('onStop: rejects Stop when the pointer grows beyond 64 KiB after a mutating
     writeFileSync(currentFile, JSON.stringify({ id: 'T1' }) + ' '.repeat(70 * 1024));
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
-    assert.match(res.reason, /grew beyond its expected size/);
+    assert.match(res.reason, /Active ticket ID changed from T1 to none/);
   } finally {
     cleanup();
   }

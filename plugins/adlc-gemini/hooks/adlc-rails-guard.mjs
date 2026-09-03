@@ -1683,28 +1683,11 @@ export function onStop(payload, { env = process.env } = {}) {
         try {
           const currentFile = join(root, '.adlc', 'current-ticket.json');
           if (existsSync(currentFile)) {
-            // lstat (no-follow) BEFORE handing off to the canonical reader: that
-            // reader opens the path normally and stats the RESOLVED target, so a
-            // shell swapping the pointer for a symlink to external content with a
-            // matching id would otherwise pass the id-comparison below undetected
-            // (agy cross-model review).
-            const currentLstat = lstatSync(currentFile);
-            if (currentLstat.isSymbolicLink()) {
-              return {
-                decision: 'continue',
-                reason: 'ADLC Rails-Guard: Active ticket pointer became a symlink during shell execution.',
-              };
-            }
-            // The canonical reader truncates an oversized pointer to its 64 KiB cap
-            // and parses the prefix rather than refusing it — a valid-JSON-then-padding
-            // file would otherwise pass id comparison despite exceeding the pointer's
-            // legitimate size (agy cross-model review).
-            if (currentLstat.size > 64 * 1024) {
-              return {
-                decision: 'continue',
-                reason: 'ADLC Rails-Guard: Active ticket pointer grew beyond its expected size during shell execution.',
-              };
-            }
+            // resolveActiveTicketId's canonical reader rejects a symlinked or
+            // oversized pointer outright (conflict below) — no separate lstat
+            // check needed here; that used to be a real gap (agy cross-model
+            // review) before the canonical reader itself closed it for every
+            // harness (packages/tickets/lib/pointer.mjs).
             const currentResolved = resolveActiveTicketId(root, env);
             if (currentResolved.conflict) {
               return {
