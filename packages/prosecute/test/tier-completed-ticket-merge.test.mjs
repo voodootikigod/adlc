@@ -108,22 +108,63 @@ describe('loadTicketsForTier merges duplicate ticket ids with base-tip precedenc
     } finally { cleanup(dir); }
   });
 
-  it('a malformed entry (null, or a non-string id) in a --dir ticket table is skipped, not crashed on or misclassified', () => {
+  it('a null entry in a --dir ticket table is skipped, not crashed on or misclassified', () => {
     // readTicketArray (the --dir custom source) does no schema validation, so a
-    // malformed entry can genuinely reach mergeTicketsById's per-entry guard
-    // (`!ticket || typeof ticket.id !== 'string'`). A well-formed ticket (T2,
-    // rails matching the changed file) sits alongside the malformed entries in
-    // the SAME array, so the guard must skip the garbage without dropping or
-    // misclassifying the real ticket.
+    // genuinely non-object entry can reach mergeTicketsById's per-entry guard.
+    // A well-formed ticket (T2, rails matching the changed file) sits alongside
+    // it in the SAME array, so the guard must skip the garbage without dropping
+    // or misclassifying the real ticket.
     const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
     try {
       mkdirSync(join(dir, 'custom'), { recursive: true });
       writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({
-        tickets: [null, { title: 'no id at all' }, { id: 42, title: 'numeric id' }, T({ id: 'T2' })],
+        tickets: [null, T({ id: 'T2' })],
       }));
       const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
       assert.equal(r.status, 2, 'the well-formed ticket in the same array must still tier the change');
       assert.match(r.stderr, /T2/);
+    } finally { cleanup(dir); }
+  });
+
+  it('an entry with no usable string id still contributes its rails — dedup-by-id must not narrow the tier surface', () => {
+    // mergeTicketsById cannot DEDUPLICATE an id-less entry, but pre-#905 the
+    // unmerged union already tiered on such an entry's rails regardless of
+    // `id`'s type (classifyTrustRootTier only ever reads `ticket?.rails`, never
+    // `ticket.id`, to decide whether a rail applies). Silently dropping the
+    // entry here would be a NEW narrowing this merge step must not introduce.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({
+        tickets: [{ title: 'no id at all', rails: ['src/**'] }, { id: 42, title: 'numeric id', rails: ['docs/**'] }],
+      }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 2, 'the id-less entry\'s matching rail must still tier the change');
+      assert.match(r.stderr, /src\/\*\*/);
+    } finally { cleanup(dir); }
+  });
+
+  it('a `tickets: null` custom table fails closed (exit 1), never silently treated as absent', () => {
+    // `parsed?.tickets ?? []` collapses a PRESENT `tickets: null` and a GENUINELY
+    // ABSENT `tickets` key to the same empty array; only the absent-key case may
+    // read as "nothing to check".
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({ tickets: null }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 1, 'a present but null `tickets` field must be an operational error');
+      assert.match(r.stderr, /tickets.*field/i);
+    } finally { cleanup(dir); }
+  });
+
+  it('a genuinely absent `tickets` key still reads as an empty table (no regression)', () => {
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({ other: 'field' }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 0, 'an absent `tickets` key contributes nothing, same as an absent file');
     } finally { cleanup(dir); }
   });
 

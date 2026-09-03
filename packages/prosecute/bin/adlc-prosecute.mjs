@@ -31,16 +31,26 @@ function readTicketArray(path) {
   } catch (err) {
     throw new Error(`ticket table ${path} is not valid JSON — tiering cannot proceed: ${err.message}`);
   }
-  const tickets = parsed?.tickets ?? [];
-  // A present `tickets` field that is not itself an array (an object, string,
-  // etc.) is the same "exists and is malformed" case the try/catch above
-  // guards — mergeTicketsById's own Array.isArray fallback would otherwise
-  // silently treat it as an empty table, dropping the rails dimension exactly
-  // as an unparseable file would.
-  if (!Array.isArray(tickets)) {
+  // A top-level value that is not a plain object (a bare array, string, number,
+  // or null) can never carry a `tickets` property meaningfully; treat it as
+  // malformed rather than reading `undefined.tickets` through optional
+  // chaining, which — same bug as below — would read as "absent" instead.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`ticket table ${path} does not contain a JSON object — tiering cannot proceed`);
+  }
+  // Absent vs present-but-malformed must stay distinguishable. `parsed.tickets
+  // ?? []` collapses BOTH "no tickets key" and "tickets: null" to the same
+  // empty array, so a corrupted `{"tickets": null}` table silently passed as
+  // "nothing to check" before this `in` check existed. A present `tickets`
+  // field that is not itself an array (null, an object, a string, etc.) is the
+  // same "exists and is malformed" case the try/catch above guards — silently
+  // treating it as empty would drop the rails dimension exactly as an
+  // unparseable file would.
+  if (!('tickets' in parsed)) return [];
+  if (!Array.isArray(parsed.tickets)) {
     throw new Error(`ticket table ${path} has a non-array \`tickets\` field — tiering cannot proceed`);
   }
-  return tickets;
+  return parsed.tickets;
 }
 
 // resolve(dir) is inside (or equal to) the repo root.
@@ -384,11 +394,24 @@ function tierChangedFiles(base, root) {
 // contract for the rails dimension specifically.
 function mergeTicketsById(sources) {
   const byId = new Map();
+  // Entries with no usable string id cannot be deduplicated by id, but their
+  // rails must still reach classifyTrustRootTier exactly as an un-merged union
+  // always did (it only ever used `ticket?.rails`, never `ticket.id`, to decide
+  // whether a rail applies) — dropping them here would be a NEW narrowing this
+  // merge step must not introduce, not a defensive skip.
+  const unkeyed = [];
   for (const list of sources) {
     for (const ticket of Array.isArray(list) ? list : []) {
-      if (!ticket || typeof ticket.id !== 'string') continue;
-      const existing = byId.get(ticket.id);
+      // Only a genuinely non-object entry (null, a primitive) has nothing to
+      // extract: classifyTrustRootTier's own `ticket?.rails` already reads
+      // such a value as "no rails", so skipping it here changes nothing.
+      if (!ticket || typeof ticket !== 'object') continue;
       const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+      if (typeof ticket.id !== 'string') {
+        unkeyed.push({ ...ticket, rails: [...rails] });
+        continue;
+      }
+      const existing = byId.get(ticket.id);
       if (!existing) {
         byId.set(ticket.id, { ...ticket, rails: [...rails] });
         continue;
@@ -398,7 +421,7 @@ function mergeTicketsById(sources) {
       existing.rails = [...merged];
     }
   }
-  return [...byId.values()];
+  return [...unkeyed, ...byId.values()];
 }
 
 function loadTicketsForTier(dir, root, base) {
