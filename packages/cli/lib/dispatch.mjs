@@ -97,8 +97,17 @@ export function classifyPackageJson(
   try {
     resolveBare(packageName);
     return { path: null, code: 'packaging-fault' };
-  } catch {
-    return { path: null, code: 'not-a-dependency' };
+  } catch (err) {
+    // Round-6 review: this bare probe must inspect WHY it failed, the same
+    // way the subpath rung's own fallthrough already lets a non-absence
+    // error reach the entry/bare rungs instead of assuming absence. Only
+    // MODULE_NOT_FOUND means the package genuinely is not installed. Any
+    // other code (e.g. ERR_PACKAGE_PATH_NOT_EXPORTED — an exports map that
+    // omits `.` itself) means Node's resolver found the package but could
+    // not resolve this specific spec from it: installed, defect in its own
+    // exports map — a packaging fault, not an absence, exactly the #970
+    // misclassification this function exists to fix, one rung deeper.
+    return { path: null, code: err?.code === 'MODULE_NOT_FOUND' ? 'not-a-dependency' : 'packaging-fault' };
   }
 }
 

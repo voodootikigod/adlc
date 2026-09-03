@@ -205,40 +205,38 @@ test('an idempotent re-scaffold with no --harness re-warns every time (D7)', () 
   fixture((root) => {
     const first = scaffold({ root });
     assert.equal(first.warnings.length, 1);
-    assert.doesNotMatch(first.warnings[0], /already existed and was left untouched/, 'a fresh scaffold has no caveat to add');
     const second = scaffold({ root });
     assert.equal(second.warnings.length, 1, 'omitting --harness is still ambiguous on a re-run');
     assert.match(second.warnings[0], /--harness/);
     assert.match(second.warnings[0], /codex/);
-    // Round-5 review: rerunning with no --harness against an EXISTING config
-    // does not correct it either (writeMissing never overwrites), so the
-    // message must not repeat the same "pass --harness to fix it" promise
-    // uncaveated the second time.
-    assert.match(second.warnings[0], /already existed and was left untouched/);
   });
 });
 
-test('explicit --harness after a bare init does not claim to have corrected the stale guess (round-5 review)', () => {
-  // scaffold()'s config.json write is create-only (writeMissing), so a
-  // rerun with an explicit --harness against an already-guessed config
-  // leaves the guess in place. The warning from the FIRST (guessing) call
-  // told the operator to "pass --harness ... naming the harness you
-  // actually use" — verify that doing exactly that does not silently
-  // register the new harness, and that the config content is provably
-  // unchanged (not merely that no warning fires, which a subtler bug could
-  // still pass).
+test('explicit --harness after a bare init actually corrects the stale guess (round-6 review)', () => {
+  // writeOrReconcileConfig reconciles just the requested harness into an
+  // already-existing config.json rather than leaving it untouched — the
+  // warning from the FIRST (guessing) call told the operator to "pass
+  // --harness ... naming the harness you actually use", so doing exactly
+  // that must actually register it. Every other field (the stale codex
+  // entry, securityMode) survives — this is a merge, not a rewrite.
   fixture((root) => {
     const first = scaffold({ root });
     assert.equal(first.warnings.length, 1);
-    const beforeCfg = readFileSync(join(root, '.adlc/config.json'), 'utf8');
+    const beforeCfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
 
     const second = scaffold({ root, harness: 'pi' });
     assert.deepEqual(second.warnings, [], 'an explicit --harness never itself warns');
-    assert.deepEqual(second.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
-    const afterCfg = readFileSync(join(root, '.adlc/config.json'), 'utf8');
-    assert.equal(afterCfg, beforeCfg, 'config.json is genuinely untouched, not just unreported');
-    assert.equal(JSON.parse(afterCfg).harnesses.codex !== undefined, true, 'the stale codex guess is still there');
-    assert.equal(JSON.parse(afterCfg).harnesses.pi, undefined, 'pi was NOT registered despite --harness pi');
+    assert.deepEqual(second.updated.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    const afterCfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.deepEqual(afterCfg.harnesses.pi, { railEnforcement: 'auto' }, 'pi is now registered');
+    assert.deepEqual(afterCfg.harnesses.codex, beforeCfg.harnesses.codex, 'the pre-existing codex entry survives untouched');
+    assert.equal(afterCfg.securityMode, beforeCfg.securityMode, 'unrelated fields are preserved, not rewritten');
+
+    // Idempotent: registering the SAME harness again is a true no-op.
+    const third = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(third.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.equal(third.updated.includes('.adlc/config.json'), false);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), afterCfg);
   });
 });
 
@@ -248,6 +246,26 @@ test('a re-scaffold that DOES pass --harness never warns, whether or not the con
     assert.deepEqual(first.warnings, []);
     const second = scaffold({ root, harness: 'pi' });
     assert.deepEqual(second.warnings, [], '--harness was given both times, so nothing is ambiguous');
+  });
+});
+
+test('reconciling --harness against a corrupt or shape-mismatched existing config.json degrades to unchanged, never crashes or corrupts further', () => {
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc/config.json'), '{ not valid json');
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.equal(readFileSync(join(root, '.adlc/config.json'), 'utf8'), '{ not valid json', 'left exactly as found');
+  });
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    // Valid JSON, but no "harnesses" object at all (a hand-edited or
+    // otherwise unusual config) — nothing to merge into, so leave it be
+    // rather than inventing a shape the file never had.
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1 }));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), { version: 1 });
   });
 });
 

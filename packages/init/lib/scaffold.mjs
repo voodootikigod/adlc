@@ -271,6 +271,52 @@ function writeFileNoFollow(path, content, { exclusive = false } = {}) {
   }
 }
 
+/**
+ * Write .adlc/config.json fresh, or — when it already exists and `harness`
+ * is explicitly given — reconcile just that one harness into it (round-6
+ * review): the D7 warning's own advice ("pass --harness ... naming the
+ * harness you actually use") must actually register it, not leave a stale
+ * guess in place while reporting success. Every OTHER field (other
+ * harnesses' entries, securityMode, version) is preserved untouched — this
+ * is a targeted merge, not a rewrite, so an operator's own customizations to
+ * fields this function does not touch survive.
+ *
+ * Left untouched (reported 'unchanged', writeMissing's original contract)
+ * when: the file doesn't parse as JSON (do not attempt to merge into
+ * something already broken), `harness` is null (still just a guess, nothing
+ * to reconcile toward), or the requested harness is already registered.
+ */
+function writeOrReconcileConfig(root, harness, result) {
+  const relativePath = '.adlc/config.json';
+  const path = join(root, relativePath);
+  rejectSymlinkComponents(root, relativePath);
+  const existed = lstatIfPresent(path) !== null;
+  if (!existed) {
+    mkdirSync(dirname(path), { recursive: true });
+    rejectSymlinkComponents(root, relativePath);
+    writeFileNoFollow(path, configForHarness(harness), { exclusive: true });
+    record(result, 'created', relativePath);
+    return;
+  }
+  if (harness !== null) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      parsed = null;
+    }
+    const harnesses = parsed && typeof parsed === 'object' ? parsed.harnesses : null;
+    if (parsed && harnesses && typeof harnesses === 'object' && !(harness in harnesses)) {
+      const merged = { ...parsed, harnesses: { ...harnesses, [harness]: { railEnforcement: 'auto' } } };
+      rejectSymlinkComponents(root, relativePath);
+      writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
+      record(result, 'updated', relativePath);
+      return;
+    }
+  }
+  record(result, 'unchanged', relativePath);
+}
+
 function writeMissing(root, relativePath, content, result) {
   const path = join(root, relativePath);
   rejectSymlinkComponents(root, relativePath);
@@ -450,26 +496,19 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   rejectSymlinkComponents(target, '.adlc/specs');
   mkdirSync(join(target, '.adlc/specs'), { recursive: true });
   rejectSymlinkComponents(target, '.adlc/specs');
-  writeMissing(target, '.adlc/config.json', configForHarness(harness), result);
+  writeOrReconcileConfig(target, harness, result);
   // #970 D7: the ambiguity this warns about is a property of THIS
   // invocation's arguments — no --harness was passed — not of whether a
-  // write happened. Gating on result.created alone means a re-run against an
-  // existing config stays silent even when that config is itself a stale
-  // guess from an earlier no-harness run: the operator asking again with no
-  // --harness gets no signal that the ambiguity is still unresolved. Warn
-  // whenever harness is null, regardless of create/update/unchanged state.
+  // write happened. Warn whenever harness is null, regardless of
+  // create/update/unchanged state, so a re-run against an existing config
+  // that is itself a stale guess from an earlier no-harness run still tells
+  // the operator the ambiguity is unresolved. Once --harness IS passed,
+  // writeOrReconcileConfig above actually registers it (round-6 review), so
+  // this warning's own remediation advice is now accurate.
   if (harness == null) {
-    // writeMissing above never overwrites an existing config.json, so on a
-    // rerun against one this same advice does not actually correct the
-    // registration — say so, rather than implying the rerun fixed it.
-    const caveat = result.created.includes('.adlc/config.json')
-      ? ''
-      : ' This .adlc/config.json already existed and was left untouched — passing --harness on a rerun ' +
-        'does not update an existing file; edit its "harnesses" field by hand, or delete the file first, ' +
-        'to change it.';
     result.warnings.push(
       `${HARNESS_GUESS_WARNING_PREFIX} .adlc/config.json registered "codex" as a guess. Pass ` +
-        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.${caveat}`,
+        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,
     );
   }
   ensureTicketStore(target, result);

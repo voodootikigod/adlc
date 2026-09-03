@@ -301,6 +301,28 @@ test('AC1: classifyPackageJson reports not-a-dependency when the package is not 
   assert.deepEqual(result, { path: null, code: 'not-a-dependency' });
 });
 
+// Round-6 review: the bare rung's catch used to treat EVERY thrown error the
+// same as genuine absence — the exact #970 misclassification class, one rung
+// deeper than the subpath rung it already guards against above. A package
+// whose own exports map omits `.` throws ERR_PACKAGE_PATH_NOT_EXPORTED from
+// the BARE probe too (Node found the package directory; it could not resolve
+// this specific spec from its exports map) — that is evidence the package IS
+// installed, not evidence it is absent.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the bare rung fails with something other than MODULE_NOT_FOUND', () => {
+  const subpathErr = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const bareErr = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/no-root-export', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw bareErr; },
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'a non-MODULE_NOT_FOUND bare failure means the package was found, not absent',
+  );
+});
+
 test('AC1: classifyPackageJson reports packaging-fault when an exports map omits ./package.json AND the entry-based fallback also fails to locate it (the #970 shape)', () => {
   const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
   const result = classifyPackageJson('@adlc/broken-exports', {
