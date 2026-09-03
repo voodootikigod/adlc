@@ -606,19 +606,25 @@ test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows or
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('hooks.json wires handoff for Edit matcher and Bash|Shell', () => {
+// The handoff hook itself (the `handoff` mode below) stays fully implemented
+// and tested — only its hooks.json wiring is pulled, so real sessions never
+// invoke it while it is not yet ready. Re-add the two removed hook entries
+// (see git history on this test / plugins/adlc-claude-code/hooks/hooks.json)
+// to reconnect, and restore the assertions this test carried before.
+test('hooks.json does not wire handoff — disconnected pending stabilization', () => {
   const cfg = JSON.parse(readFileSync(join(HOOKS_DIR, 'hooks.json'), 'utf8'));
   const pre = cfg.hooks.PreToolUse;
-  const edit = pre.find((e) => String(e.matcher).includes('Edit'));
-  assert.ok(edit, 'Edit matcher entry');
+  for (const entry of pre) {
+    assert.ok(
+      !entry.hooks.some((h) => String(h.command).includes('handoff')),
+      `expected no handoff hook on matcher ${entry.matcher}`,
+    );
+  }
+  const sessionStart = cfg.hooks.SessionStart?.[0]?.hooks ?? [];
   assert.ok(
-    edit.hooks.some((h) => String(h.command).includes('handoff')),
-    'handoff on Edit matcher',
+    !sessionStart.some((h) => String(h.command).includes('handoffstart')),
+    'expected no handoffstart hook on SessionStart',
   );
-  const bash = pre.find((e) => String(e.matcher).includes('Bash'));
-  assert.ok(bash, 'Bash matcher entry');
-  assert.match(String(bash.matcher), /Bash\|Shell|Shell\|Bash/);
-  assert.ok(bash.hooks.some((h) => String(h.command).includes('handoff')));
 });
 
 test('malformed stdin → deny (fail closed)', () => {

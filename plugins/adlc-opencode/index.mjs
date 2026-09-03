@@ -86,6 +86,14 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(options);
   const env = { ...optEnv, ...process.env };
+  // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
+  // stable enough for real sessions — it was blocking edits/shell wholesale
+  // across workstreams, so it defaults OFF. checkHandoff() and its test
+  // suite stay intact and exercise it via this env var; deliberately NOT
+  // mapped through optionsToEnv (unlike advisoryHooks/ungatedTools above) —
+  // this is not a repo-config knob a reviewed repo's opencode.json should be
+  // able to flip. Flip the default once the deny-set has baked longer.
+  const CONTEXT_ROT_HANDOFF_ENABLED = env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1';
   const advisoryOnly = env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
   // Attribute the downgrade to its ACTUAL source: an operator grepping their
   // environment for a cited env var they never set is a dead end.
@@ -213,19 +221,21 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
       // Slice-5 context-rot handoff: evaluated FIRST. A session past the
       // handoff band should not be told which rail it hit — it should be told
       // to stop and hand off.
-      const handoff = checkHandoff({
-        tool,
-        args,
-        sessionID: input?.sessionID,
-        tracker,
-        root,
-        env,
-        ticketId: activeTicketIdOrNull,
-        sticky: handoffSticky,
-        initLatch: handoffInit,
-      });
-      if (handoff.decision === 'deny') {
-        return denyHandoff(`ADLC context-handoff: blocked ${tool} — ${handoff.reason}`);
+      if (CONTEXT_ROT_HANDOFF_ENABLED) {
+        const handoff = checkHandoff({
+          tool,
+          args,
+          sessionID: input?.sessionID,
+          tracker,
+          root,
+          env,
+          ticketId: activeTicketIdOrNull,
+          sticky: handoffSticky,
+          initLatch: handoffInit,
+        });
+        if (handoff.decision === 'deny') {
+          return denyHandoff(`ADLC context-handoff: blocked ${tool} — ${handoff.reason}`);
+        }
       }
 
       const verdict = checkToolCall({ tool, args, root, env });
@@ -288,21 +298,23 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
         if (READONLY_TOOLS.includes(kind)) return;
         // The deny-set outranks the rail set here too: a session that must hand
         // off should not be able to buy its way past a permission prompt.
-        const handoff = checkHandoff({
-          tool: kind,
-          args: {},
-          sessionID: input?.sessionID,
-          tracker,
-          root,
-          env,
-          ticketId: activeTicketIdOrNull,
-          sticky: handoffSticky,
-          initLatch: handoffInit,
-        });
-        if (handoff.decision === 'deny') {
-          output.status = 'deny';
-          await notify(`ADLC context-handoff: denied permission "${kind}" — ${handoff.reason}`, 'error');
-          return;
+        if (CONTEXT_ROT_HANDOFF_ENABLED) {
+          const handoff = checkHandoff({
+            tool: kind,
+            args: {},
+            sessionID: input?.sessionID,
+            tracker,
+            root,
+            env,
+            ticketId: activeTicketIdOrNull,
+            sticky: handoffSticky,
+            initLatch: handoffInit,
+          });
+          if (handoff.decision === 'deny') {
+            output.status = 'deny';
+            await notify(`ADLC context-handoff: denied permission "${kind}" — ${handoff.reason}`, 'error');
+            return;
+          }
         }
         const force = resolveRailsInForce(root, env);
         if (!force.active) return;

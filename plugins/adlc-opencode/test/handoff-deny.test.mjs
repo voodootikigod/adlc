@@ -23,6 +23,14 @@ import {
   toRepoRelative,
 } from '../lib/handoff-gate.mjs';
 
+// The handoff call site in adlcRailsGuard defaults off
+// (CONTEXT_ROT_HANDOFF_ENABLED reads env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED,
+// see ../index.mjs); this whole suite exercises the real deny-set, so it
+// opts in once for the file's process rather than at each of its ~26
+// adlcRailsGuard() call sites. No production caller sets this env var, so
+// real sessions stay unaffected.
+process.env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED = '1';
+
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'oc-handoff-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });

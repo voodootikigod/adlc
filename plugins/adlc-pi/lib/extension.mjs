@@ -94,6 +94,13 @@ export function createExtension({ env = process.env } = {}) {
   // The extension entry resolves the signing key ONCE from ITS env (which tests inject)
   // and threads it — no process.env reads below this line (spec Layer 2, P1).
   const manifestKey = typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null;
+  // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
+  // stable enough for real sessions — it was blocking edits/shell wholesale
+  // across workstreams, so it defaults OFF. checkHandoff() and its test
+  // suite stay intact and exercise it by setting this in the injected env;
+  // no real caller sets it, so production stays disabled either way. Flip
+  // the default once the deny-set has baked longer.
+  const CONTEXT_ROT_HANDOFF_ENABLED = env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1';
   return async function adlcPiExtension(pi) {
     let activeCwd = process.cwd();
     let active = { ticketId: null, ticket: null, error: null };
@@ -424,26 +431,28 @@ export function createExtension({ env = process.env } = {}) {
       // NOT ticket-scoped: an open deny record is a session-trust fact, so it
       // must hold even when no ticket is active — every gate below this line
       // returns early without a ticket.
-      const handoff = checkHandoff({
-        toolName: event.toolName,
-        input: event.input,
-        sessionId: handoffSessionId,
-        usage: handoffUsage(ctx),
-        ticketId: active.ticketId ?? null,
-        root: activeCwd,
-        manifestKey,
-        sticky: handoffSticky,
-        adlcRoots: handoffAdlcRoots,
-        storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
-      });
-      if (handoff.decision === 'deny') {
-        ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
-        noteGate({
-          ctx,
-          type: 'handoff-deny',
-          detail: { tool: event.toolName, reasons: handoff.reasons },
+      if (CONTEXT_ROT_HANDOFF_ENABLED) {
+        const handoff = checkHandoff({
+          toolName: event.toolName,
+          input: event.input,
+          sessionId: handoffSessionId,
+          usage: handoffUsage(ctx),
+          ticketId: active.ticketId ?? null,
+          root: activeCwd,
+          manifestKey,
+          sticky: handoffSticky,
+          adlcRoots: handoffAdlcRoots,
+          storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
         });
-        return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        if (handoff.decision === 'deny') {
+          ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
+          noteGate({
+            ctx,
+            type: 'handoff-deny',
+            detail: { tool: event.toolName, reasons: handoff.reasons },
+          });
+          return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        }
       }
 
       if (active.ticketId && (active.error || !active.ticket)) {
