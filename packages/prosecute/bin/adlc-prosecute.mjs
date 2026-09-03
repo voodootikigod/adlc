@@ -407,7 +407,12 @@ function mergeTicketsById(sources) {
       // such a value as "no rails", so skipping it here changes nothing.
       if (!ticket || typeof ticket !== 'object') continue;
       const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
-      if (typeof ticket.id !== 'string') {
+      // An empty or whitespace-only id is exactly as unusable as a missing one
+      // — without this, two DIFFERENT malformed entries sharing `id: ''` would
+      // merge into a single record under the empty-string key, letting one's
+      // `completed: true` suppress the other's otherwise-active rails, a
+      // narrowing this merge step must not introduce.
+      if (typeof ticket.id !== 'string' || ticket.id.trim() === '') {
         unkeyed.push({ ...ticket, rails: [...rails] });
         continue;
       }

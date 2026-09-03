@@ -144,6 +144,31 @@ describe('loadTicketsForTier merges duplicate ticket ids with base-tip precedenc
     } finally { cleanup(dir); }
   });
 
+  it('two UNRELATED entries sharing the literal SAME empty-string id are not merged together — one\'s completion must not suppress the other\'s rails', () => {
+    // Before requiring `.trim() !== ''`, id: '' passed `typeof === 'string'` and
+    // was a usable Map key exactly like any real id — TWO entries both carrying
+    // `id: ''` therefore collided into ONE merged record, and the completed
+    // one's `completed: true` (first occurrence wins) suppressed the active
+    // one's rails via the same union step that is supposed to only combine
+    // copies of a SINGLE real ticket. Two DIFFERENT whitespace-only strings
+    // (e.g. '' and '   ') would never have collided as distinct Map keys even
+    // pre-fix, so this case must use the IDENTICAL empty string to reproduce
+    // the actual defect.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({
+        tickets: [
+          { id: '', title: 'malformed, completed', rails: [], completed: true },
+          { id: '', title: 'malformed, active rail', rails: ['src/**'] },
+        ],
+      }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 2, 'the second entry\'s active rail must still tier, not be suppressed by the first\'s completion');
+      assert.match(r.stderr, /src\/\*\*/);
+    } finally { cleanup(dir); }
+  });
+
   it('a `tickets: null` custom table fails closed (exit 1), never silently treated as absent', () => {
     // `parsed?.tickets ?? []` collapses a PRESENT `tickets: null` and a GENUINELY
     // ABSENT `tickets` key to the same empty array; only the absent-key case may
