@@ -117,10 +117,10 @@ test('validateCandidate rejects a malformed hunk (non-string replacement)', () =
   assert.match(r.reason, /malformed hunk/);
 });
 
-test('validateCandidate accepts empty changes array', () => {
+test('validateCandidate rejects an empty changes array (issue #599: an empty changeset is a no-op, not a fix)', () => {
   const r = validateCandidate({ changes: [] }, ['a.mjs']);
-  assert.equal(r.valid, true);
-  assert.equal(r.changes.length, 0);
+  assert.equal(r.valid, false);
+  assert.equal(r.reason, 'candidate proposes no changes');
 });
 
 // ─── runConsensusFix (full engine, no network) ────────────────────────────────
@@ -615,6 +615,51 @@ test('runConsensusFix: without --rails, emits a warning and survivors are repro-
     assert.equal(result.survivors[0].railsChecked, false);
 
     assert.equal(readFileSync(f, 'utf8'), 'original');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('runConsensusFix: unanimous empty-changeset candidates do not win consensus on an environmentally-flaky test (issue #599)', async () => {
+  const dir = makeTmp();
+  try {
+    const f = join(dir, 'source.mjs');
+    writeFileSync(f, 'original');
+
+    // A test that is red on its FIRST invocation for a purely environmental
+    // reason (a marker/fixture the first run itself creates) and green on
+    // every invocation after — with the source file completely untouched.
+    // This is the exact shape the issue names: nothing about the code
+    // changed between the red and green runs.
+    const marker = join(dir, 'MARKER');
+    const testCmd = `test -f '${marker}' || { touch '${marker}'; exit 1; }`;
+
+    const result = await runConsensusFix({
+      testCmd,
+      files: [f],
+      n: 3,
+      tier: 'mid',
+      // Every candidate proposes changing nothing.
+      completeFn: async () => '{"changes": []}',
+    });
+
+    // The initial confirm-failure run consumes the first (red) invocation;
+    // every candidate's post-apply run then sees the marker and passes —
+    // purely because the test itself is flaky, not because of any fix.
+    assert.equal(result.survivors.length, 0, 'an empty changeset must never survive as a candidate');
+    assert.equal(result.discarded.length, 3);
+    for (const d of result.discarded) {
+      assert.equal(d.reason, 'validation failed: candidate proposes no changes');
+    }
+    // No winner is ever selected from zero survivors.
+    assert.equal(result.selectionResult, null);
+    assert.equal(result.groups.size, 0);
+    // Vacuously all-divergent (no group has more than one member) — the CLI
+    // reads this as "nothing to apply, escalate" rather than declaring a
+    // false unanimous consensus.
+    assert.equal(result.allDivergent, true);
+
+    assert.equal(readFileSync(f, 'utf8'), 'original', 'source must be untouched');
   } finally {
     cleanup(dir);
   }

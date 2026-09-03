@@ -53,6 +53,14 @@ export function validateCandidate(parsed, allowedPaths) {
   if (!Array.isArray(parsed.changes)) {
     return { valid: false, reason: 'missing or non-array "changes" field' };
   }
+  // An empty changeset applies as a true no-op: nothing distinguishes it from
+  // a real fix at the survivor stage, so an unanimous group of no-op
+  // candidates would otherwise win consensus outright on a test that happens
+  // to pass its SECOND (unmodified-source) run for an environmental reason
+  // (issue #599). Reject it here, before it can ever become a survivor.
+  if (parsed.changes.length === 0) {
+    return { valid: false, reason: 'candidate proposes no changes' };
+  }
   const allowedSet = new Set(allowedPaths);
   for (const change of parsed.changes) {
     if (typeof change.file !== 'string' || !Array.isArray(change.hunks)) {
