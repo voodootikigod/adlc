@@ -125,8 +125,13 @@ test('sed write with a line-address prefix and no space (regression)', () => {
   assert.equal(shellHasMutation("sed -n '1,5w.adlc/handoffs/x' /dev/null"), true);
   assert.equal(classifyShellCommand("sed -n '1w.adlc/handoffs/x' /dev/null").readOnly, false);
   // The digit boundary is `(?<=[0-9])`, not `(?<=[1-9])` — an address ending
-  // in a ZERO digit (`10w`, not just `1w`) must be caught too.
+  // in a ZERO digit (`10w`, not just `1w`) must be caught too. Both quote
+  // styles: the regex has a SEPARATE alternative per quote kind, so a
+  // mutation to only one of them survives a test that only exercises the
+  // other (confirmed by mutation-gate CI — the double-quoted branch alone
+  // was mutated and a single-quote-only test missed it).
   assert.equal(shellHasMutation("sed -n '10w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(shellHasMutation('sed -n "10w.adlc/handoffs/x" /dev/null'), true);
 });
 
 // ---- cwd changes + expansion ----

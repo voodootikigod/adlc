@@ -288,6 +288,22 @@ test('findPackageJsonUpward respects its depth cap at the boundary (mutation reg
       null,
       'one directory PAST the cap (8 levels up) must not be found — proves the loop bound is live, not decorative',
     );
+    // The DEFAULT `maxDepth = 8` specifically — every real caller (e.g.
+    // packageJsonFromEntry) omits the third argument, so a test that always
+    // passes 8 explicitly never observes a mutation to the default itself.
+    // Must use the DEEP (one-past-cap) case, not the shallow one: a package
+    // 7 levels up is found whether the default is 8, 9, or higher, so only
+    // asserting THAT survives a mutated (too-generous) default undetected.
+    assert.equal(
+      findPackageJsonUpward(sevenLevelsUp, '@adlc/depth-fixture'),
+      join(root, 'package.json'),
+      'a package.json exactly 7 directories up must still be found via the default maxDepth',
+    );
+    assert.equal(
+      findPackageJsonUpward(deepDir, '@adlc/depth-fixture'),
+      null,
+      'one directory PAST the cap must not be found via the default maxDepth either — pins the default at exactly 8, not 9+',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
