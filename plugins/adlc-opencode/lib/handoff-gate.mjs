@@ -520,21 +520,28 @@ export function checkHandoff({
   if (sticky) sticky.record(sessionId, result.denyEverWritten);
 
   if (!result.deny) return { decision: 'allow' };
-  // Lead with the fresh-session path (#970 D5): see the identical note in
+  // #970 D5 (round-7 review): see the identical note in
   // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
-  // clears D2 (this session being the denier), not an open D3 record, so
-  // the message no longer promises it "always works" (see this file's own
+  // clears D1/D2 (this session's own re-entry/denier status), not an open
+  // D3 record or a structural reason, so only recommend it when every
+  // reason present is one it can actually clear (see this file's own
   // "a fresh session is denied by the open record, not by its own depth"
-  // test for direct proof).
+  // test for direct proof D3 survives a fresh session id).
+  const freshSessionHelps = result.reasons.every((r) => r.startsWith('D1:') || r.startsWith('D2:'));
   return {
     decision: 'deny',
     reasons: result.reasons,
     reason:
-      `context-rot handoff deny (${result.reasons.join(', ')}). Try a fresh session or subagent first — ` +
-      "it costs nothing and clears this session's own denier status, but an open deny record still " +
-      'blocks every session until it is cleared. To clear it, run `adlc handoff resume` / repair ' +
-      'from a DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear ' +
-      `the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
+      (freshSessionHelps
+        ? `context-rot handoff deny (${result.reasons.join(', ')}). Try a fresh session or subagent ` +
+          "first — it costs nothing and clears this session's own denier status. To clear it another " +
+          'way instead, run `adlc handoff resume` / repair from a DIFFERENT session than this one ' +
+          '(same-session resume is refused).'
+        : `context-rot handoff deny (${result.reasons.join(', ')}). This is recorded in the repo, not ` +
+          'scoped to this session, so a fresh session or subagent hits the same deny — it holds until ' +
+          'an operator clears it. Run `adlc handoff resume` / repair from a DIFFERENT session than this ' +
+          'one (same-session resume is refused).') +
+      ` Agent shell cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
   };
 }
 

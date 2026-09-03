@@ -323,6 +323,42 @@ test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) wh
   );
 });
 
+// Round-7 review: MODULE_NOT_FOUND itself is overloaded. Measured directly
+// (see the comment at classifyPackageJson's bare-rung catch): an installed
+// package whose package.json declares a "main"/entry file that does not
+// exist on disk ALSO throws MODULE_NOT_FOUND from require.resolve(bareName)
+// — Node found the package directory and failed on a specific file within
+// it. That thrown error carries a `.path` naming the missing target file;
+// genuine absence (the package directory itself was never found) does not.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the bare rung fails with MODULE_NOT_FOUND but names a specific missing target file (installed package, broken main/export entry)', () => {
+  const subpathErr = Object.assign(new Error('nope'), { code: 'MODULE_NOT_FOUND' });
+  const bareErr = Object.assign(
+    new Error("Cannot find module '/fake/node_modules/@adlc/broken-main/dist/index.js'"),
+    { code: 'MODULE_NOT_FOUND', path: '/fake/node_modules/@adlc/broken-main/dist/index.js' },
+  );
+  const result = classifyPackageJson('@adlc/broken-main', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw bareErr; },
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'a MODULE_NOT_FOUND naming a specific missing target file means the package was found installed, not absent',
+  );
+
+  // Negative control: the SAME code with no `.path` (genuine absence, the
+  // shape the pre-existing not-a-dependency test above uses) must still
+  // classify as not-a-dependency — this fix narrows, it does not invert.
+  const trulyAbsentErr = Object.assign(new Error("Cannot find module 'nope'"), { code: 'MODULE_NOT_FOUND' });
+  const absent = classifyPackageJson('@adlc/genuinely-absent', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw trulyAbsentErr; },
+  });
+  assert.deepEqual(absent, { path: null, code: 'not-a-dependency' });
+});
+
 test('AC1: classifyPackageJson reports packaging-fault when an exports map omits ./package.json AND the entry-based fallback also fails to locate it (the #970 shape)', () => {
   const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
   const result = classifyPackageJson('@adlc/broken-exports', {

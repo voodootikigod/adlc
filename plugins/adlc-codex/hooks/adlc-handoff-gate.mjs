@@ -1263,16 +1263,23 @@ async function main() {
 
   if (!result.deny) process.exit(0);
 
-  // Lead with the fresh-session path (#970 D5): see the identical note in
+  // #970 D5 (round-7 review): see the identical note in
   // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
-  // clears D2 (this session being the denier), not an open D3 record, so
-  // the message no longer promises it "always works".
+  // clears D1/D2 (this session's own re-entry/denier status), not an open
+  // D3 record or a structural reason, so only recommend it when every
+  // reason present is one it can actually clear.
+  const freshSessionHelps = result.reasons.every((r) => r.startsWith('D1:') || r.startsWith('D2:'));
   fail(
-    `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
-      "nothing and clears this session's own denier status, but an open deny record still blocks every " +
-      'session until it is cleared. To clear it, run `adlc handoff resume` / repair from a ' +
-      `DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear the ` +
-      `deny-set.\n\n${recoveryDiagnostic(sessionId)}`
+    (freshSessionHelps
+      ? `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
+        "nothing and clears this session's own denier status. To clear it another way instead, run " +
+        '`adlc handoff resume` / repair from a DIFFERENT session than this one (same-session resume is ' +
+        'refused).'
+      : `mutation denied (${result.reasons.join(', ')}). This is recorded in the repo, not scoped to this ` +
+        'session, so a fresh session or subagent hits the same deny — it holds until an operator clears ' +
+        'it. Run `adlc handoff resume` / repair from a DIFFERENT session than this one (same-session ' +
+        'resume is refused).') +
+      ` Agent shell cannot clear the deny-set.\n\n${recoveryDiagnostic(sessionId)}`
   );
 }
 

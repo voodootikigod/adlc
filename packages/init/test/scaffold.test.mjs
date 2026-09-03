@@ -259,13 +259,40 @@ test('reconciling --harness against a corrupt or shape-mismatched existing confi
   });
   fixture((root) => {
     mkdirSync(join(root, '.adlc'), { recursive: true });
-    // Valid JSON, but no "harnesses" object at all (a hand-edited or
-    // otherwise unusual config) — nothing to merge into, so leave it be
-    // rather than inventing a shape the file never had.
-    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1 }));
+    // Valid JSON, but the top level is an array — a shape this function does
+    // not understand at all — so it is left exactly as found rather than
+    // guessing at a merge target.
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify(['not', 'an', 'object']));
     const result = scaffold({ root, harness: 'pi' });
     assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
-    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), { version: 1 });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), ['not', 'an', 'object']);
+  });
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    // Valid JSON, top-level object, but "harnesses" itself is the WRONG
+    // shape (not a plain object) — cannot safely merge a harness entry into
+    // it, so leave it exactly as found rather than clobbering it.
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1, harnesses: 'codex' }));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), { version: 1, harnesses: 'codex' });
+  });
+});
+
+test('reconciling --harness against a valid existing config.json with NO harnesses field creates one (round-7 review)', () => {
+  // A different plugin's own scaffolder (e.g. cursor, opencode) can create a
+  // valid .adlc/config.json without a "harnesses" field at all. Round 6's
+  // reconciliation fix only merged into an EXISTING harnesses object and
+  // left this case unregistered — extend it to create the field.
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1, securityMode: 'unsigned-fallback' }));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.updated.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.deepEqual(cfg.harnesses, { pi: { railEnforcement: 'auto' } });
+    assert.equal(cfg.securityMode, 'unsigned-fallback', 'unrelated fields are preserved');
+    assert.equal(cfg.version, 1);
   });
 });
 

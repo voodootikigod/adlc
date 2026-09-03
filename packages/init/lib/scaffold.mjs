@@ -271,20 +271,31 @@ function writeFileNoFollow(path, content, { exclusive = false } = {}) {
   }
 }
 
+/** A plain JSON object, not an array/null — the only shape a merge can target. */
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * Write .adlc/config.json fresh, or — when it already exists and `harness`
- * is explicitly given — reconcile just that one harness into it (round-6
+ * is explicitly given — reconcile just that one harness into it (round-6/7
  * review): the D7 warning's own advice ("pass --harness ... naming the
  * harness you actually use") must actually register it, not leave a stale
- * guess in place while reporting success. Every OTHER field (other
- * harnesses' entries, securityMode, version) is preserved untouched — this
- * is a targeted merge, not a rewrite, so an operator's own customizations to
+ * guess in place while reporting success. This includes a valid config with
+ * NO `harnesses` field at all (e.g. one a different plugin's own scaffolder
+ * wrote) — round 6 only merged into an EXISTING harnesses object and left
+ * that case silently unregistered. Every OTHER field (other harnesses'
+ * entries, securityMode, version) is preserved untouched — this is a
+ * targeted merge, not a rewrite, so an operator's own customizations to
  * fields this function does not touch survive.
  *
  * Left untouched (reported 'unchanged', writeMissing's original contract)
- * when: the file doesn't parse as JSON (do not attempt to merge into
- * something already broken), `harness` is null (still just a guess, nothing
- * to reconcile toward), or the requested harness is already registered.
+ * when: the file doesn't parse as JSON, or doesn't parse to a plain object
+ * (do not attempt to merge into something already broken or a shape this
+ * function does not understand — an array/string/number top level, or a
+ * `harnesses` field that isn't itself a plain object); `harness` is null
+ * (still just a guess, nothing to reconcile toward); or the requested
+ * harness is already registered.
  */
 function writeOrReconcileConfig(root, harness, result) {
   const relativePath = '.adlc/config.json';
@@ -305,13 +316,18 @@ function writeOrReconcileConfig(root, harness, result) {
     } catch {
       parsed = null;
     }
-    const harnesses = parsed && typeof parsed === 'object' ? parsed.harnesses : null;
-    if (parsed && harnesses && typeof harnesses === 'object' && !(harness in harnesses)) {
-      const merged = { ...parsed, harnesses: { ...harnesses, [harness]: { railEnforcement: 'auto' } } };
-      rejectSymlinkComponents(root, relativePath);
-      writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
-      record(result, 'updated', relativePath);
-      return;
+    if (isPlainObject(parsed) && (parsed.harnesses === undefined || isPlainObject(parsed.harnesses))) {
+      const existingHarnesses = parsed.harnesses ?? {};
+      if (!(harness in existingHarnesses)) {
+        const merged = {
+          ...parsed,
+          harnesses: { ...existingHarnesses, [harness]: { railEnforcement: 'auto' } },
+        };
+        rejectSymlinkComponents(root, relativePath);
+        writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
+        record(result, 'updated', relativePath);
+        return;
+      }
     }
   }
   record(result, 'unchanged', relativePath);

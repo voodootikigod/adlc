@@ -1096,10 +1096,51 @@ test('the full assembled deny message never carries a write-enabled recovery com
 });
 
 // #970 D5: see the identical test/rationale in
-// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs. Same-session
-// `adlc handoff resume` exits 2 by design, so the OLD ordering named the one
-// recommendation guaranteed not to work in the state that reads it first.
-test('the assembled deny message leads with the fresh-session path before naming same-session-restricted `adlc handoff resume` (D5)', async () => {
+// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs — round-7 review
+// found the unconditional fresh-session recommendation overclaims whenever
+// an open deny record (D3) is what's blocking, since a fresh session id is
+// not authorized against that record either (this file's own "a fresh
+// session is denied by the open record, not by its own depth" test proves
+// it). Only D1/D2 (this session's own re-entry/denier status, with no open
+// record left to check) are genuinely cleared by a fresh id.
+test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-sticky-fresh');
+    writeDenyRecord(dir, {
+      session_id: 'denier-sticky-fresh',
+      ticket_id: 'T1',
+      content_hash: 'abc',
+      status: 'consumed',
+      since: new Date().toISOString(),
+      host: 'test',
+      schema: 1,
+    });
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'denier-sticky-fresh', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        assert.doesNotMatch(err.message, /D3:/, 'sanity: the consumed record must not also carry an open-record reason');
+        const freshSessionIdx = err.message.indexOf('fresh session');
+        const resumeIdx = err.message.indexOf('adlc handoff resume');
+        assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${err.message}`);
+        assert.ok(resumeIdx >= 0, `no resume mention:\n${err.message}`);
+        assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${err.message}`);
+        assert.match(err.message, /DIFFERENT session/);
+        assert.doesNotMatch(err.message, /hits the same deny/, 'must not claim fresh session fails when it genuinely works');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', async () => {
   const dir = repo();
   try {
     seedForeignDeny(dir, 'denier-ordering');
@@ -1111,11 +1152,10 @@ test('the assembled deny message leads with the fresh-session path before naming
           { args: { filePath: 'src/ok.mjs' } },
         ),
       (err) => {
-        const freshSessionIdx = err.message.indexOf('fresh session');
+        assert.match(err.message, /D3:unauthorized_open:denier-ordering/, 'sanity: a foreign open record carries D3');
+        assert.match(err.message, /hits the same deny/, 'must say a fresh session does not escape an open record');
         const resumeIdx = err.message.indexOf('adlc handoff resume');
-        assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${err.message}`);
         assert.ok(resumeIdx >= 0, `no resume mention:\n${err.message}`);
-        assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${err.message}`);
         assert.match(err.message, /DIFFERENT session/);
         return true;
       },

@@ -107,7 +107,19 @@ export function classifyPackageJson(
     // not resolve this specific spec from it: installed, defect in its own
     // exports map — a packaging fault, not an absence, exactly the #970
     // misclassification this function exists to fix, one rung deeper.
-    return { path: null, code: err?.code === 'MODULE_NOT_FOUND' ? 'not-a-dependency' : 'packaging-fault' };
+    //
+    // Round-7 review: MODULE_NOT_FOUND itself is overloaded — Node throws the
+    // SAME code both for "this package directory does not exist at all" and
+    // for "this package directory exists, but its declared main/export
+    // TARGET FILE is missing" (a broken publish). Measured directly (see the
+    // dispatch.test.mjs regression below): only the second case attaches a
+    // `.path` property naming the specific missing target file; the genuine
+    // "package not found anywhere" case has no `.path` at all, only
+    // `.requireStack`. `.path` present is therefore evidence Node's resolver
+    // located the package and failed on a specific file within it —
+    // installed, broken entry, a packaging fault — not evidence of absence.
+    const genuinelyAbsent = err?.code === 'MODULE_NOT_FOUND' && typeof err?.path !== 'string';
+    return { path: null, code: genuinelyAbsent ? 'not-a-dependency' : 'packaging-fault' };
   }
 }
 
