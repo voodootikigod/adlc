@@ -31,6 +31,7 @@ for (const cmd of [
   'cp src/a.mjs test/a.mjs',
   'sed -i s/a/b/ file.txt',
   "sed 'w out.txt' in.txt",
+  "sed -n 'wout.txt' in.txt", // no space between `w` and the filename (regression — GNU sed accepts this)
   'find . -name "*.tmp" -delete',
   'git commit -m x',
   'git checkout -- test/x.mjs',
@@ -93,6 +94,45 @@ test('write option: node --test --test-reporter-destination out.txt', () => {
   assert.equal(shellHasWriteOption('node --test --test-reporter-destination out.txt'), true);
 });
 test('no write option: git status', () => assert.equal(shellHasWriteOption('git status'), false));
+test('write option smuggled inside quotes: git diff "--output=x" (regression)', () => {
+  // The boundary before `--` used to require literal whitespace, so a quoted
+  // option — where the character before `--` is `"` or `'`, not a space —
+  // read back as read-only even though the option is real.
+  assert.equal(shellHasWriteOption('git diff "--output=.adlc/handoffs/x"'), true);
+  assert.equal(shellHasWriteOption("git diff '--output=.adlc/handoffs/x'"), true);
+  // readOnly stays true here by design — the ladder's deny condition is
+  // `readOnly && writeOption`, not `readOnly && !writeOption`; a caller must
+  // check both fields, which is exactly the smuggling case this classifies.
+  const c = classifyShellCommand('git diff "--output=.adlc/handoffs/x"');
+  assert.equal(c.readOnly, true);
+  assert.equal(c.writeOption, true);
+});
+
+test('write option: flag quoted alone, value a separate argument (regression)', () => {
+  // `"--output"` closes its own quote right after the option name, with no
+  // `=` or whitespace directly after it in the raw text — the shell strips
+  // the quotes before git ever sees it, so this is identical to unquoted
+  // `git diff --output file`.
+  assert.equal(shellHasWriteOption('git diff "--output" .adlc/handoffs/x'), true);
+  assert.equal(shellHasWriteOption("git diff '--output' .adlc/handoffs/x"), true);
+});
+
+test('sed write with a line-address prefix and no space (regression)', () => {
+  // `1w file` / `1,5w file` are real sed syntax (verified against the real
+  // binary) — the digit immediately before `w` is a WORD character, so a
+  // plain `\b` boundary never fires there.
+  assert.equal(shellHasMutation("sed -n '1w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(shellHasMutation("sed -n '1,5w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(classifyShellCommand("sed -n '1w.adlc/handoffs/x' /dev/null").readOnly, false);
+  // The digit boundary is `(?<=[0-9])`, not `(?<=[1-9])` — an address ending
+  // in a ZERO digit (`10w`, not just `1w`) must be caught too. Both quote
+  // styles: the regex has a SEPARATE alternative per quote kind, so a
+  // mutation to only one of them survives a test that only exercises the
+  // other (confirmed by mutation-gate CI — the double-quoted branch alone
+  // was mutated and a single-quote-only test missed it).
+  assert.equal(shellHasMutation("sed -n '10w.adlc/handoffs/x' /dev/null"), true);
+  assert.equal(shellHasMutation('sed -n "10w.adlc/handoffs/x" /dev/null'), true);
+});
 
 // ---- cwd changes + expansion ----
 test('cwd change detected', () => assert.equal(shellChangesCwd('cd sub && echo x > f'), true));
@@ -116,6 +156,13 @@ test('collectShellPaths: redirect target, quoted path, sed w-file, bare tokens',
   const out3 = new Set();
   collectShellPaths("sed 'w captured.txt' in.txt", out3);
   assert.ok(out3.has('captured.txt'));
+});
+
+test('collectShellPaths: sed w-file with no space (regression)', () => {
+  const out = new Set();
+  collectShellPaths("sed -n 'wcaptured.txt' in.txt", out);
+  assert.ok(out.has('captured.txt'));
+  assert.equal(classifyShellCommand("sed -n 'wcaptured.txt' in.txt").readOnly, false);
 });
 
 test('shellTokens: quotes and separators', () => {

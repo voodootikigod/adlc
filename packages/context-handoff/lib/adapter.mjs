@@ -27,6 +27,7 @@ import { readBypassGrant, removeBypassGrant } from './bypass-grant.mjs';
 import { HANDOFF_DEPTH } from './thresholds.mjs';
 import { readVerifiedCapture } from './capture.mjs';
 import { CONTENT_KIND_CAPTURE } from './final.mjs';
+import { classifyShellCommand } from '@adlc/core';
 
 /** Mutating `adlc handoff` subcommands agents must not run under deny-set. */
 export const HANDOFF_MUTATING_SUBCOMMANDS = new Set([
@@ -209,24 +210,65 @@ export function classifyHandoffPath(root, rel) {
  * themselves and classify as unprotected, so the extra candidates cost a
  * failed stat each.
  *
+ * A `--flag=value` (or `-f=value`) token — a DASH-PREFIXED one specifically —
+ * is added BOTH as the dash-stripped whole (`output=.adlc/x`, so an existing
+ * literal token spelled that way is still caught) and as just the value half
+ * (`.adlc/x`) — without the latter, stripping only the LEADING dashes leaves
+ * the `=` in place, so `--output=.adlc/handoffs/x` never produces a token
+ * equal to (or reaching through) `.adlc`, only the unmatchable
+ * `output=.adlc/handoffs/x`. That gap let `git diff --output=.adlc/handoffs/x`
+ * overwrite a protected artifact through an option this parser never split on.
+ *
+ * Gated on a LEADING dash deliberately: a bare `name=value` token is a shell
+ * VARIABLE ASSIGNMENT (`d=.adlc; rm -rf "$d/handoffs"`), not a redirect
+ * target, and treating it as one would be the exact false confidence the
+ * "variable indirection is out of reach of a literal scan" test below refuses
+ * to claim — the value was never written anywhere by the assignment itself,
+ * and a scanner that keys on the variable NAME is trivially evaded by
+ * renaming it.
+ *
+ * A `sed` command's `w` (write) directive accepts its filename glued directly
+ * on with NO space (`wfile`, verified against the real binary) as readily as
+ * `w file`, so `sed -n 'w.adlc/handoffs/x' ...` tokenizes to the single token
+ * `w.adlc/handoffs/x` — never `.adlc`, and never a token that reaches it as an
+ * ancestor either. The `w` may also carry a leading sed ADDRESS — `1w file`,
+ * `1,5w file` (real syntax, verified against the real binary) — so the strip
+ * also eats a leading `[0-9,$!]*` before the `w`, not just the `w` itself.
+ * Gated on the whole command containing `sed` (the same coarse scoping
+ * @adlc/core's own sed-write detection uses) so an unrelated token that
+ * merely starts with a lowercase `w` isn't split apart elsewhere.
+ *
  * @param {unknown} command
  * @returns {string[]}
  */
 export function shellPathCandidates(command) {
   if (typeof command !== 'string' || command === '') return [];
   const out = new Set();
-  // Strip quotes, then take whitespace/;|&-separated tokens.
-  for (const raw of command.replace(/['"]/g, ' ').split(/[\s;|&()<>]+/)) {
+  const addWithAncestors = (raw) => {
     const token = raw.replace(/^-+/, '');
-    if (token === '') continue;
+    if (token === '') return;
     const norm = token.replace(/\\/g, '/').replace(/\/+$/, '');
-    if (norm === '') continue;
+    if (norm === '') return;
     out.add(norm);
     // Every ancestor, so a deep target is seen as reaching through them.
     const parts = norm.split('/');
     for (let i = 1; i < parts.length; i += 1) {
       const prefix = parts.slice(0, i).join('/');
       if (prefix !== '') out.add(prefix);
+    }
+  };
+  const isSedCommand = /\bsed\b/.test(command);
+  // Strip quotes, then take whitespace/;|&-separated tokens.
+  for (const raw of command.replace(/['"]/g, ' ').split(/[\s;|&()<>]+/)) {
+    if (raw === '') continue;
+    addWithAncestors(raw);
+    if (raw.startsWith('-')) {
+      const eq = raw.indexOf('=');
+      if (eq > 0) addWithAncestors(raw.slice(eq + 1));
+    }
+    if (isSedCommand) {
+      const sedWrite = raw.match(/^[0-9,$!]*w([./~].*)$/);
+      if (sedWrite) addWithAncestors(sedWrite[1]);
     }
   }
   return [...out];
@@ -613,7 +655,30 @@ export function evaluateHandoffPreToolUse({
   // same limitation the rail shell classifier documents. It raises the cost of
   // the obvious attempt; the durable fix is host-owned storage the agent's shell
   // cannot reach at all (T-01KZRCNX3TSJ4C0PXZ28C9CB5N).
-  if (isBash) {
+  //
+  // Skipped for a command that is genuinely read-only by the SAME enforcement
+  // ladder rails-guard uses elsewhere in this repo (adlc-rails-guard.mjs:
+  // `readOnly && writeOption → deny`, `readOnly → allow`) — never
+  // `shellIsPositivelyReadOnly` alone. That function only tests the LEADING
+  // command name per segment, so `cat x > .adlc/handoffs/y` still starts with
+  // `cat` and reads back "positively read only" even though it overwrites the
+  // deny store via redirection; `classifyShellCommand(...).readOnly` closes
+  // that by ANDing in `!shellHasMutation` (redirect-aware), and `writeOption`
+  // additionally catches output-flag smuggling redirection alone misses
+  // (`git diff --output=.adlc/handoffs/y`). The rationale above is entirely
+  // about DELETION/overwrite reaching the deny store; a command that is
+  // neither (an ambiguous or unparseable one still fails closed, by
+  // construction of the ladder) cannot touch it either. This also closes an
+  // inconsistency rather than opening one: the `Read` tool already bypasses
+  // this guard completely (only Edit/Write/MultiEdit/NotebookEdit/Bash are
+  // wired to it — see hooks.json), so a plain `ls`/`cat`/`grep` under `.adlc/`
+  // was being refused while reading the identical bytes through a different
+  // tool was not.
+  const shellClassification = isBash ? classifyShellCommand(bashCommand) : null;
+  const shellGenuinelyReadOnly = shellClassification !== null
+    && shellClassification.readOnly
+    && !shellClassification.writeOption;
+  if (isBash && !shellGenuinelyReadOnly) {
     for (const token of shellPathCandidates(bashCommand)) {
       const verdict = classifyProtectedTarget(root, token);
       if (verdict.protected) {

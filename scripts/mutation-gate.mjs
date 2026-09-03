@@ -140,8 +140,21 @@ export function testTargetFor(file, root = ROOT) {
     return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
   }
   if ((m = /^plugins\/([^/]+)\/(hooks|lib|agents|mcp)\//.exec(file))) {
-    const d = `plugins/${m[1]}/${m[2]}/test`;
-    if (existsSync(join(root, d))) return `${d}/*.test.mjs`;
+    const globs = [];
+    const subDir = `plugins/${m[1]}/${m[2]}/test`;
+    const pluginDir = `plugins/${m[1]}/test`;
+    if (existsSync(join(root, subDir))) globs.push(`${subDir}/*.test.mjs`);
+    // A plugin's contract tests may live at the plugin ROOT rather than nested
+    // under the specific hooks/lib/agents/mcp subdirectory that changed — e.g.
+    // plugins/adlc-copilot/test/rails-guard-contract.test.mjs is what actually
+    // covers plugins/adlc-copilot/hooks/adlc-rails-guard.mjs's mutation
+    // classifier, not anything under hooks/test/. Union both when both exist,
+    // mirroring the packages/ pattern (test/ + cli-test/ + adapter-test/)
+    // above — crediting only the first found silently drops real coverage
+    // from the fast command, reporting a false SURVIVED for a mutant only the
+    // OTHER suite actually kills.
+    if (existsSync(join(root, pluginDir))) globs.push(`${pluginDir}/*.test.mjs`);
+    return globs.length > 0 ? globs.join(' ') : null;
   }
   if ((m = /^plugins\/([^/]+)\//.exec(file))) {
     const d = `plugins/${m[1]}/test`;

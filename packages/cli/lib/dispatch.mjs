@@ -7,6 +7,52 @@ import { getTool } from './registry.mjs';
 
 const require = createRequire(import.meta.url);
 
+// A published package MAY declare an `exports` map that omits `./package.json`
+// (@adlc/context-handoff does — its map lists many `./lib/*.mjs` subpaths, not
+// that one), and Node enforces exports encapsulation: any subpath not listed
+// throws ERR_PACKAGE_PATH_NOT_EXPORTED. `require.resolve('<pkg>/package.json')`
+// therefore throws for exactly the packages that have the MOST reason to
+// declare an exports map (many internal lib files). The monorepo `devPath`
+// rung above never exercises this — it always short-circuits first when `adlc`
+// runs from within this repo — so a real install (global `npm i -g @adlc/cli`,
+// or any project-local install) is the only place it was ever reachable.
+//
+// This is the FALLBACK rung, not the primary one: most tools in this suite are
+// bin-only (no `main`, no `exports` — e.g. @adlc/rails-guard, @adlc/fleet) and
+// have no `.` entry at all, so `require.resolve(packageName)` throws
+// MODULE_NOT_FOUND for them. Resolving via the package's own entry must
+// therefore stay a NARROW fallback for ERR_PACKAGE_PATH_NOT_EXPORTED
+// specifically — an earlier version of this function tried the entry-based walk
+// unconditionally and broke dispatch for every bin-only tool in a real install.
+// Extracted so the depth cap has a boundary a test can actually reach: a
+// synthetic directory tree of a controlled depth, independent of Node's own
+// module-resolution semantics (which packageJsonFromEntry alone would drag
+// into any attempt to test the cap directly).
+export function findPackageJsonUpward(startDir, packageName, maxDepth = 8) {
+  let dir = startDir;
+  for (let i = 0; i < maxDepth; i += 1) {
+    const candidate = join(dir, 'package.json');
+    if (existsSync(candidate)) {
+      const pkg = readPackage(candidate);
+      if (pkg?.name === packageName) return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+export function packageJsonFromEntry(packageName) {
+  let entry;
+  try {
+    entry = require.resolve(packageName);
+  } catch {
+    return null;
+  }
+  return findPackageJsonUpward(dirname(entry), packageName);
+}
+
 export function packageJsonPath(packageName) {
   if (packageName.startsWith('@adlc/')) {
     const name = packageName.slice('@adlc/'.length);
@@ -16,15 +62,20 @@ export function packageJsonPath(packageName) {
         const pkg = JSON.parse(readFileSync(devPath, 'utf8'));
         if (pkg?.name === packageName) return devPath;
       } catch {
-        /* fall through to require.resolve */
+        /* fall through */
       }
     }
   }
+  // Primary rung: works for every package with no `exports` map (the vast
+  // majority — bin-only tools), and for any package whose map DOES list
+  // `./package.json`. Only a package with an exports map that omits it needs
+  // the entry-based fallback below.
   try {
     return require.resolve(`${packageName}/package.json`);
-  } catch {
-    return null;
+  } catch (err) {
+    if (err?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') return null;
   }
+  return packageJsonFromEntry(packageName);
 }
 
 function resolvePackageBin(packageName, binName) {

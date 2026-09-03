@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { createRequire } from 'node:module';
+import { findPackageJsonUpward, packageJsonFromEntry, packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -205,6 +206,106 @@ test('packageJsonPath falls back to require.resolve if the local package.json ha
     assert.equal(result, null);
   } finally {
     rmSync(fakePkgDir, { recursive: true, force: true });
+  }
+});
+
+test('packageJsonFromEntry finds package.json for a package whose exports map omits it (regression)', () => {
+  // @adlc/context-handoff's exports map lists many `./lib/*.mjs` subpaths but
+  // never `./package.json`, so Node's exports encapsulation makes the naive
+  // `require.resolve('@adlc/context-handoff/package.json')` throw
+  // ERR_PACKAGE_PATH_NOT_EXPORTED. That subpath call is exactly what the old
+  // packageJsonPath() fallback used — unreachable in this monorepo (the devPath
+  // rung always wins first), so it was undetected until a real install (global
+  // `npm i -g @adlc/cli`) hit it and `adlc handoff <verb>` failed with
+  // "tool not installed: @adlc/context-handoff".
+  const require = createRequire(import.meta.url);
+  assert.throws(
+    () => require.resolve('@adlc/context-handoff/package.json'),
+    /ERR_PACKAGE_PATH_NOT_EXPORTED/,
+    'this pins the Node behavior that motivated the fix — if it stops throwing, the fix (and this test) can be simplified',
+  );
+
+  const found = packageJsonFromEntry('@adlc/context-handoff');
+  assert.ok(found, 'packageJsonFromEntry must locate the package.json without using the exports-restricted subpath');
+  assert.match(found, /context-handoff\/package\.json$/);
+  const pkg = JSON.parse(readFileSync(found, 'utf8'));
+  assert.equal(pkg.name, '@adlc/context-handoff');
+});
+
+test('packageJsonFromEntry must never be the ONLY rung for a bin-only package with no root entry (regression)', () => {
+  // Most tools in this suite (@adlc/rails-guard, @adlc/fleet, @adlc/hollow-test,
+  // ...) declare only `bin`, no `main` and no `exports` — no `.` entry point at
+  // all. `require.resolve(packageName)` (bare, no subpath) throws
+  // MODULE_NOT_FOUND for these, so packageJsonFromEntry alone returns null for
+  // them. An earlier version of packageJsonPath() tried this rung
+  // unconditionally as the sole fallback and broke `adlc <tool>` dispatch for
+  // every bin-only tool in a real (non-monorepo-devPath) install — the fix it
+  // was meant to deliver for @adlc/context-handoff regressed far more tools
+  // than it fixed. Pin both halves: the entry-only rung fails for a bin-only
+  // package, and the full packageJsonPath() ladder (subpath-first, entry-based
+  // fallback only on ERR_PACKAGE_PATH_NOT_EXPORTED) still succeeds for it.
+  const require = createRequire(import.meta.url);
+  assert.doesNotThrow(
+    () => require.resolve('@adlc/rails-guard/package.json'),
+    'this pins that rails-guard has no exports map — if it grows one without listing ./package.json, this test (not packageJsonPath) should start failing here',
+  );
+  assert.equal(
+    packageJsonFromEntry('@adlc/rails-guard'),
+    null,
+    'the entry-based rung alone must fail for a bin-only package (no `.` entry) — it must never be the sole resolution path',
+  );
+
+  const found = packageJsonPath('@adlc/rails-guard');
+  assert.ok(found, 'packageJsonPath must still resolve a bin-only package via the direct subpath rung');
+  assert.match(found, /rails-guard\/package\.json$/);
+});
+
+test('findPackageJsonUpward respects its depth cap at the boundary (mutation regression)', () => {
+  // A synthetic tree, independent of Node's own module resolution, so the cap
+  // itself is directly testable. `for (let i = 0; i < maxDepth; i += 1)` checks
+  // the START dir on i=0, then walks up on each subsequent iteration — with
+  // maxDepth=8 that's 8 checks covering 0..7 levels up, never 8. So a
+  // package.json 7 levels up is the last one still found; 8 levels up is one
+  // past the cap.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cli-depth-'));
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@adlc/depth-fixture' }));
+    let deepDir = root;
+    for (let i = 0; i < 8; i += 1) {
+      deepDir = join(deepDir, `d${i}`);
+    }
+    mkdirSync(deepDir, { recursive: true });
+    // deepDir is 8 levels below root; its parent (d0..d6) is 7 levels below.
+    const sevenLevelsUp = dirname(deepDir);
+
+    assert.equal(
+      findPackageJsonUpward(sevenLevelsUp, '@adlc/depth-fixture', 8),
+      join(root, 'package.json'),
+      'a package.json exactly 7 directories up (the last level the cap reaches) must still be found',
+    );
+    assert.equal(
+      findPackageJsonUpward(deepDir, '@adlc/depth-fixture', 8),
+      null,
+      'one directory PAST the cap (8 levels up) must not be found — proves the loop bound is live, not decorative',
+    );
+    // The DEFAULT `maxDepth = 8` specifically — every real caller (e.g.
+    // packageJsonFromEntry) omits the third argument, so a test that always
+    // passes 8 explicitly never observes a mutation to the default itself.
+    // Must use the DEEP (one-past-cap) case, not the shallow one: a package
+    // 7 levels up is found whether the default is 8, 9, or higher, so only
+    // asserting THAT survives a mutated (too-generous) default undetected.
+    assert.equal(
+      findPackageJsonUpward(sevenLevelsUp, '@adlc/depth-fixture'),
+      join(root, 'package.json'),
+      'a package.json exactly 7 directories up must still be found via the default maxDepth',
+    );
+    assert.equal(
+      findPackageJsonUpward(deepDir, '@adlc/depth-fixture'),
+      null,
+      'one directory PAST the cap must not be found via the default maxDepth either — pins the default at exactly 8, not 9+',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

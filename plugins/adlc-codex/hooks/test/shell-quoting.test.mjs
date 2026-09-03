@@ -127,6 +127,24 @@ test('an UNTERMINATED quote fails closed', () => {
   });
 });
 
+// A sed line-address write ending in a ZERO digit right before `w` — the
+// digit boundary is `(?<=[0-9])`, not `(?<=[1-9])`, so this case (unreachable
+// by an address ending 1-9) is caught too. Both quote styles: the regex has
+// a SEPARATE alternative per quote kind, so a mutation to only one of them
+// survives a test that only exercises the other (confirmed by mutation-gate
+// CI against the copilot fork of this same classifier).
+for (const command of [
+  "sed -n '10w test/frozen.test.mjs' /dev/null",
+  'sed -n "10w test/frozen.test.mjs" /dev/null',
+]) {
+  test(`a sed line-address write with no space to a RAIL is DENIED — ${command}`, () => {
+    withRepo((root) => {
+      const r = shell(root, command);
+      assert.equal(r.status, DENIED, `must deny: ${command}\n${r.stderr}`);
+    });
+  });
+}
+
 test('a plain read-only command is still ALLOWED (control)', () => {
   withRepo((root) => {
     // Denominator: proves the deny assertions above are not simply "everything
