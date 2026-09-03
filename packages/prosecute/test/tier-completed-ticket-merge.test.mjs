@@ -108,6 +108,25 @@ describe('loadTicketsForTier merges duplicate ticket ids with base-tip precedenc
     } finally { cleanup(dir); }
   });
 
+  it('a malformed entry (null, or a non-string id) in a --dir ticket table is skipped, not crashed on or misclassified', () => {
+    // readTicketArray (the --dir custom source) does no schema validation, so a
+    // malformed entry can genuinely reach mergeTicketsById's per-entry guard
+    // (`!ticket || typeof ticket.id !== 'string'`). A well-formed ticket (T2,
+    // rails matching the changed file) sits alongside the malformed entries in
+    // the SAME array, so the guard must skip the garbage without dropping or
+    // misclassifying the real ticket.
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({
+        tickets: [null, { title: 'no id at all' }, { id: 42, title: 'numeric id' }, T({ id: 'T2' })],
+      }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 2, 'the well-formed ticket in the same array must still tier the change');
+      assert.match(r.stderr, /T2/);
+    } finally { cleanup(dir); }
+  });
+
   it('rails are unioned across duplicate copies, not just replaced by the base-tip copy', () => {
     // Base declares T1 with no rails; feat's own HEAD copy of T1 (not yet synced
     // to base) already carries a widened rails set. The widened rail must still
