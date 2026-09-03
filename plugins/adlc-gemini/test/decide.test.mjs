@@ -115,6 +115,17 @@ test('decide(): write to .adlc/.session-secret is denied as a frozen rail', () =
   assert.match(v.deny_reason, /frozen rail/);
 });
 
+test('checkRail: denies a .env.local.bak-style path via the .env.local* wildcard rail', () => {
+  // checkRail is TRUST_ROOT_RAILS's direct consumer (via railPreconditions), called
+  // here in isolation from decide()'s separate isTrustRootOrSecretPath regex check
+  // (which also matches any '.env.local' substring) — so this pins the rails-glob
+  // wildcard specifically, not overlapping protection.
+  const root = adlcRepo();
+  const res = checkRail({ filePath: join(root, '.env.local.bak'), tool: 'write_to_file', root, env: ENF });
+  assert.equal(res.decision, 'deny');
+  assert.match(res.reason, /frozen rail ".*\.env\.local\*"/);
+});
+
 test('decide(): nested path object on unclassified tool targeting frozen rail is denied', () => {
   const root = adlcRepo();
   const v = call('custom_mutator', { target: { path: join(root, '.adlc/tickets.json') } });

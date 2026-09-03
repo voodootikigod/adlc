@@ -46,6 +46,12 @@ test('computeRiskTier: derives high risk for ticket touching trust root', () => 
   assert.ok(signals.includes('touches-trust-root'));
 });
 
+test('computeRiskTier: derives high risk for ticket touching the session secret', () => {
+  const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', rails: ['.adlc/.session-secret'] });
+  assert.equal(tier, 'high');
+  assert.ok(signals.includes('touches-trust-root'));
+});
+
 test('computeRiskTier: normal risk for standard ticket', () => {
   const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', scope: ['src/foo.mjs'] });
   assert.equal(tier, 'normal');

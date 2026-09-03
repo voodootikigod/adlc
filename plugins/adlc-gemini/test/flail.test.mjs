@@ -37,6 +37,17 @@ test('normalizeError handles adversarial long inputs without quadratic backtrack
   assert.ok(typeof res === 'string');
 });
 
+test('normalizeError truncates at exactly 2048 characters, not 2049', () => {
+  // A line of length 2049 whose 2049th character is uppercase 'Z' (survives
+  // lowercasing but no other rule touches it). Truncated at 2048 it never
+  // reaches the marker; off by one and it does — so output length pins the
+  // exact boundary the ReDoS guard depends on.
+  const overLength = 'a'.repeat(2048) + 'Z';
+  const result = normalizeError(overLength);
+  assert.equal(result.length, 2048);
+  assert.equal(result, 'a'.repeat(2048));
+});
+
 test('detectRepeatedErrors detects error signatures repeating >= maxRepeat times', () => {
   const lines = [
     'Error: Failed to compile src/a.js at line 10',
