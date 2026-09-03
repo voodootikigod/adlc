@@ -236,6 +236,48 @@ describe('classifyTrustRootTier — test-only exemption (#154/T41)', () => {
   });
 });
 
+describe('classifyTrustRootTier — completed tickets do not tier via rails (#905)', () => {
+  it('AC1: a completed ticket\'s rails do NOT tier a matching change', () => {
+    const tickets = [
+      { id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [], completed: true },
+    ];
+    const r = classifyTrustRootTier({ changedFiles: ['packages/foo/lib/x.mjs'], tickets });
+    assert.deepEqual(r, { isTrustRootTier: false, reasons: [] });
+  });
+
+  it('AC2: the same ticket with completed omitted (or false) still tiers the identical change', () => {
+    const changedFiles = ['packages/foo/lib/x.mjs'];
+    const withoutField = [{ id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [] }];
+    const rOmitted = classifyTrustRootTier({ changedFiles, tickets: withoutField });
+    assert.equal(rOmitted.isTrustRootTier, true);
+    assert.ok(rOmitted.reasons.some((x) => x.includes('T37') && x.includes('packages/**')));
+
+    const withFalse = [{ id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [], completed: false }];
+    const rFalse = classifyTrustRootTier({ changedFiles, tickets: withFalse });
+    assert.equal(rFalse.isTrustRootTier, true);
+    assert.ok(rFalse.reasons.some((x) => x.includes('T37') && x.includes('packages/**')));
+  });
+
+  it('AC3: a completed ticket\'s rails are skipped even alongside a non-completed ticket whose rails also match — the change still tiers via the non-completed ticket', () => {
+    const tickets = [
+      { id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [], completed: true },
+      { id: 'T99', title: 'active', scope: [], rails: ['packages/**'], edges: [] },
+    ];
+    const r = classifyTrustRootTier({ changedFiles: ['packages/foo/lib/x.mjs'], tickets });
+    assert.equal(r.isTrustRootTier, true);
+    assert.ok(r.reasons.some((x) => x.includes('T99')), 'must tier via the non-completed ticket');
+    assert.ok(!r.reasons.some((x) => x.includes('T37')), 'the completed ticket must contribute no reason');
+  });
+
+  it('a non-string/non-boolean completed value (e.g. the string "true") is NOT treated as completed — strict === true only', () => {
+    const tickets = [
+      { id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [], completed: 'true' },
+    ];
+    const r = classifyTrustRootTier({ changedFiles: ['packages/foo/lib/x.mjs'], tickets });
+    assert.equal(r.isTrustRootTier, true, 'a truthy non-boolean completed value must not exempt the ticket');
+  });
+});
+
 // The test-file exemption (#154/T41) is only SAFE if a test-classified path never
 // holds production code imported by a gate. Enforce that invariant so a future
 // convention violation can't silently open a tier bypass.

@@ -115,7 +115,11 @@ trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
 `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`). The ticket table for
 rails-deny-path tiering is read from the **same `--dir`** the prosecution uses (falling back
 to `.adlc/tickets.json`), so rails declared under a custom `--dir` are not invisible to the
-tier. For such a change, a passing P5 **additionally** requires a `cross-model-review`
+tier. A **completed** ticket's rails (`completed: true`, strict boolean) contribute no
+rails-deny-path reason — they auto-expire, matching rail-freeze's own T36 completion
+lifecycle reading, so a change under `packages/` does not tier forever just because some
+long-finished ticket once declared `packages/**` as a rail (#905). For such a change, a
+passing P5 **additionally** requires a `cross-model-review`
 **`approve`** in the manifest whose `provider` is distinct from the author and whose
 `revision` equals the reviewed revision. Missing → exit 2.
 

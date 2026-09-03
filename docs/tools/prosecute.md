@@ -108,6 +108,15 @@ The review packet binds the reviewer prompt and reviewed input packet to P5 evid
 `prompt` and `inputs` are file paths, their hashes must match the supplied SHA-256 values,
 and `clean_worktree` must equal the exact reviewed revision.
 
+## Trust-root tier (`tier-check`)
+
+`adlc-prosecute tier-check` classifies a change as **trust-root tier** when it touches an
+enforcement package, a gated-artifact producer, an exact trust-root file, or a rails
+deny-path declared by any ticket. A ticket marked `completed: true` (strict boolean)
+contributes no rails deny-path reason — its rails auto-expire, matching rail-freeze's own
+completion-lifecycle reading, so a change under `packages/` does not stay trust-root tier
+forever just because some long-finished ticket once declared `packages/**` as a rail.
+
 ## Exit codes
 
 - `0`: two consecutive dry passes were recorded
