@@ -468,12 +468,14 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
   // Deliberately NOT `--write` — see the canonical function's comment
-  // (recovery-exception.mjs) for the full rationale (issue #970 D6).
-  const dryRunCommand =
-    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
-    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+  // (recovery-exception.mjs) for the full rationale (issue #970 D6). The
+  // command sits alone on its own first line, prose after — see the
+  // canonical function's comment for why (issue #970 remediation).
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
     'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
-  return dryRunCommand;
+  return `${command}\n${explanation}`;
 }
 
 /**

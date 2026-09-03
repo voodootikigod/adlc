@@ -654,12 +654,17 @@ export function formatRecoveryCommand({
   // (this repo, dogfooding) can paste and run the labeled command exactly
   // as easily as an unlabeled one. Apply the identical D6 dry-run contract
   // here: the auto-printed command never carries --write.
-  return (
+  //
+  // Round-3 review correction: the command sits alone on its own first
+  // line, prose after — see the canonical function's comment
+  // (recovery-exception.mjs) for why (issue #970 remediation).
+  const command =
     `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
-    `${unboundClause(unbound)} --dir ${dirDisplay}` +
-    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
-    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.'
-  );
+    `${unboundClause(unbound)} --dir ${dirDisplay}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return `${command}\n${explanation}`;
 }
 
 /**

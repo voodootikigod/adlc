@@ -330,12 +330,14 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
   // Deliberately NOT `--write` — see the canonical function's comment
-  // (recovery-exception.mjs) for the full rationale (issue #970 D6).
-  const dryRunCommand =
-    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
-    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+  // (recovery-exception.mjs) for the full rationale (issue #970 D6). The
+  // command sits alone on its own first line, prose after — see the
+  // canonical function's comment for why (issue #970 remediation).
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
     'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
-  return dryRunCommand;
+  return `${command}\n${explanation}`;
 }
 
 /**
@@ -1262,10 +1264,13 @@ async function main() {
   if (!result.deny) process.exit(0);
 
   // Lead with the fresh-session path (#970 D5): see the identical note in
-  // plugins/adlc-claude-code/hooks/adlc-hook.mjs.
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
+  // clears D2 (this session being the denier), not an open D3 record, so
+  // the message no longer promises it "always works".
   fail(
-    `mutation denied (${result.reasons.join(', ')}). Continue in a fresh session or subagent — that always ` +
-      'works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair from a ' +
+    `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
+      "nothing and clears this session's own denier status, but an open deny record still blocks every " +
+      'session until it is cleared. To clear it, run `adlc handoff resume` / repair from a ' +
       `DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear the ` +
       `deny-set.\n\n${recoveryDiagnostic(sessionId)}`
   );

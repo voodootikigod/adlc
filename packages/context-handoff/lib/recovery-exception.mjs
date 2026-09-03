@@ -343,11 +343,19 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   // exception as --write) and needs no key; a human operator holding
   // ADLC_MANIFEST_KEY adds --write themselves after reviewing why the deny
   // fired.
-  const dryRunCommand =
-    `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
-    ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+  //
+  // The command sits ALONE on its own first line, with the explanatory prose
+  // on the line(s) after: `tokenize` (this file) rejects any raw string
+  // containing `\r`/`\n` outright, so appending the prose to the SAME string
+  // as the command made the whole returned value fail to match its own
+  // grammar, and made the printed line unparseable if copy-pasted as-is
+  // (a shell reads the trailing `(...)` prose as syntax). A caller that needs
+  // just the runnable command takes `formatRecoveryCommand(...).split('\n')[0]`.
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
     'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
-  return dryRunCommand;
+  return `${command}\n${explanation}`;
 }
 
 /**

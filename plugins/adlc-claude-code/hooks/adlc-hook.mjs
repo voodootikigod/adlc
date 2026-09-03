@@ -2330,15 +2330,23 @@ async function handoff(input) {
 
   if (!result.deny) return;
 
-  // Lead with the fresh-session path (#970 D5): it always works, needs no
-  // key, and does not depend on same-session `resume` being refused (exit 2
-  // by design) — the OLD ordering named the same-session-restricted command
-  // first, so the first thing tried in the state that hit the deny was
-  // guaranteed not to work there.
+  // Lead with the fresh-session path (#970 D5): the OLD ordering named the
+  // same-session-restricted `adlc handoff resume` first, so the first thing
+  // tried in the state that hit the deny was guaranteed not to work there
+  // (same-session resume exits 2 by design). A follow-up review (#970
+  // remediation) found the replacement overclaimed: a fresh session only
+  // clears D2 (this session being the denier) — an open deny record (D3)
+  // still blocks every session, fresh or not, until resume/repair/bypass
+  // clears it (mutation-gate.mjs's D3:unauthorized_open loop checks every
+  // open record regardless of the CALLER's session; opencode's
+  // "a fresh session is denied by the open record, not by its own depth"
+  // test proves it). Fresh session is still worth trying first — it costs
+  // nothing and needs no key — but the message no longer promises it works.
   return denyHandoff(
-    `mutation denied (${result.reasons.join(', ')}). Continue in a fresh session or subagent — that always ` +
-      'works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair from a ' +
-      'DIFFERENT session than this one (same-session resume is refused). Agent Shell cannot clear deny-set.\n\n' +
+    `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
+      "nothing and clears this session's own denier status, but an open deny record still blocks every " +
+      'session until it is cleared. To clear it, run `adlc handoff resume` / repair from a DIFFERENT ' +
+      'session than this one (same-session resume is refused). Agent Shell cannot clear deny-set.\n\n' +
       `${CAPTURE_INSTRUCTION}\n\n${recoveryDiagnostic(sessionId)}`
   );
 }

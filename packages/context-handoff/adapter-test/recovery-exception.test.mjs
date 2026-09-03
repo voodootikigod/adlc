@@ -208,7 +208,7 @@ test('formatRecoveryCommand — quotes paths containing a space', () => {
     scriptPath: '/Users/alice/My Project/adlc/handoff.mjs',
     sessionId: 'sess-1',
   });
-  assert.match(out, /^'\/Users\/alice\/My Project\/node' '\/Users\/alice\/My Project\/adlc\/handoff\.mjs' bypass --session sess-1 \(dry run/);
+  assert.match(out, /^'\/Users\/alice\/My Project\/node' '\/Users\/alice\/My Project\/adlc\/handoff\.mjs' bypass --session sess-1\n\(dry run/);
 });
 
 test('formatRecoveryCommand — does not quote a plain path', () => {
@@ -219,10 +219,27 @@ test('formatRecoveryCommand — does not quote a plain path', () => {
   });
   assert.equal(
     out,
-    "/usr/local/bin/node /repo/packages/context-handoff/bin/handoff.mjs bypass --session sess-1 " +
+    "/usr/local/bin/node /repo/packages/context-handoff/bin/handoff.mjs bypass --session sess-1\n" +
       "(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding " +
       "ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.",
   );
+});
+
+test('formatRecoveryCommand — the first line alone is the runnable command, and matches matchRecoveryCommand (D6/#970 round-trip)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recovery-exception-roundtrip '));
+  const interpreterPath = join(dir, 'node');
+  const scriptPath = join(dir, 'handoff.mjs');
+  writeFileSync(interpreterPath, '');
+  writeFileSync(scriptPath, '');
+  const sessionId = 'sess-1';
+  const out = formatRecoveryCommand({ interpreterPath, scriptPath, sessionId });
+  const lines = out.split('\n');
+  assert.ok(lines.length >= 2, `expected command and prose on separate lines:\n${out}`);
+  const [commandLine, ...prose] = lines;
+  assert.doesNotMatch(commandLine, /\(dry run/, 'the command line itself must carry none of the explanatory prose');
+  assert.match(prose.join('\n'), /\(dry run — inspects only, mutates nothing\)/);
+  const result = matchRecoveryCommand(`${commandLine} --write`, { interpreterPath, scriptPath, sessionId });
+  assert.equal(result.matched, true, `first line does not match the recovery grammar:\n${commandLine}`);
 });
 
 // D6 (#970): the assembled diagnostic must never hand over a directly
@@ -282,7 +299,7 @@ test('formatRecoveryCommand — a VALUE_GRAMMAR-safe sessionId still formats nor
     scriptPath: '/repo/handoff.mjs',
     sessionId: 'sess-abc.123_ok',
   });
-  assert.match(out, /--session sess-abc\.123_ok \(dry run/);
+  assert.match(out, /--session sess-abc\.123_ok\n\(dry run/);
 });
 
 test('formatRecoveryCommand — an interpreterPath containing an apostrophe degrades to the unsafe-path message, never a broken command', () => {

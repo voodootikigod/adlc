@@ -602,7 +602,7 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag \(dry run/);
+  assert.match(r.out, /bypass --session consumer-diag\n\(dry run/);
 });
 
 // #970 D5: see the identical test/rationale in
@@ -740,7 +740,7 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
   const out = recoveryDiagnostic('sess-a');
   // #970 D6: dry-run form only, no directly-runnable --write.
-  assert.match(out, /bypass --session sess-a \(dry run/);
+  assert.match(out, /bypass --session sess-a\n\(dry run/);
   assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });

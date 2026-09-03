@@ -512,13 +512,18 @@ export function checkHandoff({
 
   if (!result.deny) return { decision: 'allow' };
   // Lead with the fresh-session path (#970 D5): see the identical note in
-  // plugins/adlc-claude-code/hooks/adlc-hook.mjs.
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
+  // clears D2 (this session being the denier), not an open D3 record, so
+  // the message no longer promises it "always works" (see this file's own
+  // "a fresh session is denied by the open record, not by its own depth"
+  // test for direct proof).
   return {
     decision: 'deny',
     reasons: result.reasons,
     reason:
-      `context-rot handoff deny (${result.reasons.join(', ')}). Continue in a fresh session or subagent — ` +
-      'that always works and needs no key. To clear this deny instead, run `adlc handoff resume` / repair ' +
+      `context-rot handoff deny (${result.reasons.join(', ')}). Try a fresh session or subagent first — ` +
+      "it costs nothing and clears this session's own denier status, but an open deny record still " +
+      'blocks every session until it is cleared. To clear it, run `adlc handoff resume` / repair ' +
       'from a DIFFERENT session than this one (same-session resume is refused). Agent shell cannot clear ' +
       `the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
   };

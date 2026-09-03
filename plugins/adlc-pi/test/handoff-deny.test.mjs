@@ -746,8 +746,8 @@ test('the recovery command degrades rather than emitting a broken one', () => {
   };
   assert.equal(
     formatRecoveryCommand(base),
-    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc' +
-      ' (dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc\n' +
+      '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
       'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.',
   );
   assert.match(
@@ -868,7 +868,10 @@ test('the printed command actually clears a real band-generated foreign deny', a
     // carries it).
     const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
     assert.ok(printedLine, `no command line in:\n${denied.reason}`);
-    const dryRunCommand = printedLine.replace(/^[^:]*: /, '').split(' (dry run')[0];
+    // The command now sits alone on its own line (#970 remediation: it must
+    // never be concatenated with the explanatory prose), so `printedLine`
+    // IS the command already — no need to strip a trailing "(dry run..." tail.
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
     const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
@@ -1165,8 +1168,14 @@ test('shell metacharacters in a repo path are quoted, never emitted bare', () =>
     assert.ok(command.includes(`--dir '${adlcDir}'`), `must single-quote ${adlcDir}: ${command}`);
   }
   // A path with nothing special stays unquoted, so the quoting is real and not
-  // an unconditional wrap that would prove nothing.
-  assert.ok(formatRecoveryCommand({ ...base, adlcDir: '/srv/plain/.adlc' }).includes('--dir /srv/plain/.adlc '));
+  // an unconditional wrap that would prove nothing. --dir is the last token on
+  // the command's own first line (the prose explanation follows on the next
+  // line — #970), so check the line ending rather than a trailing space.
+  assert.ok(
+    formatRecoveryCommand({ ...base, adlcDir: '/srv/plain/.adlc' })
+      .split('\n')[0]
+      .endsWith('--dir /srv/plain/.adlc'),
+  );
 });
 
 test('a diagnostic that cannot be a command is never labelled as one', () => {
@@ -1658,7 +1667,10 @@ test('the command printed for a store fault, with --write deliberately added by 
     const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
     assert.ok(printedLine, `no command printed for a store fault:\n${denied.reason}`);
     assert.doesNotMatch(printedLine, /--dir \S+ --write\b/, 'the auto-printed command must never carry --write directly (D6)');
-    const dryRunCommand = printedLine.replace(/^[^:]*: /, '').split(' (dry run')[0];
+    // The command now sits alone on its own line (#970 remediation: it must
+    // never be concatenated with the explanatory prose), so `printedLine`
+    // IS the command already — no need to strip a trailing "(dry run..." tail.
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
     const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
@@ -2114,7 +2126,13 @@ test('the printed --dir is the real path, not a symlink to it', () => {
       hasManifestKey: true,
       cliPath: '/opt/adlc/bin/handoff.mjs',
     });
-    assert.ok(viaLink.includes(`--dir ${join(real, '.adlc')} `), `expected the real path: ${viaLink}`);
+    // --dir is the last token on the command's own first line (the prose
+    // explanation follows on the next line — #970), so check the line
+    // ending rather than a trailing space.
+    assert.ok(
+      viaLink.split('\n')[0].endsWith(`--dir ${join(real, '.adlc')}`),
+      `expected the real path: ${viaLink}`,
+    );
     assert.ok(!viaLink.includes(link), 'the symlink must not appear in a pasted command');
   } finally {
     rmSync(real, { recursive: true, force: true });
@@ -2215,8 +2233,14 @@ test('a symlinked .adlc shows its real target in the removal command', () => {
     assert.doesNotMatch(text, /rm -rf \.adlc/, 'never the relative form that hides the hop');
 
     // `--dir` keeps the unresolved spelling on purpose: the CLI requires that
-    // argument's last segment to be `.adlc`, which the target is not.
-    assert.ok(text.includes(`--dir ${join(repo, '.adlc')} `), 'the CLI argument stays .adlc-suffixed');
+    // argument's last segment to be `.adlc`, which the target is not. It is
+    // also the last token on the command's own first line (the prose
+    // explanation follows on the next line — #970), so check the line
+    // ending rather than a trailing space.
+    assert.ok(
+      text.split('\n')[0].endsWith(`--dir ${join(repo, '.adlc')}`),
+      'the CLI argument stays .adlc-suffixed',
+    );
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

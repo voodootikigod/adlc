@@ -570,7 +570,7 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag \(dry run/);
+  assert.match(r.out, /bypass --session consumer-diag\\n\(dry run/);
 });
 
 // #970 D5: the OLD message named the same-session-restricted `adlc handoff
@@ -901,7 +901,7 @@ test('a stale/inaccessible CLAUDE_PROJECT_DIR still denies an ORDINARY edit, but
   });
   assert.equal(r.verdict, 'deny', r.out);
   assert.match(r.out, /could not enter the project directory/);
-  assert.match(r.out, /bypass --session consumer-stale-dir-deny \(dry run/);
+  assert.match(r.out, /bypass --session consumer-stale-dir-deny\\n\(dry run/);
 });
 
 // --- recordRecoveryUnderBand: env allowlist (mirrors the Codex hook) -------
@@ -1092,7 +1092,7 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   // matches the shape the matcher itself accepts, without handing over a
   // directly-runnable mutating command. See handoff-deny.test.mjs's own D6
   // test below for the negative-space guard.
-  assert.match(out, /bypass --session sess-a \(dry run/);
+  assert.match(out, /bypass --session sess-a\n\(dry run/);
   assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });
