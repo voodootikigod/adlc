@@ -110,7 +110,10 @@ test('AC1: the context-handoff deny outranks the build gate above the handoff ba
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('AC1: below both bands allows; normal-risk ticket is not build-gated', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
+// The two allowance cases below stay active — neither depends on the
+// disconnected handoff call site, only on the build-gate's own risk-tier
+// scoping, so skipping them would lose real coverage.
+test('AC1: below both bands allows; normal-risk ticket is not build-gated', async () => {
   const root = makeRepo();
   try {
     const low = await boot(root, 30);
@@ -122,10 +125,13 @@ test('AC1: below both bands allows; normal-risk ticket is not build-gated', { sk
     const { pi, ctx } = await boot(root2, 30);
     assert.equal(await pi.handlers.tool_call(writeCall('src/a.ts'), ctx), undefined, 'normal risk never build-gated');
   } finally { rmSync(root2, { recursive: true, force: true }); }
+});
 
-  // …but the deny-set is NOT risk-scoped: a normal-risk ticket past the
-  // handoff band is still stopped. That is the deliberate difference between
-  // a per-ticket blast-radius gate and a per-session trust decision.
+// …but the deny-set is NOT risk-scoped: a normal-risk ticket past the
+// handoff band is still stopped. That is the deliberate difference between
+// a per-ticket blast-radius gate and a per-session trust decision — and it
+// depends entirely on the disconnected handoff call site.
+test('AC1: a normal-risk ticket past the handoff band is still stopped by the deny-set', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
   const root3 = makeRepo({ current: 'T2' });
   try {
     const { pi, ctx } = await boot(root3, 99);
