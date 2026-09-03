@@ -5226,19 +5226,29 @@ test('isReadonlyCommand: rejects symlink in workspace pointing to secrets or out
   try {
     // Create symlink pointing outside workspace to /etc/passwd
     const externalLink = join(root, 'link-passwd');
+    let externalLinkCreated = true;
     try {
       symlinkSync('/etc/passwd', externalLink);
+    } catch {
+      externalLinkCreated = false;
+    }
+    if (externalLinkCreated) {
       assert.equal(isReadonlyCommand(`cat ${externalLink}`, { root }), false);
       assert.equal(isReadonlyCommand('cat link-passwd', { root }), false);
-    } catch {}
+    }
 
     // Create symlink pointing to session secret
     const secretLink = join(root, 'link-secret');
+    let secretLinkCreated = true;
     try {
       symlinkSync(join(root, '.adlc', '.session-secret'), secretLink);
+    } catch {
+      secretLinkCreated = false;
+    }
+    if (secretLinkCreated) {
       assert.equal(isReadonlyCommand(`cat ${secretLink}`, { root }), false);
       assert.equal(isReadonlyCommand('cat link-secret', { root }), false);
-    } catch {}
+    }
   } finally {
     cleanup();
   }
