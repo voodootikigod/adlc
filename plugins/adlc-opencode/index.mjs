@@ -29,12 +29,6 @@ import { checkCommandOrder, checkCommandTamper } from './lib/command-gate.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-// Kill switch: the context-rot handoff deny-set (slice 5) is not yet stable
-// enough for real sessions — it was blocking edits/shell wholesale across
-// workstreams. checkHandoff() and its test suite stay intact; flip this back
-// to true to reconnect once it has baked longer.
-const CONTEXT_ROT_HANDOFF_ENABLED = false;
-
 /** @typedef {import('@opencode-ai/plugin').Plugin} Plugin */
 
 // The plugin package root (…/plugins/adlc-opencode), used to byte-compare a
@@ -92,6 +86,14 @@ export const adlcRailsGuard = async ({ directory, worktree, project, client } = 
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(options);
   const env = { ...optEnv, ...process.env };
+  // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
+  // stable enough for real sessions — it was blocking edits/shell wholesale
+  // across workstreams, so it defaults OFF. checkHandoff() and its test
+  // suite stay intact and exercise it via this env var; deliberately NOT
+  // mapped through optionsToEnv (unlike advisoryHooks/ungatedTools above) —
+  // this is not a repo-config knob a reviewed repo's opencode.json should be
+  // able to flip. Flip the default once the deny-set has baked longer.
+  const CONTEXT_ROT_HANDOFF_ENABLED = env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1';
   const advisoryOnly = env.ADLC_ALLOW_ADVISORY_HOOKS === '1';
   // Attribute the downgrade to its ACTUAL source: an operator grepping their
   // environment for a cited env var they never set is a dead end.

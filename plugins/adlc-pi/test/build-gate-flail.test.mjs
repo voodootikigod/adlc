@@ -89,18 +89,17 @@ test('AC1: high-risk ticket + degraded context denies a structured write', async
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-// Both tests below assert handoff-vs-build-gate PRECEDENCE, which only holds
-// while the handoff call site in extension.mjs is live. It is disconnected
-// (CONTEXT_ROT_HANDOFF_ENABLED = false, see handoff-deny.test.mjs) pending
-// stabilization, so they skip together with that suite. Reconnect both at
-// once.
-const HANDOFF_DISCONNECTED_REASON =
-  'context-rot handoff wiring disconnected pending stabilization — see CONTEXT_ROT_HANDOFF_ENABLED in ../lib/extension.mjs';
+// Both tests below assert handoff-vs-build-gate PRECEDENCE. The handoff call
+// site defaults off (CONTEXT_ROT_HANDOFF_ENABLED reads
+// env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED, see ../lib/extension.mjs); they opt
+// back in explicitly to exercise it. No production caller sets this env var,
+// so real sessions stay unaffected.
+const HANDOFF_ENABLED_ENV = { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' };
 
-test('AC1: the context-handoff deny outranks the build gate above the handoff band', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
+test('AC1: the context-handoff deny outranks the build gate above the handoff band', async () => {
   const root = makeRepo();
   try {
-    const { pi, ctx } = await boot(root, DEFAULT_CONTEXT_PERCENT_THRESHOLD + 5);
+    const { pi, ctx } = await boot(root, DEFAULT_CONTEXT_PERCENT_THRESHOLD + 5, HANDOFF_ENABLED_ENV);
     const denied = await pi.handlers.tool_call(writeCall('src/a.ts'), ctx);
     assert.equal(denied.block, true);
     // The stronger deny wins: the build gate's bypass is an operator override,
@@ -129,12 +128,11 @@ test('AC1: below both bands allows; normal-risk ticket is not build-gated', asyn
 
 // …but the deny-set is NOT risk-scoped: a normal-risk ticket past the
 // handoff band is still stopped. That is the deliberate difference between
-// a per-ticket blast-radius gate and a per-session trust decision — and it
-// depends entirely on the disconnected handoff call site.
-test('AC1: a normal-risk ticket past the handoff band is still stopped by the deny-set', { skip: HANDOFF_DISCONNECTED_REASON }, async () => {
+// a per-ticket blast-radius gate and a per-session trust decision.
+test('AC1: a normal-risk ticket past the handoff band is still stopped by the deny-set', async () => {
   const root3 = makeRepo({ current: 'T2' });
   try {
-    const { pi, ctx } = await boot(root3, 99);
+    const { pi, ctx } = await boot(root3, 99, HANDOFF_ENABLED_ENV);
     const denied = await pi.handlers.tool_call(writeCall('src/a.ts'), ctx);
     assert.equal(denied.block, true);
     assert.match(denied.reason, /context-rot handoff deny/);

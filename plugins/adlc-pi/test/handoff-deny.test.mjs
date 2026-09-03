@@ -2,22 +2,8 @@
 // Drives the REAL extension's tool_call handler through the same fake pi
 // harness extension.test.mjs uses, never a re-implementation of it.
 
-import { test as nodeTest, after } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-
-// Kill switch: every test below drives extension.mjs's tool_call handler,
-// whose handoff call site is disconnected (CONTEXT_ROT_HANDOFF_ENABLED =
-// false in ../lib/extension.mjs) — a real deny can no longer fire, so these
-// skip together rather than assert one. Flip the flag and delete this
-// wrapper (restoring the plain `test` import above) to reconnect.
-const HANDOFF_DISCONNECTED_REASON =
-  'context-rot handoff wiring disconnected pending stabilization — see CONTEXT_ROT_HANDOFF_ENABLED in ../lib/extension.mjs';
-function test(name, optionsOrFn, maybeFn) {
-  if (typeof optionsOrFn === 'function') {
-    return nodeTest(name, { skip: HANDOFF_DISCONNECTED_REASON }, optionsOrFn);
-  }
-  return nodeTest(name, { ...optionsOrFn, skip: HANDOFF_DISCONNECTED_REASON }, maybeFn);
-}
 import {
   mkdtempSync,
   mkdirSync,
@@ -152,7 +138,11 @@ function fakeCtx(cwd, { percent } = {}) {
 
 async function boot(root, { percent, sessionEvent, sessionId } = {}) {
   const pi = fakePi();
-  createExtension({ env: {} })(pi);
+  // The handoff call site defaults off (CONTEXT_ROT_HANDOFF_ENABLED reads
+  // env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED, see ../lib/extension.mjs) — this
+  // suite exercises the real deny-set, so it opts in explicitly. No
+  // production caller sets this, so real sessions stay unaffected.
+  createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
   const ctx = fakeCtx(root, { percent });
   if (sessionId) ctx.sessionManager = { getSessionId: () => sessionId };
   await pi.handlers.session_start(
@@ -529,7 +519,7 @@ test('a THROWING getContextUsage fails closed, an absent one does not', async ()
     // absence of one. Collapsing the two would let a 95%-full session through
     // on a transient error.
     const pi = fakePi();
-    createExtension({ env: {} })(pi);
+    createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
     const ctx = fakeCtx(root);
     ctx.getContextUsage = () => {
       throw new Error('transient');

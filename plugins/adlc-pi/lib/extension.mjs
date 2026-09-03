@@ -7,12 +7,6 @@
 // contract: write/edit carry input.path, bash carries input.command) onto
 // those pieces. index.ts is a typed shim around createExtension().
 
-// Kill switch: the context-rot handoff deny-set (slice 5) is not yet stable
-// enough for real sessions — it was blocking edits/shell wholesale across
-// workstreams. checkHandoff() and its test suite stay intact; flip this back
-// to true to reconnect once it has baked longer.
-const CONTEXT_ROT_HANDOFF_ENABLED = false;
-
 import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {
@@ -100,6 +94,13 @@ export function createExtension({ env = process.env } = {}) {
   // The extension entry resolves the signing key ONCE from ITS env (which tests inject)
   // and threads it — no process.env reads below this line (spec Layer 2, P1).
   const manifestKey = typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null;
+  // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
+  // stable enough for real sessions — it was blocking edits/shell wholesale
+  // across workstreams, so it defaults OFF. checkHandoff() and its test
+  // suite stay intact and exercise it by setting this in the injected env;
+  // no real caller sets it, so production stays disabled either way. Flip
+  // the default once the deny-set has baked longer.
+  const CONTEXT_ROT_HANDOFF_ENABLED = env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1';
   return async function adlcPiExtension(pi) {
     let activeCwd = process.cwd();
     let active = { ticketId: null, ticket: null, error: null };
