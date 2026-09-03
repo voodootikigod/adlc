@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decide } from '../hooks/adlc-rails-guard.mjs';
+import { decide, canonicalizeExisting } from '../hooks/adlc-rails-guard.mjs';
 import { checkRail } from '../rails-checker.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -590,6 +590,29 @@ test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript con
       },
     }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
     assert.equal(res.allow_tool, true);
+  } finally {
+    try { rmSync(root, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('canonicalizeExisting: falsy and non-string input is returned unchanged, without attempting resolution', () => {
+  assert.equal(canonicalizeExisting(null), null);
+  assert.equal(canonicalizeExisting(undefined), undefined);
+  // Falsy but a string: the guard must short-circuit on `!p` alone, not fall through
+  // into the resolution walk (which would return an unrelated cwd-derived path).
+  assert.equal(canonicalizeExisting(''), '');
+});
+
+test('canonicalizeExisting: an existing symlinked path resolves through the symlink', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-canon-'));
+  try {
+    const real = join(root, 'real-target');
+    mkdirSync(real, { recursive: true });
+    const link = join(root, 'link-to-real');
+    symlinkSync(real, link);
+    const resolved = canonicalizeExisting(link);
+    assert.equal(resolved, realpathSync(link));
+    assert.notEqual(resolved, link);
   } finally {
     try { rmSync(root, { recursive: true, force: true }); } catch {}
   }

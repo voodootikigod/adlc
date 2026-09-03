@@ -9,7 +9,7 @@ import { existsSync, readFileSync, realpathSync, lstatSync, readdirSync } from '
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
-function canonicalizeExisting(p) {
+export function canonicalizeExisting(p) {
   if (!p || typeof p !== 'string') return p;
   try {
     if (existsSync(p)) return realpathSync(p);
