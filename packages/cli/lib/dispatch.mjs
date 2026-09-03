@@ -106,10 +106,20 @@ export function packageJsonPath(packageName) {
   return packageJsonDiagnostic(packageName).path;
 }
 
-function resolvePackageBinDiagnostic(packageName, binName) {
+/**
+ * A resolved package.json that does NOT declare the requested bin name is
+ * ALSO a packaging fault, not a successful resolution (adversarial review):
+ * the package is installed and its package.json resolves, but the specific
+ * bin entry `runBin` needs is missing or misnamed. Reporting `'resolved'`
+ * here made `runBin` fall through to the generic "tool not installed - run
+ * npm i -g @adlc/cli" message, misattributing a defect in the package's own
+ * bin field to a missing install.
+ */
+export function resolvePackageBinDiagnostic(packageName, binName) {
   const { path: pkgJsonPath, code } = packageJsonDiagnostic(packageName);
   if (!pkgJsonPath) return { bin: null, code };
-  return { bin: binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName), code: 'resolved' };
+  const bin = binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
+  return { bin, code: bin === null ? 'packaging-fault' : 'resolved' };
 }
 
 function resolvePackageBin(packageName, binName) {
@@ -148,7 +158,7 @@ export function resolveRunnerBinDiagnostic() {
   if (!pkgJsonPath) return { bin: null, code };
   const pkg = readPackage(pkgJsonPath);
   const bin = binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
-  return { bin, code: 'resolved' };
+  return { bin, code: bin === null ? 'packaging-fault' : 'resolved' };
 }
 
 export function resolveRunnerBin() {

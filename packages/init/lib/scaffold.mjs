@@ -424,7 +424,13 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   // default the moment this D7 nudge exists (#970).
   const result = { root: target, created: [], updated: [], unchanged: [], warnings: [], notices: [] };
   const copilot = harness === 'copilot';
-  if (harness === 'cursor' || copilot) codexAgents = false;
+  // Codex agent templates default on for `codex` (and for no --harness at
+  // all, since that path also defaults the CONFIG to codex — see the
+  // notice above) and are suppressed for every OTHER named harness, not
+  // just cursor/copilot: extending --harness to claude-code/pi/opencode/
+  // gemini without extending this check left a non-Codex repo scaffolded
+  // with .codex/agents/*.toml it never asked for (adversarial review).
+  if (harness !== null && harness !== 'codex') codexAgents = false;
 
   const destinations = ['.adlc/specs', '.adlc/config.json', '.gitignore'];
   if (codexAgents) {

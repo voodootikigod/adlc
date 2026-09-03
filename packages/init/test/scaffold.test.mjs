@@ -147,9 +147,26 @@ for (const harness of ['claude-code', 'pi', 'opencode', 'gemini']) {
       assert.equal(cfg.harnesses[harness].railEnforcement, 'auto');
       assert.equal(cfg.harnesses.codex, undefined);
       assert.deepEqual(result.warnings, [], 'an explicit --harness must never warn');
+      // A non-Codex harness must not be scaffolded with Codex agent
+      // templates by default (adversarial review, round 1) — codexAgents
+      // was only ever suppressed for cursor/copilot, so extending
+      // --harness to these four names without extending the suppression
+      // meant a claude-code/pi/opencode/gemini repo got .codex/ pollution.
+      assert.equal(existsSync(join(root, '.codex')), false, `--harness ${harness} must not scaffold .codex/`);
     });
   });
 }
+
+test('scaffold --harness codex (or no --harness) still defaults codexAgents to true', () => {
+  fixture((root) => {
+    scaffold({ root, harness: 'codex' });
+    assert.ok(existsSync(join(root, '.codex', 'agents')), '--harness codex must still scaffold .codex/agents');
+  });
+  fixture((root) => {
+    scaffold({ root });
+    assert.ok(existsSync(join(root, '.codex', 'agents')), 'no --harness must still default to scaffolding .codex/agents');
+  });
+});
 
 test('scaffold with no --harness at all still defaults to codex, but NOTICES rather than mislabeling silently — and never fails the run (D7)', () => {
   fixture((root) => {

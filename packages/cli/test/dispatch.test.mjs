@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { classifyPackageJson, findPackageJsonUpward, notInstalledMessage, packageJsonFromEntry, packageJsonPath, resolveBin, resolveBinDiagnostic, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { classifyPackageJson, findPackageJsonUpward, notInstalledMessage, packageJsonFromEntry, packageJsonPath, resolveBin, resolveBinDiagnostic, resolvePackageBinDiagnostic, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -321,6 +321,24 @@ test('AC1: classifyPackageJson defaults to the real require.resolve/packageJsonF
   const result = classifyPackageJson('@adlc/context-handoff');
   assert.equal(result.code, 'resolved');
   assert.match(result.path, /context-handoff\/package\.json$/);
+});
+
+test('resolvePackageBinDiagnostic classifies a resolved package.json with no matching bin entry as packaging-fault, not resolved (adversarial review, round 1)', () => {
+  // @adlc/spec-lint is real and bin-only; its package.json resolves cleanly
+  // (devPath rung), but it does not declare a bin named this. The old code
+  // returned { bin: null, code: 'resolved' } for this — runBin then printed
+  // the generic "tool not installed: ... npm i -g @adlc/cli" message for a
+  // package that IS installed and DOES resolve, misattributing a bin-field
+  // defect in the package itself to a missing install.
+  const result = resolvePackageBinDiagnostic('@adlc/spec-lint', 'this-bin-name-does-not-exist-in-the-manifest');
+  assert.equal(result.bin, null);
+  assert.equal(result.code, 'packaging-fault');
+});
+
+test('resolvePackageBinDiagnostic still reports resolved with a real bin path for the correct bin name (control)', () => {
+  const result = resolvePackageBinDiagnostic('@adlc/spec-lint', 'spec-lint');
+  assert.equal(result.code, 'resolved');
+  assert.ok(result.bin && result.bin.includes('spec-lint'));
 });
 
 test('AC1: resolveBinDiagnostic threads packaging-fault vs not-a-dependency through to dispatch()', () => {
