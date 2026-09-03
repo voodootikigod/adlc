@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { packageJsonFromEntry, packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { findPackageJsonUpward, packageJsonFromEntry, packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -258,6 +258,39 @@ test('packageJsonFromEntry must never be the ONLY rung for a bin-only package wi
   const found = packageJsonPath('@adlc/rails-guard');
   assert.ok(found, 'packageJsonPath must still resolve a bin-only package via the direct subpath rung');
   assert.match(found, /rails-guard\/package\.json$/);
+});
+
+test('findPackageJsonUpward respects its depth cap at the boundary (mutation regression)', () => {
+  // A synthetic tree, independent of Node's own module resolution, so the cap
+  // itself is directly testable. `for (let i = 0; i < maxDepth; i += 1)` checks
+  // the START dir on i=0, then walks up on each subsequent iteration — with
+  // maxDepth=8 that's 8 checks covering 0..7 levels up, never 8. So a
+  // package.json 7 levels up is the last one still found; 8 levels up is one
+  // past the cap.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cli-depth-'));
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@adlc/depth-fixture' }));
+    let deepDir = root;
+    for (let i = 0; i < 8; i += 1) {
+      deepDir = join(deepDir, `d${i}`);
+    }
+    mkdirSync(deepDir, { recursive: true });
+    // deepDir is 8 levels below root; its parent (d0..d6) is 7 levels below.
+    const sevenLevelsUp = dirname(deepDir);
+
+    assert.equal(
+      findPackageJsonUpward(sevenLevelsUp, '@adlc/depth-fixture', 8),
+      join(root, 'package.json'),
+      'a package.json exactly 7 directories up (the last level the cap reaches) must still be found',
+    );
+    assert.equal(
+      findPackageJsonUpward(deepDir, '@adlc/depth-fixture', 8),
+      null,
+      'one directory PAST the cap (8 levels up) must not be found — proves the loop bound is live, not decorative',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('`adlc <tool> --help` answers for tools that declare no usage of their own (#107)', () => {

@@ -124,6 +124,9 @@ test('sed write with a line-address prefix and no space (regression)', () => {
   assert.equal(shellHasMutation("sed -n '1w.adlc/handoffs/x' /dev/null"), true);
   assert.equal(shellHasMutation("sed -n '1,5w.adlc/handoffs/x' /dev/null"), true);
   assert.equal(classifyShellCommand("sed -n '1w.adlc/handoffs/x' /dev/null").readOnly, false);
+  // The digit boundary is `(?<=[0-9])`, not `(?<=[1-9])` — an address ending
+  // in a ZERO digit (`10w`, not just `1w`) must be caught too.
+  assert.equal(shellHasMutation("sed -n '10w.adlc/handoffs/x' /dev/null"), true);
 });
 
 // ---- cwd changes + expansion ----

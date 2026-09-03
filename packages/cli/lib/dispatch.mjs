@@ -24,15 +24,13 @@ const require = createRequire(import.meta.url);
 // therefore stay a NARROW fallback for ERR_PACKAGE_PATH_NOT_EXPORTED
 // specifically — an earlier version of this function tried the entry-based walk
 // unconditionally and broke dispatch for every bin-only tool in a real install.
-export function packageJsonFromEntry(packageName) {
-  let entry;
-  try {
-    entry = require.resolve(packageName);
-  } catch {
-    return null;
-  }
-  let dir = dirname(entry);
-  for (let i = 0; i < 8; i += 1) {
+// Extracted so the depth cap has a boundary a test can actually reach: a
+// synthetic directory tree of a controlled depth, independent of Node's own
+// module-resolution semantics (which packageJsonFromEntry alone would drag
+// into any attempt to test the cap directly).
+export function findPackageJsonUpward(startDir, packageName, maxDepth = 8) {
+  let dir = startDir;
+  for (let i = 0; i < maxDepth; i += 1) {
     const candidate = join(dir, 'package.json');
     if (existsSync(candidate)) {
       const pkg = readPackage(candidate);
@@ -43,6 +41,16 @@ export function packageJsonFromEntry(packageName) {
     dir = parent;
   }
   return null;
+}
+
+export function packageJsonFromEntry(packageName) {
+  let entry;
+  try {
+    entry = require.resolve(packageName);
+  } catch {
+    return null;
+  }
+  return findPackageJsonUpward(dirname(entry), packageName);
 }
 
 export function packageJsonPath(packageName) {

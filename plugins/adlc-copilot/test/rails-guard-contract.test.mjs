@@ -73,6 +73,10 @@ for (const command of [
   'cat payload.txt>test/frozen.test.mjs',
   'grep x foo>test/frozen.test.mjs',
   'echo hi>>test/frozen.test.mjs',
+  // A sed line-address ending in a ZERO digit right before `w` — the digit
+  // boundary is `(?<=[0-9])`, not `(?<=[1-9])`, specifically so this case
+  // (unreachable by an address ending 1-9) is still caught.
+  "sed -n '10w test/frozen.test.mjs' /dev/null",
 ]) {
   test(`no-space shell redirect to a rail → deny (bypass closed) — ${command}`, () => {
     fixture((root) => {
