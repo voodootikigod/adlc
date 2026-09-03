@@ -2506,22 +2506,44 @@ async function handoffStart(input) {
   const loaded = api.loadDenyRecords(root);
   const newest = newestOpenDeny(loaded?.records);
   if (!newest) return;
-  const command =
-    typeof api.formatContinueCommand === 'function' ? api.formatContinueCommand(newest.session_id) : null;
+  const command = formatContinueCommandTrusted(newest.session_id);
   const msg = formatBlockingDenyMessage(command);
   emit({ hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg });
 }
 
 /**
+ * Trusted-local twin of `formatContinueCommand`
+ * (packages/context-handoff/lib/supervise.mjs) — deliberately NOT calling
+ * `api.formatContinueCommand` (round-8 review). `api` is a package resolved
+ * from the PROJECT's own node_modules: version-skewed and untrusted, the
+ * same trust boundary `recoveryDiagnostic` below already respects by never
+ * calling into `api` for TEXT that reaches the model, only for raw deny-
+ * record DATA a trusted local classifier then interprets. Calling the
+ * project-resolved formatter directly would forward WHATEVER that install
+ * happens to return, unvalidated, straight into `additionalContext` — an
+ * older, pre-D6 `@adlc/context-handoff` still returns `--write` baked in,
+ * reintroducing the exact bypass D6 removed, purely from version skew this
+ * hook has no control over. `newest.session_id` itself is also project-
+ * resolved data (read via `api.loadDenyRecords`), so it is validated here
+ * exactly like the canonical function validates its own input — this
+ * function trusts no part of what `api` handed over, only its own logic.
+ * @param {unknown} denySessionId
+ * @returns {string|null}
+ */
+export function formatContinueCommandTrusted(denySessionId) {
+  if (typeof denySessionId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(denySessionId)) return null;
+  return `ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${denySessionId}`;
+}
+
+/**
  * The (b)-branch message text, factored out so its exact wording — including
- * the `command === null` fallback (a stale/incompatible install whose loaded
- * package does not export `formatContinueCommand`) — is unit-testable
- * without needing to fake that install through the full dynamic-import path.
+ * the `command === null` fallback (an unsafe/unparseable session id) — is
+ * unit-testable directly.
  * No `--write` in either branch (issue #970 D6): this is `additionalContext`
  * fed to a model as context, so a mutating command handed over pre-filled is
  * exactly the escape hatch D6 exists to close.
- * @param {string|null} command `api.formatContinueCommand(...)` result, or
- *   null when that export is unavailable or refused to format (unsafe id).
+ * @param {string|null} command `formatContinueCommandTrusted(...)` result,
+ *   or null when the session id was not safe to format.
  * @returns {string}
  */
 export function formatBlockingDenyMessage(command) {

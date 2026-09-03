@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { formatBlockingDenyMessage, newestOpenDeny } from '../adlc-hook.mjs';
+import { formatBlockingDenyMessage, formatContinueCommandTrusted, newestOpenDeny } from '../adlc-hook.mjs';
 import { dispatch, ENFORCING_MODES } from '../adlc-hook-run.mjs';
 import { CAPTURE_INSTRUCTION } from '../handoff-gate.mjs';
 import { SUPERVISOR_ENV_MARKER, buildBootstrapPrompt, superviseChildEnv } from '@adlc/context-handoff';
@@ -300,6 +300,52 @@ test('a session with no auth is given the exact command that unblocks the repo',
 // dynamic-import hook path without faking that install — pinning its exact
 // text directly, placeholders included, is what catches a corrupted
 // `<id>` delimiter the way the real-command branch above already does.
+// Round-8 review: handoffStart used to call the PROJECT-resolved
+// api.formatContinueCommand directly and forward its return value verbatim
+// into additionalContext/systemMessage. That package is untrusted and can be
+// version-skewed — an older, pre-D6 install still returns --write baked in,
+// and nothing validated the string before it reached the model. Two things
+// close this: formatContinueCommandTrusted never calls into `api` at all
+// (proven directly below), and a static source-order check pins that
+// handoffStart's own body never references api.formatContinueCommand
+// (the actual bug's exact shape — a regression that reintroduces the call
+// would be silently invisible to every other test, which only observes the
+// CURRENT, safe package's output).
+test('formatContinueCommandTrusted: valid ids format correctly, unsafe ids degrade to null, never touches api', () => {
+  assert.equal(
+    formatContinueCommandTrusted('sess-1'),
+    'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session sess-1',
+  );
+  assert.doesNotMatch(formatContinueCommandTrusted('sess-1'), /--write\b/);
+  // isSafeSessionId (deny-marker.mjs) accepts an embedded newline (it is a
+  // path check); this function's grammar does not — the same reasoning
+  // isPromptSafeId (brief.mjs) documents for prompt-facing text.
+  assert.equal(formatContinueCommandTrusted('sess-1\nrm -rf /'), null);
+  assert.equal(formatContinueCommandTrusted('sess-1; rm -rf /'), null);
+  assert.equal(formatContinueCommandTrusted(''), null);
+  assert.equal(formatContinueCommandTrusted(null), null);
+  assert.equal(formatContinueCommandTrusted(undefined), null);
+  assert.equal(formatContinueCommandTrusted(42), null);
+});
+
+test('handoffStart never calls the project-resolved api.formatContinueCommand (source order pin, round-8 review)', () => {
+  const source = readFileSync(HOOK, 'utf8');
+  const handoffStartIdx = source.indexOf('async function handoffStart(input)');
+  assert.ok(handoffStartIdx >= 0, 'handoffStart() not found');
+  const nextFnIdx = source.indexOf('\nexport function formatContinueCommandTrusted');
+  assert.ok(nextFnIdx > handoffStartIdx, 'formatContinueCommandTrusted not found after handoffStart');
+  const body = source.slice(handoffStartIdx, nextFnIdx);
+  // The `\(` requires an actual CALL — this file's own comments legitimately
+  // mention the bare name `api.formatContinueCommand` (no trailing paren) to
+  // explain what must NOT happen; only a real invocation should trip this.
+  assert.doesNotMatch(
+    body,
+    /api\.formatContinueCommand\(/,
+    'handoffStart must never call the project-resolved (untrusted, version-skewed) formatter',
+  );
+  assert.match(body, /formatContinueCommandTrusted\(/, 'handoffStart must use the trusted local twin instead');
+});
+
 test('formatBlockingDenyMessage exact text, both branches, placeholders included', () => {
   const real = formatBlockingDenyMessage('ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session real-session');
   assert.equal(
