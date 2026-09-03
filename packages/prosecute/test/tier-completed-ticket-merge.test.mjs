@@ -127,6 +127,22 @@ describe('loadTicketsForTier merges duplicate ticket ids with base-tip precedenc
     } finally { cleanup(dir); }
   });
 
+  it('a --dir ticket table whose `tickets` field is not an array fails closed (exit 1), never silently treated as empty', () => {
+    // readTicketArray parses the file fine (valid JSON) but the `tickets` field
+    // itself is an object, not an array — the same "exists and is malformed"
+    // case the JSON-parse-failure branch already throws on. Without validating
+    // the array shape, mergeTicketsById's defensive Array.isArray fallback
+    // silently drops this source's rails entirely (fail open).
+    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: editRail });
+    try {
+      mkdirSync(join(dir, 'custom'), { recursive: true });
+      writeFileSync(join(dir, 'custom', 'tickets.json'), JSON.stringify({ tickets: { T1: 'not an array' } }));
+      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', 'custom'], dir);
+      assert.equal(r.status, 1, 'a non-array `tickets` field must be an operational error, never a silent empty table');
+      assert.match(r.stderr, /tickets.*field/i);
+    } finally { cleanup(dir); }
+  });
+
   it('rails are unioned across duplicate copies, not just replaced by the base-tip copy', () => {
     // Base declares T1 with no rails; feat's own HEAD copy of T1 (not yet synced
     // to base) already carries a widened rails set. The widened rail must still

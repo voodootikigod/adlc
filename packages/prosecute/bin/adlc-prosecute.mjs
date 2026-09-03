@@ -25,11 +25,22 @@ function readTicketArray(path) {
     if (err.code === 'ENOENT') return [];
     throw new Error(`ticket table ${path} exists but cannot be read for tiering: ${err.message}`);
   }
+  let parsed;
   try {
-    return JSON.parse(raw)?.tickets ?? [];
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new Error(`ticket table ${path} is not valid JSON — tiering cannot proceed: ${err.message}`);
   }
+  const tickets = parsed?.tickets ?? [];
+  // A present `tickets` field that is not itself an array (an object, string,
+  // etc.) is the same "exists and is malformed" case the try/catch above
+  // guards — mergeTicketsById's own Array.isArray fallback would otherwise
+  // silently treat it as an empty table, dropping the rails dimension exactly
+  // as an unparseable file would.
+  if (!Array.isArray(tickets)) {
+    throw new Error(`ticket table ${path} has a non-array \`tickets\` field — tiering cannot proceed`);
+  }
+  return tickets;
 }
 
 // resolve(dir) is inside (or equal to) the repo root.
