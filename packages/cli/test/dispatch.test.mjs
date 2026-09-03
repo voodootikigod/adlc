@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { findPackageJsonUpward, packageJsonFromEntry, packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { classifyPackageJson, findPackageJsonUpward, notInstalledMessage, packageJsonFromEntry, packageJsonPath, resolveBin, resolveBinDiagnostic, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -258,6 +258,102 @@ test('packageJsonFromEntry must never be the ONLY rung for a bin-only package wi
   const found = packageJsonPath('@adlc/rails-guard');
   assert.ok(found, 'packageJsonPath must still resolve a bin-only package via the direct subpath rung');
   assert.match(found, /rails-guard\/package\.json$/);
+});
+
+// D2/D3 (#970): dispatch.mjs used to collapse EVERY resolution failure into
+// the identical "tool not installed ... npm i -g @adlc/cli" message, whether
+// the package was never installed or was installed but had a packaging
+// defect (the exact #970 scenario) — reinstalling the suite reinstalls the
+// identical broken exports map, so that advice cannot fix what it names.
+test('AC1/AC2: notInstalledMessage distinguishes a packaging fault from genuine absence', () => {
+  const faultMsg = notInstalledMessage('@adlc/context-handoff', 'packaging-fault');
+  const absentMsg = notInstalledMessage('@adlc/nonexistent-xyz', 'not-a-dependency');
+  const undefinedCodeMsg = notInstalledMessage('@adlc/nonexistent-xyz', undefined);
+  assert.notEqual(faultMsg, absentMsg, 'the two failure classes must not read identically');
+  assert.doesNotMatch(
+    faultMsg,
+    /npm i -g @adlc\/cli/,
+    'a packaging fault must never suggest reinstalling — reinstalling ships the identical broken package',
+  );
+  assert.match(faultMsg, /packaging fault/i);
+  assert.match(absentMsg, /npm i -g @adlc\/cli/, 'genuine absence keeps the existing reinstall advice');
+  // An unrecognized/undefined code must default to the ORIGINAL wording exactly
+  // (byte-for-byte) — this is the compatibility floor for every caller that
+  // predates classification.
+  assert.equal(undefinedCodeMsg, absentMsg);
+  assert.equal(undefinedCodeMsg, 'tool not installed: @adlc/nonexistent-xyz - run "npm i -g @adlc/cli" to install the suite');
+});
+
+test('AC1: classifyPackageJson resolves normally when the primary rung succeeds', () => {
+  const result = classifyPackageJson('@adlc/whatever', {
+    resolveSubpath: () => '/fake/path/package.json',
+  });
+  assert.deepEqual(result, { path: '/fake/path/package.json', code: 'resolved' });
+});
+
+test('AC1: classifyPackageJson reports not-a-dependency when the package is not resolvable at all', () => {
+  const err = Object.assign(new Error('nope'), { code: 'MODULE_NOT_FOUND' });
+  const result = classifyPackageJson('@adlc/nonexistent-xyz', {
+    resolveSubpath: () => { throw err; },
+  });
+  assert.deepEqual(result, { path: null, code: 'not-a-dependency' });
+});
+
+test('AC1: classifyPackageJson reports packaging-fault when an exports map omits ./package.json AND the entry-based fallback also fails to locate it (the #970 shape)', () => {
+  const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/broken-exports', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+  });
+  assert.deepEqual(result, { path: null, code: 'packaging-fault' });
+});
+
+test('AC1: classifyPackageJson still resolves via the entry-based fallback when it succeeds (regression: must not always report packaging-fault on ERR_PACKAGE_PATH_NOT_EXPORTED)', () => {
+  const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/context-handoff', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => '/real/context-handoff/package.json',
+  });
+  assert.deepEqual(result, { path: '/real/context-handoff/package.json', code: 'resolved' });
+});
+
+test('AC1: classifyPackageJson defaults to the real require.resolve/packageJsonFromEntry rungs and resolves the real @adlc/context-handoff package (end-to-end, no injection)', () => {
+  const result = classifyPackageJson('@adlc/context-handoff');
+  assert.equal(result.code, 'resolved');
+  assert.match(result.path, /context-handoff\/package\.json$/);
+});
+
+test('AC1: resolveBinDiagnostic threads packaging-fault vs not-a-dependency through to dispatch()', () => {
+  assert.deepEqual(resolveBinDiagnostic('nonexistent-tool-xyz'), { bin: null, code: 'not-a-dependency' });
+  const bin = resolveBinDiagnostic('spec-lint');
+  assert.equal(bin.code, 'resolved');
+  assert.ok(bin.bin && bin.bin.includes('spec-lint'));
+});
+
+test('AC3: every @adlc/* package under packages/* that declares an exports map resolves its package.json via packageJsonPath (systematic in-repo sweep, generalizes the #965 hand-picked cases)', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const packagesDir = join(worktreeRoot, 'packages');
+  const entries = readdirSync(packagesDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let checked = 0;
+  for (const entry of entries) {
+    const pkgJsonPath = join(packagesDir, entry.name, 'package.json');
+    if (!existsSync(pkgJsonPath)) continue;
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!pkg.exports || typeof pkg.name !== 'string') continue;
+    checked += 1;
+    const found = packageJsonPath(pkg.name);
+    assert.ok(found, `${pkg.name} declares an exports map but packageJsonPath() could not resolve its package.json`);
+    assert.match(found, new RegExp(`${entry.name}/package\\.json$`));
+  }
+  assert.ok(
+    checked > 0,
+    'sanity: at least one @adlc/* package under packages/* must declare an exports map for this sweep to mean anything',
+  );
 });
 
 test('findPackageJsonUpward respects its depth cap at the boundary (mutation regression)', () => {

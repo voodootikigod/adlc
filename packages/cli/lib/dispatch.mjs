@@ -53,14 +53,43 @@ export function packageJsonFromEntry(packageName) {
   return findPackageJsonUpward(dirname(entry), packageName);
 }
 
-export function packageJsonPath(packageName) {
+/**
+ * Classify HOW a package's package.json resolves (or fails to), distinguishing
+ * a genuine absence (never a dependency — `npm i -g @adlc/cli` fixes this) from
+ * a packaging fault (resolved as a dependency, but no rung could locate its
+ * package.json — an exports/layout defect in the package ITSELF, which
+ * reinstalling the identical broken package cannot fix; see issue #970).
+ *
+ * `resolveSubpath`/`resolveEntry` are injectable seams so this classification
+ * logic is unit-testable without a real broken package on disk: constructing
+ * one in this monorepo would need a real `npm install` (workspace symlinking)
+ * mid-test, which is impractical. Default to the real primary rung
+ * (`require.resolve('<pkg>/package.json')`) and `packageJsonFromEntry`.
+ * @param {string} packageName
+ * @param {{ resolveSubpath?: (name: string) => string, resolveEntry?: (name: string) => string|null }} [seams]
+ * @returns {{ path: string|null, code: 'resolved'|'not-a-dependency'|'packaging-fault' }}
+ */
+export function classifyPackageJson(
+  packageName,
+  { resolveSubpath = (name) => require.resolve(`${name}/package.json`), resolveEntry = packageJsonFromEntry } = {},
+) {
+  try {
+    return { path: resolveSubpath(packageName), code: 'resolved' };
+  } catch (err) {
+    if (err?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') return { path: null, code: 'not-a-dependency' };
+  }
+  const viaEntry = resolveEntry(packageName);
+  return viaEntry ? { path: viaEntry, code: 'resolved' } : { path: null, code: 'packaging-fault' };
+}
+
+export function packageJsonDiagnostic(packageName) {
   if (packageName.startsWith('@adlc/')) {
     const name = packageName.slice('@adlc/'.length);
     const devPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', name, 'package.json');
     if (existsSync(devPath)) {
       try {
         const pkg = JSON.parse(readFileSync(devPath, 'utf8'));
-        if (pkg?.name === packageName) return devPath;
+        if (pkg?.name === packageName) return { path: devPath, code: 'resolved' };
       } catch {
         /* fall through */
       }
@@ -70,18 +99,21 @@ export function packageJsonPath(packageName) {
   // majority — bin-only tools), and for any package whose map DOES list
   // `./package.json`. Only a package with an exports map that omits it needs
   // the entry-based fallback below.
-  try {
-    return require.resolve(`${packageName}/package.json`);
-  } catch (err) {
-    if (err?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') return null;
-  }
-  return packageJsonFromEntry(packageName);
+  return classifyPackageJson(packageName);
+}
+
+export function packageJsonPath(packageName) {
+  return packageJsonDiagnostic(packageName).path;
+}
+
+function resolvePackageBinDiagnostic(packageName, binName) {
+  const { path: pkgJsonPath, code } = packageJsonDiagnostic(packageName);
+  if (!pkgJsonPath) return { bin: null, code };
+  return { bin: binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName), code: 'resolved' };
 }
 
 function resolvePackageBin(packageName, binName) {
-  const pkgJsonPath = packageJsonPath(packageName);
-  if (!pkgJsonPath) return null;
-  return binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
+  return resolvePackageBinDiagnostic(packageName, binName).bin;
 }
 
 function readPackage(path) {
@@ -101,20 +133,26 @@ function binPathFromPackage(pkgJsonPath, pkg, preferredBinName) {
   return relative ? join(dirname(pkgJsonPath), relative) : null;
 }
 
-export function resolveBin(toolName) {
+export function resolveBinDiagnostic(toolName) {
   const tool = getTool(toolName);
-  if (!tool) return null;
-  const pkgJsonPath = packageJsonPath(tool.packageName);
-  if (!pkgJsonPath) return null;
+  if (!tool) return { bin: null, code: 'not-a-dependency' };
+  return resolvePackageBinDiagnostic(tool.packageName, tool.binName ?? tool.name);
+}
+
+export function resolveBin(toolName) {
+  return resolveBinDiagnostic(toolName).bin;
+}
+
+export function resolveRunnerBinDiagnostic() {
+  const { path: pkgJsonPath, code } = packageJsonDiagnostic('@adlc/runner');
+  if (!pkgJsonPath) return { bin: null, code };
   const pkg = readPackage(pkgJsonPath);
-  return binPathFromPackage(pkgJsonPath, pkg, tool.binName ?? tool.name);
+  const bin = binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
+  return { bin, code: 'resolved' };
 }
 
 export function resolveRunnerBin() {
-  const pkgJsonPath = packageJsonPath('@adlc/runner');
-  if (!pkgJsonPath) return null;
-  const pkg = readPackage(pkgJsonPath);
-  return binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
+  return resolveRunnerBinDiagnostic().bin;
 }
 
 // Signals forwarded to the tool child. SIGKILL is absent because it cannot be
@@ -179,11 +217,30 @@ function runChild(label, spawnFn, command, args, failPrefix) {
   });
 }
 
-function runBin(label, bin, args, spawnFn) {
+/**
+ * The message for a tool `runBin` could not resolve a bin for. `code` (from
+ * `classifyPackageJson`/`*Diagnostic`) distinguishes a packaging fault from
+ * genuine absence — see #970: the old, undifferentiated message suggested
+ * reinstalling for BOTH, but reinstalling a package whose own exports map is
+ * missing an entry ships the identical broken map right back. Any code other
+ * than `'packaging-fault'` (including `undefined`, for every pre-existing
+ * caller) keeps the ORIGINAL wording byte-for-byte.
+ * @param {string} label
+ * @param {'resolved'|'not-a-dependency'|'packaging-fault'|undefined} code
+ * @returns {string}
+ */
+export function notInstalledMessage(label, code) {
+  if (code === 'packaging-fault') {
+    return `${label} is installed but its package.json could not be resolved (packaging fault — a defect in the package's own exports map, not a missing install) — reinstalling will not fix this`;
+  }
+  return `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`;
+}
+
+function runBin(label, bin, args, spawnFn, code) {
   if (!bin) {
     return Promise.resolve({
       code: 1,
-      error: `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`,
+      error: notInstalledMessage(label, code),
     });
   }
 
@@ -345,15 +402,18 @@ export function dispatch(toolName, args, opts = {}) {
   const spawnFn = opts.spawnFn ?? spawn;
   const tool = getTool(toolName);
   if (toolName === 'ticket' && ['pull', 'push', 'sync', 'doctor'].includes(args[0])) {
-    return runBin('@adlc/ticket-sync', resolvePackageBin('@adlc/ticket-sync', 'adlc-ticket-sync'), args, spawnFn);
+    const { bin, code } = resolvePackageBinDiagnostic('@adlc/ticket-sync', 'adlc-ticket-sync');
+    return runBin('@adlc/ticket-sync', bin, args, spawnFn, code);
   }
   if (tool?.external) {
     return runExternal(tool.packageName, args, spawnFn, opts.npxEnv);
   }
-  return runBin(tool?.packageName ?? `@adlc/${toolName}`, resolveBin(toolName), args, spawnFn);
+  const { bin, code } = resolveBinDiagnostic(toolName);
+  return runBin(tool?.packageName ?? `@adlc/${toolName}`, bin, args, spawnFn, code);
 }
 
 export function dispatchRunner(args, opts = {}) {
   const spawnFn = opts.spawnFn ?? spawn;
-  return runBin('@adlc/runner', resolveRunnerBin(), args, spawnFn);
+  const { bin, code } = resolveRunnerBinDiagnostic();
+  return runBin('@adlc/runner', bin, args, spawnFn, code);
 }
