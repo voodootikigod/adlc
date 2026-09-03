@@ -808,9 +808,15 @@ const quotaByFile = new Map(fileTargets.map((t) => [t.file, t.quota]));
 const starved = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) === 0);
 const noMutableLines = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) > 0);
 if (starved.length > 0) {
+  // Distinguish "nothing in this diff was verified at all" from "part of the
+  // diff ran and was killed, but these specific files were not" — an operator
+  // deciding whether to trust the rest of a large run needs to know which.
+  const otherEvidence = results.length > 0
+    ? ` (${results.length} mutant(s) elsewhere in this diff already ran and were killed)`
+    : '';
   opError(
     `${starved.length} selected file(s) received no mutation budget and were ` +
-    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.`
+    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.${otherEvidence}`
   );
 }
 if (noMutableLines.length > 0) {

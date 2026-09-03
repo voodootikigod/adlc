@@ -122,6 +122,17 @@ describe('CLI: diff-derived files starved of mutation budget (--max too small)',
     assert.match(result.stderr, /b\.mjs/, `Expected b.mjs named in stderr, got: ${result.stderr}`);
     assert.match(result.stderr, /c\.mjs/, `Expected c.mjs named in stderr, got: ${result.stderr}`);
     assert.match(result.stderr, /raise --max/, `Expected a raise --max instruction, got: ${result.stderr}`);
+    // a.mjs DID get a real, killed mutant — the message must say so, so an
+    // operator can tell "part of this diff was verified" from "nothing was".
+    // (The empty-note branch, when results.length === 0, is unreachable at
+    // this point in the control flow: any diff-derived run with zero results
+    // overall is already caught earlier, by the pre-existing #658 check at
+    // hollow-test.mjs:~703 — this assertion alone kills both an
+    // invert-comparison and a ternary-swap mutation of the new condition,
+    // since either would replace this note with the empty string in THIS
+    // concrete, always-nonzero-results test run.)
+    assert.match(result.stderr, /1 mutant\(s\) elsewhere in this diff already ran and were killed/,
+      `Expected the other-evidence note (a.mjs's killed mutant), got: ${result.stderr}`);
   });
 
   it('never prints the success line, in stdout or stderr', () => {
