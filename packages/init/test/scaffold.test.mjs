@@ -205,10 +205,40 @@ test('an idempotent re-scaffold with no --harness re-warns every time (D7)', () 
   fixture((root) => {
     const first = scaffold({ root });
     assert.equal(first.warnings.length, 1);
+    assert.doesNotMatch(first.warnings[0], /already existed and was left untouched/, 'a fresh scaffold has no caveat to add');
     const second = scaffold({ root });
     assert.equal(second.warnings.length, 1, 'omitting --harness is still ambiguous on a re-run');
     assert.match(second.warnings[0], /--harness/);
     assert.match(second.warnings[0], /codex/);
+    // Round-5 review: rerunning with no --harness against an EXISTING config
+    // does not correct it either (writeMissing never overwrites), so the
+    // message must not repeat the same "pass --harness to fix it" promise
+    // uncaveated the second time.
+    assert.match(second.warnings[0], /already existed and was left untouched/);
+  });
+});
+
+test('explicit --harness after a bare init does not claim to have corrected the stale guess (round-5 review)', () => {
+  // scaffold()'s config.json write is create-only (writeMissing), so a
+  // rerun with an explicit --harness against an already-guessed config
+  // leaves the guess in place. The warning from the FIRST (guessing) call
+  // told the operator to "pass --harness ... naming the harness you
+  // actually use" — verify that doing exactly that does not silently
+  // register the new harness, and that the config content is provably
+  // unchanged (not merely that no warning fires, which a subtler bug could
+  // still pass).
+  fixture((root) => {
+    const first = scaffold({ root });
+    assert.equal(first.warnings.length, 1);
+    const beforeCfg = readFileSync(join(root, '.adlc/config.json'), 'utf8');
+
+    const second = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(second.warnings, [], 'an explicit --harness never itself warns');
+    assert.deepEqual(second.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    const afterCfg = readFileSync(join(root, '.adlc/config.json'), 'utf8');
+    assert.equal(afterCfg, beforeCfg, 'config.json is genuinely untouched, not just unreported');
+    assert.equal(JSON.parse(afterCfg).harnesses.codex !== undefined, true, 'the stale codex guess is still there');
+    assert.equal(JSON.parse(afterCfg).harnesses.pi, undefined, 'pi was NOT registered despite --harness pi');
   });
 });
 

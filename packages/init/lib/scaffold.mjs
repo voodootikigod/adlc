@@ -459,9 +459,17 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   // --harness gets no signal that the ambiguity is still unresolved. Warn
   // whenever harness is null, regardless of create/update/unchanged state.
   if (harness == null) {
+    // writeMissing above never overwrites an existing config.json, so on a
+    // rerun against one this same advice does not actually correct the
+    // registration — say so, rather than implying the rerun fixed it.
+    const caveat = result.created.includes('.adlc/config.json')
+      ? ''
+      : ' This .adlc/config.json already existed and was left untouched — passing --harness on a rerun ' +
+        'does not update an existing file; edit its "harnesses" field by hand, or delete the file first, ' +
+        'to change it.';
     result.warnings.push(
       `${HARNESS_GUESS_WARNING_PREFIX} .adlc/config.json registered "codex" as a guess. Pass ` +
-        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,
+        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.${caveat}`,
     );
   }
   ensureTicketStore(target, result);

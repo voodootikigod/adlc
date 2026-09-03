@@ -2501,8 +2501,9 @@ async function handoffStart(input) {
     typeof api.formatContinueCommand === 'function' ? api.formatContinueCommand(newest.session_id) : null;
   const msg =
     'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
-    'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Run:\n  ' +
-    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id> --write   (read <id> from .adlc/handoffs/denies/)');
+    'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Add ' +
+    '--write yourself once ready to mutate — it is deliberately not printed pre-filled. Run:\n  ' +
+    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id>   (read <id> from .adlc/handoffs/denies/)');
   emit({ hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg });
 }
 

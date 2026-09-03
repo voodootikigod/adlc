@@ -134,12 +134,19 @@ export function packageJsonPath(packageName) {
  * here made `runBin` fall through to the generic "tool not installed - run
  * npm i -g @adlc/cli" message, misattributing a defect in the package's own
  * bin field to a missing install.
+ *
+ * `'bin-not-declared'` (round-5 review), not `'packaging-fault'`: those two
+ * causes are distinct — `'packaging-fault'` here would mean package.json
+ * itself could not be resolved (propagated from `packageJsonDiagnostic`
+ * above), which is not what happened when this function reaches the `bin`
+ * computation at all. `notInstalledMessage` gives each its own, accurate
+ * wording.
  */
 export function resolvePackageBinDiagnostic(packageName, binName) {
   const { path: pkgJsonPath, code } = packageJsonDiagnostic(packageName);
   if (!pkgJsonPath) return { bin: null, code };
   const bin = binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
-  return { bin, code: bin === null ? 'packaging-fault' : 'resolved' };
+  return { bin, code: bin === null ? 'bin-not-declared' : 'resolved' };
 }
 
 function resolvePackageBin(packageName, binName) {
@@ -178,7 +185,7 @@ export function resolveRunnerBinDiagnostic() {
   if (!pkgJsonPath) return { bin: null, code };
   const pkg = readPackage(pkgJsonPath);
   const bin = binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
-  return { bin, code: bin === null ? 'packaging-fault' : 'resolved' };
+  return { bin, code: bin === null ? 'bin-not-declared' : 'resolved' };
 }
 
 export function resolveRunnerBin() {
@@ -253,15 +260,25 @@ function runChild(label, spawnFn, command, args, failPrefix) {
  * genuine absence — see #970: the old, undifferentiated message suggested
  * reinstalling for BOTH, but reinstalling a package whose own exports map is
  * missing an entry ships the identical broken map right back. Any code other
- * than `'packaging-fault'` (including `undefined`, for every pre-existing
- * caller) keeps the ORIGINAL wording byte-for-byte.
+ * than `'packaging-fault'`/`'bin-not-declared'` (including `undefined`, for
+ * every pre-existing caller) keeps the ORIGINAL wording byte-for-byte.
+ *
+ * `'packaging-fault'` and `'bin-not-declared'` are deliberately separate
+ * codes with separate wording (round-5 review): the first means package.json
+ * itself could not be resolved; the second means package.json resolved FINE
+ * but the specific bin entry is missing or misnamed. Reusing one message for
+ * both told an operator their exports map was broken when the actual defect
+ * was an unrelated bin field, sending them to look in the wrong file.
  * @param {string} label
- * @param {'resolved'|'not-a-dependency'|'packaging-fault'|undefined} code
+ * @param {'resolved'|'not-a-dependency'|'packaging-fault'|'bin-not-declared'|undefined} code
  * @returns {string}
  */
 export function notInstalledMessage(label, code) {
   if (code === 'packaging-fault') {
     return `${label} is installed but its package.json could not be resolved (packaging fault — a defect in the package's own exports map, not a missing install) — reinstalling will not fix this`;
+  }
+  if (code === 'bin-not-declared') {
+    return `${label} is installed and its package.json resolves, but it does not declare the bin this needs (packaging fault — a defect in the package's own bin field, not a missing install) — reinstalling will not fix this`;
   }
   return `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`;
 }

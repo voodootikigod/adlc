@@ -347,16 +347,23 @@ test('AC1: classifyPackageJson defaults to the real require.resolve/packageJsonF
   assert.match(result.path, /context-handoff\/package\.json$/);
 });
 
-test('resolvePackageBinDiagnostic classifies a resolved package.json with no matching bin entry as packaging-fault, not resolved (adversarial review, round 1)', () => {
+test('resolvePackageBinDiagnostic classifies a resolved package.json with no matching bin entry as bin-not-declared, not resolved (adversarial review, round 1; round-5 review: distinct code from packaging-fault)', () => {
   // @adlc/spec-lint is real and bin-only; its package.json resolves cleanly
   // (devPath rung), but it does not declare a bin named this. The old code
   // returned { bin: null, code: 'resolved' } for this — runBin then printed
   // the generic "tool not installed: ... npm i -g @adlc/cli" message for a
   // package that IS installed and DOES resolve, misattributing a bin-field
-  // defect in the package itself to a missing install.
+  // defect in the package itself to a missing install. A later fix reused
+  // 'packaging-fault' for this case too, which misdiagnosed it as a broken
+  // exports map — package.json resolved FINE here; only the bin field
+  // didn't. 'bin-not-declared' is its own code with its own message.
   const result = resolvePackageBinDiagnostic('@adlc/spec-lint', 'this-bin-name-does-not-exist-in-the-manifest');
   assert.equal(result.bin, null);
-  assert.equal(result.code, 'packaging-fault');
+  assert.equal(result.code, 'bin-not-declared');
+  const message = notInstalledMessage('@adlc/spec-lint', result.code);
+  assert.doesNotMatch(message, /package\.json could not be resolved/, 'package.json DID resolve here');
+  assert.match(message, /does not declare the bin/);
+  assert.doesNotMatch(message, /npm i -g @adlc\/cli/, 'reinstalling will not add a bin field the package does not declare');
 });
 
 test('resolvePackageBinDiagnostic still reports resolved with a real bin path for the correct bin name (control)', () => {
@@ -391,6 +398,53 @@ test('AC3: every @adlc/* package under packages/* that declares an exports map r
     const found = packageJsonPath(pkg.name);
     assert.ok(found, `${pkg.name} declares an exports map but packageJsonPath() could not resolve its package.json`);
     assert.match(found, new RegExp(`${entry.name}/package\\.json$`));
+  }
+  assert.ok(
+    checked > 0,
+    'sanity: at least one @adlc/* package under packages/* must declare an exports map for this sweep to mean anything',
+  );
+});
+
+// Round-5 review: the sweep above proves only that packageJsonPath() (via
+// packageJsonDiagnostic's devPath rung) finds these local files — every
+// @adlc/* package in THIS monorepo satisfies that shortcut, so the test
+// above never reaches classifyPackageJson()'s actual resolveSubpath/
+// resolveEntry/resolveBare rungs at all. Those are exactly the rungs an
+// INSTALLED (non-monorepo, e.g. `npm i -g @adlc/cli`) layout depends on —
+// a regression there could pass the sweep above while `adlc handoff <verb>`
+// fails for every real user. classifyPackageJson() called directly here
+// (bypassing packageJsonDiagnostic and its devPath shortcut) uses its
+// default, REAL resolveSubpath/resolveEntry/resolveBare seams — the same
+// require.resolve/packageJsonFromEntry semantics the earlier
+// 'packageJsonFromEntry finds package.json ... (regression)' test proved
+// necessary for @adlc/context-handoff specifically. This generalizes that
+// proof to every exports-map package the monorepo's workspace symlinks make
+// really resolvable, the same way an installed layout would.
+test('AC3: every @adlc/* package under packages/* that declares an exports map resolves via REAL Node module resolution, not the devPath shortcut (round-5 review)', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const packagesDir = join(worktreeRoot, 'packages');
+  const entries = readdirSync(packagesDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let checked = 0;
+  for (const entry of entries) {
+    const pkgJsonPath = join(packagesDir, entry.name, 'package.json');
+    if (!existsSync(pkgJsonPath)) continue;
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!pkg.exports || typeof pkg.name !== 'string') continue;
+    checked += 1;
+    const result = classifyPackageJson(pkg.name);
+    assert.equal(
+      result.code,
+      'resolved',
+      `${pkg.name} declares an exports map but real Node module resolution could not resolve its ` +
+        `package.json (code: ${result.code}) — this is the installed-layout path, not the devPath shortcut`,
+    );
+    assert.ok(result.path, `${pkg.name}: resolved but path is falsy`);
+    assert.match(result.path, new RegExp(`${entry.name}/package\\.json$`));
   }
   assert.ok(
     checked > 0,

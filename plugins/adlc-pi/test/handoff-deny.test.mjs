@@ -1860,6 +1860,17 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
     cliPath: null,
   });
   assert.match(ordinary, /bypass\|repair\|resume/);
+
+  // D6 (#970): this is a SEPARATE literal template from formatRecoveryCommand
+  // (recovery-exception.mjs) — reached only when @adlc/context-handoff could
+  // not be resolved, so the normal formatter never runs. It must follow the
+  // same dry-run-only contract: no auto-printed command may carry --write.
+  const commands = [...storeFault.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.ok(commands.length >= 1, `expected at least one printed command:\n${storeFault}`);
+  for (const command of commands) {
+    assert.doesNotMatch(command, /--write\b/, `a printed command must never auto-carry --write: ${command}`);
+  }
+  assert.match(storeFault, /add --write yourself/, 'must still say how to escalate deliberately');
 });
 
 test('a directory contaminated by the old bug is not an ADLC repo', () => {

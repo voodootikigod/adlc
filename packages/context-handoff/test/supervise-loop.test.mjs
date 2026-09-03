@@ -255,7 +255,8 @@ test('a degraded continue leaves the child running and warns exactly once', LOOP
 
   const warnings = h.logs.filter((line) => line.includes('automatic continuation is not possible'));
   assert.equal(warnings.length, 1, `expected one warning, got ${warnings.length}`);
-  assert.match(warnings[0], /handoff continue --deny-session sess-denier --write/);
+  assert.match(warnings[0], /handoff continue --deny-session sess-denier/);
+  assert.match(warnings[0], /add --write yourself/);
   assert.match(warnings[0], /deny is unbound/);
 });
 
@@ -765,7 +766,7 @@ test('transcriptPathFor encodes the working directory the way Claude Code does',
 test('formatContinueCommand refuses an id that could write its own line', () => {
   assert.equal(
     formatContinueCommand('sess-1'),
-    'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session sess-1 --write',
+    'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session sess-1',
   );
   // isSafeSessionId accepts an embedded newline (it is a path check); this is
   // the guard that does not.
@@ -774,12 +775,29 @@ test('formatContinueCommand refuses an id that could write its own line', () => 
   assert.equal(formatContinueCommand(null), null);
 });
 
+// D6 (#970): this command is consumed both by the supervisor's own
+// operator-facing degradeMessage AND by an agent-facing hook's
+// additionalContext (adlc-hook.mjs's handoffStart) — a mutating command with
+// --write baked in, handed to an agent as context, is exactly the escape
+// hatch D6 exists to close.
+test('formatContinueCommand never auto-carries --write (D6)', () => {
+  assert.doesNotMatch(formatContinueCommand('sess-1'), /--write\b/);
+});
+
 test('degradeMessage degrades to a readable instruction when the id cannot be quoted', () => {
+  // Check the specific command-argument boundary, not the whole message: the
+  // prose legitimately SAYS "--write" when telling the operator to add it
+  // themselves — what must never happen is --write appended directly onto
+  // the printed --deny-session argument, ready to run as printed.
   const safe = degradeMessage('sess-1', 'deny is unbound');
-  assert.match(safe, /--deny-session sess-1 --write/);
+  assert.match(safe, /--deny-session sess-1/);
+  assert.match(safe, /add --write yourself/);
+  assert.doesNotMatch(safe, /--deny-session sess-1 --write/);
+
   const unsafe = degradeMessage('sess-1\nrm -rf /', 'deny is unbound');
   assert.doesNotMatch(unsafe, /rm -rf/);
   assert.match(unsafe, /\.adlc\/handoffs\/denies/);
+  assert.doesNotMatch(unsafe, /--deny-session <id> --write/, 'the no-safe-id fallback must not auto-carry --write either');
 });
 
 test('degradeMessage describes the session it is actually talking about', () => {
@@ -809,7 +827,8 @@ test('degradeMessage describes the session it is actually talking about', () => 
 
   // Every variant still hands over the recovery command — that is unconditional.
   for (const message of [running, ended, crashed, killed]) {
-    assert.match(message, /--deny-session sess-1 --write/);
+    assert.match(message, /--deny-session sess-1/);
+    assert.doesNotMatch(message, /--deny-session sess-1 --write/);
   }
 });
 

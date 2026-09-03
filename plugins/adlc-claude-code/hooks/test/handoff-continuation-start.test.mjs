@@ -270,8 +270,15 @@ test('a session with no auth is given the exact command that unblocks the repo',
     assert.ok(emitted);
     assert.match(
       emitted.systemMessage,
-      new RegExp(`ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${DENIER} --write`),
+      new RegExp(`ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${DENIER}`),
     );
+    // D6 (#970): the auto-printed command must never carry --write — an
+    // agent reading this as context could paste and run it as-is.
+    assert.doesNotMatch(
+      emitted.systemMessage,
+      new RegExp(`--deny-session ${DENIER} --write`),
+    );
+    assert.match(emitted.systemMessage, /Add --write yourself/);
     assert.match(emitted.systemMessage, /cannot\s+clear it/);
     assert.equal(
       readdirSync(join(root, '.adlc', 'handoffs')).filter((n) => n.endsWith('.resume-auth.json')).length,
@@ -299,7 +306,8 @@ test('the newest open deny is the one named', () => {
     writeFileSync(path, JSON.stringify({ ...record, since: '2099-01-01T00:00:00.000Z' }, null, 2));
 
     const emitted = runHook(root, { session_id: 'a-fresh-session' });
-    assert.match(emitted.systemMessage, /--deny-session newer-deny --write/);
+    assert.match(emitted.systemMessage, /--deny-session newer-deny/);
+    assert.doesNotMatch(emitted.systemMessage, /--deny-session newer-deny --write/);
     assert.doesNotMatch(emitted.systemMessage, /older-deny/);
   } finally {
     rmSync(root, { recursive: true, force: true });

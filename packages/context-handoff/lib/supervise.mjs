@@ -119,12 +119,22 @@ export function transcriptPathFor({ homeDir, cwd, sessionId, sep = '/' } = {}) {
  * character that would let a marker filename write its own second line into an
  * operator's terminal or a model's context.
  *
+ * No `--write` (issue #970 D6, the same dry-run-only contract
+ * `formatRecoveryCommand` — recovery-exception.mjs — follows): this string is
+ * consumed both by the supervisor's own operator-facing `degradeMessage` and,
+ * separately, by an agent-facing hook (`handoffStart`,
+ * plugins/adlc-claude-code/hooks/adlc-hook.mjs) that surfaces it as
+ * `additionalContext` — a mutating command with `--write` baked in, handed to
+ * an agent as context to act on, is exactly the escape hatch D6 exists to
+ * close. `continue --write` mints a real resume-auth and consumes the deny
+ * for one successor — the same key-gated risk class as `bypass --write`.
+ *
  * @param {unknown} denySessionId
  * @returns {string|null}
  */
 export function formatContinueCommand(denySessionId) {
   if (!isPromptSafeId(denySessionId)) return null;
-  return `ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${denySessionId} --write`;
+  return `ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${denySessionId}`;
 }
 
 /**
@@ -159,8 +169,9 @@ export function degradeMessage(denySessionId, reason, childExit = null) {
     `adlc handoff supervise: automatic continuation is not possible (${reason}).`,
     state,
     command
-      ? `Continue it yourself with:\n  ${command}`
-      : 'The denied session id cannot be printed as a safe shell command — read it from .adlc/handoffs/denies/ and run `adlc handoff continue --deny-session <id> --write`.',
+      ? `Continue it yourself with (add --write yourself once ready to mutate — it is deliberately not ` +
+        `printed pre-filled):\n  ${command}`
+      : 'The denied session id cannot be printed as a safe shell command — read it from .adlc/handoffs/denies/ and run `adlc handoff continue --deny-session <id>` (add --write yourself once ready to mutate).',
   ].join('\n');
 }
 
