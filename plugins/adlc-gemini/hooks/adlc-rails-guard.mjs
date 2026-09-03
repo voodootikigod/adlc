@@ -1695,6 +1695,16 @@ export function onStop(payload, { env = process.env } = {}) {
                 reason: 'ADLC Rails-Guard: Active ticket pointer became a symlink during shell execution.',
               };
             }
+            // The canonical reader truncates an oversized pointer to its 64 KiB cap
+            // and parses the prefix rather than refusing it — a valid-JSON-then-padding
+            // file would otherwise pass id comparison despite exceeding the pointer's
+            // legitimate size (agy cross-model review).
+            if (currentLstat.size > 64 * 1024) {
+              return {
+                decision: 'continue',
+                reason: 'ADLC Rails-Guard: Active ticket pointer grew beyond its expected size during shell execution.',
+              };
+            }
             const currentResolved = resolveActiveTicketId(root, env);
             if (currentResolved.conflict) {
               return {

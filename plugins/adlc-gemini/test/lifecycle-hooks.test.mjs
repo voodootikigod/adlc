@@ -2276,6 +2276,53 @@ test('onStop: rejects Stop when the pointer becomes a symlink after a mutating s
   }
 });
 
+test('onStop: rejects Stop when the pointer grows beyond 64 KiB after a mutating shell command', () => {
+  // Codex cross-model review (round 6): the canonical reader TRUNCATES an
+  // oversized pointer to its 64 KiB cap and parses the prefix, rather than
+  // refusing it outright the way the original lstat-based size check did.
+  // JSON.parse tolerates trailing whitespace after a complete value, so valid
+  // JSON followed by >64 KiB of padding parses successfully and would pass an
+  // id-only comparison. This pins the dedicated size check added ahead of it.
+  const { root, env, cleanup } = setupTempRepo({ enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'echo "hello" > src/app.js', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }],
+      exit_code: 0,
+    }),
+    JSON.stringify({ content: 'Finished.' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  try {
+    const payload = {
+      workspacePaths: [root],
+      transcriptPath: transcriptFile,
+      conversationId: 'test-session-pointer-oversized',
+    };
+    preInvocation(payload, { env });
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordToolCall('test-session-pointer-oversized', { isMutating: true });
+    tracker.recordToolCall('test-session-pointer-oversized', { isMutating: false });
+    tracker.recordTranscript('test-session-pointer-oversized', transcriptFile);
+
+    const currentFile = join(root, '.adlc', 'current-ticket.json');
+    // Same id as the real pointer, padded past 64 KiB with trailing whitespace —
+    // JSON.parse ignores it, so an id-only comparison would not notice.
+    writeFileSync(currentFile, JSON.stringify({ id: 'T1' }) + ' '.repeat(70 * 1024));
+    const res = onStop(payload, { env });
+    assert.equal(res.decision, 'continue');
+    assert.match(res.reason, /grew beyond its expected size/);
+  } finally {
+    cleanup();
+  }
+});
+
 test('onStop: resolves transcript using ADLC_SESSION_ID when payload omits conversationId', () => {
   const cid = `session-env-${Date.now()}`;
   const appDataDir = join(tmpdir(), `adlc-brain-${Date.now()}`);
