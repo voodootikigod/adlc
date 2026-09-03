@@ -285,7 +285,15 @@ export function isTrustRootOrSecretPath(p, env = process.env) {
     if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
   }
   if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
-  if (norm.startsWith('~/.adlc') || norm.startsWith('~\\.adlc') || norm.startsWith('~/.config/adlc') || norm.startsWith('~\\.config\\adlc')) return true;
+  // A raw (unexpanded) home-tilde reference: normRaw at the call site can carry
+  // literal shell command text (e.g. `cat ~/.adlc/.master-key`) that a shell only
+  // expands at execution time, so this must catch the tilde form directly —
+  // independent of the resolved-homedir comparison above. `norm` already had every
+  // backslash normalized to `/` above, so only the forward-slash form can occur here.
+  if (norm[0] === '~') {
+    const afterTilde = norm.slice(1);
+    if (afterTilde.startsWith('/.adlc') || afterTilde.startsWith('/.config/adlc')) return true;
+  }
   return false;
 }
 
@@ -1675,22 +1683,14 @@ export function onStop(payload, { env = process.env } = {}) {
         try {
           const currentFile = join(root, '.adlc', 'current-ticket.json');
           if (existsSync(currentFile)) {
-            const currentStat = lstatSync(currentFile);
-            if (!currentStat.isFile() || currentStat.isSymbolicLink() || currentStat.size > 64 * 1024) {
+            const currentResolved = resolveActiveTicketId(root, env);
+            if (currentResolved.conflict) {
               return {
                 decision: 'continue',
                 reason: 'ADLC Rails-Guard: Corrupt or unreadable current-ticket pointer after shell execution.',
               };
             }
-            const currentRaw = readTextFileBounded(currentFile, currentStat.size);
-            const currentObj = currentRaw ? JSON.parse(currentRaw) : null;
-            if (!currentObj || typeof currentObj !== 'object') {
-              return {
-                decision: 'continue',
-                reason: 'ADLC Rails-Guard: Corrupt or unreadable current-ticket pointer after shell execution.',
-              };
-            }
-            if (currentObj.id && currentObj.id !== active.id) {
+            if (currentResolved.id && currentResolved.id !== active.id) {
               return {
                 decision: 'continue',
                 reason: 'ADLC Rails-Guard: Active ticket pointer ID was altered during shell execution.',
