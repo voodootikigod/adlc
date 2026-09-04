@@ -2330,9 +2330,32 @@ async function handoff(input) {
 
   if (!result.deny) return;
 
+  // #970 D5 (round-7 review): the OLD ordering named the same-session-
+  // restricted `adlc handoff resume` first, so the first thing tried in the
+  // state that hit the deny was guaranteed not to work there (same-session
+  // resume exits 2 by design). An intermediate fix recommended a fresh
+  // session unconditionally, which overclaimed: a fresh session only clears
+  // D1/D2 (this session's own re-entry/denier status) — an open deny record
+  // (D3), or a structural reason (D0, a protected-path refusal), blocks
+  // EVERY session, fresh or not (mutation-gate.mjs's D3:unauthorized_open
+  // loop checks every open record regardless of the CALLER's session;
+  // opencode's "a fresh session is denied by the open record, not by its own
+  // depth" test proves it). Only recommend it when every reason present is
+  // one it can actually clear — otherwise lead straight with the path that
+  // works, matching pi's twin (which never claims fresh-session recovery for
+  // exactly this reason).
+  const freshSessionHelps = result.reasons.every((r) => r.startsWith('D1:') || r.startsWith('D2:'));
   return denyHandoff(
-    `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
-      `or continue in a fresh session. Agent Shell cannot clear deny-set.\n\n` +
+    (freshSessionHelps
+      ? `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
+        "nothing and clears this session's own denier status. To clear it another way instead, run " +
+        '`adlc handoff resume` / repair from a DIFFERENT session than this one (same-session resume is ' +
+        'refused).'
+      : `mutation denied (${result.reasons.join(', ')}). This is recorded in the repo, not scoped to this ` +
+        'session, so a fresh session or subagent hits the same deny — it holds until an operator clears ' +
+        'it. Run `adlc handoff resume` / repair from a DIFFERENT session than this one (same-session ' +
+        'resume is refused).') +
+      ' Agent Shell cannot clear deny-set.\n\n' +
       `${CAPTURE_INSTRUCTION}\n\n${recoveryDiagnostic(sessionId)}`
   );
 }
@@ -2483,13 +2506,53 @@ async function handoffStart(input) {
   const loaded = api.loadDenyRecords(root);
   const newest = newestOpenDeny(loaded?.records);
   if (!newest) return;
-  const command =
-    typeof api.formatContinueCommand === 'function' ? api.formatContinueCommand(newest.session_id) : null;
-  const msg =
-    'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
-    'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Run:\n  ' +
-    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id> --write   (read <id> from .adlc/handoffs/denies/)');
+  const command = formatContinueCommandTrusted(newest.session_id);
+  const msg = formatBlockingDenyMessage(command);
   emit({ hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg });
+}
+
+/**
+ * Trusted-local twin of `formatContinueCommand`
+ * (packages/context-handoff/lib/supervise.mjs) — deliberately NOT calling
+ * `api.formatContinueCommand` (round-8 review). `api` is a package resolved
+ * from the PROJECT's own node_modules: version-skewed and untrusted, the
+ * same trust boundary `recoveryDiagnostic` below already respects by never
+ * calling into `api` for TEXT that reaches the model, only for raw deny-
+ * record DATA a trusted local classifier then interprets. Calling the
+ * project-resolved formatter directly would forward WHATEVER that install
+ * happens to return, unvalidated, straight into `additionalContext` — an
+ * older, pre-D6 `@adlc/context-handoff` still returns `--write` baked in,
+ * reintroducing the exact bypass D6 removed, purely from version skew this
+ * hook has no control over. `newest.session_id` itself is also project-
+ * resolved data (read via `api.loadDenyRecords`), so it is validated here
+ * exactly like the canonical function validates its own input — this
+ * function trusts no part of what `api` handed over, only its own logic.
+ * @param {unknown} denySessionId
+ * @returns {string|null}
+ */
+export function formatContinueCommandTrusted(denySessionId) {
+  if (typeof denySessionId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(denySessionId)) return null;
+  return `ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session ${denySessionId}`;
+}
+
+/**
+ * The (b)-branch message text, factored out so its exact wording — including
+ * the `command === null` fallback (an unsafe/unparseable session id) — is
+ * unit-testable directly.
+ * No `--write` in either branch (issue #970 D6): this is `additionalContext`
+ * fed to a model as context, so a mutating command handed over pre-filled is
+ * exactly the escape hatch D6 exists to close.
+ * @param {string|null} command `formatContinueCommandTrusted(...)` result,
+ *   or null when the session id was not safe to format.
+ * @returns {string}
+ */
+export function formatBlockingDenyMessage(command) {
+  return (
+    'ADLC context-handoff: an open handoff deny is blocking mutations in this repo. This session cannot ' +
+    'clear it — a host must continue the denied session, which consumes the deny for ONE successor. Add ' +
+    '--write yourself once ready to mutate — it is deliberately not printed pre-filled. Run:\n  ' +
+    (command ?? 'ADLC_MANIFEST_KEY=… adlc handoff continue --deny-session <id>   (read <id> from .adlc/handoffs/denies/)')
+  );
 }
 
 /**

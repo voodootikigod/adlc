@@ -613,7 +613,9 @@ export function formatUnsafeInstallPathMessage({
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: a resolved path ' +
     'contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run the ' +
     `operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId}${unboundClause(unbound)} --write" against ${adlcDir}.`
+    `subcommand "bypass --session ${sessionId}${unboundClause(unbound)}" against ${adlcDir} to inspect ` +
+    '(mutates nothing). Clearing the deny needs a human operator holding ADLC_MANIFEST_KEY to review why ' +
+    'it fired and add --write themselves — that is deliberately not spelled out as a single runnable line.'
   );
 }
 
@@ -643,10 +645,26 @@ export function formatRecoveryCommand({
   if (interpreterDisplay === null || scriptDisplay === null || dirDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, adlcDir, sessionId, unbound });
   }
-  return (
+  // Round-2 review correction: an earlier version of this fix left pi's
+  // twin printing --write directly, reasoning that the surrounding
+  // "One-shot host-side grant (needs ADLC_MANIFEST_KEY...)" label already
+  // named the requirement so the command was not "bare" the way claude-
+  // code/codex's used to be. That label is informational, not a technical
+  // gate — an agent that already has ADLC_MANIFEST_KEY in its environment
+  // (this repo, dogfooding) can paste and run the labeled command exactly
+  // as easily as an unlabeled one. Apply the identical D6 dry-run contract
+  // here: the auto-printed command never carries --write.
+  //
+  // Round-3 review correction: the command sits alone on its own first
+  // line, prose after — see the canonical function's comment
+  // (recovery-exception.mjs) for why (issue #970 remediation).
+  const command =
     `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}` +
-    `${unboundClause(unbound)} --dir ${dirDisplay} --write`
-  );
+    `${unboundClause(unbound)} --dir ${dirDisplay}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return `${command}\n${explanation}`;
 }
 
 /**
@@ -785,8 +803,11 @@ export function handoffRecoveryDiagnostic({
         'CLI cannot be named by path. Install it (npm install -g @adlc/cli) and drive it through that bin, ' +
         'run from the denied repo: ' +
         (storeFault
-          ? '`adlc handoff bypass --session <id> --unbound-reason <text> --write` — a bound grant does not ' +
-            'lift a store fault.'
+          ? // No --write on the auto-printed command — same dry-run-only
+            // contract formatRecoveryCommand (recovery-exception.mjs) follows —
+            // a human holding ADLC_MANIFEST_KEY adds it after review.
+            '`adlc handoff bypass --session <id> --unbound-reason <text>` (add --write yourself once ready ' +
+            'to mutate) — a bound grant does not lift a store fault.'
           : '`adlc handoff bypass|repair|resume`.'),
     );
   } else if (protectedPath) {
@@ -958,9 +979,15 @@ export function checkHandoff({
   return {
     decision: 'deny',
     reasons: result.reasons,
-    // No "continue in a fresh session": the deny record lives in the repo, so a
-    // new session walks straight back into it. Saying otherwise sent operators
-    // round a loop that could not terminate.
+    // #970 D5 does not apply here: "continue in a fresh session" is only
+    // true advice where a fresh session genuinely escapes the deny. Pi's
+    // deny record is repo-persistent and session-trust-scoped, so a new
+    // session walks straight back into it — this is pre-existing,
+    // deliberately tested behavior (see "a deny with no usable session id
+    // still refuses the fresh-session lie" / "the self-deny label is pinned
+    // too" in handoff-deny.test.mjs, predating this ticket), not an
+    // oversight D5 should override. Saying otherwise sent operators round a
+    // loop that could not terminate.
     reason:
       `context-rot handoff deny (${result.reasons.join(', ')}). The deny is recorded in the repo and ` +
       'scoped to session trust rather than to a ticket: it holds for new sessions here until an operator ' +

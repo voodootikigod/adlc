@@ -290,12 +290,14 @@ function quotePathForDisplay(p) {
  * @returns {string}
  */
 export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
-  return (
+  const message =
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write". \`pwd\` remains usable in the interim.`
-  );
+    `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
+    'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.';
+  return message;
 }
 
 /**
@@ -327,7 +329,15 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   if (interpreterDisplay === null || scriptDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  // Deliberately NOT `--write` — see the canonical function's comment
+  // (recovery-exception.mjs) for the full rationale (issue #970 D6). The
+  // command sits alone on its own first line, prose after — see the
+  // canonical function's comment for why (issue #970 remediation).
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return `${command}\n${explanation}`;
 }
 
 /**
@@ -1253,9 +1263,23 @@ async function main() {
 
   if (!result.deny) process.exit(0);
 
+  // #970 D5 (round-7 review): see the identical note in
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
+  // clears D1/D2 (this session's own re-entry/denier status), not an open
+  // D3 record or a structural reason, so only recommend it when every
+  // reason present is one it can actually clear.
+  const freshSessionHelps = result.reasons.every((r) => r.startsWith('D1:') || r.startsWith('D2:'));
   fail(
-    `mutation denied (${result.reasons.join(', ')}). Resume via host \`adlc handoff resume\` / repair, ` +
-      `or continue in a fresh session. Agent shell cannot clear the deny-set.\n\n${recoveryDiagnostic(sessionId)}`
+    (freshSessionHelps
+      ? `mutation denied (${result.reasons.join(', ')}). Try a fresh session or subagent first — it costs ` +
+        "nothing and clears this session's own denier status. To clear it another way instead, run " +
+        '`adlc handoff resume` / repair from a DIFFERENT session than this one (same-session resume is ' +
+        'refused).'
+      : `mutation denied (${result.reasons.join(', ')}). This is recorded in the repo, not scoped to this ` +
+        'session, so a fresh session or subagent hits the same deny — it holds until an operator clears ' +
+        'it. Run `adlc handoff resume` / repair from a DIFFERENT session than this one (same-session ' +
+        'resume is refused).') +
+      ` Agent shell cannot clear the deny-set.\n\n${recoveryDiagnostic(sessionId)}`
   );
 }
 

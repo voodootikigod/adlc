@@ -49,7 +49,10 @@ test('an unbound deny degrades: nothing consumed, child left alone, operator tol
       .split('\n')
       .filter((line) => line.includes('automatic continuation is not possible'));
     assert.equal(warnings.length, 1, `expected exactly one warning, got ${warnings.length}`);
-    assert.match(run.stderr, new RegExp(`handoff continue --deny-session ${denier} --write`));
+    assert.match(run.stderr, new RegExp(`handoff continue --deny-session ${denier}`));
+    // D6 (#970): the auto-printed command must never carry --write.
+    assert.doesNotMatch(run.stderr, new RegExp(`handoff continue --deny-session ${denier} --write`));
+    assert.match(run.stderr, /add --write yourself/);
 
     // This child is still alive when the degrade prints (it idles past the
     // quiescence gate), so the message must say so — the live half of the

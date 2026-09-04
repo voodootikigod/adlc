@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { findPackageJsonUpward, packageJsonFromEntry, packageJsonPath, resolveBin, resolveRunnerBin } from '../lib/dispatch.mjs';
+import { classifyPackageJson, findPackageJsonUpward, notInstalledMessage, packageJsonFromEntry, packageJsonPath, resolveBin, resolveBinDiagnostic, resolvePackageBinDiagnostic, resolveRunnerBin } from '../lib/dispatch.mjs';
 import { isTool, suggest, TOOLS } from '../lib/registry.mjs';
 import { renderHelp } from '../lib/help.mjs';
 
@@ -258,6 +258,256 @@ test('packageJsonFromEntry must never be the ONLY rung for a bin-only package wi
   const found = packageJsonPath('@adlc/rails-guard');
   assert.ok(found, 'packageJsonPath must still resolve a bin-only package via the direct subpath rung');
   assert.match(found, /rails-guard\/package\.json$/);
+});
+
+// D2/D3 (#970): dispatch.mjs used to collapse EVERY resolution failure into
+// the identical "tool not installed ... npm i -g @adlc/cli" message, whether
+// the package was never installed or was installed but had a packaging
+// defect (the exact #970 scenario) — reinstalling the suite reinstalls the
+// identical broken exports map, so that advice cannot fix what it names.
+test('AC1/AC2: notInstalledMessage distinguishes a packaging fault from genuine absence', () => {
+  const faultMsg = notInstalledMessage('@adlc/context-handoff', 'packaging-fault');
+  const absentMsg = notInstalledMessage('@adlc/nonexistent-xyz', 'not-a-dependency');
+  const undefinedCodeMsg = notInstalledMessage('@adlc/nonexistent-xyz', undefined);
+  assert.notEqual(faultMsg, absentMsg, 'the two failure classes must not read identically');
+  assert.doesNotMatch(
+    faultMsg,
+    /npm i -g @adlc\/cli/,
+    'a packaging fault must never suggest reinstalling — reinstalling ships the identical broken package',
+  );
+  assert.match(faultMsg, /packaging fault/i);
+  assert.match(absentMsg, /npm i -g @adlc\/cli/, 'genuine absence keeps the existing reinstall advice');
+  // An unrecognized/undefined code must default to the ORIGINAL wording exactly
+  // (byte-for-byte) — this is the compatibility floor for every caller that
+  // predates classification.
+  assert.equal(undefinedCodeMsg, absentMsg);
+  assert.equal(undefinedCodeMsg, 'tool not installed: @adlc/nonexistent-xyz - run "npm i -g @adlc/cli" to install the suite');
+});
+
+test('AC1: classifyPackageJson resolves normally when the primary rung succeeds', () => {
+  const result = classifyPackageJson('@adlc/whatever', {
+    resolveSubpath: () => '/fake/path/package.json',
+  });
+  assert.deepEqual(result, { path: '/fake/path/package.json', code: 'resolved' });
+});
+
+test('AC1: classifyPackageJson reports not-a-dependency when the package is not resolvable at all (bare resolve also fails)', () => {
+  const err = Object.assign(new Error('nope'), { code: 'MODULE_NOT_FOUND' });
+  const result = classifyPackageJson('@adlc/nonexistent-xyz', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw err; },
+  });
+  assert.deepEqual(result, { path: null, code: 'not-a-dependency' });
+});
+
+// Round-6 review: the bare rung's catch used to treat EVERY thrown error the
+// same as genuine absence — the exact #970 misclassification class, one rung
+// deeper than the subpath rung it already guards against above. A package
+// whose own exports map omits `.` throws ERR_PACKAGE_PATH_NOT_EXPORTED from
+// the BARE probe too (Node found the package directory; it could not resolve
+// this specific spec from its exports map) — that is evidence the package IS
+// installed, not evidence it is absent.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the bare rung fails with something other than MODULE_NOT_FOUND', () => {
+  const subpathErr = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const bareErr = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/no-root-export', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw bareErr; },
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'a non-MODULE_NOT_FOUND bare failure means the package was found, not absent',
+  );
+});
+
+// Round-7 review: MODULE_NOT_FOUND itself is overloaded. Measured directly
+// (see the comment at classifyPackageJson's bare-rung catch): an installed
+// package whose package.json declares a "main"/entry file that does not
+// exist on disk ALSO throws MODULE_NOT_FOUND from require.resolve(bareName)
+// — Node found the package directory and failed on a specific file within
+// it. That thrown error carries a `.path` naming the missing target file;
+// genuine absence (the package directory itself was never found) does not.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the bare rung fails with MODULE_NOT_FOUND but names a specific missing target file (installed package, broken main/export entry)', () => {
+  const subpathErr = Object.assign(new Error('nope'), { code: 'MODULE_NOT_FOUND' });
+  const bareErr = Object.assign(
+    new Error("Cannot find module '/fake/node_modules/@adlc/broken-main/dist/index.js'"),
+    { code: 'MODULE_NOT_FOUND', path: '/fake/node_modules/@adlc/broken-main/dist/index.js' },
+  );
+  const result = classifyPackageJson('@adlc/broken-main', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw bareErr; },
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'a MODULE_NOT_FOUND naming a specific missing target file means the package was found installed, not absent',
+  );
+
+  // Negative control: the SAME code with no `.path` (genuine absence, the
+  // shape the pre-existing not-a-dependency test above uses) must still
+  // classify as not-a-dependency — this fix narrows, it does not invert.
+  const trulyAbsentErr = Object.assign(new Error("Cannot find module 'nope'"), { code: 'MODULE_NOT_FOUND' });
+  const absent = classifyPackageJson('@adlc/genuinely-absent', {
+    resolveSubpath: () => { throw subpathErr; },
+    resolveEntry: () => null,
+    resolveBare: () => { throw trulyAbsentErr; },
+  });
+  assert.deepEqual(absent, { path: null, code: 'not-a-dependency' });
+});
+
+test('AC1: classifyPackageJson reports packaging-fault when an exports map omits ./package.json AND the entry-based fallback also fails to locate it (the #970 shape)', () => {
+  const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/broken-exports', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+    resolveBare: () => '/fake/node_modules/@adlc/broken-exports/index.mjs',
+  });
+  assert.deepEqual(result, { path: null, code: 'packaging-fault' });
+});
+
+// Round-2 review, finding 5: the ORIGINAL classifier trusted the specific
+// error CODE (only ERR_PACKAGE_PATH_NOT_EXPORTED fell through to the entry
+// rung) as a proxy for "the package is genuinely installed" — but any OTHER
+// subpath failure (e.g. MODULE_NOT_FOUND for a reason that is not "the
+// package itself is absent") was classified as not-a-dependency without
+// ever actually checking whether the BARE package resolves. That is the
+// same misclassification class #970 exists to fix, one level up.
+test('AC1: classifyPackageJson reports packaging-fault (not not-a-dependency) when the subpath rung throws something OTHER than ERR_PACKAGE_PATH_NOT_EXPORTED but the bare package still resolves', () => {
+  const err = Object.assign(new Error('module not found'), { code: 'MODULE_NOT_FOUND' });
+  const result = classifyPackageJson('@adlc/oddly-broken', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => null,
+    resolveBare: () => '/real/node_modules/@adlc/oddly-broken/index.mjs',
+  });
+  assert.deepEqual(
+    result,
+    { path: null, code: 'packaging-fault' },
+    'the bare package resolving proves it is installed — the missing package.json is a fault in it, not an absence',
+  );
+});
+
+test('AC1: classifyPackageJson still resolves via the entry-based fallback when it succeeds (regression: must not always report packaging-fault on ERR_PACKAGE_PATH_NOT_EXPORTED)', () => {
+  const err = Object.assign(new Error('not exported'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
+  const result = classifyPackageJson('@adlc/context-handoff', {
+    resolveSubpath: () => { throw err; },
+    resolveEntry: () => '/real/context-handoff/package.json',
+  });
+  assert.deepEqual(result, { path: '/real/context-handoff/package.json', code: 'resolved' });
+});
+
+test('AC1: classifyPackageJson defaults to the real require.resolve/packageJsonFromEntry rungs and resolves the real @adlc/context-handoff package (end-to-end, no injection)', () => {
+  const result = classifyPackageJson('@adlc/context-handoff');
+  assert.equal(result.code, 'resolved');
+  assert.match(result.path, /context-handoff\/package\.json$/);
+});
+
+test('resolvePackageBinDiagnostic classifies a resolved package.json with no matching bin entry as bin-not-declared, not resolved (adversarial review, round 1; round-5 review: distinct code from packaging-fault)', () => {
+  // @adlc/spec-lint is real and bin-only; its package.json resolves cleanly
+  // (devPath rung), but it does not declare a bin named this. The old code
+  // returned { bin: null, code: 'resolved' } for this — runBin then printed
+  // the generic "tool not installed: ... npm i -g @adlc/cli" message for a
+  // package that IS installed and DOES resolve, misattributing a bin-field
+  // defect in the package itself to a missing install. A later fix reused
+  // 'packaging-fault' for this case too, which misdiagnosed it as a broken
+  // exports map — package.json resolved FINE here; only the bin field
+  // didn't. 'bin-not-declared' is its own code with its own message.
+  const result = resolvePackageBinDiagnostic('@adlc/spec-lint', 'this-bin-name-does-not-exist-in-the-manifest');
+  assert.equal(result.bin, null);
+  assert.equal(result.code, 'bin-not-declared');
+  const message = notInstalledMessage('@adlc/spec-lint', result.code);
+  assert.doesNotMatch(message, /package\.json could not be resolved/, 'package.json DID resolve here');
+  assert.match(message, /does not declare the bin/);
+  assert.doesNotMatch(message, /npm i -g @adlc\/cli/, 'reinstalling will not add a bin field the package does not declare');
+});
+
+test('resolvePackageBinDiagnostic still reports resolved with a real bin path for the correct bin name (control)', () => {
+  const result = resolvePackageBinDiagnostic('@adlc/spec-lint', 'spec-lint');
+  assert.equal(result.code, 'resolved');
+  assert.ok(result.bin && result.bin.includes('spec-lint'));
+});
+
+test('AC1: resolveBinDiagnostic threads packaging-fault vs not-a-dependency through to dispatch()', () => {
+  assert.deepEqual(resolveBinDiagnostic('nonexistent-tool-xyz'), { bin: null, code: 'not-a-dependency' });
+  const bin = resolveBinDiagnostic('spec-lint');
+  assert.equal(bin.code, 'resolved');
+  assert.ok(bin.bin && bin.bin.includes('spec-lint'));
+});
+
+test('AC3: every @adlc/* package under packages/* that declares an exports map resolves its package.json via packageJsonPath (systematic in-repo sweep, generalizes the #965 hand-picked cases)', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const packagesDir = join(worktreeRoot, 'packages');
+  const entries = readdirSync(packagesDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let checked = 0;
+  for (const entry of entries) {
+    const pkgJsonPath = join(packagesDir, entry.name, 'package.json');
+    if (!existsSync(pkgJsonPath)) continue;
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!pkg.exports || typeof pkg.name !== 'string') continue;
+    checked += 1;
+    const found = packageJsonPath(pkg.name);
+    assert.ok(found, `${pkg.name} declares an exports map but packageJsonPath() could not resolve its package.json`);
+    assert.match(found, new RegExp(`${entry.name}/package\\.json$`));
+  }
+  assert.ok(
+    checked > 0,
+    'sanity: at least one @adlc/* package under packages/* must declare an exports map for this sweep to mean anything',
+  );
+});
+
+// Round-5 review: the sweep above proves only that packageJsonPath() (via
+// packageJsonDiagnostic's devPath rung) finds these local files — every
+// @adlc/* package in THIS monorepo satisfies that shortcut, so the test
+// above never reaches classifyPackageJson()'s actual resolveSubpath/
+// resolveEntry/resolveBare rungs at all. Those are exactly the rungs an
+// INSTALLED (non-monorepo, e.g. `npm i -g @adlc/cli`) layout depends on —
+// a regression there could pass the sweep above while `adlc handoff <verb>`
+// fails for every real user. classifyPackageJson() called directly here
+// (bypassing packageJsonDiagnostic and its devPath shortcut) uses its
+// default, REAL resolveSubpath/resolveEntry/resolveBare seams — the same
+// require.resolve/packageJsonFromEntry semantics the earlier
+// 'packageJsonFromEntry finds package.json ... (regression)' test proved
+// necessary for @adlc/context-handoff specifically. This generalizes that
+// proof to every exports-map package the monorepo's workspace symlinks make
+// really resolvable, the same way an installed layout would.
+test('AC3: every @adlc/* package under packages/* that declares an exports map resolves via REAL Node module resolution, not the devPath shortcut (round-5 review)', () => {
+  const worktreeRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const packagesDir = join(worktreeRoot, 'packages');
+  const entries = readdirSync(packagesDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let checked = 0;
+  for (const entry of entries) {
+    const pkgJsonPath = join(packagesDir, entry.name, 'package.json');
+    if (!existsSync(pkgJsonPath)) continue;
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!pkg.exports || typeof pkg.name !== 'string') continue;
+    checked += 1;
+    const result = classifyPackageJson(pkg.name);
+    assert.equal(
+      result.code,
+      'resolved',
+      `${pkg.name} declares an exports map but real Node module resolution could not resolve its ` +
+        `package.json (code: ${result.code}) — this is the installed-layout path, not the devPath shortcut`,
+    );
+    assert.ok(result.path, `${pkg.name}: resolved but path is falsy`);
+    assert.match(result.path, new RegExp(`${entry.name}/package\\.json$`));
+  }
+  assert.ok(
+    checked > 0,
+    'sanity: at least one @adlc/* package under packages/* must declare an exports map for this sweep to mean anything',
+  );
 });
 
 test('findPackageJsonUpward respects its depth cap at the boundary (mutation regression)', () => {

@@ -290,12 +290,14 @@ function quotePathForDisplay(p) {
  * @returns {string}
  */
 export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
-  return (
+  const message =
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write". \`pwd\` remains usable in the interim.`
-  );
+    `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
+    'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.';
+  return message;
 }
 
 /**
@@ -333,7 +335,27 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   if (interpreterDisplay === null || scriptDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  // Deliberately NOT `--write`: a mutating, directly copy-pasteable command
+  // handed automatically to whoever (or whatever) reads a deny message is the
+  // gate's own escape hatch offered at the moment of maximum incentive to use
+  // it (issue #970 D6; ADLC.md rule 6 — never weaken a gate). This dry-run
+  // form is safe to auto-print (inspects only, matches the SAME recovery
+  // exception as --write) and needs no key; a human operator holding
+  // ADLC_MANIFEST_KEY adds --write themselves after reviewing why the deny
+  // fired.
+  //
+  // The command sits ALONE on its own first line, with the explanatory prose
+  // on the line(s) after: `tokenize` (this file) rejects any raw string
+  // containing `\r`/`\n` outright, so appending the prose to the SAME string
+  // as the command made the whole returned value fail to match its own
+  // grammar, and made the printed line unparseable if copy-pasted as-is
+  // (a shell reads the trailing `(...)` prose as syntax). A caller that needs
+  // just the runnable command takes `formatRecoveryCommand(...).split('\n')[0]`.
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return `${command}\n${explanation}`;
 }
 
 /**

@@ -317,6 +317,14 @@ export function recoveryTail(sessionId, reasons = [], root = undefined) {
  * word the flag is dropped and the operator is told to cd instead, which is
  * wrong-but-visible rather than silently pointed elsewhere.
  *
+ * Neither template carries `--write` (issue #970 D6, the same contract
+ * `formatRecoveryCommand` — recovery-exception.mjs — follows): these
+ * placeholders still need real values substituted before either command runs
+ * at all, but once an operator has done that substitution nothing else should
+ * stand between them and a mutating command by accident. Requiring `--write`
+ * to be added by hand is the one deliberate, conscious step D6 exists to
+ * force at the moment of maximum incentive to skip it.
+ *
  * @param {string} target the session that OWNS the marker, already validated
  * @param {string} [root] repo root
  * @returns {string}
@@ -329,14 +337,15 @@ function recoverySteps(target, root) {
       ? ' Run them from the repo root — its path cannot be printed as a safe shell word, so --dir is omitted and the CLI would otherwise resolve the store against your cwd.'
       : '';
   return (
-    'Recover from a HOST shell (the agent shell is inside the deny-set): ' +
-    `\`adlc handoff resume --session <new-session> --deny-session ${target}${dir} --write\`. ` +
+    'Recover from a HOST shell (the agent shell is inside the deny-set). Fill in the placeholders below, ' +
+    'then add --write yourself once ready to mutate — it is deliberately not printed pre-filled: ' +
+    `\`adlc handoff resume --session <new-session> --deny-session ${target}${dir}\`. ` +
     'If resume declines for ANY reason it names — an unbound deny (null ticket_id or null final ' +
     'content_hash) or a final checkpoint it cannot read — repair is the answer to all of them, ' +
     `because it refreshes the final AND rebinds: \`adlc handoff repair --session ${target} ` +
-    `--ticket <id> --content-hash <hash>${dir} --write\`, then re-run resume. Repair rewrites an ` +
-    'existing binding, so run it only AFTER resume has actually refused, never as the first move.' +
-    cdNote
+    `--ticket <id> --content-hash <hash>${dir}\` (same rule: add --write yourself), then re-run resume. ` +
+    'Repair rewrites an existing binding, so run it only AFTER resume has actually refused, never as the ' +
+    `first move.${cdNote}`
   );
 }
 
@@ -511,13 +520,28 @@ export function checkHandoff({
   if (sticky) sticky.record(sessionId, result.denyEverWritten);
 
   if (!result.deny) return { decision: 'allow' };
+  // #970 D5 (round-7 review): see the identical note in
+  // plugins/adlc-claude-code/hooks/adlc-hook.mjs — a fresh session only
+  // clears D1/D2 (this session's own re-entry/denier status), not an open
+  // D3 record or a structural reason, so only recommend it when every
+  // reason present is one it can actually clear (see this file's own
+  // "a fresh session is denied by the open record, not by its own depth"
+  // test for direct proof D3 survives a fresh session id).
+  const freshSessionHelps = result.reasons.every((r) => r.startsWith('D1:') || r.startsWith('D2:'));
   return {
     decision: 'deny',
     reasons: result.reasons,
     reason:
-      `context-rot handoff deny (${result.reasons.join(', ')}). Resume via host ` +
-      '`adlc handoff resume` / repair, or continue in a fresh session. Agent shell ' +
-      `cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
+      (freshSessionHelps
+        ? `context-rot handoff deny (${result.reasons.join(', ')}). Try a fresh session or subagent ` +
+          "first — it costs nothing and clears this session's own denier status. To clear it another " +
+          'way instead, run `adlc handoff resume` / repair from a DIFFERENT session than this one ' +
+          '(same-session resume is refused).'
+        : `context-rot handoff deny (${result.reasons.join(', ')}). This is recorded in the repo, not ` +
+          'scoped to this session, so a fresh session or subagent hits the same deny — it holds until ' +
+          'an operator clears it. Run `adlc handoff resume` / repair from a DIFFERENT session than this ' +
+          'one (same-session resume is refused).') +
+      ` Agent shell cannot clear the deny-set.\n\n${recoveryTail(sessionId, result.reasons, root)}`,
   };
 }
 

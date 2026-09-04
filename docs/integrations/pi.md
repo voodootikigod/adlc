@@ -198,6 +198,9 @@ In Pi, this is achieved natively via **Subagents** or the **Pi SDK**:
 
 ## 5. Deployment as a Shareable Pi Package
 
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement.
+
 The entire integration is packaged in `plugins/adlc-pi/` with the following structure:
 * `package.json`: Manifest declaring the extension and skills.
 * `index.ts`: The TypeScript extension module containing the lifecycle hooks.

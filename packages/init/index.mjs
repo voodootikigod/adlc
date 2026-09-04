@@ -1,1 +1,1 @@
-export { CODEX_AGENT_TEMPLATES, scaffold } from './lib/scaffold.mjs';
+export { CODEX_AGENT_TEMPLATES, KNOWN_HARNESSES, scaffold } from './lib/scaffold.mjs';

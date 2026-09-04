@@ -12,15 +12,37 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
 import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
 
+// Every harness --harness may name (bin/adlc-init.mjs validates against this
+// same list before scaffold() ever sees a value — this module trusts its
+// caller rather than re-validating).
+export const KNOWN_HARNESSES = Object.freeze([
+  'codex',
+  'cursor',
+  'copilot',
+  'claude-code',
+  'pi',
+  'opencode',
+  'gemini',
+]);
+
+/**
+ * #970 D7: the old ternary here special-cased only cursor/copilot and
+ * silently folded EVERY other harness value — including the real names of
+ * claude-code/pi/opencode/gemini — into "codex". A fresh repo scaffolded
+ * from inside any of those four hosts got a config claiming codex, with no
+ * warning; the harness that actually enforced never matched what the
+ * config recorded. Registers whichever harness was actually named; `codex`
+ * remains the fallback ONLY when none was given at all, and that fallback
+ * is now WARNED at the call site below rather than silently assumed.
+ */
 function configForHarness(harness) {
-  const harnesses = harness === 'cursor'
-    ? { cursor: { railEnforcement: 'auto' } }
-    : harness === 'copilot'
-      ? { copilot: { railEnforcement: 'auto' } }
-      : { codex: { railEnforcement: 'auto' } };
+  const resolved = harness ?? 'codex';
+  const harnesses = { [resolved]: { railEnforcement: 'auto' } };
   // securityMode is required for config-integrity once a config is committed;
   // acknowledgedNewRailBypass must NOT be self-set here — that is a protected-base
   // ceremony field. Keep generated configs local until that ceremony runs.
+  // "unsigned-fallback" accepts unsigned gate-manifest entries as valid —
+  // see README.md's Security modes section for what a stronger mode buys.
   return `${JSON.stringify({ version: 1, securityMode: 'unsigned-fallback', harnesses }, null, 2)}\n`;
 }
 
@@ -249,6 +271,68 @@ function writeFileNoFollow(path, content, { exclusive = false } = {}) {
   }
 }
 
+/** A plain JSON object, not an array/null — the only shape a merge can target. */
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Write .adlc/config.json fresh, or — when it already exists and `harness`
+ * is explicitly given — reconcile just that one harness into it (round-6/7
+ * review): the D7 warning's own advice ("pass --harness ... naming the
+ * harness you actually use") must actually register it, not leave a stale
+ * guess in place while reporting success. This includes a valid config with
+ * NO `harnesses` field at all (e.g. one a different plugin's own scaffolder
+ * wrote) — round 6 only merged into an EXISTING harnesses object and left
+ * that case silently unregistered. Every OTHER field (other harnesses'
+ * entries, securityMode, version) is preserved untouched — this is a
+ * targeted merge, not a rewrite, so an operator's own customizations to
+ * fields this function does not touch survive.
+ *
+ * Left untouched (reported 'unchanged', writeMissing's original contract)
+ * when: the file doesn't parse as JSON, or doesn't parse to a plain object
+ * (do not attempt to merge into something already broken or a shape this
+ * function does not understand — an array/string/number top level, or a
+ * `harnesses` field that isn't itself a plain object); `harness` is null
+ * (still just a guess, nothing to reconcile toward); or the requested
+ * harness is already registered.
+ */
+function writeOrReconcileConfig(root, harness, result) {
+  const relativePath = '.adlc/config.json';
+  const path = join(root, relativePath);
+  rejectSymlinkComponents(root, relativePath);
+  const existed = lstatIfPresent(path) !== null;
+  if (!existed) {
+    mkdirSync(dirname(path), { recursive: true });
+    rejectSymlinkComponents(root, relativePath);
+    writeFileNoFollow(path, configForHarness(harness), { exclusive: true });
+    record(result, 'created', relativePath);
+    return;
+  }
+  if (harness !== null) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      parsed = null;
+    }
+    if (isPlainObject(parsed) && (parsed.harnesses === undefined || isPlainObject(parsed.harnesses))) {
+      const existingHarnesses = parsed.harnesses ?? {};
+      if (!(harness in existingHarnesses)) {
+        const merged = {
+          ...parsed,
+          harnesses: { ...existingHarnesses, [harness]: { railEnforcement: 'auto' } },
+        };
+        rejectSymlinkComponents(root, relativePath);
+        writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
+        record(result, 'updated', relativePath);
+        return;
+      }
+    }
+  }
+  record(result, 'unchanged', relativePath);
+}
+
 function writeMissing(root, relativePath, content, result) {
   const path = join(root, relativePath);
   rejectSymlinkComponents(root, relativePath);
@@ -393,11 +477,28 @@ jobs:
         run: npm i -g @adlc/cli
 `;
 
+/**
+ * Every `result.warnings` entry naming this prefix is ADVISORY, not a
+ * broken/ambiguous store state: bin/adlc-init.mjs excludes exactly this
+ * class from its `ok`/exit-code decision, so the single most common
+ * invocation — bare `adlc init`, no --harness — still exits 0. The message
+ * still lives in `warnings`, the one documented, --json-visible contract —
+ * not a second, undocumented `notices` array a --json caller would never
+ * think to check.
+ */
+export const HARNESS_GUESS_WARNING_PREFIX = 'no --harness passed;';
+
 export function scaffold({ root = '.', codexAgents = true, harness = null } = {}) {
   const target = canonicalTarget(root);
   const result = { root: target, created: [], updated: [], unchanged: [], warnings: [] };
   const copilot = harness === 'copilot';
-  if (harness === 'cursor' || copilot) codexAgents = false;
+  // Codex agent templates default on for `codex` (and for no --harness at
+  // all, since that path also defaults the CONFIG to codex — see the
+  // notice above) and are suppressed for every OTHER named harness, not
+  // just cursor/copilot: extending --harness to claude-code/pi/opencode/
+  // gemini without extending this check left a non-Codex repo scaffolded
+  // with .codex/agents/*.toml it never asked for (adversarial review).
+  if (harness !== null && harness !== 'codex') codexAgents = false;
 
   const destinations = ['.adlc/specs', '.adlc/config.json', '.gitignore'];
   if (codexAgents) {
@@ -411,7 +512,21 @@ export function scaffold({ root = '.', codexAgents = true, harness = null } = {}
   rejectSymlinkComponents(target, '.adlc/specs');
   mkdirSync(join(target, '.adlc/specs'), { recursive: true });
   rejectSymlinkComponents(target, '.adlc/specs');
-  writeMissing(target, '.adlc/config.json', configForHarness(harness), result);
+  writeOrReconcileConfig(target, harness, result);
+  // #970 D7: the ambiguity this warns about is a property of THIS
+  // invocation's arguments — no --harness was passed — not of whether a
+  // write happened. Warn whenever harness is null, regardless of
+  // create/update/unchanged state, so a re-run against an existing config
+  // that is itself a stale guess from an earlier no-harness run still tells
+  // the operator the ambiguity is unresolved. Once --harness IS passed,
+  // writeOrReconcileConfig above actually registers it (round-6 review), so
+  // this warning's own remediation advice is now accurate.
+  if (harness == null) {
+    result.warnings.push(
+      `${HARNESS_GUESS_WARNING_PREFIX} .adlc/config.json registered "codex" as a guess. Pass ` +
+        `--harness <${KNOWN_HARNESSES.join('|')}> naming the harness you actually use.`,
+    );
+  }
   ensureTicketStore(target, result);
   ensureGitignore(target, result);
 

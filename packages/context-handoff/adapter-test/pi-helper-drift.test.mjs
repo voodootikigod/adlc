@@ -67,8 +67,12 @@ test('pi quotes exactly the characters outside the canonical safe class', () => 
     if (ch === "'") continue;
     const dir = `/srv/a${ch}b/.adlc`;
     const command = piFormatRecoveryCommand({ ...RECOVERY, scriptPath: '/opt/a/handoff.mjs', adlcDir: dir });
-    const quoted = command.includes(`--dir '${dir}' `);
-    const bare = command.includes(`--dir ${dir} `);
+    // --dir is the LAST token on the command's own first line (the prose
+    // explanation follows on the next line) — check the line ending, not a
+    // trailing space, so this survives the command/prose line split (#970).
+    const commandLine = command.split('\n')[0];
+    const quoted = commandLine.endsWith(`--dir '${dir}'`);
+    const bare = commandLine.endsWith(`--dir ${dir}`);
     assert.ok(quoted !== bare, `ambiguous rendering for ${JSON.stringify(ch)}: ${command}`);
     assert.equal(
       quoted,
@@ -98,7 +102,8 @@ test('an isolated shell metacharacter is quoted on both sides', () => {
   for (const dir of ['/srv/a;b/.adlc', '/srv/$x/.adlc', '/srv/a&b/.adlc', '/srv/a|b/.adlc']) {
     assert.ok(
       piFormatRecoveryCommand({ ...RECOVERY, scriptPath: '/opt/a/handoff.mjs', adlcDir: dir })
-        .includes(`--dir '${dir}' `),
+        .split('\n')[0]
+        .endsWith(`--dir '${dir}'`),
       `pi must quote ${dir}`,
     );
     assert.ok(

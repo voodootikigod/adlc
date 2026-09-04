@@ -231,11 +231,11 @@ test('a self-deny recovery tail targets this session, exact command text', () =>
   const tail = recoveryTail('ses_abc-1', ['D2:denier_session', 'D3:unauthorized_open:ses_abc-1']);
   assert.match(
     tail,
-    /`adlc handoff resume --session <new-session> --deny-session ses_abc-1 --write`/,
+    /`adlc handoff resume --session <new-session> --deny-session ses_abc-1`/,
   );
   assert.match(
     tail,
-    /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash> --write`/,
+    /`adlc handoff repair --session ses_abc-1 --ticket <id> --content-hash <hash>`/,
   );
   assert.ok(
     tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
@@ -276,11 +276,11 @@ test('a foreign deny recovers the OWNING session, not the blocked one', () => {
   assert.match(tail, /blocked-b/, 'the blocked session is still worth naming');
   assert.match(
     tail,
-    /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash> --write`/,
+    /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash>`/,
   );
   assert.match(
     tail,
-    /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/,
+    /`adlc handoff resume --session <new-session> --deny-session owner-a`/,
   );
   assert.ok(
     tail.indexOf('handoff resume') < tail.indexOf('handoff repair'),
@@ -545,8 +545,8 @@ test('every open deny is named, not just the first, and --dir is pinned to the r
   assert.match(tail, /2 open denies are blocking this repo \(owner-a, owner-c\)/);
   // Without --dir the CLI resolves the store against the pasting shell's cwd,
   // exits 0 against some other directory, and leaves this repo denied.
-  assert.match(tail, /--deny-session owner-a --dir \/repo\/root\/\.adlc --write/);
-  assert.match(tail, /--content-hash <hash> --dir \/repo\/root\/\.adlc --write/);
+  assert.match(tail, /--deny-session owner-a --dir \/repo\/root\/\.adlc`/);
+  assert.match(tail, /--content-hash <hash> --dir \/repo\/root\/\.adlc`/);
 });
 
 test('a repo path that cannot be a safe shell word drops --dir and says to cd', () => {
@@ -589,8 +589,8 @@ test('a consumed self-deny is called out, because clearing the open denies will 
 
 test('a foreign deny still prints the owner command when this session has no safe id', () => {
   const tail = recoveryTail(undefined, ['D3:unauthorized_open:owner-a']);
-  assert.match(tail, /`adlc handoff resume --session <new-session> --deny-session owner-a --write`/);
-  assert.match(tail, /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash> --write`/);
+  assert.match(tail, /`adlc handoff resume --session <new-session> --deny-session owner-a`/);
+  assert.match(tail, /`adlc handoff repair --session owner-a --ticket <id> --content-hash <hash>`/);
   assert.ok(tail.indexOf('handoff resume') < tail.indexOf('handoff repair'));
 });
 
@@ -1045,6 +1045,118 @@ test('the deny message carries the session id and a recovery command against the
         assert.match(err.message, /adlc handoff repair --session denier-tail/);
         assert.match(err.message, /adlc handoff resume --session <new-session> --deny-session denier-tail/);
         assert.doesNotMatch(err.message, /--session tail-sess /);
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// D6 (#970): recoverySteps() is OpenCode's OWN resume/repair template,
+// distinct from the canonical formatRecoveryCommand (recovery-exception.mjs)
+// this repo's other hosts route through — a separate code path that a fix
+// scoped to only the canonical formatter would not reach. The FULL assembled
+// deny message is asserted here (not just recoveryTail() in isolation) so a
+// future host-specific helper cannot reintroduce the same gap one layer
+// removed from where this test looks.
+test('the full assembled deny message never carries a write-enabled recovery command (D6)', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-write-check');
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'consumer-write-check', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        // Check the literal, copy-pasteable command spans specifically (not
+        // the whole message): the prose legitimately SAYS "--write" when
+        // telling the operator to add it themselves — that must stay. What
+        // must never happen is `--write` appearing INSIDE a backtick-quoted
+        // command, ready to run as printed.
+        const commands = [...err.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        assert.ok(commands.length >= 2, `expected at least 2 printed commands:\n${err.message}`);
+        for (const command of commands) {
+          assert.doesNotMatch(
+            command,
+            /--write\b/,
+            `a printed command must never auto-carry --write: ${command}`,
+          );
+        }
+        assert.match(err.message, /add --write yourself/, 'must still say how to escalate deliberately');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #970 D5: see the identical test/rationale in
+// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs — round-7 review
+// found the unconditional fresh-session recommendation overclaims whenever
+// an open deny record (D3) is what's blocking, since a fresh session id is
+// not authorized against that record either (this file's own "a fresh
+// session is denied by the open record, not by its own depth" test proves
+// it). Only D1/D2 (this session's own re-entry/denier status, with no open
+// record left to check) are genuinely cleared by a fresh id.
+test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-sticky-fresh');
+    writeDenyRecord(dir, {
+      session_id: 'denier-sticky-fresh',
+      ticket_id: 'T1',
+      content_hash: 'abc',
+      status: 'consumed',
+      since: new Date().toISOString(),
+      host: 'test',
+      schema: 1,
+    });
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'denier-sticky-fresh', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        assert.doesNotMatch(err.message, /D3:/, 'sanity: the consumed record must not also carry an open-record reason');
+        const freshSessionIdx = err.message.indexOf('fresh session');
+        const resumeIdx = err.message.indexOf('adlc handoff resume');
+        assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${err.message}`);
+        assert.ok(resumeIdx >= 0, `no resume mention:\n${err.message}`);
+        assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${err.message}`);
+        assert.match(err.message, /DIFFERENT session/);
+        assert.doesNotMatch(err.message, /hits the same deny/, 'must not claim fresh session fails when it genuinely works');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', async () => {
+  const dir = repo();
+  try {
+    seedForeignDeny(dir, 'denier-ordering');
+    const hooks = await adlcRailsGuard({ worktree: dir });
+    await assert.rejects(
+      () =>
+        hooks['tool.execute.before'](
+          { tool: 'edit', sessionID: 'consumer-ordering', callID: 'c' },
+          { args: { filePath: 'src/ok.mjs' } },
+        ),
+      (err) => {
+        assert.match(err.message, /D3:unauthorized_open:denier-ordering/, 'sanity: a foreign open record carries D3');
+        assert.match(err.message, /hits the same deny/, 'must say a fresh session does not escape an open record');
+        const resumeIdx = err.message.indexOf('adlc handoff resume');
+        assert.ok(resumeIdx >= 0, `no resume mention:\n${err.message}`);
+        assert.match(err.message, /DIFFERENT session/);
         return true;
       },
     );

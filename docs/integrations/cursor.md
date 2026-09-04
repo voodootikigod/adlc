@@ -53,6 +53,9 @@ documented events); opt out of the legacy scaffolder path with `--no-unpinned` /
 
 ## Install
 
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement.
+
 ### Preferred — Cursor marketplace plugin
 
 1. In Cursor: **Settings → Plugins → Add marketplace** and paste

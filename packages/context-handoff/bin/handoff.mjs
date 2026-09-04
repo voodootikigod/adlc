@@ -350,9 +350,20 @@ function degrade(message) {
   gateFail(`handoff continue: ${message}`);
 }
 
-/** The exact command an operator runs to bind an unbound deny (§Host repair). */
+/**
+ * The exact command an operator runs to bind an unbound deny (§Host repair).
+ *
+ * No `--write` (issue #970 D6, the same dry-run-only contract
+ * `formatRecoveryCommand` — recovery-exception.mjs — follows): this stderr
+ * text can reach an agent's context via a subprocess's captured output the
+ * same way any other auto-printed diagnostic can, so it must not hand over a
+ * directly copy-pasteable mutating command either.
+ */
 function repairHint(denySessionId) {
-  return `adlc handoff repair --session ${denySessionId} --ticket <id> --content-hash <hash> --write`;
+  return (
+    `adlc handoff repair --session ${denySessionId} --ticket <id> --content-hash <hash>` +
+    ' (add --write yourself once ready to mutate)'
+  );
 }
 
 /**

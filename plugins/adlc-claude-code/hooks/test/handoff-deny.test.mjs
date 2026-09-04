@@ -570,7 +570,68 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag --write/);
+  assert.match(r.out, /bypass --session consumer-diag\\n\(dry run/);
+});
+
+// #970 D5: the OLD message named the same-session-restricted `adlc handoff
+// resume` FIRST — the one recommendation guaranteed not to work in the exact
+// state that reads it (same-session resume exits 2 by design). `resume` must
+// be explicitly flagged as needing a DIFFERENT session in every case.
+//
+// Round-7 review: an intermediate fix recommended a fresh session
+// unconditionally, which overclaims whenever an OPEN deny record is what's
+// actually blocking (D3) — a fresh session id is not authorized against that
+// record either, so it hits the identical denial. Fresh session only
+// genuinely clears D1/D2 (this session's own re-entry/denier status, with NO
+// open record left to check it against). These two tests exercise both
+// shapes: a CONSUMED self-record (D2 alone — no open record survives to
+// re-check against a fresh id, so it genuinely works) and an OPEN self-record
+// via the band (D2 co-occurs with D3 for the SAME record — a fresh session's
+// id is still unauthorized against it, so it does not).
+test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', () => {
+  const r = runHandoff({
+    sessionId: 'denier-sticky-fresh',
+    seedDeny: (root) => {
+      assert.equal(
+        ensureDenyMarker(root, {
+          sessionId: 'denier-sticky-fresh',
+          ticketId: 'T1',
+          contentHash: 'abc',
+          host: 'test',
+        }).ok,
+        true,
+      );
+      writeDenyRecord(root, {
+        session_id: 'denier-sticky-fresh',
+        ticket_id: 'T1',
+        content_hash: 'abc',
+        status: 'consumed',
+        since: new Date().toISOString(),
+        host: 'test',
+        schema: 1,
+      });
+    },
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.doesNotMatch(r.out, /D3:/, 'sanity: the consumed record must not also carry an open-record reason');
+  const freshSessionIdx = r.out.indexOf('fresh session');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${r.out}`);
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
+  assert.doesNotMatch(r.out, /hits the same deny/, 'must not claim fresh session fails when it genuinely works');
+});
+
+test('D2 with D3 (open self-record via the band): the message does not overclaim that a fresh session escapes it', () => {
+  const r = runHandoff({ sessionId: 'deep-sess-fresh', transcriptToolCalls: HANDOFF_DEPTH });
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, /D2:denier_session/);
+  assert.match(r.out, /D3:unauthorized_open:deep-sess-fresh/, 'sanity: the OPEN self-record also carries D3');
+  assert.match(r.out, /hits the same deny/, 'must say a fresh session does not escape an open record');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
 });
 
 test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
@@ -871,7 +932,7 @@ test('a stale/inaccessible CLAUDE_PROJECT_DIR still denies an ORDINARY edit, but
   });
   assert.equal(r.verdict, 'deny', r.out);
   assert.match(r.out, /could not enter the project directory/);
-  assert.match(r.out, /bypass --session consumer-stale-dir-deny --write/);
+  assert.match(r.out, /bypass --session consumer-stale-dir-deny\\n\(dry run/);
 });
 
 // --- recordRecoveryUnderBand: env allowlist (mirrors the Codex hook) -------
@@ -1058,7 +1119,12 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   // resulting command is real (matches the shape the matcher itself accepts).
   const { recoveryDiagnostic } = await import('../adlc-hook.mjs');
   const out = recoveryDiagnostic('sess-a');
-  assert.match(out, /bypass --session sess-a --write/);
+  // #970 D6: the auto-printed command is the dry-run form only (no --write) —
+  // matches the shape the matcher itself accepts, without handing over a
+  // directly-runnable mutating command. See handoff-deny.test.mjs's own D6
+  // test below for the negative-space guard.
+  assert.match(out, /bypass --session sess-a\n\(dry run/);
+  assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });
 

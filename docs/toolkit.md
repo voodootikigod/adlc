@@ -22,6 +22,31 @@ through the stable `adlc <tool>` dispatcher.
 | Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
 | Continuous / §6 | What is the recorded token spend shape, and does it match the barbell? | [`adlc spend`](./tools/spend.md) |
 
+## Version requirements
+
+`@adlc/cli` and every native harness plugin distributed as an npm package
+(`@adlc/codex`, `@adlc/cursor`, `@adlc/opencode`, `@adlc/pi`, `@adlc/gemini`,
+`@adlc/copilot`) are released in lockstep — install matching `major.minor`
+versions of the CLI and whichever plugin(s) you use. A version-skewed pair (an
+older CLI against a newer plugin package, or vice versa) can hit a resolution
+or contract mismatch that neither side's own tests exercise, since each
+package's suite only tests itself. Claude Code is the one exception: it has no
+npm package of its own — it is installed as a Git/marketplace plugin (see
+[docs/integrations/claude-code.md](./integrations/claude-code.md)) — but the
+same lockstep principle applies to its own `@adlc/cli` dependency, and it must
+be kept in step with whichever CLI version you use the same way the npm
+packages are. **1.11.0 is the current practical floor** across the suite
+(older releases predate fixes several plugins now assume); use `@latest`
+unless you have a specific reason to pin lower.
+
+```sh
+npm install -g @adlc/cli@latest
+```
+
+reinstalls the CLI at the same version as whatever plugin(s) you install alongside
+it in the same command. See each harness's own integration doc
+(`docs/integrations/*.md`) for host-specific install steps.
+
 ## P5: recorder vs. reviewer seam
 
 **This is a deliberate design decision, not a gap:** `adlc prosecute` makes zero model

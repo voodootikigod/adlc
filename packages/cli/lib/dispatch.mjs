@@ -53,14 +53,84 @@ export function packageJsonFromEntry(packageName) {
   return findPackageJsonUpward(dirname(entry), packageName);
 }
 
-export function packageJsonPath(packageName) {
+/**
+ * Classify HOW a package's package.json resolves (or fails to), distinguishing
+ * a genuine absence (never a dependency — `npm i -g @adlc/cli` fixes this) from
+ * a packaging fault (resolved as a dependency, but no rung could locate its
+ * package.json — an exports/layout defect in the package ITSELF, which
+ * reinstalling the identical broken package cannot fix; see issue #970).
+ *
+ * The distinction is decided by actually probing the BARE package name
+ * (round-2 review, finding 5) — not by trusting the specific subpath error
+ * CODE as a proxy for it. An earlier version fell through to the
+ * entry-based rung only for `ERR_PACKAGE_PATH_NOT_EXPORTED` specifically
+ * and treated every OTHER subpath failure as absence, which reproduced the
+ * exact misclassification #970 exists to fix one level up: a package whose
+ * subpath rung fails for some other reason, but whose bare name still
+ * resolves, is installed with a packaging fault, not missing.
+ *
+ * `resolveSubpath`/`resolveEntry`/`resolveBare` are injectable seams so this
+ * classification logic is unit-testable without a real broken package on
+ * disk: constructing one in this monorepo would need a real `npm install`
+ * (workspace symlinking) mid-test, which is impractical. Default to the
+ * real rungs (`require.resolve('<pkg>/package.json')`,
+ * `packageJsonFromEntry`, `require.resolve('<pkg>')`).
+ * @param {string} packageName
+ * @param {{ resolveSubpath?: (name: string) => string, resolveEntry?: (name: string) => string|null, resolveBare?: (name: string) => string }} [seams]
+ * @returns {{ path: string|null, code: 'resolved'|'not-a-dependency'|'packaging-fault' }}
+ */
+export function classifyPackageJson(
+  packageName,
+  {
+    resolveSubpath = (name) => require.resolve(`${name}/package.json`),
+    resolveEntry = packageJsonFromEntry,
+    resolveBare = (name) => require.resolve(name),
+  } = {},
+) {
+  try {
+    return { path: resolveSubpath(packageName), code: 'resolved' };
+  } catch {
+    /* any subpath failure falls through to the precise classification below */
+  }
+  const viaEntry = resolveEntry(packageName);
+  if (viaEntry) return { path: viaEntry, code: 'resolved' };
+  try {
+    resolveBare(packageName);
+    return { path: null, code: 'packaging-fault' };
+  } catch (err) {
+    // Round-6 review: this bare probe must inspect WHY it failed, the same
+    // way the subpath rung's own fallthrough already lets a non-absence
+    // error reach the entry/bare rungs instead of assuming absence. Only
+    // MODULE_NOT_FOUND means the package genuinely is not installed. Any
+    // other code (e.g. ERR_PACKAGE_PATH_NOT_EXPORTED — an exports map that
+    // omits `.` itself) means Node's resolver found the package but could
+    // not resolve this specific spec from it: installed, defect in its own
+    // exports map — a packaging fault, not an absence, exactly the #970
+    // misclassification this function exists to fix, one rung deeper.
+    //
+    // Round-7 review: MODULE_NOT_FOUND itself is overloaded — Node throws the
+    // SAME code both for "this package directory does not exist at all" and
+    // for "this package directory exists, but its declared main/export
+    // TARGET FILE is missing" (a broken publish). Measured directly (see the
+    // dispatch.test.mjs regression below): only the second case attaches a
+    // `.path` property naming the specific missing target file; the genuine
+    // "package not found anywhere" case has no `.path` at all, only
+    // `.requireStack`. `.path` present is therefore evidence Node's resolver
+    // located the package and failed on a specific file within it —
+    // installed, broken entry, a packaging fault — not evidence of absence.
+    const genuinelyAbsent = err?.code === 'MODULE_NOT_FOUND' && typeof err?.path !== 'string';
+    return { path: null, code: genuinelyAbsent ? 'not-a-dependency' : 'packaging-fault' };
+  }
+}
+
+export function packageJsonDiagnostic(packageName) {
   if (packageName.startsWith('@adlc/')) {
     const name = packageName.slice('@adlc/'.length);
     const devPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', name, 'package.json');
     if (existsSync(devPath)) {
       try {
         const pkg = JSON.parse(readFileSync(devPath, 'utf8'));
-        if (pkg?.name === packageName) return devPath;
+        if (pkg?.name === packageName) return { path: devPath, code: 'resolved' };
       } catch {
         /* fall through */
       }
@@ -70,18 +140,38 @@ export function packageJsonPath(packageName) {
   // majority — bin-only tools), and for any package whose map DOES list
   // `./package.json`. Only a package with an exports map that omits it needs
   // the entry-based fallback below.
-  try {
-    return require.resolve(`${packageName}/package.json`);
-  } catch (err) {
-    if (err?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') return null;
-  }
-  return packageJsonFromEntry(packageName);
+  return classifyPackageJson(packageName);
+}
+
+export function packageJsonPath(packageName) {
+  return packageJsonDiagnostic(packageName).path;
+}
+
+/**
+ * A resolved package.json that does NOT declare the requested bin name is
+ * ALSO a packaging fault, not a successful resolution (adversarial review):
+ * the package is installed and its package.json resolves, but the specific
+ * bin entry `runBin` needs is missing or misnamed. Reporting `'resolved'`
+ * here made `runBin` fall through to the generic "tool not installed - run
+ * npm i -g @adlc/cli" message, misattributing a defect in the package's own
+ * bin field to a missing install.
+ *
+ * `'bin-not-declared'` (round-5 review), not `'packaging-fault'`: those two
+ * causes are distinct — `'packaging-fault'` here would mean package.json
+ * itself could not be resolved (propagated from `packageJsonDiagnostic`
+ * above), which is not what happened when this function reaches the `bin`
+ * computation at all. `notInstalledMessage` gives each its own, accurate
+ * wording.
+ */
+export function resolvePackageBinDiagnostic(packageName, binName) {
+  const { path: pkgJsonPath, code } = packageJsonDiagnostic(packageName);
+  if (!pkgJsonPath) return { bin: null, code };
+  const bin = binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
+  return { bin, code: bin === null ? 'bin-not-declared' : 'resolved' };
 }
 
 function resolvePackageBin(packageName, binName) {
-  const pkgJsonPath = packageJsonPath(packageName);
-  if (!pkgJsonPath) return null;
-  return binPathFromPackage(pkgJsonPath, readPackage(pkgJsonPath), binName);
+  return resolvePackageBinDiagnostic(packageName, binName).bin;
 }
 
 function readPackage(path) {
@@ -101,20 +191,26 @@ function binPathFromPackage(pkgJsonPath, pkg, preferredBinName) {
   return relative ? join(dirname(pkgJsonPath), relative) : null;
 }
 
-export function resolveBin(toolName) {
+export function resolveBinDiagnostic(toolName) {
   const tool = getTool(toolName);
-  if (!tool) return null;
-  const pkgJsonPath = packageJsonPath(tool.packageName);
-  if (!pkgJsonPath) return null;
+  if (!tool) return { bin: null, code: 'not-a-dependency' };
+  return resolvePackageBinDiagnostic(tool.packageName, tool.binName ?? tool.name);
+}
+
+export function resolveBin(toolName) {
+  return resolveBinDiagnostic(toolName).bin;
+}
+
+export function resolveRunnerBinDiagnostic() {
+  const { path: pkgJsonPath, code } = packageJsonDiagnostic('@adlc/runner');
+  if (!pkgJsonPath) return { bin: null, code };
   const pkg = readPackage(pkgJsonPath);
-  return binPathFromPackage(pkgJsonPath, pkg, tool.binName ?? tool.name);
+  const bin = binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
+  return { bin, code: bin === null ? 'bin-not-declared' : 'resolved' };
 }
 
 export function resolveRunnerBin() {
-  const pkgJsonPath = packageJsonPath('@adlc/runner');
-  if (!pkgJsonPath) return null;
-  const pkg = readPackage(pkgJsonPath);
-  return binPathFromPackage(pkgJsonPath, pkg, 'adlc-runner') ?? binPathFromPackage(pkgJsonPath, pkg);
+  return resolveRunnerBinDiagnostic().bin;
 }
 
 // Signals forwarded to the tool child. SIGKILL is absent because it cannot be
@@ -179,11 +275,40 @@ function runChild(label, spawnFn, command, args, failPrefix) {
   });
 }
 
-function runBin(label, bin, args, spawnFn) {
+/**
+ * The message for a tool `runBin` could not resolve a bin for. `code` (from
+ * `classifyPackageJson`/`*Diagnostic`) distinguishes a packaging fault from
+ * genuine absence — see #970: the old, undifferentiated message suggested
+ * reinstalling for BOTH, but reinstalling a package whose own exports map is
+ * missing an entry ships the identical broken map right back. Any code other
+ * than `'packaging-fault'`/`'bin-not-declared'` (including `undefined`, for
+ * every pre-existing caller) keeps the ORIGINAL wording byte-for-byte.
+ *
+ * `'packaging-fault'` and `'bin-not-declared'` are deliberately separate
+ * codes with separate wording (round-5 review): the first means package.json
+ * itself could not be resolved; the second means package.json resolved FINE
+ * but the specific bin entry is missing or misnamed. Reusing one message for
+ * both told an operator their exports map was broken when the actual defect
+ * was an unrelated bin field, sending them to look in the wrong file.
+ * @param {string} label
+ * @param {'resolved'|'not-a-dependency'|'packaging-fault'|'bin-not-declared'|undefined} code
+ * @returns {string}
+ */
+export function notInstalledMessage(label, code) {
+  if (code === 'packaging-fault') {
+    return `${label} is installed but its package.json could not be resolved (packaging fault — a defect in the package's own exports map, not a missing install) — reinstalling will not fix this`;
+  }
+  if (code === 'bin-not-declared') {
+    return `${label} is installed and its package.json resolves, but it does not declare the bin this needs (packaging fault — a defect in the package's own bin field, not a missing install) — reinstalling will not fix this`;
+  }
+  return `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`;
+}
+
+function runBin(label, bin, args, spawnFn, code) {
   if (!bin) {
     return Promise.resolve({
       code: 1,
-      error: `tool not installed: ${label} - run "npm i -g @adlc/cli" to install the suite`,
+      error: notInstalledMessage(label, code),
     });
   }
 
@@ -345,15 +470,18 @@ export function dispatch(toolName, args, opts = {}) {
   const spawnFn = opts.spawnFn ?? spawn;
   const tool = getTool(toolName);
   if (toolName === 'ticket' && ['pull', 'push', 'sync', 'doctor'].includes(args[0])) {
-    return runBin('@adlc/ticket-sync', resolvePackageBin('@adlc/ticket-sync', 'adlc-ticket-sync'), args, spawnFn);
+    const { bin, code } = resolvePackageBinDiagnostic('@adlc/ticket-sync', 'adlc-ticket-sync');
+    return runBin('@adlc/ticket-sync', bin, args, spawnFn, code);
   }
   if (tool?.external) {
     return runExternal(tool.packageName, args, spawnFn, opts.npxEnv);
   }
-  return runBin(tool?.packageName ?? `@adlc/${toolName}`, resolveBin(toolName), args, spawnFn);
+  const { bin, code } = resolveBinDiagnostic(toolName);
+  return runBin(tool?.packageName ?? `@adlc/${toolName}`, bin, args, spawnFn, code);
 }
 
 export function dispatchRunner(args, opts = {}) {
   const spawnFn = opts.spawnFn ?? spawn;
-  return runBin('@adlc/runner', resolveRunnerBin(), args, spawnFn);
+  const { bin, code } = resolveRunnerBinDiagnostic();
+  return runBin('@adlc/runner', bin, args, spawnFn, code);
 }

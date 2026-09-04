@@ -428,12 +428,14 @@ function quotePathForDisplay(p) {
  * @returns {string}
  */
 export function formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId }) {
-  return (
+  const message =
     'The recovery command cannot be printed as a safe, copy-pasteable shell command: the resolved install ' +
     'path contains a character (a literal apostrophe or a newline) that cannot be represented in one. Run ' +
     `the operator recovery CLI manually — interpreter at ${interpreterPath}, script at ${scriptPath}, ` +
-    `subcommand "bypass --session ${sessionId} --write". \`pwd\` remains usable in the interim.`
-  );
+    `subcommand "bypass --session ${sessionId}" to inspect (mutates nothing). Clearing the deny needs a ` +
+    'human operator holding ADLC_MANIFEST_KEY to review why it fired and add --write themselves — that is ' +
+    'deliberately not spelled out as a single runnable line. `pwd` remains usable in the interim.';
+  return message;
 }
 
 /**
@@ -465,7 +467,15 @@ export function formatRecoveryCommand({ interpreterPath, scriptPath, sessionId }
   if (interpreterDisplay === null || scriptDisplay === null) {
     return formatUnsafeInstallPathMessage({ interpreterPath, scriptPath, sessionId });
   }
-  return `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId} --write`;
+  // Deliberately NOT `--write` — see the canonical function's comment
+  // (recovery-exception.mjs) for the full rationale (issue #970 D6). The
+  // command sits alone on its own first line, prose after — see the
+  // canonical function's comment for why (issue #970 remediation).
+  const command = `${interpreterDisplay} ${scriptDisplay} bypass --session ${sessionId}`;
+  const explanation =
+    '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+    'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.';
+  return `${command}\n${explanation}`;
 }
 
 /**

@@ -54,8 +54,15 @@ test('an unbound deny degrades with the repair one-liner and consumes nothing', 
     // Binding is host repair's job; the message must say exactly how.
     assert.match(
       r.stderr,
+      /adlc handoff repair --session denier-u --ticket <id> --content-hash <hash>/,
+    );
+    // D6 (#970): the auto-printed hint must never carry --write — reachable
+    // subprocess stderr, same risk class as any other auto-printed diagnostic.
+    assert.doesNotMatch(
+      r.stderr,
       /adlc handoff repair --session denier-u --ticket <id> --content-hash <hash> --write/,
     );
+    assert.match(r.stderr, /add --write yourself/);
     assertUntouched(cwd, 'denier-u', before);
   });
 });
