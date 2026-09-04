@@ -18,7 +18,10 @@ test, applies each candidate in isolation, and keeps only those that pass BOTH t
 repro command and the full rail regression suite. Survivors are grouped by
 agreement and the smallest diff from the largest consensus group wins. When every
 survivor is a singleton (with `--n >= 3`), that divergence is treated as evidence
-the spec is ambiguous, and the tool escalates rather than guessing.
+the spec is ambiguous, and the tool escalates rather than guessing. A candidate
+proposing no changes is a no-op, not a fix, and is discarded before it can ever
+become a survivor — it would otherwise apply cleanly and be judged solely by
+whether `--test-cmd` happens to pass a second time against the untouched source.
 
 ## Usage
 
