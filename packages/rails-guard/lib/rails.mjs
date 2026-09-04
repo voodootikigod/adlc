@@ -29,7 +29,12 @@ export function resolveRailGlobs(cliRails, ticket) {
 
 /**
  * Check which changed files match any rail glob.
- * Returns [ { file, type: 'rail-edit', globs: [matched patterns] } ]
+ * Returns { violations, sanctioned } — violations: [ { file, type: 'rail-edit',
+ * globs: [matched patterns] } ]; sanctioned: [ { file, globs } ] for every path
+ * that matched a rail glob but was exempted via sanctionedAdditions (#739 — the
+ * exemption must be disclosed, never silent, wherever the result is read). The
+ * #228 version-only exemption is intentionally NOT included in `sanctioned` — it
+ * is a separate, already-accepted exemption class this disclosure does not cover.
  *
  * @param {string[]} changedFiles
  * @param {string[]} railGlobs
@@ -47,21 +52,25 @@ export function resolveRailGlobs(cliRails, ticket) {
  *        the trusted base, ticket-rail-only match, never a trust root) is computed
  *        by the CI wrapper (lib/ci/rail-freeze.mjs), the one caller that knows glob
  *        ownership and the pinned base. Omitting it keeps the original behaviour.
+ * @returns {{ violations: Array<{file: string, type: 'rail-edit', globs: string[]}>,
+ *             sanctioned: Array<{file: string, globs: string[]}> }}
  */
 export function checkRailEdits(changedFiles, railGlobs, resolveContents = null, sanctionedAdditions = null) {
   const violations = [];
+  const sanctioned = [];
   for (const file of changedFiles) {
     const matched = railGlobs.filter((g) => globMatch(g, file));
     if (matched.length === 0) continue;
     if (sanctionedAdditions?.has(file)) {
-      continue; // sanctioned rail authoring — reported by the caller, never silent
+      sanctioned.push({ file, globs: matched }); // sanctioned rail authoring — reported by the caller, never silent
+      continue;
     }
     if (resolveContents && isManifestFile(file) && isVersionOnlyEdit(file, resolveContents)) {
       continue; // #228 — mechanical version bump, not a behaviour edit
     }
     violations.push({ file, type: 'rail-edit', globs: matched });
   }
-  return violations;
+  return { violations, sanctioned };
 }
 
 /**

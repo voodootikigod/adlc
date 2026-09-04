@@ -28,13 +28,14 @@ import { checkRailEdits } from '../lib/rails.mjs';
 // alone knows glob ownership and the trusted base. The library only honors the set.
 
 test('checkRailEdits without a sanction set behaves exactly as before', () => {
-  const violations = checkRailEdits(['test/frozen/new.mjs'], ['test/frozen/**'], null);
+  const { violations, sanctioned } = checkRailEdits(['test/frozen/new.mjs'], ['test/frozen/**'], null);
   assert.equal(violations.length, 1);
   assert.equal(violations[0].type, 'rail-edit');
+  assert.deepEqual(sanctioned, []);
 });
 
 test('checkRailEdits skips exactly the sanctioned paths, never their neighbors', () => {
-  const violations = checkRailEdits(
+  const { violations, sanctioned } = checkRailEdits(
     ['test/frozen/new.mjs', 'test/frozen/other.mjs'],
     ['test/frozen/**'],
     null,
@@ -42,6 +43,8 @@ test('checkRailEdits skips exactly the sanctioned paths, never their neighbors',
   );
   assert.equal(violations.length, 1);
   assert.equal(violations[0].file, 'test/frozen/other.mjs');
+  assert.equal(sanctioned.length, 1);
+  assert.equal(sanctioned[0].file, 'test/frozen/new.mjs');
 });
 
 test('the --help contract documents --sanctioned-add as CI plumbing, not an operator flag', () => {

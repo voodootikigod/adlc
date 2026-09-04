@@ -22,8 +22,13 @@ export function formatViolations(violations) {
 /**
  * Build the structured result object returned in --json mode
  * and also used as the manifest record shape.
+ *
+ * `sanctionedAdditions` (#739) is additive disclosure only — it does not change
+ * `railsDiffEmpty`'s existing meaning or value (still true whenever there are zero
+ * rail-edit violations, exemptions included). Defaults to [] so every existing
+ * caller that does not pass it keeps behaving exactly as before.
  */
-export function buildResult({ violations, railGlobs, railGlobError, railsDiffEmpty, suppressionsClean, base, ticket }) {
+export function buildResult({ violations, railGlobs, railGlobError, railsDiffEmpty, suppressionsClean, sanctionedAdditions = [], base, ticket }) {
   return {
     tool: 'rails-guard',
     base: base ?? 'HEAD',
@@ -32,6 +37,7 @@ export function buildResult({ violations, railGlobs, railGlobError, railsDiffEmp
     railGlobError: railGlobError ?? null,
     railsDiffEmpty,
     suppressionsClean,
+    sanctionedAdditions,
     passed: violations.length === 0,
     violations,
   };
