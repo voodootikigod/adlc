@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decide, extractToolName, extractFilePath } from '../hooks/adlc-rails-guard.mjs';
 import { audit } from '../hooks/adlc-audit.mjs';
-import { PRETOOL_MATCHER } from '../rails-checker.mjs';
+import { PRETOOL_MATCHER, classifyTool } from '../rails-checker.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GUARD_SCRIPT = join(HERE, '..', 'hooks', 'adlc-rails-guard.mjs');
@@ -271,6 +271,51 @@ test('(no-path) a MUTATING tool with no extractable path fails CLOSED under enfo
     assert.equal(decide({ tool_name: 'edit_file', tool_input: {} }, { root, env: { ADLC_P4_ENFORCEMENT: '0' } }).permission, 'allow');
     // read-only tool with no path -> always allow
     assert.equal(decide({ tool_name: 'codebase_search', tool_input: { query: 'x' } }, { root, env: env() }).permission, 'allow');
+  } finally { cleanup(root); }
+});
+
+test('(#816) todo_write and create_diagram no longer classify as mutating (substring false positive)', () => {
+  assert.equal(classifyTool('todo_write'), 'readonly');
+  assert.equal(classifyTool('create_diagram'), 'readonly');
+});
+
+test('(#816) glob_file_search and fetch_pull_request classify as readonly (combined tokens missing from PURE_READS)', () => {
+  assert.equal(classifyTool('glob_file_search'), 'readonly');
+  assert.equal(classifyTool('fetch_pull_request'), 'readonly');
+});
+
+test('(#816) todo_write / create_diagram / glob_file_search / fetch_pull_request allow with no path under enforcement', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    for (const tool of ['todo_write', 'create_diagram', 'glob_file_search', 'fetch_pull_request']) {
+      assert.equal(
+        decide({ tool_name: tool, tool_input: {} }, { root, env: env() }).permission,
+        'allow',
+        `${tool} must allow with no path under active enforcement`,
+      );
+    }
+  } finally { cleanup(root); }
+});
+
+test('(#816 table) the pinned Cursor tool inventory classifies correctly; a novel mutating-shaped name still fails closed', () => {
+  const root = fixture({ tickets: RAILED });
+  try {
+    // The four false positives this ticket fixes.
+    for (const tool of ['todo_write', 'create_diagram', 'glob_file_search', 'fetch_pull_request']) {
+      assert.equal(decide({ tool_name: tool, tool_input: {} }, { root, env: env() }).permission, 'allow', `${tool} allow`);
+    }
+    // Pre-existing controls that were already correct and must stay correct.
+    for (const tool of ['web_search', 'read_file', 'list_dir', 'run_terminal_cmd']) {
+      assert.equal(decide({ tool_name: tool, tool_input: {} }, { root, env: env() }).permission, 'allow', `${tool} allow`);
+    }
+    // A novel mutating-shaped tool name, NOT on either new exact-name exemption
+    // list, with no path — must still deny. Proves the exact-name additions did
+    // not widen the substring/fail-closed default for anything else.
+    assert.equal(
+      decide({ tool_name: 'terminal_modify', tool_input: {} }, { root, env: env() }).permission,
+      'deny',
+      'an unrecognized mutating-shaped tool must still fail closed',
+    );
   } finally { cleanup(root); }
 });
 
