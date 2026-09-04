@@ -108,6 +108,16 @@ function readPointerFileBounded(path) {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return null; // FIFO / directory / device / oversized → refuse
+    // Compare device+inode between the pre-open lstat and the post-open fstat:
+    // if a swap landed in the gap between them (the residual window O_NOFOLLOW
+    // does not close on platforms where it is not honored — see the comment
+    // above), the opened file's identity will differ from what was inspected,
+    // even though both individually "look like" a regular file (agy
+    // cross-model review, round 8). Not available on every platform (Windows
+    // FAT-family filesystems may report ino as 0 for both); when either side
+    // is unusable this falls back to whatever the individual checks already
+    // established rather than inventing a comparison neither side supports.
+    if (lst.dev !== 0 && lst.ino !== 0 && (stat.dev !== lst.dev || stat.ino !== lst.ino)) return null;
     const length = stat.size;
     const buf = Buffer.allocUnsafe(length);
     // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
