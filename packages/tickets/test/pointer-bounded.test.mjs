@@ -101,6 +101,19 @@ test('a well-formed small pointer still resolves (bounding must not regress the 
   assert.equal(res.value.id, 'T1');
 });
 
+test('a root with no .adlc directory at all resolves to "no active ticket", not a deny', () => {
+  // The PARENT-directory branch of the bounded reader. A missing `.adlc` means
+  // the repo is simply not ADLC-initialized, which is the same legitimate
+  // "no active ticket" outcome as a missing pointer file — it must NOT
+  // fail closed, or every non-ADLC repo would read as a denial. This is
+  // deliberately distinct from `.adlc` EXISTING but not being a real directory
+  // (a symlinked .adlc), which DOES deny — see the symlinked-.adlc vector above.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-pointer-uninitialized-'));
+  const res = readActiveTicketPointer(root);
+  assert.equal(res.ok, true, 'an uninitialized repo must resolve, not deny');
+  assert.equal(res.value.present, false);
+});
+
 test('a genuinely absent pointer resolves to "no active ticket" (fail-open is correct ONLY here)', () => {
   const root = repo(() => {}); // nothing written
   const res = readActiveTicketPointer(root);
