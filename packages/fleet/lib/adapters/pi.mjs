@@ -1,11 +1,12 @@
 // WorkerAdapter: Pi coding agent (headless). Model plane (K2).
 //
-// DEFAULT invocation: `pi run <prompt>`. Confidence: LOW — pi has no `-p` flag;
-// docs/specs/pi-native-flush.md documents the native non-interactive patterns as
-// a child `pi` subprocess or the SDK's `createAgentSession` / `--mode rpc`
-// (JSONL). The exact headless CLI form must be VERIFIED against the installed
-// `@earendil-works/pi-coding-agent` version; until then this default is a
-// best-effort placeholder and is expected to be set via `fleet.adapterArgs`
+// DEFAULT invocation: `pi --print <prompt>`. Confidence: LOW — the installed
+// `pi --help` documents `--print, -p  Non-interactive mode: process prompt and
+// exit` (issue #867; the CLI has no `run` subcommand at all). The exact headless
+// output shape is still unverified against the installed
+// `@earendil-works/pi-coding-agent` version; docs/specs/pi-native-flush.md also
+// documents an alternative non-interactive form via the SDK's
+// `createAgentSession` / `--mode rpc` (JSONL), available via `fleet.adapterArgs`
 // (e.g. `["--mode","rpc"]` with the prompt on stdin). Overridable via
 // `command`/`args`, and `useStdin` routes the prompt to stdin for the rpc form.
 
@@ -45,7 +46,7 @@ export const transports = Object.freeze({
 });
 
 export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command = 'pi', args, useStdin = false }) {
-  const argv = args ?? ['run', prompt];
+  const argv = args ?? ['--print', prompt];
   const opts = { cwd: worktree, env, timeout: timeoutMs };
   if (useStdin) opts.input = prompt;
   const res = await exec(command, argv, opts);
