@@ -155,8 +155,6 @@ function collectPaths(value, out = new Set()) {
         if (typeof item === 'string') out.add(item);
         else collectPaths(item, out);
       }
-    } else if (['command', 'cmd', 'patch'].includes(key) && typeof child === 'string') {
-      collectPatchPaths(child, out);
     } else if (key === 'input' && typeof child === 'string') {
       // `input` is overloaded across tool contracts: apply_patch-style tools
       // pass patch TEXT here, but adlc_prosecute's `input` (packages/cli/lib/
