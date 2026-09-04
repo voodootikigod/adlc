@@ -384,6 +384,32 @@ describe('signalGraphCoupling', () => {
     assert.equal(score, 0.35);
   });
 
+  test('fileCoupling map with no matching pairs returns 0', () => {
+    const a = mkTicket('A', { scope: ['src/a.ts'] });
+    const b = mkTicket('B', { scope: ['src/b.ts'] });
+    const repoFiles = ['src/a.ts', 'src/b.ts'];
+    const graphCouplingData = {
+      fileCoupling: {
+        'src/other1.ts|src/other2.ts': 0.8,
+      },
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0);
+  });
+
+  test('fileCoupling map matches reverse pair key', () => {
+    const a = mkTicket('A', { scope: ['src/services/user.ts'] });
+    const b = mkTicket('B', { scope: ['src/db/repo.ts'] });
+    const repoFiles = ['src/services/user.ts', 'src/db/repo.ts'];
+    const graphCouplingData = {
+      fileCoupling: {
+        'src/db/repo.ts|src/services/user.ts': 0.6,
+      },
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.42);
+  });
+
   test('a null fileCoupling map is ignored, falling through to the edges array', () => {
     // typeof null === 'object', so the guard must require fileCoupling to be
     // truthy AND an object — not either/or — or a null map would be treated
@@ -399,6 +425,141 @@ describe('signalGraphCoupling', () => {
     };
     const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
     assert.equal(score, 0.7);
+  });
+
+  test('graphCouplingData passed directly as an array of edges', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = [
+      { from: 'src/services/order.ts', to: 'src/payment/gateway.ts', weight: 0.5 },
+    ];
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.35);
+  });
+
+  test('graphCouplingData with links array format', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      links: [
+        { source: 'src/services/order.ts', target: 'src/payment/gateway.ts', weight: 0.8 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.ok(Math.abs(score - 0.56) < 1e-6, `expected ~0.56, got ${score}`);
+  });
+
+  test('edges array connects reverse direction (B calls A)', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/payment/gateway.ts', to: 'src/services/order.ts', weight: 0.8 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.ok(Math.abs(score - 0.56) < 1e-6, `expected ~0.56, got ${score}`);
+  });
+
+  test('edges array touching A but unrelated destination returns 0', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/services/order.ts', to: 'src/unrelated/logger.ts', weight: 1.0 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0);
+  });
+
+  test('edges array touching B but unrelated destination returns 0', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/payment/gateway.ts', to: 'src/unrelated/logger.ts', weight: 1.0 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0);
+  });
+
+  test('incomplete edges missing src or dst are skipped', () => {
+    const a = mkTicket('A', { scope: ['src/services/order.ts'] });
+    const b = mkTicket('B', { scope: ['src/payment/gateway.ts'] });
+    const repoFiles = ['src/services/order.ts', 'src/payment/gateway.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/services/order.ts' },
+        { to: 'src/payment/gateway.ts' },
+        { weight: 1.0 },
+        { from: 'src/services/order.ts', to: 'src/payment/gateway.ts', weight: 0.5 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.35);
+  });
+
+  test('edges with callerFile/calleeFile and fromFile/toFile keys are recognized', () => {
+    const a = mkTicket('A', { scope: ['src/a.ts'] });
+    const b = mkTicket('B', { scope: ['src/b.ts'] });
+    const repoFiles = ['src/a.ts', 'src/b.ts'];
+    const graph1 = { edges: [{ callerFile: 'src/a.ts', calleeFile: 'src/b.ts', weight: 1.0 }] };
+    assert.equal(signalGraphCoupling(a, b, graph1, repoFiles), 0.7);
+
+    const graph2 = { edges: [{ fromFile: 'src/a.ts', toFile: 'src/b.ts', weight: 1.0 }] };
+    assert.equal(signalGraphCoupling(a, b, graph2, repoFiles), 0.7);
+  });
+
+  test('edges matching relative path suffixes', () => {
+    const a = mkTicket('A', { scope: ['packages/core/src/index.ts'] });
+    const b = mkTicket('B', { scope: ['packages/cli/src/main.ts'] });
+    const repoFiles = ['packages/core/src/index.ts', 'packages/cli/src/main.ts'];
+    const graphCouplingData = {
+      edges: [
+        { from: 'src/index.ts', to: 'src/main.ts', weight: 1.0 },
+      ],
+    };
+    const score = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
+    assert.equal(score, 0.7);
+  });
+
+  test('edge weight > 1 is capped to 1.0 and unweighted edge defaults to 1.0', () => {
+    const a = mkTicket('A', { scope: ['src/a.ts'] });
+    const b = mkTicket('B', { scope: ['src/b.ts'] });
+    const repoFiles = ['src/a.ts', 'src/b.ts'];
+    const graph1 = { edges: [{ from: 'src/a.ts', to: 'src/b.ts', weight: 5.0 }] };
+    assert.equal(signalGraphCoupling(a, b, graph1, repoFiles), 0.7);
+
+    const graph2 = { edges: [{ from: 'src/a.ts', to: 'src/b.ts' }] };
+    assert.equal(signalGraphCoupling(a, b, graph2, repoFiles), 0.7);
+  });
+});
+
+describe('pairScore — dominant signal', () => {
+  test('graph coupling dominant signal returned by pairScore', () => {
+    const a = mkTicket('A', { scope: ['src/services/user.ts'] });
+    const b = mkTicket('B', { scope: ['src/db/repo.ts'] });
+    const repoFiles = ['src/services/user.ts', 'src/db/repo.ts'];
+    const graphCouplingData = {
+      fileCoupling: {
+        'src/services/user.ts|src/db/repo.ts': 1.0,
+      },
+    };
+    const { score, signal, hardVeto } = pairScore(a, b, {
+      repoFiles,
+      root: '/',
+      graphCouplingData,
+    });
+    assert.equal(score, 0.7);
+    assert.equal(signal, 'graph-coupling');
+    assert.equal(hardVeto, false);
   });
 });
 
