@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -2383,9 +2383,20 @@ test('onStop: rejects Stop when transcript file is replaced with a different ino
     // Initialize session state with original transcript
     preInvocation(payload, { env });
 
-    // Recreate transcript file with a new inode
-    rmSync(transcriptFile, { force: true });
-    writeFileSync(transcriptFile, lines.join('\n') + '\n');
+    // Replace the transcript with a DIFFERENT inode. Deliberately NOT
+    // rmSync-then-writeFileSync at the same path: the OS is free to hand the
+    // just-freed inode straight back to the recreated file, in which case the
+    // identity never changes, the guard correctly does not fire, and this test
+    // fails on its own unmet premise rather than on a real regression — that
+    // is exactly what made it flaky on CI runners while passing locally.
+    // Writing a sibling first (while the original still holds its inode) and
+    // renaming over guarantees a fresh inode, and models the real atomic-swap
+    // tamper more faithfully besides.
+    const replacement = `${transcriptFile}.replacement`;
+    writeFileSync(replacement, lines.join('\n') + '\n');
+    const beforeIno = statSync(transcriptFile).ino;
+    renameSync(replacement, transcriptFile);
+    assert.notEqual(statSync(transcriptFile).ino, beforeIno, 'precondition: the replacement must carry a different inode');
 
     const res = onStop(payload, { env });
     assert.equal(res.decision, 'continue');
