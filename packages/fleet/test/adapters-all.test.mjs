@@ -9,14 +9,18 @@ const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 's
 // the prompt on stdin (agy).
 const EXPECTED = {
   codex: { cmd: 'codex', args: ['exec', PROMPT], stdin: false },
-  gemini: { cmd: null, args: ['--print'], stdin: true },
-  agy: { cmd: 'agy', args: ['--print'], stdin: true },
-  jetski: { cmd: 'jetski', args: ['--print'], stdin: true },
+  // agy/jetski `--print` is a flag whose VALUE is the prompt, not a stdin mode
+  // (issue #866) — the prompt is an argv value by default.
+  gemini: { cmd: null, args: ['--print', PROMPT], stdin: false },
+  agy: { cmd: 'agy', args: ['--print', PROMPT], stdin: false },
+  jetski: { cmd: 'jetski', args: ['--print', PROMPT], stdin: false },
   // `--format json` is load-bearing, not cosmetic: it is the only mode that
   // emits the step_finish token events T152's usage parser reads. Dropping it
   // silently downgrades every opencode dispatch to usageStatus 'unreported'.
   opencode: { cmd: 'opencode', args: ['run', '--format', 'json', PROMPT], stdin: false },
-  pi: { cmd: 'pi', args: ['run', PROMPT], stdin: false },
+  // pi has no `run` subcommand; `--print`/`-p` is its documented non-interactive
+  // mode (issue #867).
+  pi: { cmd: 'pi', args: ['--print', PROMPT], stdin: false },
   cursor: { cmd: 'cursor-agent', args: ['-p', PROMPT], stdin: false },
   copilot: { cmd: 'copilot', args: ['-p', PROMPT, '--allow-tool', 'write', '--allow-tool', 'shell'], stdin: false },
 };
@@ -87,7 +91,7 @@ test('pi: useStdin pipes the prompt on stdin (A3 RPC transport)', async () => {
 test('agy: --model is added from the model option', async () => {
   const rec = [];
   await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'Claude Opus 4.6' });
-  assert.deepEqual(rec[0].args, ['--print', '--model', 'Claude Opus 4.6']);
+  assert.deepEqual(rec[0].args, ['--print', PROMPT, '--model', 'Claude Opus 4.6']);
 });
 
 // ---- operating-stack §4c: FORCE the concrete model onto the command line ----
@@ -181,7 +185,7 @@ test('a declared forcesModel is PROVEN by the argv the adapter renders', async (
 test('agy: the default sentinel is not emitted as a literal --model default', async () => {
   const rec = [];
   await getAdapter('agy').dispatch({ worktree: '/wt', prompt: PROMPT, timeoutMs: 1, env: ENV, exec: stubExec(rec), model: 'default' });
-  assert.deepEqual(rec[0].args, ['--print'], 'agy must let its harness resolve the default, not name a model called "default"');
+  assert.deepEqual(rec[0].args, ['--print', PROMPT], 'agy must let its harness resolve the default, not name a model called "default"');
 });
 
 // The alias set is a claim about an EXTERNAL CLI, so it cannot be derived from

@@ -18,14 +18,29 @@ never rewarded for volume.
    not implemented), scope violation, correctness (edge cases, error
    swallowing, races), test weakening (deleted/skipped/vacuous tests,
    mocked reality), security (injection, secrets, unsafe input).
-3. **The minimum that satisfies the spec is the target.** Do not file
-   findings demanding more than the ticket asked for.
-4. **Severity honestly:** critical = data loss/security/wrong results;
-   high = acceptance criterion unmet or real bug; medium/low = everything
-   else. Only critical/high block.
+3. **The ticket contract is the baseline.** Do not demand gold-plating beyond the requirements, but report any security, integrity, or correctness flaw discovered.
+4. **Severity honestly:** critical = data loss/security/wrong results; high = acceptance criterion unmet or real bug; medium = robustness/drift/compatibility; low = minor hygiene. Report all findings truthfully according to active review policy.
 5. **Zero findings is a verdict, not a failure.** If the diff survives the
    charge sheet, say so plainly: `{"findings": [], "verdict": "ship"}`.
 6. Output exactly the JSON contract requested — no prose around it.
+
+## Multi-Lens Fan-Out via `invoke_subagent` (Antigravity Native)
+
+In Antigravity, fan out the 5 prosecutor lenses concurrently using a single `invoke_subagent` call:
+
+```json
+{
+  "Subagents": [
+    { "TypeName": "prosecutor-contract", "Role": "Contract Prosecutor", "Prompt": "Prosecute interface contracts and boundary definitions against the ticket.", "Model": "inherit" },
+    { "TypeName": "prosecutor-correctness", "Role": "Correctness Prosecutor", "Prompt": "Prosecute algorithmic logic, edge cases, error swallowing, and concurrency.", "Model": "inherit" },
+    { "TypeName": "prosecutor-diff", "Role": "Diff Prosecutor", "Prompt": "Prosecute diff against stated acceptance criteria and declared scope.", "Model": "inherit" },
+    { "TypeName": "prosecutor-security", "Role": "Security Prosecutor", "Prompt": "Prosecute injection, path traversal, untrusted execution, and secret exposures.", "Model": "inherit" },
+    { "TypeName": "prosecutor-tests", "Role": "Test Quality Prosecutor", "Prompt": "Audit tests for hollow assertions, skipped tests, or weakened rails.", "Model": "inherit" }
+  ]
+}
+```
+
+Each subagent returns structured findings. Dispatch surviving critical/high findings to `prosecutor-verifier` before emitting the final ship verdict.
 
 ## Bank every surviving finding before the verdict (the P5 → P7 bridge)
 

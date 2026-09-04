@@ -256,6 +256,67 @@ export function signalNamespace(a, b, repoFiles) {
   return 0;
 }
 
+// ─── Signal 5: Semantic Graph Coupling ───────────────────────────────────────
+
+/**
+ * Returns graph coupling signal in [0, 0.7].
+ * Detects semantic cross-ticket dependencies via pre-computed symbol/call graph
+ * (e.g. Spanner Graph, mcp__spannercg, or graph coupling export).
+ */
+export function signalGraphCoupling(a, b, graphCouplingData, repoFiles) {
+  if (!graphCouplingData) return 0;
+  const aScope = a.scope ?? [];
+  const bScope = b.scope ?? [];
+  const aFiles = repoFiles.filter((f) => aScope.some((g) => globMatch(g, f)));
+  const bFiles = repoFiles.filter((f) => bScope.some((g) => globMatch(g, f)));
+
+  // 1. Direct fileCoupling map: { "fileA|fileB": score }
+  if (graphCouplingData.fileCoupling && typeof graphCouplingData.fileCoupling === 'object') {
+    let maxCoupling = 0;
+    for (const fa of aFiles) {
+      for (const fb of bFiles) {
+        if (fa === fb) continue;
+        const s1 = graphCouplingData.fileCoupling[`${fa}|${fb}`] ?? graphCouplingData.fileCoupling[pairKey(fa, fb)];
+        const s2 = graphCouplingData.fileCoupling[`${fb}|${fa}`];
+        const val = Math.max(s1 ?? 0, s2 ?? 0);
+        if (val > maxCoupling) maxCoupling = val;
+      }
+    }
+    if (maxCoupling > 0) return Math.min(0.7, maxCoupling > 1 ? 0.7 : maxCoupling * 0.7);
+  }
+
+  // 2. Edges array: [{ from, to, weight? }] or [{ source, target, weight? }]
+  const edges = Array.isArray(graphCouplingData.edges)
+    ? graphCouplingData.edges
+    : Array.isArray(graphCouplingData.links)
+    ? graphCouplingData.links
+    : Array.isArray(graphCouplingData)
+    ? graphCouplingData
+    : null;
+
+  if (edges) {
+    let maxCoupling = 0;
+    for (const edge of edges) {
+      const src = edge.from ?? edge.source ?? edge.callerFile ?? edge.fromFile;
+      const dst = edge.to ?? edge.target ?? edge.calleeFile ?? edge.toFile;
+      if (!src || !dst) continue;
+      const aMatchesSrc = aFiles.some((f) => f === src || f.endsWith('/' + src) || src.endsWith('/' + f));
+      const bMatchesDst = bFiles.some((f) => f === dst || f.endsWith('/' + dst) || dst.endsWith('/' + f));
+      const bMatchesSrc = bFiles.some((f) => f === src || f.endsWith('/' + src) || src.endsWith('/' + f));
+      const aMatchesDst = aFiles.some((f) => f === dst || f.endsWith('/' + dst) || dst.endsWith('/' + f));
+
+      if ((aMatchesSrc && bMatchesDst) || (bMatchesSrc && aMatchesDst)) {
+        const weight = typeof edge.weight === 'number' ? Math.min(1.0, edge.weight) : 1.0;
+        const score = weight * 0.7;
+        if (score > maxCoupling) maxCoupling = score;
+      }
+    }
+    if (maxCoupling > 0) return maxCoupling;
+  }
+
+  return 0;
+}
+
 // ─── Combined score ───────────────────────────────────────────────────────────
 
 /**
@@ -263,18 +324,20 @@ export function signalNamespace(a, b, repoFiles) {
  * Returns { score, signal, hardVeto }.
  */
 export function pairScore(a, b, opts = {}) {
-  const { repoFiles = [], root = process.cwd(), coChangeData = null } = opts;
+  const { repoFiles = [], root = process.cwd(), coChangeData = null, graphCouplingData = null } = opts;
 
   const s1 = signalScopeOverlap(a, b);
   if (s1 >= 1.0) return { score: 1.0, signal: 'scope-overlap', hardVeto: true };
 
   const s4 = signalNamespace(a, b, repoFiles);
+  const s5 = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
   const s2 = signalImportRadius(a, b, repoFiles, root);
   const s3 = signalCoChange(a, b, coChangeData, repoFiles);
 
-  const score = Math.max(s2, s3, s4);
+  const score = Math.max(s2, s3, s4, s5);
   let signal = 'none';
   if (score === s4 && s4 > 0) signal = 'namespace-collision';
+  else if (score === s5 && s5 > 0) signal = 'graph-coupling';
   else if (score === s2 && s2 > 0) signal = 'import-radius';
   else if (score === s3 && s3 > 0) signal = 'co-change';
 

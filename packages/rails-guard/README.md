@@ -102,6 +102,7 @@ rails-guard: 2 violation(s) found
   "railGlobError": null,
   "railsDiffEmpty": true,
   "suppressionsClean": false,
+  "sanctionedAdditions": [],
   "passed": false,
   "violations": [
     {
@@ -127,11 +128,19 @@ Appended to `.adlc/manifest.jsonl`:
   "base": "HEAD",
   "railsDiffEmpty": true,
   "suppressionsClean": true,
+  "sanctionedAdditions": ["test/frozen/new.test.mjs"],
   "railFiles": {
     "test/auth.test.ts": "abc123...",
     "schema/types.ts": "def456..."
   }
 }
+```
+
+`sanctionedAdditions` (`--json` and `--record`) names every rail-matching path that was
+exempted via the CI-plumbing `--sanctioned-add` flag for this run — empty when none were used.
+`railsDiffEmpty`'s own meaning is unchanged: it is still `true` whenever there are zero
+rail-edit violations, sanctioned or `#228` version-only exemptions included. A path in
+`sanctionedAdditions` was a pure ADDITION, never an edit — the exemption is never silent.
 ```
 
 `railFiles` contains the SHA-256 of every repo file that matches a rail glob at

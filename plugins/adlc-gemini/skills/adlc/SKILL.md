@@ -11,10 +11,11 @@ explicit, machine-checkable **gates**. Each gate is a CLI invoked through the
 umbrella dispatcher: `adlc <tool> [args]`. Every tool exits `0` = gate passes,
 `1` = operational error, `2` = gate fails. Identify the phase, run the gate.
 
-**Claude is the model.** Every LLM-backed gate supports `--prompt-only`: it
-prints the exact prompt and exits without calling any provider. Inside Claude
-Code you do not need API keys — run the tool with `--prompt-only`, answer the
-printed prompt yourself, and apply the judgment. Prefer this over wiring keys.
+**You provide the judgment.** Every LLM-backed gate supports `--prompt-only`: it
+prints the exact prompt and exits without calling any provider. Inside an
+Antigravity (`agy`) session you do not need external API keys — run the tool
+with `--prompt-only`, evaluate the printed prompt yourself, and apply the
+judgment. Prefer this over wiring keys.
 
 Prerequisite: the toolkit must be installed (`adlc --version` works). If not,
 the user runs `npm i -g @adlc/cli`. Run `/adlc-init` once per repo to create the
@@ -99,7 +100,7 @@ recorded before the ticket's own spec-lint/premortem evidence. The tools:
 
 ### P2 — Decompose (an agent can execute without guessing)
 - `adlc coldstart TICKET-ID --prompt-only` (or `--all`) — gate ticket
-  executability. LLM-backed: in Claude, use `--prompt-only` and answer the
+  executability. LLM-backed: in Antigravity, use `--prompt-only` and answer the
   printed audit yourself (the bare form needs an API key and exits 1 without one).
 - `adlc model-router [--floor N]` — assign tickets to frontier/direct/ladder
   model strategies. The cost dial (D1).

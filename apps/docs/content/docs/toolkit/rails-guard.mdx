@@ -32,7 +32,7 @@ adlc rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] [--rails <glo
 | `--ticket <id>` | Load rail globs and `allow-suppression` declarations from this ticket. |
 | `--tickets <path>` | Path to the tickets file (default `.adlc/tickets.json`). |
 | `--rails <glob>` | Frozen-path glob, repeatable. Overrides `ticket.rails` when supplied. |
-| `--record` | On a clean pass, append a `rails-check` proof (with SHA-256 of every rail-matching file) to `.adlc/manifest.jsonl`. |
+| `--record` | On a clean pass, append a `rails-check` proof (with SHA-256 of every rail-matching file) to `.adlc/manifest.jsonl`. A `sanctionedAdditions` array in this entry (and in `--json` output) names any rail path exempted via the CI-plumbing `--sanctioned-add` flag for this run — empty when none were used, never silent. |
 | `--json` | Emit a machine-readable result for orchestrators. |
 | `--help` | Print help and exit 0. |
 

@@ -12,11 +12,12 @@ import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { ticketHash, loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
 // rail set cannot be quietly edited away. Mirrors adlc-opencode/rails-checker.mjs.
-export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**'];
+export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**', '.adlc/session-ledger.jsonl', '.adlc/session-ledger.jsonl*', '.adlc/.session-secret', '.adlc/.session-secret*', '.env.local', '.env.local*'];
 
 // Cursor's structured file-mutation tools (normalized to lowercase, non-alpha
 // stripped). Cursor exposes Write/Edit/MultiEdit/search_replace/delete_file-style
@@ -25,7 +26,7 @@ export const TRUST_ROOT_RAILS = ['.adlc/tickets.json', '.adlc/tickets/.store.jso
 // classify as mutating even though they also contain the read word "search".
 // Shell writes are intentionally NOT gated in-session (Turing-complete shell);
 // they fall to the CI diff gate.
-export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append'];
+export const MUTATING_TOOL_HINTS = ['write', 'edit', 'replace', 'patch', 'create', 'delete', 'remove', 'rename', 'move', 'apply', 'insert', 'append', 'modify'];
 
 // The Cursor preToolUse hook is wired with a catch-all matcher (".*") so EVERY
 // tool call reaches the guard and the classifier is the single decision point —
@@ -89,16 +90,78 @@ const SHELL_TOOL_NAMES = new Set([
   'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
   'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
+  'customshell',
 ]);
 
+export function hasCommandLineArgs(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return false;
+  for (const [key, val] of Object.entries(args)) {
+    if (/(command|cmd|exec|shell|terminal|script|code|eval|run)/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) return true;
+      if (Array.isArray(val) && val.length > 0) return true;
+    }
+    if (val && typeof val === 'object' && hasCommandLineArgs(val, depth + 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasCodeExecutionArgs(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return false;
+  for (const [key, val] of Object.entries(args)) {
+    if (/^(code|script|eval|expression|program|snippet|inline|payload)$/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) return true;
+      if (Array.isArray(val) && val.length > 0) return true;
+    }
+    if (val && typeof val === 'object' && hasCodeExecutionArgs(val, depth + 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function extractCommandString(args, depth = 0) {
+  if (!args || typeof args !== 'object' || depth > 5) return '';
+  for (const [key, val] of Object.entries(args)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
+    if (/^(command|cmd|commandline|command_line|exec|shell|terminal|script|eval|run|query|action|operation|program|payload)$/i.test(key)) {
+      if (typeof val === 'string' && val.trim().length > 0) {
+        return val.trim();
+      }
+      if (Array.isArray(val) && val.length > 0) {
+        return val.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ').trim();
+      }
+    }
+  }
+  for (const [key, val] of Object.entries(args)) {
+    if (/content|body|diff|patch|replacement|summary|description|message/i.test(key)) {
+      continue;
+    }
+    if (val && typeof val === 'object') {
+      const nested = extractCommandString(val, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
 /**
- * True ONLY for a recognized shell/terminal execution tool (exact whole-name match
- * after normalization). Used by the no-path exemption, which must NOT be fooled by a
- * structured mutator whose name merely contains a shell word. Mutating classification
- * also wins first in the caller, so `terminal_edit` is denied regardless.
+ * True for a recognized shell/terminal execution tool (exact whole-name match
+ * after normalization). Tools bearing arbitrary code/scripts or unclassified
+ * executors are NOT classified as shells and must fail closed as opaque mutators.
  */
-export function isShellTool(name) {
-  return SHELL_TOOL_NAMES.has(normalizeToolName(name));
+export function isShellTool(name, args = null) {
+  const norm = normalizeToolName(name);
+  if (!SHELL_TOOL_NAMES.has(norm)) return false;
+  if (args && typeof args === 'object') {
+    const hasCmd = hasCommandLineArgs(args);
+    const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
+    if (hasTarget && !hasCmd) return false;
+  }
+  return true;
 }
 
 /**
@@ -111,11 +174,18 @@ export function isShellTool(name) {
  *  3. everything else is 'other', which checkRail CHECKS (treats as a mutation),
  *     so an unrecognized tool carrying a rail path is denied, not waved through.
  */
-export function classifyTool(name) {
+export function classifyTool(name, args = null) {
   const n = normalizeToolName(name);
   if (!n) return 'other';
   if (MUTATING_TOOL_HINTS.some((h) => n.includes(h))) return 'mutating';
-  if (PURE_READS.has(n)) return 'readonly';
+  if (PURE_READS.has(n)) {
+    if (args && typeof args === 'object') {
+      const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
+      const hasCmd = hasCommandLineArgs(args);
+      if (hasTarget || hasCmd) return 'other';
+    }
+    return 'readonly';
+  }
   return 'other';
 }
 
@@ -170,7 +240,7 @@ export function resolveActiveTicketId(root, env) {
   // now also covers an unparseable pointer AND an object pointer whose id key is
   // unrecognized — the latter used to read as "no active ticket" and ALLOW.
   if (!resolved.ok) return { id: null, conflict: true, code: resolved.code, message: resolved.message };
-  return { id: resolved.value?.id ?? null, conflict: false };
+  return { id: resolved.value?.id ?? null, conflict: false, ticketHash: resolved.value?.ticketHash ?? null };
 }
 
 /**
@@ -203,21 +273,30 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (!active.id) {
     return { state: 'inactive', reason: 'no active ticket resolved' };
   }
-  // A corrupt/invalid tickets.json must FAIL CLOSED under active enforcement. core
-  // surfaces corruption three ways: it throws on some malformed schemas, returns an
-  // `errors` array on others, and returns an empty list when `tickets` is absent.
-  let tickets, errors;
+  let snapshot;
   try {
-    ({ tickets, errors } = loadTickets(ticketsPath));
+    snapshot = loadTicketStoreReadOnly({ root, env });
   } catch (err) {
-    return { state: 'deny', reason: `tickets.json failed to load (${err.message}) — failing closed` };
+    if (/validation failed/i.test(err.message)) {
+      return { state: 'deny', reason: `tickets.json failed to validate (${err.message}) — failing closed` };
+    }
+    return { state: 'deny', reason: `ticket store failed to load (${err.message}) — failing closed` };
   }
-  if (errors && errors.length) {
-    return { state: 'deny', reason: `tickets.json failed to validate (${errors.length} error(s)) — failing closed` };
-  }
-  const ticket = tickets.find((t) => t.id === active.id);
+  const ticket = snapshot?.get(active.id);
   if (!ticket) {
-    return { state: 'deny', reason: `active ticket ${active.id} not found in tickets.json — failing closed` };
+    return { state: 'deny', reason: `active ticket ${active.id} not found in ticket store — failing closed` };
+  }
+  if (active.ticketHash) {
+    const storeHash = snapshot.ticketHashes?.[active.id] ?? snapshot.ticketHashes?.get?.(active.id);
+    let computed;
+    try {
+      computed = storeHash ?? ticketHash(ticket);
+    } catch (err) {
+      return { state: 'deny', reason: `failed to compute ticket hash for ${active.id} (${err.message}) — failing closed` };
+    }
+    if (computed !== active.ticketHash) {
+      return { state: 'deny', reason: `active ticket ${active.id} hash mismatch (${computed} !== ${active.ticketHash}) — failing closed` };
+    }
   }
   const declaredRails = ticket.rails ?? [];
   // core validates rails is an array but NOT its element types; a non-string entry
@@ -225,7 +304,30 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (declaredRails.some((rail) => typeof rail !== 'string' || rail.length === 0)) {
     return { state: 'deny', reason: `active ticket ${active.id} has a malformed rail entry — failing closed` };
   }
-  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS], activeId: active.id };
+  const overridePath = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const customRoots = [];
+  if (overridePath && typeof overridePath === 'string') {
+    const raw = overridePath.trim();
+    if (raw) {
+      customRoots.push(raw);
+      customRoots.push(`${raw}/**`);
+      customRoots.push(`${raw}/*`);
+      if (isAbsolute(raw)) {
+        try {
+          const rel = relative(root, raw);
+          if (!rel.startsWith('..')) {
+            customRoots.push(rel);
+            customRoots.push(`${rel}/**`);
+          }
+        } catch {}
+      } else {
+        customRoots.push(join(root, raw));
+        customRoots.push(`${join(root, raw)}/**`);
+      }
+    }
+  }
+
+  return { state: 'active', rails: [...declaredRails, ...TRUST_ROOT_RAILS, ...customRoots], activeId: active.id };
 }
 
 // Per-root cache for the REAL filesystem probe only. Injected fns (tests) always
@@ -290,7 +392,11 @@ function flipCase(s) {
 
 /** Find the declared rail (original spelling) that exactly or glob-matches `path`. */
 function findRailHit(path, rails) {
-  return rails.find((rail) => rail === path || globMatch(rail, path));
+  const normPath = typeof path === 'string' ? path.replace(/\\/g, '/') : '';
+  return rails.find((rail) => {
+    const normRail = typeof rail === 'string' ? rail.replace(/\\/g, '/') : '';
+    return normRail === normPath || globMatch(normRail, normPath);
+  });
 }
 
 /**
@@ -298,8 +404,8 @@ function findRailHit(path, rails) {
  * denied. Pure and fail-safe: returns { decision: 'allow' | 'deny', reason }.
  * Preconditions are delegated to railPreconditions (single source of truth).
  */
-export function checkRail({ filePath, tool, root = process.cwd(), env = process.env, isCaseInsensitiveFsFn = isCaseInsensitiveFs }) {
-  if (classifyTool(tool) === 'readonly') {
+export function checkRail({ filePath, tool, toolArgs = null, root = process.cwd(), env = process.env, isCaseInsensitiveFsFn = isCaseInsensitiveFs }) {
+  if (classifyTool(tool, toolArgs) === 'readonly') {
     return { decision: 'allow', reason: `tool "${tool}" is read-only` };
   }
   const pre = railPreconditions({ root, env });
@@ -308,7 +414,12 @@ export function checkRail({ filePath, tool, root = process.cwd(), env = process.
 
   // Enforcing: match BOTH the lexical path and the symlink-resolved real path (so a
   // symlink alias whose target is a frozen rail can't slip past a name check).
-  const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
+  const candidates = new Set([
+    canonicalizePath(filePath, root),
+    resolveRailPath(filePath, root),
+    (isAbsolute(filePath) ? filePath : join(root, filePath)).replace(/\\/g, '/'),
+    realpathOr(filePath).replace(/\\/g, '/')
+  ]);
   const insensitive = isCaseInsensitiveFsFn(root);
   for (const path of candidates) {
     let hit = findRailHit(path, pre.rails);

@@ -35,3 +35,20 @@ test('P5 prosecutor roster: all 5 lenses, main prosecutor, and verifier exist an
     assert.match(content, /description:/m, `Description missing in ${file}`);
   }
 });
+
+test('adlc-prosecute command exists and documents multi-lens fan-out', () => {
+  const cmdPath = join(here, '..', 'commands', 'adlc-prosecute.md');
+  assert.ok(existsSync(cmdPath), 'commands/adlc-prosecute.md missing');
+  const content = readFileSync(cmdPath, 'utf8');
+  assert.match(content, /invoke_subagent/);
+  assert.match(content, /prosecutor-contract/);
+  assert.match(content, /prosecutor-verifier/);
+});
+
+test('adlc-prosecutor skill documents invoke_subagent fan-out payload', () => {
+  const skillPath = join(here, '..', 'skills', 'adlc-prosecutor', 'SKILL.md');
+  assert.ok(existsSync(skillPath), 'skills/adlc-prosecutor/SKILL.md missing');
+  const content = readFileSync(skillPath, 'utf8');
+  assert.match(content, /invoke_subagent/);
+  assert.match(content, /TypeName": "prosecutor-contract/);
+});

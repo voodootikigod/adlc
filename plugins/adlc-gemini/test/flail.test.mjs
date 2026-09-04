@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+process.env.ADLC_TEST_MODE = '1';
 
 import {
   normalizeError,
@@ -25,6 +26,26 @@ test('normalizeError strips line numbers, hex, quotes, absolute paths, and digit
 
   assert.equal(norm1, norm2);
   assert.equal(norm1, 'error: failed to build target at line ()');
+});
+
+test('normalizeError handles adversarial long inputs without quadratic backtracking', () => {
+  const adversarial = 'error: ' + 'a.'.repeat(50000);
+  const start = Date.now();
+  const res = normalizeError(adversarial);
+  const duration = Date.now() - start;
+  assert.ok(duration < 200, `Expected duration < 200ms, got ${duration}ms`);
+  assert.ok(typeof res === 'string');
+});
+
+test('normalizeError truncates at exactly 2048 characters, not 2049', () => {
+  // A line of length 2049 whose 2049th character is uppercase 'Z' (survives
+  // lowercasing but no other rule touches it). Truncated at 2048 it never
+  // reaches the marker; off by one and it does — so output length pins the
+  // exact boundary the ReDoS guard depends on.
+  const overLength = 'a'.repeat(2048) + 'Z';
+  const result = normalizeError(overLength);
+  assert.equal(result.length, 2048);
+  assert.equal(result, 'a'.repeat(2048));
 });
 
 test('detectRepeatedErrors detects error signatures repeating >= maxRepeat times', () => {
@@ -80,6 +101,14 @@ test('detectEditChurn identifies files edited >= threshold times', () => {
   assert.equal(churning[0].count, 3);
 });
 
+test('detectEditChurn identifies rotating filenames matching numbered patterns', () => {
+  const logs = ['Editing scratch1.js', 'Editing scratch2.js', 'Editing scratch3.js'];
+  const churning = detectEditChurn(logs, 3);
+  assert.equal(churning.length, 1);
+  assert.equal(churning[0].path, 'pattern:scratch#.js');
+  assert.equal(churning[0].count, 3);
+});
+
 test('parseTranscriptLines extracts content and error text from JSONL transcript files', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'flail-test-'));
   try {
@@ -94,6 +123,21 @@ test('parseTranscriptLines extracts content and error text from JSONL transcript
     const lines = parseTranscriptLines(transcriptPath);
     assert.ok(lines.includes('Error: Cannot find module lodash line 1'));
     assert.ok(lines.includes('Error: Cannot find module express line 2'));
+
+    // resolveTranscriptPath handles existing string paths
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath } }), transcriptPath);
+
+    // resolveTranscriptPath rejects non-string and non-existent paths
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: { invalid: true } } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: 12345 } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: true } }), null);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath: join(tmpDir, 'non-existent.jsonl') } }), null);
+
+    // parseTranscriptLines handles scalar null, boolean, and number JSONL records without throwing
+    const scalarPath = join(tmpDir, 'scalar.jsonl');
+    writeFileSync(scalarPath, ['null', 'true', '42', JSON.stringify({ content: 'Real log line' })].join('\n'));
+    const scalarLines = parseTranscriptLines(scalarPath);
+    assert.ok(scalarLines.includes('Real log line'));
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -154,6 +198,7 @@ test('runFromStdin denies mutating tools when session is flailing under enforcem
 
     const env = {
       ADLC_P4_ENFORCEMENT: '1',
+      ADLC_FLAIL_ENFORCEMENT: '1',
       ANTIGRAVITY_APP_DATA_DIR: root,
     };
 
