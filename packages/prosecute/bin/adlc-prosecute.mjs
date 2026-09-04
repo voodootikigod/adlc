@@ -25,11 +25,32 @@ function readTicketArray(path) {
     if (err.code === 'ENOENT') return [];
     throw new Error(`ticket table ${path} exists but cannot be read for tiering: ${err.message}`);
   }
+  let parsed;
   try {
-    return JSON.parse(raw)?.tickets ?? [];
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new Error(`ticket table ${path} is not valid JSON — tiering cannot proceed: ${err.message}`);
   }
+  // A top-level value that is not a plain object (a bare array, string, number,
+  // or null) can never carry a `tickets` property meaningfully; treat it as
+  // malformed rather than reading `undefined.tickets` through optional
+  // chaining, which — same bug as below — would read as "absent" instead.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`ticket table ${path} does not contain a JSON object — tiering cannot proceed`);
+  }
+  // Absent vs present-but-malformed must stay distinguishable. `parsed.tickets
+  // ?? []` collapses BOTH "no tickets key" and "tickets: null" to the same
+  // empty array, so a corrupted `{"tickets": null}` table silently passed as
+  // "nothing to check" before this `in` check existed. A present `tickets`
+  // field that is not itself an array (null, an object, a string, etc.) is the
+  // same "exists and is malformed" case the try/catch above guards — silently
+  // treating it as empty would drop the rails dimension exactly as an
+  // unparseable file would.
+  if (!('tickets' in parsed)) return [];
+  if (!Array.isArray(parsed.tickets)) {
+    throw new Error(`ticket table ${path} has a non-array \`tickets\` field — tiering cannot proceed`);
+  }
+  return parsed.tickets;
 }
 
 // resolve(dir) is inside (or equal to) the repo root.
@@ -355,18 +376,71 @@ function tierChangedFiles(base, root) {
   return [...new Set([...tracked, ...untracked, ...renamedSources(mergeBase, root)])];
 }
 
+// Merge ticket tables from every source by id (#905 follow-up). A branch cut
+// BEFORE a ticket completes on the base still carries its own stale, not-yet-
+// completed copy; classifyTrustRootTier's per-object filter only exempts a
+// ticket when the OBJECT IT SEES says completed: true, so an ungrouped union
+// leaves that stale copy contributing its rails forever, even after the base
+// tip completes the same ticket.
+//
+// `sources` is ordered base-tip first: for a shared id, the FIRST occurrence's
+// scalar fields (completed included) win — matching rail-freeze's own trust
+// anchor, "completed is read from the BASE TIP, never HEAD" — so a base-active
+// ticket still overrides a HEAD-only completion claim (the security property
+// #905 already established: a HEAD-only edit cannot self-exempt a ticket the
+// base still freezes). Every source's `rails` are UNIONED onto the surviving
+// record, so a rail widened at HEAD before the base saw it is not lost — this
+// preserves the pre-existing "adding a source can only widen, never narrow"
+// contract for the rails dimension specifically.
+function mergeTicketsById(sources) {
+  const byId = new Map();
+  // Entries with no usable string id cannot be deduplicated by id, but their
+  // rails must still reach classifyTrustRootTier exactly as an un-merged union
+  // always did (it only ever used `ticket?.rails`, never `ticket.id`, to decide
+  // whether a rail applies) — dropping them here would be a NEW narrowing this
+  // merge step must not introduce, not a defensive skip.
+  const unkeyed = [];
+  for (const list of sources) {
+    for (const ticket of Array.isArray(list) ? list : []) {
+      // Only a genuinely non-object entry (null, a primitive) has nothing to
+      // extract: classifyTrustRootTier's own `ticket?.rails` already reads
+      // such a value as "no rails", so skipping it here changes nothing.
+      if (!ticket || typeof ticket !== 'object') continue;
+      const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+      // An empty or whitespace-only id is exactly as unusable as a missing one
+      // — without this, two DIFFERENT malformed entries sharing `id: ''` would
+      // merge into a single record under the empty-string key, letting one's
+      // `completed: true` suppress the other's otherwise-active rails, a
+      // narrowing this merge step must not introduce.
+      if (typeof ticket.id !== 'string' || ticket.id.trim() === '') {
+        unkeyed.push({ ...ticket, rails: [...rails] });
+        continue;
+      }
+      const existing = byId.get(ticket.id);
+      if (!existing) {
+        byId.set(ticket.id, { ...ticket, rails: [...rails] });
+        continue;
+      }
+      const merged = new Set(existing.rails);
+      for (const r of rails) merged.add(r);
+      existing.rails = [...merged];
+    }
+  }
+  return [...unkeyed, ...byId.values()];
+}
+
 function loadTicketsForTier(dir, root, base) {
   // UNION, never replace: rails from the base and from the worktree both apply.
   // The classifier ORs deny-paths across tickets, so adding a source can only
   // widen the trust-root surface (fail-safe), never narrow it. Read at the base
   // TIP deliberately (not the merge-base): a ticket added on the base after the
   // branch point still contributes its rails — widening only, so fail-safe.
-  const tickets = [...readBaseTickets(root, base), ...readCanonicalTickets(root)];
+  const sources = [readBaseTickets(root, base), readCanonicalTickets(root)];
   const resolvedDir = resolve(dir);
   if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
-    tickets.push(...readTicketArray(join(resolvedDir, 'tickets.json')));
+    sources.push(readTicketArray(join(resolvedDir, 'tickets.json')));
   }
-  return tickets;
+  return mergeTicketsById(sources);
 }
 
 const { values, positionals } = parseArgs({
