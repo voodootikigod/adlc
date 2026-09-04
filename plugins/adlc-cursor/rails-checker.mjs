@@ -48,8 +48,8 @@ export { PRETOOL_MATCHER } from './constants.mjs';
 // "search" — see ADR 0006 / the P5 prosecution that caught it).
 export const PURE_READS = new Set([
   'read', 'readfile', 'readlints', 'grep', 'grepsearch', 'glob', 'globsearch',
-  'codebasesearch', 'semanticsearch', 'filesearch', 'list', 'listdir', 'ls',
-  'cat', 'view', 'viewfile', 'webfetch', 'websearch', 'fetch', 'fetchrules', 'search',
+  'codebasesearch', 'semanticsearch', 'filesearch', 'globfilesearch', 'list', 'listdir', 'ls',
+  'cat', 'view', 'viewfile', 'webfetch', 'websearch', 'fetch', 'fetchrules', 'fetchpullrequest', 'search',
 ]);
 
 /** Normalize a raw Cursor tool name to a lowercase alpha token for classification. */
@@ -88,19 +88,33 @@ export function isShellTool(name) {
   return SHELL_TOOL_NAMES.has(normalizeToolName(name));
 }
 
+// Cursor first-party structured tools VERIFIED to never carry a file-mutation
+// argument, but whose name collides with a MUTATING_TOOL_HINTS substring
+// ('todo_write' -> contains "write"; 'create_diagram' -> contains "create") and so
+// would otherwise misclassify as 'mutating' and be denied on every call (#816).
+// EXACT whole normalized names only — same rationale as SHELL_TOOL_NAMES above: a
+// substring/heuristic exemption here would risk waving through a genuine future
+// mutator whose name happens to contain "todo" or "diagram". Checked in
+// classifyTool() BEFORE the substring hints, the same ordering discipline
+// isShellTool() already uses relative to the opaque-mutator branch in decide().
+const NON_MUTATING_STRUCTURED_TOOL_NAMES = new Set(['todowrite', 'creatediagram']);
+
 /**
  * Classify a Cursor tool name: 'mutating' | 'readonly' | 'other'.
  *
  * Order is load-bearing and FAIL-CLOSED:
- *  1. mutating hints (substring) win first — so "search_replace" (contains
+ *  1. verified non-mutating structured tools (exact whole-name) win first — so
+ *     "todo_write"/"create_diagram" are never caught by the substring hints below;
+ *  2. mutating hints (substring) win next — so "search_replace" (contains
  *     "replace") is mutating despite also containing "search";
- *  2. then known pure reads (whole token) are allowed;
- *  3. everything else is 'other', which checkRail CHECKS (treats as a mutation),
+ *  3. then known pure reads (whole token) are allowed;
+ *  4. everything else is 'other', which checkRail CHECKS (treats as a mutation),
  *     so an unrecognized tool carrying a rail path is denied, not waved through.
  */
 export function classifyTool(name) {
   const n = normalizeToolName(name);
   if (!n) return 'other';
+  if (NON_MUTATING_STRUCTURED_TOOL_NAMES.has(n)) return 'readonly';
   if (MUTATING_TOOL_HINTS.some((h) => n.includes(h))) return 'mutating';
   if (PURE_READS.has(n)) return 'readonly';
   return 'other';
