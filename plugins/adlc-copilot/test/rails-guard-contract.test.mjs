@@ -161,6 +161,24 @@ test('adlc_prosecute (this plugin\'s own gate tool) → allow under active rails
   });
 });
 
+// A bare relative path with no extension and no directory separator (e.g. a
+// railed `Makefile`) satisfies looksBarePathLike() but NOT looksPathLike()
+// (which additionally requires a slash or a dot-extension). This distinguishes
+// the `||` in collectPaths()'s `input` branch from an `&&`: only the `||`
+// still collects — and therefore still denies — a bare rail filename.
+test('adlc_prosecute input targeting a bare (no-extension, no-slash) rail path → deny', () => {
+  fixture((root) => {
+    const result = runCopilot(root, {
+      toolName: 'adlc_prosecute',
+      toolArgs: { input: 'Makefile', ticket: 'T1' },
+    });
+    assert.equal(result.status, 0);
+    const out = parseStdout(result);
+    assert.ok(out && out.reason, `expected a rail deny, got: ${result.stdout || '(empty=ALLOW)'}`);
+    assert.match(out.reason, /blocked rail edit for T1/);
+  }, { ticket: { id: 'T1', title: 'Active', scope: ['src/**'], rails: ['Makefile'], edges: [] } });
+});
+
 test('todo_write → allow under active rails, no path', () => {
   fixture((root) => {
     const result = runCopilot(root, { toolName: 'todo_write', toolArgs: { todos: ['a'] } });
