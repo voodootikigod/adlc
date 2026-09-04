@@ -49,8 +49,26 @@ hollow-test --test-cmd "node --test test/" [options]
 | Code | Meaning |
 |------|---------|
 | `0` | Gate passes — all mutants were killed (or no mutable lines in diff). |
-| `1` | Operational error — dirty working tree, not a git repo, bad arguments. |
+| `1` | Operational error — dirty working tree, not a git repo, bad arguments, or a **selected file received no mutation budget** (see below). |
 | `2` | Gate fails — one or more mutants survived (hollow coverage). |
+
+### `--max` too small for the diff: a starved file fails closed
+
+`--max` spreads the mutant budget round-robin across every selected file, and a small
+`--max` against a wide diff can leave one or more diff-derived files with **zero quota** —
+never mutated at all. That file's changed code is then unverified, so `hollow-test` refuses
+to report a pass: it exits `1` and names every starved file on stderr rather than silently
+passing on whatever other files did get budget. Raise `--max` to cover every selected file
+(one per file changed, at minimum), or narrow the diff:
+
+```bash
+$ hollow-test --test-cmd "node --test test/*.test.mjs" --base HEAD~1 --max 1
+error: 2 selected file(s) received no mutation budget and were NOT prosecuted: src/b.mjs, src/c.mjs — raise --max to cover them.
+```
+
+This does not apply to a file that received budget but has no mutable line at all (a
+comment-only or import-only change) — that case still only warns, since the file genuinely
+has nothing to mutate rather than having been skipped for lack of budget.
 
 ## Examples
 

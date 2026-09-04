@@ -27,6 +27,7 @@ import {
   recordFinding,
   extractJson,
 } from '@adlc/core';
+import { scrubHookSecrets } from '@adlc/context-handoff/lib/secret-scrub.mjs';
 
 /** Default bounds (spec 4.1: max 4 concurrent, 120s/lens, max 3 rounds). */
 export const DEFAULT_OPTIONS = Object.freeze({
@@ -53,14 +54,24 @@ export function resolvePiBin(repoRoot) {
  * timeout via the AbortSignal it passes, but the runner also self-guards so a
  * hung child is reaped even when called outside the loop.
  *
+ * The child's environment is an explicitly scrubbed COPY of process.env — never
+ * the live env object — so ADLC_MANIFEST_KEY/ADLC_ADMIN_KEY never reach a child
+ * whose prompt embeds attacker-influenced diff text (issue #843), and the
+ * parent process's own env is left untouched for every other consumer in this
+ * process.
+ *
  * @param {string} repoRoot
+ * @param {object} [opts]
+ * @param {typeof spawn} [opts.spawnFn] injectable spawn, default the real one
  * @returns {(prompt: string, ctl: { signal?: AbortSignal, timeout?: number }) => Promise<string>}
  */
-export function defaultRunLens(repoRoot) {
+export function defaultRunLens(repoRoot, { spawnFn = spawn } = {}) {
   const piBin = resolvePiBin(repoRoot);
   return (prompt, { signal, timeout = DEFAULT_OPTIONS.timeout } = {}) =>
     new Promise((resolve, reject) => {
-      const child = spawn(piBin, ['-p', prompt, '--no-session'], { cwd: repoRoot });
+      const env = { ...process.env };
+      scrubHookSecrets(env);
+      const child = spawnFn(piBin, ['-p', prompt, '--no-session'], { cwd: repoRoot, env });
       let out = '';
       let err = '';
       const done = (fn, arg) => {

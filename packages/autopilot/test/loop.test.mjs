@@ -1,0 +1,277 @@
+// Dry-run honesty (AC 10) and "dry-run never needs a worktree" (AC 128) over
+// the REAL iterate(): phase A/B faked, selection + triage real, fake tools.
+
+import { test } from './helpers/node-test.mjs';
+import * as cryptoForDigest from 'node:crypto';
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { iterate, statusCommand, selectCommand, triageCommand, restMsFor, runOnce } from '../lib/loop.mjs';
+import { runIssue } from '../lib/run.mjs';
+import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { FAKE, GIT } from './helpers/recover-fixture.mjs';
+
+/** A digest of every file under `root` (paths + bytes), skipping volatile git internals. */
+function treeDigest(root) {
+  // Every regular file (content) plus the repository's persistent git state: refs, packed-refs, HEAD, config,
+  // exclude and the object count — a dry run that wrote a ref or an object is not byte-identical.
+  const { createHash } = cryptoForDigest;
+  const h = createHash('sha256');
+  const walk = (dir) => {
+    for (const name of readdirSync(dir).sort()) {
+      const p = join(dir, name);
+      if (name === '.git' && dir !== root) continue;
+      if (p === join(root, '.git')) {
+        for (const f of ['config', join('info', 'exclude'), 'HEAD', 'packed-refs']) { const fp = join(p, f); if (existsSync(fp)) h.update(`${f}\n${readFileSync(fp, 'utf8')}\n`); }
+        const refsDir = join(p, 'refs');
+        if (existsSync(refsDir)) { const refs = []; const wr = (d) => { for (const n of readdirSync(d).sort()) { const q = join(d, n); if (statSync(q).isDirectory()) wr(q); else refs.push(`${q.slice(p.length)}=${readFileSync(q, 'utf8').trim()}`); } }; wr(refsDir); h.update(`refs\n${refs.join('\n')}\n`); }
+        const objDir = join(p, 'objects'); let objects = 0;
+        if (existsSync(objDir)) for (const n of readdirSync(objDir)) { const q = join(objDir, n); if (statSync(q).isDirectory()) objects += readdirSync(q).length; }
+        h.update(`objects=${objects}\n`);
+        continue;
+      }
+      const st = statSync(p);
+      if (st.isDirectory()) walk(p); else h.update(`${p.slice(root.length)}\n${readFileSync(p)}\n`);
+    }
+  };
+  walk(root);
+  return h.digest('hex');
+}
+
+const READ_ONLY_GIT = /^(for-each-ref|show|ls-tree|ls-remote|rev-parse|cat-file|config|status|diff|log)$/;
+
+async function dryRun({ baselineLocal }) {
+  const fx = await createSequenceFixture({ dryRun: true });
+  const before = treeDigest(fx.repoRoot);
+  const manifestBefore = readdirSync(join(fx.repoRoot, '.adlc', 'manifest.d')).map((f) => readFileSync(join(fx.repoRoot, '.adlc', 'manifest.d', f), 'utf8')).join('\0');
+  const phaseB = baselineLocal
+    // phase B reports ITS items only; the loop adds fleet-dry-run-needs-worktree itself
+    ? async () => ({ complete: false, incomplete: [], tokenShort: false, checks: { config: 'ok', parity: 'ok' } })
+    : async () => ({ complete: false, incomplete: ['baseline-not-local'], tokenShort: null, checks: { config: 'skipped', parity: 'skipped', ssh: 'skipped' } });
+  const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ preflight: { phaseA: async () => {}, resolveBaseline: async () => fx.baseOid, phaseB } }), pinnedIssue: fx.issue });
+  return { fx, it, before, manifestBefore };
+}
+
+export async function ac10_dryRunHonesty() {
+  for (const baselineLocal of [true, false]) {
+    const { fx, it, before, manifestBefore } = await dryRun({ baselineLocal });
+    try {
+      assert.equal(it.exitCode, 0, JSON.stringify(it.document));
+      assert.equal(it.outcome, 'dry-run');
+      assert.equal(it.document.complete, false, 'the plan is never complete');
+      assert.ok(it.document.incomplete.includes('fleet-dry-run-needs-worktree'), 'always lists fleet-dry-run-needs-worktree');
+      if (!baselineLocal) {
+        assert.ok(it.document.incomplete.includes('baseline-not-local'));
+        assert.ok(Object.values(it.document.preflightB.checks).every((v) => v === 'skipped'), 'every phase-B item is skipped without the objects');
+      }
+      assert.equal(it.document.selection.picked, fx.issue, 'the pinned issue is planned');
+      assert.ok(Array.isArray(it.document.fleetArgv) && it.document.fleetArgv.includes('--tickets'), 'the plan carries the fleet argv');
+      // Only read-only argv reached the recorder.
+      for (const r of fx.recorder) {
+        const exe = r.argv[0]; const a = r.argv.slice(1);
+        if (exe === GIT) {
+          const verb = a.find((x, i) => !x.startsWith('-') && !(i > 0 && (a[i - 1] === '-C' || a[i - 1] === '--git-dir')));
+          assert.match(verb, READ_ONLY_GIT, `read-only git only: ${a.join(' ')}`);
+          if (verb === 'config') assert.ok(a.includes('--get') && a.includes('--file'), 'the identity read is the --file --get form, never a write');
+          assert.ok(!['fetch', 'worktree', 'push'].includes(verb));
+        }
+        if (exe === FAKE.gh) {
+          const mutatingVerb = /^(create|edit|comment|close|merge|delete|reopen|transfer|pin|lock)$/.test(a[1] ?? '') || a.includes('--add-label') || a.includes('--remove-label');
+          const method = (() => { const i = a.findIndex((x) => x === '-X' || x === '--method'); return i === -1 ? 'GET' : String(a[i + 1] ?? '').toUpperCase(); })();
+          const mutatingApi = a[0] === 'api' && (method !== 'GET' || a.includes('--input') || a.some((x) => /^query=\s*mutation\b/.test(x)));
+          assert.ok(!mutatingVerb && !mutatingApi, `no gh mutation: ${a.join(' ')}`);
+        }
+        assert.ok(!a.includes('--write') && !a.includes('--record'), `no --write/--record flag: ${a.join(' ')}`);
+        assert.ok(exe !== FAKE.adlc || a[0] !== 'fleet', 'no fleet spawn');
+      }
+      assert.ok(!existsSync(fx.paths.lockDir), 'no lock was taken');
+      assert.equal(treeDigest(fx.repoRoot), before, 'the filesystem fixture is byte-identical before and after');
+      const manifestAfter = readdirSync(join(fx.repoRoot, '.adlc', 'manifest.d')).map((f) => readFileSync(join(fx.repoRoot, '.adlc', 'manifest.d', f), 'utf8')).join('\0');
+      assert.equal(manifestAfter, manifestBefore, 'no manifest line was appended');
+    } finally { fx.cleanup(); }
+  }
+}
+test('AC10: once --dry-run --issue N exits 0 with a plan that is complete:false and lists fleet-dry-run-needs-worktree (and baseline-not-local with every phase-B item skipped when the objects are absent); the recorder shows only the read-only argv set; the fixture is byte-identical afterwards; no manifest line appended', { timeout: 120_000 }, ac10_dryRunHonesty);
+
+export async function ac128_dryRunNeverNeedsAWorktree() {
+  for (const baselineLocal of [true, false]) {
+    const { fx, it } = await dryRun({ baselineLocal });
+    try {
+      assert.ok(!fx.recorder.some((r) => r.argv[0] === GIT && r.argv.includes('worktree')), 'no git worktree add');
+      assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet'), 'no fleet spawn');
+      assert.ok(it.document.incomplete.includes('fleet-dry-run-needs-worktree'));
+      const checks = it.document.preflightB.checks;
+      if (baselineLocal) assert.ok(Object.values(checks).some((v) => v === 'ok'), 'the read-only phase-B checks RUN when the objects are local');
+      else assert.ok(Object.values(checks).every((v) => v === 'skipped'), 'and are all skipped when they are not');
+      assert.ok(!existsSync(fx.paths.issueWorktree(fx.issue)));
+    } finally { fx.cleanup(); }
+  }
+}
+test('AC128: in dry-run the recorder shows no git worktree add and no fleet spawn; the plan lists fleet-dry-run-needs-worktree; the read-only phase-B checks run when the baseline objects are local and are all skipped when they are not', { timeout: 120_000 }, ac128_dryRunNeverNeedsAWorktree);
+
+export async function ac28_loweringIsApplied() {
+  // --max-rounds 3 against the committed 15 → the first fleet argv carries --max-strikes 3; a raise is refused.
+  const fx = await createSequenceFixture({ flags: { maxRounds: '3' } });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.outcome, 'done', JSON.stringify(it.document?.run ?? it.outcome));
+    const fleet = fx.recorder.find((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet');
+    assert.equal(fleet.argv[fleet.argv.indexOf('--max-strikes') + 1], '3', 'the lowered budget is the effective one');
+    assert.equal(fx.ctx.config.autopilot.maxRounds, 3);
+  } finally { fx.cleanup(); }
+  const fx2 = await createSequenceFixture({ flags: { maxRounds: '20' } });
+  try {
+    await assert.rejects(() => iterate({ ctx: fx2.ctx, deps: fx2.loopDeps(), pinnedIssue: fx2.issue }), /may be lowered by the CLI but not raised/);
+  } finally { fx2.cleanup(); }
+}
+test('AC28: the operator lowering flags are APPLIED to the committed config in phase B (--max-rounds 3 → --max-strikes 3); a raise is refused', { timeout: 120_000 }, ac28_loweringIsApplied);
+
+export async function ac21_resumableRunsAreResumed() {
+  // A `shaped` record with a cached ticket and no worktree (the quota refused before creation) is resumed BEFORE selection.
+  const fx = await createSequenceFixture();
+  try {
+    const { newRecord } = await import('../lib/records.mjs');
+    const { branchFor } = await import('../lib/input.mjs');
+    const n = fx.issue;
+    const rec = { ...newRecord({ issue: n, token: 'e'.repeat(64), baseOid: fx.baseOid, branch: branchFor(n), stagingBranch: null, stagingPath: null, finalPath: fx.paths.issueWorktree(n), issueRevision: { updatedAt: fx.state.issue.updatedAt }, ticketCache: fx.ticket }), state: 'shaped', creationPhase: null };
+    fx.ctx.records.save(rec);
+    const recover = await import('../lib/recover.mjs');                      // the REAL classifier (the fixture stubs it to no actions)
+    // The PR cap throttles NEW work only: with the cap already reached the in-flight run still resumes (agy r3 c4).
+    fx.ctx.config = { ...fx.ctx.config, autopilot: { ...fx.ctx.config.autopilot, maxOpenPrs: 0 } };
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ recover }), pinnedIssue: null });
+    assert.notEqual(it.outcome, 'sleep:pr-cap', 'a resumable run is not starved by the PR cap');
+    assert.deepEqual(it.document.resume, { action: 'resume-shaped', issue: n }, 'recovery classified the row and the loop consumed it');
+    assert.equal(it.outcome, 'resumed:done', JSON.stringify(it.document.run));
+    assert.equal(fx.ctx.records.load(n).state, 'done');
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.gh && String(r.argv[2] ?? '').includes('issues?state=open')), 'no new selection ran');
+  } finally { fx.cleanup(); }
+  // A `dispatched` record with a worktree resumes at the rounds (no second ticket write).
+  const fx2 = await createSequenceFixture();
+  try {
+    const n = fx2.issue;
+    const first = await runIssue({ ctx: fx2.ctx, deps: fx2.ctx.deps, issue: n, ticket: fx2.ticket, revision: { updatedAt: fx2.state.issue.updatedAt }, authorization: { ok: true } });
+    assert.equal(first.state, 'done');
+    fx2.ctx.records.update(n, { state: 'quota-paused', attestedHead: null });   // the run's OWN open PR stays exempt from revalidation
+    const before = fx2.recorder.filter((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'ticket' && r.argv[2] === 'create').length;
+    const { resumeRun } = await import('../lib/run.mjs');
+    const r = await resumeRun({ ctx: fx2.ctx, deps: fx2.ctx.deps, action: 'resume-dispatch', issue: n });
+    assert.ok(['done', 'ci-watch', 'ci-red', 'oid-mismatch', 'blocked'].includes(r.state), JSON.stringify(r));
+    assert.equal(fx2.recorder.filter((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'ticket' && x.argv[2] === 'create').length, before, 'no second ticket write on resume');
+  } finally { fx2.cleanup(); }
+}
+test('AC21: recovery\'s resume actions are consumed by the loop — a shaped run resumes before selection and a dispatched run resumes at its rounds without a second ticket write', { timeout: 240_000 }, ac21_resumableRunsAreResumed);
+
+export async function ac19_corruptAttemptLedgerFailsClosed() {
+  // An unreadable attempts ledger is treated as the shaping cap reached: the issue is excluded, never admitted.
+  const { writeFileSync } = await import('node:fs');
+  const fx = await createSequenceFixture();
+  try {
+    writeFileSync(fx.paths.attempts(fx.issue), '{ not json');
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.notEqual(it.outcome, 'done', `a corrupt ledger never admits the issue (${it.outcome})`);
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.adlc && r.argv[1] === 'fleet'), 'zero fleet dispatches');
+    assert.ok(fx.logs.some((l) => /attempts ledger unreadable/.test(l)), 'the refusal is logged with its cause');
+  } finally { fx.cleanup(); }
+}
+test('AC19: a CORRUPT attempts ledger fails closed — the issue is excluded as if the shaping cap were reached, with zero dispatches', { timeout: 120_000 }, ac19_corruptAttemptLedgerFailsClosed);
+
+export async function ac136_readOnlyCommandsReleaseSshMaterial() {
+  // status/select/triage run phase A on a dry-run context (temporary SSH material); it is released on every exit path.
+  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fx = await createSequenceFixture();
+  try {
+    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-')); writeFileSync(join(parent, 'material'), 'fake');
+    const deps = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; } } } };
+    const args = { flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps };
+    const r = await statusCommand(args);
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.document.preflight?.ok, true, JSON.stringify(r.document.preflight));
+    assert.ok(!existsSync(parent), 'the temporary SSH material staged by phase A is removed before the command returns');
+    assert.equal((await statusCommand(args)).exitCode, 0, 'a second invocation (material already gone) is still clean');
+    // select and triage take the same path (their own phase A on a dry-run context).
+    for (const [name, run] of [['select', (d) => selectCommand({ ...args, deps: d })], ['triage', (d) => triageCommand({ ...args, flags: { issue: fx.issue }, deps: d })]]) {
+      const p = mkdtempSync(join(tmpdir(), `ap-dryrun-ssh-${name}-`)); writeFileSync(join(p, 'material'), 'fake');
+      const d = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = p; }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
+      const res = await run(d);
+      assert.ok([0, 2].includes(res.exitCode), `${name}: ${JSON.stringify(res.document).slice(0, 200)}`);
+      assert.ok(!existsSync(p), `${name} released the dry-run SSH material`);
+    }
+    // The FAILING path: phase A stages the material and then throws — it is still released.
+    const pf = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail-')); writeFileSync(join(pf, 'material'), 'fake');
+    const failing = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = pf; throw Object.assign(new Error('gh host mismatch'), { code: 'remote-host-mismatch' }); }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
+    const st = await statusCommand({ ...args, deps: failing });
+    assert.equal(st.document.preflight?.ok, false, 'status reports the phase A failure');
+    assert.ok(!existsSync(pf), 'status released the material although phase A threw');
+    const pf2 = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail2-')); writeFileSync(join(pf2, 'material'), 'fake');
+    const failing2 = { deps: { ...failing.deps, preflight: { ...failing.deps.preflight, phaseA: async (ctx) => { ctx.sshDryRunParent = pf2; throw new Error('boom'); } } } };
+    await assert.rejects(() => selectCommand({ ...args, deps: failing2 }), /boom/);
+    assert.ok(!existsSync(pf2), 'select released the material on its throwing path too');
+  } finally { fx.cleanup(); }
+}
+test('AC136: the read-only commands (status/select/triage) release the dry-run SSH material phase A staged, on every exit path', { timeout: 120_000 }, ac136_readOnlyCommandsReleaseSshMaterial);
+
+export async function ac10_restHonoursCommittedMinutes() {
+  assert.equal(restMsFor({ local: {}, document: { restMinutes: 3 } }), 3 * 60_000, 'the committed autopilot.restMinutes drives the cadence');
+  assert.equal(restMsFor({ local: { restMs: 5000 }, document: { restMinutes: 3 } }), 5000, 'the operator --rest wins');
+  assert.equal(restMsFor({ local: {}, document: {} }), 10 * 60_000, 'no committed value → 10 minutes');
+  // The iteration reports the committed value it read in phase B.
+  const fx = await createSequenceFixture({ config: { restMinutes: 4 } });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.document.restMinutes, 4, 'the iteration document carries the committed cadence');
+    assert.equal(restMsFor({ local: {}, document: it.document }), 4 * 60_000);
+  } finally { fx.cleanup(); }
+}
+test('AC10: the loop cadence is the COMMITTED autopilot.restMinutes (reported by the iteration), lowered by --rest, never a fixed 10 minutes', { timeout: 120_000 }, ac10_restHonoursCommittedMinutes);
+
+export async function ac140_maintenanceRunsWithTheDenylistLoaded() {
+  // §8 maintenance runs BEFORE selection: the loop loads the denylist first so maintenance's diff checks have it.
+  const fx = await createSequenceFixture();
+  try {
+    fx.ctx.denylist = null;
+    let seen = 'unset';
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps({ maintain: { maintainOpenPrs: async ({ ctx }) => { seen = typeof ctx.denylist?.matches; return { actions: [] }; }, activePrCount: () => 0 } }), pinnedIssue: fx.issue });
+    assert.equal(seen, 'function', 'maintenance saw a loaded denylist (matches function)');
+    assert.equal(it.outcome, 'done', JSON.stringify(it.document?.run ?? it.outcome));
+    assert.ok(fx.ctx.denylist.matches('scripts/rails-guard-ci.mjs'), 'the loaded list is the real §4.2 list');
+  } finally { fx.cleanup(); }
+}
+test('AC140: the loop loads the protected-path denylist BEFORE §8 maintenance runs, so a maintenance fix round can never skip the protected-path rule', { timeout: 120_000 }, ac140_maintenanceRunsWithTheDenylistLoaded);
+
+export async function ac10_dryRunThroughRunOnce() {
+  // The PUBLIC entry point: a dry run takes no lock, plans, and releases its dry-run material on the way out.
+  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { LOCK_DIR_NAME } = await import('../lib/lock.mjs');
+  const fx = await createSequenceFixture({ dryRun: true });
+  try {
+    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-once-')); writeFileSync(join(parent, 'material'), 'fake');
+    const stub = fx.loopDeps();
+    const deps = { deps: { ...stub, preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; }, resolveBaseline: async () => fx.baseOid, phaseB: async () => ({ complete: false, incomplete: ['fleet-dry-run-needs-worktree'], tokenShort: false, checks: {} }) }, selection: { ...stub.selection, select: async () => ({ picked: fx.issue, issue: fx.state.issue, authorization: { ok: true }, revision: { updatedAt: fx.state.issue.updatedAt }, ranked: [] }) } } };
+    const r = await runOnce({ flags: { dryRun: true, issue: String(fx.issue) }, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps });
+    assert.equal(r.exitCode, 0, JSON.stringify(r.document).slice(0, 300));
+    assert.equal(r.document.dryRun, true);
+    assert.equal(r.document.complete, false, 'a dry run never claims completeness (fleet needs a worktree)');
+    assert.ok(r.document.incomplete.includes('fleet-dry-run-needs-worktree'));
+    assert.ok(!existsSync(join(fx.ctx.paths.adlc, LOCK_DIR_NAME)), 'a dry run never takes the autopilot lock');
+    assert.ok(!existsSync(parent), 'the dry-run SSH material is released on the way out of runOnce');
+    assert.ok(!fx.recorder.some((x) => x.argv[0] === FAKE.adlc && x.argv[1] === 'fleet'), 'no fleet dispatch');
+  } finally { fx.cleanup(); }
+}
+test('AC10: a dry run through the PUBLIC runOnce takes no lock, reports dryRun:true, dispatches nothing and releases its temporary material on exit', { timeout: 120_000 }, ac10_dryRunThroughRunOnce);
+
+export async function ac18_dryRunShapingIsQuotaGated() {
+  // --dry-run-shape makes a MODEL call: it passes the quota start gate like the loop's shaping call does.
+  const fx = await createSequenceFixture({ dryRun: true, local: { dryRunShape: true }, quotaRead: async () => ({ ok: false, reason: 'five_hour', fiveHour: 99, sevenDay: 10, scoped: new Map(), resetsAt: { fiveHour: null } }) });
+  try {
+    const it = await iterate({ ctx: fx.ctx, deps: fx.loopDeps(), pinnedIssue: fx.issue });
+    assert.equal(it.document.dryRun, true);
+    assert.ok(!fx.recorder.some((r) => r.argv[0] === FAKE.claude && r.argv.includes('-p')), 'no shaping call while the quota refuses');
+    assert.ok(!it.document.ticket, 'no shaped ticket was produced');
+  } finally { fx.cleanup(); }
+}
+test('AC18: a dry-run shaping call is quota-gated — with the window refused no model call is made and no shaped ticket appears in the plan', { timeout: 120_000 }, ac18_dryRunShapingIsQuotaGated);

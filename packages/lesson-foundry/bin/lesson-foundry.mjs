@@ -23,6 +23,7 @@ const { values: flags } = parseArgs({
     min:         { type: 'string',  default: '2' },
     'out-dir':   { type: 'string',  default: '.adlc/lessons' },
     write:       { type: 'boolean', default: false },
+    force:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
     tier:        { type: 'string',  default: 'mid' },
@@ -91,23 +92,15 @@ const unbanked = (flags.gate || flags.write)
   ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5)
   : [];
 
-// Output (human or JSON)
-if (flags.json) {
-  const gateResult = flags.gate
-    ? { unbanked: unbanked.map((c) => c.name), pass: unbanked.length === 0 }
-    : null;
-  printJson(buildJsonResult({ clusters, skipped, filtered, plan, gateResult }));
-} else {
-  const lines = buildHumanReport({ clusters, skipped, filtered, plan });
-  for (const l of lines) console.log(l);
-}
+// Filter out the synthetic spec-gap-template aggregate entry
+const realPlan = plan.filter((p) => p.cluster !== null);
+const templatePlan = plan.filter((p) => p.route === 'spec-gap-template');
 
-// --write: emit files
+// --write (real artifacts only): run BEFORE the output section so --json can report which
+// paths were skipped. An existing file is left untouched unless --force is given (#674) —
+// hand-refined lint descriptors / check scripts / SKILL stubs must survive a re-run.
+const writeSkippedPaths = [];
 if (flags.write) {
-  // Filter out the synthetic spec-gap-template aggregate entry
-  const realPlan = plan.filter((p) => p.cluster !== null);
-  const templatePlan = plan.filter((p) => p.route === 'spec-gap-template');
-
   // Ensure output directory exists
   if (!existsSync(outDir)) {
     try {
@@ -120,6 +113,11 @@ if (flags.write) {
   for (const entry of realPlan) {
     for (const file of entry.files) {
       const fullPath = file.path; // already prefixed with outDir
+      if (!flags.force && existsSync(fullPath)) {
+        writeSkippedPaths.push(fullPath);
+        if (!flags.json) console.log(`  exists (skipped): ${fullPath}`);
+        continue;
+      }
       try {
         writeFileSync(fullPath, file.content, 'utf8');
         if (!flags.json) console.log(`  wrote: ${fullPath}`);
@@ -128,8 +126,24 @@ if (flags.write) {
       }
     }
   }
+}
 
-  // Handle interrogation-template.md (append if exists, write if not)
+// Output (human or JSON)
+if (flags.json) {
+  const gateResult = flags.gate
+    ? { unbanked: unbanked.map((c) => c.name), pass: unbanked.length === 0 }
+    : null;
+  printJson(buildJsonResult({
+    clusters, skipped, filtered, plan, gateResult,
+    writeSkipped: flags.write ? writeSkippedPaths : null,
+  }));
+} else {
+  const lines = buildHumanReport({ clusters, skipped, filtered, plan });
+  for (const l of lines) console.log(l);
+}
+
+// --write: interrogation-template.md (append if exists, write if not)
+if (flags.write) {
   for (const entry of templatePlan) {
     for (const file of entry.files) {
       const fullPath = file.path;

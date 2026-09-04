@@ -42,6 +42,8 @@ import {
 import { createFlailTracker } from './flail.mjs';
 import { registerCommands } from './commands.mjs';
 import { renderWidgetLines } from './widget.mjs';
+import { buildShutdownEvidence } from './shutdown.mjs';
+import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { createRenderers } from './renderers.mjs';
 import { registerProsecuteTool } from './prosecute-tool.mjs';
 import { registerGateTool } from './gate-tool.mjs';
@@ -53,10 +55,52 @@ import { makeShutdownListener } from './shutdown.mjs';
 // stale entries are evicted oldest-first well past any realistic concurrency.
 const SNAPSHOT_MAP_CAP = 100;
 
+// #936 days after which lesson-foundry/skill-rot evidence is considered stale.
+// ADLC_P7_STALE_DAYS in the environment overrides this baseline; a non-numeric
+// or non-positive value falls back to the default (fail-safe, never NaN).
+export const P7_STALE_DEFAULT_DAYS = 14;
+const MS_PER_DAY = 86_400_000;
+
+// P7 entry types that count as "P7 ran". Names match the manifest `type`
+// field the gate CLIs record. Deliberately narrow: acceptance of stale-state
+// is recorded under any of these; gate-fuzzing / review-calibration / +
+// model-ratchet / ticket-prune are P7-adjacent but not distillation, so they
+// do not reset the clock.
+const P7_ENTRY_TYPES = new Set(['lesson-foundry', 'skill-rot']);
+
+// Pure (#936): compute how stale P7 is from manifest entries. Returns null
+// when the entries cannot prove a stale condition: no P7 evidence means
+// nothing stale (nothing ran yet); the caller decides widget behavior.
+// Fail-safe: entries may be absent/malformed; the output is null or a
+// finite positive integer (truncated).
+export function computeP7StaleDays(entries, { now = Date.now(), thresholdDays = P7_STALE_DEFAULT_DAYS } = {}) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  let latest = null;
+  for (const entry of entries) {
+    if (!P7_ENTRY_TYPES.has(entry?.type ?? entry?.gate)) continue;
+    const at = entry?.at;
+    const ms = typeof at === 'string' ? Date.parse(at) : NaN;
+    if (Number.isFinite(ms) && (latest === null || ms > latest)) latest = ms;
+  }
+  if (latest === null) return null;
+  const days = Math.floor((now - latest) / MS_PER_DAY);
+  // Inclusive boundary: the ticket contract (AC3) is "renders at threshold",
+  // so evidence exactly thresholdDays old IS stale. (Cross-model review, PR
+  // #955: an exclusive compare delayed the nudge a day past the contract.)
+  return days >= thresholdDays ? days : null;
+}
+
 export function createExtension({ env = process.env } = {}) {
   // The extension entry resolves the signing key ONCE from ITS env (which tests inject)
   // and threads it — no process.env reads below this line (spec Layer 2, P1).
   const manifestKey = typeof env.ADLC_MANIFEST_KEY === 'string' && env.ADLC_MANIFEST_KEY.length > 0 ? env.ADLC_MANIFEST_KEY : null;
+  // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
+  // stable enough for real sessions — it was blocking edits/shell wholesale
+  // across workstreams, so it defaults OFF. checkHandoff() and its test
+  // suite stay intact and exercise it by setting this in the injected env;
+  // no real caller sets it, so production stays disabled either way. Flip
+  // the default once the deny-set has baked longer.
+  const CONTEXT_ROT_HANDOFF_ENABLED = env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1';
   return async function adlcPiExtension(pi) {
     let activeCwd = process.cwd();
     let active = { ticketId: null, ticket: null, error: null };
@@ -69,6 +113,14 @@ export function createExtension({ env = process.env } = {}) {
     // instance and re-derived at session_start if the host offers a real id;
     // null means the deny-set fails closed under pressure rather than skipping.
     let handoffSessionId = resolvePiSessionId(null, null);
+    // #936 P7 staleness hint for the widget: recomputed at session_start from
+    // the own manifest chain (fail-silent: null means no-stale-signal, never
+    // an error surface). Fed into renderWidgetLines, so the live hint rides
+    // the widget's existing 3-line contract.
+    let p7StaleDays = null;
+    // #927 pending-acceptance hint: computed at session_start from the last
+    // session's entry list (fail-silent). Rides the same widget update.
+    let pendingAcceptance = false;
     // Per-session D1 memory: a FAILED deny-marker write must stay sticky after
     // the band cools, and only an in-process caller can carry that fact.
     const handoffSticky = createStickyDenyState();
@@ -128,6 +180,8 @@ export function createExtension({ env = process.env } = {}) {
           contextPercent: usage?.percent ?? null,
           degraded: fitness.isCompacted(),
           lastGateEvent,
+          pendingAcceptance,
+          p7StaleDays,
         });
         setWidget.call(ctx.ui, 'adlc', lines.length ? lines : undefined);
       } catch {
@@ -295,6 +349,25 @@ export function createExtension({ env = process.env } = {}) {
       flail.reset();
       unvettedSeen.clear();
       lastGateEvent = null;
+      // #927/#936 recompute widget hints each session. Fail-silent: any read
+      // problem degrades both hints (never an error surface — AC3's manifest
+      // failure clause). P7 staleness uses the own manifest chain (read-only);
+      // pendingAcceptance reads the session branch — only as a hint, since the
+      // manifest remains the base of record for acceptance.
+      const thresholdRaw = Number(env.ADLC_P7_STALE_DAYS);
+      const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 ? thresholdRaw : P7_STALE_DEFAULT_DAYS;
+      try {
+        const { entries } = readOwnManifestChain(join(activeCwd, '.adlc'), { cwd: activeCwd });
+        p7StaleDays = computeP7StaleDays(entries, { thresholdDays: threshold });
+      } catch {
+        p7StaleDays = null;
+      }
+      try {
+        const branch = ctx?.sessionManager?.getBranch?.() ?? [];
+        pendingAcceptance = buildShutdownEvidence({ entries: branch, ticketId: active.ticketId })?.kind === 'pending-acceptance';
+      } catch {
+        pendingAcceptance = false;
+      }
       refreshWidget(ctx);
       if (!active.ticketId) return;
       if (active.error) {
@@ -358,26 +431,28 @@ export function createExtension({ env = process.env } = {}) {
       // NOT ticket-scoped: an open deny record is a session-trust fact, so it
       // must hold even when no ticket is active — every gate below this line
       // returns early without a ticket.
-      const handoff = checkHandoff({
-        toolName: event.toolName,
-        input: event.input,
-        sessionId: handoffSessionId,
-        usage: handoffUsage(ctx),
-        ticketId: active.ticketId ?? null,
-        root: activeCwd,
-        manifestKey,
-        sticky: handoffSticky,
-        adlcRoots: handoffAdlcRoots,
-        storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
-      });
-      if (handoff.decision === 'deny') {
-        ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
-        noteGate({
-          ctx,
-          type: 'handoff-deny',
-          detail: { tool: event.toolName, reasons: handoff.reasons },
+      if (CONTEXT_ROT_HANDOFF_ENABLED) {
+        const handoff = checkHandoff({
+          toolName: event.toolName,
+          input: event.input,
+          sessionId: handoffSessionId,
+          usage: handoffUsage(ctx),
+          ticketId: active.ticketId ?? null,
+          root: activeCwd,
+          manifestKey,
+          sticky: handoffSticky,
+          adlcRoots: handoffAdlcRoots,
+          storeOverride: env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
         });
-        return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        if (handoff.decision === 'deny') {
+          ctx.ui.notify(`Blocked ${event.toolName}: ${handoff.reason}`, 'error');
+          noteGate({
+            ctx,
+            type: 'handoff-deny',
+            detail: { tool: event.toolName, reasons: handoff.reasons },
+          });
+          return { block: true, reason: `Blocked ${event.toolName}: ${handoff.reason}` };
+        }
       }
 
       if (active.ticketId && (active.error || !active.ticket)) {

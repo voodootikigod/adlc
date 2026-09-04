@@ -277,9 +277,20 @@ final word — verify.
 
 - Never run a gate or suite as `… | tail` in a background task — the exit you read is
   tail's. Redirect to a file and `echo EXIT=$?` on its own line.
-- Every command starts with `cd /abs/worktree &&` — fork agents SHARE the parent's
-  persistent shell cwd, so a parent `cd` moves every lane (one codex round reviewed the
-  wrong tree this way; check `pwd` and the reviewer's file list before trusting a round).
+- **EVERY command, with NO exceptions, starts with `cd /abs/worktree &&` — including
+  single simple commands, not just multi-step chains.** This is not just a parent→lane
+  gotcha: concurrently-running SIBLING lanes share cwd with EACH OTHER too, confirmed
+  independently by two different lanes in one batch — one lane's `cd` raced with another's
+  and caused an `adversarial-review` call to silently review a SIBLING lane's diff instead
+  of its own, with no error, no warning, just a clean-looking "approve" on the wrong code.
+  Both lanes only caught it by checking `pwd`/`git branch --show-current`/HEAD AFTER an
+  unusual review result and re-running from an explicit `cd`. **Never trust a cross-model
+  review or a gate result you did not launch from an explicit `cd` in the SAME command** —
+  a review verdict on the wrong diff is a false "approve" with no visible symptom until you
+  go looking. For any review, additionally confirm the reviewer's own printed target/branch
+  line (e.g. `Target: branch fix/<n>-... vs origin/main`) names YOUR branch before trusting
+  the verdict — do this every round, not only when something looks off, since nothing looks
+  off until you check.
 - Provider quotas are shared with every other session on the machine; on a `usage limit`
   from agy, fall back to codex (a different family) and retry agy after the reset it prints. Kill
   orphaned `codex-linux-sandbox` processes (ppid 1) left by earlier runs — they are hung

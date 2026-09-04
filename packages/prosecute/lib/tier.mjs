@@ -145,6 +145,12 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
       if (contractRelevant && path.startsWith(prefix)) push(`touches gated-artifact producer package ${prefix}`);
     }
     for (const ticket of Array.isArray(tickets) ? tickets : []) {
+      // T36 completion lifecycle: a completed ticket's rails auto-expire, exactly
+      // matching rail-freeze.mjs's own reading (`ticket.completed === true`, strict
+      // boolean — not truthy, not the string 'true'). Without this, T37/T38
+      // (completed, rails packages/**) tiered every change under packages/ forever
+      // (#905).
+      if (ticket?.completed === true) continue;
       const rails = Array.isArray(ticket?.rails) ? ticket.rails : [];
       for (const glob of rails) {
         if (typeof glob === 'string' && glob && globMatch(glob, path)) {

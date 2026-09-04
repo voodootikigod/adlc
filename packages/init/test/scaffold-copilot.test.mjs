@@ -54,7 +54,7 @@ test('CLI rejects an unknown harness', () => {
   fresh((root) => {
     assert.throws(
       () => execFileSync(process.execPath, [BIN, '--root', root, '--harness', 'bogus', '--json'], { encoding: 'utf8', stdio: 'pipe' }),
-      /must be codex, cursor, or copilot/,
+      /must be one of codex, cursor, copilot/,
     );
   });
 });

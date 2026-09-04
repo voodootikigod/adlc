@@ -105,7 +105,16 @@ export function shellHasMutation(text) {
     /\b(?:patch|tar|unzip)\b/.test(text) ||
     /\bfind\b[^;&|]*(?:-delete|-exec(?:dir)?\b|-ok(?:dir)?\b)/.test(text) ||
     /\b(?:sed|perl)\s+[^;&|]*-(?:i|p?i)\b/.test(text) ||
-    /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s+\S+[^"\n]*"|'[^'\n]*\bw\s+\S+[^'\n]*')/.test(text) ||
+    // GNU sed's `w` command accepts the filename with no space (verified
+    // against the real binary). `\s*` deliberately over-matches some ordinary
+    // substitution text in exchange — this classifier already errs toward
+    // "mutating" on ambiguity. The boundary before `w` accepts a digit too
+    // (`(?<=[0-9])`, not just `\b`): a line-address write (`1w file`, `1,5w
+    // file` — real sed syntax, verified against the real binary) has a DIGIT
+    // immediately before `w`, and digits are word characters, so plain `\b`
+    // never fires there. Every other address form (`$w`, `/re/w`, `!w`) is
+    // already a non-word character before `w`, where `\b` already matches.
+    /\bsed\b[^;&|]*(?:"[^"\n]*(?:\b|(?<=[0-9]))w\s*\S+[^"\n]*"|'[^'\n]*(?:\b|(?<=[0-9]))w\s*\S+[^'\n]*')/.test(text) ||
     /\bawk\b[^;&|]*(?:\s-i(?:\s|=)|\s--in-place\b)/.test(text) ||
     /\b(?:node|python3?|ruby)\b[^;&|]*(?:writeFile|appendFile|rmSync|renameSync|copyFile|truncateSync|mkdirSync|write_text|write_bytes)/.test(text) ||
     /\bopen\s*\([^)]*,\s*['"][^'"]*[wax+][^'"]*['"]/.test(text) ||
@@ -206,7 +215,14 @@ export function shellIsPositivelyReadOnly(text) {
 
 /** A nominally read-only command smuggling a write via an output option. */
 export function shellHasWriteOption(text) {
-  return /\s--(?:output|output-file|test-reporter-destination|reporter-destination)(?:=|\s+)\S+/.test(text);
+  // The boundary before `--` also accepts a quote character, not only
+  // whitespace — a quoted option (`git diff "--output=x"`) was reading as
+  // read-only. An optional quote is also accepted AFTER the option name,
+  // before the `=`/whitespace: a flag quoted alone with its value as a
+  // separate argument (`git diff "--output" file` — identical to unquoted
+  // `git diff --output file` once the shell strips the quotes) closes the
+  // option's own quote right where `=`/whitespace was assumed to be.
+  return /(?:^|[\s"'])--(?:output|output-file|test-reporter-destination|reporter-destination)['"]?(?:=|\s+)\S+/.test(text);
 }
 
 export function shellChangesCwd(text) {
@@ -232,7 +248,7 @@ export function collectShellPaths(text, out) {
     if (looksPathLike(value)) out.add(value);
   }
 
-  const sedWritePattern = /\bsed\b[^;&|]*(?:"[^"\n]*\bw\s+([A-Za-z0-9_./@+-]+)[^"\n]*"|'[^'\n]*\bw\s+([A-Za-z0-9_./@+-]+)[^'\n]*')/g;
+  const sedWritePattern = /\bsed\b[^;&|]*(?:"[^"\n]*(?:\b|(?<=[0-9]))w\s*([A-Za-z0-9_./@+-]+)[^"\n]*"|'[^'\n]*(?:\b|(?<=[0-9]))w\s*([A-Za-z0-9_./@+-]+)[^'\n]*')/g;
   let sedWrite;
   while ((sedWrite = sedWritePattern.exec(text)) !== null) {
     const value = sedWrite[1] ?? sedWrite[2];

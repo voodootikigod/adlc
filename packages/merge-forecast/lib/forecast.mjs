@@ -137,8 +137,13 @@ export async function runForecast(opts) {
     for (const id of waves[w]) waveMap.set(id, w);
   }
   const concurrentVetoes = pairResults.filter((pr) => {
-    if (!pr.hardVeto) return false;
-    // Vetoed pair — check if both in same wave
+    // A hard-vetoed pair (score 1.0, scope-overlap) is always high-risk; any
+    // OTHER pair whose score has reached the conflict threshold (namespace
+    // collision, import-radius, co-change) is high-risk too — the README's
+    // documented contract ("vetoed/high-risk pair scheduled concurrently")
+    // covers both, not only the hard veto.
+    if (!pr.hardVeto && pr.score < conflictThreshold) return false;
+    // Check if both tickets in the pair land in the same wave.
     const wA = waveMap.get(pr.a);
     const wB = waveMap.get(pr.b);
     return wA !== undefined && wB !== undefined && wA === wB;
@@ -146,7 +151,9 @@ export async function runForecast(opts) {
   if (concurrentVetoes.length > 0) {
     gateFailures.push(
       `${concurrentVetoes.length} high-risk pair(s) would run concurrently: ` +
-        concurrentVetoes.map((p) => p.pair).join(', ')
+        concurrentVetoes
+          .map((p) => `${p.pair} (score ${p.score}, ${p.signal})`)
+          .join(', ')
     );
   }
 

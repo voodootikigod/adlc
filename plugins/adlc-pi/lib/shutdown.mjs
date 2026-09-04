@@ -18,9 +18,9 @@ import { recordGateEvent } from './evidence.mjs';
 
 const SHUTDOWN_MAX_EVENTS = 10;
 
-// A gate event that RESOLVES prior denies/reverts: a clean gate pass
-// ('adlc-gate-run' with exit code 0) or a recorded acceptance ('adlc-accept'
-// that succeeded). Everything after the last such event is still "open".
+// Pending-acceptance hint (#927): tracked separately from this deny/revert
+// resolution index in buildShutdownEvidence below (a passing gate run is not
+// an acceptance — cross-model review, PR #955).
 function resolvesState(d) {
   if (!d || typeof d.type !== 'string') return false;
   if (d.type === 'adlc-gate-run' && d.code === 0) return true;
@@ -51,10 +51,35 @@ export function buildShutdownEvidence({ entries, ticketId = null } = {}) {
     if (resolvesState(d)) lastResolvedIdx = i;
   });
   const unresolved = events.filter((d, i) => i > lastResolvedIdx && isStop(d.type));
-  if (unresolved.length === 0) return null;
+  // Pending-acceptance hint (#927): the latest ticket-done-claimed vs the
+  // latest adlc-accept(ok) — an index pair INDEPENDENT of lastResolvedIdx.
+  // A passing gate run resolves denies/reverts but is NOT an acceptance
+  // (cross-model review finding: done-claim → prosecution nudge → passing
+  // adlc_gate run would otherwise suppress the nudge without any acceptance).
+  // Deny/revert events still outrank the hint as 'unresolved'.
+  let lastDoneIdx = null;
+  let lastAcceptIdx = null;
+  events.forEach((d, i) => {
+    if (d.type === 'ticket-done-claimed') lastDoneIdx = i;
+    if (d.type === 'adlc-accept' && d.ok === true) lastAcceptIdx = i;
+  });
+  // Pending-acceptance is only meaningful with a binding ticket (never a bare
+  // done-claim with no active ticket).
+  let pendingAcceptance = false;
+  if (unresolved.length === 0 && ticketId) {
+    // null sentinels, not -1: the -1 form generates an EQUIVALENT off-by-one
+    // mutant (-1 → -2, masked by the paired !==-1/> checks — measured in the
+    // PR #955 mutation-gate run), and the gate bans suppressing it, so the
+    // sentinel class itself is removed here instead.
+    pendingAcceptance = lastDoneIdx !== null && (lastAcceptIdx === null || lastDoneIdx > lastAcceptIdx);
+    if (!pendingAcceptance) return null;
+  } else if (unresolved.length === 0) {
+    return null;
+  }
 
   const recent = unresolved.slice(-SHUTDOWN_MAX_EVENTS);
   return {
+    kind: pendingAcceptance ? 'pending-acceptance' : 'unresolved',
     ticketId,
     unresolvedCount: unresolved.length,
     events: recent.map((d) => ({

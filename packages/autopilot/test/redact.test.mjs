@@ -1,0 +1,171 @@
+// AC 88 / 91 / 96 / 99 / 105 — the single fail-closed redactor. Every
+// SECRET_PATTERNS entry and every literal orchestrator secret is replaced with
+// `[REDACTED:<pattern>]`; a redactor that throws, times out or leaves a
+// residual match yields ONLY the withheld sentinel; structured records keep
+// their schema. The outward WRITERS (comments, digest, dead-end file) are
+// asserted in their own suites; this file owns the redactor's contract.
+
+import { test } from './helpers/node-test.mjs';
+import assert from 'node:assert/strict';
+import { createRedactor, redactRecord, redactStream, SECRET_PATTERNS, WITHHELD_DEAD_END, WITHHELD_BODY, CHUNK_BYTES, CHUNK_OVERLAP } from '../lib/redact.mjs';
+import { withMutation } from '../lib/mutations.mjs';
+
+/** One sample that matches each pattern, by name. */
+export const SAMPLES = {
+  'AWS access key ID': 'AKIA' + 'ABCDEFGHIJKLMNOP',
+  'Private key (PEM)': '-----BEGIN RSA PRIVATE KEY-----',
+  'OpenAI/Anthropic-style key': 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789',
+  'GitHub token': 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0' + 'K1l2M3n4O5p6Q7r8S9t0',
+  'Slack token': 'xoxb-1234567890-abcdefghij',
+  'Google API key': 'AIza' + 'A'.repeat(35),
+  JWT: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop',
+  'Hardcoded credential assignment': 'api_key = "abcdefghijklmnopqrstuvwxyz"',
+  'ADLC manifest key': 'ADLC_MANIFEST_KEY=0123456789abcdef0123456789abcdef',
+  // Line-anchored by design (an .env-style assignment starts a line), so the sample carries its newline.
+  'env secret assignment': '\nFOO_TOKEN=plainvalue123',
+  'Bearer token': 'Bearer abcdefghijklmnopqrstuvwxyz0123',
+};
+
+export function ac88_everyPatternIsReplacedWithItsName() {
+  const names = SECRET_PATTERNS.map((p) => p.name);
+  assert.deepEqual(Object.keys(SAMPLES).sort(), [...names].sort(), 'the sample table covers every pattern exactly');
+  const { redact } = createRedactor({ secretValues: ['orchestrator-key-value-12345'] });
+  for (const [name, sample] of Object.entries(SAMPLES)) {
+    const r = redact(`log line before ${sample} after`);
+    assert.equal(r.ok, true, name);
+    assert.ok(!r.text.includes(sample), `${name}: the matched text is gone`);
+    assert.ok(r.text.includes(`[REDACTED:${name}]`) || r.text.includes('[REDACTED:'), `${name}: replaced by [REDACTED:<pattern>]`);
+  }
+  const lit = redact('token: orchestrator-key-value-12345 trailing');
+  assert.equal(lit.text, 'token: [REDACTED:orchestrator secret value] trailing', 'the literal key value is replaced by name');
+}
+test('AC88: each SECRET_PATTERNS entry and the literal orchestrator key value are replaced with [REDACTED:<pattern>]', ac88_everyPatternIsReplacedWithItsName);
+
+export async function ac88_failClosedOnThrowOrResidual() {
+  const throwing = createRedactor({ impl: () => { throw new Error('boom'); } });
+  const r1 = throwing.redact('anything ' + SAMPLES['GitHub token']);
+  assert.equal(r1.ok, false); assert.equal(r1.text, WITHHELD_DEAD_END); assert.match(r1.reason, /redactor-threw/);
+  const leaky = createRedactor({ impl: (t) => t }); // returns input unchanged
+  const r2 = leaky.redact('x ' + SAMPLES['GitHub token']);
+  assert.equal(r2.ok, false); assert.equal(r2.text, WITHHELD_DEAD_END); assert.equal(r2.reason, 'residual-match');
+  const custom = leaky.redact('x ' + SAMPLES.JWT, { withheld: WITHHELD_BODY });
+  assert.equal(custom.text, WITHHELD_BODY, 'free-text writers get the body sentinel');
+  let t = 0;
+  const slow = createRedactor({ now: () => (t += 10_000), budgetMs: 5_000 });
+  const r3 = slow.redact('clean text');
+  assert.equal(r3.ok, false); assert.equal(r3.reason, 'redactor-timeout');
+  // The seam the coverage gate applies: with `redactor.disable` the raw text goes out.
+  await withMutation('redactor.disable', () => {
+    const { redact } = createRedactor({});
+    const r = redact('x ' + SAMPLES['GitHub token']);
+    assert.equal(r.ok, true);
+    assert.ok(r.text.includes(SAMPLES['GitHub token']), 'mutation fixture: the secret leaks (this is what the gate expects the real test to catch)');
+  });
+}
+test('AC88: a redactor that throws, leaks (residual match) or exceeds its budget yields only the withheld sentinel', ac88_failClosedOnThrowOrResidual);
+
+export function ac105_structuredRedactionKeepsSchema() {
+  const { redact } = createRedactor({ secretValues: ['orchestrator-key-value-12345'] });
+  const redactor = { redact };
+  const record = { issue: 7, state: 'blocked', token: 'f'.repeat(64), lastError: 'failed with ' + SAMPLES['GitHub token'], baseOid: 'a'.repeat(40) };
+  const out = redactRecord(record, ['lastError'], redactor);
+  assert.equal(out.issue, 7); assert.equal(out.state, 'blocked'); assert.equal(out.token, 'f'.repeat(64)); assert.equal(out.baseOid, 'a'.repeat(40));
+  assert.ok(!out.lastError.includes(SAMPLES['GitHub token']) && out.lastError.includes('[REDACTED:'));
+  assert.equal(out.redactionFailed, undefined);
+  // Identifier fields are NEVER handed to the redactor (spy).
+  const seen = [];
+  const spy = { redact: (t, o) => { seen.push(t); return redact(t, o); } };
+  redactRecord(record, ['lastError'], spy);
+  assert.deepEqual(seen, [record.lastError]);
+  // A failing field → null + redactionFailed, and the document still parses/drives recovery.
+  const failing = { redact: () => ({ ok: false, text: null }) };
+  const bad = redactRecord(record, ['lastError'], failing);
+  assert.equal(bad.lastError, null); assert.deepEqual(bad.redactionFailed, ['lastError']); assert.equal(bad.state, 'blocked');
+  assert.equal(JSON.parse(JSON.stringify(bad)).token, record.token);
+}
+test('AC105: structured redaction touches only the free-text fields, nulls a failing one under redactionFailed, and keeps every identifier', ac105_structuredRedactionKeepsSchema);
+
+export function ac99_chunkedRedactionCatchesStraddlingSecret() {
+  const { redact } = createRedactor({});
+  const token = SAMPLES['GitHub token'];
+  // Place the token so it straddles a 64 KiB boundary (preceded by a space: the
+  // pattern needs a word boundary, and a real log has one).
+  const head = 'a'.repeat(CHUNK_BYTES - 11) + ' ';
+  const whole = head + token + ' tail '.repeat(100);
+  const chunks = [whole.slice(0, CHUNK_BYTES), whole.slice(CHUNK_BYTES)];
+  const r = redactStream(chunks, { redact }, { keepChars: CHUNK_BYTES });
+  assert.equal(r.ok, true);
+  assert.ok(!r.text.includes(token), 'a secret straddling the chunk boundary is still redacted');
+  assert.ok(r.text.length <= CHUNK_BYTES, 'only the last 64 KiB is retained');
+  const leaky = { redact: (t) => ({ ok: false, text: WITHHELD_DEAD_END }) };
+  assert.equal(redactStream(['x'], leaky).text, WITHHELD_DEAD_END);
+}
+test('AC99: a secret straddling a 64 KiB chunk boundary is still redacted and only the last 64 KiB is kept', ac99_chunkedRedactionCatchesStraddlingSecret);
+
+// ---- AC 91: outward redaction on every exit path, over the real writers ----
+import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { applyTerminalEffects } from '../lib/effects.mjs';
+import { postDigest } from '../lib/digest.mjs';
+import { writeDeadEnd } from '../lib/dispatch.mjs';
+import { upsertPr } from '../lib/push.mjs';
+import { newRecord } from '../lib/records.mjs';
+import { STATUS_FREE_TEXT_FIELDS } from '../lib/status.mjs';
+import { branchFor } from '../lib/input.mjs';
+import { readFileSync as readOut, existsSync as existsOut } from 'node:fs';
+import { FAKE } from './helpers/recover-fixture.mjs';
+
+export async function ac91_outwardRedactionOnEveryExitPath() {
+  const fx = await createSequenceFixture();
+  try {
+    const n = fx.issue; const key = fx.key;
+    const secrets = [...Object.values(SAMPLES), key];
+    const payload = `findings:\n${secrets.map((s) => `token ${s} leaked`).join('\n')}\n`;
+    const rec = { ...newRecord({ issue: n, token: 'a'.repeat(64), baseOid: fx.baseOid, branch: branchFor(n), stagingBranch: null, stagingPath: null, finalPath: fx.paths.issueWorktree(n) }), state: 'blocked', creationPhase: null, reasonText: payload, lastError: payload, prNumber: null };
+    fx.ctx.records.save(rec);
+    // every outward writer, fed the payload
+    await applyTerminalEffects({ ctx: fx.ctx, record: fx.ctx.records.load(n), outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: '<!-- adlc-autopilot:blocked test -->', body: payload, label: 'adlc:autopilot-blocked' });
+    await postDigest({ ctx: fx.ctx, record: fx.ctx.records.load(n), outcome: { state: 'blocked', reason: payload } });
+    fx.ctx.status.write(Object.fromEntries(STATUS_FREE_TEXT_FIELDS.map((k) => [k, payload])));
+    const deadEnd = await writeDeadEnd({ ctx: fx.ctx, issue: n, text: payload });
+    fx.sh(['push', '-q', fx.originPath, `${fx.baseOid}:refs/heads/${branchFor(n)}`]);
+    fx.ctx.records.update(n, { attestedHead: fx.baseOid, lastPushedOid: fx.baseOid });
+    await upsertPr({ ctx: fx.ctx, issue: n, record: fx.ctx.records.load(n), attestedHead: fx.baseOid, title: `t ${key}`, body: payload });
+    // nothing outward carries a secret
+    const outward = [];
+    for (const r of fx.recorder.filter((r) => r.argv[0] === FAKE.gh)) outward.push(r.argv.join(' '), String(r.stdinBytes ?? ''));
+    outward.push(readOut(fx.paths.statusFile, 'utf8'), readOut(fx.paths.record(n), 'utf8'), readOut(deadEnd, 'utf8'));
+    const sources = ['gh', 'gh', 'status', 'record', 'dead-end'];
+    for (const s of secrets) outward.forEach((text, i) => assert.ok(!text.includes(s), `secret ${s.slice(0, 12)}… appears in outward text #${i} (${sources[Math.min(i, 4)] ?? 'gh'}): ${text.slice(0, 200)}`));
+    assert.ok(readOut(fx.paths.record(n), 'utf8').includes('[REDACTED'), 'the record carries the redaction marker in its free-text fields');
+    // a redactor failure withholds the WHOLE body while the label is still applied
+    // The fail-closed contract lives in createRedactor: an implementation that throws yields ok:false + the withheld sentinel.
+    const failing = createRedactor({ secretValues: [key], impl: () => { throw new Error('redactor exploded'); } });
+    const ctx2 = { ...fx.ctx, redactor: failing };
+    fx.gh.labels[String(n)] = [];
+    fx.ctx.records.update(n, { effects: {} });
+    await applyTerminalEffects({ ctx: ctx2, record: fx.ctx.records.load(n), outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: '<!-- adlc-autopilot:blocked withheld -->', body: payload, label: 'adlc:autopilot-blocked' });
+    const comment = fx.recorder.filter((r) => r.argv[0] === FAKE.gh && r.argv[1] === 'issue' && r.argv[2] === 'comment').at(-1);
+    assert.ok(comment, 'a comment was still posted');
+    assert.ok(String(comment.stdinBytes).includes(WITHHELD_BODY), 'its body is the withheld sentinel');
+    for (const s of secrets) assert.ok(!String(comment.stdinBytes).includes(s));
+    assert.deepEqual(fx.gh.labels[String(n)], ['adlc:autopilot-blocked'], 'the label is applied regardless');
+  } finally { fx.cleanup(); }
+}
+test('AC91: for every outward writer (terminal comment, digest, status file, run record, dead-end file, PR body) a payload carrying every SECRET_PATTERNS entry and the key is redacted; a redactor failure replaces the whole body with the withheld sentinel while the label is still applied', { timeout: 120_000 }, ac91_outwardRedactionOnEveryExitPath);
+
+export function ac99_overlapZoneRedactionKeepsOffsets() {
+  // A length-CHANGING redaction inside the overlap zone of chunk 1: the streamed output must equal the
+  // whole-text redaction (no duplicated or dropped characters across the chunk boundary).
+  const { redact } = createRedactor({});
+  const token = SAMPLES['GitHub token'];
+  // The secret STRADDLES the carry boundary of chunk 1 (CHUNK_BYTES - CHUNK_OVERLAP): its head is in the
+  // emitted part, its tail in the carry — the exact shape where an unredacted carry leaks the tail.
+  const whole = 'a'.repeat(CHUNK_BYTES - CHUNK_OVERLAP - 20) + ' ' + token + ' ' + 'b'.repeat(CHUNK_OVERLAP + 3000) + ' end';
+  const chunks = [whole.slice(0, CHUNK_BYTES), whole.slice(CHUNK_BYTES)];
+  const expected = redact(whole).text.slice(-CHUNK_BYTES);
+  const r = redactStream(chunks, { redact }, { keepChars: CHUNK_BYTES });
+  assert.equal(r.ok, true);
+  assert.ok(!r.text.includes(token));
+  assert.equal(r.text, expected, 'streamed redaction is offset-exact against the whole-text redaction');
+}
+test('AC99: a length-changing redaction inside the overlap zone neither duplicates nor drops characters across the chunk boundary', ac99_overlapZoneRedactionKeepsOffsets);

@@ -10,6 +10,9 @@ the right gate without you memorizing 20 tools.
 
 ## Install
 
+See [Version requirements](../toolkit.md#version-requirements) for the shared
+`@adlc/cli`/plugin lockstep-versioning requirement.
+
 **Recommended.** Install with [`plugins`](https://www.npmjs.com/package/plugins) — the
 vendor-neutral installer that reads this repo's `marketplace.json`, translates the plugin
 into the target's native format, and installs it. It auto-detects your agent tools (Claude

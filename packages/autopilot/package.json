@@ -1,0 +1,47 @@
+{
+  "name": "@adlc/autopilot",
+  "version": "1.11.0",
+  "description": "Quota-gated local issue-to-PR loop: picks a GitHub issue, shapes an ADLC ticket, dispatches one sandboxed fleet run per issue, gates, attests and opens the PR. Composes @adlc/fleet; adds no gate logic.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/autopilot"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/autopilot#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agents",
+    "autopilot",
+    "github-issues",
+    "orchestration"
+  ],
+  "bin": {
+    "adlc-autopilot": "./bin/adlc-autopilot.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.11.0",
+    "@adlc/fleet": "1.11.0",
+    "@adlc/tickets": "1.11.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:gate": "AUTOPILOT_GATE_FULL=1 node --test test/spec-coverage.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

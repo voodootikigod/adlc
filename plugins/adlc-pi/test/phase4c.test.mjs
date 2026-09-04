@@ -285,6 +285,78 @@ test('AC2: session_shutdown with no active ticket appends nothing', async () => 
 // degrades to a notify.
 // =========================================================================
 
+// =========================================================================
+// #927 — pending-acceptance classification: a ticket-done-claimed that is not
+// resolved by an adlc-accept marks the shutdown kind 'pending-acceptance'.
+// Manifest remains the base of record (the acceptance.ok here is the hint).
+// =========================================================================
+
+test('buildShutdownEvidence: done-claim without accept marks pending-acceptance', () => {
+  const done = [gateEvent('e1', 'ticket-done-claimed')];
+  const out = buildShutdownEvidence({ entries: done, ticketId: 'T1' });
+  assert.ok(out, 'done-claim unresolved by accept is pending');
+  assert.equal(out.kind, 'pending-acceptance');
+});
+
+test('buildShutdownEvidence: latest-of-each-kind index tracking (boundary kill for the initializers)', () => {
+  // done-claim at index 0 with NO other entries: a mutated initial index
+  // (0 instead of -1) misclassifies this as resolved — observable here.
+  const atZero = [gateEvent('e1', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: atZero, ticketId: 'T1' })?.kind, 'pending-acceptance');
+  // Adjacent indices pin both sides: done at 0, accept at 1 must resolve;
+  // with a mutated -1 initializer (0), accept-at-0-then-done-at-1 must still
+  // be pending and not "resolved by an accept at the sentinel index".
+  const adjacent = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: adjacent, ticketId: 'T1' }), null);
+  const reversed = [gateEvent('e1', 'adlc-accept', { ok: true }), gateEvent('e2', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: reversed, ticketId: 'T1' })?.kind, 'pending-acceptance');
+});
+
+test('buildShutdownEvidence: a FAILED accept (ok:false) does not resolve the done-claim', () => {
+  // Pins the conjunction in the accept tracker: type AND ok. The logic-swap
+  // mutant (&& → ||) lets a failed accept clear the hint — caught here.
+  const failedAccept = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: false })];
+  assert.equal(buildShutdownEvidence({ entries: failedAccept, ticketId: 'T1' })?.kind, 'pending-acceptance');
+  const acceptMissingOk = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept')];
+  assert.equal(buildShutdownEvidence({ entries: acceptMissingOk, ticketId: 'T1' })?.kind, 'pending-acceptance');
+});
+
+test('buildShutdownEvidence: a passing gate run does NOT resolve a done-claim (cross-model finding)', () => {
+  // The natural post-TICKET-DONE flow runs gates (build verify, prosecution
+  // nudge); those adlc-gate-run code:0 events resolve denies/reverts but must
+  // NOT suppress the pending-acceptance hint without an actual acceptance.
+  const flow = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-gate-run', { code: 0 })];
+  const out = buildShutdownEvidence({ entries: flow, ticketId: 'T1' });
+  assert.ok(out, 'a gate pass is not an acceptance');
+  assert.equal(out.kind, 'pending-acceptance');
+  // …and the accept after the gate pass still resolves it.
+  const accepted = [...flow, gateEvent('e3', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: accepted, ticketId: 'T1' }), null);
+});
+
+test('buildShutdownEvidence: accept(ok) resolves the done-claim', () => {
+  const cleared = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'adlc-accept', { ok: true })];
+  assert.equal(buildShutdownEvidence({ entries: cleared, ticketId: 'T1' }), null, 'accept resolves pending-acceptance');
+});
+
+test('buildShutdownEvidence: deny still takes precedence over pending-acceptance classification', () => {
+  const both = [gateEvent('e1', 'ticket-done-claimed'), gateEvent('e2', 'rail-deny', { path: 'x' })];
+  const out = buildShutdownEvidence({ entries: both, ticketId: 'T1' });
+  assert.ok(out);
+  assert.equal(out.kind, 'unresolved', 'deny/revert outrank the pending hint');
+});
+
+test('buildShutdownEvidence: no ticket id → done-claims alone are not pending', () => {
+  const done = [gateEvent('e1', 'ticket-done-claimed')];
+  assert.equal(buildShutdownEvidence({ entries: done, ticketId: null }), null, 'pending needs a ticket binding');
+});
+
+// =========================================================================
+// AC3 — /adlc-rollback surfaces a select of entry digests and forks the chosen
+// entry; select=undefined forks nothing; a sessionManager without getBranch
+// degrades to a notify.
+// =========================================================================
+
 test('buildRollbackCandidates: message entries newest-first, pre-failure entries preferred', () => {
   const branch = [
     msg('m1', 'user', 'start'),

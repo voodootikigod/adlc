@@ -237,9 +237,10 @@ test('Codex marketing facts describe the native marketplace surface', () => {
     ['P5-P6', '$adlc-prosecute'],
     ['P7', '$adlc-distill'],
   ]);
-  // The binding floor is the handoff gate's, not the MCP transport's: below
-  // 1.11.0 the gate fails closed and denies every mutating tool call.
-  assert.match(codex?.note ?? '', /1\.11\.0 or newer/);
+  // #970 D9: the version floor moved to a shared docs/toolkit.md section
+  // instead of being restated (and drifting) independently here.
+  assert.match(codex?.note ?? '', /toolkit\.md/);
+  assert.match(codex?.note ?? '', /Version requirements/);
   assert.doesNotMatch(codex?.note ?? '', /checkout|unreleased/i);
   assert.equal(codex?.surfacesSection.kicker, 'Native surfaces');
   assert.equal(codex?.phaseSection.kicker, 'Phase routing');

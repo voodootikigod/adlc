@@ -792,11 +792,14 @@ for (const r of results) {
 //   ATTEMPTED but every mutant invalid/undetermined -> hard failure. A trial ran
 //   and produced no evidence, which is the #293 false-green.
 //
-//   NEVER ATTEMPTED (quota 0 from budget distribution) -> reported, not fatal.
-//   Reserving budget for explicit targets while diff-derived files share what is
-//   left is the documented design (#70/#41/#35); refusing outright would break
-//   it. But it must not be SILENT — a file the gate never looked at is exactly
-//   the place to hide an untested change.
+//   NEVER ATTEMPTED (quota 0 from budget distribution) -> hard failure too
+//   (#657). Reserving budget for explicit targets while diff-derived files
+//   share what is left is still the documented design (#70/#41/#35) — that
+//   SHARING is unchanged — but a selected file the gate never looked at at
+//   all must not be reported as covered just because some OTHER file's
+//   mutants were killed. Matches the explicit-target precedent above
+//   (lines ~518-533), which already refuses to run rather than silently
+//   mutate a subset and report a full pass.
 const attempted = new Set(results.map((r) => r.file));
 const quotaByFile = new Map(fileTargets.map((t) => [t.file, t.quota]));
 // Two reasons a selected file produced nothing, and only one is a budget
@@ -805,9 +808,15 @@ const quotaByFile = new Map(fileTargets.map((t) => [t.file, t.quota]));
 const starved = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) === 0);
 const noMutableLines = [...validByFile.keys()].filter((f) => !attempted.has(f) && (quotaByFile.get(f) ?? 0) > 0);
 if (starved.length > 0) {
-  console.warn(
-    `hollow-test: ${starved.length} selected file(s) received no mutation budget and were ` +
-    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.`
+  // Distinguish "nothing in this diff was verified at all" from "part of the
+  // diff ran and was killed, but these specific files were not" — an operator
+  // deciding whether to trust the rest of a large run needs to know which.
+  const otherEvidence = results.length > 0
+    ? ` (${results.length} mutant(s) elsewhere in this diff already ran and were killed)`
+    : '';
+  opError(
+    `${starved.length} selected file(s) received no mutation budget and were ` +
+    `NOT prosecuted: ${starved.join(', ')} — raise --max to cover them.${otherEvidence}`
   );
 }
 if (noMutableLines.length > 0) {

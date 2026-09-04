@@ -99,6 +99,80 @@ test('AC1: a long ticket id/gate line stays ≤ WIDGET_MAX_LINE', () => {
   }
 });
 
+// =========================================================================
+// #927/#936 — pendingAcceptance and P7 stale signals on the third line.
+// Priority: pendingAcceptance > p7StaleDays > lastGateEvent. Cap 3, truncate.
+// =========================================================================
+
+test('pendingAcceptance: claim-done-no-accept renders the third line', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    enforcement: 'active',
+    pendingAcceptance: true,
+  });
+  assert.equal(lines[lines.length - 1], 'P6 pending: run /adlc-accept');
+});
+
+test('pendingAcceptance beats p7Stale and lastGateEvent', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    enforcement: 'active',
+    pendingAcceptance: true,
+    p7StaleDays: 30,
+    lastGateEvent: { type: 'rail-deny', summary: 'x' },
+  });
+  assert.equal(lines[lines.length - 1], 'P6 pending: run /adlc-accept');
+});
+
+test('p7StaleDays renders when no pendingAcceptance; beats lastGateEvent', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    enforcement: 'active',
+    p7StaleDays: 21,
+    lastGateEvent: { type: 'rail-deny', summary: 'x' },
+  });
+  assert.equal(lines[lines.length - 1], 'P7 stale: lesson-foundry/skill-rot 21d ago');
+});
+
+test('p7StaleDays omitted when not a positive finite number', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    enforcement: 'active',
+    p7StaleDays: NaN,
+    lastGateEvent: { type: 'rail-deny', summary: 'x' },
+  });
+  assert.match(lines[lines.length - 1], /last gate:/);
+});
+
+test('widget cap still 3 lines with the new signals', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    ticketTitle: 'Long ticket title',
+    enforcement: 'active',
+    pendingAcceptance: true,
+    p7StaleDays: 99,
+    lastGateEvent: { type: 'x', summary: 'y' },
+  });
+  assert.ok(lines.length <= 3);
+});
+
+test('p7StaleDays boundary: 0 suppresses, 1 renders (off-by-one kill)', () => {
+  const suppressed = renderWidgetLines({ ticketId: 'T1', enforcement: 'active', p7StaleDays: 0 });
+  assert.ok(!suppressed.some((l) => /P7 stale:/.test(l)), '0 days is not stale');
+  const rendered = renderWidgetLines({ ticketId: 'T1', enforcement: 'active', p7StaleDays: 1 });
+  assert.ok(rendered.some((l) => /P7 stale: lesson-foundry\/skill-rot 1d ago/.test(l)), '1 day renders');
+});
+
+test('pendingAcceptance false falls through to lastGateEvent', () => {
+  const lines = renderWidgetLines({
+    ticketId: 'T1',
+    enforcement: 'active',
+    pendingAcceptance: false,
+    lastGateEvent: { type: 'rail-deny', summary: 'x.ts' },
+  });
+  assert.match(lines[lines.length - 1], /last gate:/);
+});
+
 test('AC1: purity — same input, same output, input not mutated', () => {
   const state = Object.freeze({ ticketId: 'T1', enforcement: 'active', contextPercent: 33 });
   const a = renderWidgetLines(state);

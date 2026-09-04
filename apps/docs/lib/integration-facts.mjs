@@ -48,7 +48,7 @@ export const CODEX_INTEGRATION = {
     'codex plugin add adlc-codex@adlc',
     'adlc init --root /absolute/path/to/project',
   ],
-  note: 'Install @adlc/cli 1.11.0 or newer from npm — the context-rot handoff gate fails closed below it and denies every mutating tool call. Then install the native plugin from the Codex Git marketplace. Keep the CLI and plugin updated together, and start a new Codex thread after installation or upgrade.',
+  note: 'Install @adlc/cli from npm — see docs/toolkit.md\'s Version requirements for the shared CLI/plugin lockstep-versioning floor. Then install the native plugin from the Codex Git marketplace. Keep the CLI and plugin updated together, and start a new Codex thread after installation or upgrade.',
   pluginDir: 'plugins/adlc-codex',
   hero: {
     kicker: 'Codex integration',
@@ -212,11 +212,11 @@ export const CLAUDE_CODE_INTEGRATION = {
   surfaces: [
     {
       key: 'commands',
-      count: 7,
+      count: 8,
       label: 'commands',
       title: 'Slash commands for each gate',
-      detail: 'Each of init, ticket, spec, approve-spec, prosecute, distill, and maintain has its own /adlc:* command — P1 interrogation and the G1 human approval included.',
-      items: ['/adlc:adlc-init', '/adlc:adlc-ticket', '/adlc:adlc-spec', '/adlc:adlc-approve-spec', '/adlc:adlc-prosecute', '/adlc:adlc-distill', '/adlc:adlc-maintain'],
+      detail: 'Each of init, ticket, spec, approve-spec, prosecute, distill, maintain, and autopilot has its own /adlc:* command — P1 interrogation, the G1 human approval, and the operator window onto the issue autopilot included.',
+      items: ['/adlc:adlc-init', '/adlc:adlc-ticket', '/adlc:adlc-spec', '/adlc:adlc-approve-spec', '/adlc:adlc-prosecute', '/adlc:adlc-distill', '/adlc:adlc-maintain', '/adlc:adlc-autopilot'],
     },
     {
       key: 'hooks',

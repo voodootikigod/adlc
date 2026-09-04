@@ -417,19 +417,19 @@ test('malformed stdin fails closed', () => {
   assert.match(r.out, /malformed hook payload JSON/);
 });
 
-test('hooks.json wires the handoff hook on the PreToolUse mutation matcher', () => {
+// adlc-handoff-gate.mjs itself stays fully implemented and tested above —
+// only its hooks.json wiring is pulled, so real sessions never invoke it
+// while it is not yet ready. Re-add the removed PreToolUse entry (see git
+// history on this test / plugins/adlc-codex/hooks/hooks.json) to reconnect,
+// and restore the matcher-coverage assertions this test carried before.
+test('hooks.json does not wire the handoff hook — disconnected pending stabilization', () => {
   const wiring = JSON.parse(readFileSync(join(HOOKS_DIR, 'hooks.json'), 'utf8'));
   const pre = wiring.hooks.PreToolUse;
   assert.ok(Array.isArray(pre) && pre.length > 0);
   const entry = pre.find((group) =>
     group.hooks.some((h) => h.command.includes('adlc-handoff-gate.mjs')),
   );
-  assert.ok(entry, 'PreToolUse must run adlc-handoff-gate.mjs');
-  // The matcher must cover both structured edits and the shell, or the
-  // fail-closed-all rule has a hole the deny-set cannot see.
-  for (const tool of ['apply_patch', 'write', 'Edit', 'Bash', 'exec_command', 'write_stdin']) {
-    assert.match(tool, new RegExp(entry.matcher), `matcher must cover ${tool}`);
-  }
+  assert.ok(!entry, 'PreToolUse must not run adlc-handoff-gate.mjs');
 });
 
 test('the plugin ships the new hook and its resolver', () => {
@@ -602,7 +602,54 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
   assert.equal(r.verdict, 'deny');
   assert.ok(r.out.includes(REAL_NODE), r.out);
   assert.ok(r.out.includes(REAL_RECOVERY_CLI), r.out);
-  assert.match(r.out, /bypass --session consumer-diag --write/);
+  assert.match(r.out, /bypass --session consumer-diag\n\(dry run/);
+});
+
+// #970 D5: see the identical test/rationale in
+// plugins/adlc-claude-code/hooks/test/handoff-deny.test.mjs — round-7 review
+// found the unconditional fresh-session recommendation overclaims whenever
+// an open deny record (D3) is what's blocking, since a fresh session id is
+// not authorized against that record either. Only D1/D2 (this session's own
+// re-entry/denier status, with no open record left to check) are genuinely
+// cleared by a fresh id.
+test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', () => {
+  const r = runHandoff({
+    sessionId: 'denier-sticky-fresh',
+    seedDeny: (root) => {
+      seedForeignDeny('denier-sticky-fresh')(root);
+      writeDenyRecord(root, {
+        session_id: 'denier-sticky-fresh',
+        ticket_id: 'T1',
+        content_hash: 'abc',
+        status: 'consumed',
+        since: new Date().toISOString(),
+        host: 'test',
+        schema: 1,
+      });
+    },
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.doesNotMatch(r.out, /D3:/, 'sanity: the consumed record must not also carry an open-record reason');
+  const freshSessionIdx = r.out.indexOf('fresh session');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(freshSessionIdx >= 0, `no fresh-session mention:\n${r.out}`);
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.ok(freshSessionIdx < resumeIdx, `fresh-session must be read before resume:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
+  assert.doesNotMatch(r.out, /hits the same deny/, 'must not claim fresh session fails when it genuinely works');
+});
+
+test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', () => {
+  const r = runHandoff({
+    sessionId: 'consumer-ordering',
+    seedDeny: seedForeignDeny('denier-ordering'),
+  });
+  assert.equal(r.verdict, 'deny');
+  assert.match(r.out, /D3:unauthorized_open:denier-ordering/, 'sanity: a foreign open record carries D3');
+  assert.match(r.out, /hits the same deny/, 'must say a fresh session does not escape an open record');
+  const resumeIdx = r.out.indexOf('adlc handoff resume');
+  assert.ok(resumeIdx >= 0, `no resume mention:\n${r.out}`);
+  assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
 });
 
 test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
@@ -723,7 +770,9 @@ test('recoveryDiagnostic prints a real, absolute, session-bound recovery command
   // via this file's own trusted local twins.
   const { recoveryDiagnostic } = await import('../adlc-handoff-gate.mjs');
   const out = recoveryDiagnostic('sess-a');
-  assert.match(out, /bypass --session sess-a --write/);
+  // #970 D6: dry-run form only, no directly-runnable --write.
+  assert.match(out, /bypass --session sess-a\n\(dry run/);
+  assert.doesNotMatch(out, /bypass --session sess-a --write/);
   assert.doesNotMatch(out, /Recovery command unavailable/);
 });
 

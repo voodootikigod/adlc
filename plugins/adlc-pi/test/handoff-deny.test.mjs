@@ -138,7 +138,11 @@ function fakeCtx(cwd, { percent } = {}) {
 
 async function boot(root, { percent, sessionEvent, sessionId } = {}) {
   const pi = fakePi();
-  createExtension({ env: {} })(pi);
+  // The handoff call site defaults off (CONTEXT_ROT_HANDOFF_ENABLED reads
+  // env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED, see ../lib/extension.mjs) — this
+  // suite exercises the real deny-set, so it opts in explicitly. No
+  // production caller sets this, so real sessions stay unaffected.
+  createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
   const ctx = fakeCtx(root, { percent });
   if (sessionId) ctx.sessionManager = { getSessionId: () => sessionId };
   await pi.handlers.session_start(
@@ -515,7 +519,7 @@ test('a THROWING getContextUsage fails closed, an absent one does not', async ()
     // absence of one. Collapsing the two would let a 95%-full session through
     // on a transient error.
     const pi = fakePi();
-    createExtension({ env: {} })(pi);
+    createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
     const ctx = fakeCtx(root);
     ctx.getContextUsage = () => {
       throw new Error('transient');
@@ -684,7 +688,13 @@ test('the deny text carries a session-bound recovery command', async () => {
     assert.equal(verdict.block, true);
     assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
     assert.match(verdict.reason, /bypass --session my-session /, 'bound to this session');
-    assert.match(verdict.reason, / --write(\s|$)/, 'copy-pasteable and persisting');
+    // D6 (round 2 review): the auto-printed command is the dry-run form
+    // only — --write is never directly appended to the copy-pasteable
+    // `--dir <path>` prefix — with the key requirement explained
+    // separately (as prose elsewhere in the message), matching
+    // claude-code/codex/opencode.
+    assert.doesNotMatch(verdict.reason, /--dir \S+ --write\b/);
+    assert.match(verdict.reason, /ADLC_MANIFEST_KEY/, 'names what actually gates a real bypass');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -736,12 +746,17 @@ test('the recovery command degrades rather than emitting a broken one', () => {
   };
   assert.equal(
     formatRecoveryCommand(base),
-    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc --write',
+    '/usr/bin/node /opt/adlc/bin/handoff.mjs bypass --session sess-a --dir /srv/repo/.adlc\n' +
+      '(dry run — inspects only, mutates nothing). Clearing the deny needs a human operator holding ' +
+      'ADLC_MANIFEST_KEY to add --write themselves; that is deliberately not spelled out as a single runnable line.',
   );
   assert.match(
     formatRecoveryCommand({ ...base, unbound: true }),
     /bypass --session sess-a --unbound-reason \S+ --dir /,
   );
+  // D6 (round 2 review): the auto-printed command must never carry --write
+  // directly appended to the copy-pasteable prefix.
+  assert.doesNotMatch(formatRecoveryCommand(base), /--dir \S+ --write\b/);
 
   // A path needing quoting is quoted; one that cannot be quoted at all degrades
   // to prose rather than a command that would break out of its own quoting.
@@ -848,12 +863,16 @@ test('the printed command actually clears a real band-generated foreign deny', a
     assert.equal(denied.decision, 'deny');
     assert.match(denied.reason, /D3:unauthorized_open:sess-A/);
 
-    // Pull the command out of the message exactly as an operator would.
-    const command = denied.reason
-      .split('\n')
-      .find((line) => line.includes('bypass --session'))
-      ?.replace(/^[^:]*: /, '');
-    assert.ok(command, `no command line in:\n${denied.reason}`);
+    // Pull the command out of the message exactly as an operator would, then
+    // deliberately add --write themselves (D6: the auto-printed form never
+    // carries it).
+    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+    assert.ok(printedLine, `no command line in:\n${denied.reason}`);
+    // The command now sits alone on its own line (#970 remediation: it must
+    // never be concatenated with the explanatory prose), so `printedLine`
+    // IS the command already — no need to strip a trailing "(dry run..." tail.
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
+    const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
       shell: true,
@@ -861,7 +880,7 @@ test('the printed command actually clears a real band-generated foreign deny', a
       env: { ...process.env, ADLC_MANIFEST_KEY: key },
       encoding: 'utf8',
     });
-    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
+    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
 
     assert.equal(askB().decision, 'allow', 'the printed command must actually unblock the caller');
     assert.equal(askB().decision, 'deny', 'and be consumed by that one mutation, as the text says');
@@ -1149,8 +1168,14 @@ test('shell metacharacters in a repo path are quoted, never emitted bare', () =>
     assert.ok(command.includes(`--dir '${adlcDir}'`), `must single-quote ${adlcDir}: ${command}`);
   }
   // A path with nothing special stays unquoted, so the quoting is real and not
-  // an unconditional wrap that would prove nothing.
-  assert.ok(formatRecoveryCommand({ ...base, adlcDir: '/srv/plain/.adlc' }).includes('--dir /srv/plain/.adlc '));
+  // an unconditional wrap that would prove nothing. --dir is the last token on
+  // the command's own first line (the prose explanation follows on the next
+  // line — #970), so check the line ending rather than a trailing space.
+  assert.ok(
+    formatRecoveryCommand({ ...base, adlcDir: '/srv/plain/.adlc' })
+      .split('\n')[0]
+      .endsWith('--dir /srv/plain/.adlc'),
+  );
 });
 
 test('a diagnostic that cannot be a command is never labelled as one', () => {
@@ -1614,10 +1639,13 @@ test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', ()
   );
 });
 
-test('the command printed for a store fault actually lifts it', () => {
+test('the command printed for a store fault, with --write deliberately added by a human, actually lifts it', () => {
   // The end-to-end check that would have caught my own false claim: run the
-  // exact string the store-fault message prints and see whether the next call
-  // is allowed. It is — the unbound form lifts D0 where a bound one does not.
+  // printed dry-run command (as a human operator would, after reading it and
+  // deliberately adding --write themselves — round 2 review: the auto-printed
+  // form itself must never carry --write, see D6) and see whether the next
+  // call is allowed. It is — the unbound form lifts D0 where a bound one does
+  // not.
   const key = 'k'.repeat(64);
   const root = makeRepo();
   try {
@@ -1636,11 +1664,14 @@ test('the command printed for a store fault actually lifts it', () => {
     const denied = ask();
     assert.deepEqual(denied.reasons, ['D0:deny_store_unavailable'], 'a clean store fault, nothing else');
 
-    const command = denied.reason
-      .split('\n')
-      .find((line) => line.includes('bypass --session'))
-      ?.replace(/^[^:]*: /, '');
-    assert.ok(command, `no command printed for a store fault:\n${denied.reason}`);
+    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+    assert.ok(printedLine, `no command printed for a store fault:\n${denied.reason}`);
+    assert.doesNotMatch(printedLine, /--dir \S+ --write\b/, 'the auto-printed command must never carry --write directly (D6)');
+    // The command now sits alone on its own line (#970 remediation: it must
+    // never be concatenated with the explanatory prose), so `printedLine`
+    // IS the command already — no need to strip a trailing "(dry run..." tail.
+    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
+    const command = `${dryRunCommand} --write`;
 
     const run = spawnSync(command, {
       shell: true,
@@ -1648,8 +1679,8 @@ test('the command printed for a store fault actually lifts it', () => {
       env: { ...process.env, ADLC_MANIFEST_KEY: key },
       encoding: 'utf8',
     });
-    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
-    assert.equal(ask().decision, 'allow', 'the printed command must lift the store fault');
+    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
+    assert.equal(ask().decision, 'allow', 'the printed command, with --write deliberately added, must lift the store fault');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1820,6 +1851,14 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
     cliPath: null,
   });
   assert.match(storeFault, /--unbound-reason/, 'a bound grant does not lift a store fault');
+  // Exact text, placeholders included (mutation regression: a corrupted
+  // `<id>`/`<text>` placeholder delimiter is a defect an operator would
+  // paste verbatim, same class as any other malformed placeholder in this
+  // file — see the CLI-cannot-be-resolved / store-fault fallback below).
+  assert.match(
+    storeFault,
+    /`adlc handoff bypass --session <id> --unbound-reason <text>` \(add --write yourself once ready to mutate\) — a bound grant does not lift a store fault\./,
+  );
 
   const ordinary = handoffRecoveryDiagnostic({
     sessionId: 'sess-a',
@@ -1829,6 +1868,17 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
     cliPath: null,
   });
   assert.match(ordinary, /bypass\|repair\|resume/);
+
+  // D6 (#970): this is a SEPARATE literal template from formatRecoveryCommand
+  // (recovery-exception.mjs) — reached only when @adlc/context-handoff could
+  // not be resolved, so the normal formatter never runs. It must follow the
+  // same dry-run-only contract: no auto-printed command may carry --write.
+  const commands = [...storeFault.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  assert.ok(commands.length >= 1, `expected at least one printed command:\n${storeFault}`);
+  for (const command of commands) {
+    assert.doesNotMatch(command, /--write\b/, `a printed command must never auto-carry --write: ${command}`);
+  }
+  assert.match(storeFault, /add --write yourself/, 'must still say how to escalate deliberately');
 });
 
 test('a directory contaminated by the old bug is not an ADLC repo', () => {
@@ -2095,7 +2145,13 @@ test('the printed --dir is the real path, not a symlink to it', () => {
       hasManifestKey: true,
       cliPath: '/opt/adlc/bin/handoff.mjs',
     });
-    assert.ok(viaLink.includes(`--dir ${join(real, '.adlc')} `), `expected the real path: ${viaLink}`);
+    // --dir is the last token on the command's own first line (the prose
+    // explanation follows on the next line — #970), so check the line
+    // ending rather than a trailing space.
+    assert.ok(
+      viaLink.split('\n')[0].endsWith(`--dir ${join(real, '.adlc')}`),
+      `expected the real path: ${viaLink}`,
+    );
     assert.ok(!viaLink.includes(link), 'the symlink must not appear in a pasted command');
   } finally {
     rmSync(real, { recursive: true, force: true });
@@ -2196,8 +2252,14 @@ test('a symlinked .adlc shows its real target in the removal command', () => {
     assert.doesNotMatch(text, /rm -rf \.adlc/, 'never the relative form that hides the hop');
 
     // `--dir` keeps the unresolved spelling on purpose: the CLI requires that
-    // argument's last segment to be `.adlc`, which the target is not.
-    assert.ok(text.includes(`--dir ${join(repo, '.adlc')} `), 'the CLI argument stays .adlc-suffixed');
+    // argument's last segment to be `.adlc`, which the target is not. It is
+    // also the last token on the command's own first line (the prose
+    // explanation follows on the next line — #970), so check the line
+    // ending rather than a trailing space.
+    assert.ok(
+      text.split('\n')[0].endsWith(`--dir ${join(repo, '.adlc')}`),
+      'the CLI argument stays .adlc-suffixed',
+    );
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

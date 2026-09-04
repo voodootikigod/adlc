@@ -55,8 +55,13 @@ than in a version range.
   to the system prompt each turn (the body fenced as untrusted).
 - **Native tools** — `adlc_prosecute` runs the deterministic P5 review loop in-session;
   `adlc_gate` runs the LLM-backed gates keyless through your session model.
-- **Commands + footer pill** — `/ticket`, `/adlc-init`, `/adlc-accept`, and a live status
-  pill for the active enforcement context.
+- **Commands + footer pill** — `/ticket`, `/adlc-init`, `/adlc-accept`, and a live
+  widget (ticket, context %, degraded flag, plus hints) in the footer pill.
+- **Completion hints** — when a session ends with a claimed-done ticket but
+  no acceptance, or when lesson-foundry/skill-rot evidence goes stale
+  (`ADLC_P7_STALE_DAYS`, default 14), the next session's widget says so — the
+  third widget line prioritizes `P6 pending: run /adlc-accept` ahead of
+  `P7 stale:` ahead of the last-gate summary.
 - **Skills** — `adlc` (phase router), `adlc-spec` (P0–P2), `adlc-rail-build` (P3–P4),
   `adlc-prosecute` (P5–P6), `adlc-distill` (P7).
 

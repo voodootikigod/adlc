@@ -133,6 +133,192 @@ test('scaffold --harness cursor writes cursor harness config and skips Codex age
   });
 });
 
+// #970 D7: configForHarness's old ternary special-cased only cursor/copilot
+// and silently mapped EVERY other value — including the real names of four
+// other supported harnesses — to "codex". A fresh repo scaffolded from
+// inside a Claude Code (or pi, or opencode, or gemini) session got a config
+// claiming codex, with no warning.
+for (const harness of ['claude-code', 'pi', 'opencode', 'gemini']) {
+  test(`scaffold --harness ${harness} registers the real harness name, not codex (D7)`, () => {
+    fixture((root) => {
+      const result = scaffold({ root, harness });
+      const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+      assert.equal(cfg.securityMode, 'unsigned-fallback');
+      assert.equal(cfg.harnesses[harness].railEnforcement, 'auto');
+      assert.equal(cfg.harnesses.codex, undefined);
+      assert.deepEqual(result.warnings, [], 'an explicit --harness must never warn');
+      // A non-Codex harness must not be scaffolded with Codex agent
+      // templates by default (adversarial review, round 1) — codexAgents
+      // was only ever suppressed for cursor/copilot, so extending
+      // --harness to these four names without extending the suppression
+      // meant a claude-code/pi/opencode/gemini repo got .codex/ pollution.
+      assert.equal(existsSync(join(root, '.codex')), false, `--harness ${harness} must not scaffold .codex/`);
+    });
+  });
+}
+
+test('scaffold --harness codex (or no --harness) still defaults codexAgents to true', () => {
+  fixture((root) => {
+    scaffold({ root, harness: 'codex' });
+    assert.ok(existsSync(join(root, '.codex', 'agents')), '--harness codex must still scaffold .codex/agents');
+  });
+  fixture((root) => {
+    scaffold({ root });
+    assert.ok(existsSync(join(root, '.codex', 'agents')), 'no --harness must still default to scaffolding .codex/agents');
+  });
+});
+
+test('scaffold with no --harness at all still defaults to codex, but WARNS rather than mislabeling silently (D7)', () => {
+  fixture((root) => {
+    const result = scaffold({ root });
+    const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.equal(cfg.harnesses.codex.railEnforcement, 'auto');
+    // Round-2 review, correcting round 1's `notices` split: the harness
+    // guess belongs in `result.warnings` — the one documented,
+    // JSON-consumer-visible contract (bin/adlc-init.mjs's own `ok =
+    // warnings.length === 0` reporting path) — not a second, undocumented
+    // channel a --json caller would never think to check.
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /--harness/);
+    assert.match(result.warnings[0], /codex/);
+    for (const name of ['cursor', 'copilot', 'claude-code', 'pi', 'opencode', 'gemini']) {
+      assert.match(result.warnings[0], new RegExp(name), `warning must name ${name} as a recognized value`);
+    }
+    // Pins the exact `--harness <a|b|c>` placeholder syntax (mutation
+    // regression: an operator that flips `<` to `>=` inside the template
+    // literal changes printed text no earlier assertion here observed).
+    assert.match(
+      result.warnings[0],
+      /--harness <codex\|cursor\|copilot\|claude-code\|pi\|opencode\|gemini>/,
+      'warning must render the accepted values as a literal <a|b|c> placeholder',
+    );
+  });
+});
+
+test('an idempotent re-scaffold with no --harness re-warns every time (D7)', () => {
+  // Gating the warning on result.created would mean a second no-harness run
+  // against an already-existing config stays silent — even one whose
+  // config.json is itself a stale guess from an earlier no-harness run. The
+  // ambiguity is a property of THIS invocation's arguments (no --harness
+  // passed), not of whether a write happened this time, so it must be
+  // reported every time.
+  fixture((root) => {
+    const first = scaffold({ root });
+    assert.equal(first.warnings.length, 1);
+    const second = scaffold({ root });
+    assert.equal(second.warnings.length, 1, 'omitting --harness is still ambiguous on a re-run');
+    assert.match(second.warnings[0], /--harness/);
+    assert.match(second.warnings[0], /codex/);
+  });
+});
+
+test('explicit --harness after a bare init actually corrects the stale guess (round-6 review)', () => {
+  // writeOrReconcileConfig reconciles just the requested harness into an
+  // already-existing config.json rather than leaving it untouched — the
+  // warning from the FIRST (guessing) call told the operator to "pass
+  // --harness ... naming the harness you actually use", so doing exactly
+  // that must actually register it. Every other field (the stale codex
+  // entry, securityMode) survives — this is a merge, not a rewrite.
+  fixture((root) => {
+    const first = scaffold({ root });
+    assert.equal(first.warnings.length, 1);
+    const beforeCfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+
+    const second = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(second.warnings, [], 'an explicit --harness never itself warns');
+    assert.deepEqual(second.updated.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    const afterCfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.deepEqual(afterCfg.harnesses.pi, { railEnforcement: 'auto' }, 'pi is now registered');
+    assert.deepEqual(afterCfg.harnesses.codex, beforeCfg.harnesses.codex, 'the pre-existing codex entry survives untouched');
+    assert.equal(afterCfg.securityMode, beforeCfg.securityMode, 'unrelated fields are preserved, not rewritten');
+
+    // Idempotent: registering the SAME harness again is a true no-op.
+    const third = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(third.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.equal(third.updated.includes('.adlc/config.json'), false);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), afterCfg);
+  });
+});
+
+test('a re-scaffold that DOES pass --harness never warns, whether or not the config already exists', () => {
+  fixture((root) => {
+    const first = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(first.warnings, []);
+    const second = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(second.warnings, [], '--harness was given both times, so nothing is ambiguous');
+  });
+});
+
+test('reconciling --harness against a corrupt or shape-mismatched existing config.json degrades to unchanged, never crashes or corrupts further', () => {
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc/config.json'), '{ not valid json');
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.equal(readFileSync(join(root, '.adlc/config.json'), 'utf8'), '{ not valid json', 'left exactly as found');
+  });
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    // Valid JSON, but the top level is an array — a shape this function does
+    // not understand at all — so it is left exactly as found rather than
+    // guessing at a merge target.
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify(['not', 'an', 'object']));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), ['not', 'an', 'object']);
+  });
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    // Valid JSON, top-level object, but "harnesses" itself is the WRONG
+    // shape (not a plain object) — cannot safely merge a harness entry into
+    // it, so leave it exactly as found rather than clobbering it.
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1, harnesses: 'codex' }));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.unchanged.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8')), { version: 1, harnesses: 'codex' });
+  });
+});
+
+test('reconciling --harness against a valid existing config.json with NO harnesses field creates one (round-7 review)', () => {
+  // A different plugin's own scaffolder (e.g. cursor, opencode) can create a
+  // valid .adlc/config.json without a "harnesses" field at all. Round 6's
+  // reconciliation fix only merged into an EXISTING harnesses object and
+  // left this case unregistered — extend it to create the field.
+  fixture((root) => {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc/config.json'), JSON.stringify({ version: 1, securityMode: 'unsigned-fallback' }));
+    const result = scaffold({ root, harness: 'pi' });
+    assert.deepEqual(result.updated.filter((p) => p === '.adlc/config.json'), ['.adlc/config.json']);
+    const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+    assert.deepEqual(cfg.harnesses, { pi: { railEnforcement: 'auto' } });
+    assert.equal(cfg.securityMode, 'unsigned-fallback', 'unrelated fields are preserved');
+    assert.equal(cfg.version, 1);
+  });
+});
+
+test('CLI still exits 0 for a bare `adlc init` with no --harness, even though it now carries a warning (D7)', () => {
+  // The harness guess is advisory, not a broken/ambiguous store — it must
+  // not turn the single most common invocation, bare `adlc init`, into a
+  // failing run by default. The CLI's ok/exit-code contract distinguishes
+  // this ADVISORY_WARNING_PREFIX class from every OTHER warning (a broken
+  // store, a corrupt manifest) rather than treating result.warnings as
+  // uniformly fatal.
+  fixture((root) => {
+    const result = JSON.parse(execFileSync(process.execPath, [BIN, '--root', root, '--json'], { encoding: 'utf8' }));
+    assert.equal(result.ok, true);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /--harness/);
+  });
+});
+
+// #970 D8: securityMode: 'unsigned-fallback' weakens config-integrity
+// verification with zero user-facing documentation of what that means.
+test('scaffold documents what unsigned-fallback weakens, in the README (D8)', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  assert.match(readme, /unsigned-fallback/);
+  assert.match(readme, /unsigned/i);
+});
+
 test('fresh scaffold yields a usable ticket store: create --write succeeds and reads back', () => {
   fixture((root) => {
     const scaffolded = scaffold({ root });
@@ -143,7 +329,10 @@ test('fresh scaffold yields a usable ticket store: create --write succeeds and r
     // silent bookkeeping regression here is exactly the hollow-test class T55 warns of.
     assert.ok(scaffolded.created.includes('.adlc/tickets/.store.json'));
     assert.ok(scaffolded.created.includes('.adlc/ticket-archive/.store.json'));
-    assert.equal(scaffolded.warnings.length, 0);
+    // The one expected warning here is the D7 harness-guess advisory (no
+    // --harness was passed) — the ticket-store provisioning itself must
+    // still carry none.
+    assert.deepEqual(scaffolded.warnings, scaffolded.warnings.filter((w) => w.includes('--harness')));
 
     const input = join(root, 'ticket.json');
     writeFileSync(input, JSON.stringify({ id: 'T1', title: 'first ticket' }));
@@ -242,9 +431,13 @@ test('scaffold warns for a directory store with a corrupt manifest rather than r
 });
 
 test('the ticket-store step is idempotent: a second scaffold reports it unchanged, not recreated', () => {
+  // An explicit --harness keeps this test's concern (ticket-store
+  // idempotency) isolated from the separate no-harness warning contract:
+  // that warning fires on every no-harness call, regardless of
+  // create/update/unchanged state — see the D7 tests above.
   fixture((root) => {
-    scaffold({ root, codexAgents: false });
-    const second = scaffold({ root, codexAgents: false });
+    scaffold({ root, harness: 'codex', codexAgents: false });
+    const second = scaffold({ root, harness: 'codex', codexAgents: false });
     assert.equal(second.warnings.length, 0);
     assert.ok(second.unchanged.includes('.adlc/tickets/.store.json'));
     assert.ok(second.unchanged.includes('.adlc/ticket-archive/.store.json'));
@@ -291,5 +484,38 @@ test('CLI --harness cursor implies no Codex agents', () => {
     assert.equal(existsSync(join(root, '.codex')), false);
     const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
     assert.equal(cfg.harnesses.cursor.railEnforcement, 'auto');
+  });
+});
+
+// #970 D7: the CLI parser only ever accepted codex|cursor|copilot — there
+// was no flag spelling that could register claude-code/pi/opencode/gemini
+// at all, so a fresh scaffold from any of those hosts had no correct value
+// to pass even if the operator knew to look for one.
+for (const harness of ['claude-code', 'pi', 'opencode', 'gemini']) {
+  test(`CLI --harness ${harness} registers the real harness name (D7)`, () => {
+    fixture((root) => {
+      const result = JSON.parse(
+        execFileSync(process.execPath, [BIN, '--root', root, '--harness', harness, '--json'], { encoding: 'utf8' }),
+      );
+      assert.equal(result.ok, true);
+      const cfg = JSON.parse(readFileSync(join(root, '.adlc/config.json'), 'utf8'));
+      assert.equal(cfg.harnesses[harness].railEnforcement, 'auto');
+      assert.equal(cfg.harnesses.codex, undefined);
+    });
+  });
+}
+
+test('CLI rejects an unrecognized --harness value, naming every accepted one', () => {
+  fixture((root) => {
+    assert.throws(
+      () => execFileSync(process.execPath, [BIN, '--root', root, '--harness', 'nonexistent-host'], { encoding: 'utf8', stdio: 'pipe' }),
+      (err) => {
+        const text = String(err.stderr ?? err.stdout ?? err.message);
+        for (const name of ['codex', 'cursor', 'copilot', 'claude-code', 'pi', 'opencode', 'gemini']) {
+          assert.match(text, new RegExp(name), `error must name ${name} as an accepted value`);
+        }
+        return true;
+      },
+    );
   });
 });

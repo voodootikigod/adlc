@@ -1,0 +1,80 @@
+---
+title: autopilot
+description: Quota-gated local issue-to-PR loop. Picks the next GitHub issue, shapes an ADLC ticket, dispatches one sandboxed fleet run per issue, runs the outer gates, attests with a cross-model review and opens the PR. P6 (merge) stays human.
+---
+
+# autopilot
+
+**ADLC phase: P0 → P5 as a loop** · **Gate:** nothing is dispatched unless the operator's quota windows are below the threshold, the toolchain and remote identity are pinned, the pinned baseline's config and spec approval verify, and every phase transition is an existing ADLC gate.
+
+## What it defends against
+
+An open backlog that nobody is working while the operator is away. `autopilot`
+turns it into a stream of evidence-bearing PRs **without** a hosted substrate and
+**without** exceeding a subscription: it runs as a `systemd --user` service on the
+operator's machine, and every Claude-consuming step starts only when both the
+5-hour and the 7-day windows are under the threshold (default 50 %, tightenable,
+never loosenable).
+
+It adds no gate logic of its own. It is an issue picker + quota gate + rest loop
+that composes [`fleet`](./fleet): one ticket per run, so each issue gets its own
+branch and PR. Containment is fleet's bounded model plane (synthetic HOME, private
+tmp, per-file tool binds, a per-run git mirror as the worker's only git database,
+allowlisted egress to the model API). The orchestrator holds the manifest key; the
+worker never does.
+
+## Usage
+
+```sh
+adlc autopilot loop   [--rest <duration>] [--dry-run]
+adlc autopilot once   [--issue <n>] [--force] [--dry-run] [--dry-run-shape]
+adlc autopilot status [--json]
+adlc autopilot select [--top <n>] [--json]
+adlc autopilot quota  [--json] [--model <m>] [--quota-threshold <T>] [--quota-reserve <R>]
+adlc autopilot triage --issue <n> [--json]
+adlc autopilot reset  --issue <n> ( --confirm-delete <OID> [--delete-remote] | --attempts )
+adlc autopilot init   [--labels] [--service] [--write]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--repo <owner/name>` (or `ADLC_AUTOPILOT_REPO`) | Operator-local repository identity; required for `loop`/`once`. The committed config confirms it, never defines it. |
+| `--model` / `--adapter` | Operator-local worker model (default `opus`) and harness (`claude-code` only in v1). |
+| `--quota-threshold <T>` / `--quota-reserve <R>` | Operator-local: `T` 1–50 (default 50), `R` 0–49 and `< T` (default 5, applied to every start after the first in an iteration). |
+| `--issue <n>` / `--force` | Pin a candidate (bypasses scoring only) / lift exactly the five autopilot-owned stop labels. |
+| `--dry-run` | Print the full plan with zero mutations of any kind; the plan is always `complete: false` with an explicit skip list. |
+| `--ssh-identity <abs>` / `--trusted-bin-dirs <abs,…>` | Explicit SSH key (else the agent) / narrow the tool search list. |
+
+Repo-committed configuration lives under `autopilot` in `.adlc/config.json`
+(`restMinutes`, `maxOpenPrs`, `maxRounds`, `wallClockMinutes`, `ciFixRounds`,
+`ciWatchMinutes`, `reviewMaxBytes`, `repo`, `dispatchApproval`,
+`protectedPathsExtra`); the CLI may lower these, never raise them.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: the iteration completed (a run, a CLARIFY, a rest, or a clean dry-run).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error — preflight red (`untrusted-tool`, `repo-mismatch`, `key-file-insecure`, `spec-approval-stale`, …), lock held, bad input.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: a gate refused — a pinned issue is excluded (the rule is named), `reset` refused, a run was blocked.</span>
+</div>
+
+## Example
+
+```sh
+$ adlc autopilot once --issue 742 --dry-run --json
+{
+  "issue": 742,
+  "baseOid": "5ed5620484787794be922f80fc04bf99fe459812",
+  "ticket": { "title": "#742: …", "scope": ["packages/x/**"] },
+  "fleetArgv": ["…", "run", "--tickets", "T-01…", "--no-pr", "--no-complete", "--max-strikes", "15", "…"],
+  "complete": false,
+  "incomplete": ["fleet-dry-run-needs-worktree"]
+}
+exit 0
+```
+
+## Go deeper
+
+[packages/autopilot](https://github.com/voodootikigod/adlc/tree/main/packages/autopilot) ·
+[design spec](https://github.com/voodootikigod/adlc/blob/main/docs/specs/issue-autopilot-local.md) ·
+[ADR 0016](https://github.com/voodootikigod/adlc/blob/main/docs/adr/0016-issue-autopilot-local-substrate.md)

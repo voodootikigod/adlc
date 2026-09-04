@@ -128,6 +128,10 @@ export function packageSegments({ existsSync: exists = existsSync, readdirSync: 
 export const SEGMENTS = [
   ['generated-reader drift', 'node scripts/ticket-readers/generate.mjs --check'],
   ...packageSegments(),
+  // The autopilot's AC coverage gate executes every registered criterion and applies each
+  // mutation fixture (~3 min): enforced here in CI, opt-in per package so the per-mutant runs
+  // of the mutation gate do not repeat it.
+  ['autopilot AC gate', 'AUTOPILOT_GATE_FULL=1 node --test packages/autopilot/test/spec-coverage.test.mjs'],
   ['claude-code hooks', 'node --test plugins/adlc-claude-code/hooks/test/*.test.mjs'],
   ['claude-code lib', 'node --test plugins/adlc-claude-code/lib/test/*.test.mjs'],
   ['codex hooks', 'node --test plugins/adlc-codex/hooks/test/*.test.mjs'],
