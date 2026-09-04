@@ -138,3 +138,51 @@ test('never exits non-zero even on a garbage payload', () => {
     assert.equal(result.status, 0);
   });
 });
+
+// #809: a pathless, non-file-mutating structured tool must be recognized and
+// allowed even with an active railed ticket — not swept into the terminal
+// "no editable paths" deny meant for opaque/unrecognized mutators.
+
+test('adlc_gate (this plugin\'s own gate tool) → allow under active rails, no path', () => {
+  fixture((root) => {
+    const result = runCopilot(root, { toolName: 'adlc_gate', toolArgs: { gate: 'hollow-test', args: ['--json'] } });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), '', `expected allow (empty stdout), got: ${result.stdout}`);
+  });
+});
+
+test('adlc_prosecute (this plugin\'s own gate tool) → allow under active rails, real argument shape', () => {
+  fixture((root) => {
+    // Real inputSchema (packages/cli/lib/mcp-server.mjs): required input+ticket,
+    // `input` is a genuine relative file path (safeRelativePath), not apply_patch text.
+    const result = runCopilot(root, { toolName: 'adlc_prosecute', toolArgs: { input: 'p5-passes.json', ticket: 'T1' } });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), '', `expected allow (empty stdout), got: ${result.stdout}`);
+  });
+});
+
+test('todo_write → allow under active rails, no path', () => {
+  fixture((root) => {
+    const result = runCopilot(root, { toolName: 'todo_write', toolArgs: { todos: ['a'] } });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), '', `expected allow (empty stdout), got: ${result.stdout}`);
+  });
+});
+
+test('fetch → allow under active rails, no path', () => {
+  fixture((root) => {
+    const result = runCopilot(root, { toolName: 'fetch', toolArgs: { url: 'https://example.com' } });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), '', `expected allow (empty stdout), got: ${result.stdout}`);
+  });
+});
+
+test('an unrecognized opaque structured mutator with no path → still denies (fail-closed default not weakened)', () => {
+  fixture((root) => {
+    const result = runCopilot(root, { toolName: 'some_unknown_tool', toolArgs: { foo: 'bar' } });
+    assert.equal(result.status, 0);
+    const out = parseStdout(result);
+    assert.ok(out && out.reason, `expected a deny, got: ${result.stdout || '(empty=ALLOW)'}`);
+    assert.match(out.reason, /did not include any editable paths/);
+  });
+});

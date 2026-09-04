@@ -155,8 +155,18 @@ function collectPaths(value, out = new Set()) {
         if (typeof item === 'string') out.add(item);
         else collectPaths(item, out);
       }
-    } else if (['command', 'cmd', 'patch', 'input'].includes(key) && typeof child === 'string') {
+    } else if (['command', 'cmd', 'patch'].includes(key) && typeof child === 'string') {
       collectPatchPaths(child, out);
+    } else if (key === 'input' && typeof child === 'string') {
+      // `input` is overloaded across tool contracts: apply_patch-style tools
+      // pass patch TEXT here, but adlc_prosecute's `input` (packages/cli/lib/
+      // mcp-server.mjs) is a genuine relative file PATH, not patch text.
+      // Collect both interpretations — collectPatchPaths finds nothing for a
+      // bare filename (no `*** Add File:`-style line to match), and a real
+      // patch body never parses as a bare path (looksPathLike/looksBarePathLike
+      // reject embedded newlines), so this cannot double-count the same bytes.
+      collectPatchPaths(child, out);
+      if (looksPathLike(child) || looksBarePathLike(child)) out.add(child);
     } else {
       collectPaths(child, out);
     }
@@ -435,6 +445,17 @@ function toolName(payload) {
   return payload.tool_name ?? payload.toolName ?? payload.tool ?? payload.name ?? payload.recipient_name ?? '';
 }
 
+// #809: an EXACT whole-name allowlist of tools verified to never carry an
+// editable-file argument, consulted only when a call reaches the terminal
+// "no editable paths" branch. This narrows the false-positive surface for
+// specific, verified-safe tools without weakening the fail-closed default
+// for anything else — a tool NOT on this list, with zero collected paths,
+// still denies exactly as before. `adlc_gate`/`adlc_prosecute` are this
+// plugin's own MCP tools (packages/cli/lib/mcp-server.mjs — the only two
+// this plugin ships); `todo_write`/`fetch` are common pathless planning/read
+// tools with no file-mutation argument in their contract.
+const NON_MUTATING_TOOL_NAMES = new Set(['adlc_gate', 'adlc_prosecute', 'todo_write', 'fetch']);
+
 function isShellToolName(name) {
   return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
 }
@@ -602,6 +623,10 @@ if (expandingShellMutation) {
 if (paths.length === 0) {
   if (shellTool && !shellMutating && shellInvocations.length > 0 && shellInvocations.every(({ commandText }) => shellIsPositivelyReadOnly(commandText))) {
     notice('shell command has no editable rail targets');
+    process.exit(0);
+  }
+  if (!shellTool && NON_MUTATING_TOOL_NAMES.has(String(toolName(payload)))) {
+    notice(`non-mutating tool "${toolName(payload)}" has no editable rail targets`);
     process.exit(0);
   }
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
