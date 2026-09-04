@@ -40,9 +40,9 @@ export function isBlankTestCmd(value) {
 
 /**
  * Run all applicable checks based on flags.
- *
- * @param {object} opts
- * @param {string}  opts.cwd         - working directory (default process.cwd())
+ * @param {object} [opts]
+ * @param {string}  [opts.cwd]       - working directory (default process.cwd())
+ * @param {string}  [opts.dir]       - ADLC directory (default .adlc)
  * @param {boolean} opts.worktrees   - run worktrees check
  * @param {string}  opts.testCmd     - run test-cmd check with this command
  * @param {boolean} opts.gh          - run gh check
@@ -62,6 +62,7 @@ export async function runChecks(opts = {}) {
 
   const cwd = opts.cwd ?? process.cwd();
   const env = opts.env ?? process.env;
+  const dir = opts.dir;
   const results = [];
 
   // ── REQUIRED checks ─────────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ export async function runChecks(opts = {}) {
   const gitCheck = await checkGit(cwd);
   results.push({ ...gitCheck, required: true });
 
-  const writeCheck = await checkWrite(cwd);
+  const writeCheck = await checkWrite(cwd, { dir, env });
   results.push({ ...writeCheck, required: true });
 
   const branchCheck = await checkBranch(cwd);

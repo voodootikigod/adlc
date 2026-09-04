@@ -94,6 +94,24 @@ describe('checkWrite', () => {
     const tmpFile = join(dir, '.adlc', 'tmp', 'preflight-test');
     assert.equal(existsSync(tmpFile), false, 'preflight-test file should be cleaned up');
   });
+
+  it('supports custom options.dir', async () => {
+    const customDir = '.sdlc/.adlc';
+    const result = await checkWrite(dir, { dir: customDir });
+    assert.equal(result.status, 'pass');
+    assert.match(result.detail, /\.sdlc\/\.adlc\/tmp\/preflight-test written and removed/);
+    const tmpFile = join(dir, customDir, 'tmp', 'preflight-test');
+    assert.equal(existsSync(tmpFile), false, 'custom tmp file should be cleaned up');
+  });
+
+  it('supports options.env.ADLC_DIR', async () => {
+    const envDir = '.env-adlc';
+    const result = await checkWrite(dir, { env: { ADLC_DIR: envDir } });
+    assert.equal(result.status, 'pass');
+    assert.match(result.detail, /\.env-adlc\/tmp\/preflight-test written and removed/);
+    const tmpFile = join(dir, envDir, 'tmp', 'preflight-test');
+    assert.equal(existsSync(tmpFile), false, 'env tmp file should be cleaned up');
+  });
 });
 
 // ── checkBranch ───────────────────────────────────────────────────────────────

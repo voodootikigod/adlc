@@ -15,7 +15,7 @@ From the ADLC D2 field notes:
 ## Usage
 
 ```
-preflight [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
+preflight [--dir <path>] [--test-cmd "..."] [--gh] [--llm] [--worktrees] [--json]
 ```
 
 ### No flags — required checks only
@@ -30,13 +30,14 @@ a verdict line. Exit 0 if all pass; exit 2 if any fail.
 ### With optional checks
 
 ```
-preflight --test-cmd "npm test" --gh --llm --worktrees
+preflight --dir .sdlc/.adlc --test-cmd "npm test" --gh --llm --worktrees
 ```
 
 ## Flags
 
 | Flag | Type | Description |
 |------|------|-------------|
+| `--dir <path>` | string | ADLC directory used for write checks and temporary files (default: `.adlc` or `$ADLC_DIR`). |
 | `--test-cmd "CMD"` | string | Run CMD via `sh -c`, expect exit 0. Tail of output shown on failure. A passed-but-empty value (e.g. an unset `$TEST_CMD`) is rejected with exit 1 — `--test-cmd requires a non-empty command` — never silently skipped. |
 | `--gh` | boolean | Run `gh auth status`; expect exit 0. |
 | `--llm` | boolean | Call `detectProvider()` and assert it is non-null. No API call made. Reports which provider was found. |

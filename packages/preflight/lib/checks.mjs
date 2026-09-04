@@ -6,8 +6,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { detectProvider } from '@adlc/core';
-import { git } from '@adlc/core';
+import { detectProvider, git, ADLC_DIR } from '@adlc/core';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,17 +69,21 @@ export async function checkGit(cwd = process.cwd()) {
   }
 }
 
-/** REQUIRED: write — write+delete .adlc/tmp/preflight-test in cwd. */
-export async function checkWrite(cwd = process.cwd()) {
+/** REQUIRED: write — write+delete ${adlcDir}/tmp/preflight-test in cwd. */
+export async function checkWrite(cwd = process.cwd(), options = {}) {
   const name = 'write';
-  const dir = join(cwd, '.adlc', 'tmp');
+  const adlcDir = (typeof options.dir === 'string' && options.dir.trim())
+    ? options.dir.trim()
+    : (options.env?.ADLC_DIR ?? process.env.ADLC_DIR ?? ADLC_DIR);
+  const dir = join(cwd, adlcDir, 'tmp');
   const file = join(dir, 'preflight-test');
+  const relPath = join(adlcDir, 'tmp', 'preflight-test');
   let written = false;
   try {
     await mkdir(dir, { recursive: true });
     await writeFile(file, 'preflight-write-test');
     written = true;
-    return { name, status: 'pass', detail: `.adlc/tmp/preflight-test written and removed` };
+    return { name, status: 'pass', detail: `${relPath} written and removed` };
   } catch (err) {
     return { name, status: 'fail', detail: String(err.message ?? err) };
   } finally {
