@@ -1,9 +1,9 @@
 // flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, fstatSync, realpathSync, constants as fsConstants } from 'node:fs';
+import { join, relative, isAbsolute, dirname, parse, basename } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 export const DEFAULT_FLAIL_THRESHOLD = 3;
@@ -19,12 +19,15 @@ export const ERROR_LINE_RE = /error|exception|failed|cannot|ENOENT|FAIL|ERR!/i;
  */
 export function normalizeError(line) {
   if (typeof line !== 'string') return '';
+  if (line.length > 2048) line = line.slice(0, 2048);
   return line
     .toLowerCase()
     .replace(/0x[0-9a-f]+/gi, '')
     .replace(/"[^"]*"/g, '')
     .replace(/'[^']*'/g, '')
-    .replace(/(?:\b[A-Za-z]:\\[^\s]*|(?:\/|\b[\w.-]+\/)[^\s]*)/g, '')
+    .replace(/\b[A-Za-z]:\\[^\s]*/g, '')
+    .replace(/\b\S+\/[^\s]*/g, '')
+    .replace(/\/[^\s]*/g, '')
     .replace(/\d+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -69,16 +72,29 @@ export function detectRepeatedErrors(steps, maxRepeat = DEFAULT_ERROR_REPEAT_THR
  */
 export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
   const counts = new Map();
+  const baseCounts = new Map();
+  let totalEdits = 0;
   for (const line of logLines) {
     const match = typeof line === 'string' ? line.match(/^Editing\s+(.+)$/) : null;
     if (match?.[1]) {
+      totalEdits++;
       const path = match[1].trim();
       counts.set(path, (counts.get(path) ?? 0) + 1);
+      const base = basename(path).replace(/\d+/g, '#');
+      baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
     }
   }
   const result = [];
   for (const [path, count] of counts.entries()) {
     if (count >= threshold) result.push({ path, count });
+  }
+  for (const [base, count] of baseCounts.entries()) {
+    if (base.includes('#') && count >= threshold && !result.some((r) => r.path === base)) {
+      result.push({ path: `pattern:${base}`, count });
+    }
+  }
+  if (totalEdits >= threshold * 4 && result.length === 0) {
+    result.push({ path: 'total_edits_velocity', count: totalEdits });
   }
   return result;
 }
@@ -87,67 +103,196 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  * Resolve transcript path for a given agy conversation ID or payload.
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
+  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
+  const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
-  let cid = cidFromPayload;
-  if (!cid && !payload && typeof conversationId === 'string' && conversationId !== 'default_session') {
-    cid = conversationId;
+  const cidFromEnv = env?.ADLC_SESSION_ID ?? env?.AGY_SESSION_ID ?? env?.GEMINI_SESSION_ID;
+  let cid = cidFromPayload ?? (typeof conversationId === 'string' && conversationId !== 'default_session' ? conversationId : null) ?? (typeof cidFromEnv === 'string' && cidFromEnv !== 'default_session' ? cidFromEnv : null);
+
+  if (typeof direct === 'string' && direct.trim()) {
+    if (/(^|[/\\]).*transcript.*\.jsonl$/i.test(direct.trim())) {
+      try {
+        const lstat = lstatSync(direct);
+        if (!lstat.isSymbolicLink() && lstat.isFile()) {
+          const real = realpathSync(direct);
+          const isTest = (env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1');
+          const allowedRoots = [
+            appDataDir,
+            env?.ANTIGRAVITY_WORKSPACE,
+            env?.WORKSPACE_ROOT,
+            ...(isTest ? [tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])] : []),
+          ];
+          let isAllowed = allowedRoots.filter(Boolean).some((r) => {
+            try {
+              const realR = realpathSync(r);
+              const rel = relative(realR, real);
+              return !rel.startsWith('..') && !isAbsolute(rel);
+            } catch {
+              return false;
+            }
+          });
+          if (!isAllowed && isTest) {
+            let cur = dirname(real);
+            const { root: fsRoot } = parse(cur);
+            while (cur && cur !== fsRoot) {
+              if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
+                isAllowed = true;
+                break;
+              }
+              cur = dirname(cur);
+            }
+          }
+          if (isAllowed) return real;
+        }
+      } catch {
+        // not a regular file, inaccessible, symlink, or outside allowed roots
+      }
+    }
   }
   if (!cid || typeof cid !== 'string') return null;
   if (cid.includes('..') || cid.includes('/') || cid.includes('\\')) return null;
 
-  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
   const transcriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl');
-  if (existsSync(transcriptPath)) return transcriptPath;
+  try {
+    const lstat = lstatSync(transcriptPath);
+    if (!lstat.isSymbolicLink() && lstat.isFile()) return transcriptPath;
+  } catch {}
   const fullTranscriptPath = join(appDataDir, 'brain', cid, '.system_generated', 'logs', 'transcript_full.jsonl');
-  if (existsSync(fullTranscriptPath)) return fullTranscriptPath;
+  try {
+    const lstat = lstatSync(fullTranscriptPath);
+    if (!lstat.isSymbolicLink() && lstat.isFile()) return fullTranscriptPath;
+  } catch {}
   return null;
 }
 
-/**
- * Safely parse recent lines from an agy transcript JSONL file.
- */
-export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
-  if (!filePath || !existsSync(filePath)) return [];
+export function parseTranscriptRecords(filePath, options = {}) {
+  const maxScanBytes = typeof options === 'number' ? options : (options?.maxScanBytes ?? MAX_SCAN_BYTES);
+  const readFull = typeof options === 'object' && options?.readFull === true;
+  const maxRecords = typeof options === 'object' ? (options?.maxRecords ?? 50000) : 50000;
+  const maxLineLength = typeof options === 'object' ? (options?.maxLineLength ?? 1048576) : 1048576;
+  const maxTotalBytes = typeof options === 'object' ? (options?.maxTotalBytes ?? (16 * 1024 * 1024)) : (16 * 1024 * 1024);
+  if (!filePath) return [];
+  let fd;
   try {
-    const stat = statSync(filePath);
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    return [];
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return [];
+    const records = [];
+
+    if (readFull) {
+      const chunkSize = 65536;
+      const buf = Buffer.alloc(chunkSize);
+      let leftover = '';
+      let pos = 0;
+      let totalBytes = 0;
+      while (pos < stat.size) {
+        const toRead = Math.min(chunkSize, stat.size - pos);
+        const bytesRead = readSync(fd, buf, 0, toRead, pos);
+        if (bytesRead <= 0) break;
+        pos += bytesRead;
+        totalBytes += bytesRead;
+        if (totalBytes > maxTotalBytes) {
+          records.push({ content: 'oversized_transcript', __oversized: true });
+          return records;
+        }
+        const chunkStr = leftover + buf.toString('utf8', 0, bytesRead);
+        const lines = chunkStr.split('\n');
+        leftover = lines.pop() ?? '';
+        if (leftover.length > maxLineLength) {
+          records.push({ content: 'unterminated_oversized_line', __oversized: true });
+          return records;
+        }
+        for (const rawLine of lines) {
+          if (!rawLine.trim()) continue;
+          if (records.length >= maxRecords) {
+            records.push({ content: 'oversized_transcript', __oversized: true });
+            return records;
+          }
+          if (rawLine.length > maxLineLength) {
+            records.push({ content: 'oversized_line', __unparseable: true });
+            continue;
+          }
+          try {
+            records.push(JSON.parse(rawLine));
+          } catch {
+            records.push({ content: rawLine, __unparseable: true });
+          }
+        }
+      }
+      if (leftover.trim()) {
+        if (records.length >= maxRecords) {
+          records.push({ content: 'oversized_transcript', __oversized: true });
+        } else {
+          try {
+            records.push(JSON.parse(leftover));
+          } catch {
+            records.push({ content: leftover, __unparseable: true });
+          }
+        }
+      }
+      return records;
+    }
+
     let content = '';
     if (stat.size > maxScanBytes) {
-      const fd = openSync(filePath, 'r');
       const buf = Buffer.alloc(maxScanBytes);
       readSync(fd, buf, 0, maxScanBytes, stat.size - maxScanBytes);
-      closeSync(fd);
       content = buf.toString('utf8');
       const firstNewline = content.indexOf('\n');
       if (firstNewline !== -1) content = content.slice(firstNewline + 1);
     } else {
-      content = readFileSync(filePath, 'utf8');
+      const buf = Buffer.alloc(stat.size);
+      let pos = 0;
+      while (pos < stat.size) {
+        const n = readSync(fd, buf, pos, stat.size - pos, pos);
+        if (n <= 0) break;
+        pos += n;
+      }
+      content = buf.toString('utf8', 0, pos);
     }
-    const steps = [];
     for (const rawLine of content.split('\n')) {
       if (!rawLine.trim()) continue;
       try {
-        const obj = JSON.parse(rawLine);
-        const stepLines = [];
-        if (obj.content && typeof obj.content === 'string') {
-          stepLines.push(...obj.content.split('\n'));
-        }
-        if (obj.text && typeof obj.text === 'string') {
-          stepLines.push(...obj.text.split('\n'));
-        }
-        if (obj.message && typeof obj.message === 'string') {
-          stepLines.push(...obj.message.split('\n'));
-        }
-        if (stepLines.length > 0) {
-          steps.push(stepLines);
-        }
+        records.push(JSON.parse(rawLine));
       } catch {
-        steps.push([rawLine]);
+        records.push({ content: rawLine, __unparseable: true });
       }
     }
-    return steps;
+    return records;
   } catch {
     return [];
+  } finally {
+    try { closeSync(fd); } catch {}
   }
+}
+
+export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
+  const records = parseTranscriptRecords(filePath, maxScanBytes);
+  const steps = [];
+  for (const obj of records) {
+    if (!obj || typeof obj !== 'object') {
+      if (typeof obj === 'string' && obj.trim()) steps.push([obj]);
+      continue;
+    }
+    const stepLines = [];
+    if (typeof obj.content === 'string') {
+      stepLines.push(...obj.content.split('\n'));
+    }
+    if (typeof obj.text === 'string') {
+      stepLines.push(...obj.text.split('\n'));
+    }
+    if (typeof obj.message === 'string') {
+      stepLines.push(...obj.message.split('\n'));
+    }
+    if (stepLines.length > 0) {
+      steps.push(stepLines);
+    }
+  }
+  return steps;
 }
 
 export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
@@ -159,11 +304,11 @@ export function parseTranscriptLines(filePath, maxScanBytes = MAX_SCAN_BYTES) {
  */
 export function analyzeFlail({ edits = [], transcriptSteps = [], transcriptLines = [], threshold = DEFAULT_FLAIL_THRESHOLD, maxErrorRepeat = DEFAULT_ERROR_REPEAT_THRESHOLD } = {}) {
   const churning = detectEditChurn(edits, threshold);
-  const steps = [...edits.map(edit => [edit]), ...transcriptSteps];
+  const errorSteps = [...transcriptSteps];
   if (transcriptLines.length > 0 && transcriptSteps.length === 0) {
-    steps.push(...transcriptLines.map(line => [line]));
+    errorSteps.push(...transcriptLines.map(line => [line]));
   }
-  const repeatedErrors = detectRepeatedErrors(steps, maxErrorRepeat);
+  const repeatedErrors = detectRepeatedErrors(errorSteps, maxErrorRepeat);
 
   const signals = [];
   if (churning.length > 0) {

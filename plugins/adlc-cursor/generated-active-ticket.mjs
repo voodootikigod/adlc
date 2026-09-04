@@ -17,8 +17,8 @@
 // understand as "no pointer" is a fail-OPEN hole in a trust root: it silently
 // disables enforcement. Deactivation is deleting the file, not writing `{}`.
 
-import { existsSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export const CURRENT_TICKET_FILE = '.adlc/current-ticket.json';
 
@@ -26,23 +26,99 @@ export const CURRENT_TICKET_FILE = '.adlc/current-ticket.json';
 // above any legitimate pointer so a hostile giant file can never be slurped whole.
 const MAX_POINTER_BYTES = 64 * 1024;
 
+// Sentinel distinguishing "genuinely absent" (ENOENT on the pointer path itself,
+// with a real parent directory — the only legitimate "no active ticket" case)
+// from every other outcome, which readPointerFileBounded maps to a plain read
+// failure (null) so the caller fails CLOSED rather than treating it as absence.
+const ABSENT = Symbol('pointer-absent');
+
 // Read up to MAX_POINTER_BYTES of a REGULAR file without blocking. The pointer
 // root can be untrusted (issue #341: a harness may resolve it from an event
-// payload), so open O_NONBLOCK — a FIFO/device then never blocks the reader —
-// verify the type on the OPEN fd (a path swap after the check cannot matter; the
-// fd is bound to the inode), and read a bounded amount. Returns the text, or null
-// for a non-regular file or any error; the caller fails CLOSED on null.
+// payload), so:
+//
+// 1. The PARENT directory (.adlc) is lstat-checked first and must itself be a
+//    real directory, never a symlink: O_NOFOLLOW on the final open below only
+//    protects the LAST path component, so an attacker able to replace `.adlc`
+//    itself with a symlink to an external directory could otherwise redirect
+//    the read even though the leaf file's own no-follow open "succeeds"
+//    (agy cross-model review, round 7). This narrows — Node's fs module has no
+//    public FD-relative/openat() binding, which this Node-built-ins-only file
+//    cannot assume exists, so a walk like this cannot be made fully atomic
+//    against a parent directory replaced in the exact gap between this check
+//    and the open below — but it closes the STATIC case (the parent already
+//    swapped before this function runs), which is the realistic threat: an
+//    attacker able to win a microsecond race on top of that would already need
+//    a degree of concurrent local access this reader's threat model (a single
+//    untrusted pointer FILE, not a compromised filesystem) does not otherwise
+//    assume.
+// 2. lstatSync on the pointer path ITSELF, not just O_NOFOLLOW on the open
+//    (cross-platform finding, mirrors @adlc/gate-manifest/lib/lineage.mjs and
+//    @adlc/tickets/lib/manifest-segments.mjs's readBoundedJsonNoFollow exactly):
+//    O_NOFOLLOW's enforcement is not portable — Windows CI showed a symlinked
+//    marker silently followed elsewhere in this repo, since O_NOFOLLOW is not
+//    reliably honored there (Windows symlinks are reparse points, handled
+//    differently than POSIX symlinks by Node's fs layer). lstatSync + isFile()
+//    is a portable, OS-independent check that rejects a symlink OR an oversized
+//    pointer outright — a caller must never treat a truncated-but-parseable
+//    prefix (valid JSON followed by padding; JSON.parse ignores trailing
+//    whitespace) as a legitimate, unmodified pointer (round 6: a hand-rolled
+//    caller-side lstat check left a race between it and a separate open call —
+//    closing it here, once, for every harness). This ALSO replaces the old
+//    top-level existsSync(path) absence check in readActiveTicketPointer:
+//    existsSync FOLLOWS symlinks, so a DANGLING symlink at the pointer path
+//    (pointing at a nonexistent target) used to read as "genuinely absent" —
+//    present:false, ok:true — silently disabling enforcement entirely rather
+//    than failing closed on a present-but-untrustworthy pointer (round 7).
+// 3. O_NOFOLLOW stays on the open for its atomicity where it IS honored, and the
+//    post-open fstat re-verifies type and size on the OPENED fd (a path swap
+//    after a successful open cannot matter; the fd is bound to the inode) —
+//    the final, authoritative check regardless of what the open actually
+//    resolved to.
+//
+// Returns the text, ABSENT for a genuinely missing pointer with a real parent
+// directory, or null for a symlink (at the pointer path OR its parent), a
+// non-regular file, an oversized file, or any other error; the caller fails
+// CLOSED on null (never on ABSENT — that is the one legitimate "no active
+// ticket" outcome).
 function readPointerFileBounded(path) {
+  let parentLst;
+  try {
+    parentLst = lstatSync(dirname(path));
+  } catch (err) {
+    // .adlc itself does not exist: this repo is not (yet) ADLC-initialized,
+    // which is the same "no active ticket" outcome as a missing pointer file.
+    return err && err.code === 'ENOENT' ? ABSENT : null;
+  }
+  if (!parentLst.isDirectory()) return null; // .adlc itself is a symlink or other non-directory
+
+  let lst;
+  try {
+    lst = lstatSync(path);
+  } catch (err) {
+    return err && err.code === 'ENOENT' ? ABSENT : null;
+  }
+  if (!lst.isFile() || lst.size > MAX_POINTER_BYTES) return null;
+
   let fd;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
   } catch {
     return null;
   }
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile()) return null; // FIFO / directory / device → refuse
-    const length = Math.min(stat.size, MAX_POINTER_BYTES);
+    if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return null; // FIFO / directory / device / oversized → refuse
+    // Compare device+inode between the pre-open lstat and the post-open fstat:
+    // if a swap landed in the gap between them (the residual window O_NOFOLLOW
+    // does not close on platforms where it is not honored — see the comment
+    // above), the opened file's identity will differ from what was inspected,
+    // even though both individually "look like" a regular file (agy
+    // cross-model review, round 8). Not available on every platform (Windows
+    // FAT-family filesystems may report ino as 0 for both); when either side
+    // is unusable this falls back to whatever the individual checks already
+    // established rather than inventing a comparison neither side supports.
+    if (lst.dev !== 0 && lst.ino !== 0 && (stat.dev !== lst.dev || stat.ino !== lst.ino)) return null;
+    const length = stat.size;
     const buf = Buffer.allocUnsafe(length);
     // Loop: POSIX read(2) may return fewer bytes than requested (network/FUSE
     // rsize caps), so a single readSync could truncate a larger pointer.
@@ -103,9 +179,8 @@ function conflictMessage(envId, fileId) {
  */
 export function readActiveTicketPointer(root = '.') {
   const path = join(root, CURRENT_TICKET_FILE);
-  if (!existsSync(path)) return ok({ present: false });
-
   const raw = readPointerFileBounded(path);
+  if (raw === ABSENT) return ok({ present: false });
   if (raw === null) {
     return fail('operational', 'INVALID_CURRENT_TICKET', `cannot read ${CURRENT_TICKET_FILE} as a bounded regular file`);
   }

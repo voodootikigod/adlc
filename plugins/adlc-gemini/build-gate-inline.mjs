@@ -1,15 +1,19 @@
 // build-gate-inline.mjs — self-contained build-gate backstop for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, writeSync, closeSync, appendFileSync, fstatSync, readdirSync, realpathSync, constants as fsConstants } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { isAbsolute, join, relative } from 'node:path';
 import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
-import { resolveActiveTicketId } from './rails-checker.mjs';
-import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps } from './flail-inline.mjs';
+import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import { resolveActiveTicketId, isShellTool, classifyTool, extractCommandString } from './rails-checker.mjs';
+import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords } from './flail-inline.mjs';
 
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
-export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**'];
+export const LOCK_TTL_MS = 5000;
+export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json', '.adlc/sessions.json', '.adlc/sessions.lock/**', '.adlc/session-ledger.jsonl', '.adlc/.session-secret'];
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 
@@ -33,6 +37,69 @@ function isPidAlive(pid) {
     return process.kill(pid, 0);
   } catch (err) {
     return err.code !== 'ESRCH';
+  }
+}
+
+export const MAX_TRANSCRIPT_HASH_BYTES = 16 * 1024 * 1024;
+
+export function computePrefixHash(filePath, targetBytes, maxBytes = MAX_TRANSCRIPT_HASH_BYTES) {
+  if (typeof targetBytes !== 'number' || targetBytes <= 0) return null;
+  const effectiveBytes = Math.min(targetBytes, maxBytes);
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const hash = createHash('sha256');
+    const buf = Buffer.allocUnsafe(Math.min(64 * 1024, effectiveBytes));
+    let remaining = effectiveBytes;
+    while (remaining > 0) {
+      const toRead = Math.min(buf.length, remaining);
+      const bytesRead = readSync(fd, buf, 0, toRead, null);
+      if (bytesRead <= 0) break;
+      hash.update(buf.subarray(0, bytesRead));
+      remaining -= bytesRead;
+    }
+    return remaining === 0 ? hash.digest('hex') : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
+export function readTranscriptPrefixBounded(filePath, maxBytes = 64 * 1024) {
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0);
+    return {
+      prefixHash: createHash('sha256').update(buf.subarray(0, bytesRead)).digest('hex'),
+      prefixLength: bytesRead,
+    };
+  } catch {
+    return { prefixHash: null, prefixLength: 0 };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
+export function readTextFileBounded(filePath, maxBytes = 1024 * 1024) {
+  let fd;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    const buf = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0);
+    return buf.toString('utf8', 0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
   }
 }
 
@@ -93,16 +160,273 @@ export function createDepthTracker() {
   };
 }
 
+export function sanitizeSessionId(id) {
+  if (typeof id !== 'string') return 'default_session';
+  const trimmed = id.trim();
+  if (!trimmed || trimmed.length > 120 || !/^[a-zA-Z0-9_\-\.]+$/.test(trimmed)) return 'default_session';
+  if (trimmed === '__proto__' || trimmed === 'constructor' || trimmed === 'prototype' || trimmed === 'toString' || trimmed === 'valueOf') {
+    return 'default_session';
+  }
+  return trimmed;
+}
+
 /**
  * Universal session ID resolution for hooks and status display.
  */
 export function resolveSessionId({ payload, env = process.env } = {}) {
-  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.GEMINI_CONVERSATION_ID ?? env?.JETSKI_CONVERSATION_ID ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID;
+  const candidate = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id ?? env?.GEMINI_CONVERSATION_ID ?? env?.JETSKI_CONVERSATION_ID ?? env?.ANTIGRAVITY_CONVERSATION_ID ?? env?.CONVERSATION_ID ?? env?.ADLC_SESSION_ID;
   if (typeof candidate === 'string' && candidate.trim().length > 0) {
-    return candidate.trim();
+    return sanitizeSessionId(candidate);
   }
   return 'default_session';
 }
+
+const loadedSecretCache = new Map();
+
+function resolveUserHome(env = process.env) {
+  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
+  if (isTest && env?.ADLC_HOME_DIR) return env.ADLC_HOME_DIR;
+  try {
+    return homedir() || tmpdir();
+  } catch {
+    return tmpdir();
+  }
+}
+
+export function getMasterKeyRaw(env = process.env) {
+  const userHome = resolveUserHome(env);
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+  const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+
+  try {
+    if (existsSync(masterKeyFile)) {
+      const stat = lstatSync(masterKeyFile);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+        if (uid === null || stat.uid === uid) {
+          if ((stat.mode & 0o077) === 0) {
+            const raw = readFileSync(masterKeyFile, 'utf8').trim();
+            if (raw.length >= 32) return raw;
+          }
+        }
+      }
+    } else if (existsSync(legacyMasterKeyFile)) {
+      const stat = lstatSync(legacyMasterKeyFile);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024) {
+        if (uid === null || stat.uid === uid) {
+          if ((stat.mode & 0o077) === 0) {
+            const raw = readFileSync(legacyMasterKeyFile, 'utf8').trim();
+            if (raw.length >= 32) return raw;
+          }
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function rotateMasterKey(env = process.env) {
+  const userHome = resolveUserHome(env);
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+  const legacyMasterKeyFile = join(userHome, '.adlc', '.master-key');
+
+  try {
+    if (existsSync(legacyMasterKeyFile)) {
+      unlinkSync(legacyMasterKeyFile);
+    }
+  } catch (err) {
+    console.error(`[adlc-rails-guard] Warning: failed to unlink legacy master key file: ${err.message}`);
+  }
+
+  loadedSecretCache.clear();
+  console.error('[adlc-rails-guard] CRITICAL SECURITY ALERT: Master key disclosure detected! Global master key revoked, rotated, and session invalidated.');
+
+  try {
+    if (!existsSync(adlcPrivateDir)) {
+      mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
+    }
+    const newKey = randomBytes(32).toString('hex');
+    const tmpFile = `${masterKeyFile}.tmp.${process.pid}.${Date.now()}`;
+    writeFileSync(tmpFile, newKey, { mode: 0o600 });
+    renameSync(tmpFile, masterKeyFile);
+    return newKey;
+  } catch (err) {
+    console.error(`[adlc-rails-guard] Warning: failed to regenerate rotated master key: ${err.message}`);
+    return null;
+  }
+}
+
+export function getOrCreateSessionSecret(root, env = process.env) {
+  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
+  if (isTest && env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
+
+  const userHome = resolveUserHome(env);
+  const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
+  const masterKeyFile = join(adlcPrivateDir, '.auth-key');
+
+  if (loadedSecretCache.has(root)) {
+    return loadedSecretCache.get(root);
+  }
+
+  let masterKey = getMasterKeyRaw(env);
+
+  if (!masterKey) {
+    try {
+      if (!existsSync(adlcPrivateDir)) {
+        mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
+      }
+      const newKey = randomBytes(32).toString('hex');
+      writeFileSync(masterKeyFile, newKey, { mode: 0o600, flag: 'wx' });
+      masterKey = newKey;
+    } catch (err) {
+      if (err.code === 'EEXIST') {
+        masterKey = getMasterKeyRaw(env);
+      }
+    }
+  }
+
+  if (!masterKey) return null;
+
+  const derivedSecret = createHmac('sha256', masterKey)
+    .update(`adlc-session-secret:${root}`)
+    .digest('hex');
+
+  loadedSecretCache.set(root, derivedSecret);
+  return derivedSecret;
+}
+
+export function isNodeTestFile(fileName, relPath) {
+  if (!fileName || typeof fileName !== 'string') return false;
+  if (!/\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName)) return false;
+
+  const parts = relPath.replace(/\\/g, '/').split('/');
+  // Any file under a tests? or specs? or __tests__ or __specs__ directory
+  if (parts.some((p) => /^(tests?|specs?|__tests?__|__specs?__)$/i.test(p))) {
+    return true;
+  }
+
+  // Common Node test patterns anywhere in workspace:
+  // *.test.js, *.spec.js, *_test.js, *-test.js, test-*.js, test.js
+  if (/\.(test|spec)\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName) ||
+      /^test-.*|.*[-_]test\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName) ||
+      /^test\.(m?js|cjs|ts|tsx|jsx|mts|cts)$/i.test(fileName)) {
+    return true;
+  }
+
+  return false;
+}
+
+export function getTestFilesMap(root) {
+  const map = {};
+  if (!root || typeof root !== 'string') return map;
+  let realRoot = root;
+  try { realRoot = realpathSync(root); } catch {}
+  const IGNORED_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', 'build', '.adlc', 'coverage', '.cache']);
+
+  function scan(dir, depth = 0, ancestorRealpaths = new Set()) {
+    if (depth > 32) return;
+    try {
+      let real = dir;
+      try {
+        real = realpathSync(dir);
+        const relFromRoot = relative(realRoot, real);
+        if (relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) return;
+        if (ancestorRealpaths.has(real)) return;
+      } catch {
+        return;
+      }
+      const branchAncestors = new Set(ancestorRealpaths);
+      branchAncestors.add(real);
+
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullP = join(dir, entry.name);
+        let isSymlink = false;
+        try {
+          const lst = lstatSync(fullP);
+          isSymlink = lst.isSymbolicLink();
+        } catch {}
+
+        if (isSymlink) {
+          try {
+            const targetReal = realpathSync(fullP);
+            const relFromRoot = relative(realRoot, targetReal);
+            if (relFromRoot.startsWith('..') || isAbsolute(relFromRoot)) {
+              continue; // Symlink escaping workspace root is skipped
+            }
+          } catch {
+            continue;
+          }
+        }
+
+        let isDir = false;
+        let isF = false;
+        try {
+          const st = statSync(fullP);
+          isDir = st.isDirectory();
+          isF = st.isFile();
+        } catch {
+          isDir = entry.isDirectory();
+          isF = entry.isFile();
+        }
+        if (isDir) {
+          if (IGNORED_DIRS.has(entry.name)) continue;
+          scan(fullP, depth + 1, branchAncestors);
+        } else if (isF) {
+          const name = entry.name;
+          const relPath = relative(root, fullP).replace(/\\/g, '/');
+          if (isNodeTestFile(name, relPath)) {
+            try {
+              map[relPath] = createHash('sha256').update(readFileSync(fullP)).digest('hex');
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
+
+  scan(root);
+  return map;
+}
+
+export function hasDiscoverableTests(root, filterDir = null) {
+  const map = getTestFilesMap(root);
+  if (!filterDir) return Object.keys(map).length > 0;
+  const relFilter = relative(root, filterDir).replace(/\\/g, '/');
+  return Object.keys(map).some((k) => k === relFilter || k.startsWith(relFilter + '/'));
+}
+
+function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.env) {
+  const secretKey = getOrCreateSessionSecret(root, env);
+  if (!secretKey) return null;
+  const payload = JSON.stringify({
+    sessionID,
+    t: s?.initialActiveTicket ?? null,
+    h: s?.initialStoreHash ?? null,
+    p: s?.initialPointer ?? null,
+    tr: s?.initialTranscript ?? null,
+    tf: s?.initialTestFiles ?? null,
+    depth: s?.depth ?? 0,
+    totalCalls: s?.totalCalls ?? 0,
+    mutatingCalls: s?.mutatingCalls ?? 0,
+    compacted: Boolean(s?.compacted),
+    ended: Boolean(s?.ended),
+    inv: Boolean(s?.invalidated),
+    edits: Array.isArray(s?.edits) ? s.edits : [],
+    warned: Array.isArray(s?.warned) ? s.warned : [],
+    flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? '', summary: s.flailStatus.summary ?? '' } : null,
+    lastTranscriptSize: s?.lastTranscriptSize ?? null,
+    lastTranscriptHash: s?.lastTranscriptHash ?? null,
+    lastExitCode: typeof s?.lastExitCode === 'number' ? s.lastExitCode : null,
+    ledgerSeq: s?.ledgerSeq ?? 0,
+    ledgerMac: s?.ledgerMac ?? null,
+  });
+  return createHmac('sha256', secretKey).update(payload).digest('hex');
+}
+
+const inMemorySessionSnapshots = new Map();
 
 /**
  * File-backed persistent session tracker with owner-checked & PID-probed mutex locking and LRU pruning.
@@ -113,113 +437,526 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 export function createPersistentTracker(root = process.cwd(), env = process.env) {
   const adlcDir = join(root, '.adlc');
   const storePath = join(adlcDir, 'sessions.json');
+  const ledgerPath = join(adlcDir, 'session-ledger.jsonl');
   const lockDir = join(adlcDir, 'sessions.lock');
-  const ownerPath = join(lockDir, 'owner.json');
+  const ownerFile = join(lockDir, 'owner.json');
 
   const lockFailures = new Set();
+  const snapKey = (sid) => `${root}:${sid}`;
 
-  function writeOwnerFile(payload) {
-    try {
-      const tmpOwner = `${ownerPath}.tmp.${process.pid}.${Date.now()}`;
-      writeFileSync(tmpOwner, JSON.stringify(payload));
-      renameSync(tmpOwner, ownerPath);
-    } catch {
-      try { writeFileSync(ownerPath, JSON.stringify(payload)); } catch { /* ignore fallback write failure */ }
-    }
-  }
-
-  function withLock(sessionID, fn, fallback = null) {
+  function withLock(sessionID, fn) {
+    if (!ticketStoreExists(root, env)) return fn();
+    try { mkdirSync(adlcDir, { recursive: true }); } catch {}
+    const pid = process.pid;
+    const nonce = `${pid}-${Date.now()}-${Math.random()}`;
     let acquired = false;
-    const nonce = `${process.pid}-${Date.now()}-${Math.random()}`;
 
-    for (let i = 0; i < 100; i++) {
+    for (let attempt = 0; attempt < 250; attempt++) {
       try {
         mkdirSync(lockDir);
-        writeOwnerFile({ pid: process.pid, nonce, time: Date.now() });
+        const tmpOwner = `${lockDir}/owner.json.tmp.${pid}.${Date.now()}`;
+        writeFileSync(tmpOwner, JSON.stringify({ pid, nonce, time: Date.now() }));
+        renameSync(tmpOwner, ownerFile);
         acquired = true;
-        if (sessionID) lockFailures.delete(sessionID);
         break;
-      } catch {
-        try {
-          if (existsSync(lockDir)) {
-            const stat = statSync(lockDir);
-            const isStale = Date.now() - stat.mtimeMs > 3000;
-            if (isStale) {
-              let isDead = false;
-              if (existsSync(ownerPath)) {
-                try {
-                  const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-                  isDead = !isPidAlive(owner.pid);
-                } catch {
-                  isDead = true; // unreadable after >3s stale window → treat as dead
-                }
-              } else {
-                isDead = true; // missing owner.json after >3s stale window → treat as dead
+      } catch (err) {
+        if (err.code === 'EEXIST') {
+          try {
+            let isStaleAndDead = false;
+            if (existsSync(ownerFile)) {
+              try {
+                const raw = readFileSync(ownerFile, 'utf8');
+                const owner = JSON.parse(raw);
+                const isStale = Date.now() - (owner.time ?? 0) > LOCK_TTL_MS;
+                const isDead = !isPidAlive(owner.pid);
+                if (isStale && isDead) isStaleAndDead = true;
+              } catch {
+                // Malformed owner.json (crashed/partial write)
+                const stat = lstatSync(lockDir);
+                if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
               }
-              if (isDead) {
-                try {
-                  const tombstone = `${lockDir}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                  renameSync(lockDir, tombstone);
-                  rmSync(tombstone, { recursive: true, force: true });
-                } catch { /* another contender won the atomic rename race */ }
-              }
+            } else {
+              const stat = lstatSync(lockDir);
+              if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
             }
-          }
-        } catch { /* ignore */ }
-        sleepSyncWithJitter(30);
+            if (isStaleAndDead) {
+              const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+              try {
+                renameSync(lockDir, tombstone);
+                rmSync(tombstone, { recursive: true, force: true });
+              } catch {}
+            }
+          } catch {}
+        }
       }
+      sleepSyncWithJitter(25);
     }
+
     if (!acquired) {
       if (sessionID) lockFailures.add(sessionID);
-      console.error(`[adlc-rails-guard] Warning: session lock acquisition timed out at ${lockDir}`);
-      return fallback;
+      console.error(`[adlc-rails-guard] Warning: session store lock acquisition timed out`);
+      return;
     }
+
     try {
       return fn();
     } finally {
-      if (acquired) {
+      try {
+        if (existsSync(ownerFile)) {
+          const owner = JSON.parse(readFileSync(ownerFile, 'utf8'));
+          if (owner.nonce === nonce) {
+            const tombstone = `${lockDir}.rel-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            renameSync(lockDir, tombstone);
+            rmSync(tombstone, { recursive: true, force: true });
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const MAX_LEDGER_BYTES = 512 * 1024; // 512 KiB write-side rotation threshold
+  const HARD_MAX_LEDGER_BYTES = 2 * 1024 * 1024; // 2 MiB hard limit
+  const MAX_LEDGER_RECORD_BYTES = 16 * 1024; // 16 KiB hard limit per individual record
+
+  function computeLedgerMac(prevMac, seq, data) {
+    const secret = getOrCreateSessionSecret(root, env);
+    return createHmac('sha256', secret).update(`${prevMac}:${seq}:${JSON.stringify(data)}`).digest('hex');
+  }
+
+  function readLastLedgerHeader() {
+    if (!existsSync(ledgerPath)) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+    try {
+      const linkStat = lstatSync(ledgerPath);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > HARD_MAX_LEDGER_BYTES) return null;
+    } catch {
+      return null;
+    }
+    let fd;
+    try {
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
+      const stat = fstatSync(fd);
+      const postLinkStat = lstatSync(ledgerPath);
+      if (!stat.isFile() || postLinkStat.isSymbolicLink() || stat.ino !== postLinkStat.ino || stat.dev !== postLinkStat.dev || stat.size > HARD_MAX_LEDGER_BYTES) return null;
+      if (stat.size === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+
+      const readSize = Math.min(stat.size, 64 * 1024);
+      const buf = Buffer.alloc(readSize);
+      readSync(fd, buf, 0, readSize, stat.size - readSize);
+      const rawTail = buf.toString('utf8');
+      const lines = rawTail.split('\n').filter(Boolean);
+      if (lines.length === 0) return { lastSeq: 0, lastMac: '0'.repeat(64) };
+      const last = JSON.parse(lines[lines.length - 1]);
+      if (typeof last?.seq === 'number' && typeof last?.mac === 'string') {
+        return { lastSeq: last.seq, lastMac: last.mac };
+      }
+    } catch {
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
+    }
+    return null;
+  }
+
+  function appendLedger(entry) {
+    if (!ticketStoreExists(root, env)) return null;
+    try {
+      if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
+
+      let header = readLastLedgerHeader();
+      if (!header && existsSync(ledgerPath)) {
+        // Unparseable ledger header or oversized file -> attempt replay, fail-closed if corrupted
+        const replayed = replayLedger();
+        if (replayed?._corrupted) {
+          try {
+            const lStat = lstatSync(ledgerPath);
+            if (lStat.size > HARD_MAX_LEDGER_BYTES) {
+              const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
+              renameSync(ledgerPath, tombstone);
+              writeFileSync(join(adlcDir, '.ledger-quarantine'), JSON.stringify({ quarantinedAt: Date.now(), reason: 'oversized_corrupt_ledger' }), { mode: 0o600 });
+            }
+          } catch {}
+          return null;
+        } else {
+          header = { lastSeq: 0, lastMac: '0'.repeat(64) };
+        }
+      }
+      if (!header) header = { lastSeq: 0, lastMac: '0'.repeat(64) };
+
+      const seq = header.lastSeq + 1;
+      const prevMac = header.lastMac;
+      const payload = { t: Date.now(), ...entry };
+      const mac = computeLedgerMac(prevMac, seq, payload);
+      const record = JSON.stringify({ seq, prevMac, mac, payload }) + '\n';
+
+      // Enforce individual record size bound to prevent multi-megabyte writes
+      if (Buffer.byteLength(record, 'utf8') > MAX_LEDGER_RECORD_BYTES) {
+        return null;
+      }
+
+      // Check if ledger exceeds rotation threshold or hard limit
+      if (existsSync(ledgerPath)) {
         try {
-          if (existsSync(ownerPath)) {
-            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-            if (owner.nonce === nonce) {
-              rmSync(lockDir, { recursive: true, force: true });
+          const lStat = lstatSync(ledgerPath);
+          if (lStat.isFile() && lStat.size + record.length > MAX_LEDGER_BYTES) {
+            // Compact ledger: replay into compact state snapshot records
+            const store = replayLedger();
+            if (store && Object.keys(store).length > 0 && !store._corrupted) {
+              const tmpLedger = `${ledgerPath}.tmp.${process.pid}.${Date.now()}`;
+              const compactedLines = [];
+              let curSeq = 0;
+              let curPrevMac = '0'.repeat(64);
+              for (const [sid, s] of Object.entries(store)) {
+                if (sid === '_corrupted') continue;
+                curSeq++;
+                const snapPayload = {
+                  t: s.updatedAt ?? Date.now(),
+                  type: 'snapshot',
+                  sessionID: sid,
+                  depth: s.depth ?? 0,
+                  totalCalls: s.totalCalls ?? 0,
+                  mutatingCalls: s.mutatingCalls ?? 0,
+                  compacted: Boolean(s.compacted),
+                  ended: Boolean(s.ended),
+                  invalidated: Boolean(s.invalidated),
+                  edits: Array.isArray(s.edits) ? s.edits : [],
+                  warned: Array.isArray(s.warned) ? s.warned : [],
+                  initialActiveTicket: s.initialActiveTicket ?? null,
+                  initialStoreHash: s.initialStoreHash ?? null,
+                  initialPointer: s.initialPointer ?? null,
+                  initialTranscript: s.initialTranscript ?? null,
+                  lastTranscriptHash: s.lastTranscriptHash ?? null,
+                  lastTranscriptSize: s.lastTranscriptSize ?? null,
+                };
+                const snapMac = computeLedgerMac(curPrevMac, curSeq, snapPayload);
+                compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: snapMac, payload: snapPayload }));
+                curPrevMac = snapMac;
+                s.ledgerSeq = curSeq;
+                s.ledgerMac = snapMac;
+                s.baselineSig = computeBaselineSig(sid, s, root, env);
+              }
+              curSeq++;
+              const newEntryMac = computeLedgerMac(curPrevMac, curSeq, payload);
+              compactedLines.push(JSON.stringify({ seq: curSeq, prevMac: curPrevMac, mac: newEntryMac, payload }));
+              const fullCompacted = compactedLines.join('\n') + '\n';
+              if (Buffer.byteLength(fullCompacted, 'utf8') <= HARD_MAX_LEDGER_BYTES) {
+                writeFileSync(tmpLedger, fullCompacted, { mode: 0o600 });
+                renameSync(tmpLedger, ledgerPath);
+                if (entry.sessionID && store[entry.sessionID]) {
+                  store[entry.sessionID].ledgerSeq = curSeq;
+                  store[entry.sessionID].ledgerMac = newEntryMac;
+                  store[entry.sessionID].baselineSig = computeBaselineSig(entry.sessionID, store[entry.sessionID], root, env);
+                }
+                writeStore(store, entry.sessionID);
+                return { seq: curSeq, mac: newEntryMac };
+              }
+            }
+            if (lStat.size > HARD_MAX_LEDGER_BYTES) {
+              // Compaction failed and file exceeds hard limit -> quarantine oversized ledger
+              const tombstone = `${ledgerPath}.oversized-${Date.now()}`;
+              renameSync(ledgerPath, tombstone);
             }
           }
-        } catch { /* ignore release errors */ }
+        } catch {}
+      }
+
+      // Final check: Never append if it would cause the ledger to exceed HARD_MAX_LEDGER_BYTES or if symlink
+      if (existsSync(ledgerPath)) {
+        try {
+          const lStat = lstatSync(ledgerPath);
+          if (lStat.isSymbolicLink() || !lStat.isFile() || lStat.size + Buffer.byteLength(record, 'utf8') > HARD_MAX_LEDGER_BYTES) {
+            return null;
+          }
+        } catch {
+          return null;
+        }
+      }
+
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      const appendFd = openSync(ledgerPath, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | nofollow, 0o600);
+      try {
+        const postStat = fstatSync(appendFd);
+        const lStat = lstatSync(ledgerPath);
+        if (lStat.isSymbolicLink() || postStat.ino !== lStat.ino || postStat.dev !== lStat.dev) {
+          return null;
+        }
+        writeSync(appendFd, record);
+      } finally {
+        try { closeSync(appendFd); } catch {}
+      }
+      return { seq, mac };
+    } catch {}
+    return null;
+  }
+
+  function replayLedger() {
+    let fd;
+    try {
+      if (!existsSync(ledgerPath)) return null;
+      const linkStat = lstatSync(ledgerPath);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
+        const s = Object.create(null);
+        s._corrupted = true;
+        return s;
+      }
+      const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+      fd = openSync(ledgerPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.ino !== linkStat.ino || stat.dev !== linkStat.dev || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > HARD_MAX_LEDGER_BYTES) {
+        const s = Object.create(null);
+        s._corrupted = true;
+        return s;
+      }
+      if (stat.size === 0) return null;
+      const buf = Buffer.alloc(stat.size);
+      readSync(fd, buf, 0, stat.size, 0);
+      const raw = buf.toString('utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      if (lines.length === 0) return null;
+      const store = Object.create(null);
+      let expectedSeq = 1;
+      let expectedPrevMac = '0'.repeat(64);
+
+      for (const line of lines) {
+        let parsed;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          store._corrupted = true;
+          return store;
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          store._corrupted = true;
+          return store;
+        }
+
+        // Authenticate ledger entry sequence and HMAC
+        if (parsed.seq !== expectedSeq || parsed.prevMac !== expectedPrevMac) {
+          store._corrupted = true;
+          return store;
+        }
+        const expectedMac = computeLedgerMac(parsed.prevMac, parsed.seq, parsed.payload);
+        if (parsed.mac !== expectedMac) {
+          store._corrupted = true;
+          return store;
+        }
+        expectedPrevMac = parsed.mac;
+        expectedSeq = parsed.seq + 1;
+
+        const ev = parsed.payload;
+        if (!ev || typeof ev !== 'object') {
+          store._corrupted = true;
+          return store;
+        }
+
+        const safeKey = sanitizeSessionId(ev.sessionID);
+        if (!safeKey) continue;
+        const s = store[safeKey] ?? { depth: 0, totalCalls: 0, mutatingCalls: 0, compacted: false, edits: [], warned: [] };
+        if (ev.type === 'snapshot') {
+          s.depth = ev.depth ?? s.depth ?? 0;
+          s.totalCalls = ev.totalCalls ?? s.totalCalls ?? 0;
+          s.mutatingCalls = ev.mutatingCalls ?? s.mutatingCalls ?? 0;
+          s.compacted = Boolean(ev.compacted);
+          s.ended = Boolean(ev.ended);
+          s.invalidated = Boolean(ev.invalidated);
+          s.edits = Array.isArray(ev.edits) ? ev.edits : s.edits ?? [];
+          s.warned = Array.isArray(ev.warned) ? ev.warned : s.warned ?? [];
+          if (ev.initialActiveTicket) s.initialActiveTicket = ev.initialActiveTicket;
+          if (ev.initialStoreHash) s.initialStoreHash = ev.initialStoreHash;
+          if (ev.initialPointer) s.initialPointer = ev.initialPointer;
+          if (ev.initialTranscript) s.initialTranscript = ev.initialTranscript;
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+        } else if (ev.type === 'recordActiveTicket' || ev.type === 'activeTicket') {
+          if (!s.initialActiveTicket && (ev.activeTicketId || ev.ticketId)) {
+            s.initialActiveTicket = ev.activeTicketId || ev.ticketId;
+            s.initialStoreHash = ev.storeHash ?? null;
+            if (ev.initialPointer || ev.pointer) s.initialPointer = ev.initialPointer || ev.pointer;
+            if (ev.initialTestFiles) s.initialTestFiles = ev.initialTestFiles;
+          }
+        } else if (ev.type === 'recordToolCall' || ev.type === 'toolCall') {
+          s.depth = (s.depth ?? 0) + 1;
+          s.totalCalls = (s.totalCalls ?? 0) + 1;
+          if (ev.isMutating) s.mutatingCalls = (s.mutatingCalls ?? 0) + 1;
+        } else if (ev.type === 'revertToolCall') {
+          if (s.depth > 0) s.depth -= 1;
+          if (s.totalCalls > 0) s.totalCalls -= 1;
+          if (ev.isMutating && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+        } else if (ev.type === 'recordEdit' || ev.type === 'edit') {
+          if (ev.filePath) {
+            const bp = typeof ev.filePath === 'string' && ev.filePath.length > 512 ? ev.filePath.slice(0, 512) : ev.filePath;
+            s.edits.push(`Editing ${bp}`);
+            if (s.edits.length > 200) s.edits = s.edits.slice(-200);
+          }
+        } else if (ev.type === 'compact') {
+          s.compacted = true;
+        } else if (ev.type === 'ended') {
+          s.ended = true;
+        } else if (ev.type === 'recordTranscript') {
+          if (!s.initialTranscript && ev.initialTranscript) {
+            s.initialTranscript = ev.initialTranscript;
+          }
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+        } else if (ev.type === 'recordToolResult' || ev.type === 'toolResult') {
+          if (ev.lastTranscriptHash) s.lastTranscriptHash = ev.lastTranscriptHash;
+          if (ev.lastTranscriptSize) s.lastTranscriptSize = ev.lastTranscriptSize;
+          if (typeof ev.exitCode === 'number') s.lastExitCode = ev.exitCode;
+        } else if (ev.type === 'invalidated') {
+          s.invalidated = true;
+        }
+        s.updatedAt = ev.t ?? Date.now();
+        s.ledgerSeq = parsed.seq;
+        s.ledgerMac = parsed.mac;
+        s.baselineSig = computeBaselineSig(safeKey, s, root, env);
+        store[safeKey] = s;
+      }
+      return store;
+    } catch {
+      const s = Object.create(null);
+      s._corrupted = true;
+      return s;
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
       }
     }
   }
 
   function readStore() {
+    let fd;
     try {
       if (existsSync(storePath)) {
-        const store = JSON.parse(readFileSync(storePath, 'utf8'));
+        const linkStat = lstatSync(storePath);
+        if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > 1024 * 1024) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        const nofollow = fsConstants.O_NOFOLLOW ?? 0;
+        fd = openSync(storePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | nofollow);
+        const stat = fstatSync(fd);
+        if (!stat.isFile() || stat.ino !== linkStat.ino || stat.dev !== linkStat.dev || (stat.isFIFO && stat.isFIFO()) || (stat.isSocket && stat.isSocket()) || stat.size > 1024 * 1024) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        const buf = Buffer.alloc(stat.size);
+        readSync(fd, buf, 0, stat.size, 0);
+        const raw = buf.toString('utf8');
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        if (parsed._corrupted) {
+          const s = Object.create(null);
+          s._corrupted = true;
+          return s;
+        }
+        const store = Object.create(null);
+        for (const [k, v] of Object.entries(parsed)) {
+          const safeKey = sanitizeSessionId(k);
+          if (safeKey && safeKey !== 'default_session') {
+            store[safeKey] = v;
+          } else if (k === 'default_session') {
+            store.default_session = v;
+          }
+        }
         // TTL check for default_session (1 hour) to avoid stale lockouts across days
         if (store.default_session && store.default_session.updatedAt && Date.now() - store.default_session.updatedAt > 3600000) {
           delete store.default_session;
         }
         return store;
+      } else {
+        const fromLedger = replayLedger();
+        if (fromLedger && Object.keys(fromLedger).length > 0) {
+          return fromLedger;
+        }
       }
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to parse session store: ${err.message}`);
+      const s = Object.create(null);
+      s._corrupted = true;
+      return s;
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd); } catch {}
+      }
     }
-    return {};
+    return Object.create(null);
   }
 
-  function writeStore(data) {
+  function writeStore(data, currentSessionID) {
     if (!ticketStoreExists(root, env)) return;
     try {
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
 
-      const keys = Object.keys(data);
+      const keys = Object.keys(data).filter((k) => k !== '_corrupted');
+      for (const k of keys) {
+        if (data[k] && typeof data[k] === 'object') {
+          if (data[k].invalidated) data[k].invalidated = true;
+          if (Array.isArray(data[k].edits)) {
+            data[k].edits = data[k].edits
+              .filter((e) => typeof e === 'string')
+              .map((e) => (e.length > 512 ? e.slice(0, 512) : e))
+              .slice(-200);
+          }
+          if (Array.isArray(data[k].warned)) {
+            data[k].warned = data[k].warned
+              .filter((w) => typeof w === 'string')
+              .map((w) => (w.length > 256 ? w.slice(0, 256) : w))
+              .slice(-20);
+          }
+          data[k].baselineSig = computeBaselineSig(k, data[k], root, env);
+        }
+      }
+
       if (keys.length > MAX_TRACKED_SESSIONS) {
-        const sorted = keys.sort((a, b) => (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0));
+        const sorted = keys.filter((k) => k !== currentSessionID).sort((a, b) => {
+          const aEnded = Boolean(data[a]?.ended);
+          const bEnded = Boolean(data[b]?.ended);
+          if (aEnded !== bEnded) return aEnded ? -1 : 1;
+          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
+        });
         const toRemove = sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS);
         for (const k of toRemove) delete data[k];
       }
 
+      let serialized = JSON.stringify(data, null, 2);
+      if (serialized.length > 512 * 1024) {
+        const sorted = keys.filter((k) => k !== currentSessionID).sort((a, b) => {
+          const aEnded = Boolean(data[a]?.ended);
+          const bEnded = Boolean(data[b]?.ended);
+          if (aEnded !== bEnded) return aEnded ? -1 : 1;
+          return (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0);
+        });
+        for (const k of sorted) {
+          delete data[k];
+          serialized = JSON.stringify(data, null, 2);
+          if (serialized.length <= 512 * 1024) break;
+        }
+      }
+
+      if (existsSync(storePath)) {
+        const linkStat = lstatSync(storePath);
+        if (linkStat.isSymbolicLink()) {
+          console.error(`[adlc-rails-guard] Refusing to write through symlinked session store: ${storePath}`);
+          return;
+        }
+      }
+
       const tmpPath = `${storePath}.tmp.${process.pid}.${Date.now()}`;
-      writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      writeFileSync(tmpPath, serialized);
       renameSync(tmpPath, storePath);
     } catch (err) {
       console.error(`[adlc-rails-guard] Warning: failed to write session store: ${err.message}`);
@@ -227,16 +964,299 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
   }
 
   return {
-    recordToolCall(sessionID) {
+    rawStore() {
+      return readStore();
+    },
+    recordToolCall(sessionID, { isMutating = true } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        if (store._corrupted && env?.ADLC_P4_ENFORCEMENT === '1') {
+          return; // Fail closed: do not reset or accept new calls on corrupted store
+        }
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
+        if (snap) {
+          s.depth = Math.max(s.depth ?? 0, snap.depth ?? 0);
+          s.totalCalls = Math.max(s.totalCalls ?? 0, snap.totalCalls ?? 0);
+          s.mutatingCalls = Math.max(s.mutatingCalls ?? 0, snap.mutatingCalls ?? 0);
+          if (snap.compacted) s.compacted = true;
+          if (snap.initialActiveTicket && !s.initialActiveTicket) s.initialActiveTicket = snap.initialActiveTicket;
+        }
+        s.depth = (s.depth ?? 0) + 1;
+        s.totalCalls = (s.totalCalls ?? 0) + 1;
+        s.mutatingCalls = (s.mutatingCalls ?? 0) + (isMutating ? 1 : 0);
+        const lH = appendLedger({ type: 'recordToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.depth = s.depth;
+        curS.totalCalls = s.totalCalls;
+        curS.mutatingCalls = s.mutatingCalls;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
+      });
+    },
+    revertToolCall(sessionID, { isMutating = true } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID];
+        if (!s) return;
+        if (s.depth && s.depth > 0) s.depth -= 1;
+        if (s.totalCalls && s.totalCalls > 0) s.totalCalls -= 1;
+        if (isMutating && s.mutatingCalls && s.mutatingCalls > 0) s.mutatingCalls -= 1;
+        const lH = appendLedger({ type: 'revertToolCall', sessionID, isMutating, depth: s.depth, totalCalls: s.totalCalls, mutatingCalls: s.mutatingCalls });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.depth = s.depth;
+        curS.totalCalls = s.totalCalls;
+        curS.mutatingCalls = s.mutatingCalls;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
+      });
+    },
+    totalCalls(sessionID) {
+      if (!sessionID) return 0;
+      const store = readStore();
+      return store[sessionID]?.totalCalls ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.totalCalls ?? 0;
+    },
+    mutatingCalls(sessionID) {
+      if (!sessionID) return 0;
+      const store = readStore();
+      return store[sessionID]?.mutatingCalls ?? store[sessionID]?.depth ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.mutatingCalls ?? 0;
+    },
+    recordActiveTicket(sessionID, activeTicketId, storeHash) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
       withLock(sessionID, () => {
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
-        s.depth = (s.depth ?? 0) + 1;
-        s.updatedAt = Date.now();
-        store[sessionID] = s;
-        writeStore(store);
+        let pointerInfo = null;
+        if (!s.initialActiveTicket && activeTicketId) {
+          s.initialActiveTicket = activeTicketId;
+          s.initialStoreHash = storeHash ?? null;
+          s.initialTestFiles = getTestFilesMap(root);
+          const currentFile = join(root, '.adlc', 'current-ticket.json');
+          if (existsSync(currentFile)) {
+            try {
+              const cStat = lstatSync(currentFile);
+              pointerInfo = { exists: true, ino: cStat.ino, dev: cStat.dev, size: cStat.size };
+              s.initialPointer = pointerInfo;
+            } catch {}
+          }
+        }
+        const lH = appendLedger({ type: 'recordActiveTicket', sessionID, activeTicketId, storeHash, initialPointer: pointerInfo, initialTestFiles: s.initialTestFiles });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        if (s.initialActiveTicket) curS.initialActiveTicket = s.initialActiveTicket;
+        if (s.initialStoreHash) curS.initialStoreHash = s.initialStoreHash;
+        if (s.initialPointer) curS.initialPointer = s.initialPointer;
+        if (s.initialTestFiles) curS.initialTestFiles = s.initialTestFiles;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
       });
+    },
+    initialTicket(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialActiveTicket ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialActiveTicket ?? null;
+    },
+    initialStoreHash(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialStoreHash ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialStoreHash ?? null;
+    },
+    initialPointer(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialPointer ?? null;
+    },
+    initialTestFiles(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialTestFiles ?? inMemorySessionSnapshots.get(snapKey(sessionID))?.initialTestFiles ?? null;
+    },
+    hasSnapshot(sessionID) {
+      if (!sessionID) return false;
+      return inMemorySessionSnapshots.has(snapKey(sessionID));
+    },
+    validateBaseline(sessionID) {
+      if (!sessionID) return true;
+      const store = readStore();
+      if (store._corrupted && env?.ADLC_P4_ENFORCEMENT === '1') {
+        return false;
+      }
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
+      const s = store[sessionID];
+      if (snap) {
+        if (!s || !existsSync(storePath)) return false; // Deleted/wiped session store or evicted
+        if (s.invalidated || snap.invalidated) return false;
+        if ((s.depth ?? 0) < (snap.depth ?? 0) || (s.mutatingCalls ?? 0) < (snap.mutatingCalls ?? 0) || (s.totalCalls ?? 0) < (snap.totalCalls ?? 0)) {
+          return false; // Counters artificially lowered
+        }
+        if (snap.compacted && !s.compacted) return false;
+      }
+      if (!s) {
+        const ledgerStore = replayLedger();
+        if (ledgerStore && ledgerStore[sessionID] && ((ledgerStore[sessionID].mutatingCalls ?? 0) > 0 || (ledgerStore[sessionID].totalCalls ?? 0) > 0)) {
+          return false; // Wiped store after recorded mutations!
+        }
+        return true;
+      }
+      if (s.invalidated) return false;
+      const hasTrackedState = (s.totalCalls ?? 0) > 0 || (s.depth ?? 0) > 0 || (s.mutatingCalls ?? 0) > 0 || Boolean(s.initialActiveTicket) || Boolean(s.initialTranscript);
+      if (!s.baselineSig) {
+        return !hasTrackedState && env?.ADLC_P4_ENFORCEMENT !== '1';
+      }
+
+      // Canonical baseline comparison against ledger
+      const ledgerStore = replayLedger();
+      if (ledgerStore && !ledgerStore._corrupted && ledgerStore[sessionID]) {
+        const lEntry = ledgerStore[sessionID];
+        if (lEntry.invalidated) return false;
+        if (lEntry.initialActiveTicket && s.initialActiveTicket !== lEntry.initialActiveTicket) return false;
+        if (lEntry.initialStoreHash && s.initialStoreHash !== lEntry.initialStoreHash) return false;
+        if (lEntry.initialPointer && JSON.stringify(s.initialPointer) !== JSON.stringify(lEntry.initialPointer)) return false;
+        if (lEntry.initialTranscript && JSON.stringify(s.initialTranscript) !== JSON.stringify(lEntry.initialTranscript)) return false;
+        if (lEntry.initialTestFiles && JSON.stringify(s.initialTestFiles) !== JSON.stringify(lEntry.initialTestFiles)) return false;
+      }
+
+      const expected = computeBaselineSig(sessionID, s, root, env);
+      if (!expected) return false;
+      return s.baselineSig === expected;
+    },
+    markSessionEnded(sessionID) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID];
+        if (!s) return;
+        s.ended = true;
+        const lH = appendLedger({ type: 'ended', sessionID });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.ended = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
+      });
+    },
+    recordTranscript(sessionID, transcriptPath) {
+      if (!sessionID || !ticketStoreExists(root, env) || !transcriptPath) return;
+      try {
+        const stat = lstatSync(transcriptPath);
+        withLock(sessionID, () => {
+          const store = readStore();
+          const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+          let initialTranscript = s.initialTranscript ?? null;
+          if (!s.initialTranscript) {
+            const curHash = computePrefixHash(transcriptPath, stat.size);
+            const boundedPath = transcriptPath.length > 512 ? transcriptPath.slice(0, 512) : transcriptPath;
+            initialTranscript = { path: boundedPath, ino: stat.ino, dev: stat.dev, hash: curHash, size: stat.size };
+            s.initialTranscript = initialTranscript;
+          }
+          const curHash = computePrefixHash(transcriptPath, stat.size);
+          if (curHash) s.lastTranscriptHash = curHash;
+          s.lastTranscriptSize = stat.size;
+          const lH = appendLedger({ type: 'recordTranscript', sessionID, initialTranscript, lastTranscriptHash: s.lastTranscriptHash, lastTranscriptSize: s.lastTranscriptSize });
+          const curStore = readStore();
+          const curS = curStore[sessionID] ?? s;
+          if (lH) {
+            curS.ledgerSeq = lH.seq;
+            curS.ledgerMac = lH.mac;
+          }
+          if (s.initialTranscript) curS.initialTranscript = s.initialTranscript;
+          if (s.lastTranscriptHash) curS.lastTranscriptHash = s.lastTranscriptHash;
+          if (s.lastTranscriptSize) curS.lastTranscriptSize = s.lastTranscriptSize;
+          curS.updatedAt = Date.now();
+          curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+          curStore[sessionID] = curS;
+          writeStore(curStore, sessionID);
+        });
+      } catch {}
+    },
+    initialTranscript(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      return store[sessionID]?.initialTranscript ?? null;
+    },
+    lastTranscript(sessionID) {
+      if (!sessionID) return null;
+      const store = readStore();
+      const s = store[sessionID];
+      if (!s) return null;
+      return {
+        initial: s.initialTranscript ?? null,
+        lastHash: s.lastTranscriptHash ?? null,
+        lastSize: s.lastTranscriptSize ?? null,
+      };
+    },
+    recordToolResult(sessionID, { exitCode, transcriptPath } = {}) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      try {
+        let stat = null;
+        if (transcriptPath) {
+          try { stat = lstatSync(transcriptPath); } catch {}
+        }
+        withLock(sessionID, () => {
+          const store = readStore();
+          const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+          if (stat && stat.size > 0) {
+            const curHash = computePrefixHash(transcriptPath, stat.size);
+            if (curHash) s.lastTranscriptHash = curHash;
+            s.lastTranscriptSize = stat.size;
+          }
+          if (typeof exitCode === 'number') {
+            s.lastExitCode = exitCode;
+          }
+          const lH = appendLedger({
+            type: 'recordToolResult',
+            sessionID,
+            exitCode: typeof exitCode === 'number' ? exitCode : null,
+            lastTranscriptHash: s.lastTranscriptHash ?? null,
+            lastTranscriptSize: s.lastTranscriptSize ?? null,
+          });
+          const curStore = readStore();
+          const curS = curStore[sessionID] ?? s;
+          if (lH) {
+            curS.ledgerSeq = lH.seq;
+            curS.ledgerMac = lH.mac;
+          }
+          if (s.lastTranscriptHash) curS.lastTranscriptHash = s.lastTranscriptHash;
+          if (s.lastTranscriptSize) curS.lastTranscriptSize = s.lastTranscriptSize;
+          if (typeof s.lastExitCode === 'number') curS.lastExitCode = s.lastExitCode;
+          curS.updatedAt = Date.now();
+          curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+          curStore[sessionID] = curS;
+          writeStore(curStore, sessionID);
+        });
+      } catch {}
     },
     markCompacted(sessionID) {
       if (!sessionID || !ticketStoreExists(root, env)) return;
@@ -244,9 +1264,18 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const store = readStore();
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
         s.compacted = true;
-        s.updatedAt = Date.now();
-        store[sessionID] = s;
-        writeStore(store);
+        const lH = appendLedger({ type: 'compact', sessionID });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.compacted = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        writeStore(curStore, sessionID);
       });
     },
     recordEdit(sessionID, filePath, { transcriptSteps = [], transcriptLines = [] } = {}) {
@@ -256,8 +1285,9 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [], warned: [] };
         s.edits = s.edits ?? [];
         s.warned = s.warned ?? [];
-        if (filePath) {
-          s.edits.push(`Editing ${filePath}`);
+        const boundedPath = typeof filePath === 'string' ? (filePath.length > 512 ? filePath.slice(0, 512) : filePath) : null;
+        if (boundedPath) {
+          s.edits.push(`Editing ${boundedPath}`);
           if (s.edits.length > 200) s.edits = s.edits.slice(-200);
         }
 
@@ -274,9 +1304,20 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
           updatedAt: Date.now(),
         };
 
-        s.updatedAt = Date.now();
-        store[sessionID] = s;
-        writeStore(store);
+        const lH = appendLedger({ type: 'recordEdit', sessionID, filePath: boundedPath });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.edits = s.edits;
+        curS.warned = s.warned;
+        curS.flailStatus = s.flailStatus;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        writeStore(curStore, sessionID);
 
         const churns = detectEditChurn(s.edits, 3);
         const newlyChurning = churns.filter((c) => !s.warned.includes(c.path));
@@ -310,6 +1351,83 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
     isLockFailed(sessionID) {
       if (!sessionID) return false;
       return lockFailures.has(sessionID);
+    },
+    isCorrupted() {
+      if (existsSync(join(adlcDir, '.ledger-quarantine'))) return true;
+      const store = readStore();
+      return Boolean(store._corrupted);
+    },
+    validateLedger(sessionID) {
+      if (!ticketStoreExists(root, env)) return true;
+      if (!existsSync(ledgerPath)) {
+        if (existsSync(storePath)) {
+          const store = readStore();
+          if (store._corrupted) return false;
+          const entry = sessionID ? store[sessionID] : null;
+          if (entry && (entry.ledgerSeq > 0 || entry.depth > 0 || entry.totalCalls > 0)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      const replayed = replayLedger();
+      if (!replayed || replayed._corrupted) return false;
+      if (sessionID) {
+        const store = readStore();
+        if (store._corrupted) return false;
+        const entry = store[sessionID];
+        const replayedEntry = replayed[sessionID];
+        if (entry && replayedEntry) {
+          if (
+            (replayedEntry.ledgerSeq ?? 0) !== (entry.ledgerSeq ?? 0) ||
+            (replayedEntry.depth ?? 0) !== (entry.depth ?? 0) ||
+            (replayedEntry.totalCalls ?? 0) !== (entry.totalCalls ?? 0) ||
+            (replayedEntry.mutatingCalls ?? 0) !== (entry.mutatingCalls ?? 0) ||
+            (replayedEntry.initialActiveTicket && entry.initialActiveTicket !== replayedEntry.initialActiveTicket) ||
+            (replayedEntry.initialStoreHash && entry.initialStoreHash !== replayedEntry.initialStoreHash) ||
+            (replayedEntry.initialPointer && JSON.stringify(entry.initialPointer) !== JSON.stringify(replayedEntry.initialPointer)) ||
+            (replayedEntry.initialTranscript && JSON.stringify(entry.initialTranscript) !== JSON.stringify(replayedEntry.initialTranscript)) ||
+            (replayedEntry.initialTestFiles && JSON.stringify(entry.initialTestFiles) !== JSON.stringify(replayedEntry.initialTestFiles)) ||
+            replayedEntry.invalidated ||
+            entry.invalidated
+          ) {
+            return false;
+          }
+        }
+      }
+      return true;
+    },
+    invalidateSession(sessionID) {
+      if (!sessionID || !ticketStoreExists(root, env)) return;
+      withLock(sessionID, () => {
+        const store = readStore();
+        const s = store[sessionID] ?? { depth: 0, compacted: false, edits: [] };
+        s.invalidated = true;
+        const lH = appendLedger({ type: 'invalidated', sessionID, reason: 'secret_disclosure' });
+        const curStore = readStore();
+        const curS = curStore[sessionID] ?? s;
+        if (lH) {
+          curS.ledgerSeq = lH.seq;
+          curS.ledgerMac = lH.mac;
+        }
+        curS.invalidated = true;
+        curS.updatedAt = Date.now();
+        curS.baselineSig = computeBaselineSig(sessionID, curS, root, env);
+        curStore[sessionID] = curS;
+        inMemorySessionSnapshots.set(snapKey(sessionID), { ...curS });
+        writeStore(curStore, sessionID);
+      });
+    },
+    isInvalidated(sessionID) {
+      if (!sessionID) return false;
+      if (existsSync(join(adlcDir, '.ledger-quarantine'))) return true;
+      const store = readStore();
+      if (store[sessionID]?.invalidated) return true;
+      const snap = inMemorySessionSnapshots.get(snapKey(sessionID));
+      if (snap?.invalidated) return true;
+      const replayed = replayLedger();
+      if (replayed?.[sessionID]?.invalidated) return true;
+      return false;
     },
   };
 }
@@ -350,6 +1468,9 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { decision: 'allow', reason: 'enforcement inactive' };
   }
+  if (tracker?.isCorrupted?.()) {
+    return { decision: 'deny', reason: 'Session tracking store is corrupted or unreadable under enforcement (fail closed).' };
+  }
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
   if (!ticketStoreExists(root, env)) {
@@ -362,17 +1483,50 @@ export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env =
   if (!active.id) {
     return { decision: 'allow', reason: 'no unambiguous active ticket' };
   }
-  const { tickets, errors } = loadTickets(ticketsPath);
-  if (errors && errors.length > 0) {
-    return { decision: 'deny', reason: `corrupt or unparseable ticket store: ${errors.join('; ')}` };
+  let ticket = null;
+  try {
+    const store = loadTicketStoreReadOnly({ root, env });
+    ticket = store.get(active.id);
+  } catch (err) {
+    return { decision: 'deny', reason: `corrupt or unparseable ticket store: ${err?.message ?? err}` };
   }
-  const ticket = tickets.find((t) => t.id === active.id);
   if (!ticket) {
     return { decision: 'deny', reason: `active ticket ${active.id} declared in current-ticket.json but not found in tickets.json` };
   }
 
+  if (tracker?.validateBaseline && !tracker.validateBaseline(sessionID)) {
+    return { decision: 'deny', reason: 'Session baseline signature mismatch (tampering detected).' };
+  }
+  if (tracker?.validateLedger && !tracker.validateLedger(sessionID)) {
+    return { decision: 'deny', reason: 'Session ledger integrity verification failed (tampering or truncation detected).' };
+  }
+
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
+  if (env.ADLC_P4_ENFORCEMENT === '1' && sessionID && sessionID !== 'default_session') {
+    const tPath = resolveTranscriptPath({ conversationId: sessionID, env }) || (existsSync(join(root, 'transcript.jsonl')) ? join(root, 'transcript.jsonl') : null);
+    if (tPath) {
+      const records = parseTranscriptRecords(tPath);
+      const hasMutations = records.some((r) => {
+        const calls = r?.tool_calls ?? (r?.toolCall ? [r.toolCall] : []);
+        return calls.some((c) => {
+          const name = c?.name ?? '';
+          const args = c?.args ?? {};
+          if (isShellTool(name, args)) {
+            const cmd = extractCommandString(args);
+            if (!cmd) return false;
+            if (/^(node\s+--test|npm\s+test|npm\s+t\b|pnpm\s+test|yarn\s+test)\b/i.test(cmd)) return false;
+            if (/^(echo|printf|pwd|ls|dir)\b[^><|;&]*$/i.test(cmd)) return false;
+            return true;
+          }
+          return classifyTool(name, args) !== 'readonly';
+        });
+      });
+      if (hasMutations && depth === 0) {
+        return { decision: 'deny', reason: 'ticket build denied: session tracking store was removed mid-session while transcript contains prior mutations' };
+      }
+    }
+  }
   const parsedThreshold = Number.parseInt(env.ADLC_BUILD_GATE_DEPTH_THRESHOLD ?? '', 10);
   const depthThreshold = Number.isNaN(parsedThreshold) ? DEFAULT_DEPTH_THRESHOLD : parsedThreshold;
   const degraded = depth >= depthThreshold || Boolean(tracker?.isCompacted?.(sessionID)) || Boolean(tracker?.isLockFailed?.(sessionID));

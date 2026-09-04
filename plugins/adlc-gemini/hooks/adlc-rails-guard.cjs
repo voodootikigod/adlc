@@ -7,12 +7,42 @@
 var enforcing = process.env.ADLC_P4_ENFORCEMENT === '1';
 function emit(v) { try { process.stdout.write(JSON.stringify(v)); } catch (_) {} process.exit(0); }
 function failSafe(reason) {
-  emit(enforcing ? { allow_tool: false, deny_reason: 'ADLC rails-guard: ' + reason } : { allow_tool: true });
+  emit(enforcing ? {
+    decision: 'deny',
+    reason: 'ADLC rails-guard: ' + reason,
+    allow_tool: false,
+    deny_reason: 'ADLC rails-guard: ' + reason,
+  } : {
+    decision: 'allow',
+    allow_tool: true,
+  });
+}
+
+var MAX_STDIN_BYTES = parseInt(process.env.ADLC_MAX_STDIN_BYTES, 10) || (25 * 1024 * 1024); // 25 MiB default or configurable
+async function readStdinBounded(maxBytes) {
+  var limit = typeof maxBytes === 'number' ? maxBytes : MAX_STDIN_BYTES;
+  var chunks = [];
+  var total = 0;
+  for await (var c of process.stdin) {
+    total += c.length;
+    if (total > limit) {
+      throw new Error('payload exceeds maximum allowed stdin size');
+    }
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function resolveAdapterPath() {
+  if (process.env.ADLC_TEST_MODE === '1' && process.env.ADLC_AGY_ADAPTER_OVERRIDE) {
+    return process.env.ADLC_AGY_ADAPTER_OVERRIDE;
+  }
+  return __dirname + '/adlc-rails-guard.mjs';
 }
 
 var subcmd = process.argv[2];
 if (subcmd === 'status' || subcmd === 'doctor') {
-  var modPath = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var modPath = resolveAdapterPath();
   import(require('node:url').pathToFileURL(modPath).href).then(function (adapter) {
     if (subcmd === 'status') adapter.printStatus();
     else adapter.printDoctor();
@@ -20,17 +50,65 @@ if (subcmd === 'status' || subcmd === 'doctor') {
     console.error('[ADLC ' + subcmd + ' error]', (err && err.message) || err);
     process.exit(1);
   });
+} else if (subcmd === 'preinvocation' || subcmd === 'pre-invocation') {
+  process.on('uncaughtException', function () { emit({ injectSteps: [] }); });
+  process.on('unhandledRejection', function () { emit({ injectSteps: [] }); });
+  var modPre = resolveAdapterPath();
+  (async function () {
+    try {
+      var adapter = await import(require('node:url').pathToFileURL(modPre).href);
+      var raw = await readStdinBounded();
+      var payload = raw ? JSON.parse(raw) : {};
+      emit(adapter.preInvocation(payload, { env: process.env }));
+    } catch (_) { emit({ injectSteps: [] }); }
+  })();
+} else if (subcmd === 'posttooluse' || subcmd === 'post-tool-use') {
+  var postFail = function () {
+    try {
+      if (process.env.ADLC_P4_ENFORCEMENT === '1') {
+        var shmDir = '/dev/shm/.adlc';
+        try { require('node:fs').mkdirSync(shmDir, { recursive: true }); } catch (_) {}
+        require('node:fs').writeFileSync(shmDir + '/posttooluse-crash-' + process.pid, 'posttooluse error');
+      }
+    } catch (_) {}
+    emit({ decision: 'allow', allow_tool: true });
+  };
+  process.on('uncaughtException', postFail);
+  process.on('unhandledRejection', postFail);
+  var modPost = resolveAdapterPath();
+  (async function () {
+    try {
+      var adapter = await import(require('node:url').pathToFileURL(modPost).href);
+      var raw = await readStdinBounded();
+      var payload = raw ? JSON.parse(raw) : {};
+      emit(adapter.postToolUse(payload, { env: process.env }));
+    } catch (_) { postFail(); }
+  })();
+} else if (subcmd === 'stop') {
+  var stopFail = function () {
+    var enf = process.env.ADLC_P4_ENFORCEMENT === '1';
+    emit(enf ? { decision: 'continue', reason: 'ADLC Rails-Guard: Internal error evaluating Stop hook under enforcement.' } : { decision: 'stop' });
+  };
+  process.on('uncaughtException', stopFail);
+  process.on('unhandledRejection', stopFail);
+  var modStop = resolveAdapterPath();
+  (async function () {
+    try {
+      var adapter = await import(require('node:url').pathToFileURL(modStop).href);
+      var raw = await readStdinBounded();
+      var payload = raw ? JSON.parse(raw) : {};
+      emit(adapter.onStop(payload, { env: process.env }));
+    } catch (_) { stopFail(); }
+  })();
 } else {
   process.on('uncaughtException', function (e) { failSafe('uncaught ' + (e && e.message)); });
   process.on('unhandledRejection', function (e) { failSafe('rejection ' + (e && e.message)); });
 
-  var mod = process.env.ADLC_AGY_ADAPTER_OVERRIDE || (__dirname + '/adlc-rails-guard.mjs');
+  var mod = resolveAdapterPath();
   (async function () {
     try {
       var adapter = await import(require('node:url').pathToFileURL(mod).href);
-      var chunks = [];
-      for await (var c of process.stdin) chunks.push(c);
-      var raw = Buffer.concat(chunks).toString('utf8');
+      var raw = await readStdinBounded();
       emit(adapter.runFromStdin(raw, process.env));
     } catch (e) { failSafe('load/exec ' + (e && e.message)); }
   })();

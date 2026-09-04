@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -42,6 +42,12 @@ test('computeRiskTier: derives high risk for ticket declaring risk: high', () =>
 
 test('computeRiskTier: derives high risk for ticket touching trust root', () => {
   const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', scope: ['.adlc/tickets.json'] });
+  assert.equal(tier, 'high');
+  assert.ok(signals.includes('touches-trust-root'));
+});
+
+test('computeRiskTier: derives high risk for ticket touching the session secret', () => {
+  const { tier, signals } = computeRiskTier({ id: 'T1', title: 'test', rails: ['.adlc/.session-secret'] });
   assert.equal(tier, 'high');
   assert.ok(signals.includes('touches-trust-root'));
 });
@@ -450,3 +456,244 @@ test('createFlailTracker: records mutations and emits warning on threshold', () 
   assert.equal(res.churning.length, 1);
   assert.equal(res.churning[0].path, 'src/app.mjs');
 });
+
+test('checkBuildGate: allows build on sharded ticket store under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'sharded-bg-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc', 'tickets'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+    writeFileSync(join(root, '.adlc', 'tickets', ticketFilename('T-01')), JSON.stringify({
+      id: 'T-01',
+      title: 'Shard Ticket',
+      rails: ['src/frozen.js'],
+      scope: ['src/feature/**'],
+    }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-01' }));
+    writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+
+    const tracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID: 'sess-shard', tracker, root, env });
+    assert.equal(gate.decision, 'allow', gate.reason);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('flail: accumulation of > 20 distinct warnings preserves valid session baseline HMAC', () => {
+  const root = mkdtempSync(join(tmpdir(), 'warn-prune-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+    writeFileSync(join(root, '.adlc', 'sessions.json'), JSON.stringify({}));
+
+    const sessionID = 'sess-warn-prune';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+
+    // Produce 25 distinct file edit churn events to accumulate > 20 warnings
+    for (let i = 0; i < 25; i++) {
+      tracker.recordEdit(sessionID, `src/file_${i}.js`, [`Editing src/file_${i}.js`, `Editing src/file_${i}.js`, `Editing src/file_${i}.js`]);
+    }
+
+    assert.equal(tracker.validateBaseline(sessionID), true, 'session baseline must remain valid after warning pruning');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: truncated or tampered ledger fails closed under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-tamper-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const sessionID = 'sess-tamper-test';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+    tracker.recordToolCall(sessionID, { isMutating: true });
+    tracker.recordToolCall(sessionID, { isMutating: true });
+
+    // Remove sessions.json so replayLedger is authoritative
+    rmSync(join(root, '.adlc', 'sessions.json'));
+
+    // Truncate ledger file to corrupt the MAC chain / remove second tool call
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    const raw = readFileSync(ledgerFile, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    // Write only the first line (dropped subsequent entries without proper compaction/chaining)
+    writeFileSync(ledgerFile, lines[0] + '\n');
+
+    // In a fresh tracker process, replaying the truncated ledger must detect sequence broken/corrupted
+    const freshTracker = createPersistentTracker(root, env);
+    const gate = checkBuildGate({ sessionID, tracker: freshTracker, root, env });
+    assert.equal(gate.decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rails: structured write targeting .adlc/session-ledger.jsonl is denied under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-rail-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const ledgerFile = join(root, '.adlc', 'session-ledger.jsonl');
+    const res = runFromStdin(JSON.stringify({
+      conversationId: 'sess-ledger-rail',
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { TargetFile: ledgerFile, CodeContent: '{}' } },
+    }), env);
+
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /frozen rail/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: ledger ahead of stale sessions.json fails closed under enforcement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-ahead-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const sessionID = 'sess-ahead-test';
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket(sessionID, 'T1');
+
+    // Save stale sessions.json snapshot at depth 0
+    const staleSessionsJson = readFileSync(join(root, '.adlc', 'sessions.json'), 'utf8');
+
+    // Record tool call (ledger advances to seq 2, depth 1)
+    tracker.recordToolCall(sessionID, { isMutating: true });
+
+    // Restore stale sessions.json simulating crash before writeStore
+    writeFileSync(join(root, '.adlc', 'sessions.json'), staleSessionsJson);
+
+    // validateLedger must reject the mismatch
+    assert.equal(tracker.validateLedger(sessionID), false, 'ledger-ahead mismatch must fail closed');
+    const gate = checkBuildGate({ sessionID, tracker, root, env });
+    assert.equal(gate.decision, 'deny');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ledger: multi-session compaction maintains exact ledgerSeq and validation across all sessions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ledger-multisess-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket('sess-A', 'T1');
+    tracker.recordActiveTicket('sess-B', 'T1');
+
+    tracker.recordToolCall('sess-A', { isMutating: true });
+    tracker.recordToolCall('sess-B', { isMutating: true });
+
+    // Add valid edits across entries to cross the 512 KiB compaction threshold
+    for (let i = 0; i < 1200; i++) {
+      tracker.recordToolCall('sess-A', { isMutating: true });
+    }
+
+    // Both sessions must validate cleanly after compaction!
+    assert.equal(tracker.validateLedger('sess-A'), true, 'sess-A must validate after compaction');
+    assert.equal(tracker.validateLedger('sess-B'), true, 'sess-B must validate after compaction');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rails: mutating tool with command argument and no path fails closed as opaque mutator', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mutator-cmd-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const res = runFromStdin(JSON.stringify({
+      conversationId: 'sess-mutator-cmd',
+      workspacePaths: [root],
+      toolCall: { name: 'write_to_file', args: { command: 'echo hello' } },
+    }), env);
+
+    assert.equal(res.allow_tool, false);
+    assert.match(res.deny_reason, /no inspectable target path/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('store: oversized filePath in recordEdit is bounded and does not corrupt sessions.json', () => {
+  const root = mkdtempSync(join(tmpdir(), 'oversized-edit-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+    writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+
+    const tracker = createPersistentTracker(root, env);
+    tracker.recordActiveTicket('sess-oversized', 'T1');
+
+    // Submit 2 MiB string to recordEdit
+    tracker.recordEdit('sess-oversized', 'a'.repeat(2 * 1024 * 1024));
+
+    // Store must remain uncorrupted and well within 512 KiB
+    const storeStat = statSync(join(root, '.adlc', 'sessions.json'));
+    assert.ok(storeStat.size < 50 * 1024, `store size ${storeStat.size} must be bounded`);
+    assert.equal(tracker.isCorrupted(), false);
+    assert.equal(tracker.validateBaseline('sess-oversized'), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('secrets: distinct repositories derive distinct authenticated baseline signatures from master key', () => {
+  const rootA = mkdtempSync(join(tmpdir(), 'repo-a-'));
+  const rootB = mkdtempSync(join(tmpdir(), 'repo-b-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1' };
+  try {
+    for (const r of [rootA, rootB]) {
+      mkdirSync(join(r, '.adlc'), { recursive: true });
+      writeFileSync(join(r, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1' }] }));
+      writeFileSync(join(r, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+    }
+
+    const trackerA = createPersistentTracker(rootA, env);
+    const trackerB = createPersistentTracker(rootB, env);
+
+    trackerA.recordActiveTicket('sess-test', 'T1');
+    trackerB.recordActiveTicket('sess-test', 'T1');
+
+    assert.equal(trackerA.validateBaseline('sess-test'), true);
+    assert.equal(trackerB.validateBaseline('sess-test'), true);
+
+    const storeA = JSON.parse(readFileSync(join(rootA, '.adlc', 'sessions.json'), 'utf8'));
+    const storeB = JSON.parse(readFileSync(join(rootB, '.adlc', 'sessions.json'), 'utf8'));
+
+    // Even with identical sessionID and ticket state, signatures are unique per repository!
+    assert.notEqual(storeA['sess-test'].baselineSig, storeB['sess-test'].baselineSig);
+  } finally {
+    rmSync(rootA, { recursive: true, force: true });
+    rmSync(rootB, { recursive: true, force: true });
+  }
+});
+
+
+
+
+

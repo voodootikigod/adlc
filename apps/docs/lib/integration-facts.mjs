@@ -763,11 +763,11 @@ export const GEMINI_INTEGRATION = {
   surfaces: [
     {
       key: 'hooks',
-      count: 1,
-      label: 'hook event',
-      title: 'PreToolUse rails-guard (advisory)',
-      detail: 'Denies with allow_tool: false on exit 0. Non-zero exit is fail-open: a crash or timeout can let a rail write through.',
-      items: ['PreToolUse'],
+      count: 4,
+      label: 'hooks',
+      title: 'PreToolUse, PostToolUse, PreInvocation, and Stop lifecycle hooks',
+      detail: 'The PreToolUse hook denies frozen rail edits in-session. PostToolUse authenticates executed tool results and transcript hashes, PreInvocation injects active ticket context, and Stop intercepts unverified completion.',
+      items: ['PreToolUse', 'PostToolUse', 'PreInvocation', 'Stop'],
     },
     {
       key: 'skills',
@@ -779,11 +779,11 @@ export const GEMINI_INTEGRATION = {
     },
     {
       key: 'commands',
-      count: 3,
+      count: 5,
       label: 'commands',
-      title: 'Commands for bootstrap and diagnostics',
-      detail: '/adlc-init finishes the repo scaffold, /adlc-status inspects session context depth, and /adlc-doctor verifies integration health.',
-      items: ['/adlc-init', '/adlc-status', '/adlc-doctor'],
+      title: 'Commands for bootstrap, planning, and diagnostics',
+      detail: '/adlc-init scaffolds the repo, /adlc-plan compiles brain plans, /adlc-prosecute fans out multi-lens review, /adlc-status inspects context, and /adlc-doctor verifies health.',
+      items: ['/adlc-init', '/adlc-plan', '/adlc-prosecute', '/adlc-status', '/adlc-doctor'],
     },
     {
       key: 'agents',

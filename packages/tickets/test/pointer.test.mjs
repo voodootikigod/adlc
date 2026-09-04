@@ -274,6 +274,30 @@ test('reader agreement: every reader reaches the same decision on every vector',
   }
 });
 
+test('reader agreement: an uninitialized repo (no .adlc at all) is absent, not a deny, in every reader', async () => {
+  // Deliberately NOT a VECTOR: fixture() always creates `.adlc/`, so the table
+  // cannot express a repo that has none. This pins the bounded reader's
+  // PARENT-directory branch in every copy — a missing `.adlc` means the repo is
+  // simply not ADLC-initialized, which must resolve to "no active ticket"
+  // rather than fail closed, or every non-ADLC repo would read as a denial.
+  // Deliberately distinct from a `.adlc` that EXISTS but is not a real
+  // directory (a symlink), which does deny — see pointer-bounded.test.mjs.
+  // Without this, the branch was covered only for the canonical module and
+  // both its mutants survived in all eight generated copies.
+  const root = mkdtempSync(join(tmpdir(), 'adlc-pointer-uninit-'));
+  const readers = [{ name: 'packages/tickets/lib/pointer.mjs', fn: readActiveTicketPointer }];
+  for (const relative of GENERATED_READERS) {
+    const mod = await import(pathToFileURL(join(REPO, relative)).href);
+    readers.push({ name: relative, fn: mod.readActiveTicketPointer });
+  }
+  assert.equal(readers.length, GENERATED_READERS.length + 1, 'a reader is missing from the agreement set');
+  for (const reader of readers) {
+    const res = reader.fn(root);
+    assert.equal(res.ok, true, `${reader.name}: an uninitialized repo must resolve, not deny`);
+    assert.equal(res.value.present, false, `${reader.name}: an uninitialized repo has no pointer`);
+  }
+});
+
 test('reader agreement: bridge vectors agree across every reader in both modes', async () => {
   const readers = await allReaders();
   for (const vector of BRIDGE_VECTORS) {

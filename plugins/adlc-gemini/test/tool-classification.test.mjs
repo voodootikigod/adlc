@@ -29,6 +29,13 @@ for (const t of ['write_to_file', 'create_file', 'edit', 'replace_file_content',
   });
 }
 
+// MUTATING_TOOL_HINTS is a general substring hint list, not limited to agy's live
+// tool set — pin the 'modify' hint specifically (a hypothetical future tool name
+// carrying it, e.g. a "modify_file"-style verb from another harness).
+test('a tool name carrying only the "modify" hint classifies mutating', () => {
+  assert.equal(classifyTool('modify_file'), 'mutating');
+});
+
 // Every agy READ / file-search tool must classify 'readonly' (never blocked,
 // bypasses the rail check entirely). find_by_name is agy's file-search tool
 // (Pattern/SearchDirectory/Extensions args, no file-content access) — read.
