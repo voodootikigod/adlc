@@ -44,9 +44,21 @@ so a failing suite cannot masquerade as killing every mutant.
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every generated mutant was killed by the suite.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, not a git repo, bad arguments, non-green baseline, or nothing eligible to mutate with no `--target`/`--rails`.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, not a git repo, bad arguments, non-green baseline, nothing eligible to mutate with no `--target`/`--rails`, or a selected file received no mutation budget (see below).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more mutants survived (hollow coverage).</span>
 </div>
+
+### `--max` too small for the diff: a starved file fails closed
+
+`--max` spreads the mutant budget round-robin across every selected file, and a small
+`--max` against a wide diff can leave one or more diff-derived files with **zero quota** —
+never mutated at all. That file's changed code is then unverified, so `hollow-test` refuses
+to report a pass: it exits `1` and names every starved file on stderr rather than silently
+passing on whatever other files did get budget. Raise `--max` to cover every selected file
+(one per file changed, at minimum), or narrow the diff. This does not apply to a file that
+received budget but has no mutable line at all (a comment-only or import-only change) —
+that case still only warns, since the file genuinely has nothing to mutate rather than
+having been skipped for lack of budget.
 
 ## Example
 

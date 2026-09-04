@@ -1211,15 +1211,25 @@ describe('CLI: --max budget cannot silently starve an explicit --target', () => 
   });
 
   it('reserves budget for the explicit target instead of silently zeroing its quota', () => {
-    // --max equals the number of diff-eligible files: under the old
-    // round-robin-by-index allocation, the explicit target got quota 0 and
-    // this printed a false "all mutants killed" 0-survivor pass.
+    // --max is 1 MORE than the diff-eligible file count (4, not 3): 1 quota
+    // reserved for the explicit target leaves exactly 3 remaining for the 3
+    // diff-eligible files (one each, no starvation). At --max 3 the old
+    // round-robin-by-index allocation gave the explicit target quota 0 and
+    // printed a false "all mutants killed" 0-survivor pass — that bug is what
+    // this test still pins. --max 3 additionally left only 2 of the 3
+    // diff-eligible files with quota under the reservation, coincidentally
+    // starving the third — collateral to what this test is actually
+    // checking, and since #657 that diff-derived starvation now fails closed
+    // (opError, exit 1) BEFORE the survivor check below ever runs, which
+    // would make this assertion fail for a reason unrelated to the
+    // reservation mechanism under test. --max 4 removes that collision
+    // entirely while still exercising the reservation.
     const result = runCli(
       [
         '--test-cmd', 'node --test test/*.test.mjs',
         '--base', 'HEAD~1',
         '--target', 'src/never_in_diff.mjs',
-        '--max', '3',
+        '--max', '4',
         '--json',
       ],
       dir
