@@ -1,10 +1,13 @@
-// WorkerAdapter: Google Gemini CLI (`jetski --print` or `agy --print`). Model plane (K2).
+// WorkerAdapter: Google Gemini CLI (`jetski --print <prompt>` or `agy --print <prompt>`). Model plane (K2).
 //
-// DEFAULT invocation: `[agent] --print [--model <model>]` with the prompt on STDIN.
-// Confidence: HIGH — this shape is verified against antigravity-booster's
-// runAgy (../antigravity-booster/lib/agy.mjs), which pipes the prompt to stdin
-// and reads print-mode stdout. `model` comes from `fleet.model`. Overridable via
-// `command`/`args`. agy/jetski meters per-model quota pools.
+// DEFAULT invocation: `[agent] --print <prompt> [--model <model>]`, prompt as an
+// argv value. Confidence: HIGH — `--print` is a Go string flag whose VALUE is the
+// prompt (agy/jetski `--help`: "--print  Alias for --prompt"); there is no
+// stdin-print mode, so a bare `--print` with the prompt piped on stdin errors
+// with "flag needs an argument: -print" (issue #866). `model` comes from
+// `fleet.model`. Overridable via `command`/`args`; `useStdin: true` restores the
+// old stdin-piped form (prompt NOT in argv) for a caller that still wants it.
+// agy/jetski meters per-model quota pools.
 
 import { accessSync, constants, statSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -71,7 +74,7 @@ function detectBinary(targets = ['jetski', 'agy']) {
   return null;
 }
 
-export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command, args, model }) {
+export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command, args, model, useStdin = false }) {
   let resolvedCommand = command;
   if (!resolvedCommand) {
     resolvedCommand = detectBinary();
@@ -91,8 +94,13 @@ export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaul
   // `modelArgs` (not a bare truthiness check) so the registry's `default`
   // sentinel is NOT emitted literally as `--model default` — that names a model
   // agy/jetski does not have. It means "let the harness resolve its own default".
-  const argv = args ?? ['--print', ...modelArgs('--model', model)];
-  // agy/jetski reads the prompt from stdin (not an argv position).
-  const res = await exec(resolvedCommand, argv, { cwd: worktree, env, timeout: timeoutMs, input: prompt });
+  const argv = args ?? (useStdin
+    ? ['--print', ...modelArgs('--model', model)]
+    : ['--print', prompt, ...modelArgs('--model', model)]);
+  // `--print` takes the prompt as its argv value by default (see header); the
+  // stdin form is opt-in via `useStdin` for a caller that still wants it.
+  const opts = { cwd: worktree, env, timeout: timeoutMs };
+  if (useStdin) opts.input = prompt;
+  const res = await exec(resolvedCommand, argv, opts);
   return mapResult(res);
 }

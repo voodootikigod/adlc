@@ -164,9 +164,10 @@ run-wide sandbox decision: a host with no `bwrap`/`sandbox-exec` already refuses
 to dispatch at preflight, and `--i-am-in-a-disposable-container` already asserts
 the whole run is contained. There is no model-plane-only opt-out.
 
-Each adapter ships a grounded **default invocation** (`agy --print` is verified
-against antigravity-booster; `codex exec`, `opencode run`, `cursor-agent -p`, and
-the pi headless form are documented defaults with the confidence noted in each
+Each adapter ships a grounded **default invocation** (`agy --print <prompt>` /
+`jetski --print <prompt>` and `pi --print <prompt>` pass the prompt as the
+flag's argv value, not on stdin — `codex exec`, `opencode run`, `cursor-agent
+-p`, and the rest are documented defaults with the confidence noted in each
 adapter's header). Because harness CLIs evolve, the command and args are
 **overridable** via the operator-local `--adapter-command` / `--adapter-args` CLI
 flags (and `--model`) — so a CLI change is a one-line fix, and an unknown
