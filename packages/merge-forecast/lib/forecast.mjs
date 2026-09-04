@@ -3,6 +3,8 @@
  * and schedule construction.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs';
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
@@ -75,6 +77,29 @@ export async function runForecast(opts) {
     warnings.push('co-change skipped: not a git repo');
   }
 
+  // Graph coupling data — load from explicit option, env var, or conventional paths
+  let graphCouplingData = opts.graphCouplingData ?? null;
+  if (!graphCouplingData) {
+    const candidatePaths = [
+      opts.graphCouplingFile,
+      process.env.ADLC_GRAPH_COUPLING_FILE,
+      join(root, '.adlc', 'graph-coupling.json'),
+      join(root, '.sdlc', 'artifacts', 'codebase_graph.json'),
+      join(root, '.sdlc', 'artifacts', 'graph_coupling.json'),
+    ].filter(Boolean);
+
+    for (const p of candidatePaths) {
+      if (existsSync(p)) {
+        try {
+          graphCouplingData = JSON.parse(readFileSync(p, 'utf8'));
+          break;
+        } catch (err) {
+          warnings.push(`graph-coupling skipped: failed to parse ${p}: ${err.message}`);
+        }
+      }
+    }
+  }
+
   // Compute parallel-eligible pairs
   const pairs = parallelEligiblePairs(tickets);
 
@@ -84,6 +109,7 @@ export async function runForecast(opts) {
       repoFiles,
       root,
       coChangeData,
+      graphCouplingData,
     });
     const verdict = hardVeto
       ? 'VETO'

@@ -26,6 +26,7 @@ const { values } = parseArgs({
     'merge-min': { type: 'string' },
     'co-change-limit': { type: 'string' },
     'conflict-threshold': { type: 'string' },
+    'graph-coupling': { type: 'string' },
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   },
@@ -44,6 +45,7 @@ Options:
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes
   --co-change-limit <N>      Git log depth for co-change mining (default: 500)
   --conflict-threshold <F>   Score >= this triggers SEQUENCE verdict (default: 0.5)
+  --graph-coupling <path>    Path to semantic call/symbol graph coupling JSON
   --json                     Machine-readable JSON output
   --help                     Show this help
 
@@ -131,6 +133,7 @@ try {
     width: widthFlag,
     buildMin,
     mergeMin,
+    graphCouplingFile: values['graph-coupling'],
   });
 } catch (err) {
   opError(err.message ?? String(err));
