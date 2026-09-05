@@ -9,6 +9,8 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [1.11.1] - 2026-09-05
 
 ### Added
@@ -60,8 +62,6 @@ Also included:
 - **coldstart:** a shape-deviant LLM verdict is exit 1, never zero gaps; accept a bare gaps array (#594) (#902)
 - **gates:** harden Wave 2 gates against false greens (#768, #775, #786, #823) (#879)
 - **gates:** eliminate false-green vulnerabilities across 4 lifecycle gates (#583, #683, #698, #719) (#878)
-
-## [Unreleased]
 
 ## [1.11.0] - 2026-08-24
 
