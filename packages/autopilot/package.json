@@ -1,6 +1,6 @@
 {
   "name": "@adlc/autopilot",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "Quota-gated local issue-to-PR loop: picks a GitHub issue, shapes an ADLC ticket, dispatches one sandboxed fleet run per issue, gates, attests and opens the PR. Composes @adlc/fleet; adds no gate logic.",
   "type": "module",
   "license": "MIT",
@@ -29,9 +29,9 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@adlc/core": "1.11.0",
-    "@adlc/fleet": "1.11.0",
-    "@adlc/tickets": "1.11.0"
+    "@adlc/core": "1.11.1",
+    "@adlc/fleet": "1.11.1",
+    "@adlc/tickets": "1.11.1"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

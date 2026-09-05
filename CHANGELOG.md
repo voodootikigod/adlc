@@ -9,6 +9,58 @@ version and is published together.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-09-05
+
+### Added
+- **autopilot:** @adlc/autopilot — the quota-gated local issue-to-PR loop over the fleet extensions (#913)
+- **skills:** add /issue-lanes — N issues through every ADLC gate in parallel worktrees (#901)
+- **context-handoff:** handoff doctor + writer provenance — dead-end orphaned unbound denies in one command (#946)
+- **fleet:** extensions for the issue autopilot — 15 additive items beside the rails (#908)
+- **merge-forecast:** add semantic graph coupling signal and --graph-coupling flag (#958)
+- **adlc-gemini:** PreInvocation/Stop lifecycle hooks, dual-format output, and prosecution fanout (#939-#944) (#967)
+- **adlc-pi:** P6 pending-acceptance + P7 staleness widget hints (#955)
+- **tickets:** record a signed audit entry for every bypassed store mutation; refuse keyless bypass writes (#577)
+
+### Fixed
+
+This release clears four issues that were actively blocking normal use of the toolkit:
+
+- **claude-code,codex,pi,opencode:** disconnect the context-rot handoff hooks — they were not yet functional and were disrupting every workstream across all four harnesses (#966)
+- **deny-remediation:** fix the remaining #970 scope — CLI dispatch package.json resolution, quoted `--output`/unspaced sed writes, `--write` no longer auto-prints in recovery output, `adlc init` harness registration/config reconciliation, and hook deny-reason messaging (#973, following on from #965)
+- **copilot:** stop denying pathless non-mutating tool calls (`adlc_gate`, `adlc_prosecute`, `todo_write`, `fetch`) under active rails (#809) (#976)
+- **cursor:** stop denying no-path first-party Cursor tools (`todo_write`, `create_diagram`, `glob_file_search`, `fetch_pull_request`) under P4 enforcement (#816) (#975)
+
+Also included:
+- **rails-guard:** disclose --sanctioned-add exemptions (#739) (#968)
+- **fleet:** correct gemini/agy/jetski and pi adapter default argv (#866, #867) (#974)
+- **prosecute:** tier-check skip rails of completed tickets (#905) (#972)
+- **consensus-fix:** reject empty-changes no-op candidates (#599) (#969)
+- **hollow-test:** fail closed on a starved selected file (#657) (#971)
+- **cli,context-handoff:** dispatch package.json resolution + read-only shell bypass (#965)
+- **adlc-opencode:** realpath argv[1] in the CLI entry guard (#899) (#951)
+- **merge-forecast:** gate on any high-risk pair scheduled concurrently, not only hard-vetoed pairs (#681) (#952)
+- **lesson-foundry:** --write skips an existing artifact by default instead of clobbering it (#674) (#953)
+- **adlc-pi:** scrub ADLC_MANIFEST_KEY/ADLC_ADMIN_KEY from prosecution lens child processes (#843) (#950)
+- **hollow-test:** diff-derived zero-mutant files fail closed, matching explicit-target behaviour (#658) (#947)
+- **gate-fuzzing:** refuse a clean/exhaustive verdict when no real independence source is configured (#641) (#925)
+- **review-calibration:** add a --min-plants floor so a 1-2-plant commit cannot GATE PASS at 100% recall (#751) (#924)
+- **tickets:** adlc ticket doctor sets a real exit code on ok:false (#793) (#923)
+- **adlc-herdr:** resolve pluginRoot from the plugin's own install location, not env or cwd (#833) (#918)
+- **adlc-codex:** resolve the build-gate-bypass spawn through resolveTrustedBinary and a scrubbed env (#807) (#917)
+- **adlc-gemini:** detect case-insensitive filesystems and deny differently-cased rail writes (#822) (#920)
+- **adlc-copilot:** correctly compare isMain via pathToFileURL so all 7 lifecycle hooks run (#808) (#919)
+- **spec-lint:** coerce and validate --llm vacuous-vote indices; fail closed on unusable payloads (#774) (#912)
+- **rejection-mining:** fence PR comment text in the refinement prompt and stop embedding it in the lens Charter (#745) (#911)
+- **parallax:** fence --context files and ticket bodies as untrusted data in prompts (#707) (#910)
+- **skill-rot:** splice last-verified in place instead of re-serializing frontmatter (#767) (#909)
+- **mutation-gate:** size the hollow-test draw by the measured suite cost — an honest cap, never a timeout (T-01M19V5SCKQYRPYXYZHQ0AEZBT) (#914)
+- **model-router:** reject --floor 0, which silently disabled the P3 rail-density gate (#697) (#906)
+- **preflight:** reject a present-but-empty --test-cmd instead of silently passing (#712) (#904)
+- **flail-detector:** treat an empty/unusable log as could-not-analyze (exit 1), never CLEAN (#622) (#903)
+- **coldstart:** a shape-deviant LLM verdict is exit 1, never zero gaps; accept a bare gaps array (#594) (#902)
+- **gates:** harden Wave 2 gates against false greens (#768, #775, #786, #823) (#879)
+- **gates:** eliminate false-green vulnerabilities across 4 lifecycle gates (#583, #683, #698, #719) (#878)
+
 ## [Unreleased]
 
 ## [1.11.0] - 2026-08-24
