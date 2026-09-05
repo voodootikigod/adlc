@@ -54,6 +54,16 @@ describe('checkTicketOffline (unit)', () => {
     assert.equal(result.gaps.length, 1);
     assert.equal(result.gaps[0].what, 'missing body');
 
+    const nonStringBody = { ...validTicket, body: 123 };
+    const resNonString = checkTicketOffline(nonStringBody, allTickets);
+    assert.equal(resNonString.gaps.length, 1);
+    assert.equal(resNonString.gaps[0].what, 'missing body');
+
+    const nullBody = { ...validTicket, body: null };
+    const resNull = checkTicketOffline(nullBody, allTickets);
+    assert.equal(resNull.gaps.length, 1);
+    assert.equal(resNull.gaps[0].what, 'missing body');
+
     const whitespaceBody = { ...validTicket, body: '   \n  ' };
     const resWhitespace = checkTicketOffline(whitespaceBody, allTickets);
     assert.equal(resWhitespace.gaps.length, 1);
@@ -65,6 +75,16 @@ describe('checkTicketOffline (unit)', () => {
     const result = checkTicketOffline(noScope, allTickets);
     assert.equal(result.gaps.length, 1);
     assert.equal(result.gaps[0].what, 'missing scope');
+
+    const stringScope = { ...validTicket, scope: 'src/**' };
+    const resString = checkTicketOffline(stringScope, allTickets);
+    assert.equal(resString.gaps.length, 1);
+    assert.equal(resString.gaps[0].what, 'missing scope');
+
+    const nullScope = { ...validTicket, scope: null };
+    const resNull = checkTicketOffline(nullScope, allTickets);
+    assert.equal(resNull.gaps.length, 1);
+    assert.equal(resNull.gaps[0].what, 'missing scope');
 
     const invalidScope = { ...validTicket, scope: ['valid/**', '  '] };
     const resInvalid = checkTicketOffline(invalidScope, allTickets);
