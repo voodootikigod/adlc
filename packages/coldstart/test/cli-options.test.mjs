@@ -30,6 +30,16 @@ test('--max-age is overridable', () => {
   assert.equal(values['max-age'], '7');
 });
 
+test('--offline defaults to false when omitted', () => {
+  const { values } = parseArgs({ options: OPTIONS, args: ['T1'] });
+  assert.equal(values.offline, false);
+});
+
+test('--offline is true when the flag is passed', () => {
+  const { values } = parseArgs({ options: OPTIONS, args: ['T1', '--offline'] });
+  assert.equal(values.offline, true);
+});
+
 test('other existing defaults are unchanged (tickets path, tier, all, prompt-only, json)', () => {
   const { values } = parseArgs({ options: OPTIONS, args: ['T1'] });
   assert.equal(values.tickets, '.adlc/tickets.json');
