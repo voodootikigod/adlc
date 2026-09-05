@@ -266,6 +266,25 @@ test('buildJsonResult: lens title uses cluster.title when provided', () => {
   assert.strictEqual(result.lenses[0].title, 'Hardcoded Secrets');
 });
 
+test('buildJsonResult: reports LLM refinement status and failure count', () => {
+  const clusters = [
+    makeCluster({ refined: true }),
+    makeCluster({ slug: 'fallback', refined: false }),
+  ];
+  const result = buildJsonResult({
+    clusters,
+    lensPlans: [makePlan(), makePlan({ slug: 'fallback' })],
+    totalSignals: 6,
+    totalPRs: 4,
+    skippedPRs: 0,
+    llmFailures: [{ index: 1, slug: 'fallback', reason: 'provider unavailable' }],
+  });
+
+  assert.equal(result.llmFailures, 1);
+  assert.equal(result.lenses[0].refined, true);
+  assert.equal(result.lenses[1].refined, false);
+});
+
 test('buildJsonResult: lens path is null when plan is missing', () => {
   const cluster = makeCluster();
   const result = buildJsonResult({

@@ -81,9 +81,11 @@ const clusters = buildClusters(signals, minSize);
 
 // --llm: refine clusters
 let llmRefinements = new Map();
+let llmFailures = [];
 if (flags.llm && clusters.length > 0) {
   try {
-    llmRefinements = await refineClusters(clusters, signals, tier);
+    ({ results: llmRefinements, failures: llmFailures } =
+      await refineClusters(clusters, signals, tier));
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }
@@ -95,6 +97,7 @@ const enrichedClusters = clusters.map((c, idx) => {
   return {
     ...c,
     title: refinement?.title ?? null,
+    refined: llmRefinements.has(idx),
   };
 });
 
@@ -109,6 +112,7 @@ if (flags.json) {
     totalSignals: signals.length,
     totalPRs,
     skippedPRs,
+    llmFailures,
   }));
 } else {
   const lines = buildHumanReport({
@@ -117,11 +121,17 @@ if (flags.json) {
     totalSignals: signals.length,
     totalPRs,
     skippedPRs,
+    llmFailures,
   });
   for (const l of lines) console.log(l);
 }
 
 // --write: emit lens files
+const allRefinementsFailed = flags.llm && clusters.length > 0 && llmRefinements.size === 0;
+if (allRefinementsFailed) {
+  opError(`LLM refinement failed for all ${clusters.length} cluster${clusters.length === 1 ? '' : 's'}; no lenses were written.`);
+}
+
 if (flags.write) {
   if (!existsSync(outDir)) {
     try {

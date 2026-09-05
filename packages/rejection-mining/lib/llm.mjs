@@ -62,30 +62,37 @@ export async function refineCluster(slug, signals, tier = 'mid') {
 
 /**
  * Refine multiple clusters (one call each).
- * Returns Map<clusterIndex, {title, charter}>.
- * Failures are logged but do not throw.
+ * Returns refinement results and the clusters that could not be refined.
+ * Failures are logged but do not throw, preserving the per-cluster fallback.
  *
  * @param {Array<{slug: string, indices: number[]}>} clusters
  * @param {Array<{body: string}>} signals
  * @param {string} [tier]
- * @returns {Promise<Map<number, {title: string, charter: string}>>}
+ * @param {(slug: string, signals: Array<object>, tier: string) => Promise<object|null>} [refine]
+ * @returns {Promise<{results: Map<number, {title: string, charter: string}>, failures: Array<{index: number, slug: string, reason: string}>}>}
  */
-export async function refineClusters(clusters, signals, tier = 'mid') {
+export async function refineClusters(clusters, signals, tier = 'mid', refine = refineCluster) {
   const results = new Map();
+  const failures = [];
 
   for (const [idx, cluster] of clusters.entries()) {
     const clusterSignals = cluster.indices.map((i) => signals[i]);
     try {
-      const refined = await refineCluster(cluster.slug, clusterSignals, tier);
-      if (refined) results.set(idx, refined);
+      const refined = await refine(cluster.slug, clusterSignals, tier);
+      if (refined) {
+        results.set(idx, refined);
+      } else {
+        failures.push({ index: idx, slug: cluster.slug, reason: 'invalid or empty LLM response' });
+      }
     } catch (err) {
+      failures.push({ index: idx, slug: cluster.slug, reason: err.message });
       console.error(
         `rejection-mining: LLM refinement failed for cluster "${cluster.slug}": ${err.message}`
       );
     }
   }
 
-  return results;
+  return { results, failures };
 }
 
 /**

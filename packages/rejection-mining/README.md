@@ -113,7 +113,8 @@ or stack traces being passed directly to API response bodies or client UI.
       "title": "Error Exposure Leak",
       "count": 6,
       "prCount": 4,
-      "path": ".adlc/lenses/lens-error-expose-raw.md"
+      "path": ".adlc/lenses/lens-error-expose-raw.md",
+      "refined": true
     }
   ]
 }
@@ -135,7 +136,7 @@ illustrative-only "Example Objections" section, separate from the Charter.
 | Code | Meaning |
 |------|---------|
 | 0 | Success — mining complete |
-| 1 | Operational error — `gh` missing, auth failure, no PRs found |
+| 1 | Operational error — `gh` missing, auth failure, no PRs found, or every requested LLM refinement failed |
 | 2 | Gate fails (reserved; currently unused by this tool) |
 
 ## Requirements

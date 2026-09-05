@@ -12,7 +12,7 @@
  * @param {number} opts.skippedPRs
  * @returns {string[]}
  */
-export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs }) {
+export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs, llmFailures = [] }) {
   const lines = [];
 
   lines.push('');
@@ -24,6 +24,9 @@ export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, 
   }
   lines.push(`  Signals found: ${totalSignals}`);
   lines.push(`  Lenses:        ${clusters.length}`);
+  if (llmFailures.length > 0) {
+    lines.push(`  LLM failures:  ${llmFailures.length} of ${clusters.length} clusters`);
+  }
   lines.push('');
 
   if (clusters.length === 0) {
@@ -68,11 +71,12 @@ export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, 
  * @param {number} opts.skippedPRs
  * @returns {object}
  */
-export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs }) {
+export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs, llmFailures = [] }) {
   return {
     totalPRs,
     skippedPRs,
     totalSignals,
+    llmFailures: llmFailures.length,
     lensCount: clusters.length,
     lenses: clusters.map((cluster, idx) => {
       const plan = lensPlans[idx] ?? null;
@@ -82,6 +86,7 @@ export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, s
         count: cluster.count,
         prCount: cluster.prNumbers.size,
         path: plan ? plan.path : null,
+        refined: cluster.refined ?? false,
       };
     }),
   };
