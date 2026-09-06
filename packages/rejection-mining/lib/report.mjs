@@ -10,9 +10,21 @@
  * @param {number} opts.totalSignals
  * @param {number} opts.totalPRs
  * @param {number} opts.skippedPRs
+ * @param {boolean} [opts.llmRequested]
+ * @param {number} [opts.llmAttempted]
+ * @param {number} [opts.llmFailures]
  * @returns {string[]}
  */
-export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs }) {
+export function buildHumanReport({
+  clusters,
+  lensPlans,
+  totalSignals,
+  totalPRs,
+  skippedPRs,
+  llmRequested = false,
+  llmAttempted = 0,
+  llmFailures = 0,
+}) {
   const lines = [];
 
   lines.push('');
@@ -24,6 +36,9 @@ export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, 
   }
   lines.push(`  Signals found: ${totalSignals}`);
   lines.push(`  Lenses:        ${clusters.length}`);
+  if (llmRequested && llmAttempted > 0 && llmFailures > 0) {
+    lines.push(`  LLM refinement failed for ${llmFailures} of ${llmAttempted} clusters`);
+  }
   lines.push('');
 
   if (clusters.length === 0) {
@@ -82,6 +97,7 @@ export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, s
         count: cluster.count,
         prCount: cluster.prNumbers.size,
         path: plan ? plan.path : null,
+        refined: cluster.refined ?? false,
       };
     }),
   };

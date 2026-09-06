@@ -15,6 +15,7 @@ function makeCluster(overrides = {}) {
     count: 3,
     prNumbers: new Set([1, 2, 3]),
     indices: [0, 1, 2],
+    refined: false,
     ...overrides,
   };
 }
@@ -76,6 +77,84 @@ test('buildHumanReport: shows skipped PRs line only when skippedPRs > 0', () => 
   }).join('\n');
   // skippedPRs=0 → should NOT have a "skipped" line
   assert(!noSkipped.toLowerCase().includes('skipped'));
+});
+
+test('buildHumanReport: reports partial LLM refinement failures', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+    llmRequested: true,
+    llmAttempted: 5,
+    llmFailures: 2,
+  }).join('\n');
+  assert(text.includes('LLM refinement failed for 2 of 5 clusters'));
+});
+
+test('buildHumanReport: omits LLM failure line when all refinements succeed', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+    llmRequested: true,
+    llmAttempted: 1,
+    llmFailures: 0,
+  }).join('\n');
+  assert(!text.includes('LLM refinement failed'));
+});
+
+test('buildHumanReport: defaults to no LLM failure when refinement options are omitted', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+  }).join('\n');
+  assert(!text.includes('LLM refinement failed'));
+});
+
+test('buildHumanReport: default llmRequested stays false when other failure fields are present', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+    llmAttempted: 1,
+    llmFailures: 1,
+  }).join('\n');
+  assert(!text.includes('LLM refinement failed'));
+});
+
+test('buildHumanReport: default llmAttempted stays zero when requested and failures are present', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+    llmRequested: true,
+    llmFailures: 1,
+  }).join('\n');
+  assert(!text.includes('LLM refinement failed'));
+});
+
+test('buildHumanReport: default llmFailures stays zero when requested clusters succeed', () => {
+  const text = buildHumanReport({
+    clusters: [makeCluster()],
+    lensPlans: [makePlan()],
+    totalSignals: 3,
+    totalPRs: 3,
+    skippedPRs: 0,
+    llmRequested: true,
+    llmAttempted: 1,
+  }).join('\n');
+  assert(!text.includes('LLM refinement failed'));
 });
 
 test('buildHumanReport: no clusters → shows "No clusters met" message', () => {
@@ -240,6 +319,19 @@ test('buildJsonResult: each lens entry has required fields', () => {
   assert.strictEqual(lens.count, 3);
   assert.strictEqual(lens.prCount, 3);
   assert.strictEqual(lens.path, '.adlc/lenses/lens-avoid-hardcoding.md');
+  assert.strictEqual(lens.refined, false);
+});
+
+test('buildJsonResult: records whether each lens was refined by the LLM', () => {
+  const result = buildJsonResult({
+    clusters: [makeCluster({ refined: true }), makeCluster({ slug: 'fallback', refined: false })],
+    lensPlans: [makePlan(), makePlan({ slug: 'fallback' })],
+    totalSignals: 6,
+    totalPRs: 3,
+    skippedPRs: 0,
+  });
+  assert.strictEqual(result.lenses[0].refined, true);
+  assert.strictEqual(result.lenses[1].refined, false);
 });
 
 test('buildJsonResult: lens title falls back to slug when cluster.title is null', () => {
