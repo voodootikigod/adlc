@@ -90,13 +90,25 @@ export function buildEntry({ version, date, subjects }) {
   return body ? `${heading}\n\n${body}\n` : `${heading}\n\n_No user-facing changes._\n`;
 }
 
-/** Insert `entry` directly under the header, above any existing version sections. */
+/**
+ * Insert `entry` directly under the header, above any existing RELEASED version
+ * sections — but below an `## [Unreleased]` section, if one exists, since that
+ * heading also matches `^## \[` and must stay the topmost entry (Keep a
+ * Changelog convention; enforced by this repo's own release AC4).
+ */
 export function insertEntry(existing, entry, version) {
   const base = existing && existing.includes('# Changelog') ? existing : `${HEADER}\n`;
   if (new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm').test(base)) {
     return base; // already present — never duplicate
   }
-  const idx = base.search(/^## \[/m);
+  const unreleasedMatch = base.match(/^## \[Unreleased\]\s*$/m);
+  let searchFrom = 0;
+  if (unreleasedMatch) {
+    searchFrom = unreleasedMatch.index + unreleasedMatch[0].length;
+  }
+  const rest = base.slice(searchFrom);
+  const relIdx = rest.search(/^## \[/m);
+  const idx = relIdx === -1 ? -1 : searchFrom + relIdx;
   if (idx === -1) {
     return `${base.replace(/\s*$/, '')}\n\n${entry}`;
   }
