@@ -72,3 +72,14 @@ test('insertEntry keeps an existing [Unreleased] section above the new release, 
   assert.ok(unreleasedIdx < newIdx, '[Unreleased] stays above the new release');
   assert.ok(newIdx < oldIdx, 'the new release sits above the previous one');
 });
+
+test('insertEntry appends cleanly after [Unreleased] when no released version exists yet', () => {
+  // No `## [` heading follows [Unreleased] here, so the "not found" (-1) path
+  // must be reachable even when an [Unreleased] section IS present — pins the
+  // insertion point against the -1 sentinel getting arithmetic accidentally
+  // applied to it instead of short-circuiting to "append at the end".
+  const entry = buildEntry({ version: '1.0.0', date: '2026-09-07', subjects: ['feat: first release'] });
+  const base = '# Changelog\n\nintro\n\n## [Unreleased]\n';
+  const out = insertEntry(base, entry, '1.0.0');
+  assert.match(out, /^## \[Unreleased\]\s*\n+## \[1\.0\.0\] - 2026-09-07/m, 'entry appended intact directly after an untouched [Unreleased] heading');
+});

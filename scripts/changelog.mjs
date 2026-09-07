@@ -102,17 +102,19 @@ export function insertEntry(existing, entry, version) {
     return base; // already present — never duplicate
   }
   const unreleasedMatch = base.match(/^## \[Unreleased\]\s*$/m);
-  let searchFrom = 0;
-  if (unreleasedMatch) {
-    searchFrom = unreleasedMatch.index + unreleasedMatch[0].length;
-  }
-  const rest = base.slice(searchFrom);
-  const relIdx = rest.search(/^## \[/m);
-  const idx = relIdx === -1 ? -1 : searchFrom + relIdx;
+  const idx = unreleasedMatch
+    ? nextHeadingAfter(base, unreleasedMatch.index + unreleasedMatch[0].length)
+    : base.search(/^## \[/m);
   if (idx === -1) {
     return `${base.replace(/\s*$/, '')}\n\n${entry}`;
   }
   return `${base.slice(0, idx)}${entry}\n${base.slice(idx)}`;
+}
+
+/** Absolute index of the next `## [` heading in `base` at or after `from`, or -1 if none. */
+function nextHeadingAfter(base, from) {
+  const relIdx = base.slice(from).search(/^## \[/m);
+  return relIdx === -1 ? -1 : from + relIdx;
 }
 
 function main(argv) {
