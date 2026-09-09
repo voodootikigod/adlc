@@ -278,6 +278,34 @@ export async function ac9_wallClockKillsFleet() {
 }
 test('AC9: a fleet fake that never returns is killed at the wall clock (fake timers), outcome wall-clock, blocked label applied', { timeout: 120_000 }, ac9_wallClockKillsFleet);
 
+export async function ac962_recordVanishedMidLoopIsUnchangedNotAThrow() {
+  // #962: a CI run of AC9 itself once crashed with an unhandledRejection —
+  // "TypeError: Cannot read properties of null (reading 'roundsUsed')" — fired
+  // AFTER the test had already ended, misattributed to whatever test happened
+  // to be running at that moment. remainingBudget's `record.roundsUsed` (no
+  // optional chaining) is the exact match for that property name; the loop in
+  // continueRun is the only caller, and it only re-enters remainingBudget on a
+  // 'retry' status — so the reproducible mechanism is: a run's record vanishes
+  // (retired/torn down) BETWEEN a retry and the loop's next budget check.
+  // Confirms the loop now returns a clean terminal state instead of throwing.
+  const fleet = () => ({ stdout: JSON.stringify({ fleetRunId: 'r1', reason: 'mirror-fetch-failed', tickets: {} }), status: 2 });
+  const fx = await createSequenceFixture({ fleet });
+  try {
+    const originalDeadEnd = fx.ctx.deps.deadEnd;
+    let vanish = false;
+    fx.ctx.deps.deadEnd = async (args) => { const r = await originalDeadEnd(args); vanish = true; return r; };
+    const originalLoad = fx.ctx.records.load.bind(fx.ctx.records);
+    fx.ctx.records.load = (n) => (vanish ? null : originalLoad(n));
+
+    const result = await withMutation('run.retryOnMirrorFetchFailed', () =>
+      runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } }));
+
+    assert.deepEqual(result, { state: 'unchanged', reason: 'record-vanished', ticketId: result.ticketId });
+    assert.ok(vanish, 'the retry path (and the deadEnd write it triggers) actually ran');
+  } finally { fx.cleanup(); }
+}
+test('#962: continueRun returns a clean unchanged/record-vanished state, never an unhandled TypeError, when a run\'s record disappears between a retry and the loop\'s next budget check', ac962_recordVanishedMidLoopIsUnchangedNotAThrow);
+
 export async function ac25_budgetChargedBeforeDispatch() {
   // A crash mid-dispatch must not hand the next process a fresh budget: the round is booked BEFORE the dispatch.
   const { remainingBudget } = await import('../lib/run.mjs');

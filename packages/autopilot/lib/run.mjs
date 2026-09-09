@@ -151,7 +151,15 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
     // §6.4–§6.7 — rounds under ONE global budget (§7).
     let deadEndFile = null;
     for (;;) {
-      const budget = remainingBudget(record(), cfg, ctx.now());
+      // #962: a record that has vanished between loop iterations (the run was
+      // retired/torn down concurrently) must never reach remainingBudget's bare
+      // `record.roundsUsed` — that threw as an unhandled rejection from a stale
+      // continuation surfacing after its OWNING call had already ended, and the
+      // error then misattributed itself to whatever test/run happened to be
+      // active at that moment.
+      const currentRecord = record();
+      if (!currentRecord) return { state: 'unchanged', reason: 'record-vanished', ticketId };
+      const budget = remainingBudget(currentRecord, cfg, ctx.now());
       if (budget.strikes === 0 || budget.wallClockMinutes === 0) return { ...(await steps.block('strikes-exhausted', 'build budget exhausted', deadEndFile)), ticketId };
       const r = await steps.round({ budget, deadEndFile, chargeGlobal: true });
       if (r.status === 'terminal') return { ...r.result, ticketId };
