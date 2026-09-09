@@ -23,6 +23,7 @@ import { pinnedRealpaths } from '../lib/tools.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { FAKE } from './helpers/recover-fixture.mjs';
+import { stepsFor } from '../lib/maintenance.mjs';
 
 const HOME = '/home/op';
 function fakeCtx(over = {}) {
@@ -305,6 +306,35 @@ export async function ac962_recordVanishedMidLoopIsUnchangedNotAThrow() {
   } finally { fx.cleanup(); }
 }
 test('#962: continueRun returns a clean unchanged/record-vanished state, never an unhandled TypeError, when a run\'s record disappears between a retry and the loop\'s next budget check', ac962_recordVanishedMidLoopIsUnchangedNotAThrow);
+
+export async function ac962_roundOwnGuardCatchesVanishedRecord() {
+  // Cross-model review on #962's first fix (the continueRun loop-level guard)
+  // correctly flagged it as incomplete: round() ITSELF calls ctx.records.update()
+  // many times before continueRun's own loop would ever see a 'terminal' result,
+  // and records.mjs's update() throws "no run record for issue N" on a missing
+  // record — the ORIGINAL #962 symptom. round() must fail closed on its OWN
+  // entry too, before any of its internal ctx.records.update() calls, for a
+  // caller (e.g. the CI-watch fix-round path, which calls steps.round directly,
+  // bypassing continueRun's loop guard entirely) that invokes it after the
+  // record has already vanished.
+  const ctx = {
+    config: { autopilot: {} },
+    log: () => {},
+    paths: { issueWorktree: (n) => `/wt/${n}` },
+    records: { load: () => null, update: () => { throw new Error('round must not touch ctx.records.update before its own vanished-record guard'); } },
+    git: {},
+  };
+  const deps = {
+    mirror: { createWorkerMirror: async () => '/mirror.git' },
+    deps: { buildWorkerDeps: async () => '/deps' },
+    effects: {},
+  };
+  const record = { issue: 7, ticketId: 'T1', ticketCache: { scope: ['packages/x/**'] }, issueRevision: null };
+  const steps = await stepsFor({ ctx, deps, record });
+  const result = await steps.round({ budget: { strikes: 1, wallClockMinutes: 90, wallClockMs: 90 * 60_000 } });
+  assert.deepEqual(result, { status: 'terminal', result: { state: 'unchanged', reason: 'record-vanished' } });
+}
+test('#962: round() fails closed on its OWN vanished-record check, before touching ctx.records.update (the original "no run record for issue N" throw site)', ac962_roundOwnGuardCatchesVanishedRecord);
 
 export async function ac25_budgetChargedBeforeDispatch() {
   // A crash mid-dispatch must not hand the next process a fresh budget: the round is booked BEFORE the dispatch.

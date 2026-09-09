@@ -168,7 +168,12 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
       break;
     }
   } else {
+    // #962: same vanished-record hazard as the rounds loop above — `resumeRun`
+    // checks the record exists before calling in, but a record can still
+    // disappear between that check and this one (an orphaned/leaked caller
+    // outliving its owner's teardown).
     const rec = record();
+    if (!rec) return { state: 'unchanged', reason: 'record-vanished', ticketId };
     if (!rec.attestedHead) return { state: 'unchanged', reason: 'resume-no-attested-head', ticketId };
     produced = { attested: { attestedHead: rec.attestedHead, revision: rec.attestRevision ?? null }, review: { verdict: 'approve', findings: [], reviewedHead: rec.reviewedHead ?? rec.attestedHead } };
   }

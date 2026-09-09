@@ -118,6 +118,13 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
    */
   async function round({ budget, deadEndFile = null, chargeGlobal = true }) {
     const rec = record();
+    // #962: a record that has vanished (the run was retired/torn down
+    // concurrently — e.g. after a caller's own timeout) must fail closed
+    // HERE, before any of the ctx.records.update() calls below, which throw
+    // "no run record for issue N" on a missing record (records.mjs) — an
+    // orphaned round continuing past its owner's teardown turned that throw
+    // into an unhandled rejection blamed on an unrelated, later test.
+    if (!rec) return terminal({ state: 'unchanged', reason: 'record-vanished' });
     // §6.0a again immediately before dispatch (+ the credential margin).
     if (!active('run.skipRevalidation')) {
       const rv = await deps.revalidate({ ctx, issue: n, revision, authorization, beforeDispatch: true, wallClockMs: budget.wallClockMs });
