@@ -208,3 +208,55 @@ pass a reviewer.
 
 The repo-scope rule still holds absolutely; only the environment-scoped bootstrap token is
 permitted, and only while packages are still being added.
+
+**The CI bootstrap token does NOT actually work for a brand-new package — confirmed in CI,
+not just theorized.** During v1.11.1 (2026-09-09), `@adlc/autopilot` (the release's one new
+package) failed publish.yml's `Publish` step with a 404 on the registry PUT, even though the
+environment-scoped `NODE_AUTH_TOKEN` was set exactly as this file describes:
+
+```
+npm error code E404
+npm error 404 Not Found - PUT https://registry.npmjs.org/@adlc%2fautopilot - Not found
+```
+
+The Sigstore provenance step *succeeded* first ("Signed provenance statement... published to
+transparency log") — that step is independent of registry auth and always runs in a supported
+CI provider. The 404 is specifically the registry rejecting whatever credential actually reached
+the PUT. Whether npm's CLI silently preferred an OIDC exchange that has no trusted-publisher
+record for a package that doesn't exist yet, or the classic token itself lacks org
+create-new-package rights, was not resolved — and does not need to be, because of the next
+paragraph.
+
+**The actual working bootstrap procedure: a ONE-TIME manual publish from the maintainer's own
+authenticated npm session, before the CI run.** This is npm's standard way to create a new
+scoped package — trusted publishing (and, evidently, this repo's CI token) can only publish
+*new versions of a package that already exists*, never bring one into existence:
+
+```bash
+cd packages/<new-package> && npm publish --access public
+```
+
+Two things bit this the first time and are worth stating explicitly:
+
+- **Do not pass `--provenance` for this manual step.** It fails closed with
+  `npm error code EUSAGE` / `Automatic provenance generation not supported for provider: null`
+  — provenance auto-generation only works from a recognized CI provider's OIDC context (GitHub
+  Actions, etc.), never a local/interactive session. A local publish has no attestation, and
+  that is fine for this one bootstrap version; subsequent versions publish through CI with
+  provenance as normal once npm's trusted-publisher relationship exists for the package.
+- **If it still 404s after removing `--provenance`,** that's an *account/org* permission gap, not
+  a flag issue — re-authenticate (`npm login`) and confirm org membership/publish rights for the
+  `@adlc` scope before retrying. That was the actual root cause in the v1.11.1 incident: the
+  session's npm auth was stale.
+- **A brand-new package name can 404 on `npm view` for up to ~60s after a successful publish**
+  even after the publish command itself printed success — registry propagation lag, not a failed
+  publish (see the `verify` block's own re-poll logic above for the same phenomenon at the suite
+  level). If a *local* client's own negative-cache is the suspect (the maintainer confirms they
+  can see it, but `npm view` from elsewhere still 404s), `npm cache clean --force` clears it.
+
+**This is why `scripts/release.mjs --publish` is resumable (T-01M1RR6AQAJ6ZAASE4CE889K88's
+follow-up fix).** The v1.11.1 run published 30 of 39 targets successfully before autopilot's
+failure stopped it; `releaseMain`'s publish loop now checks `isPublished(name, version)` before
+each target and skips ones already live, so once the new package is bootstrapped manually, simply
+re-tagging and re-running the workflow picks up exactly where it left off — it does not need to
+(and will not attempt to) re-publish the 30 that already succeeded.
