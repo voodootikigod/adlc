@@ -1,0 +1,27 @@
+name: Install bubblewrap
+description: >-
+  Install bubblewrap (bwrap) and relax the AppArmor unprivileged-userns
+  restriction so real-sandbox tests run instead of skipping. Shared by every
+  workflow that runs `npm test` against this repo's fleet/autopilot suites —
+  publish.yml missing this step (while ci.yml had it, twice) is exactly what
+  stranded v1.11.1's first publish attempt: identical code, identical `npm
+  test`, but a real assertion failure in one workflow and a silent skip in
+  the other. A single composite action is what keeps that from drifting back
+  out of sync — copy-pasted YAML across workflows has no mechanism to notice
+  when one copy changes and the other doesn't.
+runs:
+  using: composite
+  steps:
+    - name: Install bubblewrap (real-sandbox tests run instead of skipping)
+      # The fleet's bounded model plane, synthetic HOME, egress and the autopilot's
+      # gate containment are exercised for REAL only where a usable bubblewrap
+      # exists; without it those suites skip LOUDLY (the bwrap probe helpers are
+      # the single switch). Ubuntu 24.04 restricts unprivileged user namespaces
+      # via AppArmor, which bwrap needs — relax that on this runner. The probe
+      # line never fails the step: an unusable bwrap means loud skips, not a red.
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq bubblewrap
+        sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 || true
+        bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap probe: usable" || echo "bwrap probe: NOT usable (suites will skip loudly)"

@@ -49,13 +49,10 @@ jobs:
         # step was missing from publish.yml, so `npm test` below hit real assertion
         # failures (reason: sandbox-unavailable) instead of ci.yml's loud skip, since some
         # dry-run fleet-dispatch fixtures assert a real backend rather than skip on its
-        # absence. Mirrors ci.yml verbatim (#978 postmortem — v1.11.1's first publish
-        # attempt failed here before ever reaching the Publish step).
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
-          sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all true && echo "bwrap probe: usable" || echo "bwrap probe: NOT usable (suites will skip loudly)"
+        # absence (#978 postmortem — v1.11.1's first publish attempt failed here before
+        # ever reaching the Publish step). Now a shared composite action with ci.yml's
+        # two copies, specifically so this can't drift out of sync again.
+        uses: ./.github/actions/install-bubblewrap
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

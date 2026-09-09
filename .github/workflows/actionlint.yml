@@ -1,0 +1,41 @@
+name: Actionlint
+
+# Lints every .github/workflows/*.yml and .github/actions/**/*.yml for syntax
+# errors, unknown keys, bad expressions, and shellcheck issues inside `run:`
+# blocks. This catches malformed workflow YAML before it merges — it does NOT
+# catch behavioral drift between two workflows that both parse fine but do
+# different things (that class of bug — publish.yml missing a step ci.yml had —
+# is what the install-bubblewrap composite action fixes structurally instead).
+#
+# ============================================================
+# ACTION REQUIRED — GITHUB REPOSITORY SETTINGS
+# ============================================================
+# Add "actionlint" as a required status check in
+# Settings > Branches > Branch protection rules for main, if workflow-file
+# correctness should block a merge rather than merely being visible.
+# ============================================================
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@d290e336d5a743810aef4404f757dc862276d2ae # v1.73.4
+        with:
+          fail_level: error
+          # github-pr-check (the action's default) needs a PR to comment on; this
+          # workflow also runs on push-to-main, where github-check (the Checks API,
+          # not a review comment) is the mode that works either way.
+          reporter: github-check
