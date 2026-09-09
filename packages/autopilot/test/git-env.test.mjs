@@ -100,6 +100,37 @@ export function ac143_netGitTemplateAndVerify() {
 }
 test('AC143: NET_GIT is written from the fixed template (bare, hooksPath /dev/null, alternates → the primary objects, no url.*/credential.*), a modified config is net-config-tampered, and real git accepts it', ac143_netGitTemplateAndVerify);
 
+export function netGitDisablesAutoGc() {
+  // #962: repo/ and origin.git in recover-fixture.mjs both got gc.auto=0 +
+  // gc.autoDetach=false after a real CI ENOTEMPTY flake (a detached background
+  // gc still writing into .git when the fixture's teardown rm raced it) —
+  // NET_GIT never got the same protection despite receiving real pushes (and
+  // therefore accumulating real loose objects) exactly like origin.git does.
+  // A real `git config --get` read (not a template string match) so a typo'd
+  // key name or wrong section would actually fail this.
+  const root = mkdtempSync(join(tmpdir(), 'ap-netgit-gc-'));
+  try {
+    const repoRoot = join(root, 'repo'); mkdirSync(join(repoRoot, '.git', 'objects'), { recursive: true });
+    const netGit = join(root, 'net.git');
+    writeNetGit({ netGit, repoRoot, remoteFetchUrl: URL, remotePushUrl: URL, sshWrapperPath: '/w' });
+    const env = gitBaseEnv({ path: process.env.PATH, home: root });
+    const readCfg = (key) => spawnSync('git', [`--git-dir=${netGit}`, 'config', '--get', key], { encoding: 'utf8', env });
+    const auto = readCfg('gc.auto');
+    assert.equal(auto.status, 0, `gc.auto not set in NET_GIT's config: ${auto.stderr}`);
+    assert.equal(auto.stdout.trim(), '0');
+    const autoDetach = readCfg('gc.autoDetach');
+    assert.equal(autoDetach.status, 0, `gc.autoDetach not set in NET_GIT's config: ${autoDetach.stderr}`);
+    assert.equal(autoDetach.stdout.trim(), 'false');
+    // Pins the pre-existing repositoryformatversion on the same template line —
+    // mutation-gate flagged it unguarded (only regex-matched elsewhere in this
+    // file, never read back through real git).
+    const formatVersion = readCfg('core.repositoryformatversion');
+    assert.equal(formatVersion.status, 0, `core.repositoryformatversion not set in NET_GIT's config: ${formatVersion.stderr}`);
+    assert.equal(formatVersion.stdout.trim(), '0');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+test('NET_GIT disables gc.auto/gc.autoDetach, matching the sibling fixture-repo protection already in place for the identical ENOTEMPTY teardown race (#962)', netGitDisablesAutoGc);
+
 export function ac31_gitSpawnClassifier() {
   const net = classifyGitSpawn(['/usr/bin/git', `--git-dir=/r/.adlc/autopilot-runs/net.git`, 'fetch', '--no-tags', URL, 'a'.repeat(40)]);
   assert.equal(net.network, true); assert.equal(net.verb, 'fetch'); assert.equal(net.gitDir, '/r/.adlc/autopilot-runs/net.git'); assert.equal(net.remoteArg, URL);

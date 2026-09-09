@@ -109,8 +109,15 @@ export function auditRepoConfig(listOutput) {
 }
 
 // ---- the network repository NET_GIT (§9.1c) ----
+// gc.auto=0 / gc.autoDetach=false: NET_GIT receives real pushes (each writes new
+// loose objects into its OWN object store — objects/info/alternates only lets it
+// READ the primary repository's objects, a push's own objects land here), so it
+// can trigger git's background auto-gc exactly like origin.git did before this
+// same protection was added there (packages/autopilot/test/helpers/
+// recover-fixture.mjs, for the identical detached-gc-races-teardown-rm ENOTEMPTY
+// flake, #962).
 export const NET_GIT_CONFIG_TEMPLATE = ({ remoteFetchUrl, remotePushUrl, sshWrapperPath }) =>
-  `[core]\n\trepositoryformatversion = 0\n\tbare = true\n\tsshCommand = ${shellQuote(sshWrapperPath)}\n\thooksPath = /dev/null\n[remote "origin"]\n\turl = ${remoteFetchUrl}\n\tpushurl = ${remotePushUrl}\n`;
+  `[core]\n\trepositoryformatversion = 0\n\tbare = true\n\tsshCommand = ${shellQuote(sshWrapperPath)}\n\thooksPath = /dev/null\n[gc]\n\tauto = 0\n\tautoDetach = false\n[remote "origin"]\n\turl = ${remoteFetchUrl}\n\tpushurl = ${remotePushUrl}\n`;
 
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
