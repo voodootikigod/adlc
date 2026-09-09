@@ -789,6 +789,10 @@ function defaultPublishImpl(dir) {
   execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
 }
 
+function defaultViewRunner(name, version) {
+  return spawnSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' });
+}
+
 // A crashed or interrupted release (v1.11.1's shape: 30 of 39 targets published,
 // then a real failure on target 31) left no way to resume — re-running this loop
 // re-attempted every already-published target, which npm refuses with a non-zero
@@ -798,8 +802,15 @@ function defaultPublishImpl(dir) {
 // makes the whole loop naturally resumable without distinguishing "already
 // published" from a genuine publish failure by parsing npm's error text, which
 // would be a fragile, npm-version-dependent string match.
-export function defaultIsPublished(name, version) {
-  const result = spawnSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' });
+//
+// `runView` is injectable (defaults to the real `npm view` call) so a unit test
+// can exercise the status/stdout combination `npm view` never actually produces
+// for THIS function's own call shape — querying one exact version either fully
+// matches (status 0, stdout === that version) or fully fails (nonzero, empty) —
+// without which the status/stdout AND could not be told apart from an OR by any
+// test driving the real subprocess.
+export function defaultIsPublished(name, version, runView = defaultViewRunner) {
+  const result = runView(name, version);
   return result.status === 0 && result.stdout.trim() === version;
 }
 

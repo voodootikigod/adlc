@@ -329,14 +329,31 @@ test('releaseMain --publish is resumable: a mid-run failure, then a re-run with 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('defaultIsPublished reflects the real npm registry: true for an existing version, false for one that does not exist', () => {
-  // No network mock here by design — this is the one test that exercises the
-  // REAL default, against a package guaranteed to exist (this very suite) and a
-  // version guaranteed never to. `--publish` tests everywhere else inject a fake
-  // isPublished specifically so they stay offline; this is the sole exception,
-  // matching the file's own documented pattern for defaultPublishImpl itself
-  // (never invoked in tests, but present and directly checkable).
+test('defaultIsPublished reflects the real npm registry: true for a version that actually shipped, false for one that never existed', () => {
+  // No network mock here by design — this is the one pair of assertions that
+  // exercises the REAL default end-to-end, against a package guaranteed to
+  // exist (this very suite) with a version guaranteed to (1.0.0, its first
+  // published release) and one guaranteed never to. `--publish` tests
+  // everywhere else inject a fake isPublished specifically so they stay
+  // offline; this is the sole exception, matching the file's own documented
+  // pattern for defaultPublishImpl itself (never invoked in tests, but
+  // present and directly checkable). This positive case is also what pins
+  // the runView call's own 'version' field selector: dropping it would make
+  // npm view return the full package.json dump, which can never equal the
+  // bare version string.
+  assert.equal(defaultIsPublished('@adlc/core', '1.0.0'), true);
   assert.equal(defaultIsPublished('@adlc/core', '0.0.0-does-not-exist'), false);
+});
+
+test('defaultIsPublished requires BOTH a zero exit AND matching stdout — a status/stdout split (impossible via a real npm view call for one exact version) must read false either way', () => {
+  // npm view for one EXACT version either fully matches or fully fails; it
+  // never returns a zero exit with different content, or a nonzero exit with
+  // the right content. That combination is only reachable by injecting the
+  // subprocess call directly, which is the point: it is what tells an AND
+  // apart from an OR here at all.
+  assert.equal(defaultIsPublished('@adlc/x', '1.2.3', () => ({ status: 0, stdout: 'not-1.2.3\n' })), false);
+  assert.equal(defaultIsPublished('@adlc/x', '1.2.3', () => ({ status: 1, stdout: '1.2.3\n' })), false);
+  assert.equal(defaultIsPublished('@adlc/x', '1.2.3', () => ({ status: 0, stdout: '1.2.3\n' })), true);
 });
 
 test('findPublishMetadataProblems flags a publish target with missing/empty repository.url', () => {
