@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 // acorn is a devDependency of the PRIVATE root package, used only by repo
 // tooling. No published @adlc/* package gains a runtime dependency from it —
 // see the note on relativeSpecifiers for why a real parser is required here.
@@ -789,6 +789,20 @@ function defaultPublishImpl(dir) {
   execFileSync('npm', ['publish', '--provenance'], { cwd: dir, stdio: 'inherit' });
 }
 
+// A crashed or interrupted release (v1.11.1's shape: 30 of 39 targets published,
+// then a real failure on target 31) left no way to resume — re-running this loop
+// re-attempted every already-published target, which npm refuses with a non-zero
+// exit ("cannot publish over the previously published version"), immediately
+// re-crashing the run on target 1 rather than reaching the targets that actually
+// still need publishing. Checked BEFORE attempting a publish, never after: this
+// makes the whole loop naturally resumable without distinguishing "already
+// published" from a genuine publish failure by parsing npm's error text, which
+// would be a fragile, npm-version-dependent string match.
+export function defaultIsPublished(name, version) {
+  const result = spawnSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' });
+  return result.status === 0 && result.stdout.trim() === version;
+}
+
 export function releaseMain(
   argv = process.argv.slice(2),
   {
@@ -801,6 +815,7 @@ export function releaseMain(
     // its documented "no real npm, offline, leaves no trace" contract — and so
     // step 5's fail-closed behavior is testable at all.
     packImpl = defaultPackImpl,
+    isPublished = defaultIsPublished,
   } = {}
 ) {
   const version = argv[0];
@@ -965,6 +980,10 @@ export function releaseMain(
   // 2. Publish in dependency order — packages/* first, then every non-private
   // plugin package (they consume the packages).
   for (const target of publishTargets({ packagesDir, pluginsDir })) {
+    if (isPublished(target.name, version)) {
+      console.log(`\nskipping ${target.name}@${version} — already published`);
+      continue;
+    }
     console.log(`\npublishing ${target.name}@${version} ...`);
     publishImpl(target.dir, target.name);
   }
