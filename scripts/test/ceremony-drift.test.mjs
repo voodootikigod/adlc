@@ -830,15 +830,24 @@ test('the advertised review command carries --infer-scope, matching how the set 
   assert.match(reviewLine, /--infer-scope/);
 });
 
-test('the truncation notice advertises the same flag as the review command', () => {
+test('the truncation notice advertises the same flag and ref as the review command', () => {
   // A drift set large enough to clamp still has to hand back a reproducible command.
+  //
+  // The ref is passed EXPLICITLY rather than left to resolveDriftBaseRef(): the
+  // default reads process.env.BASE_REF, which CI sets, so asserting against a
+  // hardcoded trunk here would pass locally and fail on a runner. The property
+  // under test is that the notice carries the ref the body was rendered with —
+  // not whatever the ambient environment happens to say.
   const huge = Array.from({ length: 4000 }, (_, i) => ({
     id: `T${i}`, reason: 'inferred: scope resolves', rails: ['a/**'], blocker: 'rails-freeze',
   }));
-  const body = renderIssueBody(huge, { activeTicketId: null });
+  const body = renderIssueBody(huge, { activeTicketId: null, baseRef: 'release/9.9' });
   assert.ok(body.includes('truncated'), 'this fixture must actually trip the clamp');
   const notice = body.slice(body.indexOf('truncated'));
-  assert.match(notice, /ticket-prune --base-ref origin\/main --infer-scope/);
+  assert.ok(
+    notice.includes('adlc ticket-prune --base-ref release/9.9 --infer-scope'),
+    `the notice must carry the rendered ref and the flag: ${notice}`,
+  );
 });
 
 test('the advertised review command names the ref the set was measured against', () => {
