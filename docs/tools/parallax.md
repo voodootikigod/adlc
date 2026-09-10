@@ -66,7 +66,9 @@ parallax --route "question" --context spec.md --context arch.md
 | `--context <file>` | — | Route mode: context file (repeatable) |
 | `--context-cap <n>` | 6000 | Route mode: max chars embedded per `--context` file (tail-biased). A file over the cap is marked truncated in-prompt. |
 | `--tickets <path>` | `.adlc/tickets.json` | Tickets file for edge mode |
-| `--n <int>` | 3 | Fan width (number of independent readings) |
+| `--n <int>` | 3 | Fan width (number of independent readings). Minimum 2 — one reading cannot be compared against another. |
+| `--allow-partial-fan` | false | Accept a verdict computed from fewer readings than `--n` requested. Off by default: a narrowed sample biases the score toward a pass. |
+| `--ticket <id>` | — | Ticket this run is evidence for. Required with `--record-verdict` — an unbound record can satisfy any ticket's P1 gate. |
 | `--threshold <0-1>` | 0.25 | Ambiguity score gate threshold |
 | `--tier cheap\|mid\|frontier` | cheap for fan, mid for divergence | Override LLM tier |
 | `--json` | false | Machine-readable output (score + divergences) |
@@ -81,6 +83,28 @@ parallax --route "question" --context spec.md --context arch.md
 | 0 | Gate passes — ambiguity score ≤ threshold (spec/edge), or answers equivalent (route) |
 | 1 | Operational error — bad input, missing file, network failure, insufficient readings |
 | 2 | Gate fails — ambiguity score > threshold (spec/edge), or answers diverge (route) |
+
+
+### What a verdict requires
+
+parallax refuses to certify a reading it did not actually take. Two guards, both
+operational errors (exit 1), never a score:
+
+- **Off-schema divergence payload.** The mid-tier divergence call is asked for
+  `{agreements: [...], divergences: [...]}`. A refusal object, a truncated `{}`,
+  a bare array or a `{result: ...}` wrapper used to fall through to "zero
+  divergences, zero agreements", which scores 0 and passes the gate — an
+  unanalysed spec reported as unambiguous. Such a payload is now refused.
+- **Shrunken fan.** The score is measured across `--n` independent readings, so
+  a fan narrowed by rate limits, timeouts or unparseable JSON measures a smaller
+  sample and scores systematically LOWER — it biases toward a pass. When fewer
+  readings survive than were requested, the verdict is refused unless
+  `--allow-partial-fan` is given. `requested` and `used` appear in both `--json`
+  and `--questions-json` so a machine consumer can see the effective width
+  instead of having to notice a `warnings` entry.
+
+`--n 1` is rejected at parse time: one reading can never be compared against
+another, so it could only ever spend an API call on the way to an error.
 
 ---
 

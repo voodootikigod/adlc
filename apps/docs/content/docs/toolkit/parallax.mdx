@@ -28,12 +28,36 @@ Three modes: **spec** (default, fans readers over a raw request), **edge** (`--e
 | `--route <text>` | Route mode: the question to route. |
 | `--context <file>` | Route mode: context file, repeatable. |
 | `--tickets <path>` | Tickets file for edge mode (default `.adlc/tickets.json`). |
-| `--n <int>` | Fan width: number of independent readings (default 3). |
+| `--n <int>` | Fan width: number of independent readings (default 3, minimum 2). |
+| `--allow-partial-fan` | Accept a verdict computed from fewer readings than `--n` requested. Off by default: a narrowed sample biases the score toward a pass. |
 | `--threshold <0-1>` | Ambiguity gate threshold (default 0.25). |
 | `--tier cheap\|mid\|frontier` | Override the LLM tier. |
 | `--json` | Machine-readable output (score + divergences). |
 | `--prompt-only` | Print the exact prompts and exit 0. No API key needed. |
-| `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
+| `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only` and `--ticket`. |
+| `--ticket <id>` | Ticket this run is evidence for. Required with `--record-verdict` — an unbound record can satisfy any ticket's P1 gate. |
+
+
+### What a verdict requires
+
+parallax refuses to certify a reading it did not actually take. Two guards, both
+operational errors (exit 1), never a score:
+
+- **Off-schema divergence payload.** The mid-tier divergence call is asked for
+  `{agreements: [...], divergences: [...]}`. A refusal object, a truncated `{}`,
+  a bare array or a `{result: ...}` wrapper used to fall through to "zero
+  divergences, zero agreements", which scores 0 and passes the gate — an
+  unanalysed spec reported as unambiguous. Such a payload is now refused.
+- **Shrunken fan.** The score is measured across `--n` independent readings, so
+  a fan narrowed by rate limits, timeouts or unparseable JSON measures a smaller
+  sample and scores systematically LOWER — it biases toward a pass. When fewer
+  readings survive than were requested, the verdict is refused unless
+  `--allow-partial-fan` is given. `requested` and `used` appear in both `--json`
+  and `--questions-json` so a machine consumer can see the effective width
+  instead of having to notice a `warnings` entry.
+
+`--n 1` is rejected at parse time: one reading can never be compared against
+another, so it could only ever spend an API call on the way to an error.
 
 ## Exit codes
 

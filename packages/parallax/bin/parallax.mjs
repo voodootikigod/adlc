@@ -39,7 +39,10 @@ Usage:
   parallax --route "question" [--context file ...]
 
 Flags:
-  --n <int>           fan width (default 3)
+  --n <int>           fan width (default 3, minimum 2)
+  --allow-partial-fan accept a verdict computed from fewer readings than --n
+                      requested (some fan calls failed). Off by default: a
+                      narrowed sample biases the score toward a pass.
   --threshold <0-1>   ambiguity gate threshold (default 0.25)
   --tier cheap|mid|frontier  override LLM tier
   --json              machine-readable output
@@ -50,7 +53,10 @@ Flags:
   --prompt-only       print prompts and exit 0 (no API key needed)
   --record-verdict <file|->  with --prompt-only: read the operator's answer
                       from <file> (or stdin when '-') and record it into
-                      .adlc/manifest.jsonl via gate-manifest
+                      .adlc/manifest.jsonl via gate-manifest.
+                      Requires --ticket — an unbound record can satisfy any
+                      ticket's P1 gate
+  --ticket <id>       ticket this run is evidence for; binds --record-verdict
   --tickets <path>    tickets file (default .adlc/tickets.json)
   --context <file>    context file(s) for --route mode (repeatable)
   --context-cap <n>   max chars embedded per --context file (default 6000)
@@ -72,6 +78,8 @@ const { values, positionals } = parseArgs({
     'context-cap': { type: 'string' },
     // COMMON
     n: { type: 'string', default: '3' },
+    'allow-partial-fan': { type: 'boolean', default: false },
+    ticket: { type: 'string' },
     threshold: { type: 'string', default: '0.25' },
     tier: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -82,7 +90,12 @@ const { values, positionals } = parseArgs({
 });
 
 const n = parseInt(values.n, 10);
-if (!Number.isInteger(n) || n < 1) opError('--n must be a positive integer');
+// A divergence analysis compares readings against each other, so one reading
+// can never produce a verdict — `--n 1` used to pass validation, spend an API
+// call, and then die on the >=2 guard downstream (#706). Reject it up front.
+if (!Number.isInteger(n) || n < 2) {
+  opError('--n must be an integer >= 2 (a divergence analysis needs at least two readings to compare)');
+}
 
 const threshold = parseFloat(values.threshold);
 if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
@@ -96,6 +109,13 @@ if (values.tier !== undefined && !VALID_TIERS.includes(values.tier)) {
 
 if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
+}
+
+// An entry with no ticket binding is evidence for nothing in particular, so it
+// can be replayed to satisfy ANY ticket's P1 gate (#709). premortem already
+// refuses this; parallax now matches it.
+if (values['record-verdict'] !== undefined && values.ticket === undefined) {
+  opError('--record-verdict requires --ticket — an unbound record can satisfy any ticket\'s P1 gate');
 }
 
 if (values['questions-json'] && values['prompt-only']) {
@@ -129,7 +149,7 @@ async function recordPromptOnlyVerdict(prompts, extra) {
   }
   const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
   const verdict = await readVerdictSource(values['record-verdict']);
-  const entry = recordVerdict({ verdict, extra, key: getKey() });
+  const entry = recordVerdict({ ticket: values.ticket, verdict, extra, key: getKey() });
   console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
   process.exit(0);
 }
@@ -175,18 +195,19 @@ if (values.edge) {
     result = await runEdgeMode(ticketA, ticketB, {
       n,
       tier: tierOverride ?? 'cheap',
+      allowPartialFan: values['allow-partial-fan'],
     });
   } catch (err) {
     opError(err.message);
   }
 
-  const { agreements, divergences, score, errors } = result;
+  const { agreements, divergences, score, errors, requested, used } = result;
   const report = renderReport({ agreements, divergences, score, threshold });
 
   if (values['questions-json']) {
-    printJson({ ...renderQuestionsJson({ mode: 'edge', divergences, score, threshold }), tickets: [idA, idB], warnings: errors });
+    printJson({ ...renderQuestionsJson({ mode: 'edge', divergences, score, threshold }), tickets: [idA, idB], requested, used, warnings: errors });
   } else if (values.json) {
-    printJson({ mode: 'edge', tickets: [idA, idB], agreements, divergences, score, threshold, gate: score <= threshold, warnings: errors });
+    printJson({ mode: 'edge', tickets: [idA, idB], agreements, divergences, score, threshold, gate: score <= threshold, requested, used, warnings: errors });
   } else {
     console.log(`# Edge contract: ${idA} ↔ ${idB}\n`);
     console.log(report);
@@ -231,21 +252,22 @@ if (values.route) {
       n,
       tier: tierOverride ?? 'cheap',
       contextCap,
+      allowPartialFan: values['allow-partial-fan'],
     });
   } catch (err) {
     opError(err.message);
   }
 
-  const { equivalent, answer, variants, errors } = result;
+  const { equivalent, answer, variants, errors, requested, used } = result;
 
   if (values['questions-json']) {
     printJson(
       equivalent
-        ? { mode: 'route', questions: [], gate: true, answer, warnings: errors }
-        : { ...renderRouteQuestionsJson(question, variants), warnings: errors }
+        ? { mode: 'route', questions: [], gate: true, answer, requested, used, warnings: errors }
+        : { ...renderRouteQuestionsJson(question, variants), requested, used, warnings: errors }
     );
   } else if (values.json) {
-    printJson({ mode: 'route', question, equivalent, answer, variants, warnings: errors });
+    printJson({ mode: 'route', question, equivalent, answer, variants, requested, used, warnings: errors });
   } else if (equivalent) {
     console.log(answer);
     if (errors.length > 0) console.error('\nwarnings:', errors.join('; '));
@@ -320,16 +342,17 @@ try {
   result = await runSpecMode(request, {
     n,
     tier: tierOverride ?? 'cheap',
+    allowPartialFan: values['allow-partial-fan'],
   });
 } catch (err) {
   opError(err.message);
 }
 
-const { agreements, divergences, score, errors } = result;
+const { agreements, divergences, score, errors, requested, used } = result;
 const report = renderReport({ agreements, divergences, score, threshold });
 
 if (values['questions-json']) {
-  printJson({ ...renderQuestionsJson({ mode: 'spec', divergences, score, threshold }), warnings: errors });
+  printJson({ ...renderQuestionsJson({ mode: 'spec', divergences, score, threshold }), requested, used, warnings: errors });
 } else if (values.json) {
   printJson({
     mode: 'spec',
@@ -338,6 +361,8 @@ if (values['questions-json']) {
     score,
     threshold,
     gate: score <= threshold,
+    requested,
+    used,
     warnings: errors,
   });
 } else {

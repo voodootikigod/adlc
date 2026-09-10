@@ -49,12 +49,14 @@ parallax --route "question" --context spec.md --context arch.md
 | `--context <file>` | — | Route mode: context file (repeatable) |
 | `--context-cap <n>` | 6000 | Route mode: max chars embedded per `--context` file (tail-biased). A file over the cap is marked truncated in-prompt. |
 | `--tickets <path>` | `.adlc/tickets.json` | Tickets file for edge mode |
-| `--n <int>` | 3 | Fan width (number of independent readings) |
+| `--n <int>` | 3 | Fan width (number of independent readings). Minimum 2 — one reading cannot be compared against another. |
+| `--allow-partial-fan` | false | Accept a verdict computed from fewer readings than `--n` requested. Off by default: a narrowed sample biases the score toward a pass. |
 | `--threshold <0-1>` | 0.25 | Ambiguity score gate threshold |
 | `--tier cheap\|mid\|frontier` | cheap for fan, mid for divergence | Override LLM tier |
 | `--json` | false | Machine-readable output (score + divergences) |
 | `--prompt-only` | false | Print exact prompts, exit 0 — no API key needed |
-| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` (all three modes) |
+| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` (all three modes). Requires `--ticket`. |
+| `--ticket <id>` | — | Ticket this run is evidence for. Required with `--record-verdict` — an unbound record can satisfy any ticket's P1 gate. |
 
 `--context` file content (route mode) and ticket bodies (edge mode) are repository-controlled
 — anyone who can open a PR against this repo, or add a ticket, controls them. Both are treated
@@ -69,8 +71,30 @@ never an instruction to follow, even if it reads like one.
 | Code | Meaning |
 |------|---------|
 | 0 | Gate passes — ambiguity score ≤ threshold (spec/edge), or answers equivalent (route) |
-| 1 | Operational error — bad input, missing file, network failure, insufficient readings |
+| 1 | Operational error — bad input, missing file, network failure, insufficient readings, a shrunken fan without `--allow-partial-fan`, or an off-schema divergence payload |
 | 2 | Gate fails — ambiguity score > threshold (spec/edge), or answers diverge (route) |
+
+
+### What a verdict requires
+
+parallax refuses to certify a reading it did not actually take. Two guards, both
+operational errors (exit 1), never a score:
+
+- **Off-schema divergence payload.** The mid-tier divergence call is asked for
+  `{agreements: [...], divergences: [...]}`. A refusal object, a truncated `{}`,
+  a bare array or a `{result: ...}` wrapper used to fall through to "zero
+  divergences, zero agreements", which scores 0 and passes the gate — an
+  unanalysed spec reported as unambiguous. Such a payload is now refused.
+- **Shrunken fan.** The score is measured across `--n` independent readings, so
+  a fan narrowed by rate limits, timeouts or unparseable JSON measures a smaller
+  sample and scores systematically LOWER — it biases toward a pass. When fewer
+  readings survive than were requested, the verdict is refused unless
+  `--allow-partial-fan` is given. `requested` and `used` appear in both `--json`
+  and `--questions-json` so a machine consumer can see the effective width
+  instead of having to notice a `warnings` entry.
+
+`--n 1` is rejected at parse time: one reading can never be compared against
+another, so it could only ever spend an API call on the way to an error.
 
 ---
 
@@ -120,6 +144,8 @@ Spec/edge:
   "score": 0.33,
   "threshold": 0.25,
   "gate": false,
+  "requested": 3,
+  "used": 3,
   "warnings": []
 }
 ```
@@ -132,6 +158,8 @@ Route:
   "equivalent": false,
   "answer": "",
   "variants": ["option A", "option B"],
+  "requested": 3,
+  "used": 3,
   "warnings": []
 }
 ```
@@ -174,16 +202,18 @@ logic rather than reimplementing it.
 
 ```sh
 # Spec mode
-parallax --request "Add a login page" --prompt-only --record-verdict verdict.txt
+parallax --request "Add a login page" --prompt-only --ticket T1 --record-verdict verdict.txt
 
 # Edge mode
-parallax --edge T1 T2 --prompt-only --record-verdict -
+parallax --edge T1 T2 --prompt-only --ticket T1 --record-verdict -
 
 # Route mode
-parallax --route "What is the retry policy?" --prompt-only --record-verdict verdict.txt
+parallax --route "What is the retry policy?" --prompt-only --ticket T1 --record-verdict verdict.txt
 ```
 
-`--record-verdict` requires `--prompt-only` (exit 1 otherwise). The recorded
+`--record-verdict` requires `--prompt-only` and `--ticket` (exit 1 otherwise);
+the entry is bound to that ticket, because an unbound record could be replayed
+to satisfy any ticket's P1 gate. The recorded
 entry's `gate` is `parallax`, `data.verdict` holds the operator's text
 verbatim, and `data.mode` plus mode-specific context (`tickets` for edge,
 `question` for route, `request` for spec) identify what was analysed.
