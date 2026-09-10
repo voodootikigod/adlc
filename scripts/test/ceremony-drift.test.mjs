@@ -19,6 +19,7 @@ import {
   MARKER,
   MANAGED_AUTHORS,
   resolveDriftBaseRef,
+  reviewCommand,
 } from '../ceremony-drift.mjs';
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
@@ -837,4 +838,19 @@ test('the truncation notice advertises the same flag as the review command', () 
   assert.ok(body.includes('truncated'), 'this fixture must actually trip the clamp');
   const notice = body.slice(body.indexOf('truncated'));
   assert.match(notice, /ticket-prune --base-ref origin\/main --infer-scope/);
+});
+
+test('the advertised review command names the ref the set was measured against', () => {
+  // A retargeted run (BASE_REF) that still advertised origin/main would hand the
+  // operator a command computing a DIFFERENT set than the issue reports.
+  assert.match(reviewCommand('release/1.11'), /--base-ref release\/1\.11 --infer-scope/);
+  assert.match(reviewCommand('origin/main'), /--base-ref origin\/main --infer-scope/);
+});
+
+test('a retargeted body advertises the retargeted ref, not a hardcoded trunk', () => {
+  const body = renderIssueBody(DRIFT, { activeTicketId: null, baseRef: 'release/1.11' });
+  const line = body.split('\n').find((l) => l.includes('ticket-prune') && l.includes('--base-ref'));
+  assert.ok(line, 'the body must advertise a review command');
+  assert.match(line, /--base-ref release\/1\.11/);
+  assert.doesNotMatch(line, /origin\/main/);
 });

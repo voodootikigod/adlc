@@ -52,7 +52,9 @@ export const LABEL = 'ceremony-drift';
 // a ticket named in the report would simply not appear, and the drift would look
 // already resolved. renderIssueBody is asserted to carry the flag so the two
 // cannot drift apart again.
-const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main --infer-scope        # dry run: review the set';
+export function reviewCommand(baseRef = resolveDriftBaseRef()) {
+  return `adlc ticket-prune --base-ref ${baseRef} --infer-scope        # dry run: review the set`;
+}
 
 // The completion command is PER-TICKET and canonical, not a bulk sweep.
 //
@@ -137,7 +139,7 @@ const mdField = (value, { max = 200 } = {}) =>
  * compare bodies to decide whether anything actually changed.
  * @param {{id?: string, reason?: string, rails?: string[], blocker?: string}[]} needsCeremony
  */
-export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false } = {}) {
+export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTicketUnknown = false, baseRef = resolveDriftBaseRef() } = {}) {
   const entries = [...(needsCeremony ?? [])].sort((a, b) =>
     String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
   );
@@ -350,7 +352,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
         'Review the current drift set (read-only — expires no rails):',
         '',
         '```bash',
-        DRY_RUN_CMD,
+        reviewCommand(baseRef),
         '```',
         '',
         ...(completable.length
@@ -411,7 +413,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
     'closes on its own once the set is empty; edits to the body are overwritten._',
   ].join('\n');
 
-  return clampBody(body);
+  return clampBody(body, baseRef);
 }
 
 // FINAL BACKSTOP against GitHub's ~65_536-byte issue-body limit. Per-field and
@@ -422,11 +424,11 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
 // MARKER survives (it is at the top), so issue discovery still works, and the cut
 // is deterministic, so decideAction's idempotence holds.
 export const MAX_BODY = 60_000; // headroom under GitHub's limit for the notice
-function clampBody(body) {
+function clampBody(body, baseRef = resolveDriftBaseRef()) {
   if (body.length <= MAX_BODY) return body;
   const notice =
     '\n\n---\n\n> ⚠ This issue was truncated: the full drift set exceeds GitHub\'s ' +
-    'issue-body size limit. Run `adlc ticket-prune --base-ref origin/main --infer-scope` locally ' +
+    `issue-body size limit. Run \`adlc ticket-prune --base-ref ${baseRef} --infer-scope\` locally ` +
     'to see every entry.';
   const budget = MAX_BODY - notice.length;
   const cut = body.lastIndexOf('\n', budget);
@@ -566,6 +568,8 @@ export function decideAction({ drift, existingIssue, activeTicketId = null, acti
   }
 
   const title = renderIssueTitle(entries);
+  // baseRef defaults to resolveDriftBaseRef(), the same env main() measured with,
+  // so the advertised command always names the ref the set was computed against.
   const body = renderIssueBody(entries, { activeTicketId, activeTicketUnknown });
 
   if (!existingIssue) return { action: 'open', title, body };
@@ -678,7 +682,8 @@ async function main() {
   // the case that carries no done-status to assert. Whether that inference is
   // trustworthy enough for THIS report is a separate question, tracked apart from
   // #779; this call deliberately preserves the pre-#779 drift set unchanged.
-  const result = runTicketPrune({ cwd: process.cwd(), baseRef: resolveDriftBaseRef(), inferScope: true });
+  const driftBaseRef = resolveDriftBaseRef();
+  const result = runTicketPrune({ cwd: process.cwd(), baseRef: driftBaseRef, inferScope: true });
   if (!result.ok) {
     // OPERATIONAL failure — the reporter itself could not do its job. This must
     // be loud (see the exit-code contract in main's catch below).

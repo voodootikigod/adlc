@@ -130,15 +130,21 @@ matching, and is exactly the check the issue's worked example did by hand.
 ## Examples
 
 ```bash
-# Report stale tickets on the currently checked-out ref (dry-run, default)
+# Report stale tickets on the currently checked-out ref (dry-run, default).
+# Stale here means an explicit done-shaped `status` — nothing is inferred.
 ticket-prune
 
-# Audit tickets against main from a feature branch. --infer-scope is what makes
-# this an audit: without it only tickets carrying an explicit done-status are stale.
-ticket-prune --base-ref origin/main --infer-scope --json
-
-# Tombstone the rails-less stale tickets found above (completed:true in place)
+# Tombstone the rails-less stale tickets found above (completed:true in place).
+# Same classifier as the dry run above, so what you reviewed is what it writes.
 ticket-prune --write
+
+# Audit against main from a feature branch. --infer-scope is what makes this an
+# audit rather than a status report: it also treats a ticket whose declared scope
+# fully resolves as shipped. That signal is WEAK — it is true the moment a ticket
+# is authored on a repo older than its backlog — so this is a review aid. Confirm
+# each id by hand and complete it per-ticket; do not pair --infer-scope with
+# --write to archive in bulk on the strength of it (#779).
+ticket-prune --base-ref origin/main --infer-scope --json
 
 # Admin, on a protected-base checkout of main: complete a rail-freezing shipped
 # ticket, expiring its rails (T36). Per-ticket, records manifest evidence, both
