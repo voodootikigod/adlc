@@ -48,8 +48,7 @@ adlc ticket-prune --json
 ```
 
 - Dry-run by default (this call never writes): reports tickets that look already
-  shipped — an explicit `status: done`-shaped field, or every declared `scope`
-  glob resolving to a file already tracked on `HEAD`. A *plan*, not a gate (exit
+  shipped, meaning an explicit `status: done`-shaped field. The older scope-existence inference — every declared `scope` glob resolving to a file already tracked on `HEAD` — is OFF unless you add `--infer-scope` (#779): it is true the moment a ticket is authored on a repo older than its backlog, so it is a review aid, never a basis for a bulk write. A *plan*, not a gate (exit
   `0` either way; exit `1` only on an operational error such as a
   missing/invalid `.adlc/tickets.json`).
 - List the stale tickets and recommend confirming them by hand, then re-running

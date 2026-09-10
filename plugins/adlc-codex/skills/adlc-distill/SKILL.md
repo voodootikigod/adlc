@@ -63,8 +63,7 @@ adlc ticket-prune --json
 ```
 
 Dry-run by default (never writes on its own): reports tickets that look
-already shipped — an explicit `status: done`-shaped field, or every declared
-`scope` glob already resolving to a file tracked on `HEAD`. A **plan, not a
+already shipped, meaning an explicit `status: done`-shaped field. The older scope-existence inference — every declared `scope` glob resolving to a file already tracked on `HEAD` — is OFF unless you add `--infer-scope` (#779): it is true the moment a ticket is authored on a repo older than its backlog, so it is a review aid, never a basis for a bulk write. A **plan, not a
 gate** — exit `0` either way; exit `1` only on an operational error (a
 missing/invalid ticket store). List stale tickets found and recommend
 confirming by hand, then `adlc ticket-prune --write` to archive into the

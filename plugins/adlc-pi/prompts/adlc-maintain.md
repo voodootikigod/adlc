@@ -32,8 +32,7 @@ Run `adlc model-ratchet --dry-run --json`.
 ## 3. Ticket prune — stale ticket hygiene
 Run `adlc ticket-prune --json`.
 - Dry-run by default (this call never writes): reports tickets that look already
-  shipped — an explicit done-shaped status, or every declared `scope` glob
-  resolving to a file already tracked on `HEAD`. Exit `0` either way; exit `1`
+  shipped, meaning an explicit done-shaped status. The older scope-existence inference — every declared `scope` glob resolving to a file already tracked on `HEAD` — is OFF unless you add `--infer-scope` (#779): it is true the moment a ticket is authored on a repo older than its backlog, so it is a review aid, never a basis for a bulk write. Exit `0` either way; exit `1`
   only on an operational error.
 - List the stale tickets and recommend confirming them by hand, then re-running
   with `adlc ticket-prune --write` to archive them into the gitignored
