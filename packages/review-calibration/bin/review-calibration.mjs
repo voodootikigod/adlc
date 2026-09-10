@@ -24,7 +24,7 @@ import {
   resolveEffectiveProvider,
 } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
-import { echoReviewer, oracleReviewer } from '../lib/controls.mjs';
+import { echoControl, oracleReviewer } from '../lib/controls.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
@@ -268,14 +268,15 @@ const equivalentExcluded = equivalent.length;
 // broken (this is the regression that catches a string-match shortcut), so it
 // is an operational error, not a reviewer verdict.
 
-const echoScore = await scorePlants(validPlants, echoReviewer(validPlants), { judge: referenceJudge });
+const echoScore = await echoControl({ plants: validPlants, judge: referenceJudge, scorePlants });
 const oracleScore = await scorePlants(validPlants, oracleReviewer(validPlants), { judge: referenceJudge });
-if (echoScore.recall > 0.001) {
-  opError(`scorer self-test FAILED: echo control scored recall ${echoScore.recall.toFixed(3)} (must be ~0) — the scorer has a non-semantic shortcut`);
+if (!echoScore.bounded) {
+  opError(`scorer self-test FAILED: echo control scored recall ${echoScore.echoRecall.toFixed(3)} (must be ~0) — the scorer has a non-semantic shortcut`);
 }
 if (oracleScore.recall < 0.999) {
   opError(`scorer self-test FAILED: oracle control scored recall ${oracleScore.recall.toFixed(3)} (must be 1.0) — the scorer has false negatives`);
 }
+
 
 // ── SIGINT safety: track planted files for emergency restore ──────────────────
 
@@ -315,7 +316,48 @@ if (exitCode !== 0 && exitCode !== 2) {
 // ── score real findings ───────────────────────────────────────────────────────
 
 const findings = parseFindings(stdout + '\n' + stderr);
-const score = await scorePlants(validPlants, findings, { judge });
+
+// Count the configured judge's verdicts. Whether it rendered any at all is what
+// decides if the control below has anything to bound — see the note there.
+let judgeVerdicts = 0;
+const countedJudge = async (plant, finding) => {
+  judgeVerdicts++;
+  return judge(plant, finding);
+};
+const score = await scorePlants(validPlants, findings, { judge: countedJudge });
+
+// ── control self-test #2 — bounds the JUDGE that actually scored ─────────────
+// The controls above run through referenceJudge, so they bound the SCORER's
+// aggregation and nothing else. The instrument that produced the recall printed
+// below is the CONFIGURED judge, and until #753 no control had ever been near
+// it: a permissive, injected or garbage LLM judge went unchecked, and
+// `--scorer string`'s literal `() => true` awarded an echoing reviewer 1.0 while
+// the self-test above reported all was well.
+//
+// It runs iff the configured judge rendered at least one verdict. A judge that
+// was never consulted contributed nothing to the number, so there is nothing to
+// bound — and inflating recall REQUIRES the judge to answer "match", so every
+// path that can produce a dishonest number is covered. This also keeps the
+// control free of a network call on runs where no finding located a plant.
+//
+// In judge mode an unbounded judge is a hard operational failure: the number
+// cannot be certified, so none is emitted. In string mode the configured judge
+// matches everything BY CONSTRUCTION and can never be bounded — failing there
+// would delete a documented mode, so the result is carried into the scorecard
+// instead, where a machine consumer can see what only a stderr warning said
+// before.
+const configuredJudgeControl = judgeVerdicts > 0
+  ? await echoControl({ plants: validPlants, judge, scorePlants })
+  : { echoRecall: null, bounded: null };
+
+if (scorerMode !== 'string' && configuredJudgeControl.bounded === false) {
+  opError(
+    `judge self-test FAILED: the configured judge (${judgeProviderName ?? 'unknown provider'}, tier ${tier}) ` +
+    `scored the echo control ${configuredJudgeControl.echoRecall.toFixed(3)} (must be ~0) — it cannot distinguish ` +
+    'a reviewer that only echoes changed lines from one that identifies defects. Refusing to certify a recall ' +
+    'number measured with it.'
+  );
+}
 
 const scorecard = {
   ...score,
@@ -325,6 +367,8 @@ const scorecard = {
   scorer: scorerMode,
   reviewExitCode: exitCode,
   equivalentExcluded,
+  configuredJudgeEchoRecall: configuredJudgeControl.echoRecall,
+  configuredJudgeBounded: configuredJudgeControl.bounded,
 };
 
 // ── output ────────────────────────────────────────────────────────────────────

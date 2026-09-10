@@ -618,6 +618,59 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
     assert.equal(parsed.scorer, 'string');
     assert.ok(parsed.total > 0);
   });
+
+  // #753: this is the exact scenario the issue described — an echoing reviewer
+  // scoring well under `--scorer string`, whose judge is literally `() => true`.
+  // The run still completes and still exits 0 (that mode is documented and the
+  // offline suites depend on it), but the JSON now SAYS the number was measured
+  // with a judge no control could bound, instead of leaving that to a stderr
+  // warning no machine consumer reads.
+  it('--scorer string reports configuredJudgeBounded false in --json', () => {
+    const result = runCli([
+      '--review-cmd', `node ${scriptPath} {base}`,
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
+    ], dir);
+    assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.configuredJudgeBounded, false,
+      'a judge that matches everything must never be reported as bounded');
+    assert.equal(parsed.configuredJudgeEchoRecall, 1,
+      'the echo control scores 1.0 under a judge that matches everything');
+  });
+});
+
+// ── #753: the judge control only bounds a judge that actually judged ──────────
+// A reviewer whose output locates no plant never reaches the judge, so the
+// judge contributed nothing to the recall number and there is nothing for the
+// control to bound. Reporting `null` there (rather than a fabricated verdict)
+// is what keeps the control honest — and what keeps a run from making LLM calls
+// purely to bound an instrument it never used.
+
+describe('E2E: a judge that rendered no verdict is reported as unbounded-unknown', () => {
+  let dir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'rc-nojudge-'));
+    createRepo(dir);
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('locates nothing → configuredJudgeBounded is null, run still completes', () => {
+    const result = runCli([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants', '3', '--min-plants', '1', '--min-recall', '0',
+      '--scorer', 'string', '--json',
+    ], dir);
+    assert.equal(result.status, 0, `expected pass, got ${result.status}: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.recall, 0);
+    assert.equal(parsed.configuredJudgeBounded, null,
+      'no verdict rendered → nothing to bound, and the report must not claim otherwise');
+    assert.equal(parsed.configuredJudgeEchoRecall, null);
+  });
 });
 
 describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () => {

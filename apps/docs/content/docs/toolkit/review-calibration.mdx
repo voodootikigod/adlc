@@ -17,6 +17,17 @@ scores recall. A built-in echo control scores ~0 and an oracle control scores
 1.0, so the recall figure is trustworthy rather than gamed by a reviewer that
 merely echoes changed lines.
 
+Those two controls run through a deterministic reference judge, which bounds the
+**scorer's aggregation**. The figure itself is produced by the *configured*
+judge, so the echo control runs a second time through that judge whenever it
+rendered a verdict: in the default judge mode a judge that cannot reject an
+echoing reviewer is an operational failure (exit 1, no figure emitted).
+`--scorer string` makes the judge match everything by construction and so can
+never be bounded — that run still completes and reports
+`configuredJudgeBounded: false`, making the uncertified number visible to a
+machine consumer. When no finding located a plant the judge was never consulted,
+and `configuredJudgeBounded` / `configuredJudgeEchoRecall` are `null`.
+
 ## Usage
 
 ```sh

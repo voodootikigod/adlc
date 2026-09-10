@@ -38,3 +38,40 @@ export function oracleReviewer(plants) {
     evidence: p.mutated,
   }));
 }
+
+/**
+ * The recall an echoing reviewer may reach before the judge that scored it is
+ * considered unbounded. An echoer describes nothing, so a judge worth trusting
+ * gives it 0; anything above this is a judge with a non-semantic shortcut, a
+ * permissive judge, or one that has been steered. Inclusive.
+ *
+ * This is the ONLY place the bound is spelled — issue #753 arose precisely
+ * because the check existed in one place and the judge it was meant to bound
+ * lived in another.
+ */
+export const ECHO_BOUND = 0.001;
+
+/**
+ * Run the negative control through a SPECIFIC judge and report whether that
+ * judge is bounded by it.
+ *
+ * The caller decides which judge: the deterministic `referenceJudge` bounds the
+ * scorer's aggregation, while the judge configured for the run bounds the
+ * instrument that actually produces the reported recall. Before #753 only the
+ * former was ever checked, so a permissive, injected or garbage LLM judge — and
+ * `--scorer string`'s literal `() => true` — passed a "control self-test" that
+ * had never been near it.
+ *
+ * `scorePlants` is injected rather than imported so the whole check is
+ * unit-testable with fake judges and no network.
+ *
+ * @param {object} deps
+ * @param {Array<object>} deps.plants
+ * @param {(plant, finding) => (boolean|Promise<boolean>)} deps.judge
+ * @param {(plants, findings, deps) => Promise<{recall:number}>} deps.scorePlants
+ * @returns {Promise<{echoRecall:number, bounded:boolean}>}
+ */
+export async function echoControl({ plants, judge, scorePlants }) {
+  const { recall } = await scorePlants(plants, echoReviewer(plants), { judge });
+  return { echoRecall: recall, bounded: recall <= ECHO_BOUND };
+}

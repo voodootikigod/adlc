@@ -11,7 +11,8 @@
  *   results:Array<{file,line,category,operator,caught,original,mutated}>,
  *   reviewExitCode:number|null, commit:string, minRecall:number,
  *   minPrecision?:number, scorer:string, judgeAgreement?:number,
- *   equivalentExcluded?:number
+ *   equivalentExcluded?:number,
+ *   configuredJudgeEchoRecall?:number, configuredJudgeBounded?:boolean
  * }} scorecard
  * @returns {object}
  */
@@ -32,6 +33,13 @@ export function buildJsonReport(scorecard) {
     scorer: scorecard.scorer,
     judgeAgreement: scorecard.judgeAgreement ?? null,
     equivalentExcluded: scorecard.equivalentExcluded ?? 0,
+    // Whether the judge that produced `recall` was itself bounded by the echo
+    // control (#753). false = the number is uncertified, not that it is wrong
+    // (`--scorer string` can never satisfy this by construction). null = the
+    // judge rendered no verdict on this run, so it contributed nothing to
+    // `recall` and there was nothing to bound.
+    configuredJudgeEchoRecall: scorecard.configuredJudgeEchoRecall ?? null,
+    configuredJudgeBounded: scorecard.configuredJudgeBounded ?? null,
     commit: scorecard.commit,
     reviewExitCode: scorecard.reviewExitCode,
     perCategory: scorecard.perCategory,
@@ -54,6 +62,7 @@ export function printScorecard(scorecard) {
   const {
     recall, caught, total, precision, falsePositives, perCategory, results,
     commit, minRecall, minPrecision, scorer, judgeAgreement, equivalentExcluded,
+    configuredJudgeEchoRecall, configuredJudgeBounded,
   } = scorecard;
   const pct = (n) => `${(n * 100).toFixed(1)}%`;
   const recallPass = recall >= minRecall;
@@ -72,6 +81,15 @@ export function printScorecard(scorecard) {
   }
   if (judgeAgreement != null) {
     console.log(`Judge agreement: ${pct(judgeAgreement)}  (measured vs labeled fixture)`);
+  }
+  if (configuredJudgeEchoRecall != null) {
+    console.log(
+      `Judge bound:     echo control ${pct(configuredJudgeEchoRecall)} under the configured judge ` +
+      `[${configuredJudgeBounded ? 'BOUNDED' : 'NOT BOUNDED'}]`
+    );
+    if (!configuredJudgeBounded) {
+      console.log('                 recall below is NOT certified — the configured judge cannot reject an echoing reviewer');
+    }
   }
   if (equivalentExcluded) {
     console.log(`Excluded:        ${equivalentExcluded} equivalent mutant(s) (no behavioral discriminator)`);

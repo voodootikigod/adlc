@@ -23,10 +23,23 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
    (pass on the original, fail on the mutant). Plants whose witness does not
    discriminate are equivalent mutants — there is no bug to find, so they are
    excluded from the denominator rather than scored as missed.
-4. **Control self-test**: before scoring, two reference reviewers run — an
-   *echoer* (must score ~0) and an *oracle* (must score 1.0). If either is wrong
-   the scorer itself is broken and the tool exits 1. This bound is what makes the
-   recall number trustworthy.
+4. **Control self-test (scorer)**: before scoring, two reference reviewers run
+   through the deterministic `referenceJudge` — an *echoer* (must score ~0) and
+   an *oracle* (must score 1.0). If either is wrong the scorer itself is broken
+   and the tool exits 1. This bounds the **scorer's aggregation** — that it has
+   no non-semantic shortcut — and nothing else.
+4b. **Control self-test (judge)**: the number you actually get is produced by the
+   *configured* judge, not `referenceJudge`, so the echo control runs a second
+   time through that judge whenever it rendered at least one verdict. In the
+   default judge mode an unbounded judge is an operational failure (exit 1) — a
+   judge that cannot reject an echoing reviewer cannot certify a recall figure.
+   `--scorer string` sets the judge to "match everything" by construction, so it
+   can never be bounded: that run still completes, and reports
+   `configuredJudgeBounded: false` so the uncertified number is visible to a
+   machine consumer rather than only to a stderr warning. When no finding
+   located a plant the judge was never consulted, and both
+   `configuredJudgeBounded` and `configuredJudgeEchoRecall` are `null` — it
+   contributed nothing to the score, so there was nothing to bound.
 5. **Apply all plants**, **run `--review-cmd`** (`{base}` → commit ref), **restore**
    (always, via `finally` + SIGINT handler).
 6. **Parse findings**: the reviewer's output is parsed as structured findings
