@@ -25,6 +25,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeGateExecute, execFailureReason } from '../lib/gate-tool.mjs';
 import { prosecute, renderSummary } from '../lib/prosecutor.mjs';
+import { createExtension } from '../lib/extension.mjs';
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -239,6 +240,108 @@ test('AC4: /adlc-accept fails closed through the same predicate', () => {
     /const ok = parsed \? parsed\.ok === true : res\?\.code === 0;/,
     'the raw exit-code-only ok computation must be gone'
   );
+});
+
+// ── AC4, driven through the real /adlc-accept handler ─────────────────────
+// The three branches of its `ok`: a killed exec, and (with no JSON on stdout,
+// so the exit code decides) a zero and a non-zero code.
+
+function fakePi({ exec } = {}) {
+  const handlers = {};
+  const commands = {};
+  const entries = [];
+  const execCalls = [];
+  return {
+    on(name, fn) { handlers[name] = fn; },
+    registerCommand(name, def) { commands[name] = def; },
+    registerMessageRenderer() {},
+    sendMessage() {},
+    async exec(cmd, args) {
+      execCalls.push({ cmd, args });
+      if (typeof exec === 'function') return exec(cmd, args);
+      return { stdout: '', stderr: '', code: 0 };
+    },
+    appendEntry(customType, data) { entries.push({ customType, data }); },
+    handlers, commands, entries, execCalls,
+  };
+}
+
+function fakeCtx(cwd, { confirm } = {}) {
+  const notices = [];
+  return {
+    cwd,
+    hasUI: true,
+    ui: {
+      setStatus() {}, setWidget() {},
+      notify(msg, level) { notices.push({ msg, level }); },
+      async select(_t, options) { return options[0]; },
+      async confirm() { return typeof confirm === 'function' ? confirm() : true; },
+    },
+    notices,
+  };
+}
+
+async function bootAccept(root, exec) {
+  const pi = fakePi({ exec });
+  createExtension({ env: {} })(pi);
+  await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, fakeCtx(root));
+  return pi;
+}
+
+function makeAcceptRepo() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-accept-')));
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  const t1 = {
+    id: 'T1', title: 'First ticket', body: 'Do the first thing',
+    scope: ['src/**'], rails: ['test/contracts/**'], edges: [], duration: 1, category: 'feature',
+  };
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [t1] }, null, 2));
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  writeFileSync(join(root, '.adlc', 'packet.json'), JSON.stringify({ ticket: 'T1' }));
+  return root;
+}
+
+/** `accept` returns non-JSON stdout, so `res.code` alone decides the outcome. */
+function acceptExecWith(acceptResult) {
+  return (cmd, args) => (args[0] === 'accept' ? acceptResult : { stdout: '', stderr: '', code: 0 });
+}
+
+async function runAccept(acceptResult) {
+  const root = makeAcceptRepo();
+  try {
+    const pi = await bootAccept(root, acceptExecWith(acceptResult));
+    const ctx = fakeCtx(root, { confirm: () => true });
+    await pi.commands['adlc-accept'].handler('.adlc/packet.json', ctx);
+    return { notices: ctx.notices, entries: pi.entries };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('AC4: /adlc-accept records the acceptance when the CLI exits 0 with no JSON on stdout', async () => {
+  const { notices } = await runAccept({ stdout: 'accepted\n', stderr: '', code: 0 });
+  assert.ok(
+    notices.some((n) => /recorded P6 acceptance/i.test(n.msg)),
+    `expected an acceptance notice, got ${JSON.stringify(notices)}`
+  );
+  assert.ok(!notices.some((n) => /acceptance gate FAILED/i.test(n.msg)));
+});
+
+test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdout', async () => {
+  const { notices } = await runAccept({ stdout: 'nope\n', stderr: 'boom', code: 1 });
+  assert.ok(
+    notices.some((n) => /acceptance gate FAILED/i.test(n.msg) && /Not recorded/i.test(n.msg)),
+    `expected a refusal notice, got ${JSON.stringify(notices)}`
+  );
+  assert.ok(!notices.some((n) => /recorded P6 acceptance/i.test(n.msg)));
+});
+
+test('AC4: /adlc-accept refuses a KILLED accept exec even though it reports code 0', async () => {
+  const { notices } = await runAccept({ stdout: '', stderr: '', code: 0, killed: true });
+  const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
+  assert.ok(failure, `expected a refusal notice, got ${JSON.stringify(notices)}`);
+  assert.match(failure.msg, /killed/i, 'the refusal names the kill rather than an exit code');
+  assert.ok(!notices.some((n) => /recorded P6 acceptance/i.test(n.msg)));
 });
 
 // =========================================================================
