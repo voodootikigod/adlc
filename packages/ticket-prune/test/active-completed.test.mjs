@@ -110,7 +110,9 @@ test('#311 legacy store --write: the active set on the write return path exclude
 
     // DONE-RAILED declares rails, so this store is a frozen trust root and the
     // write must be signable — incidental to the active-set exclusion asserted here.
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    // inferScope:true because SHIPPED's staleness is what makes the write path run
+    // at all, and #779 made that inference opt-in.
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['SHIPPED'], 'the write path ran');
@@ -135,7 +137,8 @@ test('#311 boundary: a completed ticket whose scope IS shipped stays in the stal
       { id: 'DONE-SHIPPED', title: 'completed and shipped', scope: ['plugins/adlc-widget/**'], completed: true },
     ]);
 
-    const result = runTicketPrune({ cwd: dir });
+    // "whose scope IS shipped" is the premise, so the inference has to be on (#779).
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.stale.map((r) => r.id), ['DONE-SHIPPED'], 'still classified stale');

@@ -8,7 +8,13 @@
 // freeze rails (or already carry a `completed` field) are only REPORTED, under
 // needsCeremony — complete them individually with the canonical command below.
 //
-// Usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
+// Usage: ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--json]
+//
+// Staleness comes from an author-asserted done-shaped `status` field. The older
+// scope-existence inference — "every declared scope glob resolves to a tracked
+// file, so the work must have shipped" — is OFF unless --infer-scope is passed
+// (#779): it is true the moment a ticket is authored on any repo older than its
+// backlog, so leaving it on made --write archive the live backlog and exit 0.
 //
 // This is advisory (like model-ratchet), not a pass/fail gate: stale tickets
 // are clutter, not a merge blocker. Exit codes: 0 = report/write succeeded
@@ -27,13 +33,16 @@ import { runTicketPrune } from '../lib/run.mjs';
 import { renderReport, toJson } from '../lib/format.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
-const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--write] [--allow-unsigned] [--ceremony] [--json]';
+const USAGE = 'usage: ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--allow-unsigned] [--ceremony] [--json]';
 
 const { values } = parseArgs({
   usage: USAGE,
   options: {
     tickets: { type: 'string', default: '.adlc/tickets.json' },
     'base-ref': { type: 'string', default: 'HEAD' },
+    // OFF by default (#779): scope existence is not evidence that the ticket's
+    // work landed, so it must be asked for by name before it can drive a write.
+    'infer-scope': { type: 'boolean', default: false },
     write: { type: 'boolean', default: false },
     ceremony: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
@@ -63,6 +72,7 @@ const result = runTicketPrune({
   baseRef: values['base-ref'],
   write: values.write,
   ceremony: values.ceremony,
+  inferScope: values['infer-scope'],
 });
 
 if (!result.ok) {

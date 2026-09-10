@@ -649,7 +649,15 @@ function findExistingIssue() {
 }
 
 async function main() {
-  const result = runTicketPrune({ cwd: process.cwd(), baseRef: process.env.BASE_REF || 'origin/main' });
+  // inferScope:true is explicit because ticket-prune's default flipped to OFF
+  // (#779) — scope existence is not evidence that a ticket's work landed, so it
+  // must not silently drive a write. This reporter is the one caller that wants
+  // the weaker signal on purpose: its whole job is surfacing tickets that SHIPPED
+  // while still freezing rails, and a shipped-but-uncompleted ticket is exactly
+  // the case that carries no done-status to assert. Whether that inference is
+  // trustworthy enough for THIS report is a separate question, tracked apart from
+  // #779; this call deliberately preserves the pre-#779 drift set unchanged.
+  const result = runTicketPrune({ cwd: process.cwd(), baseRef: process.env.BASE_REF || 'origin/main', inferScope: true });
   if (!result.ok) {
     // OPERATIONAL failure — the reporter itself could not do its job. This must
     // be loud (see the exit-code contract in main's catch below).

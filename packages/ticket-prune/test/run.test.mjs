@@ -29,6 +29,13 @@ function readTickets(dir) {
  * A scratch repo with one shipped feature (plugins/adlc-widget/**, committed)
  * standing in for "mocked done signals": a ticket whose scope matches it is
  * inferrable-stale; a ticket whose scope points nowhere real is not.
+ *
+ * Every runTicketPrune call in this file therefore passes `inferScope: true`.
+ * #779 made that inference OPT-IN — scope existence is not evidence that a
+ * ticket's work landed — but these tests are about the classify/lock/write/audit
+ * machinery DOWNSTREAM of a stale classification, and this repo shape is how they
+ * produce one. That the DEFAULT is now off, and what --write does with it off, is
+ * pinned separately in test/infer-scope-gate.test.mjs.
  */
 function setupScratchRepo(dir) {
   git(['init', '-q'], dir);
@@ -105,7 +112,7 @@ test('dry-run reports a stale ticket (mocked done signal: shipped scope) without
     writeTickets(dir, tickets);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir });
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
 
     assert.equal(result.ok, true);
     assert.equal(result.write, false);
@@ -143,7 +150,7 @@ test('dry-run: an absolute --tickets path is honored, not joined onto cwd', () =
         ),
       );
 
-      const result = runTicketPrune({ cwd: dir, ticketsPath: absTickets });
+      const result = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath: absTickets });
 
       assert.equal(result.ok, true);
       assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
@@ -159,7 +166,7 @@ test('dry-run: an explicit non-done status overrides a shipped-looking scope', (
     writeTickets(dir, [
       { id: 'T1', title: 'Explicitly still active', status: 'active', scope: ['plugins/adlc-widget/**'] },
     ]);
-    const result = runTicketPrune({ cwd: dir });
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
     assert.deepEqual(result.stale, []);
     assert.equal(result.active.length, 1);
   });
@@ -168,7 +175,7 @@ test('dry-run: an explicit non-done status overrides a shipped-looking scope', (
 test('dry-run: explicit status "done" is stale even with no matching scope', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Marked done', status: 'done', scope: ['nowhere/**'] }]);
-    const result = runTicketPrune({ cwd: dir });
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
     assert.deepEqual(result.stale.map((r) => r.id), ['T1']);
   });
 });
@@ -182,7 +189,7 @@ test('--write tombstones a rails-less stale ticket with completed:true IN PLACE,
       { id: 'T2', title: 'Still building', scope: ['packages/never-built/**'] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
@@ -219,7 +226,7 @@ test('--write does NOT auto-tombstone a stale ticket that still freezes rails �
     writeTickets(dir, [railed]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     // Completing it would expire its frozen rails — a privileged action the
@@ -243,7 +250,7 @@ test('#104 (codex): a rails-less stale ticket that ALREADY carries completed:fal
     ]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned, []);
@@ -271,7 +278,7 @@ test('--write with a mix: the rails-less stale ticket is tombstoned, the railed 
       },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);
@@ -289,7 +296,7 @@ test('--write with no stale tickets leaves tickets.json byte-untouched', () => {
     writeTickets(dir, [{ id: 'T1', title: 'Still building', scope: ['packages/never-built/**'] }]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.deepEqual(result.tombstoned, []);
     assert.deepEqual(result.needsCeremony, []);
@@ -304,7 +311,7 @@ test('--write is idempotent: an already-tombstoned (completed:true) stale ticket
     ]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     // classifyTicket may still consider it stale, but it is already completed
@@ -327,7 +334,7 @@ test('--write: if the tickets.json write fails, the error is reported cleanly as
     // the "no uncaught exception" guarantee we care about.
     const badTicketsPath = join(dir, 'nonexistent-dir', 'tickets.json');
 
-    const result = runTicketPrune({ cwd: dir, ticketsPath: badTicketsPath, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath: badTicketsPath, write: true });
 
     assert.equal(result.ok, false);
     assert.match(result.error, /not found|write/i);
@@ -363,7 +370,7 @@ test('--write: re-reads tickets.json under the lock, so a ticket added concurren
     };
     const writerDone = spawnMutateAfterDelay(dir, mutated, 150);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     await writerDone;
 
     assert.equal(result.ok, true);
@@ -389,7 +396,7 @@ test('--write: if a stale ticket is already gone by the time the lock is acquire
     // ticket-prune gets the lock.
     const writerDone = spawnMutateAfterDelay(dir, { tickets: [] }, 150);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     await writerDone;
 
     assert.equal(result.ok, true);
@@ -414,7 +421,7 @@ test('--write: if tickets.json is DELETED (not just mutated) between classificat
     // sees no file (readJson → null), which must surface as a clean error.
     const writerDone = spawnDeleteAfterDelay(dir, 150);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     await writerDone;
 
     assert.equal(result.ok, false);
@@ -435,7 +442,7 @@ test('--write: a ticket concurrently un-staled (status flipped back to active) b
     const mutated = { tickets: [{ id: 'T1', title: 'Reopened work', status: 'in-progress' }] };
     const writerDone = spawnMutateAfterDelay(dir, mutated, 150);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     await writerDone;
 
     assert.equal(result.ok, true);
@@ -484,7 +491,7 @@ test('#198 AC1: dry-run surfaces a railed shipped ticket under needsCeremony (bl
     ]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir }); // dry-run, no --write
+    const result = runTicketPrune({ inferScope: true, cwd: dir }); // dry-run, no --write
 
     assert.equal(result.ok, true);
     assert.equal(result.write, false);
@@ -503,7 +510,7 @@ test('#198 AC1: dry-run surfaces a rails-less preexisting-completed-field ticket
     writeTickets(dir, [
       { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], completed: false },
     ]);
-    const result = runTicketPrune({ cwd: dir }); // dry-run
+    const result = runTicketPrune({ inferScope: true, cwd: dir }); // dry-run
     assert.deepEqual(result.needsCeremony.map((c) => c.id), ['T1']);
     assert.equal(result.needsCeremony[0].blocker, 'preexisting-completed-field');
   });
@@ -527,7 +534,7 @@ test('#208: runTicketPrune with ceremony:true fails closed and mutates nothing, 
           { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: ['test/adlc-widget/**'] },
         ]);
         const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
-        const result = runTicketPrune({ cwd: dir, ceremony: true });
+        const result = runTicketPrune({ inferScope: true, cwd: dir, ceremony: true });
         assert.equal(result.ok, false);
         assert.match(result.error, /deprecated/);
         assert.match(result.error, /adlc ticket complete <id> --write --authorize --json/);
@@ -550,7 +557,7 @@ test('#208: --write still tombstones a rails-less stale ticket; a railed one is 
       { id: 'T2', title: 'railed shipped', scope: ['packages/second-widget/**'], rails: ['test/second-widget/**'] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['T1']);           // rails-less → tombstoned
@@ -580,7 +587,7 @@ test('a keyless --write REFUSES when any ticket in the store declares a rail, an
     const before = readFileSync(ticketsPath, 'utf8');
 
     assert.throws(
-      () => runTicketPrune({ cwd: dir, write: true }),
+      () => runTicketPrune({ inferScope: true, cwd: dir, write: true }),
       (error) => error.code === 'MANIFEST_KEY_REQUIRED',
     );
     assert.equal(readFileSync(ticketsPath, 'utf8'), before, 'tickets.json is byte-identical');
@@ -589,7 +596,7 @@ test('a keyless --write REFUSES when any ticket in the store declares a rail, an
     // write, it does not refuse the work — and it is RECORDED. Refusing without
     // recording would have left the invariant half-true: the writes that got
     // through would still be invisible.
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['RAILLESS']);
 
@@ -623,7 +630,7 @@ test('a staging failure is reported as a failed sweep, not a silent no-op', () =
     const before = readFileSync(ticketsPath, 'utf8');
     chmodSync(readOnly, 0o555);
     try {
-      const result = runTicketPrune({ cwd: dir, ticketsPath, write: true });
+      const result = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath, write: true });
       assert.equal(result.ok, false, 'the sweep failed and says so');
       assert.match(result.error, /failed to write completions/);
       assert.equal(readFileSync(ticketsPath, 'utf8'), before);
@@ -665,6 +672,7 @@ test('a rename failure is corrected in the ledger, not left standing as a false 
     const before = readFileSync(ticketsPath, 'utf8');
 
     const result = runTicketPrune({
+      inferScope: true,
       cwd: dir, write: true, key: 'test-manifest-key', stageJson: stagerThatFailsToCommit(),
     });
 
@@ -705,6 +713,7 @@ test('when the correction cannot be written either, the refusal says the ledger 
     const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
 
     const result = runTicketPrune({
+      inferScope: true,
       cwd: dir,
       write: true,
       key: 'test-manifest-key',
@@ -731,7 +740,7 @@ test('a rename failure on a rails-free store records nothing, because nothing wa
     writeTickets(dir, [
       { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
     ]);
-    const result = runTicketPrune({ cwd: dir, write: true, stageJson: stagerThatFailsToCommit() });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, stageJson: stagerThatFailsToCommit() });
 
     assert.equal(result.ok, false);
     assert.match(result.error, /failed to write completions/);
@@ -756,7 +765,7 @@ test('an audit that cannot be recorded refuses with tickets.json untouched and n
     // A manifest that cannot be appended to: a directory where the file goes.
     mkdirSync(join(dir, '.adlc', 'manifest.jsonl'), { recursive: true });
 
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, false);
     assert.match(result.error, /audit entry .* could not be recorded/);
@@ -783,9 +792,9 @@ test('two stores with identical content get distinct audit entries, not one shar
     const second = join(dir, 'second-store.json');
     writeFileSync(second, JSON.stringify({ tickets }, null, 2));
 
-    const first = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const first = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
     assert.equal(first.ok, true, first.error);
-    const other = runTicketPrune({ cwd: dir, ticketsPath: second, write: true, key: 'test-manifest-key' });
+    const other = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath: second, write: true, key: 'test-manifest-key' });
     assert.equal(other.ok, true, other.error);
 
     const entries = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8')
@@ -805,7 +814,7 @@ test('a store with NO rails prunes exactly as before: no key needed, no manifest
       { id: 'STILL-GOING', title: 'in flight', scope: ['packages/never-built/**'], rails: [] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.tombstoned.map((t) => t.id), ['RAILLESS']);
@@ -820,7 +829,7 @@ test('#208: a preexisting-completed-field ticket is reported under needsCeremony
     ]);
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.needsCeremony.map((c) => c.id), ['T1']);
@@ -853,7 +862,7 @@ test('#208: bin --ceremony exits 1 with the deprecation redirect and writes noth
 test('empty tickets.json (no tickets) reports cleanly and is a no-op', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, []);
-    const result = runTicketPrune({ cwd: dir });
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
     assert.equal(result.ok, true);
     assert.deepEqual(result.stale, []);
     assert.deepEqual(result.active, []);
@@ -864,7 +873,7 @@ test('empty tickets.json (no tickets) reports cleanly and is a no-op', () => {
 
 test('missing tickets.json is an operational error, not a silent pass', () => {
   withScratchRepo((dir) => {
-    const result = runTicketPrune({ cwd: dir });
+    const result = runTicketPrune({ inferScope: true, cwd: dir });
     assert.equal(result.ok, false);
     assert.match(result.error, /tickets file not found/);
   });
@@ -899,12 +908,12 @@ test('bin: --write against a frozen trust root refuses without a key, and --allo
     // ADLC_MANIFEST_KEY scrubbed explicitly: the bin resolves it from the
     // environment, and a developer who exports one would otherwise never see this
     // refusal locally while CI, which has none, hit it every time.
-    const refused = runBin(['--write'], dir, { ADLC_MANIFEST_KEY: '' });
+    const refused = runBin(['--infer-scope', '--write'], dir, { ADLC_MANIFEST_KEY: '' });
     assert.notEqual(refused.code, 0, 'an unsignable trust-root write is refused');
     assert.match(refused.stderr, /ADLC_MANIFEST_KEY/);
     assert.equal(readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8'), before, 'and nothing was written');
 
-    const allowed = runBin(['--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
+    const allowed = runBin(['--infer-scope', '--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
     assert.equal(allowed.code, 0, allowed.stderr);
     assert.match(allowed.stderr, /unsigned/i, 'and going through unsigned says what it costs');
     assert.equal(readTickets(dir).tickets.find((t) => t.id === 'RAILLESS').completed, true);
@@ -917,7 +926,7 @@ test('bin: --allow-unsigned WITH a key does not warn — the entry is signed eit
       { id: 'RAILED', title: 'railed in-flight', scope: ['packages/never-built/**'], rails: ['src/guarded/**'] },
       { id: 'RAILLESS', title: 'shipped', scope: ['plugins/adlc-widget/**'], rails: [] },
     ]);
-    const { code, stderr } = runBin(['--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: 'test-manifest-key' });
+    const { code, stderr } = runBin(['--infer-scope', '--write', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: 'test-manifest-key' });
     assert.equal(code, 0, stderr);
     // Warning on a signed write teaches operators the warning is noise, which is
     // how the real one gets ignored.
@@ -929,7 +938,7 @@ test('bin: --allow-unsigned WITH a key does not warn — the entry is signed eit
 test('bin: dry-run exits 0 and --json prints the classification', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    const { code, stdout } = runBin(['--json'], dir);
+    const { code, stdout } = runBin(['--infer-scope', '--json'], dir);
     assert.equal(code, 0);
     const parsed = JSON.parse(stdout);
     assert.equal(parsed.write, false);
@@ -941,7 +950,7 @@ test('bin: dry-run exits 0 and --json prints the classification', () => {
 test('bin: --write exits 0 and actually tombstones in place via the CLI entry point', () => {
   withScratchRepo((dir) => {
     writeTickets(dir, [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'] }]);
-    const { code, stdout } = runBin(['--write', '--json'], dir);
+    const { code, stdout } = runBin(['--infer-scope', '--write', '--json'], dir);
     assert.equal(code, 0);
     const parsed = JSON.parse(stdout);
     assert.deepEqual(parsed.tombstoned.map((t) => t.id), ['T1']);
@@ -992,7 +1001,7 @@ test('#208: directory --write archives only rails-less stale tickets; a rail-fre
     // out of it is an audited override that must be signable
     // (packages/tickets/test/bypass-audit.test.mjs). The key is incidental to
     // what this test asserts, which is WHICH tickets --write may archive.
-    const result = runTicketPrune({ cwd: dir, write: true, key: 'test-manifest-key' });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, key: 'test-manifest-key' });
 
     assert.equal(result.ok, true);
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
@@ -1016,12 +1025,12 @@ test('the --allow-unsigned opt-out reaches the DIRECTORY backend too, not just t
 
     // The directory branch reports a failed sweep rather than throwing, so
     // automation reading the result sees the refusal instead of an exit 0.
-    const refused = runTicketPrune({ cwd: dir, write: true });
+    const refused = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     assert.equal(refused.ok, false, 'keyless still refuses');
     assert.match(refused.error, /ADLC_MANIFEST_KEY/);
     assert.ok(existsSync(join(dir, '.adlc', 'tickets', ticketFilename('RAILLESS'))), 'nothing archived');
 
-    const result = runTicketPrune({ cwd: dir, write: true, allowUnsigned: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true, allowUnsigned: true });
     assert.equal(result.ok, true, result.error);
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
   });
@@ -1034,7 +1043,7 @@ test('#208: directory --write does not archive a deliberately completed:false ti
       { id: 'KEEP', title: 'kept incomplete', scope: ['plugins/adlc-widget/**'], completed: false },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), []);
@@ -1050,7 +1059,7 @@ test('#208: directory --write surfaces archived ids in the result (observability
     writeDirectoryStore(dir, [
       { id: 'RAILLESS', title: 'rails-less shipped', scope: ['plugins/adlc-widget/**'] },
     ]);
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
     assert.equal(result.ok, true);
     // The mutation must be visible in both the result and the public formatters.
     assert.deepEqual((result.archived ?? []).map((a) => a?.id ?? a), ['RAILLESS']);
@@ -1077,7 +1086,7 @@ test('#208/T75: a directory batch with one inbound-edge-blocked ticket archives 
       { id: 'CCC', title: 'still building', scope: ['packages/never-built/**'], edges: [{ to: 'BBB', kind: 'depends' }] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     // T75: the blocked ticket is a report, not a hard failure.
     assert.equal(result.ok, true);
@@ -1104,7 +1113,7 @@ test('#208/T75: bin --write --json exits 0 and surfaces the blocked set on a par
     let out = '';
     let code = 0;
     try {
-      out = execFileSync(process.execPath, [BIN, '--write', '--json'], { cwd: dir, encoding: 'utf8', env: process.env });
+      out = execFileSync(process.execPath, [BIN, '--infer-scope', '--write', '--json'], { cwd: dir, encoding: 'utf8', env: process.env });
     } catch (err) {
       code = err.status ?? 1;
       out = (err.stdout?.toString() ?? '') + (err.stderr?.toString() ?? '');

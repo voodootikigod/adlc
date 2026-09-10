@@ -38,7 +38,9 @@ function computeNeedsCeremony(stale, ticketsById) {
  * @param {boolean} [options.write] tombstone rails-less stale tickets in place instead of dry-run reporting
  * @param {boolean} [options.ceremony] protected-base admin action: also complete rail-freezing stale
  *   tickets in place (expires their rails, T36). Requires ADLC_RAILS_BYPASS=1 and writes nothing without it.
- * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
+ * @param {boolean} [options.inferScope] enable the scope-existence staleness inference (default FALSE,
+ *   #779). With it off, only an author-asserted done-shaped `status` makes a ticket stale.
+ * @returns {{ok: true, baseRef: string, write: boolean, ceremony: boolean, inferScope: boolean, stale: object[], active: object[], tombstoned: {id: string, reason: string}[], ceremonyCompleted: {id: string, reason: string, rails: string[]}[], needsCeremony: {id: string, reason: string, rails: string[], blocker: 'rails-freeze' | 'preexisting-completed-field'}[]} | {ok: false, error: string}}
  */
 export function runTicketPrune(options = {}) {
   const {
@@ -63,6 +65,7 @@ export function runTicketPrune(options = {}) {
     baseRef = 'HEAD',
     write = false,
     ceremony = false,
+    inferScope = false,
   } = options;
 
   // `--ceremony` is DEPRECATED (#208). It was a bulk completion: it took no
@@ -94,7 +97,7 @@ export function runTicketPrune(options = {}) {
   }
 
   if (tickets.length === 0) {
-    return { ok: true, baseRef, write, ceremony, stale: [], active: [], tombstoned: [], ceremonyCompleted: [], needsCeremony: [] };
+    return { ok: true, baseRef, write, ceremony, inferScope, stale: [], active: [], tombstoned: [], ceremonyCompleted: [], needsCeremony: [] };
   }
 
   let trackedFiles;
@@ -104,7 +107,7 @@ export function runTicketPrune(options = {}) {
     return { ok: false, error: err.message };
   }
 
-  const results = classifyTickets(tickets, trackedFiles);
+  const results = classifyTickets(tickets, trackedFiles, { inferScope });
   const ticketsById = new Map(tickets.map((t) => [t.id, t]));
   const stale = results.filter((r) => r.stale);
   // Active = not stale AND not already completed (#311). classifyTicket answers
@@ -128,6 +131,7 @@ export function runTicketPrune(options = {}) {
       baseRef,
       write,
       ceremony,
+      inferScope,
       stale,
       active,
       tombstoned: [],
@@ -178,7 +182,7 @@ export function runTicketPrune(options = {}) {
         const current = canonicalStore.load();
         const ticket = current.get(id);
         if (!ticket) continue; // vanished under us since the first pass
-        const reclassified = classifyTicket(ticket, trackedFiles);
+        const reclassified = classifyTicket(ticket, trackedFiles, { inferScope });
         if (!reclassified.stale) continue; // un-staled since the first pass
         const disposition = ceremonyDisposition(ticket, reclassified.reason);
         if (disposition.disposition === 'done') continue;
@@ -215,7 +219,7 @@ export function runTicketPrune(options = {}) {
         }
         return {
           ok: false,
-          baseRef, write, ceremony, stale, active,
+          baseRef, write, ceremony, inferScope, stale, active,
           archived: archivedEntries, needsCeremony, blocked,
           failedId: id,
           code: error?.code ?? 'ARCHIVE_FAILED',
@@ -223,7 +227,7 @@ export function runTicketPrune(options = {}) {
         };
       }
     }
-    return { ok: true, baseRef, write, ceremony, stale, active, archived: archivedEntries, needsCeremony, blocked };
+    return { ok: true, baseRef, write, ceremony, inferScope, stale, active, archived: archivedEntries, needsCeremony, blocked };
   }
 
   const locked = acquireLock(cwd);
@@ -278,7 +282,7 @@ export function runTicketPrune(options = {}) {
     const ceremonyCompleted = [];
     const needsCeremony = [];
     for (const ticket of staleCandidates) {
-      const reclassified = classifyTicket(ticket, trackedFiles);
+      const reclassified = classifyTicket(ticket, trackedFiles, { inferScope });
       if (!reclassified.stale) continue;                 // un-staled under the lock — leave it
       const disposition = ceremonyDisposition(ticket, reclassified.reason);
       if (disposition.disposition === 'done') continue;  // already completed — nothing to do
@@ -298,7 +302,7 @@ export function runTicketPrune(options = {}) {
       // Nothing writable this pass (all stale ids were un-staled, already
       // completed, or are rail-freezing/preexisting-completed-field entries this
       // tool only reports). tickets.json is left untouched.
-      return { ok: true, baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
+      return { ok: true, baseRef, write, ceremony, inferScope, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
     }
 
     // This legacy path rewrites tickets.json DIRECTLY rather than through
@@ -420,7 +424,7 @@ export function runTicketPrune(options = {}) {
       };
     }
 
-    return { ok: true, baseRef, write, ceremony, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
+    return { ok: true, baseRef, write, ceremony, inferScope, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
   } finally {
     releaseLock(cwd);
   }

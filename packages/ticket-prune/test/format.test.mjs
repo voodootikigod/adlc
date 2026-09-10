@@ -74,7 +74,8 @@ test('renderReport (dry-run): stale tickets are reported with the "re-run with -
 
 test('renderReport (dry-run): a header reflects the dry-run mode and "No stale tickets found" when empty', () => {
   const text = renderReport({ baseRef: 'HEAD', write: false, stale: [], active: [], tombstoned: [], needsCeremony: [] });
-  assert.match(text, /ticket-prune — base ref: HEAD \(dry-run\)/);
+  // The header also names which classifier produced the counts (#779).
+  assert.match(text, /ticket-prune — base ref: HEAD \(dry-run, scope-existence inference: off\)/);
   assert.match(text, /No stale tickets found\./);
 });
 
@@ -84,6 +85,7 @@ test('toJson projects exactly the machine-readable fields, defaulting the new ar
     baseRef: 'HEAD',
     write: true,
     ceremony: false,
+    inferScope: false,
     stale: [],
     active: [],
     tombstoned: [{ id: 'T1', reason: 'x' }],

@@ -12,6 +12,10 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTicketPrune } from '../lib/run.mjs';
+
+// Every run here passes inferScope:true: these tests are about the inbound-edge
+// wedge in the ARCHIVE loop, and the scope-existence inference (#779 made it
+// opt-in) is how the fixtures become archive candidates in the first place.
 import { orderArchiveCandidates } from '../lib/archive-order.mjs';
 import { ticketFilename } from '@adlc/tickets';
 
@@ -93,7 +97,7 @@ test('a batch with one inbound-edge-blocked ticket still archives the rest and n
       { id: 'CCC', title: 'still building', scope: ['packages/never-built/**'], edges: [{ to: 'BBB' }] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     // The blocked ticket no longer wedges the sweep: it is a report, not a hard failure.
     assert.equal(result.ok, true);
@@ -125,7 +129,7 @@ test('an UNEXPECTED archive failure (not an inbound edge) fails the sweep — ne
     // broken store as clean.
     writeFileSync(join(dir, '.adlc', 'ticket-archive'), 'not a directory\n');
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, false, 'a genuine I/O failure must not report success');
     assert.equal(result.failedId, 'AAA');
@@ -148,7 +152,7 @@ test('an in-batch edge source is archived before its target, so neither is false
       { id: 'SRC', title: 'rails-less shipped', scope: ['packages/src2/**'], edges: [{ to: 'TGT' }] },
     ]);
 
-    const result = runTicketPrune({ cwd: dir, write: true });
+    const result = runTicketPrune({ inferScope: true, cwd: dir, write: true });
 
     assert.equal(result.ok, true);
     assert.deepEqual((result.blocked ?? []).map((b) => b.id), [], 'nothing is blocked when ordered topologically');

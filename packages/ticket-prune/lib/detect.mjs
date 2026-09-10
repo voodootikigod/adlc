@@ -12,10 +12,23 @@
 //      an inference, so it wins over everything else (including a
 //      contradicting scope/rails inference).
 //
-//   2. OTHERWISE infer from whether the ticket's declared `scope` files exist
-//      on a base ref (default HEAD; see listTrackedFiles). A ticket whose
-//      every declared scope glob resolves to at least one file tracked at
-//      that ref is treated as shipped.
+//   2. OTHERWISE, and ONLY when the caller opts in with `inferScope`, infer
+//      from whether the ticket's declared `scope` files exist on a base ref
+//      (default HEAD; see listTrackedFiles). A ticket whose every declared
+//      scope glob resolves to at least one file tracked at that ref is
+//      treated as shipped.
+//
+// Why the inference is OPT-IN (#779). Scope existence is not evidence that the
+// ticket's work landed: it asks "does `packages/core/**` match a tracked file?",
+// which on any repo older than its ticket backlog is true the moment the ticket
+// is authored — the directory was already there. Nothing checks that the scope
+// files CHANGED, that the ticket created them, or that the ticket ever entered
+// a build. Left on by default it classified 179 of this repo's 206 tickets as
+// stale, and `--write` then archived every rails-less one of them — open,
+// never-started work — reporting `ok: true` and exit 0 with a success line. So
+// the default answers only from an author-asserted `status`, and a caller that
+// genuinely wants the weaker signal (see scripts/ceremony-drift.mjs) asks for
+// it by name.
 //
 // Why scope-existence over "closing PR reference" (the other option the
 // issue floats): this repo's ticket schema has no field that records a PR
@@ -68,8 +81,26 @@ export function scopeShipped(ticket, trackedFiles) {
   return scope.every((glob) => trackedFiles.some((file) => globMatch(glob, file)));
 }
 
-/** Classify one ticket. Returns { id, stale, reason }. */
-export function classifyTicket(ticket, trackedFiles) {
+/**
+ * The reason reported when a statusless ticket is left active because the
+ * scope-existence inference was not enabled. Deliberately distinct from
+ * "declared scope not fully present": that one says the check RAN and failed,
+ * this one says it never ran. Collapsing them would hide which classifier
+ * produced the counts an operator is reading.
+ */
+const INFERENCE_OFF_REASON =
+  'no explicit status; scope-existence inference is off (pass --infer-scope to enable it)';
+
+/**
+ * Classify one ticket. Returns { id, stale, reason }.
+ *
+ * @param {object} ticket
+ * @param {string[]} trackedFiles
+ * @param {{inferScope?: boolean}} [options] `inferScope` (default FALSE) enables
+ *   the scope-existence fallback described in the module header. With it off, a
+ *   ticket with no explicit status is never inferred stale.
+ */
+export function classifyTicket(ticket, trackedFiles, { inferScope = false } = {}) {
   const status = explicitStatus(ticket);
   if (status !== null) {
     return {
@@ -88,6 +119,13 @@ export function classifyTicket(ticket, trackedFiles) {
     };
   }
 
+  // Checked BEFORE scopeShipped, so with the inference off the answer never
+  // depends on the tracked-file snapshot at all — an inference that is off
+  // must not be able to change the reported reason.
+  if (!inferScope) {
+    return { id: ticket.id, stale: false, reason: INFERENCE_OFF_REASON };
+  }
+
   if (scopeShipped(ticket, trackedFiles)) {
     return {
       id: ticket.id,
@@ -103,8 +141,9 @@ export function classifyTicket(ticket, trackedFiles) {
   };
 }
 
-export function classifyTickets(tickets, trackedFiles) {
-  return tickets.map((ticket) => classifyTicket(ticket, trackedFiles));
+/** Map classifyTicket over an array, threading the same options to each. */
+export function classifyTickets(tickets, trackedFiles, { inferScope = false } = {}) {
+  return tickets.map((ticket) => classifyTicket(ticket, trackedFiles, { inferScope }));
 }
 
 /**

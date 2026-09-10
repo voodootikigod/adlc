@@ -1,12 +1,16 @@
 // format.mjs — human-readable + JSON rendering for a runTicketPrune() result.
 
 export function renderReport(result) {
-  const { baseRef, write, stale, active, tombstoned = [], archived = [], needsCeremony = [], blocked = [] } = result;
+  const { baseRef, write, inferScope = false, stale, active, tombstoned = [], archived = [], needsCeremony = [], blocked = [] } = result;
   const lines = [];
   // `--ceremony` is deprecated (#208) and returns before rendering, so the only
   // in-place write this tool reports is tombstoning under --write.
   const mode = write ? 'write' : 'dry-run';
-  lines.push(`ticket-prune — base ref: ${baseRef} (${mode})`);
+  // Which classifier produced these counts is part of the report, not a detail
+  // (#779): with the inference off, "no stale tickets" means "none was asserted
+  // done"; with it on, it also means "none had a fully-resolving scope". An
+  // operator reading a count cannot tell those apart otherwise.
+  lines.push(`ticket-prune — base ref: ${baseRef} (${mode}, scope-existence inference: ${inferScope ? 'on' : 'off'})`);
   lines.push('');
 
   if (write) {
@@ -77,10 +81,12 @@ export function renderReport(result) {
 }
 
 export function toJson(result) {
-  const { baseRef, write, ceremony = false, stale, active, tombstoned = [], archived = [], ceremonyCompleted = [], needsCeremony = [], blocked = [] } = result;
+  const { baseRef, write, ceremony = false, inferScope = false, stale, active, tombstoned = [], archived = [], ceremonyCompleted = [], needsCeremony = [], blocked = [] } = result;
   // `archived` is the directory-store mutation (moved shards); omitting it would
   // make `--json` under-report what --write actually changed on that backend.
   // `blocked` is the skip-and-continue set (T75) — tickets left unarchived because
   // a ticket outside the batch still references them.
-  return { baseRef, write, ceremony, stale, active, tombstoned, archived, ceremonyCompleted, needsCeremony, blocked };
+  // `inferScope` says which classifier produced `stale`/`active` — a machine
+  // consumer reading a count needs the same disambiguation the text report gets.
+  return { baseRef, write, ceremony, inferScope, stale, active, tombstoned, archived, ceremonyCompleted, needsCeremony, blocked };
 }

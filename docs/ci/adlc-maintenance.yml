@@ -109,13 +109,17 @@ jobs:
             echo "## Stale tickets (ticket-prune)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ -f .adlc/tickets.json ]; then
+          # Both backends: the LEGACY flat file, and the canonical SHARDED store
+          # (.adlc/tickets/.store.json plus the shards beside it). Guarding on the
+          # flat file alone made this step a no-op on every sharded repo — which is
+          # every new repo — and print "nothing to prune" having examined nothing.
+          if [ -f .adlc/tickets.json ] || [ -f .adlc/tickets/.store.json ]; then
             # `if` capture so a nonzero exit does not abort the step under `set -e`.
             if out="$(adlc ticket-prune --json)"; then rc=0; else rc=$?; fi
             echo "$out" >> "$GITHUB_STEP_SUMMARY"
           else
             rc=0
-            echo "(.adlc/tickets.json not present — nothing to prune)" >> "$GITHUB_STEP_SUMMARY"
+            echo "(neither .adlc/tickets.json nor .adlc/tickets/.store.json present — nothing to prune)" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           # ticket-prune is a report, not a gate: exit 0 is the only expected

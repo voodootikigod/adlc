@@ -18,7 +18,7 @@ Addresses [issue #39](https://github.com/voodootikigod/adlc/issues/39).
 ## Usage
 
 ```
-ticket-prune [--tickets path] [--base-ref ref] [--write] [--json]
+ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--json]
 ```
 
 Dry-run by default, consistent with every other ADLC writer (`skill-rot`,
@@ -82,12 +82,24 @@ ticket vs. inferring from merged deliverables/PRs. Decision, in order:
    value is treated as an explicit "not done" and wins over the inference
    below even if the ticket's scope looks fully shipped.
 
-2. **Otherwise, infer from scope existing on a base ref.** A ticket with no
-   explicit status is stale only if it declares at least one `scope` glob
-   *and* every declared glob resolves to at least one file tracked at
-   `--base-ref` (default `HEAD`, via `git ls-tree`). A ticket with no declared
-   scope is never inferred stale — it's reported active until an explicit
-   status settles it.
+2. **Otherwise, and only with `--infer-scope`, infer from scope existing on a
+   base ref.** A ticket with no explicit status is stale only if it declares at
+   least one `scope` glob *and* every declared glob resolves to at least one
+   file tracked at `--base-ref` (default `HEAD`, via `git ls-tree`). A ticket
+   with no declared scope is never inferred stale — it's reported active until
+   an explicit status settles it.
+
+**The inference is OFF by default (#779).** Scope existence is not evidence that
+a ticket's work landed: it asks "does `packages/core/**` match a tracked file?",
+which on any repo older than its ticket backlog is true the moment the ticket is
+authored — the directory was already there. Nothing checks that the scope files
+*changed*, that this ticket created them, or that the ticket ever entered a
+build. Left on by default it classified 179 of this repo's 206 tickets as stale,
+23 of them rails-less and therefore archived by `--write` — all 23 open work
+that had never been completed — while the run printed a success line and exited
+0. So the default answers from an author-asserted `status` alone, and a caller
+that wants the weaker signal asks for it by name. Both the text report and
+`--json` say which classifier produced the counts.
 
 **Why not "scope/rails + a closing PR reference"?** The issue floated PR
 references as a corroborating signal. This repo's ticket schema has no field
@@ -108,9 +120,10 @@ matching, and is exactly the check the issue's worked example did by hand.
 | `--tickets <path>` | Ticket-store override. The default auto-detects sharded `.adlc/tickets/` or legacy `.adlc/tickets.json`. |
 | `--archive <path>` | Legacy-backend archive override. Sharded stores always use `.adlc/ticket-archive/`. |
 | `--base-ref <ref>` | Git ref to check declared `scope` globs against (default `HEAD`). Point at `origin/main` to audit a feature branch's tickets against what's already shipped on trunk. |
+| `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
 | `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
 | `--ceremony` | **Deprecated (#208).** Fails closed and redirects to `adlc ticket complete <id> --write --authorize --json`. Rail-freezing tickets are completed per-ticket via that command, not in bulk here. |
-| `--json` | Machine-readable `{ baseRef, write, ceremony, stale[], active[], tombstoned[], ceremonyCompleted[], needsCeremony[] }`. |
+| `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], ceremonyCompleted[], needsCeremony[] }`. |
 
 ## Exit codes
 

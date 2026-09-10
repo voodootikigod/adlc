@@ -11,12 +11,14 @@ description: Reports and archives stale, already-shipped tickets out of .adlc/ti
 
 `.adlc/tickets.json` is a mutable scratchpad, and nothing else prunes it after a ticket ships. Completed tickets accumulate and masquerade as an open backlog. You can't tell live work from leftovers without cross-checking deliverables and merged PRs by hand. `ticket-prune` reports (and, with `--write`, archives) the tickets it can determine are stale, so the backlog reflects what is actually open.
 
-A ticket is stale when it carries an explicit terminal `status` (`done` / `closed` / `complete` / `completed` / `archived` / `shipped`, case-insensitive), or, absent a status, when it declares at least one `scope` glob and every glob resolves to a file tracked at `--base-ref`. A ticket with no scope and no status is never inferred stale.
+A ticket is stale when it carries an explicit terminal `status` (`done` / `closed` / `complete` / `completed` / `archived` / `shipped`, case-insensitive), or — **only with `--infer-scope`** — when, absent a status, it declares at least one `scope` glob and every glob resolves to a file tracked at `--base-ref`. A ticket with no scope and no status is never inferred stale.
+
+That scope-existence inference is **off by default** (#779). Scope existence is not evidence that a ticket's work landed: `packages/core/**` matches a tracked file the moment the ticket is authored on any repo older than its backlog, because the directory was already there. Nothing checks that the scope files changed, that this ticket created them, or that the ticket ever entered a build. Left on by default it classified 179 of this repo's 206 tickets as stale, and `--write` archived 23 rails-less ones — all open work that had never been completed — while printing a success line and exiting 0. Both the text report and `--json` state which classifier produced the counts.
 
 ## Usage
 
 ```sh
-adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [--json]
+adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--infer-scope] [--write] [--json]
 ```
 
 | Flag | Description |
@@ -24,8 +26,9 @@ adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--write] [
 | `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
 | `--archive <path>` | Archive file written under `--write` (default `.adlc/tickets.archive.json`, gitignored). |
 | `--base-ref <ref>` | Git ref to check `scope` globs against (default `HEAD`). Point at `origin/main` to audit a branch's tickets against trunk. |
+| `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
 | `--write` | Archive stale tickets: move them out of `--tickets` into `--archive` (append/upsert by id; never clobbered, never deleted). |
-| `--json` | Machine-readable `{ baseRef, write, stale[], active[], archived[] }`. |
+| `--json` | Machine-readable `{ baseRef, write, inferScope, stale[], active[], archived[] }`. |
 
 ## Exit codes
 

@@ -56,11 +56,15 @@ test('classifyTicket: explicit non-done status blocks inference even if scope lo
   assert.match(result.reason, /status/i);
 });
 
-test('classifyTicket: no status field falls back to scope-on-base-ref inference (stale)', () => {
+test('classifyTicket: no status field falls back to scope-on-base-ref inference (stale) when it is enabled', () => {
+  // #779 made the fallback opt-in; this test is about WHAT the inference decides,
+  // so it asks for the inference explicitly. That the DEFAULT is now off is pinned
+  // in test/infer-scope-gate.test.mjs.
   const tracked = ['plugins/adlc-opencode/index.mjs', 'docs/integrations/opencode.md'];
   const result = classifyTicket(
     { id: 'T1', scope: ['plugins/adlc-opencode/**', 'docs/integrations/opencode.md'] },
-    tracked
+    tracked,
+    { inferScope: true }
   );
   assert.equal(result.stale, true);
   assert.match(result.reason, /scope/i);
@@ -82,7 +86,7 @@ test('classifyTickets maps a whole ticket array', () => {
     { id: 'T2', scope: ['packages/never-built/**'] },
     { id: 'T3', status: 'done' },
   ];
-  const results = classifyTickets(tickets, tracked);
+  const results = classifyTickets(tickets, tracked, { inferScope: true });
   assert.deepEqual(
     results.map((r) => [r.id, r.stale]),
     [
