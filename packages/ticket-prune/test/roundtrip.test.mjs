@@ -41,10 +41,19 @@ function writeTickets(dir, tickets) {
  * audited override and refuses unless it can be signed
  * (packages/tickets/test/bypass-audit.test.mjs). The key is what an operator
  * running this has; what these tests are about is the diff the gate then sees.
+ *
+ * Every real-CLI invocation here passes `--infer-scope`. These fixtures derive
+ * staleness ONLY from the scope-existence inference — they declare
+ * `scope: ['plugins/adlc-widget/**']` against a committed file and carry no
+ * `status` field — and #779 made that inference opt-in, because scope existence
+ * is not evidence that a ticket's work landed. What these tests assert is the
+ * shape of the DIFF `--write` produces and whether the real rails-guard-ci gate
+ * accepts it, so they need a stale ticket as a precondition and ask for the
+ * inference explicitly to get one. No assertion here depends on the default.
  */
 function runPruneWrite(dir) {
   try {
-    execFileSync(process.execPath, [PRUNE_BIN, '--write'], {
+    execFileSync(process.execPath, [PRUNE_BIN, '--infer-scope', '--write'], {
       cwd: dir, stdio: 'pipe', env: { ...process.env, ADLC_MANIFEST_KEY: 'test-manifest-key' },
     });
     return 0;
@@ -137,7 +146,7 @@ test('AC1(b) part 1: ticket-prune --write does NOT tombstone a RAILED stale tick
   try {
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
     // Use --json to read the tool's own report; --write must be a no-op on tickets.json.
-    const out = execFileSync(process.execPath, [PRUNE_BIN, '--write', '--json'], { cwd: dir, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, [PRUNE_BIN, '--infer-scope', '--write', '--json'], { cwd: dir, encoding: 'utf8' });
     const report = JSON.parse(out);
     assert.deepEqual(report.tombstoned, [], 'a railed stale ticket is NOT auto-tombstoned');
     assert.deepEqual(report.needsCeremony.map((t) => t.id), ['T1']);
@@ -182,7 +191,7 @@ test('AC1(c): ticket-prune --write does NOT rewrite a rails-less stale ticket th
   });
   try {
     const before = readFileSync(join(dir, '.adlc', 'tickets.json'), 'utf8');
-    const out = execFileSync(process.execPath, [PRUNE_BIN, '--write', '--json'], { cwd: dir, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, [PRUNE_BIN, '--infer-scope', '--write', '--json'], { cwd: dir, encoding: 'utf8' });
     const report = JSON.parse(out);
     assert.deepEqual(report.tombstoned, [], 'false→true would be a MUTATION the add-only gate denies; the tool must not make it');
     assert.deepEqual(report.needsCeremony.map((t) => t.id), ['T1']);
