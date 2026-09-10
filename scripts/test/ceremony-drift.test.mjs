@@ -18,6 +18,7 @@ import {
   selectTrackingIssue,
   MARKER,
   MANAGED_AUTHORS,
+  resolveDriftBaseRef,
 } from '../ceremony-drift.mjs';
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
@@ -801,4 +802,15 @@ test('a railed preexisting-completed-field entry gets no runnable command', () =
   assert.deepEqual(readyCommandIds(body), [], 'must not advertise completing a deliberate completed value');
   assert.match(body, /## Needs a manual decision/);
   assert.match(body, /will \*\*not\*\* clear/);
+});
+
+// ── the base ref drift is measured against ──────────────────────────────────
+// main() is a branch-free I/O shell, so this default had no assertion behind it.
+// Getting it wrong measures drift against the wrong ref and silently changes
+// what the report claims, with nothing failing to say so.
+
+test('BASE_REF retargets the drift base ref, and unset falls back to trunk', () => {
+  assert.equal(resolveDriftBaseRef({}), 'origin/main', 'unset falls back to trunk');
+  assert.equal(resolveDriftBaseRef({ BASE_REF: '' }), 'origin/main', 'empty is not a ref');
+  assert.equal(resolveDriftBaseRef({ BASE_REF: 'release/1.11' }), 'release/1.11', 'a set BASE_REF wins');
 });

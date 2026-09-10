@@ -648,6 +648,19 @@ function findExistingIssue() {
   return unlabeled;
 }
 
+/**
+ * The git ref drift is measured against. `BASE_REF` lets the workflow (or an
+ * operator auditing a branch) retarget it; unset falls back to trunk.
+ *
+ * Exported and pure so the fallback is testable: main() is deliberately a
+ * branch-free I/O shell, so a default living inline there is asserted by
+ * nothing — getting it wrong would silently measure drift against the wrong
+ * ref and quietly change what the report claims.
+ */
+export function resolveDriftBaseRef(env = process.env) {
+  return env.BASE_REF || 'origin/main';
+}
+
 async function main() {
   // inferScope:true is explicit because ticket-prune's default flipped to OFF
   // (#779) — scope existence is not evidence that a ticket's work landed, so it
@@ -657,7 +670,7 @@ async function main() {
   // the case that carries no done-status to assert. Whether that inference is
   // trustworthy enough for THIS report is a separate question, tracked apart from
   // #779; this call deliberately preserves the pre-#779 drift set unchanged.
-  const result = runTicketPrune({ cwd: process.cwd(), baseRef: process.env.BASE_REF || 'origin/main', inferScope: true });
+  const result = runTicketPrune({ cwd: process.cwd(), baseRef: resolveDriftBaseRef(), inferScope: true });
   if (!result.ok) {
     // OPERATIONAL failure — the reporter itself could not do its job. This must
     // be loud (see the exit-code contract in main's catch below).
