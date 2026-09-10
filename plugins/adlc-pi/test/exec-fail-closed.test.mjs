@@ -336,6 +336,27 @@ test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdo
   assert.ok(!notices.some((n) => /recorded P6 acceptance/i.test(n.msg)));
 });
 
+test('AC4: /adlc-accept reports the CLI\'s structured errors, not its exit code, when it emits them', async () => {
+  const { notices } = await runAccept({
+    stdout: JSON.stringify({ ok: false, errors: ['no p5 evidence', 'revision drifted'] }),
+    stderr: '', code: 2,
+  });
+  const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
+  assert.ok(failure, `expected a refusal notice, got ${JSON.stringify(notices)}`);
+  assert.match(failure.msg, /no p5 evidence; revision drifted/);
+  assert.doesNotMatch(failure.msg, /exit 2/, 'the structured errors replace the exit-code fallback');
+});
+
+test('AC4: /adlc-accept falls back to the exit code when the CLI JSON carries no error list', async () => {
+  const { notices } = await runAccept({
+    stdout: JSON.stringify({ ok: false }), stderr: 'boom', code: 2,
+  });
+  const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
+  assert.ok(failure, `expected a refusal notice, got ${JSON.stringify(notices)}`);
+  assert.match(failure.msg, /exit 2/);
+  assert.match(failure.msg, /boom/);
+});
+
 test('AC4: /adlc-accept refuses a KILLED accept exec even though it reports code 0', async () => {
   const { notices } = await runAccept({ stdout: '', stderr: '', code: 0, killed: true });
   const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
