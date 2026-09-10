@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import {
   divergencePayloadError,
   fanWidthError,
+  resolveDeps,
   runDivergenceAnalysis,
   runSpecMode,
   runRouteMode,
@@ -294,6 +295,113 @@ test('AC4: runRouteMode refuses a shrunken fan and reports requested/used when a
   assert.equal(result.equivalent, true);
 });
 
+
+// ---------------------------------------------------------------------------
+// The refusal message has to say what it actually got — an operator reading
+// "off-schema payload" with no shape named cannot tell a refusal apart from a
+// truncation.
+// ---------------------------------------------------------------------------
+
+test('the off-schema reason names the shape that was actually returned', () => {
+  assert.match(divergencePayloadError(null), /got null/);
+  assert.match(divergencePayloadError([]), /got an array/);
+  assert.match(divergencePayloadError('refused'), /got string/);
+  assert.match(divergencePayloadError(7), /got number/);
+  assert.match(divergencePayloadError({ agreements: [] }), /divergences missing or not an array/);
+  assert.match(divergencePayloadError({ divergences: [] }), /agreements missing or not an array/);
+  assert.match(
+    divergencePayloadError({}),
+    /agreements and divergences missing or not an array/
+  );
+});
+
+test('fanWidthError carries the failures even when there is only one', () => {
+  const one = fanWidthError({ requested: 3, used: 2, errors: ['rate limit'] });
+  assert.match(one, /Errors: rate limit/, 'a single failure must still be reported');
+
+  const none = fanWidthError({ requested: 3, used: 2, errors: [] });
+  assert.ok(!none.includes('Errors:'), 'no failures → no empty Errors suffix');
+});
+
+// ---------------------------------------------------------------------------
+// resolveDeps — the seam must default to the real callables and must not
+// accept a half-supplied injection.
+// ---------------------------------------------------------------------------
+
+test('resolveDeps returns real callables when nothing is injected and no mock is armed', () => {
+  const resolved = resolveDeps(undefined, {});
+  assert.equal(typeof resolved.fan, 'function');
+  assert.equal(typeof resolved.complete, 'function');
+});
+
+test('resolveDeps ignores a half-supplied deps object rather than returning it', () => {
+  const onlyFan = async () => [];
+  const resolvedFan = resolveDeps({ fan: onlyFan }, {});
+  assert.notEqual(resolvedFan.fan, onlyFan, 'a deps object without complete must not be used');
+  assert.equal(typeof resolvedFan.complete, 'function');
+
+  const onlyComplete = async () => '{}';
+  const resolvedComplete = resolveDeps({ complete: onlyComplete }, {});
+  assert.notEqual(resolvedComplete.complete, onlyComplete, 'a deps object without fan must not be used');
+
+  const both = { fan: onlyFan, complete: onlyComplete };
+  assert.equal(resolveDeps(both, {}), both, 'a complete deps pair is used as given');
+});
+
+test('resolveDeps ignores the mock unless NODE_ENV is test', () => {
+  const armed = JSON.stringify({ fan: TWO_GOOD_READINGS, divergence: CONVERGED });
+  const ignored = resolveDeps(undefined, { ADLC_GATE_MOCK_RESPONSE: armed, NODE_ENV: 'production' });
+  assert.equal(typeof ignored.fan, 'function');
+  // The real fan is used, so the mock payload is not reachable through it.
+  const honored = resolveDeps(undefined, { ADLC_GATE_MOCK_RESPONSE: armed, NODE_ENV: 'test' });
+  assert.notEqual(honored.fan, ignored.fan);
+});
+
+test('a shape-deviant mock is refused with a message naming the expected object', () => {
+  for (const [raw, pattern] of [
+    ['"hello"', /must be an object/],
+    ['[]', /must be an object/],
+    ['null', /must be an object/],
+    ['{"divergence":{}}', /fan must be an array/],
+    ['{"fan":"nope","divergence":{}}', /fan must be an array/],
+    ['{"fan":[]}', /divergence.*judge/],
+  ]) {
+    assert.throws(
+      () => resolveDeps(undefined, { ADLC_GATE_MOCK_RESPONSE: raw, NODE_ENV: 'test' }),
+      pattern,
+      `mock ${raw} must fail closed`
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The documented default fan width is 3 in every mode — the CLI default and
+// the library default must not drift apart.
+// ---------------------------------------------------------------------------
+
+test('the library default fan width is 3 for divergence modes', async () => {
+  const fanResults = [okResult(reading('A')), okResult(reading('B')), okResult(reading('C'))];
+  const { deps } = stubDeps({ fanResults, completeValue: CONVERGED });
+  const result = await runSpecMode('a request', { deps });
+  assert.equal(result.requested, 3, 'omitting n must request the documented default of 3');
+  assert.equal(result.used, 3);
+});
+
+test('the library default fan width is 3 for route mode', async () => {
+  const fanResults = [
+    { ok: true, value: 'PostgreSQL' },
+    { ok: true, value: 'Postgres' },
+    { ok: true, value: 'PG' },
+  ];
+  const { deps } = stubDeps({
+    fanResults,
+    completeValue: { equivalent: true, answer: 'PostgreSQL', variants: [] },
+  });
+  const result = await runRouteMode('Which database?', [], { deps });
+  assert.equal(result.requested, 3, 'omitting n must request the documented default of 3');
+  assert.equal(result.used, 3);
+});
+
 // ---------------------------------------------------------------------------
 // AC1 end-to-end — the CLI turns a refusal into exit 1, never `gate PASSES`
 // ---------------------------------------------------------------------------
@@ -370,12 +478,15 @@ test('AC5: edge mode --json and --questions-json carry requested and used', () =
     assert.equal(asJson.status, 0, asJson.stderr);
     const payload = JSON.parse(asJson.stdout);
     assert.equal(payload.mode, 'edge');
+    assert.deepEqual(payload.tickets, ['T1', 'T2'], 'both ticket ids identify the edge');
+    assert.equal(payload.gate, true, 'a converged edge passes the gate');
     assert.equal(payload.requested, 2);
     assert.equal(payload.used, 2);
 
     const asQuestions = runMocked([...base, '--questions-json'], mock, { cwd: dir });
     assert.equal(asQuestions.status, 0, asQuestions.stderr);
     const questions = JSON.parse(asQuestions.stdout);
+    assert.deepEqual(questions.tickets, ['T1', 'T2']);
     assert.equal(questions.requested, 2);
     assert.equal(questions.used, 2);
   } finally {
