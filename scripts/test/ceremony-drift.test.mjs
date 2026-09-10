@@ -924,3 +924,27 @@ test('refs whose characters a shell would act on stay rejected, even where git a
     assert.equal(isRenderableRef(unsafe), false, `must reject: ${JSON.stringify(unsafe)}`);
   }
 });
+
+test('a ref may start with any digit, not just a low one', () => {
+  // The first-character class is its own range; a narrowed one (0-1, say) would
+  // reject perfectly ordinary refs like a date-prefixed branch while every other
+  // case in this file still passed.
+  for (const digit of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) {
+    const ref = `${digit}024-hotfix`;
+    assert.equal(isRenderableRef(ref), true, `must accept a ref starting with ${digit}`);
+    assert.ok(reviewCommand(ref).includes(`--base-ref ${ref} --infer-scope`));
+  }
+});
+
+test('a ref may start with any letter, upper or lower', () => {
+  for (const ref of ['Alpha/main', 'zeta-branch', 'Q3-release']) {
+    assert.equal(isRenderableRef(ref), true, `must accept: ${ref}`);
+  }
+});
+
+test('a ref may NOT start with a separator or punctuation', () => {
+  // A leading hyphen would be read as a flag by the command it is pasted into.
+  for (const ref of ['-oProxyCommand=x', '.hidden', '/abs', '_lead', '@at', '=eq', ',comma', '+plus']) {
+    assert.equal(isRenderableRef(ref), false, `must reject leading punctuation: ${ref}`);
+  }
+});
