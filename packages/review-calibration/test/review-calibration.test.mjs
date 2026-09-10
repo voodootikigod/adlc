@@ -721,6 +721,37 @@ describe('E2E: a judge that rendered no verdict is reported as unbounded-unknown
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('a SINGLE verdict is still enough to demand the control', () => {
+    // The boundary that matters: one locating finding means the judge did
+    // render a verdict, so the figure depends on it and the control must run.
+    // A floor set one higher would let a single-finding run report itself
+    // unmeasured — the quietest possible version of the original bug.
+    const plantsDir = mkdtempSync(join(tmpdir(), 'rc-onehit-plants-'));
+    try {
+      const plantsPath = join(plantsDir, 'plants.json');
+      writeFileSync(plantsPath, JSON.stringify([
+        {
+          file: 'src/math.mjs', line: 6,
+          original: '  return n > 0;', mutated: '  return n >= 0;',
+          category: 'boundary', defect: 'inclusive bound admits zero',
+        },
+      ]));
+      // Reviewer emits exactly one finding, locating that one plant.
+      const result = runCli([
+        '--review-cmd', 'node -e "process.stdout.write(\'math.mjs:6 boundary is wrong\\n\')"',
+        '--commit', 'HEAD', '--plants-file', plantsPath,
+        '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
+      ], dir);
+      assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.caught, 1, 'exactly one verdict was rendered');
+      assert.equal(parsed.configuredJudgeBounded, false,
+        'one verdict is enough — the control must have run');
+    } finally {
+      rmSync(plantsDir, { recursive: true, force: true });
+    }
+  });
+
   it('locates nothing → configuredJudgeBounded is null, run still completes', () => {
     const result = runCli([
       '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',

@@ -87,3 +87,37 @@ export async function echoControl({ plants, judge, scorePlants }) {
 export function formatRecall(recall) {
   return recall.toFixed(3);
 }
+
+/**
+ * Decide whether the configured judge's echo-control result should stop the
+ * run, and with what message.
+ *
+ * Pure, and separate from the CLI, because the branch that matters most is the
+ * one an offline test can never reach through the bin: refusing to certify a
+ * recall figure measured with an LLM judge that cannot reject an echoing
+ * reviewer. Keeping the decision here means that refusal — and its wording —
+ * is verified rather than merely written.
+ *
+ * @param {object} args
+ * @param {string} args.scorerMode              'judge' | 'string'
+ * @param {boolean|null} args.bounded           control verdict; null = judge rendered no verdict
+ * @param {number|null} args.echoRecall
+ * @param {string|undefined} args.judgeProviderName
+ * @param {string} args.tier
+ * @returns {string|null}  the operator-facing failure message, or null to proceed
+ */
+export function judgeBoundFailure({ scorerMode, bounded, echoRecall, judgeProviderName, tier }) {
+  // `--scorer string` sets the judge to match everything by construction, so it
+  // can never satisfy this control. Failing there would delete a documented,
+  // deliberately-warned mode; the scorecard reports it uncertified instead.
+  if (scorerMode === 'string') return null;
+  // null = the judge was never consulted, so it contributed nothing to the
+  // figure and there is nothing to bound. Only an actual failure stops the run.
+  if (bounded !== false) return null;
+  return (
+    `judge self-test FAILED: the configured judge (${judgeProviderName ?? 'unknown provider'}, tier ${tier}) ` +
+    `scored the echo control ${formatRecall(echoRecall)} (must be ~0) — it cannot distinguish ` +
+    'a reviewer that only echoes changed lines from one that identifies defects. Refusing to certify a recall ' +
+    'number measured with it.'
+  );
+}

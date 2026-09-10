@@ -24,7 +24,7 @@ import {
   resolveEffectiveProvider,
 } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
-import { echoControl, formatRecall, oracleReviewer } from '../lib/controls.mjs';
+import { echoControl, formatRecall, judgeBoundFailure, oracleReviewer } from '../lib/controls.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
@@ -350,14 +350,14 @@ const configuredJudgeControl = judgeVerdicts > 0
   ? await echoControl({ plants: validPlants, judge, scorePlants })
   : { echoRecall: null, bounded: null };
 
-if (scorerMode !== 'string' && configuredJudgeControl.bounded === false) {
-  opError(
-    `judge self-test FAILED: the configured judge (${judgeProviderName ?? 'unknown provider'}, tier ${tier}) ` +
-    `scored the echo control ${formatRecall(configuredJudgeControl.echoRecall)} (must be ~0) — it cannot distinguish ` +
-    'a reviewer that only echoes changed lines from one that identifies defects. Refusing to certify a recall ' +
-    'number measured with it.'
-  );
-}
+const judgeBoundError = judgeBoundFailure({
+  scorerMode,
+  bounded: configuredJudgeControl.bounded,
+  echoRecall: configuredJudgeControl.echoRecall,
+  judgeProviderName,
+  tier,
+});
+if (judgeBoundError) opError(judgeBoundError);
 
 const scorecard = {
   ...score,

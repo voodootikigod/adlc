@@ -24,7 +24,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildJudgePrompt, JUDGE_SYSTEM, referenceJudge } from '../lib/judge.mjs';
-import { echoControl, echoReviewer, formatRecall } from '../lib/controls.mjs';
+import { echoControl, echoReviewer, formatRecall, judgeBoundFailure } from '../lib/controls.mjs';
 import { scorePlants } from '../lib/scorer.mjs';
 import { printScorecard } from '../lib/report.mjs';
 
@@ -219,6 +219,42 @@ describe('formatRecall renders control recalls for operators (#753)', () => {
     assert.equal(formatRecall(0.004), '0.004');
     assert.equal(formatRecall(1), '1.000');
     assert.equal(formatRecall(0), '0.000');
+  });
+});
+
+describe('judgeBoundFailure decides whether an unbounded judge stops the run (#753)', () => {
+  const args = { echoRecall: 1, judgeProviderName: 'anthropic', tier: 'cheap' };
+
+  it('refuses to certify when the configured LLM judge is unbounded', () => {
+    const msg = judgeBoundFailure({ ...args, scorerMode: 'judge', bounded: false });
+    assert.ok(msg, 'an unbounded judge in judge mode must stop the run');
+    assert.match(msg, /judge self-test FAILED/);
+    assert.match(msg, /anthropic, tier cheap/, 'must name the judge that failed');
+    assert.match(msg, /1\.000/, 'must report the offending recall');
+    assert.match(msg, /must be ~0/, 'must state the bound');
+    assert.match(msg, /Refusing to certify/);
+  });
+
+  it('proceeds when the configured judge passed the control', () => {
+    assert.equal(judgeBoundFailure({ ...args, scorerMode: 'judge', bounded: true, echoRecall: 0 }), null);
+  });
+
+  it('proceeds when the judge rendered no verdict', () => {
+    assert.equal(
+      judgeBoundFailure({ ...args, scorerMode: 'judge', bounded: null, echoRecall: null }), null,
+      'a judge that was never consulted contributed nothing to bound'
+    );
+  });
+
+  it('never stops a --scorer string run, whose judge cannot be bounded by design', () => {
+    assert.equal(judgeBoundFailure({ ...args, scorerMode: 'string', bounded: false }), null);
+  });
+
+  it('falls back to a placeholder when the provider is unknown', () => {
+    const msg = judgeBoundFailure({
+      ...args, scorerMode: 'judge', bounded: false, judgeProviderName: undefined,
+    });
+    assert.match(msg, /unknown provider/);
   });
 });
 
