@@ -814,3 +814,27 @@ test('BASE_REF retargets the drift base ref, and unset falls back to trunk', () 
   assert.equal(resolveDriftBaseRef({ BASE_REF: '' }), 'origin/main', 'empty is not a ref');
   assert.equal(resolveDriftBaseRef({ BASE_REF: 'release/1.11' }), 'release/1.11', 'a set BASE_REF wins');
 });
+
+// ── the advertised review command must reproduce what the report claims ──────
+// main() computes the drift set with the scope-existence inference ON, which is
+// off by default (#779). If the command the issue advertises omits the flag, an
+// operator running it gets a SMALLER set than the issue lists — a ticket named in
+// the report simply would not appear, and the drift would look already resolved.
+
+test('the advertised review command carries --infer-scope, matching how the set was computed', () => {
+  const body = renderIssueBody(DRIFT, { activeTicketId: null });
+  const reviewLine = body.split('\n').find((line) => line.includes('ticket-prune') && line.includes('--base-ref'));
+  assert.ok(reviewLine, 'the body must advertise a read-only review command');
+  assert.match(reviewLine, /--infer-scope/);
+});
+
+test('the truncation notice advertises the same flag as the review command', () => {
+  // A drift set large enough to clamp still has to hand back a reproducible command.
+  const huge = Array.from({ length: 4000 }, (_, i) => ({
+    id: `T${i}`, reason: 'inferred: scope resolves', rails: ['a/**'], blocker: 'rails-freeze',
+  }));
+  const body = renderIssueBody(huge, { activeTicketId: null });
+  assert.ok(body.includes('truncated'), 'this fixture must actually trip the clamp');
+  const notice = body.slice(body.indexOf('truncated'));
+  assert.match(notice, /ticket-prune --base-ref origin\/main --infer-scope/);
+});

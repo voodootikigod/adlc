@@ -44,7 +44,15 @@ export const MARKER = '<!-- adlc:ceremony-drift -->';
 export const LABEL = 'ceremony-drift';
 
 // The read-only review command. Always safe to run; it only prints the drift set.
-const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main        # dry run: review the set';
+//
+// --infer-scope is REQUIRED here and must stay in lockstep with main()'s
+// runTicketPrune call. This reporter computes its set with the scope-existence
+// inference ON; that inference is off by default (#779). Advertising the command
+// without the flag would hand an operator a SMALLER set than the issue lists —
+// a ticket named in the report would simply not appear, and the drift would look
+// already resolved. renderIssueBody is asserted to carry the flag so the two
+// cannot drift apart again.
+const DRY_RUN_CMD = 'adlc ticket-prune --base-ref origin/main --infer-scope        # dry run: review the set';
 
 // The completion command is PER-TICKET and canonical, not a bulk sweep.
 //
@@ -418,7 +426,7 @@ function clampBody(body) {
   if (body.length <= MAX_BODY) return body;
   const notice =
     '\n\n---\n\n> ⚠ This issue was truncated: the full drift set exceeds GitHub\'s ' +
-    'issue-body size limit. Run `adlc ticket-prune --base-ref origin/main` locally ' +
+    'issue-body size limit. Run `adlc ticket-prune --base-ref origin/main --infer-scope` locally ' +
     'to see every entry.';
   const budget = MAX_BODY - notice.length;
   const cut = body.lastIndexOf('\n', budget);

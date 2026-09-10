@@ -138,8 +138,9 @@ matching, and is exactly the check the issue's worked example did by hand.
 # Report stale tickets on the currently checked-out ref (dry-run, default)
 ticket-prune
 
-# Audit tickets against main from a feature branch
-ticket-prune --base-ref origin/main --json
+# Audit tickets against main from a feature branch. --infer-scope is what makes
+# this an audit: without it only tickets carrying an explicit done-status are stale.
+ticket-prune --base-ref origin/main --infer-scope --json
 
 # Tombstone the rails-less stale tickets found above (completed:true in place)
 ticket-prune --write
