@@ -52,8 +52,33 @@ export const LABEL = 'ceremony-drift';
 // a ticket named in the report would simply not appear, and the drift would look
 // already resolved. renderIssueBody is asserted to carry the flag so the two
 // cannot drift apart again.
+// The base ref arrives from the ENVIRONMENT (BASE_REF) and lands in a command
+// published for an operator to copy into a shell, so it is held to the same rule
+// the ticket ids already follow: a value becomes EXECUTABLE text only if it
+// matches a positive allow-list, and anything else is still surfaced — just never
+// as something a shell would run. An allow-list, not a denylist: these are the
+// characters a git ref legitimately uses, and nothing on that list has meaning to
+// a shell, so there is no escaping to get subtly wrong.
+const MAX_BASE_REF = 256;
+const SAFE_BASE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+export const isRenderableRef = (ref) =>
+  typeof ref === 'string' && ref.length <= MAX_BASE_REF && SAFE_BASE_REF.test(ref);
+
+// Shown in place of a ref that cannot be rendered as executable text. Deliberately
+// a placeholder rather than a silent fallback to trunk: substituting a DIFFERENT
+// ref would advertise a command that computes a different set than the report,
+// which is the defect this command was fixed for in the first place.
+//
+// The placeholder itself is drawn from the same allow-list it enforces. An
+// angle-bracketed <base-ref> would have been the obvious spelling and is exactly
+// wrong here: pasted into a shell those are redirections, so the "safe" fallback
+// could truncate a file named base-ref. A refusal marker that is itself shell
+// syntax is not a refusal.
+const UNRENDERABLE_REF = 'UNRENDERABLE-BASE-REF';
+const commandRef = (baseRef) => (isRenderableRef(baseRef) ? baseRef : UNRENDERABLE_REF);
+
 export function reviewCommand(baseRef = resolveDriftBaseRef()) {
-  return `adlc ticket-prune --base-ref ${baseRef} --infer-scope        # dry run: review the set`;
+  return `adlc ticket-prune --base-ref ${commandRef(baseRef)} --infer-scope        # dry run: review the set`;
 }
 
 // The completion command is PER-TICKET and canonical, not a bulk sweep.
@@ -428,7 +453,7 @@ function clampBody(body, baseRef = resolveDriftBaseRef()) {
   if (body.length <= MAX_BODY) return body;
   const notice =
     '\n\n---\n\n> ⚠ This issue was truncated: the full drift set exceeds GitHub\'s ' +
-    `issue-body size limit. Run \`adlc ticket-prune --base-ref ${baseRef} --infer-scope\` locally ` +
+    `issue-body size limit. Run \`adlc ticket-prune --base-ref ${commandRef(baseRef)} --infer-scope\` locally ` +
     'to see every entry.';
   const budget = MAX_BODY - notice.length;
   const cut = body.lastIndexOf('\n', budget);

