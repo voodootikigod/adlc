@@ -197,10 +197,24 @@ test('the default fan width (no --n) is still accepted', () => {
   assert.equal(r.status, 0, r.stderr);
 });
 
+// The usage block is what an operator sees on a bare invocation, so the
+// numbers and placeholders in it are part of the CLI contract, not decoration:
+// a help text claiming "minimum 3" or "--n >=int>" misdescribes the tool that
+// ships. Assert the flag lines this change touched, exactly as printed.
+test('usage text documents the --n floor with its default and minimum', () => {
+  const r = run([]);
+  assert.match(r.stderr, /--n <int>\s+fan width \(default 3, minimum 2\)/);
+});
+
+test('usage text documents --threshold with its range and default', () => {
+  const r = run([]);
+  assert.match(r.stderr, /--threshold <0-1>\s+ambiguity gate threshold \(default 0\.25\)/);
+});
+
 test('usage text documents --allow-partial-fan and --ticket', () => {
   const r = run([]);
-  assert.match(r.stderr, /--allow-partial-fan/);
-  assert.match(r.stderr, /--ticket <id>/);
+  assert.match(r.stderr, /--allow-partial-fan accept a verdict computed from fewer readings than --n/);
+  assert.match(r.stderr, /--ticket <id>\s+ticket this run is evidence for/);
 });
 
 test('invalid --threshold → exit 1', () => {
