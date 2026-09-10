@@ -206,7 +206,8 @@ export async function registerProsecuteTool(pi, deps = {}, { loadTypebox: load =
     description:
       'Run the deterministic ADLC P5 prosecution loop over the ticket diff: fan out ' +
       'fresh-context lens children, dedupe, verify survivors, loop until dry, and record ' +
-      'confirmed findings. Returns a structured verdict (CLEAN or FINDINGS).',
+      'confirmed findings. Returns a structured verdict: CLEAN, FINDINGS, or INCONCLUSIVE ' +
+      '(one or more lenses degraded, so no verdict was reached — not a pass).',
     promptSnippet: 'adlc_prosecute — run the P5 prosecution loop and return a ship/no-ship verdict.',
     promptGuidelines: [
       'Use adlc_prosecute to prosecute a change before claiming a ticket done (P5). Do not ' +

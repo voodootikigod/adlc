@@ -188,7 +188,9 @@ test('AC3: a hung lens runner is timed out, marked degraded, and does NOT fail t
       record: () => {},
     });
 
-    assert.equal(summary.verdict, 'CLEAN');
+    // A degraded lens produced no result, so the run reached no verdict on the
+    // change — INCONCLUSIVE, not CLEAN (#841). The loop still converged.
+    assert.equal(summary.verdict, 'INCONCLUSIVE');
     assert.ok(summary.degradedLenses.length >= 1, 'the hung lens is reported as degraded');
     assert.ok(
       summary.degradedLenses.some((d) => d.lens === 'correctness' && /timed out/i.test(d.reason)),

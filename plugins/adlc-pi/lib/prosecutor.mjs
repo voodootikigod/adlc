@@ -218,7 +218,8 @@ function withDeadline(promise, timeout, controller) {
  * @param {(finding: object, dir?: string) => any} [args.record]  recorder (default recordFinding)
  * @param {(msg: string) => void} [args.onProgress]  optional progress callback
  * @returns {Promise<{rounds:number, findings:object[], dryPasses:number,
- *   verdict:'CLEAN'|'FINDINGS', degradedLenses:object[], models:string[]}>}
+ *   verdict:'CLEAN'|'FINDINGS'|'INCONCLUSIVE', degradedLenses:object[],
+ *   models:string[]}>}
  */
 export async function prosecute({ diff, ticket = null, runLens, options = {}, recordDir = '.adlc', record = recordFinding, onProgress } = {}) {
   if (typeof runLens !== 'function') throw new Error('prosecute: runLens must be a function');
@@ -319,10 +320,27 @@ export async function prosecute({ diff, ticket = null, runLens, options = {}, re
     rounds: round,
     findings: confirmed,
     dryPasses,
-    verdict: confirmed.length ? 'FINDINGS' : 'CLEAN',
+    verdict: computeVerdict({ confirmed, degradedLenses }),
     degradedLenses,
     models: [...models],
   };
+}
+
+/**
+ * The loop's verdict. Confirmed findings decide first — a real finding is real
+ * whether or not a sibling lens fell over. Otherwise the absence of findings
+ * only means CLEAN if every lens actually ran: a degraded lens produced no
+ * result, and "no result" is not "no findings". Without this a prosecution in
+ * which every lens failed (missing binary, absent credentials, per-lens
+ * deadline) reported CLEAN — a ship verdict from a review that never happened.
+ *
+ * @param {{confirmed: object[], degradedLenses: object[]}} state
+ * @returns {'FINDINGS'|'INCONCLUSIVE'|'CLEAN'}
+ */
+export function computeVerdict({ confirmed = [], degradedLenses = [] } = {}) {
+  if (confirmed.length > 0) return 'FINDINGS';
+  if (degradedLenses.length > 0) return 'INCONCLUSIVE';
+  return 'CLEAN';
 }
 
 /** Human-readable one-block summary for the tool result text. */
@@ -335,7 +353,15 @@ export function renderSummary(summary) {
     lines.push(`Degraded lenses (not counted as clean): ${summary.degradedLenses.map((d) => `${d.lens}@r${d.round}`).join(', ')}`);
   }
   if (summary.findings.length === 0) {
-    lines.push('No confirmed findings survived verification.');
+    // An INCONCLUSIVE run has no findings because no lens result was obtained,
+    // not because the change is clean. Saying only "no confirmed findings" here
+    // is what made the block read as a pass while the degraded line said the
+    // opposite two lines above.
+    lines.push(
+      summary.verdict === 'INCONCLUSIVE'
+        ? 'No lens result was obtained — this prosecution reached no verdict on the change.'
+        : 'No confirmed findings survived verification.'
+    );
   } else {
     lines.push(`${summary.findings.length} confirmed finding${summary.findings.length === 1 ? '' : 's'}:`);
     for (const f of summary.findings) {

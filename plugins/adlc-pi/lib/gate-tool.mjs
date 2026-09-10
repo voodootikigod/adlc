@@ -5,8 +5,10 @@
 // (./gate-policy.mjs) BEFORE running, then dispatches `adlc <gate> [argv…]
 // --json` via pi.exec with a timeout and renders the result: exit 0 = pass,
 // exit 2 = gate-fail (isError FALSE — a failing gate is a RESULT, not a tool
-// error), an exec/timeout failure throws (a real tool error). Every run records
-// an 'adlc-gate-run' evidence entry.
+// error), an exec/timeout failure throws (a real tool error). A timeout reaches
+// us as a RESOLVED result (`{ code: 0, killed: true }`), not a rejection, so
+// execFailureReason below is what makes that promise true. Every run that
+// produced a verdict records an 'adlc-gate-run' evidence entry.
 //
 // TypeBox (a pi-runtime-only peer) builds the parameter schema via the shared
 // loader in ./prosecute-tool.mjs; registration is async and swallowed under a
@@ -46,6 +48,28 @@ export function tokenizeArgs(args) {
     out.push(match[1] ?? match[2] ?? match[3]);
   }
   return out;
+}
+
+/**
+ * Why an exec result cannot be trusted as a verdict, or null when it can.
+ *
+ * pi's execCommand never rejects and never reports a non-zero code for a killed
+ * child: on timeout it SIGTERMs, the child's exit code is null (a signal death
+ * has none), and the result is normalized as `{ code: code ?? 0, killed: true }`.
+ * So `code === 0` alone cannot distinguish "the gate passed" from "the gate was
+ * killed before it produced anything" — `killed` is the only signal that can.
+ *
+ * This is the SINGLE place that condition is spelled; every exec call site that
+ * derives a verdict from an exec result imports this rather than re-testing the
+ * fields, so the two cannot drift apart.
+ *
+ * @param {{code?: unknown, killed?: unknown}|null|undefined} res
+ * @returns {string|null} a human-readable reason, or null when the result is usable
+ */
+export function execFailureReason(res) {
+  if (res?.killed === true) return 'killed before it produced an exit code (timeout or signal)';
+  if (typeof res?.code !== 'number') return 'process reported no exit code';
+  return null;
 }
 
 /** Parse stdout as JSON; return null (not throw) when it is not JSON. */
@@ -131,7 +155,18 @@ export function makeGateExecute({ pi, getActive, getCwd, exec, note, timeoutMs =
       throw new Error(`adlc_gate(${gate}) failed to execute: ${err.message}`);
     }
 
-    const code = typeof res?.code === 'number' ? res.code : 1;
+    // A killed or codeless exec produced NO verdict, so it is a tool error for
+    // the same reason a throw from run() is — and it must be raised BEFORE
+    // record(), matching the file's existing precedent that only a decided
+    // outcome (a policy deny, a real exit code) leaves an evidence entry. A
+    // code-0 'adlc-gate-run' entry for a hang would be read downstream as a
+    // state-resolving gate pass.
+    const failure = execFailureReason(res);
+    if (failure !== null) {
+      throw new Error(`adlc_gate(${gate}) failed to execute: ${failure}`);
+    }
+
+    const code = res.code;
     const parsed = tryParseJson(res?.stdout);
     record({ gate, code });
 

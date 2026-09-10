@@ -54,7 +54,12 @@ than in a version range.
 - **Ticket doctrine injection** — the active ticket's scope, rails, and spec are appended
   to the system prompt each turn (the body fenced as untrusted).
 - **Native tools** — `adlc_prosecute` runs the deterministic P5 review loop in-session;
-  `adlc_gate` runs the LLM-backed gates keyless through your session model.
+  `adlc_gate` runs the LLM-backed gates keyless through your session model. Both fail
+  closed rather than reporting a result they did not obtain: a gate whose process was
+  killed (its 120s timeout, or any signal) or that reported no exit code is a **tool
+  error**, never a `PASS`, and records no gate-run evidence; and a prosecution in which
+  one or more lenses degraded returns the verdict **`INCONCLUSIVE`**, never `CLEAN` —
+  no lens result was obtained, which is not the same as no findings.
 - **Commands + footer pill** — `/ticket`, `/adlc-init`, `/adlc-accept`, and a live
   widget (ticket, context %, degraded flag, plus hints) in the footer pill.
 - **Completion hints** — when a session ends with a claimed-done ticket but

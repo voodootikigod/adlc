@@ -21,6 +21,7 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { ticketHash, writeActiveTicket } from '@adlc/tickets';
 import { recordGateEvent } from './evidence.mjs';
+import { execFailureReason } from './gate-tool.mjs';
 import { buildRollbackCandidates } from './rollback.mjs';
 
 // Parse a CLI's `--json` stdout into an object, or null when it is not JSON.
@@ -507,11 +508,18 @@ export function registerCommands(pi, { env = process.env, reload, getActive, get
         return;
       }
       const parsed = parseJsonStdout(res?.stdout);
-      const ok = parsed ? parsed.ok === true : res?.code === 0;
+      // A killed/codeless exec produced no verdict at all, so it can never be an
+      // acceptance — the same fail-closed condition adlc_gate uses, spelled once
+      // in gate-tool.mjs. Without this a SIGTERMed `adlc accept` with no JSON on
+      // stdout resolves as `{ code: 0 }` and records a P6 acceptance.
+      const execFailure = execFailureReason(res);
+      const ok = execFailure === null && (parsed ? parsed.ok === true : res.code === 0);
       if (!ok) {
-        const why = parsed && Array.isArray(parsed.errors) && parsed.errors.length
-          ? parsed.errors.join('; ')
-          : `exit ${res?.code ?? '?'}${res?.stderr ? `: ${res.stderr}` : ''}`;
+        const why = execFailure !== null
+          ? execFailure
+          : (parsed && Array.isArray(parsed.errors) && parsed.errors.length
+            ? parsed.errors.join('; ')
+            : `exit ${res?.code ?? '?'}${res?.stderr ? `: ${res.stderr}` : ''}`);
         ctx.ui.notify(`ADLC: acceptance gate FAILED for ${ticketId}: ${why}. Not recorded.`, 'error');
         return;
       }
