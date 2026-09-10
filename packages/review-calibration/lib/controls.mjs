@@ -75,3 +75,15 @@ export async function echoControl({ plants, judge, scorePlants }) {
   const { recall } = await scorePlants(plants, echoReviewer(plants), { judge });
   return { echoRecall: recall, bounded: recall <= ECHO_BOUND };
 }
+
+/**
+ * Render a control recall for an operator-facing message. Three decimals is
+ * one more than the bound's leading zeros, so a number that failed the check
+ * always prints as visibly non-zero rather than rounding to "0.00".
+ *
+ * @param {number} recall
+ * @returns {string}
+ */
+export function formatRecall(recall) {
+  return recall.toFixed(3);
+}

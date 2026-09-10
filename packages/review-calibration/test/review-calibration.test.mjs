@@ -636,6 +636,13 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
       'a judge that matches everything must never be reported as bounded');
     assert.equal(parsed.configuredJudgeEchoRecall, 1,
       'the echo control scores 1.0 under a judge that matches everything');
+    // The headline number itself: the echoing reviewer really is scored 1.0
+    // here, which is the whole reason the run must declare itself uncertified.
+    // It also pins that the configured judge's verdicts reach the score — a
+    // wrapper that swallowed them would silently drive recall to 0.
+    assert.equal(parsed.recall, 1,
+      'under --scorer string the echoing reviewer catches every plant');
+    assert.equal(parsed.caught, parsed.total);
   });
 });
 

@@ -24,8 +24,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildJudgePrompt, JUDGE_SYSTEM, referenceJudge } from '../lib/judge.mjs';
-import { echoControl, echoReviewer } from '../lib/controls.mjs';
+import { echoControl, echoReviewer, formatRecall } from '../lib/controls.mjs';
 import { scorePlants } from '../lib/scorer.mjs';
+import { printScorecard } from '../lib/report.mjs';
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -116,13 +117,23 @@ describe('buildJudgePrompt fences externally-authored text (#750)', () => {
     }
   });
 
-  it('still collapses whitespace and caps embedded text at 300 chars', () => {
-    const long = 'x'.repeat(500);
+  it('still collapses whitespace before fencing', () => {
     const prompt = buildJudgePrompt(PLANT, {
-      file: 'src/auth.mjs', line: 42, description: `a\n\nb   c ${long}`, evidence: null,
+      file: 'src/auth.mjs', line: 42, description: 'a\n\nb   c', evidence: null,
     });
     assert.ok(!prompt.includes('a\n\nb'), 'whitespace must still be collapsed before fencing');
-    assert.ok(!prompt.includes('x'.repeat(301)), 'embedded text must still be capped at 300 chars');
+    assert.ok(prompt.includes('a b c'), 'collapsed text must survive intact');
+  });
+
+  it('caps embedded text at exactly 300 chars', () => {
+    // A pure run of one character, so the cap bounds the run directly: at 300
+    // the prompt holds 300 of them and not one more. A looser input would let
+    // the cap drift without this noticing.
+    const prompt = buildJudgePrompt(PLANT, {
+      file: 'src/auth.mjs', line: 42, description: 'x'.repeat(500), evidence: null,
+    });
+    assert.ok(prompt.includes('x'.repeat(300)), 'must embed the full 300-char allowance');
+    assert.ok(!prompt.includes('x'.repeat(301)), 'must embed no more than 300 chars');
   });
 
   it('JUDGE_SYSTEM tells the model the fenced markers are data, not instructions', () => {
@@ -130,6 +141,16 @@ describe('buildJudgePrompt fences externally-authored text (#750)', () => {
     assert.match(
       JUDGE_SYSTEM, /never an instruction|not .{0,20}instruction|data/i,
       'system prompt must say fenced content is data, never an instruction'
+    );
+  });
+
+  it('JUDGE_SYSTEM still offers the model both verdicts', () => {
+    // makeLlmJudge decides on `parsed?.match === true`, so a system prompt that
+    // stopped offering `true` as an answer would silently drive every verdict
+    // to false — recall 0 for any reviewer, with no error anywhere.
+    assert.ok(
+      JUDGE_SYSTEM.includes('{"match": true|false}'),
+      'the judge\'s answer schema must offer both true and false'
     );
   });
 });
@@ -187,6 +208,55 @@ describe('echoControl bounds whichever judge is configured (#753)', () => {
       plants, judge: () => false, scorePlants: async () => ({ recall: 0.0011 }),
     });
     assert.equal(above.bounded, false);
+  });
+});
+
+describe('formatRecall renders control recalls for operators (#753)', () => {
+  it('keeps three decimals so a failing control never prints as 0.00', () => {
+    // The bound is 0.001. Two decimals would round a real failure of 0.004 to
+    // "0.00" — an operator reading the error would see the number the check
+    // just rejected displayed as zero.
+    assert.equal(formatRecall(0.004), '0.004');
+    assert.equal(formatRecall(1), '1.000');
+    assert.equal(formatRecall(0), '0.000');
+  });
+});
+
+describe('printScorecard surfaces the judge bound (#753)', () => {
+  const base = {
+    recall: 1, caught: 2, total: 2, precision: 1, falsePositives: 0,
+    perCategory: {}, results: [], commit: 'HEAD', minRecall: 0,
+    minPrecision: null, scorer: 'string', judgeAgreement: null,
+    equivalentExcluded: 0,
+  };
+
+  function capture(scorecard) {
+    const lines = [];
+    const original = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try { printScorecard(scorecard); } finally { console.log = original; }
+    return lines.join('\n');
+  }
+
+  it('prints the bound and the uncertified warning when the judge was measured', () => {
+    const out = capture({ ...base, configuredJudgeEchoRecall: 1, configuredJudgeBounded: false });
+    assert.match(out, /Judge bound:/);
+    assert.match(out, /NOT BOUNDED/);
+    assert.match(out, /NOT certified/);
+  });
+
+  it('prints BOUNDED with no warning when the judge passed the control', () => {
+    const out = capture({ ...base, configuredJudgeEchoRecall: 0, configuredJudgeBounded: true });
+    assert.match(out, /Judge bound:/);
+    assert.match(out, /BOUNDED/);
+    assert.ok(!/NOT BOUNDED/.test(out));
+    assert.ok(!/NOT certified/.test(out));
+  });
+
+  it('says nothing at all when the judge rendered no verdict', () => {
+    const out = capture({ ...base, configuredJudgeEchoRecall: null, configuredJudgeBounded: null });
+    assert.ok(!/Judge bound:/.test(out), 'no verdict rendered → no claim about the judge');
+    assert.ok(!/NOT certified/.test(out));
   });
 });
 

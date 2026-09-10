@@ -24,7 +24,7 @@ import {
   resolveEffectiveProvider,
 } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
-import { echoControl, oracleReviewer } from '../lib/controls.mjs';
+import { echoControl, formatRecall, oracleReviewer } from '../lib/controls.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ const equivalentExcluded = equivalent.length;
 const echoScore = await echoControl({ plants: validPlants, judge: referenceJudge, scorePlants });
 const oracleScore = await scorePlants(validPlants, oracleReviewer(validPlants), { judge: referenceJudge });
 if (!echoScore.bounded) {
-  opError(`scorer self-test FAILED: echo control scored recall ${echoScore.echoRecall.toFixed(3)} (must be ~0) — the scorer has a non-semantic shortcut`);
+  opError(`scorer self-test FAILED: echo control scored recall ${formatRecall(echoScore.echoRecall)} (must be ~0) — the scorer has a non-semantic shortcut`);
 }
 if (oracleScore.recall < 0.999) {
   opError(`scorer self-test FAILED: oracle control scored recall ${oracleScore.recall.toFixed(3)} (must be 1.0) — the scorer has false negatives`);
@@ -353,7 +353,7 @@ const configuredJudgeControl = judgeVerdicts > 0
 if (scorerMode !== 'string' && configuredJudgeControl.bounded === false) {
   opError(
     `judge self-test FAILED: the configured judge (${judgeProviderName ?? 'unknown provider'}, tier ${tier}) ` +
-    `scored the echo control ${configuredJudgeControl.echoRecall.toFixed(3)} (must be ~0) — it cannot distinguish ` +
+    `scored the echo control ${formatRecall(configuredJudgeControl.echoRecall)} (must be ~0) — it cannot distinguish ` +
     'a reviewer that only echoes changed lines from one that identifies defects. Refusing to certify a recall ' +
     'number measured with it.'
   );
