@@ -890,9 +890,16 @@ test('an over-long ref is rejected rather than rendered', () => {
 });
 
 test('ordinary refs still render, so the guard has not disabled the feature', () => {
-  for (const ok of ['main', 'origin/main', 'release/1.11', 'v1.2.3-rc.1', 'feat/some_branch']) {
+  // Includes the characters git allows that carry no shell meaning in an argument
+  // position — rejecting a ref that is both valid and safe would publish an
+  // unreproducible command for nothing.
+  for (const ok of ['main', 'origin/main', 'release/1.11', 'v1.2.3-rc.1', 'feat/some_branch',
+                    'feature@alice', 'v1.0+build', 'a=b', 'a,b']) {
     assert.equal(isRenderableRef(ok), true, `must accept: ${ok}`);
-    assert.match(reviewCommand(ok), new RegExp(`--base-ref ${ok.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&')} --infer-scope`));
+    assert.ok(
+      reviewCommand(ok).includes(`--base-ref ${ok} --infer-scope`),
+      `the ref must render verbatim: ${ok} -> ${reviewCommand(ok)}`,
+    );
   }
 });
 
@@ -907,4 +914,13 @@ test('a hostile ref is not silently replaced by a different real ref', () => {
   const cmd = reviewCommand('main; rm -rf /');
   assert.match(cmd, /--base-ref UNRENDERABLE-BASE-REF/);
   assert.ok(!/--base-ref origin\/main/.test(cmd));
+});
+
+test('refs whose characters a shell would act on stay rejected, even where git allows them', () => {
+  // ~ and ^ are expansions/history, : and ! likewise in an interactive shell, and
+  // whitespace splits the argument. Legal in some git contexts, still not safe to
+  // publish as copy-paste text.
+  for (const unsafe of ['main~1', 'main^2', 'main:x', 'a!b', 'a b', 'a\tb']) {
+    assert.equal(isRenderableRef(unsafe), false, `must reject: ${JSON.stringify(unsafe)}`);
+  }
 });

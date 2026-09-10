@@ -60,7 +60,12 @@ export const LABEL = 'ceremony-drift';
 // characters a git ref legitimately uses, and nothing on that list has meaning to
 // a shell, so there is no escaping to get subtly wrong.
 const MAX_BASE_REF = 256;
-const SAFE_BASE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+// Git also permits @ + = and , in a ref name, and none of them means anything to
+// a shell in an argument position, so they are on the list: rejecting a ref that
+// is both valid and safe would publish an unreproducible command for no gain.
+// Deliberately absent, though legal in some refs: ~ ^ : ! and whitespace, each of
+// which a shell (or an interactive one) does act on.
+const SAFE_BASE_REF = /^[A-Za-z0-9][A-Za-z0-9._/@+=,-]*$/;
 export const isRenderableRef = (ref) =>
   typeof ref === 'string' && ref.length <= MAX_BASE_REF && SAFE_BASE_REF.test(ref);
 
