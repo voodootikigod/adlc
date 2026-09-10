@@ -646,6 +646,62 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
   });
 });
 
+// ── the scorer self-test is not decorative: it can and does fire ─────────────
+// referenceJudge accepts a finding whose description contains a content token
+// from the defect text. The echo reviewer's description is "<basename>:<line>
+// changed", so a plant whose defect wording repeats its own filename makes the
+// echoer look like it identified something — the exact non-semantic shortcut
+// the control exists to catch. Before this test the failure branch had no
+// coverage at all, so its wording and its threshold were unverified.
+
+describe('E2E: the scorer control self-test fails closed when the echoer scores', () => {
+  let dir;
+  let plantsDir;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'rc-selftest-'));
+    createRepo(dir);
+    // The plants file lives OUTSIDE the repo: the tool refuses to run on a
+    // dirty tree, and an untracked file in the repo is exactly that.
+    plantsDir = mkdtempSync(join(tmpdir(), 'rc-selftest-plants-'));
+  });
+
+  after(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(plantsDir, { recursive: true, force: true });
+  });
+
+  it('exits 1 and names the echo control when the echoer scores above the bound', () => {
+    const plantsPath = join(plantsDir, 'plants.json');
+    writeFileSync(plantsPath, JSON.stringify([
+      {
+        file: 'src/math.mjs',
+        line: 6,
+        original: '  return n > 0;',
+        mutated: '  return n >= 0;',
+        category: 'boundary',
+        // "math" is a token of this plant's own filename, so the echoer's
+        // content-free "math.mjs:6 changed" reads as identifying it.
+        defect: 'math boundary off by one',
+      },
+    ]));
+
+    const result = runCli([
+      '--review-cmd', 'node -e "process.stdout.write(\'LGTM\\n\')"',
+      '--commit', 'HEAD', '--plants-file', plantsPath,
+      '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
+    ], dir);
+
+    assert.equal(result.status, 1, `expected operational exit 1, got ${result.status}: ${result.stderr}`);
+    assert.match(result.stderr, /scorer self-test FAILED/);
+    assert.match(result.stderr, /echo control scored recall 1\.000/,
+      'the message must report the offending recall to three decimals');
+    assert.match(result.stderr, /must be ~0/,
+      'the message must state the bound the control enforces');
+    assert.match(result.stderr, /non-semantic shortcut/);
+  });
+});
+
 // ── #753: the judge control only bounds a judge that actually judged ──────────
 // A reviewer whose output locates no plant never reaches the judge, so the
 // judge contributed nothing to the recall number and there is nothing for the
