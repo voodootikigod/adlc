@@ -31,9 +31,21 @@ adlc ticket store status --json   # backend: directory, pendingTransactions: []
 gh auth status
 ```
 
-**Rail-freeze pre-check — do this before choosing anything.** The required `rails-guard`
-CI job fails on EVERY PR whenever the base `.adlc/config.json` lacks the config-integrity
-fields; a PR cannot self-acknowledge. Reproduce it in a scratch worktree:
+**Rail-freeze pre-check — do this before choosing anything.** As of 2026-09-10 the
+ceremony below HAS ALREADY MERGED: `origin/main`'s `.adlc/config.json` carries
+`"version": 1, "securityMode": "unsigned-fallback", "acknowledgedNewRailBypass": true`,
+and four consecutive lane PRs passed `rails-guard` clean. So the expected state is
+PASSING, and a `rails-guard` failure is a REAL problem to diagnose, not the known
+blocker — do not tell lanes to expect it. Confirm in one command rather than running
+the probe:
+
+```bash
+git show refs/remotes/origin/main:.adlc/config.json | head -5   # expect acknowledgedNewRailBypass: true
+```
+
+If that field is ever absent again (a fresh repo, or a reverted config), the required
+`rails-guard` CI job fails on EVERY PR and a PR cannot self-acknowledge. Reproduce it in
+a scratch worktree:
 
 ```bash
 SP=<scratchpad>; git worktree add --detach $SP/probe refs/remotes/origin/main
@@ -201,16 +213,32 @@ codex is the fallback.** The model is also pinned globally in
 `--provider agy` picks it up; `agy models` lists the ids. Attest an agy review with
 `--provider gemini` (family token) — distinct from the `anthropic` author.
 
-## 4b. The cross-model attestation (key-holder step — expect it)
+## 4b. The cross-model attestation (key-holder step — for SOME lanes, not all)
 
-`packages/prosecute/lib/tier.mjs` tiers a change on any ticket's rails deny-path — including
-COMPLETED tickets (issue #905; rail-freeze skips them, tier-check does not). Completed
-tickets **T37/T38 declare `packages/**`**, so until #905 lands every lane touching
-`packages/` is trust-root tier and the required `gate` job fails with `NO SIGNATURE-VERIFIED
+**Issue #905 is CLOSED and its fix has landed**: `packages/prosecute/lib/tier.mjs:153` now
+does `if (ticket?.completed === true) continue;`, so completed tickets' rails no longer tier
+anything. T37/T38's `packages/**` rails are inert. An earlier version of this section said
+every `packages/` lane is trust-root tier "until #905 lands" — that is no longer true, and
+repeating it costs the user pointless signing round-trips.
+
+**Tier is now decided by two explicit lists in `tier.mjs`, so check the lane against them:**
+- `ENFORCEMENT_PREFIXES` — `packages/rails-guard/`, `packages/prosecute/`,
+  `packages/gate-manifest/`, `packages/build-gate/` (enforcement), plus
+  `packages/ticket-prune/` and `packages/ticket-sync/` (gated-artifact producers).
+- `TRUST_ROOT_FILES` — `scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
+  `scripts/test/rails-guard-workflow-hashes.json`.
+
+Everything else is untiered. Verified 2026-09-10: of four lanes, only the `ticket-prune`
+one needed the ceremony; `adlc-pi`, `review-calibration` and `parallax` all passed `gate`
+clean with no attestation. Have each lane run `tier-check` and report the verdict rather
+than assuming either way.
+
+When a lane IS tiered, the required `gate` job fails with `NO SIGNATURE-VERIFIED
 cross-model attestation for revision git-change:<base>:<digest>` until an attestation is
-recorded. Each lane's codex approve makes that attestation truthful. The classifier denies an
-agent sourcing `ADLC_MANIFEST_KEY`, so hand the user one script (pattern from AGENTS.md —
-the key is sourced, never an argument), one call per lane, using the digest the gate printed:
+recorded, and the reviewer's approve is what makes that attestation truthful. The
+classifier denies an agent sourcing `ADLC_MANIFEST_KEY`, so hand the user one script
+(pattern from AGENTS.md — the key is sourced, never an argument), one call per lane,
+using the digest the gate printed:
 
 ```bash
 set -a; . ./.env.local; set +a
@@ -272,15 +300,23 @@ final word — verify.
   (no `pending`), not just once. A `test`/`mutation-gate`/`ticket-store-platform`/etc.
   check failing in CI when the lane's local runs were clean is a REAL discrepancy — dig
   into the actual CI log (`gh run view <id> --log-failed`), do not assume it's the known
-  attestation gap or wave it off as flaky. Only two failures are expected and explained,
-  never anything else:
+  attestation gap or wave it off as flaky. **`gh pr checks` can report a job as `pending`
+  that has already FAILED** — confirm against the run itself (`gh run list --branch <b>`,
+  then `gh api …/runs/<id>/jobs`) before concluding a PR is merely still building.
+  Exactly ONE failure is now expected and explained, never anything else:
   - `gate` (cross-model-review) failing with `NO SIGNATURE-VERIFIED cross-model
-    attestation` — issue #905 (completed tickets still tiering). Resolved by the 4b
-    ceremony, not a lane bug.
-  - `rails-guard` failing with the base-config acknowledgement message — resolved by the
-    one-time base-config ceremony (§0), not a lane bug. Once that ceremony has merged,
-    `rails-guard` passing is the expected state; a NEW `rails-guard` failure after that is
-    a real problem (rebase the lane onto the current main tip and re-check).
+    attestation`, and ONLY for a lane the §4b lists actually tier. Resolved by the
+    ceremony, not a lane bug. An untiered lane's `gate` must pass on its own.
+  - `rails-guard` is NO LONGER an expected failure — the base-config ceremony has merged
+    (§0). A `rails-guard` failure is now a real problem: rebase the lane onto the current
+    main tip and re-check, and if it persists, diagnose it rather than attributing it to
+    the old blocker.
+- **A flaky-looking suite failure may be a real bug the flake is masking.** This batch hit
+  three autopilot failures with three different causes: a genuine fake-timer flake (AC9),
+  a nested-`gate-deps` clone race (#990), and an unguarded `records.update` that turns a
+  clean `init-failed` return into an unhandled rejection (#992 — a real defect). Read each
+  failure's actual error and stack before re-running; re-running is how the third one had
+  been staying invisible.
 - Relay each lane's report verbatim in substance: coldstart verdict, RED→GREEN, test
   counts, mutation-gate numbers, review rounds folded/refuted, commit SHAs, PR URL,
   AND the polled CI status — not just the lane's own local claim of it.
