@@ -36,9 +36,13 @@ export function createLatch() {
 
   const fire = () => {
     count += 1;
-    const ready = waiters.filter((w) => w.predicate(count));
-    waiters = waiters.filter((w) => !w.predicate(count));
-    for (const w of ready) w.resolve(count);
+    // Each predicate is evaluated exactly ONCE per fire and the verdict reused:
+    // callers legitimately write predicates over state the latch does not own
+    // (`() => timers.some(...)`), and asking twice invites the two answers to
+    // disagree.
+    const decided = waiters.map((w) => ({ waiter: w, ready: w.predicate(count) }));
+    waiters = decided.filter((d) => !d.ready).map((d) => d.waiter);
+    for (const d of decided) if (d.ready) d.waiter.resolve(count);
     return count;
   };
 
