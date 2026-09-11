@@ -62,8 +62,13 @@ export function awaitSignal(signal, { timeoutMs = 30_000, message } = {}) {
   let timer = null;
   const expiry = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(typeof message === 'function' ? message() : message)), timeoutMs);
-    // Never hold the test runner's event loop open on a wait that has been won.
-    timer.unref?.();
   });
+  // The timer is ALWAYS cleared once the race settles, which is what keeps a won
+  // wait from holding the event loop open. Do not `unref()` it as well: an
+  // unref'd timer does not hold the loop, so a test whose only pending work is
+  // this timeout drains the loop and node:test cancels it with "Promise
+  // resolution is still pending but the event loop has already resolved"
+  // (cancelledByParent). That passed locally per-file and failed on all three CI
+  // node versions.
   return Promise.race([signal, expiry]).finally(() => { if (timer) clearTimeout(timer); });
 }
