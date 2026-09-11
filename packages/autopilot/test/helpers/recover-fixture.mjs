@@ -37,7 +37,19 @@ export function createFixture({ gh = fakeGithub(), handlers = {}, now = Date.par
   const originPath = join(root, 'origin.git');
   const home = join(root, 'home');
   mkdirSync(home, { recursive: true });
-  const base = { ...gitBaseEnv({ path: process.env.PATH, home }), ...IDENTITY };
+  // #990: auto-gc is disabled through a fixture-OWNED global config file rather than a
+  // `git config` call per repository. A per-repo call can only reach repositories the
+  // fixture itself creates and names; the autopilot's own code clones more of them inside
+  // this working tree while a run proceeds (lib/deps.mjs clones into paths.gateDeps(n) =
+  // .adlc/autopilot-runs/<n>/gate-deps), and a clone does not inherit config from its
+  // source, so those were born with auto-gc enabled. GIT_CONFIG_GLOBAL is inherited by
+  // every git child the fixture spawns — production's clones included, and the auto-gc a
+  // git process would fork — so the guard covers repositories that do not exist yet. The
+  // file lives in this fixture's own temp root, so gitBaseEnv's isolation from the
+  // operator's real ~/.gitconfig (its /dev/null default) is preserved exactly.
+  const globalConfig = join(root, 'gitconfig-global');
+  writeFileSync(globalConfig, '[gc]\n\tauto = 0\n\tautoDetach = false\n');
+  const base = { ...gitBaseEnv({ path: process.env.PATH, home }), GIT_CONFIG_GLOBAL: globalConfig, ...IDENTITY };
   const sh = (args, cwd = repoRoot) => {
     const r = spawnSync(GIT, ['-c', 'commit.gpgsign=false', ...args], { cwd, env: base, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
