@@ -135,8 +135,33 @@ Write it through the service, in the lane, and take the id from the `id` FIELD (
 ```bash
 cd .worktrees/fix-<n> && ADLC_RAILS_BYPASS=1 adlc ticket create --input $SP/ticket-<n>.json --write --json
 ```
-The only artifact is the shard under `.adlc/tickets/` (`.store.json` is static, so lanes
-never conflict; a plain create records no manifest entry — by design).
+This writes TWO artifacts, not one. The shard under `.adlc/tickets/` (`.store.json` is
+static, so lanes never conflict) **and** a gate-manifest segment — under
+`ADLC_RAILS_BYPASS=1` the create is an audited override, so it records a signed
+`ticket-mutation` entry. (An older note here claimed a plain create records nothing;
+that is false with the bypass set.)
+
+**Know how that segment behaves before you tell a lane what to do with it.**
+`.adlc/manifest.d/<branch>-<ulid>.jsonl` is ONE hash-chained file for the WHOLE
+branch, not one file per write: every audited write appends, each entry carrying
+`seq` and a `prev` hash of the one before. A trust-root lane's segment ends up as
+create → coldstart verdict → any `ticket update` → the §4b attestation, all in one
+chain. Four consequences:
+- **You cannot commit "just the attestation"** — splitting the chain breaks it.
+  §4b's `git add .adlc/manifest.d` is correct as written.
+- **A trust-root lane MUST commit its segment**; it carries the attestation the
+  required `gate` job reads. A non-tiered lane's segment is orphaned once its PR
+  merges, and discarding it at cleanup matches repo practice — of 94 segments on
+  `main` (93 branch-named), not one carries a `ticket-mutation`/create entry. The
+  gates only ever consume `cross-model-review`, `p5-*`, `prosecute`,
+  `ticket-update` and `ticket-complete`.
+- **Committing the segment does not move the revision digest** — `.adlc/manifest.d`
+  is excluded from it, as it must be or attesting would invalidate itself. Re-run
+  `tier-check` after the commit to confirm rather than assuming.
+- **While untracked it makes the tree dirty**, which blocks `mutation-gate` and
+  `review-calibration` (`commit or stash first`). Tell each lane to park it in the
+  scratchpad for those runs and restore it after — "don't commit it, don't delete
+  it" is not enough guidance on its own.
 
 ## 4. Launch the lanes
 
