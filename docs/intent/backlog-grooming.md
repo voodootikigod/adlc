@@ -47,10 +47,37 @@ checking whether an issue's cited premise still holds at HEAD. That is the
 expensive part, so runs must be incremental rather than re-checking every issue
 each time.
 
-**Autonomy is decided by the quality of the evidence, not the severity of the
-action.** Mechanically-provable conclusions (the cited code no longer reads as
-filed; here is the commit that changed it) may be executed. Anything inferred —
-priority changes, duplicate links — is proposed in the report, never applied.
+**The adversarial gate licenses execution; a configurable floor overrides it.**
+An earlier draft of this document made evidence quality decide *whether* to
+execute — mechanical conclusions applied, inferred ones (priority changes,
+duplicate links) proposed only. That rule existed because inferred judgments had
+no second check. The adversarial gate below supplies exactly that check, so the
+two rules were redundant and the propose-only half is retired.
+
+What evidence quality decides now is *what the reviewer is shown*: a mechanical
+case presents the diff and the commit that changed it; an inferred case presents
+the reasoning. Either can execute once the reviewer confirms.
+
+Above that sits an **autonomy floor**: a per-project list of action classes that
+always require a human hand regardless of the reviewer's verdict, because the
+right answer differs by repo — a solo repo and one with other contributors do not
+want the same defaults. It lives in the repo profile. Three properties, following
+`packages/model-router/lib/floor.mjs`, which solved the same shape for the P3
+rail-density gate:
+
+- **One validator, every entry point.** The CLI and every library caller run the
+  same check, so a library caller cannot disable what the CLI cannot.
+- **Disabling is explicit, never accidental.** An empty floor is legal but must be
+  written deliberately; omitting the setting yields the conservative default, and
+  a floor that would permit everything cannot arise from a missing key.
+- **Unknown action classes fail closed.** A typo'd class is an operational error,
+  not a silently ignored entry — otherwise `"clsoe"` quietly drops the floor on
+  closing. (`floor.mjs` rejects `parseFloat` for the same reason: it would accept
+  `0.5abc` as `0.5`.)
+
+Anything the gate refuses is demoted to a proposal in the report. That demoted set
+is the useful signal — it is where two independent contexts disagreed — and it
+replaces the pre-emptive propose-only list.
 
 **Comment before close, always.** A close is preceded by a comment carrying the
 full evidence and rationale, so the audit trail is on the issue before it goes
@@ -91,10 +118,12 @@ act from closing your own in a solo one.
 - Filing new issues.
 - Touching `issue-lanes`' build half. Grooming runs before it, or entirely without
   it; the coupling is a handoff artifact, not a merged skill.
-- Autonomously relabeling priority.
-- Closing anything on a duplicate judgment alone. Duplicate and superseded-by
-  detection is **in scope and high-value** — it is the one output that genuinely
-  shrinks the backlog — but a duplicate verdict is inferred, so it proposes a link.
+
+Relabeling and duplicate-linking are **in scope and executable**, subject to the
+adversarial gate and the project's autonomy floor. Duplicate and superseded-by
+detection is the highest-value output, since it is the only one that genuinely
+shrinks the backlog. An earlier draft listed both as out of scope or proposal-only;
+that was superseded by the floor model above.
 
 ## Shape (recommendation, not yet confirmed)
 
