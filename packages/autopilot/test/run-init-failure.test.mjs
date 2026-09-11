@@ -247,6 +247,15 @@ test('#992 settleCi ci-red: with the record PRESENT the state write and the term
     assert.equal(r.state, 'ci-red');
     assert.equal(w.records.load(ISSUE).state, 'ci-red', 'the state write still happens');
     assert.equal(effectsSeen.length, 1, 'the terminal effects still run');
-    assert.equal(effectsSeen[0].record.issue, ISSUE, 'and they receive a real record');
+    // The full effect call is pinned: the sentinel is what makes the comment
+    // idempotent across iterations, and the target/label decide where it lands.
+    const eff = effectsSeen[0];
+    assert.equal(eff.record.issue, ISSUE, 'they receive a real record');
+    assert.equal(eff.record.state, 'ci-red', 'and it is the UPDATED record, not a stale read');
+    assert.equal(eff.outcome, 'ci-red');
+    assert.deepEqual(eff.target, { kind: 'pr', number: 41 });
+    assert.equal(eff.sentinel, '<!-- adlc-autopilot:ci-red ci-red -->');
+    assert.equal(eff.body, 'the build is red');
+    assert.equal(eff.label, 'adlc:autopilot-ci-red');
   } finally { w.cleanup(); }
 });
