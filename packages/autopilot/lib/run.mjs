@@ -32,14 +32,45 @@ export function remainingBudget(record, config, now = null) {
   return { strikes, wallClockMinutes: Math.floor(wallClockMs / 60_000), wallClockMs };
 }
 
+/**
+ * A best-effort record write (#992).
+ *
+ * `records.update` THROWS when the record is gone (lib/records.mjs). Every
+ * caller below writes as bookkeeping immediately before returning the result
+ * the caller is owed — three of them from inside a `catch` — so that throw
+ * REPLACES the result and escapes as a rejection from a continuation whose
+ * owning call has already ended. #962 fixed two occurrences of the same hazard
+ * in the rounds loop and in `resumeRun`.
+ *
+ * A record that has VANISHED (retired/torn down concurrently) is tolerated and
+ * reported by a null return; ANY other write failure is a real defect and still
+ * propagates. The reload in the catch is what tells the two apart, so neither
+ * is decided by matching on an error message. The write is bookkeeping; the
+ * return value of the calling step is the contract.
+ *
+ * Returns the updated record, or null when there was no record left to update.
+ */
+function updateRecordIfPresent(ctx, issue, patch) {
+  try {
+    return ctx.records.update(issue, patch);
+  } catch (e) {
+    if (!ctx.records.load(issue)) return null;
+    throw e;
+  }
+}
+
 /** The CI outcome (§6.9) → the run's terminal result, with its effects applied. */
 async function settleCi({ ctx, deps, steps, issue: n, ci, prNumber }) {
   switch (ci.outcome) {
     case 'done': return { state: 'done', reason: null, prNumber };
     case 'oid-mismatch': return { ...(await steps.mismatch(ci.comment, prNumber)), prNumber };
     case 'ci-red': case 'ci-incomplete': {
-      ctx.records.update(n, { state: 'ci-red', reasonText: ci.comment ?? ci.outcome });
-      await deps.effects.applyTerminalEffects({ ctx, record: ctx.records.load(n), outcome: 'ci-red', target: { kind: 'pr', number: prNumber }, sentinel: `<!-- adlc-autopilot:ci-red ${ci.outcome} -->`, body: ci.comment ?? ci.outcome, label: ci.label ?? 'adlc:autopilot-ci-red' });
+      // #992: the state write AND the terminal effects both need the record —
+      // applyTerminalEffects rejects a null one with `bad-input:record`. If it
+      // has vanished, the CI outcome is still the truthful answer and must
+      // reach the caller instead of escaping as a rejection.
+      const rec = updateRecordIfPresent(ctx, n, { state: 'ci-red', reasonText: ci.comment ?? ci.outcome });
+      if (rec) await deps.effects.applyTerminalEffects({ ctx, record: rec, outcome: 'ci-red', target: { kind: 'pr', number: prNumber }, sentinel: `<!-- adlc-autopilot:ci-red ${ci.outcome} -->`, body: ci.comment ?? ci.outcome, label: ci.label ?? 'adlc:autopilot-ci-red' });
       return { state: 'ci-red', reason: ci.outcome, prNumber, red: ci.red ?? [] };
     }
     case 'fix-round-failed': {
@@ -72,11 +103,17 @@ export async function runIssue({ ctx, deps, issue, ticket, revision = null, auth
   try { await deps.create.createIssueWorktree({ ctx, issue: n, baseOid: ctx.baseOid, issueRevision: revision }); }
   catch (e) {
     const code = e.code ?? 'create-failed';
-    if (record()) ctx.records.update(n, { lastError: `${code}: ${e.message}` });
+    // #992: was `if (record()) ctx.records.update(…)` — correct in the common
+    // case but still able to throw if the record went between the check and the
+    // write. One idiom now covers both.
+    updateRecordIfPresent(ctx, n, { lastError: `${code}: ${e.message}` });
     return { state: code.startsWith('orphan') ? 'orphan' : 'failed', reason: code, exitCode: 1, detail: e.message };
   }
   // The shaped ticket rides the record from here on: every resume path needs its scope.
-  ctx.records.update(n, { ticketCache: ticket, issueRevision: revision ?? record()?.issueRevision ?? null });
+  // #992: the record can be retired between createIssueWorktree resolving and this
+  // write; the run then has nothing left to continue, which continueRun reports as
+  // `resume-no-ticket-id` rather than throwing over it.
+  updateRecordIfPresent(ctx, n, { ticketCache: ticket, issueRevision: revision ?? record()?.issueRevision ?? null });
   return continueRun({ ctx, deps, issue: n, ticket, revision, authorization, from: 'evidence' });
 }
 
@@ -124,12 +161,14 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
     } catch (e) {
       if (e.code === 'quota-gated') {
         // §3.2 / AC 39: the ticket is cached; the run resumes at the coldstart on a later iteration.
-        ctx.records.update(n, { state: 'shaped', ticketCache: ticket, ticketId: ticketId ?? null });
+        // #992: same vanished-record hazard as the init-failure handler below.
+        updateRecordIfPresent(ctx, n, { state: 'shaped', ticketCache: ticket, ticketId: ticketId ?? null });
         return { state: 'shaped', reason: 'quota-paused', ticketId: ticketId ?? null };
       }
       // A coldstart call ended by its deadline is an operational failure that leaves the run record untouched (AC 39).
       const killed = e.code === 'claude-failed' || String(e.code ?? '').startsWith('timeout:');
-      if (!killed) ctx.records.update(n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
+      // #992: ditto — the evidence failure must reach the caller either way.
+      if (!killed) updateRecordIfPresent(ctx, n, { lastError: `${e.code ?? 'evidence-failed'}: ${e.message}` });
       return { state: 'failed', reason: e.code ?? 'evidence-failed', exitCode: 1, detail: e.message, ticketId: ticketId ?? null };
     }
   }
@@ -141,7 +180,11 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
     mirror = await deps.mirror.createWorkerMirror({ ctx, issue: n });
     workerDeps = await deps.deps.buildWorkerDeps({ ctx, issue: n, baseOid: ctx.baseOid });
   } catch (e) {
-    ctx.records.update(n, { lastError: `${e.code ?? 'init-failed'}: ${e.message}` });
+    // #992: the mirror/deps build is exactly where a concurrently-retired record
+    // is observed (a failing clone here is #990's symptom). The run HAS failed —
+    // so, unlike the mid-flight checks below, the truthful answer is the failure
+    // itself, not 'unchanged'. The record write is bookkeeping around it.
+    updateRecordIfPresent(ctx, n, { lastError: `${e.code ?? 'init-failed'}: ${e.message}` });
     return { state: 'failed', reason: e.code ?? 'init-failed', exitCode: 1, detail: e.message, ticketId };
   }
   const steps = createRunSteps({ ctx, deps, issue: n, ticket, ticketId, mirror, workerDeps, revision, authorization });
