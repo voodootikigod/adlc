@@ -19,6 +19,7 @@ import { AUTOPILOT_DEFAULTS } from '../../lib/config.mjs';
 import { STATIC_EXTRAS } from '../../lib/denylist.mjs';
 import { CRITERIA_HEADING } from '../../lib/evidence.mjs';
 import { credentialsPath } from '../../lib/token-refresh.mjs';
+import { createLatch, awaitSignal } from './signal.mjs';
 import { globMatch } from '@adlc/core';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -47,6 +48,10 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   const gh = fakeGithub({ permissions: { op: 'admin' } });
   const state = { fleetRuns: 0, gateCalls: 0, reviewCalls: 0, checkPolls: 0, updates: [], prs: [], nextPr: 41, completeCalls: 0, issue: { number: issue, title: `Add widget (#${issue})`, body: 'Please add the widget.', state: 'OPEN', updatedAt: '2026-08-28T10:00:00Z', createdAt: '2026-08-01T10:00:00Z', labels: [], author: { login: 'op' }, authorAssociation: 'OWNER' } };
   const handlers = {};
+  // #994: the fleet dispatch is an EVENT, so callers await it rather than
+  // spinning on `state.fleetRuns` with an iteration budget. The latch counts, so
+  // a wait registered after the dispatch already happened resolves at once.
+  const fleetDispatched = createLatch();
   const fx = createFixture({ gh, handlers, spawner });
   const { repoRoot, originPath, paths } = fx;
   // Every spawn advances the fixture clock one second, so timestamps (dead-end files, records) never collide.
@@ -125,6 +130,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     if (sub === 'gate-manifest' && verb === 'attest') return { stdout: 'evidence: fake' };
     if (sub === 'fleet' && verb === 'run') {
       state.fleetRuns++;
+      fleetDispatched.fire();
       try { return await (fleet ? fleet(args, { cwd }, fx, state) : defaultFleet(args, { cwd }, fx, state, worker)); }
       catch (e) { return { status: 1, stderr: `fleet fake threw: ${e.stack ?? e.message}` }; }
     }
@@ -240,6 +246,15 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   return {
     ...fx, ctx, gh, state, issue, ticket, baseOid, key,
     argvsOf: (exe) => fx.recorder.filter((r) => r.argv[0] === exe).map((r) => r.argv.slice(1)),
+    /**
+     * #994: resolves once the fleet has been dispatched `count` times — at once
+     * if it already has. On timeout it reports that the dispatch never happened,
+     * which is a DIFFERENT failure from a dispatch that happened and then hung.
+     */
+    whenFleetDispatched: ({ count = 1, timeoutMs = 30_000 } = {}) => awaitSignal(fleetDispatched.when(count), {
+      timeoutMs,
+      message: () => `the fleet dispatch never happened: waited ${timeoutMs}ms for dispatch ${count}, saw ${fleetDispatched.count()}`,
+    }),
     /** Fake loop-level collaborators around the real selection/triage/run: `iterate` can be driven with these. */
     loopDeps: (over = {}) => ({
       ...ctx.deps,

@@ -164,6 +164,7 @@ import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { iterate, quotaCommand } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { FAKE } from './helpers/recover-fixture.mjs';
+import { createLatch, awaitSignal } from './helpers/signal.mjs';
 
 const OK_USAGE = (scoped = {}) => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map(Object.entries({ opus: 10, sonnet: 10, ...scoped })), resetsAt: { fiveHour: null } });
 const REFUSED_USAGE = () => ({ ok: true, fiveHour: 80, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } });
@@ -207,15 +208,22 @@ export async function ac39_coldstartIsGated() {
   } finally { fx.cleanup(); }
   // a coldstart fake that stalls is killed at 5 minutes; the run record does not change
   const timers = []; let id = 1;
-  const spawner = { setTimeoutFn: (fn, ms) => { timers.push({ id: id++, fn, ms }); return timers.at(-1).id; }, clearTimeoutFn: (i) => { const k = timers.findIndex((x) => x.id === i); if (k !== -1) timers.splice(k, 1); } };
+  // #994: both waits below are on EVENTS — the coldstart call being made, and the
+  // deadline being armed — so each fires a latch rather than being spun for.
+  const timerArmed = createLatch();
+  const spawner = { setTimeoutFn: (fn, ms) => { timers.push({ id: id++, fn, ms }); timerArmed.fire(); return timers.at(-1).id; }, clearTimeoutFn: (i) => { const k = timers.findIndex((x) => x.id === i); if (k !== -1) timers.splice(k, 1); } };
   const fx2 = await createSequenceFixture({ spawner, claudeAnswer: null });
   let snapshot = null;
-  fx2.table[FAKE.claude] = (args, { stdin }) => { snapshot = JSON.stringify(fx2.ctx.records.load(fx2.issue)); return String(stdin).includes('COLDSTART PROMPT') ? { hang: true } : { stdout: '{}' }; };
+  const snapshotTaken = createLatch();
+  fx2.table[FAKE.claude] = (args, { stdin }) => { snapshot = JSON.stringify(fx2.ctx.records.load(fx2.issue)); snapshotTaken.fire(); return String(stdin).includes('COLDSTART PROMPT') ? { hang: true } : { stdout: '{}' }; };
   try {
     const p = runIssue({ ctx: fx2.ctx, deps: fx2.ctx.deps, issue: fx2.issue, ticket: fx2.ticket, revision: { updatedAt: fx2.state.issue.updatedAt }, authorization: { ok: true } });
-    let spins = 0; while (snapshot === null && spins++ < 50_000) await new Promise((r) => setImmediate(r));
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
-    const deadline = timers.find((x) => x.ms === 5 * 60_000);
+    await awaitSignal(snapshotTaken.when(), { message: 'the coldstart claude call never happened, so no run-record snapshot was taken' });
+    const COLDSTART_DEADLINE_MS = 5 * 60_000;
+    await awaitSignal(timerArmed.until(() => timers.some((x) => x.ms === COLDSTART_DEADLINE_MS)), {
+      message: () => `the coldstart deadline was never armed (armed: ${timers.map((x) => x.ms).join(',')})`,
+    });
+    const deadline = timers.find((x) => x.ms === COLDSTART_DEADLINE_MS);
     assert.ok(deadline, `the coldstart deadline is 5 minutes (armed: ${timers.map((x) => x.ms).join(',')})`);
     deadline.fn();
     const result = await p;

@@ -21,6 +21,7 @@ import { fakeSpawnImpl } from './helpers/fake-children.mjs';
 import { realpathSync } from 'node:fs';
 import { pinnedRealpaths } from '../lib/tools.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
+import { createLatch, awaitSignal } from './helpers/signal.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { FAKE } from './helpers/recover-fixture.mjs';
 import { stepsFor } from '../lib/maintenance.mjs';
@@ -255,18 +256,28 @@ export async function ac9_wallClockKillsFleet() {
   // signalled, the outcome is wall-clock, the blocked label is applied.
   const timers = [];
   let nextId = 1;
+  // #994: arming a timer is an event, so the test can await it instead of
+  // draining a fixed number of turns and hoping the arming happened in one.
+  const timerArmed = createLatch();
   const spawner = {
-    setTimeoutFn: (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); return id; },
+    setTimeoutFn: (fn, ms) => { const id = nextId++; timers.push({ id, fn, ms }); timerArmed.fire(); return id; },
     clearTimeoutFn: (id) => { const i = timers.findIndex((t) => t.id === id); if (i !== -1) timers.splice(i, 1); },
   };
   const fx = await createSequenceFixture({ fleet: () => ({ hang: true }), spawner });
   try {
     const p = runIssue({ ctx: fx.ctx, deps: fx.ctx.deps, issue: fx.issue, ticket: fx.ticket, revision: { updatedAt: fx.state.issue.updatedAt }, authorization: { ok: true } });
-    let spins = 0;
-    while (fx.state.fleetRuns === 0 && spins++ < 50_000) await new Promise((r) => setImmediate(r));
+    // #994: await the dispatch, not an iteration budget. The bounded spin this
+    // replaces was worth ~100ms of wall time whatever it was waiting for, so on a
+    // loaded runner it ran out BEFORE the dispatch and the assertion below then
+    // reported the state the test wanted rather than the state it found.
+    await fx.whenFleetDispatched();
     assert.equal(fx.state.fleetRuns, 1, 'fleet was dispatched and is hanging');
-    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
-    const deadline = timers.find((t) => t.ms === 90 * 60_000 + 5 * 60_000);
+    const FLEET_DEADLINE_MS = 90 * 60_000 + 5 * 60_000;
+    // Same cure for the arming: wait for the timer to exist rather than draining 20 turns.
+    await awaitSignal(timerArmed.until(() => timers.some((t) => t.ms === FLEET_DEADLINE_MS)), {
+      message: () => `the fleet deadline was never armed (armed: ${timers.map((t) => t.ms).join(',')})`,
+    });
+    const deadline = timers.find((t) => t.ms === FLEET_DEADLINE_MS);
     assert.ok(deadline, `the fleet deadline is armed at 90 min + fleet's 5-minute grace (armed: ${timers.map((t) => t.ms).join(',')})`);
     deadline.fn();
     const result = await p;
