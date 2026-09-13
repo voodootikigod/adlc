@@ -286,11 +286,12 @@ pool-aware concurrency (`docs/intent/booster-adoption.md` §4, §7).
 ## 10. Known risk
 
 `decompose` embeds spec text into a frontier-model prompt.
-`docs/intent/booster-adoption.md` §3.1 flags that `@adlc/core`'s `fence()` derives
-its tag from the capped content length, predictable when the input is truncated.
-Unproven and tracked separately. Use the current fencing primitive, introduce no
-third scheme; AC22 pins it into the fencing guard list. If the finding reproduces,
-it is a prerequisite.
+`@adlc/core`'s `fence()` derives its tag from the capped content length, so fenced
+content can compute and forge its own closing marker. **Now reproduced and filed as
+#1005** (P0) — it is not conditional on truncation, and `tail()`'s bias also means an
+over-cap spec silently loses its opening sections. This is a prerequisite, not a
+follow-up: any re-spec adds a nineteenth call site embedding repository-controlled
+text into a frontier-model prompt.
 
 ## 11. Round-four findings, recorded for the re-spec
 
@@ -313,7 +314,8 @@ by whatever replaces it:
 - **`fence()` is forgeable always, not only on truncation.** The tag is
   `${label}-${capped.length}` (`core/lib/text.mjs:48`), a pure function of content
   the author controls. `tail()` also keeps the *last* `maxChars`, so an over-cap
-  spec silently loses its opening sections and compiles clean.
+  spec silently loses its opening sections and compiles clean. Reproduced and filed
+  as **#1005**.
 - **No glob∩glob primitive exists** in the declared dependencies; the only
   implementations are two divergent copies inside `@adlc/autopilot`. Any advisory
   comparing scope globs to rails globs needs one promoted into `@adlc/core` first.
