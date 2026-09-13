@@ -29,6 +29,44 @@ profile is read by a model, this one is parsed by code, and a machine-consumed
 config with globs and an autonomy floor must fail closed on malformed input —
 which a prose file cannot do.
 
+### 2.1 Profile schema
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "autonomyFloor": ["close"],        // action classes always requiring a human
+  "units": [                          // what a "lane cluster" is, per repo
+    { "name": "parallax", "paths": ["packages/parallax/**"] }
+  ],
+  "frozenPaths": ["packages/rails-guard/**"],  // issues here never auto-action
+  "labels": {
+    "priority": { "high": "P1-high", "medium": "P2-medium", "low": "P3-low" },
+    "areaPrefix": "area:"
+  },
+  "providers": { "decider": "anthropic", "reviewer": "openai" }
+}
+```
+
+Every key is optional except `schemaVersion`; each has a documented default, and
+an unknown key is an operational error rather than an ignored one — the same
+fail-closed rule the floor uses, for the same reason.
+
+`providers.decider` is how the core knows which provider produced a conclusion,
+so it can require the reviewer to differ (§3.6). Without it the "distinct
+provider" rule is unenforceable: the core cannot compare against something it was
+never told.
+
+### 2.2 `contentHash`
+
+The cache key (§4) and the gate's replay key (§3.6) are the same value, defined
+once: **the SHA-256 of each referenced path's bytes at HEAD, concatenated in
+lexicographic path order, with the path name included in the digest input.**
+Including the name means adding or removing a referenced path changes the hash
+even when the surviving files are untouched; lexicographic order means the hash
+does not depend on the order the parser happened to emit. An issue with no
+referenced paths has **no** `contentHash` — it is not cacheable as `valid` (§4)
+and cannot be gate-replayed.
+
 ## 3. Pipeline
 
 `fetch → classify verifiability → verify → cluster → rank → gate → execute → report`
@@ -95,6 +133,20 @@ that **the filter's recall is the ceiling on what relations can ever be found** 
 a pair the filter never surfaces is a relation the tool cannot report — so the
 filter's threshold and its miss rate are reported with the run, not hidden.
 
+### 3.4a Relabel proposals
+
+Two triggers produce a `relabel` action; nothing else does.
+
+- **Priority** — the rank computed in §3.5 disagrees with the issue's existing
+  priority label. This is a judgment, so the reviewer is shown the reasoning.
+- **Area** — the issue's *verified* locations sit in a different profile unit than
+  its `area:` label claims. This is mechanically provable, so the reviewer is
+  shown the paths and the label, not an argument.
+
+Both still pass the gate and the floor; these triggers only say what generates the
+proposal. An issue whose locations could not be verified never produces an area
+relabel — an unverified location is not evidence that the code moved.
+
 ### 3.5 Rank
 
 A rank computed from what grooming learned — verdict, cluster size, whether the
@@ -157,6 +209,16 @@ rails.** Narrowing autonomy (adding a class to the floor) is an ordinary change.
 repo's trust-root path. Without that asymmetry the floor is not a floor: the
 escalation is a one-line profile PR followed by whatever closures you like, and
 the autonomy model would be exactly as strong as PR review.
+
+**Detection is by comparison against the merge base, not by trusting the working
+copy.** Before any action executes, the core reads the profile as it exists at the
+merge base with the default branch and compares floors. A floor that is *narrower
+or equal* proceeds. A floor that is *wider* — any class present at the merge base
+and absent now — requires the trust-root authorization the repo profile names, and
+is otherwise an operational error. Comparing against the merge base rather than
+the checked-out file is what makes the check meaningful: the working copy is
+exactly what an attacker controls, so a check that reads only the working copy
+validates the attacker's own claim.
 
 ### 3.8 Execute
 
@@ -256,7 +318,19 @@ re-verified every run, or cached only as `unverifiable` — never as `valid`.
   the filter's threshold and miss rate appear in the run output. verify: `node --test packages/backlog-groom/test/relations.test.mjs`
 - **AC20** The run output states how many issues were verified mechanically, by
   model, and not at all. verify: `node --test packages/backlog-groom/test/report.test.mjs`
-- **AC21** Mutation gate green on the branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0
+- **AC21** A profile with an unknown key is an operational error; every other key
+  is optional and has its documented default. verify: `node --test packages/backlog-groom/test/profile.test.mjs`
+- **AC22** `contentHash` changes when a referenced path is added or removed even
+  though the surviving files are untouched, and does not depend on parser emission
+  order. verify: `node --test packages/backlog-groom/test/cache.test.mjs`
+- **AC23** A rank disagreeing with the priority label produces a `relabel`
+  proposal; verified locations in a different unit than the `area:` label produce
+  one; an unverified location produces none. verify: `node --test packages/backlog-groom/test/relabel.test.mjs`
+- **AC24** A floor widened relative to the MERGE BASE is refused without
+  trust-root authorization, even when the working-copy profile says otherwise. verify: `node --test packages/backlog-groom/test/floor.test.mjs`
+- **AC25** With `providers.decider` absent, the distinct-reviewer rule cannot be
+  satisfied and every autonomous action demotes to a proposal. verify: `node --test packages/backlog-groom/test/gate.test.mjs`
+- **AC26** Mutation gate green on the branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0
 
 ## 6. Out of scope
 
