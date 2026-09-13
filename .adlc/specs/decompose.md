@@ -1,42 +1,83 @@
 # Spec: `@adlc/decompose` — the P2 decomposition compiler
 
-**Phase:** P2 Decompose · **Status:** awaiting P1 human approval · **Revision:** v2
-**Date:** 2026-09-11
+**Phase:** P2 Decompose · **Status:** **PARKED** — blocked on #1003 · **Revision:** v4
+**Date:** 2026-09-13
 
-> **v2 changelog.** v1 failed its own premortem on six verified counts. Every one
-> is fixed below and each is called out inline as **[v1 defect]**. Two claims v1
-> asserted about this codebase were simply false; they are corrected in §4 and §3.
+> ## Parked, and why
+>
+> This spec is **not approved and not being built.** Four adversarial premortem
+> rounds produced 29 verified findings, and the rate never dropped. The recurring
+> killer was the same in every round: *the emitted DAG is not applicable.*
+>
+> That is not bad luck. This specifies a **producer for a consumer that does not
+> exist** — there is no atomic multi-ticket write path (#1003), and
+> `adlc ticket create --input` takes one ticket while persisting a supplied id
+> verbatim (`service.mjs:106`), so a provisional `T1` collides with the 96 legacy
+> `T<n>` shards already in the store. With no ground truth to validate against,
+> every round re-litigated what the DAG must look like.
+>
+> **Unblocks when #1003 lands.** Then re-spec against a real consumer, stripped to
+> the rules that survived all four rounds — schema, cycle, intra-batch edge
+> resolution — plus two corrections round 4 earned: require non-empty `body` and
+> `scope` (`validateTicket` checks neither, `schema.mjs:4-12`), and namespace
+> provisional ids so they cannot alias the store. Rule 6 and the advisories should
+> be deleted outright; `merge-forecast` already does that work correctly and this
+> spec got it wrong in four different ways.
+>
+> Everything below is the v4 text, kept for its verified constraints. Read it as
+> evidence, not as a plan.
+
+> **Revision history.** Three adversarial premortems, three failures, and each
+> time the defects clustered **outside** the compiler's actual job — in v2 the
+> gate-orchestration loops, in v3 the store write's trust-root contract. v4 draws
+> the boundary where the complexity isn't: `decompose` is a pure function from
+> spec to validated DAG. It does not write anything. A fourth round then found the
+> defects had moved into the validation rules themselves — see the parking note.
 
 ---
 
 ## 1. Problem
 
-The ADLC specifies P2 Decompose as "ticket DAG + edge contracts," gated by
-"coldstart per ticket + merge-forecast certifies width" (`ADLC.md:148,228-248`),
-and ships every *validator* of a ticket DAG as a package: `coldstart`,
-`parallax --edge`, `model-router`, `merge-forecast`.
+P2 Decompose is specified (`ADLC.md:148,228-248`) and every DAG *validator* ships
+— `coldstart`, `parallax --edge`, `model-router`, `merge-forecast`. Nothing
+*authors* the DAG. There is no `decompose` verb; tickets are written one at a time
+by hand, and `@adlc/autopilot` is one issue → one ticket with no fan-out.
 
-Nothing *authors* the DAG. There is no `decompose` verb in
-`packages/cli/lib/registry.mjs`. Tickets are written one at a time by hand via
-`adlc ticket create --input`, and `@adlc/autopilot` is strictly one issue → one
-ticket → one fleet run with no fan-out.
+## 2. Solution: a pure function
 
-The consequence is a hole between P1 and P4: `adlc fleet` consumes a ticket DAG
-that nothing in the toolkit produces. P2 is the only phase the ADLC gates in
-theory and not in practice.
+`decompose` takes an approved spec and emits a **structurally validated ticket
+DAG as JSON**. It reads the ticket store read-only for advisory context. It writes
+nothing — not the store, not the manifest, not a rail.
 
-## 2. Solution
+What it deliberately does not do, and why:
 
-`@adlc/decompose` — a compiler. An approved spec (or prose plan) in; a validated
-ticket DAG written into the canonical `.adlc/tickets/` store out; a refusal to
-write anything that fails its own gates.
+- **It does not write the ticket store.** v3 did, and six of eight premortem
+  findings were in that contract: candidate `rails` freeze the repo on write
+  (`rail-freeze.mjs:140-143` unions rails over every non-completed ticket, and the
+  PreToolUse hook reads the same from the working tree); `storeDeclaresRails`
+  (`trust-root.mjs:78`) ignores `completed`, so one railed candidate permanently
+  converts a rail-free store into a frozen trust root; `--allow-unsigned` appends
+  unsigned entries onto an already-signed chain, and `verifyChain` then fails for
+  every later keyed gate toolkit-wide; N evidence appends land *after* the ticket
+  transaction releases its journal, so a failure at append k strands the store
+  half-evidenced with no rollback. None of that is decomposition. It is the batch
+  write's contract, and it deserves its own ticket and its own premortem.
+- **It does not emit `rails`.** Rails are a P3 artifact — `ADLC.md:262-264`
+  requires them authored "in a context that will never see the implementation,"
+  which is not a P2 converter. A DAG with no rails freezes nothing and grants
+  nothing.
+- **It does not run the P2 LLM gates.** `coldstart`, `parallax --edge` and
+  `merge-forecast` run against the applied DAG, as separate `adlc` invocations.
+
+Consequences worth stating plainly: `decompose` is **not** a producer of a gated
+artifact, so it does not join `PRODUCER_PREFIXES` and its own changes are not
+trust-root tier on that account. Applying the emitted DAG is a separate,
+deliberate act by whoever owns the store.
 
 ### 2.1 Prerequisite: the D0 doctrine amendment
 
 `ADLC.md` D0 (`:740-748`) says the orchestrator "never consults [a model] about
-sequencing." A compiler has a model propose the DAG, so `decompose` reads as
-doctrine-violating to any reviewer who checks. Ship this paragraph into `ADLC.md`
-§D0 **in the same PR**:
+sequencing." Ship this into §D0 **in the same PR**:
 
 > D0 forbids a model deciding sequencing **at dispatch time**, inside the loop,
 > where the decision is unreproducible and rots with the context. It does not
@@ -45,28 +86,36 @@ doctrine-violating to any reviewer who checks. Ship this paragraph into `ADLC.md
 > The first is a boss agent; the second is a compiler. Compilers may use
 > heuristics; schedulers may not.
 
-**Provenance caveat.** This paragraph was authored in `docs/intent/booster-adoption.md`
-and all three parallax readings adopted it verbatim after reading that document.
-It is an *unverified* agreement, not a measured convergence, and should be
-reviewed on its merits at the P1 gate.
+**Provenance caveat.** Authored in `docs/intent/booster-adoption.md`; all three
+parallax readings adopted it verbatim after reading that document. An *unverified*
+agreement, not a measured convergence — review it on its merits.
 
 ## 3. Settled decisions
 
 | # | Question | Resolution | Basis |
 |---|---|---|---|
-| D1 | Store-write mechanism | Add `planCreateBatch()` to `@adlc/tickets` | human, P1 |
-| D2 | Is width certification blocking? | Yes — **per wave** (§5 Stage C) | human, P1 |
-| D3 | Recompile semantics | Additive-only, always | human, P1 |
-| D4 | Offline operation | Ship `--from-conversion`, **honestly scoped** (below) | human, P1 |
-| D5 | Ticket schema carries a tier? | **No** — `id, title, body, category, duration, budget, scope, rails, completed, edges` | verified |
-| D6 | Can looping `planCreate` build a DAG? | **No** — `schema.mjs:49` rejects `edge to unknown ticket` | verified |
-| D7 | Is `model-router` blocking? | **No, advisory** — `ADLC.md:828` calls its exit 2 "a P3 finding wearing a routing costume" | author |
+| D1 | Does it write the store? | **No** — emits JSON (§2) | human, P1 (v4) |
+| D2 | What blocks the compile? | Structural invalidity only, using the **downstream gate's own predicate** (§5 rule 6) | human, P1 (v4) |
+| D3 | Recompile semantics | Each run emits an independent DAG; nothing is superseded | human, P1 |
+| D4 | Offline operation | `--from-conversion` makes the compile fully provider-free | human, P1 |
+| D5 | Does it emit `rails`? | **No** — P3 artifact (§2) | premortem |
+| D6 | Does it mint real ticket ids? | **No** — provisional ids only; the applier mints | v4 |
 
-**[v1 defect] D4 was overstated.** `--from-conversion` skips only *decompose's own*
-converter. Stage B still shells to `coldstart` and `parallax`, and Stage D to
-`premortem`; each calls `detectProvider()` and exits 1 without one. `--from-conversion`
-buys reproducibility and removes the frontier-tier call — **not** a fully
-provider-free compile. The README and `--help` must say exactly this.
+**D2's history is worth recording, because I got it wrong twice.** v2 made width
+certification blocking; v2's premortem showed it inert *because rule 7 already
+vetoed the same pairs with the same predicate*. v3 then narrowed rule 7 to a
+"real glob intersection" — and carried v2's conclusion forward even though it was
+contingent on the rule that changed. The result contradicted itself: v3 required
+batches to compile clean that `merge-forecast` hard-vetoes, since
+`signalScopeOverlap` (`signals.mjs:21`) takes no `repoFiles` and `pairScore`
+short-circuits on it at `:329` with `hardVeto: true`. v4 stops inventing a
+predicate and reuses the downstream one.
+
+**D6 follows from D1.** With no store write there is no reason to mint ULIDs, and
+minting them made v3's own duplicate-id and case-collision rules unreachable
+(`generateTicketId` returns uppercase Crockford base32 with 80 bits of entropy, so
+a duplicate is a 2^-80 event and a case-fold onto a legacy `a142` is impossible).
+Provisional ids keep those checks meaningful.
 
 ## 4. Package shape
 
@@ -74,283 +123,200 @@ provider-free compile. The README and `--help` must say exactly this.
 packages/decompose/
 ├── package.json      deps: @adlc/core, @adlc/tickets, @adlc/merge-forecast
 ├── bin/decompose.mjs
-├── lib/{convert,structural,gates,width,project,run}.mjs
+├── lib/{convert,structural,advisory,run}.mjs
 ├── test/
 └── README.md
 ```
 
-**[v1 defect] v1 claimed "sibling `@adlc/*` packages are never imported as
-libraries." That is false** — measured across `packages/*/lib` and `packages/*/bin`:
-34 imports of `@adlc/gate-manifest`, 31 of `@adlc/tickets`, 3 of
-`@adlc/model-router`, 3 of `@adlc/fleet`. The false premise forced an
-all-subprocess design, which is what hid the width-semantics defect below.
-
-The rule is therefore:
-
-- **Deterministic logic is imported in-process**: `topoSort`, `scopesOverlap` from
-  `@adlc/core`; `runForecast` (`forecast.mjs:26`), `topoWaves` and
-  `parallelEligiblePairs` (`reachability.mjs:92,69`) from `@adlc/merge-forecast`.
-- **Model-calling gates stay subprocesses**: `coldstart`, `parallax`, `premortem`.
-  Every such call recovers its JSON from `err.stdout` on a non-zero exit, because
-  these tools gate-fail with exit 2 and still emit valid JSON.
+`@adlc/tickets` for per-ticket schema validation only — no `TicketService`, no
+transaction. `@adlc/merge-forecast` for `parallelEligiblePairs`
+(`reachability.mjs:69`) and `signalScopeOverlap` (`signals.mjs:21`). Sibling
+`@adlc/*` imports are normal here (34 of `@adlc/gate-manifest`, 31 of
+`@adlc/tickets` across the repo).
 
 ### 4.1 CLI
 
 ```
-decompose <spec.md|->                 positional path, or - for stdin
-decompose --file <spec.md>
-decompose --request "<inline prose>"
-decompose --from-conversion <dag.json>
+decompose <spec.md|->  | --file <spec.md> | --request "<prose>" | --from-conversion <dag.json>
 
-  --write                  project into the store (default: dry run)
-  --tier <cheap|mid|frontier>   accepted; only `frontier` is permitted (below)
-  --tickets <path>         store path (default: resolved canonical store)
-  --max-attempts <n>       Stage A budget (default 3)
-  --parallax-n <int>       edge fan width, forwarded to parallax
-  --allow-unsigned         same contract as ticket-prune / ticket-sync
-  --json
-  --prompt-only            print the converter prompt, exit 0
-  --help
+  --out <path>                  write the DAG JSON here (default: stdout)
+  --tickets <path>              store to read for advisories (default: canonical)
+  --tier <cheap|mid|frontier>   accepted; only `frontier` permitted
+  --max-attempts <n>            converter budget (default 3)
+  --json · --prompt-only · --help
 ```
 
-**[v1 defect] `--tier` must be accepted, not rejected at parse time.**
-`scripts/test/flag-consistency.test.mjs:5,124` requires every model-calling package
-to register `--prompt-only` and `--tier` as parseable options and to "reject
-anything else with a clear error." v1's AC24 would have failed that suite, and
-`@adlc/core`'s `parseArgs` runs `strict: true`, so an undeclared flag throws
-`ERR_PARSE_ARGS_UNKNOWN_OPTION` rather than the intended message. Declare `--tier`,
-accept `frontier`, and reject `cheap`/`mid` with an explicit message naming the
-frontier pin (`ADLC.md:98-102`; `model-router` Rule 1 forces
-`contract|spec|architecture` work to frontier).
+There is no `--write`, no `--allow-unsigned`, and no manifest interaction.
 
-### 4.2 Exit codes
+`--tier` must be **declared and accepted** — `scripts/test/flag-consistency.test.mjs:5,124`
+requires every model-calling package to register `--prompt-only` and `--tier`, and
+`@adlc/core`'s `parseArgs` runs `strict: true`, so an undeclared flag throws
+`ERR_PARSE_ARGS_UNKNOWN_OPTION` instead of a useful message. Accept `frontier`;
+reject `cheap`/`mid` naming the pin (`ADLC.md:98-102`).
+
+On success the tool prints how to apply the DAG and the P2 gate commands to run
+against it afterwards, so the gate stays discoverable.
+
+### 4.2 Output
+
+```json
+{
+  "version": 1,
+  "sourceSpecHash": "<sha256 of the spec text>",
+  "converterTier": "frontier",
+  "attempts": 1,
+  "tickets": [ { "id": "T1", "title": "…", "body": "…", "category": "…",
+                 "scope": ["…"], "edges": [{"to": "T2"}] } ],
+  "advisories": [ { "kind": "scope-overlap-active" | "rails-collision" | "id-collision",
+                    "candidate": "T1", "against": "T-01…", "detail": "…" } ]
+}
+```
+
+`rails` is absent by construction (D5). Ids are provisional (D6).
+
+### 4.3 Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | DAG gated clean — dry-run report, or written under `--write` |
-| 1 | Operational: unreadable spec, no provider for a model-calling gate, unresolvable binary, store locked, stale CAS snapshot, missing key without `--allow-unsigned`, **any sibling gate exiting 1** |
-| 2 | Gate fail: budget exhausted with blocking findings surviving. Nothing written. |
+| 0 | DAG structurally valid; JSON emitted. Advisories may be present |
+| 1 | Operational: unreadable spec, unreadable store, no provider without `--prompt-only`/`--from-conversion` |
+| 2 | Gate fail: converter budget exhausted with structural findings surviving. No JSON emitted |
 
-A malformed converter reply is **not** operational — it folds into Stage A as a
-structural finding and consumes one attempt.
+A malformed converter reply is **not** operational — it folds in as a structural
+finding and consumes one attempt.
 
-## 5. Pipeline
+## 5. Validation
 
-### Stage A — structural (deterministic, in-process, ≤ `--max-attempts`, default 3)
-
-One frontier/direct completion converts the spec into a candidate ticket array
-using provisional ids (`T1`, `T2`, …). Validate the merged set:
+One loop, bounded by `--max-attempts` (default 3). Blocking rules:
 
 1. Per-ticket schema via `@adlc/tickets`.
-2. Duplicate provisional id within the batch.
-3. Case-insensitive id collision against the active store and within the batch.
-4. Edge-target resolution: every `edges[].to` resolves within the batch.
-5. **No edge may name an existing ticket, as origin *or* target.**
-   **[v1 defect]** v1 banned only existing→new edges. But dependency pressure lands
-   on the *target*: `topoSort()` does `indegree[e.to] += 1`, and `topoWaves()` the
-   same. A new ticket with `{to: <existing id>}` therefore changes that existing
-   ticket's indegree, readiness and wave — while its shard stays byte-identical, so
-   `rails-guard-ci`'s add-vs-alter contract sees a pure addition and the store is
-   deliberately off the tier surface (#326). A compile could silently block a
-   ticket a fleet run is already executing. Reject both directions.
-6. Cycle detection via `topoSort()`.
-7. **Scope-overlap veto, restricted to parallel-eligible pairs within the batch.**
-   **[v1 defect]** v1 vetoed overlap against *every* active ticket. Two facts make
-   that fatal: `scopesOverlap` is a string-prefix test (`packages/decompose/lib/**`
-   vs `packages/**` → `true`; `src/auth` vs `src/authz/**` → `true`, a false
-   positive), and this repo has three active repo-wide tickets — two release
-   tickets declaring `packages/**`. Every candidate touching any package would be
-   rejected, permanently, and the first compile's own output would block every
-   later one. Use `parallelEligiblePairs()` so edge-connected tickets may share
-   scope (that relationship is exactly what `edges[].contract` expresses), and
-   confine the veto to the batch. Overlap against *active* tickets is reported as
-   an advisory warning, never a veto.
+2. Duplicate provisional id within the batch (case-insensitively).
+3. Every `edges[].to` resolves to a provisional id **in this batch**.
+4. **No edge may name a ticket outside the batch.** Dependency pressure lands on
+   the target — `topoSort()` does `indegree[e.to] += 1`, as does `topoWaves()` —
+   so an edge into an existing ticket would change that ticket's readiness and
+   wave while its shard stays byte-identical, invisible to `rails-guard-ci`'s
+   add-vs-alter contract. Keeping the batch self-contained makes the emitted DAG
+   applicable without touching anything that already exists.
+5. Cycle detection via `topoSort()`.
+6. **Scope conflict among parallel-eligible pairs, using `scopesOverlap`
+   verbatim** — the exact predicate `signalScopeOverlap` wraps and
+   `merge-forecast` hard-vetoes on, over the exact pair set
+   `parallelEligiblePairs` yields. Do not invent a narrower test. Its false
+   positives (`src/auth` vs `src/authz/**`) fall in the fail-safe direction, and
+   agreeing with the downstream gate by construction is worth more than
+   precision. Edge-connected pairs are excluded by `parallelEligiblePairs`, so a
+   scaffold-then-build split remains expressible — it just has to declare its
+   edge.
 
-All failures aggregate into one feedback block for a full re-emission. Exhausting
-the budget is exit 2.
+Advisory only, reported in `advisories[]`, never blocking:
 
-### Stage B — LLM gates (blocking, ≤ 2 passes)
+- Candidate scope overlapping an **active** ticket's scope. v1 made this blocking
+  and it rejected everything: `scopesOverlap` is a prefix test and this repo has
+  three active repo-wide tickets, two of them release tickets declaring
+  `packages/**`.
+- Candidate scope intersecting an **active** ticket's `rails`. v3 made this
+  blocking; the store holds 54 unique active rails including
+  `packages/cli/lib/registry.mjs`, which this very program must edit, so blocking
+  on it means `decompose` cannot decompose its own spec. It is already enforced
+  downstream by the PreToolUse hook and by `rails-guard-ci`.
+- Provisional id colliding with an existing ticket id (the store holds short
+  legacy ids like `I1`, `a142`). Advisory because the applier mints real ids.
 
-Materialise the survivor to a scratch tree and run, concurrently:
+All blocking failures aggregate into one feedback block for a full re-emission.
+Exhausting the budget is exit 2.
 
-- `coldstart --all --tickets <scratch> --json`
-- `parallax --edge <A> <B> --tickets <scratch> --json` per batch edge
+## 6. Trust-root tier
 
-**Both subprocesses run with `cwd` set to the scratch tree.**
-**[v1 defect] v1's dry run was not dry.** `coldstart.mjs:169` runs
-`for (const entry of recordPlan) record({ ...entry, key: getKey() })`
-unconditionally after `checkAll` — there is no `--no-record` flag. A no-`--write`
-compile would permanently append manifest entries bound to provisional ids
-`T1..Tn`, and in this segmented repo would create a new tracked segment file.
-Because `appendManifestEntry(payload, dir = ADLC_DIR)` resolves `.adlc` from cwd,
-setting the subprocess cwd redirects those records into the scratch tree with no
-change to coldstart.
+`decompose` is not a producer of a gated artifact and does **not** join
+`PRODUCER_PREFIXES`.
 
-**Blocking condition is each tool's own verdict, not raw finding counts.**
-**[v1 defect]** v1 blocked on "non-empty `divergences`". parallax emits no
-`divergent` field at all, and its real gate is `score <= threshold` (default 0.25)
-— it deliberately tolerates a quarter of readings diverging. Blocking on any
-divergence would block essentially every pass and burn the re-conversion budget on
-noise. Block on parallax's `gate === false`, and on coldstart's non-empty `gaps`.
+It remains true that creating any package edits `package.json` and
+`package-lock.json`, both exact `TRUST_ROOT_FILES` in
+`packages/prosecute/lib/tier.mjs`, so **this PR is still trust-root tier and needs
+a signed cross-model attestation bound to its reviewed revision.** What v4 removes
+is the *recurring* burden: no `tier.mjs` edit (itself enforcement-tier), and no
+attestation on every future change to the package.
 
-Non-empty on pass 1 → one feedback re-conversion → re-run Stage A → re-run Stage B
-once. Still blocking → exit 2.
+## 7. Repo conformance
 
-### Stage C — per-wave width certification (blocking, per D2)
-
-**[v1 defect] v1 assumed `merge-forecast --width` certifies the whole schedule. It
-does not** — `forecast.mjs:134-136` computes `certifiedWidth` from `waves[0]` alone,
-and `computeCertifiedWidth` (`:203`) scores only pairs with both endpoints in wave
-1. For the canonical foundation-first shape (1 → 4 → 1) the true width is 4 and
-`certifiedWidth` is 1, so v1's "natural fan-out width" would have failed every DAG
-with an edge — leaving `decompose` able to emit only flat batches, which is what
-looping `ticket create` already does. Tracked as **#997**.
-
-Certify **per wave**, using the semantics the tool already implements:
-
-```
-waves = topoWaves(candidates)
-for i in 0..waves.length-1:
-    subDag = candidates minus every ticket in waves[0..i-1]   # earlier waves are "merged"
-    runForecast({ tickets: subDag, width: waves[i].length })  # waves[i] is now wave 1
-```
-
-Each wave is evaluated as wave 1 of the remaining DAG, which is exactly the
-question "if everything upstream had merged, is this wave safe at its own width?"
-Any wave failing certification, or any vetoed pair scheduled concurrently, is a
-blocking finding → one feedback re-conversion → re-validate A and B → re-run C
-once. Still blocking → exit 2. This needs no change to `merge-forecast` and does
-not block on #997.
-
-**Determinism caveat.** `pairScore()` folds in `coChange(...)`, so `certifiedWidth`
-varies with git history depth — in a shallow worktree the signal is skipped with a
-warning and the number changes. Stage C records its forecast inputs and the
-resulting per-wave widths in the evidence entry (§7) so a disputed gate result is
-reconstructable. The general problem is #997's secondary observation.
-
-### Stage D — premortem (advisory, never vetoes)
-
-Render the surviving DAG plus the source spec to one markdown document and run
-`premortem <rendered.md> --tier frontier --json`, cwd set to the scratch tree.
-Causes surface in the report and under `advisory.premortem`. They never affect the
-exit code.
-
-### Stage E — projection (clean A/B/C, and only under `--write`)
-
-1. Mint real ids via `generateTicketId()`; rewrite provisional edges in one pass.
-2. `planCreateBatch(tickets)` + `apply()`, once (§6).
-3. `model-router` for the report and evidence only — advisory (D7), nothing written
-   back (D5).
-4. `runForecast` on the written store, in-process, for the recorded width. **Not**
-   claimed as wired into `fleet`; that is a separable follow-up, recorded as a known
-   gap in the README rather than stranded the way booster's `plan.concurrencyCap` was.
-5. Append evidence (§7).
-
-## 6. New surface in `@adlc/tickets`
-
-`TicketService.planCreateBatch(tickets)` — operation `'batch-create'`. Asserts every
-id is genuinely new; validates through the same `#plan`/`validateTickets` path;
-applies through the existing `apply(plan, { lock })` transaction.
-
-Chosen over `planReconciliation` (hard-codes `'remote-reconciliation'`,
-`service.mjs:202` — every P2 compile would be audited as a ticket-sync event) and
-over looping `planCreate` (impossible, D6).
-
-**[v1 defect] v1 claimed the evidence binding is inherited "unmodified." It is not.**
-`#plan` carries a single `ticketId`; `apply()` forwards that one id;
-`evidenceBinding()` returns all-null hashes when it is null and `recordTicketEvidence`
-then stamps `bindingScope: 'store'`. A six-ticket compile would emit one entry naming
-no ticket — defeating §7's purpose. `evidence.mjs` already supports a multi-ticket
-`ticketIds` field; `applyDirectoryTransaction` never passes it. Delivering per-ticket
-binding therefore requires threading `ticketIds` from the plan through `apply()` into
-`applyDirectoryTransaction` → `recordTicketEvidence`. **`packages/tickets/lib/transaction.mjs`
-is in this diff**, which is a larger blast radius than v1 admitted.
-
-## 7. Evidence
-
-One `gate-manifest` entry per new ticket, gate `decompose`, data: `{ specHash,
-converterTier, attempts, gatePasses, coldstart, parallaxEdges, perWaveWidths,
-forecastInputs }`. Signed via `ADLC_MANIFEST_KEY`, or unsigned with a warning under
-`--allow-unsigned`. Plus the transaction's own `ticket-mutation` entry, bound to
-every id in the batch (§6).
-
-## 8. Trust-root tier and landing order
-
-Add `'packages/decompose/'` to `PRODUCER_PREFIXES` in
-`packages/prosecute/lib/tier.mjs`. Because `packages/prosecute/` is itself an
-`ENFORCEMENT_PREFIXES` entry, that change is trust-root tier on its own account.
-
-**[v1 defect] v1 implied that landing the tier one-liner early keeps later PRs
-cheap. It does not.** `TRUST_ROOT_FILES` includes `package.json` and
-`package-lock.json` as **exact** matches, and creating a package edits both. Every
-PR in this program is trust-root tier and needs a signed cross-model attestation
-bound to the reviewed revision, regardless of ordering. Per standing practice the
-agent is denied `ADLC_MANIFEST_KEY`, so a human runs that step on each lane. Plan
-for it rather than being surprised by it.
-
-## 9. Repo conformance obligations
-
-Adding a package trips four repo-wide guards that v1 ignored entirely:
-
-- `apps/docs/test/toolkit-packages.test.mjs:16` asserts `ALL_PACKAGES` is bijective
-  with the on-disk `packages/` listing, and `:25` requires
-  `apps/docs/content/docs/toolkit/decompose.mdx` to exist.
-- `scripts/test/flag-consistency.test.mjs` — add `decompose` to its `PACKAGES` table
-  (the table is hand-maintained with no completeness guard, so omission is silent).
+- `apps/docs/test/toolkit-packages.test.mjs:16` — `ALL_PACKAGES` must stay
+  bijective with the `packages/` listing; `:25` requires
+  `apps/docs/content/docs/toolkit/decompose.mdx`.
+- `scripts/test/flag-consistency.test.mjs` — add `decompose` to its `PACKAGES`
+  table (hand-maintained, no completeness guard, so omission is silent).
 - `scripts/test/prompt-fencing.test.mjs:30` — add `lib/convert.mjs` to `GUARDED`.
-- `packages/cli/lib/registry.mjs` — the `decompose` verb entry.
+- `packages/cli/lib/registry.mjs` — the `decompose` verb.
 
-## 10. Acceptance criteria
+## 8. Acceptance criteria
 
 Every criterion names the verification method that decides it.
 
-- **AC1** — A spec compiles to a valid DAG and is written to the store. Verified by `packages/decompose/test/roundtrip.test.mjs` — scratch git repo, real `decompose --from-conversion <fixture> --write`, commit, run real `scripts/rails-guard-ci.mjs` as a subprocess, assert exit 0.
-- **AC2** — A cyclic candidate batch never reaches the store. Verified by `packages/decompose/test/structural.test.mjs` — cyclic fixture exits 2, store snapshot hash unchanged.
-- **AC3** — An edge to an unknown provisional id is rejected in Stage A. Verified by `packages/decompose/test/structural.test.mjs` — assert the error names the unresolved target.
-- **AC4** — An edge naming an existing ticket is rejected in either direction. Verified by `packages/decompose/test/structural.test.mjs` — assert exit 2 for both `{from: existing}` and `{to: existing}` fixtures.
-- **AC5** — A compile does not change any existing ticket's scheduling position. Verified by `packages/decompose/test/structural.test.mjs` — compute `topoWaves` and indegree for every active ticket before and after a successful compile, assert deep equality.
-- **AC6** — Scope overlap vetoes only parallel-eligible pairs inside the batch. Verified by `packages/decompose/test/structural.test.mjs` — an edge-connected overlapping pair passes; an unconnected overlapping pair exits 2.
-- **AC7** — A batch overlapping a repo-wide active ticket still compiles. Verified by `packages/decompose/test/real-store.test.mjs` — run against a copy of this repo's real `.adlc/tickets/` store, which holds three active repo-wide-scope tickets, and assert exit 0.
-- **AC8** — A case-insensitive id collision is caught in Stage A, not at the store. Verified by `packages/decompose/test/structural.test.mjs` — assert the Stage A error fires and `CASE_COLLISION` never throws.
-- **AC9** — Stage A retries at most `--max-attempts` then exits 2. Verified by `packages/decompose/test/pipeline.test.mjs` — stub converter always invalid, assert exactly 3 converter calls.
-- **AC10** — A malformed converter reply consumes an attempt rather than exiting 1. Verified by `packages/decompose/test/pipeline.test.mjs` — stub returns unparseable text once then a valid batch, assert exit 0.
-- **AC11** — Stage B blocks on coldstart gaps and re-converts exactly once. Verified by `packages/decompose/test/pipeline.test.mjs` — stubbed subprocess, assert exactly 2 gate passes then exit 2.
-- **AC12** — Stage B blocks on parallax's own gate verdict, not on raw divergence count. Verified by `packages/decompose/test/pipeline.test.mjs` — a stub emitting `divergences` with `gate: true` (score under threshold) must NOT block; `gate: false` must block.
-- **AC13** — Stage B leaves the repo's `.adlc/` byte-identical on a dry run. Verified by `packages/decompose/test/pipeline.test.mjs` — hash the entire `.adlc/` tree including `manifest.d/` before and after a no-`--write` run with the REAL coldstart binary, assert equality.
-- **AC14** — Every wave of a multi-level DAG is certified, not just the first. Verified by `packages/decompose/test/width.test.mjs` — a 1→4→1 fixture certifies clean end to end against the REAL `runForecast`, not a stub.
-- **AC15** — A wave whose width exceeds its certification exits 2. Verified by `packages/decompose/test/width.test.mjs` — fixture with a conflicting pair inside one wave, assert exit 2 naming that wave.
-- **AC16** — A sibling gate exiting 1 fails closed. Verified by `packages/decompose/test/pipeline.test.mjs` — stub exits 1, assert `decompose` exits 1 and the store hash is unchanged.
-- **AC17** — Sibling JSON is recovered from a gate-fail exit 2. Verified by `packages/decompose/test/pipeline.test.mjs` — stub writes valid JSON and exits 2, assert findings parsed rather than treated as operational.
-- **AC18** — Premortem never changes the exit code. Verified by `packages/decompose/test/pipeline.test.mjs` — stub returns causes on a clean DAG, assert exit 0.
-- **AC19** — Dry run is the default and mutates nothing. Verified by `packages/decompose/test/cli.test.mjs` — run without `--write`, assert the whole `.adlc/` tree hash is unchanged.
-- **AC20** — `planCreateBatch` refuses a non-new id. Verified by `packages/tickets/test/service.test.mjs` — assert a policy error naming the colliding id.
-- **AC21** — `planCreateBatch` writes a multi-level DAG atomically. Verified by `packages/tickets/test/service.test.mjs` — 3 tickets across 2 edge levels in one apply, assert all present and `operation` is `batch-create`.
-- **AC22** — A failed apply leaves the store byte-identical. Verified by `packages/tickets/test/service.test.mjs` — force a mid-apply failure, assert the snapshot hash is unchanged.
-- **AC23** — The transaction's manifest entry names every ticket in the batch. Verified by `packages/tickets/test/transaction.test.mjs` — assert `ticketIds` carries all ids and `bindingScope` is not `store`.
-- **AC24** — One signed evidence entry is appended per new ticket. Verified by `packages/decompose/test/roundtrip.test.mjs` — assert entry count equals ticket count, each with `gate: 'decompose'`.
-- **AC25** — `--allow-unsigned` warns and still records. Verified by `packages/decompose/test/cli.test.mjs` — assert a warning on stderr and an unsigned entry.
-- **AC26** — `--prompt-only` prints the converter prompt, exits 0, needs no provider, writes nothing. Verified by `packages/decompose/test/cli.test.mjs` — assert exit 0, prompt on stdout, `.adlc/` tree unchanged.
-- **AC27** — `--from-conversion` skips the converter but still requires a provider for Stage B. Verified by `packages/decompose/test/cli.test.mjs` — with no provider env, assert exit 1 and a message naming the gate that needs one.
-- **AC28** — `--tier frontier` is accepted; `cheap` and `mid` are rejected with a clear message. Verified by `packages/decompose/test/cli.test.mjs` plus membership in `scripts/test/flag-consistency.test.mjs`'s table.
-- **AC29** — A change to decompose's source classifies trust-root tier. Verified by `packages/prosecute/test/tier.test.mjs` — a diff touching `packages/decompose/lib/run.mjs` tiers; a `packages/decompose/test/` path does not.
-- **AC30** — The `decompose` CLI verb is registered and dispatches. Verified by `packages/cli/test/registry.test.mjs` — assert `decompose` resolves to `@adlc/decompose`.
-- **AC31** — Repo conformance guards pass. Verified by `apps/docs/test/toolkit-packages.test.mjs` (bijection + `decompose.mdx`) and `scripts/test/prompt-fencing.test.mjs` (`lib/convert.mjs` in `GUARDED`).
-- **AC32** — The compiler converges on real input. Verified by `packages/decompose/test/convergence.test.mjs` — compile 3 committed specs from `.adlc/specs/` with recorded converter replays, assert each reaches exit 0 within the attempt budget.
-- **AC33** — No test reaches the network. Verified by `npm test` running green with no provider environment variables set.
+- **AC1** — A spec compiles to a structurally valid DAG emitted as JSON. Verified by `packages/decompose/test/compile.test.mjs` — real `decompose --from-conversion <fixture> --json`, assert exit 0 and a parseable document matching the §4.2 shape.
+- **AC2** — The emitted DAG is accepted by the downstream gate. Verified by `packages/decompose/test/handoff.test.mjs` — import `runForecast` from `@adlc/merge-forecast` in-process, run it on the emitted tickets, assert `gateFailures` is empty. This is the criterion v3 lacked and why its predicate contradiction shipped.
+- **AC3** — Rule 6 uses `scopesOverlap` verbatim. Verified by `packages/decompose/test/structural.test.mjs` — assert `src/auth` vs `src/authz/**` is REJECTED (matching `signalScopeOverlap`), not certified.
+- **AC4** — Edge-connected pairs may share scope. Verified by `packages/decompose/test/structural.test.mjs` — an overlapping pair joined by an edge compiles clean; the same pair unconnected exits 2.
+- **AC5** — No emitted ticket carries `rails`. Verified by `packages/decompose/test/compile.test.mjs` — assert `rails` is absent on every emitted ticket even when the converter proposes one.
+- **AC6** — A cyclic batch is rejected. Verified by `packages/decompose/test/structural.test.mjs` — cyclic fixture exits 2 and no JSON is emitted.
+- **AC7** — An edge naming a ticket outside the batch is rejected. Verified by `packages/decompose/test/structural.test.mjs` — assert exit 2 and that the error names the out-of-batch target.
+- **AC8** — A duplicate provisional id is rejected case-insensitively. Verified by `packages/decompose/test/structural.test.mjs` — a batch containing `T1` and `t1` exits 2.
+- **AC9** — Scope overlap against an active ticket is advisory, not blocking. Verified by `packages/decompose/test/real-store.test.mjs` — run against a copy of this repo's real `.adlc/tickets/` store, which holds three active repo-wide-scope tickets, assert exit 0 with an `advisories[]` entry of kind `scope-overlap-active`.
+- **AC10** — Rails collision against an active ticket is advisory. Verified by `packages/decompose/test/real-store.test.mjs` — emit a candidate scoped to `packages/cli/lib/registry.mjs`, which the real store rails, assert exit 0 and a `rails-collision` advisory.
+- **AC11** — The converter retries at most `--max-attempts` then exits 2. Verified by `packages/decompose/test/pipeline.test.mjs` — stub converter always invalid, assert exactly 3 calls.
+- **AC12** — A malformed converter reply consumes an attempt rather than exiting 1. Verified by `packages/decompose/test/pipeline.test.mjs` — stub returns unparseable text once then a valid batch, assert exit 0.
+- **AC13** — The tool never writes to the ticket store or the manifest. Verified by `packages/decompose/test/compile.test.mjs` — hash the entire `.adlc/` tree including `manifest.d/` before and after a full compile, assert byte equality.
+- **AC14** — `--from-conversion` completes with every provider environment variable unset. Verified by `packages/decompose/test/cli.test.mjs` — assert exit 0 and a valid emitted DAG with no provider configured.
+- **AC15** — `--from-conversion` spawns no subprocess. Verified by `packages/decompose/test/cli.test.mjs` — stub `node:child_process` and assert zero invocations on that path. The claim is scoped to this path: a CLI-backed provider spawns on the converter path by design.
+- **AC16** — `--prompt-only` prints the converter prompt and exits 0 with no provider. Verified by `packages/decompose/test/cli.test.mjs` — assert exit 0 and the prompt on stdout.
+- **AC17** — `--out` writes the DAG to a file and stdout stays clean. Verified by `packages/decompose/test/cli.test.mjs` — assert the file parses and stdout carries only the human report.
+- **AC18** — `--tier frontier` is accepted; `cheap` and `mid` are rejected with a clear message. Verified by `packages/decompose/test/cli.test.mjs` plus membership in `scripts/test/flag-consistency.test.mjs`'s table.
+- **AC19** — Success output names how to apply the DAG and the P2 gate commands. Verified by `packages/decompose/test/cli.test.mjs` — assert stdout mentions `coldstart`, `parallax` and `merge-forecast`.
+- **AC20** — An unreadable ticket store is an operational error, not a gate failure. Verified by `packages/decompose/test/cli.test.mjs` — point `--tickets` at a corrupt file, assert exit 1.
+- **AC21** — The `decompose` verb is registered and dispatches. Verified by `packages/cli/test/registry.test.mjs` — assert `decompose` resolves to `@adlc/decompose`.
+- **AC22** — Repo conformance guards pass. Verified by `apps/docs/test/toolkit-packages.test.mjs` (bijection + `decompose.mdx`) and `scripts/test/prompt-fencing.test.mjs` (`lib/convert.mjs` in `GUARDED`).
+- **AC23** — No test reaches the network. Verified by `packages/decompose/test/pipeline.test.mjs` — stub `fetch` and `child_process` across the suite and assert zero calls on every non-converter path.
 
-## 11. Non-goals for v1
+## 9. Non-goals
 
-Antigravity brain-artifact discovery (belongs in `plugins/adlc-gemini`); wiring
-`fleet` to consume the recorded width; superseding tickets from an earlier compile
-(D3); host integration-doc tables; the `sweep` generator and pool-aware concurrency
-from `docs/intent/booster-adoption.md` §4 and §7.
+Writing the ticket store (§2 — its own ticket, with its own premortem). Gate
+orchestration. Emitting rails. Antigravity brain discovery. Superseding tickets
+from an earlier compile. Host integration-doc tables. The `sweep` generator and
+pool-aware concurrency (`docs/intent/booster-adoption.md` §4, §7).
 
-## 12. Known risk
+## 10. Known risk
 
-`decompose` embeds spec text and existing ticket bodies — both repository-controlled
-— into a frontier-model prompt. `docs/intent/booster-adoption.md` §3.1 flags that
-`@adlc/core`'s `fence()` derives its tag from the capped content length, which is
-fully predictable when the input is truncated. That finding is unproven and tracked
-separately. `decompose` must use the current fencing primitive and must not
-introduce a third scheme; AC31 pins it into the fencing guard list. If the finding
-reproduces, it is a prerequisite, not a follow-up.
+`decompose` embeds spec text into a frontier-model prompt.
+`docs/intent/booster-adoption.md` §3.1 flags that `@adlc/core`'s `fence()` derives
+its tag from the capped content length, predictable when the input is truncated.
+Unproven and tracked separately. Use the current fencing primitive, introduce no
+third scheme; AC22 pins it into the fencing guard list. If the finding reproduces,
+it is a prerequisite.
+
+## 11. Round-four findings, recorded for the re-spec
+
+v4 was never approved. These were verified against the code and must be answered
+by whatever replaces it:
+
+- **The output is not applicable.** `planCreate` mints an id only when absent
+  (`service.mjs:106`), so a provisional `T1` persists verbatim and hits
+  `TICKET_EXISTS` against the 96 legacy `T<n>` shards in the store. Applying the
+  DAG leaf-first satisfies the edge check but not the id namespace. Blocked on
+  #1003.
+- **Rule 6 is not the downstream predicate.** `merge-forecast` filters pairs to
+  the same wave (`forecast.mjs:170-175`) before vetoing; `parallelEligiblePairs`
+  does not. v4 is therefore stricter than the gate it claimed parity with —
+  the same error v3 made in a different place.
+- **`validateTicket` requires only `id` and `title`** (`schema.mjs:4-12`), not
+  `body` or `scope`. Since `scopesOverlap` reads `a.scope ?? []`, a scope-less
+  batch passes every blocking rule — a reward-hacking gradient for a bounded
+  retry loop, and coldstart then hard-fails every ticket downstream.
+- **`fence()` is forgeable always, not only on truncation.** The tag is
+  `${label}-${capped.length}` (`core/lib/text.mjs:48`), a pure function of content
+  the author controls. `tail()` also keeps the *last* `maxChars`, so an over-cap
+  spec silently loses its opening sections and compiles clean.
+- **No glob∩glob primitive exists** in the declared dependencies; the only
+  implementations are two divergent copies inside `@adlc/autopilot`. Any advisory
+  comparing scope globs to rails globs needs one promoted into `@adlc/core` first.
+- **Hollow criteria:** AC21 named a file that does not exist; AC13 could not fail;
+  AC10 passed on literal string equality; AC2 asserted `gateFailures` empty on a
+  forecast that had scored nothing.
