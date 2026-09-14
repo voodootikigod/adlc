@@ -65,3 +65,11 @@ test('--threshold rejects anything outside 0..1, and non-numbers, naming what it
     assert.ok(err.message.includes(String(bad)), 'the message names the value it got');
   }
 });
+
+test('a flag longer than the help column still gets a separating space', () => {
+  // padEnd collapses to nothing once the flag outgrows the column, and the help
+  // then abuts the flag name — reading as one longer flag that does not exist.
+  const usage = renderUsage([{ name: 'a-very-long-flag-name-indeed', arg: null, help: 'HELPTEXT' }]);
+  assert.ok(!usage.includes('indeedHELPTEXT'), 'help must not abut the flag name');
+  assert.match(usage, /--a-very-long-flag-name-indeed\s+HELPTEXT/);
+});

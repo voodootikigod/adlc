@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { IMPLIED_SCHEMA_VERSION, loadCache, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
+import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
 
 test('a MISSING profile is not an error — the defaults are a complete profile', () => {
   const p = loadProfile('nope.json', { exists: () => false, readFile: () => { throw new Error('must not read'); } });
@@ -80,4 +80,47 @@ test('a valid JSON PRIMITIVE is not a cache — it degrades to empty rather than
   for (const raw of ['"bad"', '7', 'true', '"[]"', 'null', '[1,2]']) {
     assert.deepEqual(loadCache('c.json', { exists: () => true, readFile: () => raw }), {}, `${raw} must not be treated as a cache`);
   }
+});
+
+// ---- baseFloorFromGit — AC24's read side ------------------------------------
+
+test('baseFloorFromGit returns the floor recorded at the merge base', () => {
+  const run = (args) =>
+    args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
+  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run }), ['close', 'relabel']);
+});
+
+test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the key', () => {
+  // Omission at the base means the base floor was the conservative default, not
+  // nothing — so a head that empties the floor is still a widening.
+  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1 }));
+  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
+});
+
+test('baseFloorFromGit returns null — not [] — when the base profile is absent', () => {
+  // The distinction AC24 rests on. `null` makes assertFloorNotWidened refuse;
+  // `[]` would make deleting the profile at the base the cheapest widening.
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    throw new Error('fatal: path does not exist');
+  };
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
+});
+
+test('baseFloorFromGit returns null when the merge base cannot be resolved', () => {
+  const run = () => { throw new Error('fatal: no merge base'); };
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
+});
+
+test('baseFloorFromGit returns null when the base profile is malformed', () => {
+  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : '{ not json');
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
+});
+
+test('baseFloorFromGit returns null when the base profile has an unknown key', () => {
+  // A base profile this build cannot parse is a base floor this build does not
+  // know — the same unknown, reached a different way.
+  const run = (args) =>
+    args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonmyFloor: [] });
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
 });

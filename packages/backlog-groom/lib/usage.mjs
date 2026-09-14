@@ -14,6 +14,11 @@ export const FLAGS = [
   { name: 'threshold', arg: 'n', default: '0.2', help: 'relation candidate-filter threshold (default 0.2)' },
   { name: 'json', arg: null, help: 'emit the groomed set as JSON instead of the report' },
   { name: 'out', arg: 'path', help: 'write the groomed set JSON to a file' },
+  { name: 'apply', arg: null, help: 'apply gated conclusions to GitHub (writes; off by default)' },
+  { name: 'set', arg: 'path', help: 'with --apply: the groomed set JSON to act on' },
+  { name: 'ledger', arg: 'path', help: 'gate replay ledger (default .adlc/backlog-groom-ledger.json)' },
+  { name: 'base-ref', arg: 'ref', default: 'origin/main', help: 'ref the autonomy floor is compared against (default origin/main)' },
+  { name: 'authorize-floor-widening', arg: null, help: 'explicit trust-root authorization to widen the autonomy floor' },
   { name: 'help', arg: null, help: 'show this message' },
 ];
 
@@ -38,13 +43,21 @@ export function parseOptions(flags = FLAGS) {
 }
 
 /** Render the usage block from the flag table. */
+/** The help column the flag list pads to, when the flag is short enough to fit. */
+const COLUMN = 22;
+
 export function renderUsage(flags = FLAGS) {
   const lines = ['backlog-groom — groom a GitHub issue backlog against the code (read-only)', ''];
   for (const f of flags) {
     const left = f.arg ? `--${f.name} <${f.arg}>` : `--${f.name}`;
-    lines.push(`  ${left.padEnd(22)}${f.help}`);
+    // At least ONE space, always. A bare padEnd collapses to zero padding once a
+    // flag outgrows the column, and the help text then runs straight into the
+    // flag name — which reads as a different, longer flag.
+    lines.push(`  ${left.padEnd(Math.max(COLUMN, left.length + 1))}${f.help}`);
   }
-  lines.push('', 'This command never writes to GitHub.');
+  lines.push('', 'Without --apply this command never writes to GitHub.');
+  lines.push('With --apply, every action is gated by an independent reviewer and bounded by');
+  lines.push('the autonomy floor; nothing is written that both did not permit.');
   return lines.join('\n');
 }
 

@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
 
@@ -68,4 +69,51 @@ export function saveCache(path, cache, io = {}) {
   } catch (err) {
     return `could not write the cache at ${path}: ${err.message}`;
   }
+}
+
+/**
+ * The autonomy floor as it exists at the MERGE BASE with the default branch.
+ *
+ * §3.7/AC24: the comparison that makes the floor a floor is against the base,
+ * not the checked-out file. The working copy is exactly what someone widening
+ * the floor controls, so a check reading only the working copy validates the
+ * attacker's own claim.
+ *
+ * Returns `null` when the base profile cannot be read — and `null` is NOT an
+ * empty floor. `assertFloorNotWidened` refuses to act on a null base precisely
+ * so that deleting the profile at the base cannot become the cheapest widening.
+ *
+ * @returns {string[]|null}
+ */
+export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = 'origin/main' } = {}) {
+  let mergeBase;
+  try {
+    mergeBase = String(run(['merge-base', 'HEAD', baseRef])).trim();
+  } catch {
+    return null;
+  }
+  if (!mergeBase) return null;
+
+  let raw;
+  try {
+    raw = run(['show', `${mergeBase}:${profilePath}`]);
+  } catch {
+    // Absent at the base is genuinely unknown, not "no floor": the profile may
+    // be newly added in this branch, and treating that as an empty base floor
+    // would let a first-commit profile declare any floor it liked.
+    return null;
+  }
+
+  try {
+    const parsed = parseProfile(JSON.parse(raw));
+    return parsed.autonomyFloor;
+  } catch {
+    // A malformed base profile is unknown too. Guessing would be guessing about
+    // exactly the value the guard exists to compare.
+    return null;
+  }
+}
+
+function defaultGitRun(args) {
+  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
 }

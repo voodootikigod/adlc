@@ -12,12 +12,15 @@
  */
 
 import { parseArgs } from 'node:util';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 import { groom } from '../lib/groom.mjs';
 import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold } from '../lib/usage.mjs';
-import { loadProfile, loadCache, saveCache, serialiseJson } from '../lib/io.mjs';
+import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
+import { applyRun } from '../lib/apply.mjs';
+import { reviewArgv, reviewerPair } from '../lib/gate.mjs';
 
 /**
  * The operational-error exit code, named once and used by BOTH exit paths.
@@ -83,6 +86,65 @@ try {
 const cachePath = values.cache ?? '.adlc/backlog-groom-cache.json';
 const cache = values['no-cache'] ? null : loadCache(cachePath);
 
+// ---- --apply: the write path (§3.6-§3.8) -----------------------------------
+//
+// Deliberately a separate branch rather than a flag threaded through the read
+// run: the read path must stay reachable with no possibility of a write, so the
+// two never share a code path that a flag could flip.
+if (values.apply) {
+  if (!values.set) opError('--apply requires --set <path> — the groomed set to act on');
+
+  let set;
+  try {
+    set = JSON.parse(readFileSync(values.set, 'utf8'));
+  } catch (err) {
+    opError(`could not read ${values.set}: ${err.message}`);
+  }
+
+  const ledgerPath = values.ledger ?? '.adlc/backlog-groom-ledger.json';
+  const ledger = loadCache(ledgerPath);
+
+  // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
+  // the floor guard refuses to act on an unknown base rather than assuming one.
+  const baseFloor = baseFloorFromGit(profilePath, { baseRef: values['base-ref'] });
+
+  const pair = reviewerPair(profile);
+  if (!pair.ok) console.error(`backlog-groom: ${pair.reason} — every action will demote to a proposal`);
+
+  const runReview = () => {
+    const res = spawnSync('adversarial-review', reviewArgv({ artifactPath: values.set, reviewer: pair.reviewer }), {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    // A spawn that never ran has a null status. Reporting that as an exit code
+    // the gate could read as an approve is the one mistake this wrapper must
+    // not make, so it becomes an explicit non-approve.
+    if (res.error || res.status === null) throw new Error(res.error?.message ?? 'the reviewer did not run');
+    return { code: res.status };
+  };
+
+  let applied;
+  try {
+    applied = applyRun({
+      set,
+      profile,
+      baseFloor,
+      ledger,
+      runReview,
+      gh: ghWriter(),
+      floorWideningAuthorized: values['authorize-floor-widening'],
+    });
+  } catch (err) {
+    opError(err.isOpError ? err.message : `apply failed: ${err.message}`);
+  }
+
+  const warn = saveCache(ledgerPath, ledger);
+  if (warn) console.error(`backlog-groom: warning — ${warn}`);
+
+  console.log(serialiseJson(applied).trimEnd());
+  process.exitCode = 0;
+} else {
+
 // No `judge` is wired here. Relation judgment is a model call the SKILL supplies
 // (§3.4); the CLI alone surfaces candidates and reports what the filter excluded,
 // so a bare CLI run never emits a relation it did not have judgment for.
@@ -110,3 +172,27 @@ if (values.json) console.log(serialiseJson(result.set).trimEnd());
 else console.log(renderReport(result.set));
 
 process.exitCode = 0;
+}
+
+/**
+ * The GitHub writer. Every mutation the tool performs goes through exactly these
+ * three calls, so there is one place to audit and one place to stub.
+ */
+function ghWriter() {
+  const gh = (args, input) => {
+    const res = spawnSync('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024 });
+    if (res.error || res.status !== 0) throw new Error(res.stderr?.trim() || res.error?.message || `gh ${args[0]} failed`);
+    return res.stdout;
+  };
+  return {
+    comments: (number) => {
+      const raw = gh(['issue', 'view', String(number), '--json', 'comments']);
+      return (JSON.parse(raw).comments ?? []).map((c) => c.body ?? '');
+    },
+    comment: (number, body) => gh(['issue', 'comment', String(number), '--body-file', '-'], body),
+    apply: (number, action) => {
+      if (action === 'close') return gh(['issue', 'close', String(number)]);
+      throw new Error(`no writer wired for action ${action}`);
+    },
+  };
+}

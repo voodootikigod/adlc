@@ -9,7 +9,7 @@
  */
 
 /** Bump when the emitted shape changes. AC12 pins this against a fixture. */
-export const EMIT_SCHEMA_VERSION = 1;
+export const EMIT_SCHEMA_VERSION = 2;
 
 /** The exact top-level key set of an emitted document, in order. */
 export const EMIT_KEYS = Object.freeze([
@@ -25,8 +25,18 @@ export const EMIT_KEYS = Object.freeze([
   'proposals',
 ]);
 
-/** The exact key set of one emitted issue row. */
-export const ISSUE_KEYS = Object.freeze(['number', 'title', 'url', 'route', 'verdict', 'evidence', 'rank', 'labels', 'units']);
+/**
+ * The exact key set of one emitted issue row.
+ *
+ * `contentHash` is present because the WRITE path's replay protection is keyed
+ * on it (§3.6) and its idempotence marker embeds it (§3.8). Without it in the
+ * emitted set, a consumer would have to recompute the hash — re-reading every
+ * cited path — and any drift between the two computations would silently break
+ * both the one-shot guarantee and the resume-don't-re-comment rule. It is
+ * `null` for an issue with no referenced paths, which §2.2 requires to be
+ * distinguishable rather than absent.
+ */
+export const ISSUE_KEYS = Object.freeze(['number', 'title', 'url', 'route', 'verdict', 'evidence', 'contentHash', 'rank', 'labels', 'units']);
 
 /**
  * Build the groomed set.
@@ -58,6 +68,7 @@ export function emitGroomedSet({
       route: r.verified?.route ?? r.classified?.route ?? 'unverifiable',
       verdict: r.verified?.verdict ?? 'unverifiable',
       evidence: r.verified?.evidence ?? null,
+      contentHash: r.contentHash ?? null,
       rank: r.rank ?? null,
       labels: r.labels ?? [],
       units: r.units ?? [],
