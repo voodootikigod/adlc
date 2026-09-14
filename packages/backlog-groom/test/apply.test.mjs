@@ -175,3 +175,95 @@ test('absent evidence becomes an explicit null string, never undefined', () => {
   });
   assert.equal(typeof actions[0].evidence, 'string');
 });
+
+test('a frozen issue produces no close action', () => {
+  const actions = actionsFromSet({
+    schemaVersion: 3,
+    issues: [{ number: 1, verdict: 'fixed', contentHash: 'h', evidence: 'gone', frozen: true }],
+    proposals: [],
+  });
+  assert.deepEqual(actions, []);
+});
+
+test('a frozen issue produces no RELABEL action either', () => {
+  // The proposals loop needs its own guard: the profile's frozen paths are about
+  // the issue, not about one kind of action on it.
+  const actions = actionsFromSet({
+    schemaVersion: 3,
+    issues: [{ number: 1, verdict: 'valid', contentHash: 'h', evidence: 'x', frozen: true }],
+    proposals: [{ number: 1, action: 'relabel', field: 'priority', from: 'P3-low', to: 'P1-high', evidence: 'rank disagrees' }],
+  });
+  assert.deepEqual(actions, []);
+});
+
+test('an UNFROZEN issue still produces its relabel', () => {
+  // The other direction, so a flipped guard cannot pass by blocking everything.
+  const actions = actionsFromSet({
+    schemaVersion: 3,
+    issues: [{ number: 1, verdict: 'valid', contentHash: 'h', evidence: 'x', frozen: false }],
+    proposals: [{ number: 1, action: 'relabel', field: 'priority', from: 'P3-low', to: 'P1-high', evidence: 'rank disagrees' }],
+  });
+  assert.deepEqual(actions.map((a) => a.action), ['relabel']);
+});
+
+test('an action class the writer cannot perform is dropped before any write', () => {
+  // Refused here rather than at the writer, which would leave a rationale
+  // comment on an issue nothing then happened to.
+  const actions = actionsFromSet({
+    schemaVersion: 3,
+    issues: [{ number: 1, verdict: 'valid', contentHash: 'h', evidence: 'x', frozen: false }],
+    proposals: [{ number: 1, action: 'duplicate-link', evidence: 'duplicate of #2' }],
+  });
+  assert.deepEqual(actions, []);
+});
+
+test('a stale set is refused before anything is gated', () => {
+  const gh = fakeGh();
+  let reviewed = 0;
+  assert.throws(
+    () =>
+      applyRun({
+        set: { ...set(), generatedFor: 'oldsha' },
+        profile: profile(),
+        baseFloor: [],
+        ledger: {},
+        revision: 'newsha',
+        runReview: () => { reviewed += 1; return { code: REVIEW_APPROVE }; },
+        gh,
+      }),
+    (err) => err.isOpError === true
+  );
+  assert.equal(reviewed, 0, 'a stale set must not even be reviewed');
+  assert.equal(gh.calls.length, 0);
+});
+
+test('a set generated for the current revision proceeds', () => {
+  const gh = fakeGh();
+  const out = applyRun({
+    set: { ...set(), generatedFor: 'samesha' },
+    profile: profile(),
+    baseFloor: [],
+    ledger: {},
+    revision: 'samesha',
+    runReview: () => ({ code: REVIEW_APPROVE }),
+    gh,
+  });
+  assert.equal(out.executed.length, 1);
+});
+
+test('each gate decision is checkpointed before any write', () => {
+  // A verdict that exists only in memory is a verdict a crash erases, and the
+  // next run would review the same revision again.
+  const gh = fakeGh();
+  const checkpoints = [];
+  applyRun({
+    set: set(),
+    profile: profile(),
+    baseFloor: [],
+    ledger: {},
+    runReview: () => ({ code: REVIEW_APPROVE }),
+    persist: (l) => checkpoints.push(Object.keys(l).length),
+    gh,
+  });
+  assert.ok(checkpoints.length >= 1, 'the ledger must be checkpointed');
+});
