@@ -86,10 +86,26 @@ export function saveCache(path, cache, io = {}) {
  *
  * @returns {string[]|null}
  */
-export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = 'origin/main' } = {}) {
+export function resolveTrustedBaseRef({ run = defaultGitRun } = {}) {
+  // Resolved from the REPOSITORY, never from a caller-supplied flag. A caller
+  // who picks the comparison ref can pick `HEAD`, which makes the merge base the
+  // working copy: a floor widened from ['close'] to [] then compares equal to
+  // itself and passes without authorization. The whole check is only meaningful
+  // against a ref the person being checked does not choose.
+  try {
+    const head = String(run(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
+    if (head) return head;
+  } catch {
+    // No origin/HEAD configured — fall through to the conventional default.
+  }
+  return 'origin/main';
+}
+
+export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = null } = {}) {
+  const ref = baseRef ?? resolveTrustedBaseRef({ run });
   let mergeBase;
   try {
-    mergeBase = String(run(['merge-base', 'HEAD', baseRef])).trim();
+    mergeBase = String(run(['merge-base', 'HEAD', ref])).trim();
   } catch {
     return null;
   }

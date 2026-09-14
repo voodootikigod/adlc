@@ -16,6 +16,8 @@ import {
   gateKey,
   gateAction,
   reviewArgv,
+  buildActionArtifact,
+  ledgerApproves,
 } from '../lib/gate.mjs';
 
 const action = (over = {}) => ({ number: 7, action: 'close', contentHash: 'abc123', evidence: 'the cited lines are gone', ...over });
@@ -251,4 +253,62 @@ test('an array providers value cannot smuggle a decider through', () => {
   providers.decider = 'anthropic';
   providers.reviewer = 'openai';
   assert.equal(reviewerPair({ providers }).ok, false);
+});
+
+// ---- one artifact per action (§3.6) ----------------------------------------
+
+test('the artifact describes exactly one action, bound to its revision', () => {
+  const art = buildActionArtifact(action());
+  assert.match(art, /#7\b/);
+  assert.match(art, /close/);
+  assert.match(art, /abc123/, 'the artifact must name the revision the verdict binds to');
+  assert.match(art, /the cited lines are gone/);
+});
+
+test('the artifact carries the relabel fields when there are any', () => {
+  const art = buildActionArtifact({ number: 9, action: 'relabel', contentHash: 'h', field: 'priority', from: 'P3-low', to: 'P1-high', evidence: 'rank disagrees' });
+  assert.match(art, /priority/);
+  assert.match(art, /P3-low/);
+  assert.match(art, /P1-high/);
+});
+
+test('non-string evidence is rendered readably, not as [object Object]', () => {
+  const art = buildActionArtifact({ number: 1, action: 'close', contentHash: 'h', evidence: { commit: 'abc', lines: ['x'] } });
+  assert.match(art, /abc/);
+  assert.ok(!art.includes('[object Object]'));
+});
+
+test('the artifact asks about THIS action rather than the batch', () => {
+  // The attribution property: a reviewer reading it can only be answering about
+  // one issue at one revision, so its verdict cannot be stretched over others.
+  const art = buildActionArtifact(action());
+  assert.match(art, /for this issue, at this revision/);
+});
+
+// ---- a thrown review is a spent attempt ------------------------------------
+
+test('AC14: a THROWN review is recorded, so it cannot be retried until it passes', () => {
+  // Without this the one-shot rule is unenforced for exactly the case a caller
+  // can manufacture at will: kill the reviewer, retry, repeat until an approve.
+  const ledger = {};
+  const first = gateAction({ action: action(), profile: profile(), ledger, runReview: () => { throw new Error('timeout'); } });
+  assert.equal(first.verdict, 'demote');
+  assert.ok(ledger[gateKey(action())], 'the spent attempt must be on the ledger');
+
+  let called = 0;
+  const second = gateAction({ action: action(), profile: profile(), ledger, runReview: () => { called += 1; return { code: REVIEW_APPROVE }; } });
+  assert.equal(called, 0, 'a failed review has spent the one shot for this revision');
+  assert.equal(second.verdict, 'demote');
+});
+
+// ---- ledgerApproves: the authorization predicate ---------------------------
+
+test('ledgerApproves requires an approve bound to the same issue AND revision', () => {
+  const a = action();
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number } }, a), true);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'demote', contentHash: a.contentHash, number: a.number } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: 'other', number: a.number } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999 } }, a), false);
+  assert.equal(ledgerApproves({}, a), false);
+  assert.equal(ledgerApproves(null, a), false);
 });

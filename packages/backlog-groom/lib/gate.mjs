@@ -64,6 +64,21 @@ export function reviewerPair(profile) {
   return { ok: true, decider, reviewer };
 }
 
+/**
+ * True when the ledger holds an APPROVE bound to this exact action's revision.
+ *
+ * The authority on whether a write is licensed. A caller-supplied `gate` object
+ * is a claim, not authorization: any library caller can construct one, and
+ * trusting it would put the whole gate behind an `if` the caller controls.
+ */
+export function ledgerApproves(ledger, action) {
+  const entry = ledger?.[gateKey(action ?? {})];
+  if (!entry || entry.verdict !== 'approve') return false;
+  // Bound to the revision AND the issue, not merely present under the key: a
+  // ledger hand-edited to move an approval between issues must not pass.
+  return entry.contentHash === action?.contentHash && entry.number === action?.number;
+}
+
 /** The replay key: one verdict per issue per revision of the code it cites. */
 export function gateKey({ number, contentHash } = {}) {
   return `${number}:${contentHash}`;
@@ -150,8 +165,13 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     const res = runReview();
     code = res?.code;
   } catch (err) {
-    // A reviewer that could not run is not a reviewer that approved.
-    return { verdict: 'demote', reason: `the review could not complete: ${err?.message ?? err}` };
+    // A reviewer that could not run is not a reviewer that approved — AND the
+    // attempt is spent. Returning without recording would leave the one-shot
+    // rule unenforced for exactly the case a caller can manufacture at will: a
+    // spawn failure or a timeout, retried until the reviewer finally answers.
+    const reason = `the review could not complete: ${err?.message ?? err}`;
+    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number };
+    return { verdict: 'demote', reason };
   }
 
   const approved = code === REVIEW_APPROVE;
@@ -171,4 +191,40 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     number: action.number,
   };
   return { verdict, reason };
+}
+
+/**
+ * The review artifact for ONE action.
+ *
+ * §3.6 requires one issue per artifact, and the reason is attribution rather
+ * than size: a reviewer handed the whole groomed set returns one verdict for the
+ * batch, and treating that as authorization for each action means an approve
+ * never confirmed the specific write being executed. A batch containing one
+ * unsafe close would license the unsafe close along with everything else.
+ *
+ * The artifact carries the revision it is bound to, so the verdict recorded
+ * against `(issue, contentHash)` describes the same thing the reviewer read.
+ */
+export function buildActionArtifact(action) {
+  return [
+    `# Proposed ${action.action} — issue #${action.number}`,
+    '',
+    `- issue: #${action.number}`,
+    `- action: ${action.action}`,
+    `- revision (contentHash): ${action.contentHash}`,
+    action.field ? `- field: ${action.field}` : '',
+    action.from ? `- from: ${action.from}` : '',
+    action.to ? `- to: ${action.to}` : '',
+    '',
+    '## Evidence',
+    '',
+    typeof action.evidence === 'string' ? action.evidence : JSON.stringify(action.evidence ?? null, null, 2),
+    '',
+    '## What is being asked',
+    '',
+    `Is this ${action.action} justified by the evidence above, for this issue, at this revision?`,
+    'A material objection means the action is demoted to a proposal for a human.',
+  ]
+    .filter((l) => l !== '')
+    .join('\n');
 }

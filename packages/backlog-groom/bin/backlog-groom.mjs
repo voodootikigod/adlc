@@ -12,7 +12,9 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { groom } from '../lib/groom.mjs';
@@ -21,7 +23,7 @@ import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, descri
 import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
 import { makeGhWriter } from '../lib/gh.mjs';
-import { makeReviewRunner, reviewerPair } from '../lib/gate.mjs';
+import { makeReviewRunner, reviewerPair, buildActionArtifact } from '../lib/gate.mjs';
 
 /**
  * The operational-error exit code, named once and used by BOTH exit paths.
@@ -108,12 +110,22 @@ if (values.apply) {
 
   // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
   // the floor guard refuses to act on an unknown base rather than assuming one.
-  const baseFloor = baseFloorFromGit(profilePath, { baseRef: values['base-ref'] });
+  // No caller-chosen ref: resolveTrustedBaseRef reads it from the repository.
+  const baseFloor = baseFloorFromGit(profilePath);
 
   const pair = reviewerPair(profile);
   if (!pair.ok) console.error(`backlog-groom: ${pair.reason} — every action will demote to a proposal`);
 
-  const runReview = makeReviewRunner({ spawn: spawnSync, artifactPath: values.set, reviewer: pair.reviewer });
+  // ONE artifact per action, written to a scratch file the reviewer reads. The
+  // whole-set artifact would return one verdict for the batch, which is not
+  // attributable to the specific write being executed.
+  const artifactDir = mkdtempSync(join(tmpdir(), 'backlog-groom-'));
+  const runReview = (action) =>
+    makeReviewRunner({
+      spawn: spawnSync,
+      artifactPath: writeArtifact(artifactDir, action),
+      reviewer: pair.reviewer,
+    })();
 
   let applied;
   try {
@@ -164,4 +176,11 @@ if (values.json) console.log(serialiseJson(result.set).trimEnd());
 else console.log(renderReport(result.set));
 
 process.exitCode = 0;
+}
+
+/** Write one action's review artifact and return its path. */
+function writeArtifact(dir, action) {
+  const path = join(dir, `action-${action.number}-${action.contentHash}.md`);
+  writeFileSync(path, `${buildActionArtifact(action)}\n`);
+  return path;
 }

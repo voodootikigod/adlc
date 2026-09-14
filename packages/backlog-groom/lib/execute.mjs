@@ -21,6 +21,7 @@
  */
 
 import { assertFloor, assertFloorNotWidened, blockedByFloor } from './floor.mjs';
+import { ledgerApproves } from './gate.mjs';
 
 /**
  * The exported functions that can cause a GitHub write.
@@ -71,9 +72,14 @@ export function renderComment(action) {
  * floor is the operator's policy about who may act on evidence at all. A
  * sufficiently confident reviewer must not be able to talk past a policy.
  */
-export function planAction(action, { floor = [] } = {}) {
+export function planAction(action, { floor = [], ledger = null } = {}) {
   if (blockedByFloor(action?.action, floor)) return { do: false, reason: 'floor' };
-  if (action?.gate?.verdict !== 'approve') return { do: false, reason: 'gate' };
+  // The LEDGER is the authority, never the action's own `gate` field. A
+  // caller-supplied `{ gate: { verdict: 'approve' } }` is a claim anyone can
+  // construct; trusting it would put the entire gate behind an `if` whose
+  // condition the caller writes. Without a ledger there is no authorization at
+  // all, so the answer is no.
+  if (!ledgerApproves(ledger, action)) return { do: false, reason: 'gate' };
   return { do: true, reason: null };
 }
 
@@ -82,13 +88,14 @@ export function planAction(action, { floor = [] } = {}) {
  *
  * @param {object} o
  * @param {object[]} o.actions - gated actions
+ * @param {object} o.ledger - the gate ledger; the ONLY source of authorization
  * @param {string[]} o.floor - the working-copy autonomy floor
  * @param {string[]|null} o.baseFloor - the floor at the MERGE BASE (§3.7/AC24)
  * @param {boolean} [o.floorWideningAuthorized] - explicit trust-root authorization
  * @param {object} o.gh - `{comments(number), comment(number, body), apply(number, action)}`
  * @returns {{executed:object[], demoted:object[], failed:object[]}}
  */
-export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, gh } = {}) {
+export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh } = {}) {
   // Validate and compare BEFORE any write. A run must not apply its first
   // action and discover the policy problem on its second — a half-applied sweep
   // under a floor nobody authorised is worse than a refused one.
@@ -100,7 +107,7 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
   const failed = [];
 
   for (const action of actions) {
-    const plan = planAction(action, { floor });
+    const plan = planAction(action, { floor, ledger });
     if (!plan.do) {
       demoted.push({ number: action.number, action: action.action, reason: plan.reason });
       continue;

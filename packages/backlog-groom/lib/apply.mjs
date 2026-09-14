@@ -63,7 +63,8 @@ export function actionsFromSet(set) {
  * @param {object} o.profile - parsed profile
  * @param {string[]|null} o.baseFloor - the floor at the merge base
  * @param {object} o.ledger - the replay ledger (persisted by the caller)
- * @param {Function} o.runReview - injected reviewer
+ * @param {Function} o.runReview - injected reviewer, called with the ACTION so
+ *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
 export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false } = {}) {
@@ -71,7 +72,7 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
 
   const gated = proposed.map((action) => ({
     ...action,
-    gate: gateAction({ action, profile, ledger, runReview }),
+    gate: gateAction({ action, profile, ledger, runReview: () => runReview(action) }),
   }));
 
   const result = executeActions({
@@ -79,6 +80,7 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
     floor: profile.autonomyFloor,
     baseFloor,
     floorWideningAuthorized,
+    ledger,
     gh,
   });
 

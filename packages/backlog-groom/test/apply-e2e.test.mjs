@@ -53,7 +53,10 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   else writeFileSync(join(dir, 'seed.txt'), 'seed\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'seed', '--no-gpg-sign');
-  git('branch', '-f', 'base-for-floor');
+  // A real remote-tracking ref: the floor's comparison ref is resolved from the
+  // REPOSITORY, never from a flag, so the fixture has to provide the thing the
+  // resolver looks for rather than pointing the tool at a branch of its choosing.
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
 
   return { dir, bin, log };
 }
@@ -102,7 +105,7 @@ test('with no declared providers the reviewer is never spawned and nothing is wr
   // unsatisfiable and every action demotes. The run must still succeed.
   const box = sandbox();
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(ghCalls(box), [], 'no reviewer, no writes');
   assert.match(r.stderr, /demote/i);
@@ -121,7 +124,7 @@ test('a floored close is never written, even with an approving reviewer', () => 
   // fresh adopter gets proposals, not closures.
   const box = sandbox({ reviewExit: 0, profile: { schemaVersion: 1, providers: { decider: 'anthropic', reviewer: 'openai' } } });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
   const calls = ghCalls(box);
   assert.equal(calls.filter((c) => c.startsWith('issue close')).length, 0, 'the floor must block the close');
@@ -135,7 +138,7 @@ test('an approved, unfloored close comments first and then closes', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
 
   const calls = ghCalls(box).filter((c) => !c.startsWith('review'));
@@ -152,7 +155,7 @@ test('a reviewer that refuses blocks the close entirely', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
   const calls = ghCalls(box);
   assert.equal(calls.filter((c) => c.startsWith('issue close')).length, 0);
@@ -165,7 +168,7 @@ test('a reviewer that ERRORS blocks the close — an error is not an approve', (
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(ghCalls(box).filter((c) => c.startsWith('issue close')).length, 0);
 });
@@ -176,11 +179,11 @@ test('the gate ledger persists, so a second run does not re-review the same revi
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  run(['--apply', '--set', set], box);
   const afterFirst = ghCalls(box).filter((c) => c.startsWith('review')).length;
   assert.equal(afterFirst, 1);
 
-  run(['--apply', '--set', set, '--base-ref', 'base-for-floor'], box);
+  run(['--apply', '--set', set], box);
   const afterSecond = ghCalls(box).filter((c) => c.startsWith('review')).length;
   assert.equal(afterSecond, 1, 'the same revision must not be reviewed twice across runs');
 });
@@ -191,7 +194,48 @@ test('an unwritable ledger warns but does not fail a run that already decided', 
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--ledger', join(box.dir, 'nope', 'ledger.json'), '--base-ref', 'base-for-floor'], box);
+  const r = run(['--apply', '--set', set, '--ledger', join(box.dir, 'nope', 'ledger.json')], box);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /warning/i);
+});
+
+test('the apply path exposes no way to choose the floor comparison ref', () => {
+  // A caller who picks the ref can pick HEAD, which makes the merge base the
+  // working copy: a floor widened to [] then compares equal to itself and is
+  // accepted. The flag is gone, and an attempt to pass it is an argument error
+  // rather than a silently ignored option.
+  const box = sandbox();
+  const set = setFile(box);
+  const r = run(['--apply', '--set', set, '--base-ref', 'HEAD'], box);
+  assert.equal(r.status, 1);
+  assert.deepEqual(ghCalls(box), [], 'nothing may be written on an argument error');
+});
+
+test('each action is reviewed with its OWN artifact, not the whole set', () => {
+  // A reviewer handed the whole set returns one verdict for the batch, and
+  // treating that as authorization for each action means an approve never
+  // confirmed the specific write being executed.
+  const box = sandbox({
+    reviewExit: 2,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const p = join(box.dir, 'groomed.json');
+  writeFileSync(
+    p,
+    JSON.stringify({
+      schemaVersion: 2,
+      issues: [
+        { number: 705, verdict: 'fixed', contentHash: 'h705', evidence: 'gone', labels: [], units: [] },
+        { number: 706, verdict: 'fixed', contentHash: 'h706', evidence: 'also gone', labels: [], units: [] },
+      ],
+      proposals: [],
+    })
+  );
+  run(['--apply', '--set', p], box);
+  const reviews = ghCalls(box).filter((c) => c.startsWith('review'));
+  assert.equal(reviews.length, 2, 'one review per action');
+  // Each review names a different artifact, and neither is the groomed set.
+  const paths = reviews.map((r) => r.split(/\s+/).find((t) => t.endsWith('.md')));
+  assert.equal(new Set(paths).size, 2, `each action needs its own artifact, got ${JSON.stringify(paths)}`);
+  assert.ok(paths.every((x) => x && !x.endsWith('groomed.json')));
 });

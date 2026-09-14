@@ -17,7 +17,6 @@ export const FLAGS = [
   { name: 'apply', arg: null, help: 'apply gated conclusions to GitHub (writes; off by default)' },
   { name: 'set', arg: 'path', help: 'with --apply: the groomed set JSON to act on' },
   { name: 'ledger', arg: 'path', help: 'gate replay ledger (default .adlc/backlog-groom-ledger.json)' },
-  { name: 'base-ref', arg: 'ref', default: 'origin/main', help: 'ref the autonomy floor is compared against (default origin/main)' },
   { name: 'authorize-floor-widening', arg: null, help: 'explicit trust-root authorization to widen the autonomy floor' },
   { name: 'help', arg: null, help: 'show this message' },
 ];
