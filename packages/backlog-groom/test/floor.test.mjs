@@ -68,6 +68,17 @@ test('AC5: duplicate classes are rejected rather than silently deduped', () => {
   assert.match(err.message, /close/);
 });
 
+test('the action-class set is pinned — dropping one silently unguards it', () => {
+  // ACTION_CLASSES is the universe blockedByFloor fails closed against, so a
+  // class quietly removed from it stops being blockable AND stops being a
+  // recognised action at all. Pinned exactly, not by length.
+  assert.deepEqual([...ACTION_CLASSES], ['close', 'relabel', 'duplicate-link', 'comment']);
+});
+
+test('every pinned class is actually blockable', () => {
+  for (const cls of ACTION_CLASSES) assert.equal(blockedByFloor(cls, [cls]), true);
+});
+
 // ---- blockedByFloor: the actual decision -----------------------------------
 
 test('a class on the floor blocks its action regardless of any approval', () => {

@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import {
   MIN_CONFIDENCE,
+  makeReviewRunner,
   REVIEW_APPROVE,
   REVIEW_NEEDS_ATTENTION,
   reviewerPair,
@@ -181,4 +182,55 @@ test('the ledger records the verdict, the reviewer and the revision', () => {
   assert.equal(entry.reviewer, 'openai');
   assert.equal(entry.decider, 'anthropic');
   assert.equal(entry.contentHash, 'abc123');
+});
+
+// ---- the external exit contract, pinned numerically ------------------------
+
+test('the reviewer exit codes are pinned to adversarial-review\'s documented contract', () => {
+  // These are not ours to choose: 0 approve / 2 needs-attention / 1 error is the
+  // reviewer's published contract. Referring to them only through the constants
+  // would let either drift to a value the reviewer never emits, and every test
+  // that passes the constant symbolically would keep passing.
+  assert.equal(REVIEW_APPROVE, 0);
+  assert.equal(REVIEW_NEEDS_ATTENTION, 2);
+});
+
+test('a literal exit 2 demotes and a literal exit 0 approves', () => {
+  // The same contract exercised by VALUE rather than by constant, so a drifted
+  // constant is caught by behaviour and not only by its own assertion.
+  const l1 = {};
+  assert.equal(gateAction({ action: action(), profile: profile(), ledger: l1, runReview: () => ({ code: 0 }) }).verdict, 'approve');
+  const l2 = {};
+  assert.equal(gateAction({ action: action(), profile: profile(), ledger: l2, runReview: () => ({ code: 2 }) }).verdict, 'demote');
+});
+
+// ---- makeReviewRunner: the spawn branches, out of the binary ----------------
+
+test('a spawn error is a thrown non-approve, never a verdict', () => {
+  const run = makeReviewRunner({ spawn: () => ({ error: new Error('ENOENT'), status: null }), artifactPath: '/tmp/a', reviewer: 'openai' });
+  assert.throws(run, /did not run|ENOENT/);
+});
+
+test('a null status is a thrown non-approve — null is not an exit code', () => {
+  const run = makeReviewRunner({ spawn: () => ({ status: null }), artifactPath: '/tmp/a', reviewer: 'openai' });
+  assert.throws(run, /did not run/);
+});
+
+test('an undefined status is a thrown non-approve too', () => {
+  const run = makeReviewRunner({ spawn: () => ({}), artifactPath: '/tmp/a', reviewer: 'openai' });
+  assert.throws(run, /did not run/);
+});
+
+test('a real exit status is passed through as the code', () => {
+  const run = makeReviewRunner({ spawn: () => ({ status: 2 }), artifactPath: '/tmp/a', reviewer: 'openai' });
+  assert.deepEqual(run(), { code: 2 });
+});
+
+test('the runner spawns adversarial-review with the artifact and reviewer it was given', () => {
+  let seen = null;
+  const run = makeReviewRunner({ spawn: (cmd, argv) => { seen = { cmd, argv }; return { status: 0 }; }, artifactPath: '/tmp/set.json', reviewer: 'openai' });
+  run();
+  assert.equal(seen.cmd, 'adversarial-review');
+  assert.ok(seen.argv.includes('/tmp/set.json'));
+  assert.equal(seen.argv[seen.argv.indexOf('--provider') + 1], 'openai');
 });

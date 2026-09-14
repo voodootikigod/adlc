@@ -20,7 +20,7 @@ import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold } from '../lib/usage.mjs';
 import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
-import { reviewArgv, reviewerPair } from '../lib/gate.mjs';
+import { makeReviewRunner, reviewerPair } from '../lib/gate.mjs';
 
 /**
  * The operational-error exit code, named once and used by BOTH exit paths.
@@ -111,17 +111,7 @@ if (values.apply) {
   const pair = reviewerPair(profile);
   if (!pair.ok) console.error(`backlog-groom: ${pair.reason} — every action will demote to a proposal`);
 
-  const runReview = () => {
-    const res = spawnSync('adversarial-review', reviewArgv({ artifactPath: values.set, reviewer: pair.reviewer }), {
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    // A spawn that never ran has a null status. Reporting that as an exit code
-    // the gate could read as an approve is the one mistake this wrapper must
-    // not make, so it becomes an explicit non-approve.
-    if (res.error || res.status === null) throw new Error(res.error?.message ?? 'the reviewer did not run');
-    return { code: res.status };
-  };
+  const runReview = makeReviewRunner({ spawn: spawnSync, artifactPath: values.set, reviewer: pair.reviewer });
 
   let applied;
   try {

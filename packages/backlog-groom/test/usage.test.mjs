@@ -73,3 +73,24 @@ test('a flag longer than the help column still gets a separating space', () => {
   assert.ok(!usage.includes('indeedHELPTEXT'), 'help must not abut the flag name');
   assert.match(usage, /--a-very-long-flag-name-indeed\s+HELPTEXT/);
 });
+
+test('short flags align their help at a fixed column', () => {
+  // The column is the POINT of padding — help that starts wherever each flag
+  // happens to end is not a table. Pinned exactly, so the column constant is
+  // observable rather than free to drift.
+  const usage = renderUsage([
+    { name: 'a', arg: null, help: 'AAA' },
+    { name: 'bbb', arg: 'x', help: 'BBB' },
+  ]);
+  const [l1, l2] = usage.split('\n').filter((l) => l.includes('AAA') || l.includes('BBB'));
+  assert.equal(l1.indexOf('AAA'), l2.indexOf('BBB'), 'both help strings must start at the same column');
+  assert.equal(l1.indexOf('AAA'), 24, 'two leading spaces plus a 22-character flag column');
+});
+
+test('a flag that overruns the column is separated by exactly one space', () => {
+  // Not "at least one": an overrun flag that kept padding to some larger column
+  // would silently re-align the whole table around its longest entry.
+  const usage = renderUsage([{ name: 'x'.repeat(30), arg: null, help: 'HELP' }]);
+  const line = usage.split('\n').find((l) => l.includes('HELP'));
+  assert.match(line, /^ {2}--x+ HELP$/, 'exactly one space between an overrun flag and its help');
+});

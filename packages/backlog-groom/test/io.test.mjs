@@ -85,9 +85,24 @@ test('a valid JSON PRIMITIVE is not a cache — it degrades to empty rather than
 // ---- baseFloorFromGit — AC24's read side ------------------------------------
 
 test('baseFloorFromGit returns the floor recorded at the merge base', () => {
-  const run = (args) =>
-    args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
-  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run }), ['close', 'relabel']);
+  // The argv is asserted IN FULL, not by its first element: a dropped argument
+  // would silently change which revision is read, and a fake that only inspects
+  // args[0] would report success for a git call that asked a different question.
+  const seen = [];
+  const run = (args) => {
+    seen.push(args);
+    return args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
+  };
+  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run, baseRef: 'origin/main' }), ['close', 'relabel']);
+  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'origin/main']);
+  assert.deepEqual(seen[1], ['show', 'deadbeef:.claude/backlog-groom-profile.json']);
+});
+
+test('baseFloorFromGit compares against the ref it was given', () => {
+  const seen = [];
+  const run = (args) => { seen.push(args); return args[0] === 'merge-base' ? 'cafe\n' : JSON.stringify({ schemaVersion: 1 }); };
+  baseFloorFromGit('p.json', { run, baseRef: 'upstream/trunk' });
+  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'upstream/trunk']);
 });
 
 test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the key', () => {

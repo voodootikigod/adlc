@@ -86,6 +86,33 @@ export function reviewArgv({ artifactPath, reviewer, timeout = 600 } = {}) {
 }
 
 /**
+ * Build the reviewer runner the gate calls.
+ *
+ * IN LIB, NOT THE BINARY. Left in the bin these branches are reachable only by
+ * spawning the process with a real reviewer behind it, so they go untested and a
+ * flipped guard — reading a failed spawn as a verdict — passes every suite. That
+ * is the one mistake this wrapper must not make, so it is tested here instead.
+ *
+ * @param {object} o
+ * @param {Function} o.spawn - `(cmd, argv, opts) => {status, error}`
+ */
+export function makeReviewRunner({ spawn, artifactPath, reviewer, timeout = 600 } = {}) {
+  return () => {
+    const res = spawn('adversarial-review', reviewArgv({ artifactPath, reviewer, timeout }), {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    // A spawn that never ran has a NULL status, and `null` is not an exit code.
+    // Returning it would let the gate compare null against 0 and, on any future
+    // loosening of that comparison, read "never ran" as "approved".
+    if (res?.error || res?.status === null || res?.status === undefined) {
+      throw new Error(res?.error?.message ?? 'the reviewer did not run');
+    }
+    return { code: res.status };
+  };
+}
+
+/**
  * Gate one proposed action.
  *
  * @param {object} o
