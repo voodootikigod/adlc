@@ -1,7 +1,10 @@
 // llm.mjs — LLM interaction for vacuous-method detection.
 // Depends on @adlc/core for complete/extractJson.
 
-import { complete, extractJson } from '@adlc/core';
+import { complete, extractJson, fence } from '@adlc/core';
+
+// Criterion text is authored by whoever filed the work (#1010).
+const CRITERIA_MAX_CHARS = 8000;
 
 /**
  * Build the prompt for vacuous-method detection.
@@ -26,7 +29,7 @@ Identify which indices have vacuous verification methods. Return JSON only:
 If none are vacuous, return { "vacuous": [], "reason": {} }
 
 Criteria:
-${items}`;
+${fence('CRITERIA', items, CRITERIA_MAX_CHARS)}`;
 }
 
 /**

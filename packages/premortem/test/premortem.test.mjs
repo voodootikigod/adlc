@@ -285,6 +285,9 @@ export async function load(url, context, nextLoad) {
       "export function printJson(o) { process.stdout.write(JSON.stringify(o, null, 2) + '\\\\n'); }",
       "export function promptOnly() {}",
       "export function opError(m) { process.stderr.write(m + '\\\\n'); process.exit(1); }",
+      // fence() is re-exported from the REAL core so this stub cannot make an
+      // unfenced prompt look fenced (#1010). Only the LLM surface is mocked.
+      "export { fence, tail } from '__TEXT_URL__';",
     ].join('\\n');
     return { format: 'module', source: src, shortCircuit: true };
   }
@@ -313,7 +316,8 @@ test('--json: run() emits JSON causes array to stdout (mocked LLM)', () => {
 
     // Derive run.mjs's real URL (never hardcode the absolute project path).
     const runUrl = new URL('../lib/run.mjs', import.meta.url).href;
-    writeFileSync(loaderPath, LOADER_SOURCE, 'utf8');
+    const textUrl = new URL('../../core/lib/text.mjs', import.meta.url).href;
+    writeFileSync(loaderPath, LOADER_SOURCE.replace('__TEXT_URL__', textUrl), 'utf8');
     writeFileSync(runnerPath, RUNNER_SOURCE.replace('__RUN_URL__', runUrl), 'utf8');
 
     const result = spawnSync(

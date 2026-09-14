@@ -4,7 +4,13 @@
  */
 
 import { buildFileExcerpt } from './region.mjs';
-import { tail } from '@adlc/core';
+import { tail, fence } from '@adlc/core';
+
+// Test output is whatever the code under test printed, and a ``` block is
+// escaped by writing ``` (#1010). Same cap as the tail() above so the content
+// is not capped twice.
+const TEST_OUTPUT_MAX_CHARS = 4000;
+const FILE_EXCERPT_MAX_CHARS = 8000;
 
 // Re-exported for backward compatibility — packages/consensus-fix/test and
 // lib/region.mjs both import `tail` from this file. The implementation now
@@ -29,7 +35,7 @@ export { tail };
  * @returns {string}
  */
 export function buildPrompt({ testCmd, testOutput, snapshot }) {
-  const tailedOutput = tail(testOutput, 4000);
+  const tailedOutput = tail(testOutput, TEST_OUTPUT_MAX_CHARS);
 
   const fileBlocks = Object.entries(snapshot)
     .map(([path, content]) => {
@@ -37,7 +43,7 @@ export function buildPrompt({ testCmd, testOutput, snapshot }) {
       const note = excerpt.windowed
         ? ` (excerpt — file has ${excerpt.totalLines} lines total; line numbers shown below are the REAL file's line numbers)`
         : ` (${excerpt.totalLines} lines, shown in full)`;
-      return `### ${path}${note}\n\`\`\`\n${excerpt.text}\n\`\`\``;
+      return `### ${path}${note}\n${fence(`FILE:${path}`, excerpt.text, FILE_EXCERPT_MAX_CHARS)}`;
     })
     .join('\n\n');
 
@@ -47,10 +53,8 @@ export function buildPrompt({ testCmd, testOutput, snapshot }) {
     testCmd,
     `\`\`\``,
     ``,
-    `Test output (last 4000 chars):`,
-    `\`\`\``,
-    tailedOutput,
-    `\`\`\``,
+    `Test output (last ${TEST_OUTPUT_MAX_CHARS} chars):`,
+    fence('TEST_OUTPUT', tailedOutput, TEST_OUTPUT_MAX_CHARS),
     ``,
     `Source files:`,
     ``,

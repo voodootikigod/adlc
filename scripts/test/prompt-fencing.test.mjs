@@ -72,6 +72,32 @@ const GUARDED = [
     mustNotMatch: [/\$\{samplesJson\}/],
     mustContain: ["fence('pr-review-comments', samplesJson"],
   },
+  {
+    // #1010: acceptance-criterion text is authored by whoever filed the work.
+    file: 'packages/spec-lint/lib/llm.mjs',
+    mustNotMatch: [/\$\{items\}/],
+    mustContain: ["fence('CRITERIA', items"],
+  },
+  {
+    // #1010: findings are model-authored text fed back into a model; the
+    // cluster name is fenced separately so neither can break out via the other.
+    file: 'packages/lesson-foundry/lib/llm.mjs',
+    mustNotMatch: [/\$\{JSON\.stringify\(samples/, /Cluster name: \$\{clusterName\}/],
+    mustContain: ["fence('FINDINGS'", "fence('CLUSTER_NAME'"],
+  },
+  {
+    // #1010: the whole spec file is the payload here.
+    file: 'packages/premortem/lib/prompt.mjs',
+    mustNotMatch: [/specContent\.trim\(\) \+\s*$/m],
+    mustContain: ["fence('SPEC', specContent.trim()"],
+  },
+  {
+    // #1010: test output is whatever the code under test printed, and a ```
+    // block is escaped by writing ```.
+    file: 'packages/consensus-fix/lib/prompt.mjs',
+    mustNotMatch: [/\$\{excerpt\.text\}/],
+    mustContain: ["fence('TEST_OUTPUT', tailedOutput", 'fence(`FILE:${path}`'],
+  },
 ];
 
 for (const { file, mustNotMatch, mustContain } of GUARDED) {
@@ -135,14 +161,10 @@ const UNGUARDED_REVIEWED = [
     reason: 'sends only; the prompt is built by packages/parallax/lib/prompts.mjs, which is GUARDED above.' },
   { file: 'packages/review-calibration/bin/review-calibration.mjs',
     reason: 'sends only; imports buildJudgePrompt from packages/review-calibration/lib/judge.mjs, which is GUARDED above.' },
-  { file: 'packages/spec-lint/lib/llm.mjs',
-    reason: 'UNFENCED — interpolates acceptance-criterion text directly (#1010). Recorded, not accepted.' },
-  { file: 'packages/lesson-foundry/lib/llm.mjs',
-    reason: 'UNFENCED — interpolates cluster name and JSON.stringify(samples) of findings (#1010). Recorded, not accepted.' },
   { file: 'packages/premortem/lib/run.mjs',
-    reason: 'sends only, but packages/premortem/lib/prompt.mjs embeds the whole spec unfenced (#1010). Recorded, not accepted.' },
+    reason: 'sends only; the prompt is built by packages/premortem/lib/prompt.mjs, which is GUARDED above (#1010).' },
   { file: 'packages/consensus-fix/bin/consensus-fix.mjs',
-    reason: 'sends only, but packages/consensus-fix/lib/prompt.mjs embeds test output and source excerpts behind markdown backticks only (#1010). Recorded, not accepted.' },
+    reason: 'sends only; the prompt is built by packages/consensus-fix/lib/prompt.mjs, which is GUARDED above (#1010).' },
 ];
 
 test('AC: every prompt-sending module is GUARDED or explicitly reviewed (#1005)', () => {

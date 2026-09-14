@@ -1,7 +1,13 @@
 // LLM refinement helpers for lesson-foundry.
 // Builds prompts and calls complete() for cluster wording refinement.
 
-import { complete, extractJson } from '@adlc/core';
+import { complete, extractJson, fence } from '@adlc/core';
+
+// Findings are model-authored text fed back into a model, and the cluster name
+// is derived from them (#1010). Fenced separately so a hostile name cannot
+// break out through the samples block, or vice versa.
+const CLUSTER_NAME_MAX_CHARS = 200;
+const SAMPLES_MAX_CHARS = 8000;
 
 /**
  * Build the refinement prompt for a single cluster.
@@ -17,9 +23,10 @@ export function buildRefinementPrompt(clusterName, findings) {
 
   return `You are a senior engineer distilling recurring code-review findings into a permanent defense rule.
 
-Cluster name: ${clusterName}
+Cluster name:
+${fence('CLUSTER_NAME', String(clusterName ?? ''), CLUSTER_NAME_MAX_CHARS)}
 Sample findings (${findings.length} total):
-${JSON.stringify(samples, null, 2)}
+${fence('FINDINGS', JSON.stringify(samples, null, 2), SAMPLES_MAX_CHARS)}
 
 Output ONLY valid JSON matching this schema (no extra text):
 {

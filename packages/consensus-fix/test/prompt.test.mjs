@@ -74,7 +74,8 @@ test('buildPrompt tails long test output to 4000 chars', () => {
   });
   // The output in the prompt should be no more than 4000 chars of test output.
   // We find the section between the output code fences and verify.
-  const match = prompt.match(/Test output[\s\S]*?```\n([\s\S]*?)```/);
+  // The output is fenced now (#1010), not wrapped in markdown backticks.
+  const match = prompt.match(/<<UNTRUSTED:TEST_OUTPUT:[^>]*>>\n([\s\S]*?)\n<<END:TEST_OUTPUT:/);
   assert.ok(match, 'should have test output section');
   assert.ok(match[1].length <= 4001, 'output section should be at most 4000 chars + newline');
 });
