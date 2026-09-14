@@ -108,3 +108,68 @@ produces verdicts, so it adds no privilege. It follows that a cached verdict is
 **not** evidence: the write path must treat proposals as things to be reviewed on
 their own merits, and `--no-cache` forces full re-verification when a run needs
 to stand on its own.
+
+## The write path
+
+`--apply` is the only mode that writes to GitHub, and it is a separate branch
+rather than a flag threaded through the read run — the read path must stay
+reachable with no possibility of a write, so the two never share a code path a
+flag could flip.
+
+```bash
+backlog-groom --json --out groomed.json     # read-only, writes nothing anywhere
+backlog-groom --apply --set groomed.json    # gated, floored, comment-first
+```
+
+Three things stand between a verdict and a closed issue, and they answer
+different questions.
+
+**The gate — is this conclusion sound?** Each proposed action is reviewed once,
+in artifact mode, at `--min-confidence 0.3` rather than the tool's 0.5 default:
+artifact-mode grounding halves every finding's confidence, so at 0.5 material
+findings fall below the gate and the run returns a hollow approve. The reviewer
+must be a provider distinct from `providers.decider`; without both declared, the
+rule is unenforceable and every action demotes to a proposal.
+
+**One shot, enforced in the core.** The verdict is recorded against
+`(issue, contentHash)` and a second review of the same revision is refused. A
+wrapper told "review once" will reword the artifact and ask again until it gets
+an approve — that is the failure the rule exists to prevent, and instruction text
+does not stop it. A changed artifact for unchanged content is itself the tell.
+An issue with no `contentHash` has no revision to bind a verdict to, so it cannot
+be gated at all and is never actioned.
+
+**Only an explicit approve licenses a write.** The reviewer's contract is exit 0
+approve, 2 needs-attention, 1 error. A reviewer error, a timeout and a crash all
+demote: "the review could not complete" and "the review found nothing" are
+opposite facts, and a truthiness check on the exit code would merge them.
+
+**The floor — is anyone allowed to act on this at all?** `autonomyFloor` lists
+action classes that always require a human regardless of the verdict, so a
+sufficiently confident reviewer cannot talk past an operator's policy. Omitting
+the key yields `["close"]`; only a deliberate `[]` empties the floor; an unknown
+class is an operational error rather than a silently dropped entry, because
+`"clsoe"` must not quietly leave closing unguarded.
+
+Widening the floor is privileged, and is measured **against the merge base**, not
+the working copy. A check that reads only the checked-out profile validates the
+claim of whoever is widening it. An unreadable base floor refuses rather than
+assuming an empty one — otherwise deleting the profile at the base would be the
+cheapest possible widening.
+
+## Execution is idempotent by design
+
+Every action comments its evidence and a durable marker **first**, then acts.
+Never the reverse: the trail must be on the issue before it goes quiet, so a
+wrong action is self-documenting and easy to challenge.
+
+The two writes are not atomic. A comment can land and the action then fail — rate
+limit, revoked token, a human closing it first — leaving a "closing because…"
+comment on an open issue. A re-run detects its own marker for that
+`(issue, contentHash)` and resumes **at the action**, rather than stacking a
+second identical rationale with every retry. A marker from a different revision
+does not suppress the comment, because stale evidence is not this decision's
+trail.
+
+A mid-sweep failure therefore leaves a resumable state, never a half-applied one
+that a retry compounds.
