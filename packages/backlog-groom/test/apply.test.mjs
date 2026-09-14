@@ -143,3 +143,35 @@ test('AC14: the ledger persists across the run so a replay within it is refused'
   assert.equal(called, 0, 'a second run must not re-review the same revision');
   assert.equal(second.executed.length, 0);
 });
+
+test('non-string evidence is serialised rather than passed through as an object', () => {
+  // The evidence reaches a GitHub comment body. An object interpolated into a
+  // template would render as [object Object] — an evidence trail that says
+  // nothing, on an issue that is about to go quiet.
+  const actions = actionsFromSet({
+    schemaVersion: 2,
+    issues: [{ number: 1, verdict: 'fixed', contentHash: 'h', evidence: { lines: ['a'], commit: 'abc' } }],
+    proposals: [],
+  });
+  assert.equal(typeof actions[0].evidence, 'string');
+  assert.match(actions[0].evidence, /abc/);
+  assert.ok(!actions[0].evidence.includes('[object Object]'));
+});
+
+test('string evidence is passed through unchanged, not re-encoded', () => {
+  const actions = actionsFromSet({
+    schemaVersion: 2,
+    issues: [{ number: 1, verdict: 'fixed', contentHash: 'h', evidence: 'the cited line is gone' }],
+    proposals: [],
+  });
+  assert.equal(actions[0].evidence, 'the cited line is gone');
+});
+
+test('absent evidence becomes an explicit null string, never undefined', () => {
+  const actions = actionsFromSet({
+    schemaVersion: 2,
+    issues: [{ number: 1, verdict: 'fixed', contentHash: 'h' }],
+    proposals: [],
+  });
+  assert.equal(typeof actions[0].evidence, 'string');
+});

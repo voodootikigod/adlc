@@ -234,3 +234,21 @@ test('the runner spawns adversarial-review with the artifact and reviewer it was
   assert.ok(seen.argv.includes('/tmp/set.json'));
   assert.equal(seen.argv[seen.argv.indexOf('--provider') + 1], 'openai');
 });
+
+test('a non-object providers value is treated as no providers, not indexed into', () => {
+  // `typeof null === 'object'` and an array is an object too. A loosened guard
+  // would index into either and silently produce undefined providers, which then
+  // read as "not declared" — the right answer reached by luck rather than by
+  // the check.
+  for (const bad of [null, ['openai'], 'openai', 7]) {
+    const pair = reviewerPair({ providers: bad });
+    assert.equal(pair.ok, false, `providers=${JSON.stringify(bad)} must not resolve a pair`);
+  }
+});
+
+test('an array providers value cannot smuggle a decider through', () => {
+  const providers = [];
+  providers.decider = 'anthropic';
+  providers.reviewer = 'openai';
+  assert.equal(reviewerPair({ providers }).ok, false);
+});

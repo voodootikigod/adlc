@@ -20,6 +20,7 @@ import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
 import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
+import { makeGhWriter } from '../lib/gh.mjs';
 import { makeReviewRunner, reviewerPair } from '../lib/gate.mjs';
 
 /**
@@ -122,7 +123,7 @@ if (values.apply) {
       baseFloor,
       ledger,
       runReview,
-      gh: ghWriter(),
+      gh: makeGhWriter({ spawn: spawnSync }),
       floorWideningAuthorized: values['authorize-floor-widening'],
     });
   } catch (err) {
@@ -163,27 +164,4 @@ if (values.json) console.log(serialiseJson(result.set).trimEnd());
 else console.log(renderReport(result.set));
 
 process.exitCode = 0;
-}
-
-/**
- * The GitHub writer. Every mutation the tool performs goes through exactly these
- * three calls, so there is one place to audit and one place to stub.
- */
-function ghWriter() {
-  const gh = (args, input) => {
-    const res = spawnSync('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024 });
-    if (res.error || res.status !== 0) throw new Error(res.stderr?.trim() || res.error?.message || `gh ${args[0]} failed`);
-    return res.stdout;
-  };
-  return {
-    comments: (number) => {
-      const raw = gh(['issue', 'view', String(number), '--json', 'comments']);
-      return (JSON.parse(raw).comments ?? []).map((c) => c.body ?? '');
-    },
-    comment: (number, body) => gh(['issue', 'comment', String(number), '--body-file', '-'], body),
-    apply: (number, action) => {
-      if (action === 'close') return gh(['issue', 'close', String(number)]);
-      throw new Error(`no writer wired for action ${action}`);
-    },
-  };
 }

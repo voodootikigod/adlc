@@ -106,6 +106,11 @@ test('with no declared providers the reviewer is never spawned and nothing is wr
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(ghCalls(box), [], 'no reviewer, no writes');
   assert.match(r.stderr, /demote/i);
+  // git's own diagnostics must not leak into the operator's stderr. The default
+  // runner pipes stdout and IGNORES stderr precisely so a missing profile at the
+  // merge base — an ordinary, expected state — does not print a fatal-looking
+  // git error beside a run that succeeded.
+  assert.ok(!/fatal:|does not exist in/.test(r.stderr), `git noise leaked: ${r.stderr}`);
   const out = JSON.parse(r.stdout);
   assert.equal(out.executed.length, 0);
   assert.equal(out.proposed, 1, 'the run still reports what it would have done');
