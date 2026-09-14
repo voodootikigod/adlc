@@ -118,5 +118,9 @@ export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = '
 }
 
 function defaultGitRun(args) {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+  // `stdio: 'pipe'` rather than a positional array: execFileSync's DEFAULT
+  // writes the child's stderr to the parent's, so a profile simply absent at the
+  // merge base — an ordinary, expected state — would print a fatal-looking git
+  // error beside a run that succeeded. Specifying 'pipe' captures it instead.
+  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
 }

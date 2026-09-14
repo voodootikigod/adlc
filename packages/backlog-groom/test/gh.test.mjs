@@ -72,3 +72,16 @@ test('an unwired action throws rather than silently doing nothing', () => {
   const gh = makeGhWriter({ spawn: () => ok() });
   assert.throws(() => gh.apply(7, 'relabel'), /no writer wired/);
 });
+
+test('a failure with no stderr and no error still names the gh subcommand', () => {
+  // The last-resort message. Naming the wrong argv slot would report
+  // "gh view failed" for an `issue view` call — the operator then greps for a
+  // subcommand that does not exist.
+  const gh = makeGhWriter({ spawn: () => ({ status: 1 }) });
+  assert.throws(() => gh.comments(7), /gh issue failed/);
+});
+
+test('stderr is preferred over the generic message when gh explains itself', () => {
+  const gh = makeGhWriter({ spawn: () => ({ status: 1, stderr: '  could not resolve to an Issue\n' }) });
+  assert.throws(() => gh.comments(7), /could not resolve to an Issue/);
+});

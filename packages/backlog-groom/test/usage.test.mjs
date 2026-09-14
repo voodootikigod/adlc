@@ -97,8 +97,11 @@ test('a flag that overruns the column is separated by exactly one space', () => 
 
 // ---- the --apply guard, out of the binary ----------------------------------
 
-test('--apply without --set is refused, and the message names the flag', () => {
-  assert.match(validateApplyArgs({ apply: true }), /--set/);
+test('--apply without --set is refused, and the message names the flag and its value', () => {
+  // Naming the flag is not enough to act on: an operator who reads "--set" still
+  // has to guess whether it takes a value. The message has to carry the
+  // placeholder, so it is asserted whole rather than by substring.
+  assert.equal(validateApplyArgs({ apply: true }), '--apply requires --set <path> — the groomed set to act on');
 });
 
 test('--apply with --set is accepted', () => {
