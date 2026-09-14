@@ -14,7 +14,7 @@ function thrownIo(fn) {
   try { fn(); } catch (err) { return err; }
   return null;
 }
-import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadLedger, saveLedger, acquireApplyLock, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
+import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, resolveTrustedBaseRef, loadCache, loadLedger, saveLedger, acquireApplyLock, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
 
 test('a MISSING profile is not an error — the defaults are a complete profile', () => {
   const p = loadProfile('nope.json', { exists: () => false, readFile: () => { throw new Error('must not read'); } });
@@ -215,4 +215,39 @@ test('a held apply lock refuses the second run', () => {
   );
   assert.equal(err.isOpError, true);
   assert.match(err.message, /another apply run/);
+});
+
+// ---- the trusted comparison ref, which the caller must NOT choose ----------
+
+test('the trusted base ref is read from the repository', () => {
+  const seen = [];
+  const run = (args) => { seen.push(args); return 'origin/trunk\n'; };
+  assert.equal(resolveTrustedBaseRef({ run }), 'origin/trunk');
+  assert.deepEqual(seen[0], ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
+    'the ref must be resolved from origin/HEAD, not guessed');
+});
+
+test('an empty symbolic-ref answer falls back to the conventional default', () => {
+  // Returning the empty string would hand `git merge-base HEAD ''` an argument
+  // it cannot resolve, and the floor check would then fail closed for a repo
+  // that is perfectly fine.
+  assert.equal(resolveTrustedBaseRef({ run: () => '\n' }), 'origin/main');
+});
+
+test('no origin/HEAD configured falls back to the conventional default', () => {
+  assert.equal(resolveTrustedBaseRef({ run: () => { throw new Error('not a symbolic ref'); } }), 'origin/main');
+});
+
+test('baseFloorFromGit uses the resolved ref when given none', () => {
+  // The important half: with no explicit ref the comparison still happens
+  // against something the caller did not choose.
+  const seen = [];
+  const run = (args) => {
+    seen.push(args);
+    if (args[0] === 'symbolic-ref') return 'origin/trunk\n';
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close'] });
+  };
+  baseFloorFromGit('p.json', { run });
+  assert.deepEqual(seen[1], ['merge-base', 'HEAD', 'origin/trunk']);
 });
