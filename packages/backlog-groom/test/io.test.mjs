@@ -7,6 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { floorWidening } from '../lib/floor.mjs';
 import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
 
 test('a MISSING profile is not an error — the defaults are a complete profile', () => {
@@ -112,23 +113,39 @@ test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the
   assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
 });
 
-test('baseFloorFromGit returns null — not [] — when the base profile is absent', () => {
-  // The distinction AC24 rests on. `null` makes assertFloorNotWidened refuse;
-  // `[]` would make deleting the profile at the base the cheapest widening.
+test('baseFloorFromGit treats an ABSENT base profile as the default floor', () => {
+  // Not null, and emphatically not []. Nothing was declared at the base, so the
+  // default was in force — and because the default is the most conservative
+  // floor, deleting the profile at the base still cannot widen anything. The
+  // alternative, refusing, would make the tool unusable on any repo that has not
+  // adopted a profile yet.
   const run = (args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
     throw new Error('fatal: path does not exist');
   };
+  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
+});
+
+test('an absent base profile still catches a head floor that widens on the default', () => {
+  // The safety property that makes the choice above sound, asserted rather than
+  // argued: emptying the floor is a widening even when the base declared nothing.
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    throw new Error('fatal: path does not exist');
+  };
+  const base = baseFloorFromGit('p.json', { run });
+  assert.deepEqual(floorWidening(base, []), ['close']);
+});
+
+test('baseFloorFromGit returns null when the base profile is PRESENT but unreadable', () => {
+  // Distinct from absent: a file that exists may have declared a FULLER floor
+  // than the default, so assuming the default would under-detect a widening.
+  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : '{ not json');
   assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 
 test('baseFloorFromGit returns null when the merge base cannot be resolved', () => {
   const run = () => { throw new Error('fatal: no merge base'); };
-  assert.equal(baseFloorFromGit('p.json', { run }), null);
-});
-
-test('baseFloorFromGit returns null when the base profile is malformed', () => {
-  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : '{ not json');
   assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 

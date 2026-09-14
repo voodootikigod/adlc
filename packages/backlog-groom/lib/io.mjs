@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
+import { DEFAULT_AUTONOMY_FLOOR } from './floor.mjs';
 
 /** The profile schema version a bare, profile-less repo is treated as declaring. */
 export const IMPLIED_SCHEMA_VERSION = 1;
@@ -98,18 +99,20 @@ export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = '
   try {
     raw = run(['show', `${mergeBase}:${profilePath}`]);
   } catch {
-    // Absent at the base is genuinely unknown, not "no floor": the profile may
-    // be newly added in this branch, and treating that as an empty base floor
-    // would let a first-commit profile declare any floor it liked.
-    return null;
+    // Absent at the base means the DEFAULT floor was in force there — not that
+    // the floor is unknown. Refusing here would make the tool unusable on any
+    // repo that has not yet adopted a profile, and it buys nothing: the default
+    // is the most conservative floor, so a head that narrows it is still caught.
+    return [...DEFAULT_AUTONOMY_FLOOR];
   }
 
   try {
     const parsed = parseProfile(JSON.parse(raw));
     return parsed.autonomyFloor;
   } catch {
-    // A malformed base profile is unknown too. Guessing would be guessing about
-    // exactly the value the guard exists to compare.
+    // PRESENT but unreadable is genuinely unknown, and distinct from absent: the
+    // file may have declared a fuller floor than the default, so assuming the
+    // default would under-detect a real widening.
     return null;
   }
 }
