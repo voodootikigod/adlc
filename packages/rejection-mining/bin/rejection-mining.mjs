@@ -13,7 +13,12 @@ import {
 import { checkGhAvailable, runGh } from '../lib/gh.mjs';
 import { fetchSignals, buildClusters } from '../lib/mine.mjs';
 import { planLensEmissions } from '../lib/lens.mjs';
-import { buildAllPrompts, refineClusters } from '../lib/llm.mjs';
+import {
+  allRefinementsFailed,
+  buildAllPrompts,
+  isLlmRequested,
+  refineClusters,
+} from '../lib/llm.mjs';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';
 
 const { values: flags } = parseArgs({
@@ -81,9 +86,12 @@ const clusters = buildClusters(signals, minSize);
 
 // --llm: refine clusters
 let llmRefinements = new Map();
+let llmFailures;
 if (flags.llm && clusters.length > 0) {
   try {
-    llmRefinements = await refineClusters(clusters, signals, tier);
+    const refinement = await refineClusters(clusters, signals, tier);
+    llmRefinements = refinement.results;
+    llmFailures = refinement.failed;
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }
@@ -95,8 +103,11 @@ const enrichedClusters = clusters.map((c, idx) => {
   return {
     ...c,
     title: refinement?.title ?? null,
+    refined: Boolean(refinement),
   };
 });
+
+const llmRequested = isLlmRequested(flags.llm, clusters.length);
 
 // Plan lens emissions
 const lensPlans = planLensEmissions(enrichedClusters, signals, outDir, llmRefinements);
@@ -109,6 +120,9 @@ if (flags.json) {
     totalSignals: signals.length,
     totalPRs,
     skippedPRs,
+    llmRequested,
+    llmAttempted: clusters.length,
+    llmFailures,
   }));
 } else {
   const lines = buildHumanReport({
@@ -117,8 +131,19 @@ if (flags.json) {
     totalSignals: signals.length,
     totalPRs,
     skippedPRs,
+    llmRequested,
+    llmAttempted: clusters.length,
+    llmFailures,
   });
   for (const l of lines) console.log(l);
+}
+
+if (allRefinementsFailed({
+  requested: llmRequested,
+  attempted: clusters.length,
+  successful: llmRefinements.size,
+})) {
+  opError('No LLM refinements succeeded. Use --prompt-only to get prompts.');
 }
 
 // --write: emit lens files

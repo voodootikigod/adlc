@@ -62,30 +62,58 @@ export async function refineCluster(slug, signals, tier = 'mid') {
 
 /**
  * Refine multiple clusters (one call each).
- * Returns Map<clusterIndex, {title, charter}>.
+ * Returns successful refinements plus attempted/failed counts.
  * Failures are logged but do not throw.
  *
  * @param {Array<{slug: string, indices: number[]}>} clusters
  * @param {Array<{body: string}>} signals
  * @param {string} [tier]
- * @returns {Promise<Map<number, {title: string, charter: string}>>}
+ * @param {(slug: string, signals: Array<{body: string}>, tier: string) => Promise<{title: string, charter: string}|null>} [refine]
+ * @returns {Promise<{results: Map<number, {title: string, charter: string}>, attempted: number, failed: number}>}
  */
-export async function refineClusters(clusters, signals, tier = 'mid') {
+export async function refineClusters(clusters, signals, tier = 'mid', refine = refineCluster) {
   const results = new Map();
+  let failed = 0;
 
   for (const [idx, cluster] of clusters.entries()) {
     const clusterSignals = cluster.indices.map((i) => signals[i]);
     try {
-      const refined = await refineCluster(cluster.slug, clusterSignals, tier);
-      if (refined) results.set(idx, refined);
+      const refined = await refine(cluster.slug, clusterSignals, tier);
+      if (refined) {
+        results.set(idx, refined);
+      } else {
+        failed += 1;
+      }
     } catch (err) {
+      failed += 1;
       console.error(
         `rejection-mining: LLM refinement failed for cluster "${cluster.slug}": ${err.message}`
       );
     }
   }
 
-  return results;
+  return { results, attempted: clusters.length, failed };
+}
+
+/**
+ * Whether --llm must fail because every attempted cluster refinement failed.
+ *
+ * @param {{requested: boolean, attempted: number, successful: number}} opts
+ * @returns {boolean}
+ */
+export function allRefinementsFailed({ requested, attempted, successful }) {
+  return requested && attempted > 0 && successful === 0;
+}
+
+/**
+ * Whether the CLI should attempt LLM refinement for the discovered clusters.
+ *
+ * @param {boolean} requested
+ * @param {number} clusterCount
+ * @returns {boolean}
+ */
+export function isLlmRequested(requested, clusterCount) {
+  return requested && clusterCount > 0;
 }
 
 /**
