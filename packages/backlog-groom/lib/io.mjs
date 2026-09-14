@@ -6,7 +6,7 @@
  * the cache only when there is no cache, say — passes every suite.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
@@ -139,4 +139,81 @@ function defaultGitRun(args) {
   // merge base — an ordinary, expected state — would print a fatal-looking git
   // error beside a run that succeeded. Specifying 'pipe' captures it instead.
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
+}
+
+/**
+ * Load the gate ledger — STRICTLY, unlike the cache.
+ *
+ * The cache degrades to empty on corruption because a lost cache costs a slow
+ * run and never a wrong answer. The ledger is the opposite: it is the ONLY
+ * record that a revision has already spent its one review, so a ledger that
+ * degrades to `{}` degrades replay protection to nothing. Delete the file and
+ * the same revision can be reviewed again, and again, until it approves.
+ *
+ * So: absent is a legitimate first run and yields `{}`. Present but unreadable
+ * or malformed is an operational error, because it is indistinguishable from a
+ * ledger someone removed on purpose.
+ */
+export function loadLedger(path, io = {}) {
+  const { exists = existsSync, readFile = (p) => readFileSync(p, 'utf8') } = io;
+  if (!exists(path)) return {};
+
+  let parsed;
+  try {
+    parsed = JSON.parse(readFile(path));
+  } catch (err) {
+    throw Object.assign(
+      new Error(`backlog-groom: the gate ledger at ${path} exists but could not be read (${err.message}) — refusing to act, because an unreadable ledger cannot show a revision has already been reviewed`),
+      { isOpError: true }
+    );
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw Object.assign(
+      new Error(`backlog-groom: the gate ledger at ${path} is not an object — refusing to act rather than treating it as empty`),
+      { isOpError: true }
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Persist the ledger, throwing on failure.
+ *
+ * Unlike the cache's warn-and-continue: a gate decision that could not be
+ * written is a decision the next run will not see, so continuing would execute
+ * against authorization nothing can later prove was spent.
+ */
+export function saveLedger(path, ledger, io = {}) {
+  const { write = writeFileSync } = io;
+  try {
+    write(path, serialiseJson(ledger));
+  } catch (err) {
+    throw Object.assign(
+      new Error(`backlog-groom: could not persist the gate ledger at ${path} (${err.message}) — refusing to act on authorization that cannot be recorded`),
+      { isOpError: true }
+    );
+  }
+}
+
+/**
+ * Take an exclusive lock for the apply transaction, or throw.
+ *
+ * `mkdir` is atomic, so exactly one process wins. Without it two runs starting
+ * together both read a ledger with no entry for a revision, both obtain an
+ * approval for it, and both comment and close the same issue — the one-shot rule
+ * holding within a process and not across them.
+ */
+export function acquireApplyLock(path, io = {}) {
+  const { mkdir = mkdirSync, rmdir = rmSync } = io;
+  try {
+    mkdir(path);
+  } catch (err) {
+    throw Object.assign(
+      new Error(`backlog-groom: another apply run holds the lock at ${path} (${err.code ?? err.message}) — refusing to run two write transactions against one ledger`),
+      { isOpError: true }
+    );
+  }
+  return () => {
+    try { rmdir(path, { recursive: true, force: true }); } catch { /* releasing a lock must never mask the run's own error */ }
+  };
 }

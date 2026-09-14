@@ -137,7 +137,7 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     }
 
     try {
-      gh.apply(action.number, action.action);
+      gh.apply(action.number, action.action, { from: action.from, to: action.to, field: action.field });
     } catch (err) {
       // The comment is on the issue and the action is not. That is the
       // resumable state by design: a re-run finds the marker and retries only

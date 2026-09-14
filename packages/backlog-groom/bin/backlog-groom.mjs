@@ -18,9 +18,10 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { groom } from '../lib/groom.mjs';
+import { headCommit } from '../lib/verify.mjs';
 import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
-import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
+import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit, loadLedger, saveLedger, acquireApplyLock } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
 import { makeGhWriter } from '../lib/gh.mjs';
 import { makeReviewRunner, reviewerPair, buildActionArtifact } from '../lib/gate.mjs';
@@ -106,7 +107,22 @@ if (values.apply) {
   }
 
   const ledgerPath = values.ledger ?? '.adlc/backlog-groom-ledger.json';
-  const ledger = loadCache(ledgerPath);
+  let ledger;
+  try {
+    ledger = loadLedger(ledgerPath);
+  } catch (err) {
+    opError(describeError(err, 'could not load the gate ledger'));
+  }
+
+  // One write transaction at a time. Two concurrent runs would both read a
+  // ledger with no entry for a revision, both obtain an approval for it, and
+  // both comment and close the same issue.
+  let releaseLock;
+  try {
+    releaseLock = acquireApplyLock(`${ledgerPath}.lock`);
+  } catch (err) {
+    opError(describeError(err, 'could not take the apply lock'));
+  }
 
   // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
   // the floor guard refuses to act on an unknown base rather than assuming one.
@@ -137,13 +153,22 @@ if (values.apply) {
       runReview,
       gh: makeGhWriter({ spawn: spawnSync }),
       floorWideningAuthorized: values['authorize-floor-widening'],
+      // The set describes one revision; acting on it at another closes issues on
+      // evidence that no longer describes the code.
+      revision: headCommit(),
+      // Checkpointed after every gate decision, before any write.
+      persist: (l) => saveLedger(ledgerPath, l),
     });
   } catch (err) {
+    releaseLock();
     opError(describeError(err, 'apply failed'));
   }
 
-  const warn = saveCache(ledgerPath, ledger);
-  if (warn) console.error(`backlog-groom: warning — ${warn}`);
+  try {
+    saveLedger(ledgerPath, ledger);
+  } finally {
+    releaseLock();
+  }
 
   console.log(serialiseJson(applied).trimEnd());
   process.exitCode = 0;

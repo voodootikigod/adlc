@@ -9,7 +9,7 @@
  */
 
 /** Bump when the emitted shape changes. AC12 pins this against a fixture. */
-export const EMIT_SCHEMA_VERSION = 2;
+export const EMIT_SCHEMA_VERSION = 3;
 
 /** The exact top-level key set of an emitted document, in order. */
 export const EMIT_KEYS = Object.freeze([
@@ -36,7 +36,7 @@ export const EMIT_KEYS = Object.freeze([
  * `null` for an issue with no referenced paths, which §2.2 requires to be
  * distinguishable rather than absent.
  */
-export const ISSUE_KEYS = Object.freeze(['number', 'title', 'url', 'route', 'verdict', 'evidence', 'contentHash', 'rank', 'labels', 'units']);
+export const ISSUE_KEYS = Object.freeze(['number', 'title', 'url', 'route', 'verdict', 'evidence', 'contentHash', 'frozen', 'rank', 'labels', 'units']);
 
 /**
  * Build the groomed set.
@@ -69,6 +69,10 @@ export function emitGroomedSet({
       verdict: r.verified?.verdict ?? 'unverifiable',
       evidence: r.verified?.evidence ?? null,
       contentHash: r.contentHash ?? null,
+      // Whether any cited path is frozen by the profile. Emitted rather than
+      // recomputed downstream: the write path has no access to the citations,
+      // and a policy it cannot see is a policy it cannot enforce.
+      frozen: r.frozen === true,
       rank: r.rank ?? null,
       labels: r.labels ?? [],
       units: r.units ?? [],

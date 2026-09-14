@@ -188,15 +188,89 @@ test('the gate ledger persists, so a second run does not re-review the same revi
   assert.equal(afterSecond, 1, 'the same revision must not be reviewed twice across runs');
 });
 
-test('an unwritable ledger warns but does not fail a run that already decided', () => {
+test('an unwritable ledger FAILS the run rather than warning', () => {
+  // The cache warns and continues because a lost cache costs a slow run. The
+  // ledger is the only record that a revision has spent its one review, so a
+  // decision that cannot be persisted is authorization the next run will not
+  // see — and continuing would act on it anyway.
   const box = sandbox({
     reviewExit: 2,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
   const r = run(['--apply', '--set', set, '--ledger', join(box.dir, 'nope', 'ledger.json')], box);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ledger/i);
+  assert.equal(ghCalls(box).filter((c) => c.startsWith('issue')).length, 0, 'nothing may be written');
+});
+
+test('a corrupt ledger refuses the run instead of starting from empty', () => {
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const set = setFile(box);
+  const ledger = join(box.dir, 'ledger.json');
+  writeFileSync(ledger, '{ truncated');
+  const r = run(['--apply', '--set', set, '--ledger', ledger], box);
+  assert.equal(r.status, 1);
+  assert.deepEqual(ghCalls(box), [], 'a ledger that cannot prove a revision was reviewed must stop the run');
+});
+
+test('a held apply lock refuses a concurrent run', () => {
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const set = setFile(box);
+  const ledger = join(box.dir, 'ledger.json');
+  mkdirSync(`${ledger}.lock`, { recursive: true });
+  const r = run(['--apply', '--set', set, '--ledger', ledger], box);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /lock/i);
+  assert.deepEqual(ghCalls(box), []);
+});
+
+test('a set generated for a different revision is refused', () => {
+  // Acting on a stale set closes issues on evidence that no longer describes the
+  // code: the cited file may have changed, or the defect been reintroduced.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const p = join(box.dir, 'stale.json');
+  writeFileSync(
+    p,
+    JSON.stringify({
+      schemaVersion: 3,
+      generatedFor: '0000000000000000000000000000000000000000',
+      issues: [{ number: 705, verdict: 'fixed', contentHash: 'h1', evidence: 'gone', frozen: false, labels: [], units: [] }],
+      proposals: [],
+    })
+  );
+  const r = run(['--apply', '--set', p], box);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /generated for/i);
+  assert.deepEqual(ghCalls(box), []);
+});
+
+test('an issue whose cited paths are frozen is never auto-actioned', () => {
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const p = join(box.dir, 'frozen.json');
+  writeFileSync(
+    p,
+    JSON.stringify({
+      schemaVersion: 3,
+      issues: [{ number: 705, verdict: 'fixed', contentHash: 'h1', evidence: 'gone', frozen: true, labels: [], units: [] }],
+      proposals: [],
+    })
+  );
+  const r = run(['--apply', '--set', p], box);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, /warning/i);
+  assert.deepEqual(ghCalls(box), [], 'a frozen path means no action at all, not even a review');
 });
 
 test('the apply path exposes no way to choose the floor comparison ref', () => {

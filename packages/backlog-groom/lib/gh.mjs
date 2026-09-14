@@ -42,8 +42,18 @@ export function makeGhWriter({ spawn } = {}) {
       return (parsed.comments ?? []).map((c) => c.body ?? '');
     },
     comment: (number, body) => gh(['issue', 'comment', String(number), '--body-file', '-'], body),
-    apply: (number, action) => {
+    apply: (number, action, detail = {}) => {
       if (action === 'close') return gh(['issue', 'close', String(number)]);
+      if (action === 'relabel') {
+        // Remove then add, both in one gh call: two calls could leave the issue
+        // with neither label if the second failed, and the comment has already
+        // claimed the change.
+        const args = ['issue', 'edit', String(number)];
+        if (detail.from) args.push('--remove-label', detail.from);
+        if (detail.to) args.push('--add-label', detail.to);
+        if (args.length === 3) throw new Error(`relabel for issue ${number} names neither a from nor a to label`);
+        return gh(args);
+      }
       throw new Error(`no writer wired for action ${action} — refusing rather than reporting a write that did not happen`);
     },
   };

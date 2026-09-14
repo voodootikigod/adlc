@@ -13,6 +13,7 @@
  */
 
 import { gateAction } from './gate.mjs';
+import { ACTION_CLASSES } from './floor.mjs';
 import { executeActions } from './execute.mjs';
 
 /**
@@ -23,6 +24,17 @@ import { executeActions } from './execute.mjs';
  * §2.2 leaves it with no revision to bind a verdict to, so it can neither be
  * gated nor replay-protected.
  */
+/**
+ * Action classes the writer can actually perform.
+ *
+ * Narrower than ACTION_CLASSES on purpose: the FLOOR must know about every class
+ * the tool might ever take, so an operator can pre-emptively block one, while
+ * the EXECUTOR must only accept what it can really do. An action accepted here
+ * and refused at the writer would comment its rationale and then fail, leaving
+ * a "relabelling because…" note on an issue whose labels never changed.
+ */
+export const EXECUTABLE_ACTIONS = Object.freeze(['close', 'relabel']);
+
 export function actionsFromSet(set) {
   const out = [];
   const byNumber = new Map((set?.issues ?? []).map((i) => [i.number, i]));
@@ -30,6 +42,10 @@ export function actionsFromSet(set) {
   for (const issue of set?.issues ?? []) {
     if (issue.verdict !== 'fixed') continue;
     if (!issue.contentHash) continue;
+    // §2.1: an issue whose cited paths are frozen is never auto-actioned. The
+    // profile says those paths are off limits, and a close is an action on the
+    // issue about them.
+    if (issue.frozen === true) continue;
     out.push({
       number: issue.number,
       action: 'close',
@@ -41,6 +57,10 @@ export function actionsFromSet(set) {
   for (const p of set?.proposals ?? []) {
     const issue = byNumber.get(p.number);
     if (!issue?.contentHash) continue;
+    if (issue.frozen === true) continue;
+    // Refused HERE, before a comment is written — not at the writer, which would
+    // leave a rationale on an issue nothing then happened to.
+    if (!EXECUTABLE_ACTIONS.includes(p.action)) continue;
     out.push({
       number: p.number,
       action: p.action,
@@ -67,13 +87,30 @@ export function actionsFromSet(set) {
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false } = {}) {
+export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null } = {}) {
+  // A set describes ONE revision. Acting on a set generated against a different
+  // one closes issues on evidence that no longer describes the code: the cited
+  // file may have changed, or the defect may have been reintroduced, since the
+  // verdict was computed.
+  if (revision && set?.generatedFor && set.generatedFor !== revision) {
+    throw Object.assign(
+      new Error(
+        `backlog-groom: this groomed set was generated for ${set.generatedFor}, but the repository is at ${revision} — re-run the read path before applying`
+      ),
+      { isOpError: true }
+    );
+  }
+
   const proposed = actionsFromSet(set);
 
-  const gated = proposed.map((action) => ({
-    ...action,
-    gate: gateAction({ action, profile, ledger, runReview: () => runReview(action) }),
-  }));
+  const gated = proposed.map((action) => {
+    const gate = gateAction({ action, profile, ledger, runReview: () => runReview(action) });
+    // Checkpoint BEFORE any write. A verdict that exists only in memory is a
+    // verdict a crash erases, and the next run would review the same revision
+    // again — the one-shot rule surviving only as long as the process does.
+    persist?.(ledger);
+    return { ...action, gate };
+  });
 
   const result = executeActions({
     actions: gated,

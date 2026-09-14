@@ -8,7 +8,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { floorWidening } from '../lib/floor.mjs';
-import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
+
+/** Capture a thrown error — assert.throws returns undefined, not the error. */
+function thrownIo(fn) {
+  try { fn(); } catch (err) { return err; }
+  return null;
+}
+import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadLedger, saveLedger, acquireApplyLock, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
 
 test('a MISSING profile is not an error — the defaults are a complete profile', () => {
   const p = loadProfile('nope.json', { exists: () => false, readFile: () => { throw new Error('must not read'); } });
@@ -155,4 +161,58 @@ test('baseFloorFromGit returns null when the base profile has an unknown key', (
   const run = (args) =>
     args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonmyFloor: [] });
   assert.equal(baseFloorFromGit('p.json', { run }), null);
+});
+
+// ---- the ledger fails closed where the cache fails soft ---------------------
+
+test('an absent ledger is a legitimate first run', () => {
+  assert.deepEqual(loadLedger('nope.json', { exists: () => false }), {});
+});
+
+test('a PRESENT but unreadable ledger is an operational error, not an empty one', () => {
+  // The cache degrades to {} because a lost cache costs a slow run. A ledger
+  // that degrades to {} degrades replay protection to nothing: delete the file
+  // and the same revision can be reviewed until it approves.
+  const err = thrownIo(() => loadLedger('l.json', { exists: () => true, readFile: () => '{ not json' }));
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /refusing to act/);
+});
+
+test('a ledger that is not an object is refused rather than treated as empty', () => {
+  for (const raw of ['"x"', '7', '[]', 'null']) {
+    const err = thrownIo(() => loadLedger('l.json', { exists: () => true, readFile: () => raw }));
+    assert.equal(err.isOpError, true, `${raw} must be refused`);
+  }
+});
+
+test('a good ledger loads', () => {
+  assert.deepEqual(loadLedger('l.json', { exists: () => true, readFile: () => '{"7:h":{"verdict":"approve"}}' }), {
+    '7:h': { verdict: 'approve' },
+  });
+});
+
+test('a ledger that cannot be persisted is an operational error', () => {
+  // Unlike the cache's warn-and-continue: a decision the next run will not see
+  // is authorization nothing can later prove was spent.
+  const err = thrownIo(() => saveLedger('l.json', {}, { write: () => { throw new Error('EACCES'); } }));
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /refusing to act/);
+});
+
+test('the apply lock is exclusive, and releasing is idempotent', () => {
+  let made = 0;
+  const release = acquireApplyLock('/tmp/x.lock', { mkdir: () => { made += 1; }, rmdir: () => {} });
+  assert.equal(made, 1);
+  release();
+  release();
+});
+
+test('a held apply lock refuses the second run', () => {
+  // Without it, two runs both read a ledger with no entry for a revision, both
+  // obtain an approval, and both close the same issue.
+  const err = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', { mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); } })
+  );
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /another apply run/);
 });

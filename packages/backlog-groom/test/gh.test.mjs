@@ -70,7 +70,28 @@ test('an unwired action throws rather than silently doing nothing', () => {
   // A no-op that returned successfully would mark the issue actioned when
   // nothing happened to it.
   const gh = makeGhWriter({ spawn: () => ok() });
-  assert.throws(() => gh.apply(7, 'relabel'), /no writer wired/);
+  assert.throws(() => gh.apply(7, 'duplicate-link'), /no writer wired/);
+});
+
+test('relabel removes the old label and adds the new one in a single call', () => {
+  // Two calls could leave the issue with neither label if the second failed —
+  // and the comment has already claimed the change happened.
+  let seen = null;
+  const gh = makeGhWriter({ spawn: (cmd, args) => { seen = args; return ok(); } });
+  gh.apply(7, 'relabel', { from: 'P3-low', to: 'P1-high' });
+  assert.deepEqual(seen, ['issue', 'edit', '7', '--remove-label', 'P3-low', '--add-label', 'P1-high']);
+});
+
+test('a relabel naming neither label is refused rather than issuing a no-op edit', () => {
+  const gh = makeGhWriter({ spawn: () => ok() });
+  assert.throws(() => gh.apply(7, 'relabel', {}), /neither a from nor a to/);
+});
+
+test('a relabel that only adds is allowed', () => {
+  let seen = null;
+  const gh = makeGhWriter({ spawn: (cmd, args) => { seen = args; return ok(); } });
+  gh.apply(7, 'relabel', { to: 'area:review' });
+  assert.deepEqual(seen, ['issue', 'edit', '7', '--add-label', 'area:review']);
 });
 
 test('a failure with no stderr and no error still names the gh subcommand', () => {
