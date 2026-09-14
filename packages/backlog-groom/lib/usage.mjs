@@ -80,3 +80,30 @@ export function validateThreshold(raw) {
   }
   return n;
 }
+
+/**
+ * Validate the `--apply` flag combination. Returns an error message, or null.
+ *
+ * IN LIB FOR THE SAME REASON THE REST OF THIS FILE IS: a guard left in the
+ * binary is reachable only by spawning the process, so it goes untested and an
+ * inverted comparison — demanding `--set` only when it was already supplied —
+ * passes every suite while making the write path unusable or, worse, usable
+ * without the set it is supposed to act on.
+ */
+export function validateApplyArgs(values = {}) {
+  if (!values.apply) return null;
+  if (!values.set) return '--apply requires --set <path> — the groomed set to act on';
+  return null;
+}
+
+/**
+ * The message an operational error should print.
+ *
+ * An `isOpError` already carries a message written for an operator; anything
+ * else is an unexpected failure and needs its context prefixed, or the operator
+ * sees a bare `ENOENT` with no clue which file. Extracted because the ternary is
+ * a branch, and a branch in the binary is a branch nothing tests.
+ */
+export function describeError(err, context) {
+  return err?.isOpError ? err.message : `${context}: ${err?.message ?? err}`;
+}

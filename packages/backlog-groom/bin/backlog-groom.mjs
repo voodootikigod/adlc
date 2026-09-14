@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 
 import { groom } from '../lib/groom.mjs';
 import { renderReport } from '../lib/report.mjs';
-import { renderUsage, parseOptions, validateThreshold } from '../lib/usage.mjs';
+import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
 import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
 import { makeReviewRunner, reviewerPair } from '../lib/gate.mjs';
@@ -80,7 +80,7 @@ let profile;
 try {
   profile = loadProfile(profilePath);
 } catch (err) {
-  opError(err.isOpError ? err.message : `could not read ${profilePath}: ${err.message}`);
+  opError(describeError(err, `could not read ${profilePath}`));
 }
 
 const cachePath = values.cache ?? '.adlc/backlog-groom-cache.json';
@@ -92,7 +92,8 @@ const cache = values['no-cache'] ? null : loadCache(cachePath);
 // run: the read path must stay reachable with no possibility of a write, so the
 // two never share a code path that a flag could flip.
 if (values.apply) {
-  if (!values.set) opError('--apply requires --set <path> — the groomed set to act on');
+  const applyArgError = validateApplyArgs(values);
+  if (applyArgError) opError(applyArgError);
 
   let set;
   try {
@@ -125,7 +126,7 @@ if (values.apply) {
       floorWideningAuthorized: values['authorize-floor-widening'],
     });
   } catch (err) {
-    opError(err.isOpError ? err.message : `apply failed: ${err.message}`);
+    opError(describeError(err, 'apply failed'));
   }
 
   const warn = saveCache(ledgerPath, ledger);

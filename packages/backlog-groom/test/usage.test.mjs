@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FLAGS, renderUsage, validateThreshold } from '../lib/usage.mjs';
+import { FLAGS, renderUsage, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
 
 /** Return the error a thunk threw; `assert.throws` returns undefined. */
 function caughtUsage(fn) {
@@ -93,4 +93,31 @@ test('a flag that overruns the column is separated by exactly one space', () => 
   const usage = renderUsage([{ name: 'x'.repeat(30), arg: null, help: 'HELP' }]);
   const line = usage.split('\n').find((l) => l.includes('HELP'));
   assert.match(line, /^ {2}--x+ HELP$/, 'exactly one space between an overrun flag and its help');
+});
+
+// ---- the --apply guard, out of the binary ----------------------------------
+
+test('--apply without --set is refused, and the message names the flag', () => {
+  assert.match(validateApplyArgs({ apply: true }), /--set/);
+});
+
+test('--apply with --set is accepted', () => {
+  assert.equal(validateApplyArgs({ apply: true, set: 'groomed.json' }), null);
+});
+
+test('without --apply the set is not required', () => {
+  // The read path must stay usable with no write flags at all; demanding --set
+  // unconditionally would make the read-only mode unreachable.
+  assert.equal(validateApplyArgs({}), null);
+  assert.equal(validateApplyArgs({ set: 'x.json' }), null);
+});
+
+test('describeError passes an operational message through untouched', () => {
+  const err = Object.assign(new Error('profile: unknown key "x"'), { isOpError: true });
+  assert.equal(describeError(err, 'apply failed'), 'profile: unknown key "x"');
+});
+
+test('describeError prefixes an unexpected failure with its context', () => {
+  // A bare ENOENT tells the operator nothing about which file or which step.
+  assert.equal(describeError(new Error('ENOENT'), 'apply failed'), 'apply failed: ENOENT');
 });
