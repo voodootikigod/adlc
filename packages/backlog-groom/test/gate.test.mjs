@@ -305,10 +305,30 @@ test('AC14: a THROWN review is recorded, so it cannot be retried until it passes
 
 test('ledgerApproves requires an approve bound to the same issue AND revision', () => {
   const a = action();
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number } }, a), true);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'demote', contentHash: a.contentHash, number: a.number } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: 'other', number: a.number } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999 } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action } }, a), true);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'demote', contentHash: a.contentHash, number: a.number, action: a.action } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: 'other', number: a.number, action: a.action } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action } }, a), false);
   assert.equal(ledgerApproves({}, a), false);
   assert.equal(ledgerApproves(null, a), false);
+});
+
+test('a close and a relabel on the same issue and revision are separate decisions', () => {
+  // The keys must not collide: whichever was gated first would otherwise refuse
+  // the second as a replay of a decision that was never about it.
+  const a = { number: 7, action: 'close', contentHash: 'h' };
+  const b = { number: 7, action: 'relabel', contentHash: 'h' };
+  assert.notEqual(gateKey(a), gateKey(b));
+
+  const ledger = {};
+  const first = gateAction({ action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  assert.equal(first.verdict, 'demote');
+  const second = gateAction({ action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  assert.equal(second.verdict, 'approve', 'a different action is a different decision');
+});
+
+test('an approval for a close does not license a relabel', () => {
+  const a = { number: 7, action: 'close', contentHash: 'h' };
+  const approvedClose = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'close' } };
+  assert.equal(ledgerApproves(approvedClose, { number: 7, action: 'relabel', contentHash: 'h' }), false);
 });

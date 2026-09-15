@@ -21,7 +21,7 @@
  */
 
 import { assertFloor, assertFloorNotWidened, blockedByFloor } from './floor.mjs';
-import { ledgerApproves } from './gate.mjs';
+import { ledgerApproves, gateKey } from './gate.mjs';
 
 /**
  * The exported functions that can cause a GitHub write.
@@ -95,7 +95,7 @@ export function planAction(action, { floor = [], ledger = null } = {}) {
  * @param {object} o.gh - `{comments(number), comment(number, body), apply(number, action)}`
  * @returns {{executed:object[], demoted:object[], failed:object[]}}
  */
-export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh } = {}) {
+export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null } = {}) {
   // Validate and compare BEFORE any write. A run must not apply its first
   // action and discover the policy problem on its second — a half-applied sweep
   // under a floor nobody authorised is worse than a refused one.
@@ -107,6 +107,13 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
   const failed = [];
 
   for (const action of actions) {
+    // Already done. A run that applied the action and then failed to persist —
+    // or crashed — must not repeat the mutation on the next attempt.
+    if (ledger?.[gateKey(action)]?.applied === true) {
+      executed.push({ number: action.number, action: action.action, resumed: true, alreadyApplied: true });
+      continue;
+    }
+
     const plan = planAction(action, { floor, ledger });
     if (!plan.do) {
       demoted.push({ number: action.number, action: action.action, reason: plan.reason });
@@ -119,7 +126,17 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     try {
       const existing = gh.comments(action.number) ?? [];
       const want = marker(action.number, action.contentHash);
-      alreadyCommented = existing.some((body) => String(body).includes(want));
+      // OUR OWN marker only. The marker is derived from the issue number and a
+      // content hash, both of which anyone can compute, so a third party can
+      // post one and suppress the evidence comment — leaving the tool to act
+      // with no trail at all. When the identity is unknown, no comment counts
+      // as ours and the evidence is written again rather than skipped.
+      alreadyCommented = existing.some((c) => {
+        const body = typeof c === 'string' ? c : c?.body;
+        const author = typeof c === 'string' ? null : c?.author;
+        if (!String(body ?? '').includes(want)) return false;
+        return self ? author === self : false;
+      });
     } catch (err) {
       // Unable to read the issue's comments means unable to tell a resume from a
       // first run, and guessing "first run" duplicates the rationale.
@@ -146,6 +163,8 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
       continue;
     }
 
+    if (ledger?.[gateKey(action)]) ledger[gateKey(action)].applied = true;
+    onApplied?.(ledger);
     executed.push({ number: action.number, action: action.action, resumed: alreadyCommented });
   }
 

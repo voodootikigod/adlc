@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "generatedFor": "fixture",
   "coverage": {
     "total": 3,
@@ -34,6 +34,7 @@
         "movedWithinFile": true
       },
       "contentHash": "7732ddb35ca683314a9ae181fa22a47be4e4564905cb55574a71f7901ef97c19",
+      "updatedAt": "2026-09-01T00:00:00Z",
       "frozen": false,
       "rank": {
         "score": 0.6,
@@ -69,6 +70,7 @@
         "reason": "no line of the cited snippet survives anywhere in the file"
       },
       "contentHash": "6bb9b37be446ee57b9952bbf7c5551b6e3f525234397f27758e79566f2e11448",
+      "updatedAt": "2026-09-02T00:00:00Z",
       "frozen": false,
       "rank": {
         "score": 0.35,
@@ -98,6 +100,7 @@
       "verdict": "unverifiable",
       "evidence": null,
       "contentHash": null,
+      "updatedAt": "2026-09-03T00:00:00Z",
       "frozen": false,
       "rank": {
         "score": 0.25,

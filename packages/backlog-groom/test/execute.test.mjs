@@ -11,7 +11,7 @@ import { gateKey } from '../lib/gate.mjs';
 
 /** A ledger holding a real approve bound to this action's revision. */
 function ledgerFor(action, verdict = 'approve') {
-  return { [gateKey(action)]: { verdict, contentHash: action.contentHash, number: action.number } };
+  return { [gateKey(action)]: { verdict, contentHash: action.contentHash, number: action.number, action: action.action } };
 }
 
 const approved = (over = {}) => ({
@@ -109,8 +109,8 @@ test('AC15: a re-run after comment-succeeded/action-failed resumes at the action
   // The exact interrupted state: the marker is already on the issue, the action
   // never landed. Re-commenting would stack a second identical rationale, and
   // every retry would add another.
-  const gh = fakeGh({ existingComments: [`prior body\n${marker(7, 'abc123')}`] });
-  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
+  const gh = fakeGh({ existingComments: [{ body: `prior body\n${marker(7, 'abc123')}`, author: 'me' }] });
+  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['apply'], 'the comment must not be repeated');
   assert.equal(result.executed.length, 1);
   assert.equal(result.executed[0].resumed, true);
@@ -118,8 +118,8 @@ test('AC15: a re-run after comment-succeeded/action-failed resumes at the action
 
 test('AC15: a marker for a DIFFERENT revision does not suppress the comment', () => {
   // Stale evidence from an older revision is not this decision's trail.
-  const gh = fakeGh({ existingComments: [`older\n${marker(7, 'oldhash')}`] });
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
+  const gh = fakeGh({ existingComments: [{ body: `older\n${marker(7, 'oldhash')}`, author: 'me' }] });
+  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });
 
@@ -183,7 +183,7 @@ test('a FORGED approval on the action is refused — the ledger decides', () => 
 test('an approval bound to a DIFFERENT revision does not license this one', () => {
   const gh = fakeGh();
   const a = approved();
-  const stale = { [gateKey(a)]: { verdict: 'approve', contentHash: 'someotherhash', number: a.number } };
+  const stale = { [gateKey(a)]: { verdict: 'approve', contentHash: 'someotherhash', number: a.number, action: a.action } };
   const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger: stale, gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
@@ -193,7 +193,7 @@ test('an approval bound to a DIFFERENT issue does not license this one', () => {
   // A ledger edited to move an approval between issues must not pass.
   const gh = fakeGh();
   const a = approved();
-  const moved = { [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999 } };
+  const moved = { [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action } };
   const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger: moved, gh });
   assert.equal(gh.calls.length, 0);
 });
@@ -203,4 +203,45 @@ test('no ledger at all means no authorization', () => {
   const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
+});
+
+// ---- the marker is forgeable, so authorship decides ------------------------
+
+test('a marker posted by SOMEONE ELSE does not suppress the evidence comment', () => {
+  // The marker is derived from the issue number and a content hash, both of
+  // which anyone can compute. If a third party's comment counted, anyone could
+  // silence the trail and let the tool act unexplained.
+  const gh = fakeGh({ existingComments: [{ body: `nice try\n${marker(7, 'abc123')}`, author: 'someone-else' }] });
+  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
+  assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply'], 'the trail must be written');
+});
+
+test('with an UNKNOWN identity no comment counts as ours', () => {
+  // Fail toward writing the evidence again. A duplicate rationale is noise; a
+  // missing one is an issue that went quiet with no explanation.
+  const gh = fakeGh({ existingComments: [{ body: marker(7, 'abc123'), author: 'me' }] });
+  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: null });
+  assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
+});
+
+// ---- a completed action is not repeated ------------------------------------
+
+test('an action already marked applied is not performed again', () => {
+  // The crash window: the action landed, the ledger write did not. A retry must
+  // not close an issue twice or re-comment on it.
+  const gh = fakeGh();
+  const a = approved();
+  const ledger = ledgerFor(a);
+  ledger[gateKey(a)].applied = true;
+  const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  assert.equal(gh.calls.length, 0);
+  assert.equal(result.executed[0].alreadyApplied, true);
+});
+
+test('a successful action is marked applied so the next run skips it', () => {
+  const gh = fakeGh();
+  const a = approved();
+  const ledger = ledgerFor(a);
+  executeActions({ actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  assert.equal(ledger[gateKey(a)].applied, true);
 });

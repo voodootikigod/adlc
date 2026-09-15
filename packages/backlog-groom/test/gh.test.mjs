@@ -24,9 +24,26 @@ test('a successful write returns stdout', () => {
   assert.equal(gh.comment(7, 'body'), 'done\n');
 });
 
-test('comments parses the bodies it was given', () => {
-  const gh = makeGhWriter({ spawn: () => ok(JSON.stringify({ comments: [{ body: 'one' }, { body: 'two' }] })) });
-  assert.deepEqual(gh.comments(7), ['one', 'two']);
+test('comments returns each body WITH its author', () => {
+  // Authorship is load-bearing: the idempotence marker is derivable from public
+  // facts, so only our own prior comment can count as the evidence trail.
+  const gh = makeGhWriter({ spawn: () => ok(JSON.stringify({ comments: [{ body: 'one', author: { login: 'me' } }, { body: 'two', author: { login: 'them' } }] })) });
+  assert.deepEqual(gh.comments(7), [
+    { body: 'one', author: 'me' },
+    { body: 'two', author: 'them' },
+  ]);
+});
+
+test('a comment with no author is attributed to nobody, not to us', () => {
+  const gh = makeGhWriter({ spawn: () => ok(JSON.stringify({ comments: [{ body: 'x' }] })) });
+  assert.deepEqual(gh.comments(7), [{ body: 'x', author: null }]);
+});
+
+test('login reads the authenticated user', () => {
+  let seen = null;
+  const gh = makeGhWriter({ spawn: (cmd, args) => { seen = args; return ok('{"login":"me"}'); } });
+  assert.equal(gh.login(), 'me');
+  assert.deepEqual(seen, ['api', 'user']);
 });
 
 test('an issue with no comments key yields an empty list', () => {

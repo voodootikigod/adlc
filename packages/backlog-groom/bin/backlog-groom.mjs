@@ -157,6 +157,8 @@ if (values.apply) {
       // Re-derive the set's security-relevant claims from the live issue and the
       // repository, rather than trusting a JSON file any caller can edit.
       fetchIssue: (n) => ghIo.issue(n),
+      // Our own login, so only our own prior marker counts as the evidence trail.
+      self: (() => { try { return ghIo.login(); } catch { return null; } })(),
       floorWideningAuthorized: values['authorize-floor-widening'],
       // The set describes one revision; acting on it at another closes issues on
       // evidence that no longer describes the code.

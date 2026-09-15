@@ -34,6 +34,8 @@ export function makeGhWriter({ spawn } = {}) {
       const parsed = JSON.parse(raw);
       return { ...parsed, labels: (parsed.labels ?? []).map((l) => l.name ?? l) };
     },
+    /** The authenticated login, so a comment can be attributed. */
+    login: () => JSON.parse(gh(['api', 'user'])).login,
     comments: (number) => {
       const raw = gh(['issue', 'view', String(number), '--json', 'comments']);
       let parsed;
@@ -45,7 +47,12 @@ export function makeGhWriter({ spawn } = {}) {
         throw new Error(`could not parse gh output for issue ${number}: ${err.message}`);
       }
       // `?? []` only for a genuinely absent key — an issue with no comments.
-      return (parsed.comments ?? []).map((c) => c.body ?? '');
+      // Author AND body: the marker is derived from public facts (issue number
+      // and a content hash anyone can compute), so anyone able to comment can
+      // forge one. A forged marker would make the tool skip its own evidence
+      // comment and act silently — the trail suppressed by the very person the
+      // trail exists to inform.
+      return (parsed.comments ?? []).map((c) => ({ body: c.body ?? '', author: c.author?.login ?? c.author ?? null }));
     },
     comment: (number, body) => gh(['issue', 'comment', String(number), '--body-file', '-'], body),
     apply: (number, action, detail = {}) => {

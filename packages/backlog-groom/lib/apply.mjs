@@ -53,6 +53,7 @@ export function actionsFromSet(set) {
       action: 'close',
       contentHash: issue.contentHash,
       evidence: typeof issue.evidence === 'string' ? issue.evidence : JSON.stringify(issue.evidence ?? null),
+      updatedAt: issue.updatedAt ?? null,
     });
   }
 
@@ -71,6 +72,7 @@ export function actionsFromSet(set) {
       field: p.field ?? null,
       from: p.from ?? null,
       to: p.to ?? null,
+      updatedAt: issue.updatedAt ?? null,
     });
   }
 
@@ -115,6 +117,13 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
   const frozen = paths.some((path) => (profile?.frozenPaths ?? []).some((g) => globMatch(g, path)));
   if (frozen) return { ok: false, reason: `issue #${action.number} cites a frozen path` };
 
+  // The issue's own revision, not only the code's. A body or label edited after
+  // grooming leaves the repository untouched, so generatedFor still matches
+  // while the verdict was formed from text that no longer exists.
+  if (action.updatedAt && issue.updatedAt && issue.updatedAt !== action.updatedAt) {
+    return { ok: false, reason: `issue #${action.number} changed since the set was generated (${action.updatedAt} → ${issue.updatedAt})` };
+  }
+
   return { ok: true };
 }
 
@@ -130,7 +139,7 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {} } = {}) {
+export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
@@ -179,6 +188,8 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
     floorWideningAuthorized,
     ledger,
     gh,
+    onApplied: persist,
+    self,
   });
 
   return {
