@@ -204,15 +204,56 @@ export function saveLedger(path, ledger, io = {}) {
  * holding within a process and not across them.
  */
 export function acquireApplyLock(path, io = {}) {
-  const { mkdir = mkdirSync, rmdir = rmSync } = io;
-  try {
+  const {
+    mkdir = mkdirSync,
+    rmdir = rmSync,
+    write = writeFileSync,
+    read = (p) => readFileSync(p, 'utf8'),
+    alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
+    pid = process.pid,
+  } = io;
+
+  const ownerFile = `${path}/owner.json`;
+
+  const take = () => {
     mkdir(path);
+    // Owner metadata, so a lock left by a killed process can be told from one a
+    // live process is holding. Without it a crash mid-run leaves a lock nobody
+    // can safely clear: removing it might race a writer that is still going.
+    try { write(ownerFile, `${JSON.stringify({ pid, startedAt: new Date().toISOString() })}\n`); } catch { /* the lock still holds without it */ }
+  };
+
+  try {
+    take();
   } catch (err) {
-    throw Object.assign(
-      new Error(`backlog-groom: another apply run holds the lock at ${path} (${err.code ?? err.message}) — refusing to run two write transactions against one ledger`),
-      { isOpError: true }
-    );
+    let owner = null;
+    try { owner = JSON.parse(read(ownerFile)); } catch { /* an unreadable owner is an unknown owner */ }
+
+    // An unknown owner is treated as LIVE. Guessing "dead" on a lock we cannot
+    // read would let two writers run, which is the thing the lock exists to
+    // prevent — the opposite failure to a stuck lock, and the worse one.
+    if (!owner || alive(owner.pid)) {
+      throw Object.assign(
+        new Error(
+          `backlog-groom: another apply run holds the lock at ${path}${owner ? ` (pid ${owner.pid}, since ${owner.startedAt})` : ''} — refusing to run two write transactions against one ledger`
+        ),
+        { isOpError: true }
+      );
+    }
+
+    // The holder is gone. Clear and retake, and if THAT races another recovering
+    // process the second mkdir fails and it refuses, as it should.
+    try { rmdir(path, { recursive: true, force: true }); } catch { /* fall through to the retake */ }
+    try {
+      take();
+    } catch (retakeErr) {
+      throw Object.assign(
+        new Error(`backlog-groom: could not recover the stale lock at ${path} (${retakeErr.code ?? retakeErr.message}) — another run took it first`),
+        { isOpError: true }
+      );
+    }
   }
+
   return () => {
     try { rmdir(path, { recursive: true, force: true }); } catch { /* releasing a lock must never mask the run's own error */ }
   };

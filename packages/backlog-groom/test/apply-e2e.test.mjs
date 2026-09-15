@@ -37,7 +37,10 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   const ISSUE = {
     number: 705,
     title: 'a real citation',
-    body: '**Location** `src/cited.mjs:1`\n\n```\nconst x = 1;\n```\n',
+    // The cited snippet is ABSENT from the file at HEAD, which is what makes
+    // this a genuinely `fixed` issue — the write path re-verifies the verdict,
+    // so a fixture whose defect is still present is refused (correctly).
+    body: '**Location** `src/cited.mjs:1`\n\n```\nconst removedLongAgo = 1;\n```\n',
     labels: [{ name: 'bug' }],
     updatedAt: '2026-09-01T00:00:00Z',
   };
@@ -125,7 +128,7 @@ function setFile(box, { hash = box.hash } = {}) {
     JSON.stringify({
       schemaVersion: 3,
       generatedFor: box.head,
-      issues: [{ number: 705, verdict: 'fixed', contentHash: hash, evidence: 'the cited line is gone', frozen: false, labels: [], units: [] }],
+      issues: [{ number: 705, verdict: 'fixed', contentHash: hash, evidence: 'the cited line is gone', updatedAt: '2026-09-01T00:00:00Z', frozen: false, labels: [], units: [] }],
       proposals: [],
     })
   );
@@ -288,7 +291,7 @@ test('a set generated for a different revision is refused', () => {
     JSON.stringify({
       schemaVersion: 3,
       generatedFor: '0000000000000000000000000000000000000000',
-      issues: [{ number: 705, verdict: 'fixed', contentHash: 'h1', evidence: 'gone', frozen: false, labels: [], units: [] }],
+      issues: [{ number: 705, verdict: 'fixed', contentHash: 'h1', evidence: 'gone', updatedAt: '2026-09-01T00:00:00Z', frozen: false, labels: [], units: [] }],
       proposals: [],
     })
   );
@@ -309,7 +312,7 @@ test('an issue whose cited paths are frozen is never auto-actioned', () => {
     JSON.stringify({
       schemaVersion: 3,
       generatedFor: box.head,
-      issues: [{ number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', frozen: true, labels: [], units: [] }],
+      issues: [{ number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', updatedAt: '2026-09-01T00:00:00Z', frozen: true, labels: [], units: [] }],
       proposals: [],
     })
   );
@@ -345,8 +348,8 @@ test('each action is reviewed with its OWN artifact, not the whole set', () => {
       schemaVersion: 3,
       generatedFor: box.head,
       issues: [
-        { number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', frozen: false, labels: [], units: [] },
-        { number: 706, verdict: 'fixed', contentHash: box.hash, evidence: 'also gone', frozen: false, labels: [], units: [] },
+        { number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', updatedAt: '2026-09-01T00:00:00Z', frozen: false, labels: [], units: [] },
+        { number: 706, verdict: 'fixed', contentHash: box.hash, evidence: 'also gone', updatedAt: '2026-09-01T00:00:00Z', frozen: false, labels: [], units: [] },
       ],
       proposals: [],
     })
@@ -358,4 +361,30 @@ test('each action is reviewed with its OWN artifact, not the whole set', () => {
   const paths = reviews.map((r) => r.split(/\s+/).find((t) => t.endsWith('.md')));
   assert.equal(new Set(paths).size, 2, `each action needs its own artifact, got ${JSON.stringify(paths)}`);
   assert.ok(paths.every((x) => x && !x.endsWith('groomed.json')));
+});
+
+test('a set whose claimed verdict does not survive re-verification is refused', () => {
+  // The fixture issue's cited snippet is genuinely absent, so it re-verifies as
+  // `fixed`. Claiming `fixed` for an issue whose defect is still present must
+  // not close it — matching bytes prove the set describes the right thing and
+  // say nothing about whether its conclusion is right.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const p = join(box.dir, 'lying.json');
+  writeFileSync(
+    p,
+    JSON.stringify({
+      schemaVersion: 4,
+      generatedFor: box.head,
+      // A stale issue revision: the live issue says 2026-09-01.
+      issues: [{ number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', updatedAt: '2020-01-01T00:00:00Z', frozen: false, labels: [], units: [] }],
+      proposals: [],
+    })
+  );
+  const r = run(['--apply', '--set', p], box);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(ghWrites(box), [], 'an issue that changed since grooming must not be actioned');
+  assert.match(r.stdout, /changed since the set was generated/);
 });

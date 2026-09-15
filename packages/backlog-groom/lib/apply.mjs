@@ -16,6 +16,7 @@ import { gateAction } from './gate.mjs';
 import { classifyIssue } from './classify.mjs';
 import { contentHash } from './content-hash.mjs';
 import { globMatch } from './cluster.mjs';
+import { verifyIssue } from './verify.mjs';
 import { executeActions } from './execute.mjs';
 
 /**
@@ -54,6 +55,7 @@ export function actionsFromSet(set) {
       contentHash: issue.contentHash,
       evidence: typeof issue.evidence === 'string' ? issue.evidence : JSON.stringify(issue.evidence ?? null),
       updatedAt: issue.updatedAt ?? null,
+      verdict: issue.verdict,
     });
   }
 
@@ -73,6 +75,7 @@ export function actionsFromSet(set) {
       from: p.from ?? null,
       to: p.to ?? null,
       updatedAt: issue.updatedAt ?? null,
+      verdict: issue.verdict,
     });
   }
 
@@ -119,9 +122,25 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
 
   // The issue's own revision, not only the code's. A body or label edited after
   // grooming leaves the repository untouched, so generatedFor still matches
-  // while the verdict was formed from text that no longer exists.
-  if (action.updatedAt && issue.updatedAt && issue.updatedAt !== action.updatedAt) {
+  // while the verdict was formed from text that no longer exists. REQUIRED, not
+  // checked-when-present: a set that omits it would otherwise skip the check.
+  if (!action.updatedAt) {
+    return { ok: false, reason: `the set declares no updatedAt for issue #${action.number}, so its issue revision cannot be checked` };
+  }
+  if (issue.updatedAt && issue.updatedAt !== action.updatedAt) {
     return { ok: false, reason: `issue #${action.number} changed since the set was generated (${action.updatedAt} → ${issue.updatedAt})` };
+  }
+
+  // THE VERDICT ITSELF, recomputed. Matching bytes and an unchanged issue prove
+  // the set describes the right thing; they say nothing about whether its
+  // CONCLUSION is right. Without this, a hand-written set can claim `fixed` for
+  // an issue whose defect is still there, pass every other check, and close it.
+  const recomputed = verifyIssue(classified, io);
+  if (action.verdict && recomputed.verdict !== action.verdict) {
+    return { ok: false, reason: `the set claims verdict ${action.verdict} for issue #${action.number}, but re-verification says ${recomputed.verdict}` };
+  }
+  if (action.action === 'close' && recomputed.verdict !== 'fixed') {
+    return { ok: false, reason: `a close needs a re-verified 'fixed' verdict; issue #${action.number} re-verifies as ${recomputed.verdict}` };
   }
 
   return { ok: true };

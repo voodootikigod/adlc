@@ -276,7 +276,7 @@ test('a set claiming a contentHash the code does not produce is refused', () => 
   // buy another review for unchanged code until one approves.
   const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nreal\n```\n', labels: [] });
   const out = revalidateAction(
-    { number: 1, action: 'close', contentHash: 'forged' },
+    { number: 1, action: 'close', contentHash: 'forged', updatedAt: 'u1' },
     { fetchIssue, profile: { frozenPaths: [] }, io: { readFile: () => 'real\n' } }
   );
   assert.equal(out.ok, false);
@@ -289,7 +289,7 @@ test('a set claiming frozen=false for a frozen path is refused', () => {
   const io = { readFile: () => 'real\n' };
   const hash = contentHash(['packages/rails-guard/x.mjs'], io);
   const out = revalidateAction(
-    { number: 1, action: 'close', contentHash: hash },
+    { number: 1, action: 'close', contentHash: hash, updatedAt: 'u1' },
     { fetchIssue, profile: { frozenPaths: ['packages/rails-guard/**'] }, io }
   );
   assert.equal(out.ok, false);
@@ -306,11 +306,36 @@ test('an issue that cannot be re-read is refused rather than assumed unchanged',
 });
 
 test('a set whose claims match the repository is accepted', () => {
-  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nreal\n```\n', labels: [] });
-  const io = { readFile: () => 'real\n' };
+  // A genuinely fixed issue: the cited snippet is gone from the file at HEAD.
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n', labels: [], updatedAt: 'u1' });
+  const io = { readFile: () => 'something else\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
+  const hash = contentHash(['src/a.mjs'], io);
+  const out = revalidateAction({ number: 1, action: 'close', contentHash: hash, updatedAt: 'u1' }, { fetchIssue, profile: { frozenPaths: [] }, io });
+  assert.equal(out.ok, true, out.reason);
+});
+
+test('a close for an issue that re-verifies as VALID is refused', () => {
+  // The last "set is a capability" hole: matching bytes and an unchanged issue
+  // prove the set describes the right thing, and say nothing about whether its
+  // conclusion is right. A hand-written set can claim `fixed` for a live bug.
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nstill here\n```\n', labels: [], updatedAt: 'u1' });
+  const io = { readFile: () => 'still here\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
+  const hash = contentHash(['src/a.mjs'], io);
+  const out = revalidateAction(
+    { number: 1, action: 'close', contentHash: hash, updatedAt: 'u1', verdict: 'fixed' },
+    { fetchIssue, profile: { frozenPaths: [] }, io }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /re-verif/i);
+});
+
+test('a set omitting updatedAt is refused rather than skipping the check', () => {
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n', labels: [], updatedAt: 'u1' });
+  const io = { readFile: () => 'other\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
   const hash = contentHash(['src/a.mjs'], io);
   const out = revalidateAction({ number: 1, action: 'close', contentHash: hash }, { fetchIssue, profile: { frozenPaths: [] }, io });
-  assert.equal(out.ok, true);
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /updatedAt/);
 });
 
 test('a set with no generatedFor is refused when a revision is known', () => {

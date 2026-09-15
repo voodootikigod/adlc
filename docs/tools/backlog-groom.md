@@ -173,3 +173,27 @@ trail.
 
 A mid-sweep failure therefore leaves a resumable state, never a half-applied one
 that a retry compounds.
+
+## Stated limits
+
+Two things this design does **not** defend against, recorded here because a limit
+nobody wrote down is indistinguishable from an oversight.
+
+**The gate ledger is not tamper-evident.** `.adlc/backlog-groom-ledger.json` is a
+local, gitignored file. Someone who can write it can add an `approve` entry and
+the write path will honour it without consulting a reviewer. It is loaded
+strictly — corruption is refused rather than treated as empty, so replay
+protection cannot be erased by deleting the file — but a *well-formed* forged
+entry is accepted.
+
+The reason it is a limit rather than a hole: anyone who can write that file can
+also edit the code that reads it. Signing entries would need a key, and this tool
+deliberately has none. The one asymmetry worth naming is that the ledger is
+untracked, so tampering leaves no trace in version control where a source edit
+would — which is why the autonomy floor, not the ledger, is the control that
+stands between a groomed set and a closed issue.
+
+**Relations are bounded by the candidate filter's recall.** A pair the similarity
+pass never surfaces is a relation the tool cannot report. The filter's threshold
+and miss rate are printed with every run so the ceiling is visible rather than
+implied.

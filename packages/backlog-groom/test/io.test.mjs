@@ -251,3 +251,72 @@ test('baseFloorFromGit uses the resolved ref when given none', () => {
   baseFloorFromGit('p.json', { run });
   assert.deepEqual(seen[1], ['merge-base', 'HEAD', 'origin/trunk']);
 });
+
+test('a lock held by a LIVE process is refused', () => {
+  const err = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => JSON.stringify({ pid: 4242, startedAt: 'now' }),
+      alive: () => true,
+    })
+  );
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /4242/);
+});
+
+test('a lock left by a DEAD process is recovered rather than blocking forever', () => {
+  // A run killed mid-write leaves a lock nobody can safely clear by hand: doing
+  // so might race a writer that is still going. Owner metadata makes the
+  // distinction decidable.
+  let mkdirCalls = 0;
+  let removed = false;
+  const release = acquireApplyLock('/tmp/x.lock', {
+    mkdir: () => { mkdirCalls += 1; if (mkdirCalls === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+    read: () => JSON.stringify({ pid: 4242, startedAt: 'then' }),
+    alive: () => false,
+    rmdir: () => { removed = true; },
+    write: () => {},
+  });
+  assert.equal(removed, true, 'the stale lock must be cleared');
+  assert.equal(mkdirCalls, 2, 'and retaken');
+  release();
+});
+
+test('an UNREADABLE owner is treated as live, not as dead', () => {
+  // Guessing "dead" on a lock we cannot read would let two writers run, which is
+  // the failure the lock exists to prevent — worse than a stuck lock.
+  const err = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => { throw new Error('ENOENT'); },
+      alive: () => false,
+    })
+  );
+  assert.equal(err.isOpError, true);
+});
+
+test('losing the race to recover a stale lock refuses rather than proceeding', () => {
+  const err = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => JSON.stringify({ pid: 4242 }),
+      alive: () => false,
+      rmdir: () => {},
+    })
+  );
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /another run took it first/);
+});
+
+test('the lock records its owner so a later run can decide', () => {
+  const written = [];
+  const release = acquireApplyLock('/tmp/x.lock', {
+    mkdir: () => {},
+    write: (p, body) => written.push([p, JSON.parse(body)]),
+    rmdir: () => {},
+    pid: 99,
+  });
+  assert.match(written[0][0], /owner\.json$/);
+  assert.equal(written[0][1].pid, 99);
+  release();
+});
