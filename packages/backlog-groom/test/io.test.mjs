@@ -378,3 +378,40 @@ test('two recoverers of one stale lock cannot both win', () => {
   assert.equal(err.isOpError, true);
   assert.match(err.message, /recovered the stale lock.*first/);
 });
+
+test('an owner-less lock is live until the TTL, then presumed abandoned', () => {
+  // A process killed between mkdir and writing its metadata leaves a lock with
+  // nothing to prove it is dead. Permanent is the wrong answer; so is instantly
+  // stealable.
+  const fresh = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => { throw new Error('ENOENT'); },
+      stat: () => ({ mtimeMs: Date.now() - 1000 }),
+    })
+  );
+  assert.equal(fresh.isOpError, true, 'a recent owner-less lock is still respected');
+
+  let made = 0;
+  const release = acquireApplyLock('/tmp/x.lock', {
+    mkdir: () => { made += 1; if (made === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+    read: () => { throw new Error('ENOENT'); },
+    stat: () => ({ mtimeMs: Date.now() - (2 * 60 * 60 * 1000) }),
+    rename: () => {},
+    rmdir: () => {},
+    write: () => {},
+  });
+  assert.equal(made, 2, 'an expired owner-less lock is recovered');
+  release();
+});
+
+test('an owner-less lock whose age cannot be read stays live', () => {
+  const err = thrownIo(() =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => { throw new Error('ENOENT'); },
+      stat: () => { throw new Error('ENOENT'); },
+    })
+  );
+  assert.equal(err.isOpError, true);
+});

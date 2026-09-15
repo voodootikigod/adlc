@@ -6,7 +6,7 @@
  * the cache only when there is no cache, say — passes every suite.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
@@ -211,6 +211,18 @@ export function saveLedger(path, ledger, io = {}) {
  * approval for it, and both comment and close the same issue — the one-shot rule
  * holding within a process and not across them.
  */
+/** How long an owner-less lock may sit before it is presumed abandoned. */
+export const STALE_LOCK_MS = 60 * 60 * 1000;
+
+/** Age of the lock directory, or null when it cannot be determined. */
+function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
+  try {
+    return now() - stat(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 export function acquireApplyLock(path, io = {}) {
   const {
     mkdir = mkdirSync,
@@ -238,10 +250,17 @@ export function acquireApplyLock(path, io = {}) {
     let owner = null;
     try { owner = JSON.parse(read(ownerFile)); } catch { /* an unreadable owner is an unknown owner */ }
 
-    // An unknown owner is treated as LIVE. Guessing "dead" on a lock we cannot
+    // An owner-less lock is normally treated as live — but a process killed
+    // between `mkdir` and writing the metadata leaves one permanently, with
+    // nothing to prove it is dead. After the TTL it is stale: a real run that
+    // has held the lock this long has bigger problems than a second one.
+    const ageMs = owner ? 0 : lockAgeMs(path, io);
+    const expired = !owner && ageMs !== null && ageMs > STALE_LOCK_MS;
+
+    // Otherwise an unknown owner stays LIVE. Guessing "dead" on a lock we cannot
     // read would let two writers run, which is the thing the lock exists to
     // prevent — the opposite failure to a stuck lock, and the worse one.
-    if (!owner || alive(owner.pid)) {
+    if ((!owner && !expired) || (owner && alive(owner.pid))) {
       throw Object.assign(
         new Error(
           `backlog-groom: another apply run holds the lock at ${path}${owner ? ` (pid ${owner.pid}, since ${owner.startedAt})` : ''} — refusing to run two write transactions against one ledger`

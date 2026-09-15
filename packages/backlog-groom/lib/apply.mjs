@@ -121,6 +121,28 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
   const frozen = paths.some((path) => (profile?.frozenPaths ?? []).some((g) => globMatch(g, path)));
   if (frozen) return { ok: false, reason: `issue #${action.number} cites a frozen path` };
 
+  // RELABEL TARGETS ARE RE-DERIVED, not taken from the set. `from`/`to` go
+  // straight into `gh issue edit --remove-label/--add-label`, so a crafted set
+  // could otherwise strip or attach any label it liked on any issue it names.
+  if (action.action === 'relabel') {
+    const priority = Object.values(profile?.labels?.priority ?? {});
+    const areaPrefix = profile?.labels?.areaPrefix ?? 'area:';
+    const units = (profile?.units ?? []).map((u) => `${areaPrefix}${u.name}`);
+    const sanctioned = new Set([...priority, ...units]);
+
+    if (!sanctioned.has(action.to)) {
+      return { ok: false, reason: `relabel target ${JSON.stringify(action.to)} is not a label this profile declares` };
+    }
+    if (action.from && !sanctioned.has(action.from)) {
+      return { ok: false, reason: `relabel source ${JSON.stringify(action.from)} is not a label this profile declares` };
+    }
+    // And the label being removed must actually be on the issue right now.
+    const current = (issue.labels ?? []).map((l) => l?.name ?? l);
+    if (action.from && !current.includes(action.from)) {
+      return { ok: false, reason: `issue #${action.number} does not currently carry ${JSON.stringify(action.from)}` };
+    }
+  }
+
   // The issue's own revision, not only the code's. A body or label edited after
   // grooming leaves the repository untouched, so generatedFor still matches
   // while the verdict was formed from text that no longer exists. REQUIRED, not

@@ -440,3 +440,56 @@ test('revalidation reads the PINNED revision, not a moving HEAD', () => {
   // validated here describes the commit the set was accepted against.
   assert.equal(gh.calls.length > 0, true, 'the run must reach the writer');
 });
+
+// ---- relabel targets are re-derived, not taken from the set ----------------
+
+const labelProfile = () => ({
+  autonomyFloor: [],
+  providers: { decider: 'anthropic', reviewer: 'openai' },
+  frozenPaths: [],
+  labels: { priority: { high: 'P1-high', medium: 'P2-medium', low: 'P3-low' }, areaPrefix: 'area:' },
+  units: [{ name: 'review', paths: ['packages/review/**'] }],
+});
+const labelledIssue = (labels) => () => ({
+  number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n', labels, updatedAt: 'u1',
+});
+
+test('a relabel to a label the profile does not declare is refused', () => {
+  // from/to go straight into `gh issue edit --remove-label/--add-label`, so an
+  // unchecked target lets a crafted set attach or strip any label it likes.
+  const hash = contentHash(['src/a.mjs'], IO);
+  const out = revalidateAction(
+    { number: 1, action: 'relabel', field: 'priority', from: 'P3-low', to: 'not-a-real-label', contentHash: hash, updatedAt: 'u1' },
+    { fetchIssue: labelledIssue(['P3-low']), profile: labelProfile(), io: IO }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /not a label this profile declares/);
+});
+
+test('a relabel removing a label the issue does not carry is refused', () => {
+  const hash = contentHash(['src/a.mjs'], IO);
+  const out = revalidateAction(
+    { number: 1, action: 'relabel', field: 'priority', from: 'P1-high', to: 'P2-medium', contentHash: hash, updatedAt: 'u1' },
+    { fetchIssue: labelledIssue(['P3-low']), profile: labelProfile(), io: IO }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /does not currently carry/);
+});
+
+test('a relabel between declared labels the issue really has is accepted', () => {
+  const hash = contentHash(['src/a.mjs'], IO);
+  const out = revalidateAction(
+    { number: 1, action: 'relabel', field: 'priority', from: 'P3-low', to: 'P1-high', contentHash: hash, updatedAt: 'u1' },
+    { fetchIssue: labelledIssue(['P3-low']), profile: labelProfile(), io: IO }
+  );
+  assert.equal(out.ok, true, out.reason);
+});
+
+test('an area relabel may target a declared unit', () => {
+  const hash = contentHash(['src/a.mjs'], IO);
+  const out = revalidateAction(
+    { number: 1, action: 'relabel', field: 'area', from: 'area:review', to: 'area:review', contentHash: hash, updatedAt: 'u1' },
+    { fetchIssue: labelledIssue(['area:review']), profile: labelProfile(), io: IO }
+  );
+  assert.equal(out.ok, true, out.reason);
+});

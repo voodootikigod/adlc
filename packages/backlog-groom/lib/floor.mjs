@@ -99,10 +99,15 @@ export function floorWidening(base, head) {
  * working copy is exactly what someone widening the floor controls: a check
  * that reads only the checked-out profile validates the attacker's own claim.
  *
- * `authorized` is an explicit operator signal and deliberately NOT a profile
- * key. A key inside the profile granting permission to widen that same profile
- * is circular — it would make the file self-authorizing, which is the identical
- * failure the merge-base comparison exists to close.
+ * `authorized` is a LIBRARY seam for tests and is deliberately NOT reachable from
+ * the CLI. A flag that waives the check is not a weaker version of the trust-root
+ * path — it is a complete bypass of it, available to anyone who can type. The
+ * real path to a wider floor is to land the profile change on the default
+ * branch: once the base carries it, there is no widening left to detect.
+ *
+ * It is not a profile key either, for the same reason the comparison is against
+ * the base rather than the working copy: a key inside the profile granting
+ * permission to widen that same profile is circular.
  *
  * @param {{base: string[]|null, head: string[], authorized?: boolean}} o
  */
