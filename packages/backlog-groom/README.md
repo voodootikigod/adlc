@@ -8,10 +8,14 @@ locations sit in, ranks them from what was learned, and emits a versioned set.
 gate, the autonomy floor and execution are the write path, built separately.
 Proposals are emitted for it to decide on; nothing here applies them.
 
+> **The `backlog-groom` verb is not registered yet.** `packages/cli/lib/registry.mjs`
+> is a frozen rail of an in-flight ticket, so the binary is invoked by path until that
+> ticket ships — see #1021.
+
 ```bash
-backlog-groom                 # report
-backlog-groom --json          # the groomed set
-backlog-groom --out set.json  # write it to a file
+node packages/backlog-groom/bin/backlog-groom.mjs                 # report
+node packages/backlog-groom/bin/backlog-groom.mjs --json          # the groomed set
+node packages/backlog-groom/bin/backlog-groom.mjs --out set.json  # write it to a file
 ```
 
 ## Why it exists
