@@ -12,7 +12,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -114,7 +114,8 @@ if (values.apply) {
   // The ledger's directory may not exist on a repo that has not adopted ADLC,
   // and the documented --apply command should work there rather than failing on
   // a missing parent.
-  try { mkdirSync(dirname(ledgerPath), { recursive: true }); } catch { /* the lock will report it */ }
+  const ledgerDir = dirname(ledgerPath);
+  try { if (!existsSync(ledgerDir)) mkdirSync(ledgerDir); } catch { /* the lock will report it */ }
 
   // LOCK FIRST, then read. Loading the ledger before taking the lock is a
   // read-then-lock race: two runs can both read a ledger with no entry for a

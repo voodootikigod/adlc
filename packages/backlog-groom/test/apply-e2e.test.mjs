@@ -250,6 +250,19 @@ test('the gate ledger persists, so a second run does not re-review the same revi
   assert.equal(afterSecond, 1, 'the same revision must not be reviewed twice across runs');
 });
 
+test('apply works in a repository that has no .adlc directory yet', () => {
+  // The documented command must work on a repo that has not adopted ADLC; the
+  // ledger's parent is created rather than assumed.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  rmSync(join(box.dir, '.adlc'), { recursive: true, force: true });
+  const r = run(['--apply', '--set', setFile(box)], box);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(existsSync(join(box.dir, '.adlc', 'backlog-groom-ledger.json')), 'the ledger must have been created');
+});
+
 test('an unwritable ledger FAILS the run rather than warning', () => {
   // The cache warns and continues because a lost cache costs a slow run. The
   // ledger is the only record that a revision has spent its one review, so a
