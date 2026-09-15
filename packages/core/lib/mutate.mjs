@@ -400,6 +400,40 @@ export const OPERATORS = [
 
 const SKIP_LINE = /^\s*($|\/\/|\/\*|\*|#|import\b|export\s+\{|console\.)/;
 
+// ── fallback operators (#1013) ───────────────────────────────────────────────
+//
+// Tried ONLY for a line that every operator above declined. Without them a
+// plainly mutable line can report as unmutable: `const tag = randomUUID();` has
+// no comparison, boolean, return, numeric literal, array or ternary, so
+// generateMutants returned nothing and hollow-test's diff-scoped gate refused
+// the whole run as unverifiable (#658's fail-closed, firing on a false premise).
+//
+// Fallback rather than a ninth entry in OPERATORS so a line the existing set
+// already covers does not gain a second, redundant mutant — the new mutants are
+// exactly the lines that previously had none.
+// `const` ONLY, deliberately. A `let`/`var` initializer is routinely overwritten
+// on every path before it is read (`let out = ''; … out = run();`), so
+// substituting its value is an EQUIVALENT mutant — it survives while changing
+// nothing, which is a false gate failure. A `const` binding is single-assignment,
+// so its value is the one the rest of the scope actually sees. Measured: dropping
+// let/var removed 2 of 16 survivors in the sample, both of that exact shape.
+const VALUE_ASSIGNMENT_RE = /^(\s*const\s+[A-Za-z_$][\w$]*\s*=\s*)(.+?);\s*$/;
+
+const FALLBACK_OPERATORS = [
+  {
+    name: 'value-substitute',
+    apply(line) {
+      const m = line.match(VALUE_ASSIGNMENT_RE);
+      if (!m) return null;
+      const rhs = m[2].trim();
+      // Already the sentinel, or a shape whose substitution says nothing.
+      if (rhs === 'undefined' || rhs === 'null') return null;
+      return `${m[1]}undefined;`;
+    },
+  },
+];
+
+
 // A CLOSED `/* … */` prefix followed by real code (#372 defect 4). SKIP_LINE
 // skips ANY line starting with `/*`, so `/* x */ const limit = 3;` produced zero
 // mutants while `const limit = 3;` produced one — a one-line comment prefix was a
@@ -433,13 +467,27 @@ export function generateMutants(content, { targetLines, maxMutants = 50 } = {}) 
     const prefix = original.match(CLOSED_COMMENT_PREFIX)?.[1] ?? '';
     const body = original.slice(prefix.length);
     if (SKIP_LINE.test(body)) continue;
+    // Boolean, not a counter: the value is only ever read as "did anything fire",
+    // so `count += 1` vs `+= 2` would be an EQUIVALENT mutant — it survives while
+    // changing nothing, which is a false gate failure. A flag has no off-by-one.
+    let producedForLine = false;
     for (const op of OPERATORS) {
       const mutatedBody = op.apply(body);
       if (mutatedBody === null || mutatedBody === body) continue;
       // `original` stays the WHOLE line, including the stripped prefix, so
       // applyMutant's identity check still addresses the real file content.
       mutants.push({ line: lineNo, operator: op.name, original, mutated: prefix + mutatedBody });
+      producedForLine = true;
       if (mutants.length >= maxMutants) break;
+    }
+    // Only when nothing above could see this line (#1013).
+    if (!producedForLine && mutants.length < maxMutants) {
+      for (const op of FALLBACK_OPERATORS) {
+        const mutatedBody = op.apply(body);
+        if (mutatedBody === null || mutatedBody === body) continue;
+        mutants.push({ line: lineNo, operator: op.name, original, mutated: prefix + mutatedBody });
+        if (mutants.length >= maxMutants) break;
+      }
     }
   }
   return mutants;

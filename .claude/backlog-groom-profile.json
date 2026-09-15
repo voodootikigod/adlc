@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "autonomyFloor": ["close"],
+  "units": [
+    { "name": "parallax", "paths": ["packages/parallax/**"] },
+    { "name": "ticket-prune", "paths": ["packages/ticket-prune/**"] },
+    { "name": "review-calibration", "paths": ["packages/review-calibration/**"] },
+    { "name": "autopilot", "paths": ["packages/autopilot/**"] },
+    { "name": "rails-guard", "paths": ["packages/rails-guard/**"] },
+    { "name": "prosecute", "paths": ["packages/prosecute/**"] },
+    { "name": "gate-manifest", "paths": ["packages/gate-manifest/**"] },
+    { "name": "tickets", "paths": ["packages/tickets/**"] },
+    { "name": "fleet", "paths": ["packages/fleet/**"] },
+    { "name": "core", "paths": ["packages/core/**"] },
+    { "name": "adlc-pi", "paths": ["plugins/adlc-pi/**"] },
+    { "name": "adlc-claude-code", "paths": ["plugins/adlc-claude-code/**"] },
+    { "name": "adlc-codex", "paths": ["plugins/adlc-codex/**"] },
+    { "name": "adlc-cursor", "paths": ["plugins/adlc-cursor/**"] },
+    { "name": "adlc-opencode", "paths": ["plugins/adlc-opencode/**"] },
+    { "name": "adlc-herdr", "paths": ["plugins/adlc-herdr/**"] }
+  ],
+  "frozenPaths": [
+    "scripts/rails-guard-ci.mjs",
+    "docs/ci/rails-guard.yml",
+    "scripts/test/rails-guard-workflow-hashes.json"
+  ],
+  "labels": {
+    "priority": { "high": "P1-high", "medium": "P2-medium", "low": "P3-low" },
+    "areaPrefix": "area:"
+  },
+  "providers": { "decider": "anthropic", "reviewer": "openai" }
+}

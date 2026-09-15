@@ -13,7 +13,7 @@ export const TOOLKIT_GROUPS = [
   },
   {
     group: 'Compounding defenses',
-    packages: ['lesson-foundry', 'rejection-mining', 'skill-rot'],
+    packages: ['lesson-foundry', 'rejection-mining', 'skill-rot', 'backlog-groom'],
   },
   {
     group: 'Shared foundation',

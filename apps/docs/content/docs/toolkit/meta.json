@@ -9,7 +9,7 @@
     "---Review evidence & calibration---",
     "behavior-diff", "gate-manifest", "hollow-test", "prosecute", "review-calibration", "model-ratchet", "gate-fuzzing",
     "---Compounding defenses---",
-    "lesson-foundry", "rejection-mining", "skill-rot",
+    "lesson-foundry", "rejection-mining", "skill-rot", "backlog-groom",
     "---Shared foundation---",
     "cli", "core"
   ]

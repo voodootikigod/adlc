@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 4,
+  "generatedFor": "fixture",
+  "coverage": {
+    "total": 3,
+    "routes": {
+      "mechanical": 2,
+      "model": 0,
+      "unverifiable": 1
+    },
+    "verdicts": {
+      "valid": 1,
+      "fixed": 1,
+      "moved": 0,
+      "unverified": 0,
+      "unverifiable": 1
+    },
+    "mechanicalShare": 0.6667,
+    "truncated": null,
+    "budgetExhausted": false
+  },
+  "truncated": null,
+  "issues": [
+    {
+      "number": 705,
+      "title": "parallax: off-schema divergence payload scores 0.00",
+      "url": "https://example.invalid/705",
+      "route": "mechanical",
+      "verdict": "valid",
+      "evidence": {
+        "path": "packages/parallax/lib/modes.mjs",
+        "citedLine": 86,
+        "foundAtLine": 1,
+        "movedWithinFile": true
+      },
+      "contentHash": "7732ddb35ca683314a9ae181fa22a47be4e4564905cb55574a71f7901ef97c19",
+      "updatedAt": "2026-09-01T00:00:00Z",
+      "frozen": false,
+      "rank": {
+        "score": 0.6,
+        "band": "high",
+        "inputs": {
+          "verdict": 0.5,
+          "cluster": 0.05,
+          "label": 0.05,
+          "frozen": 0
+        },
+        "labelBand": "low"
+      },
+      "labels": [
+        "bug",
+        "P3-low",
+        "area:review"
+      ],
+      "units": [
+        "parallax"
+      ]
+    },
+    {
+      "number": 706,
+      "title": "parallax: failed readings shrink the fan",
+      "url": "https://example.invalid/706",
+      "route": "mechanical",
+      "verdict": "fixed",
+      "evidence": {
+        "path": "packages/parallax/lib/scoring.mjs",
+        "citedLine": 14,
+        "revision": "fixture",
+        "lastCommitTouchingPath": "cafe123",
+        "reason": "no line of the cited snippet survives anywhere in the file"
+      },
+      "contentHash": "6bb9b37be446ee57b9952bbf7c5551b6e3f525234397f27758e79566f2e11448",
+      "updatedAt": "2026-09-02T00:00:00Z",
+      "frozen": false,
+      "rank": {
+        "score": 0.35,
+        "band": "medium",
+        "inputs": {
+          "verdict": 0,
+          "cluster": 0.05,
+          "label": 0.3,
+          "frozen": 0
+        },
+        "labelBand": "high"
+      },
+      "labels": [
+        "bug",
+        "P1-high",
+        "area:review"
+      ],
+      "units": [
+        "parallax"
+      ]
+    },
+    {
+      "number": 700,
+      "title": "plan the quarter",
+      "url": "https://example.invalid/700",
+      "route": "unverifiable",
+      "verdict": "unverifiable",
+      "evidence": null,
+      "contentHash": null,
+      "updatedAt": "2026-09-03T00:00:00Z",
+      "frozen": false,
+      "rank": {
+        "score": 0.25,
+        "band": "low",
+        "inputs": {
+          "verdict": 0.15,
+          "cluster": 0,
+          "label": 0.1,
+          "frozen": 0
+        },
+        "labelBand": null
+      },
+      "labels": [
+        "documentation"
+      ],
+      "units": []
+    }
+  ],
+  "clusters": [
+    {
+      "unit": "parallax",
+      "issues": [
+        705,
+        706
+      ]
+    }
+  ],
+  "unclustered": [
+    700
+  ],
+  "relations": [],
+  "relationFilter": {
+    "threshold": 0.2,
+    "pairsTotal": 3,
+    "pairsSurfaced": 1,
+    "pairsExcluded": 2,
+    "excludedRate": 0.6666666666666666,
+    "refused": 0
+  },
+  "proposals": [
+    {
+      "number": 705,
+      "action": "relabel",
+      "field": "priority",
+      "from": "P3-low",
+      "to": "P1-high",
+      "evidence": "computed rank high (score 0.6) disagrees with the P3-low label; rank inputs: {\"verdict\":0.5,\"cluster\":0.05,\"label\":0.05,\"frozen\":0}"
+    },
+    {
+      "number": 705,
+      "action": "relabel",
+      "field": "area",
+      "from": "area:review",
+      "to": "area:parallax",
+      "evidence": "verified locations sit in unit parallax: packages/parallax/lib/modes.mjs"
+    },
+    {
+      "number": 706,
+      "action": "relabel",
+      "field": "area",
+      "from": "area:review",
+      "to": "area:parallax",
+      "evidence": "verified locations sit in unit parallax: packages/parallax/lib/scoring.mjs"
+    }
+  ]
+}

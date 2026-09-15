@@ -1,0 +1,46 @@
+{
+  "name": "@adlc/backlog-groom",
+  "version": "1.11.1",
+  "description": "Grooms a GitHub issue backlog against the code — code-grounded premise verification, clustering, relations and ranking.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/backlog-groom"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/backlog-groom#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "backlog-groom",
+    "gate"
+  ],
+  "bin": {
+    "backlog-groom": "./bin/backlog-groom.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/core": "1.11.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
