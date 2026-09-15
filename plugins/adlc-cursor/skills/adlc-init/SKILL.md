@@ -29,7 +29,7 @@ with the plugin.
 
 ## Honesty
 
-- MCP wrapper landed / channel unverified until Roots proof.
+- MCP one-root channel proven; rebind and live multi-root refusal unverified.
 - Prosecutor agents packaged-but-unverified until fan-out proof.
 - Marketplace listing URL: do not fabricate (see publish checklist in
   `docs/integrations/cursor.md`).

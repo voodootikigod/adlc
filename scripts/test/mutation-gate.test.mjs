@@ -404,6 +404,39 @@ test('testTargetFor maps scripts/<name>.mjs to scripts/test/<name>.test.mjs when
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('PR 1014 Cursor build scripts have dedicated fast mutation targets', () => {
+  const root = fixtureRoot(
+    ['scripts/test'],
+    [
+      'scripts/test/build-cursor-mcp.test.mjs',
+      'scripts/test/cursor-install-smoke.test.mjs',
+    ],
+  );
+  try {
+    const changed = [
+      'scripts/build-cursor-mcp.mjs',
+      'scripts/cursor-install-smoke.mjs',
+    ];
+    assert.equal(
+      testTargetFor(changed[0], root),
+      'scripts/test/build-cursor-mcp.test.mjs',
+    );
+    assert.equal(
+      testTargetFor(changed[1], root),
+      'scripts/test/cursor-install-smoke.test.mjs',
+    );
+    assert.deepEqual(classify(changed, 12, root), {
+      kind: 'fast',
+      testCmd: 'node --test scripts/test/build-cursor-mcp.test.mjs && node --test scripts/test/cursor-install-smoke.test.mjs',
+      max: 12,
+      files: changed,
+      skipped: [],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('testTargetFor maps scripts/pi-live-deny.mjs to plugins/adlc-pi/test/*.test.mjs when no same-basename test exists', () => {
   const root = fixtureRoot(['plugins/adlc-pi/test']);
   try {

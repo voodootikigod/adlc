@@ -244,22 +244,52 @@ Recorded with `.adlc/specs/cursor-deeper-native.md`.
    `alwaysApply: true` for canonical ticket resolution when sessionStart
    context is dropped.
 
-## T65: MCP Roots proxy (wrapper landed / channel unverified)
+## T65: MCP Roots proxy (one-root channel proven / rebind unverified)
 
-1. **`mcp.json`** launches `node ./bin/adlc-mcp-wrapper.mjs` — never raw
-   `adlc mcp-server`. Packaging + smoke reject direct wiring.
-2. **Lifecycle Roots proxy** completes initialize, requests `roots/list`,
-   decodes `file://` Root URIs, runs the T64 consumer-workspace algorithm, then
-   spawns `adlc mcp-server` with that cwd. Multi-active roots fail closed.
-   Clients without roots capability fail closed in production (no cwd guess).
-3. **Host-env** (`ADLC_CURSOR_MCP_ROOT` / `CURSOR_PROJECT_DIR`) is test-only
-   (`ADLC_CURSOR_MCP_ALLOW_HOSTENV=1` on the wrapper) and does **not** unlock
-   "MCP shipped."
-4. **Ship gate:** installed-Cursor proof of Roots resolution (incl. multi-root
-   refuse / rebind) still required before matrix/docs claim MCP shipped or T69
-   marketplace publication completes. Until then: **wrapper landed / channel
-   unverified.**
-5. `packages/cli/lib/mcp-server.mjs` remains frozen (T65 rail).
+1. **`mcp.json`** asks Cursor to expand `${CURSOR_PLUGIN_ROOT}` and launch the
+   wrapper bundle — never a process-cwd-relative path and never raw
+   `adlc mcp-server`. The bundle carries the proxy's JavaScript dependencies
+   because Cursor installs marketplace plugins as git checkouts without running
+   `npm install`; it also embeds generated version metadata, so startup does not
+   read an adjacent `package.json`. Packaging + smoke reject relative or direct
+   wiring.
+2. **Lifecycle Roots proxy** replies to initialize, waits for
+   `notifications/initialized`, then requests `roots/list`. It queues early tool
+   requests and explicitly fails queued/in-flight requests on Roots errors or
+   rebind. Unique generation/request ids prevent stale Roots replies from
+   rebinding. The proxy decodes `file://` Root URIs and Cursor's bare absolute
+   paths, then runs the T64 algorithm with `CURSOR_PROJECT_DIR` excluded from
+   that real Roots result. Store-selection env remains available. Bare relative
+   paths and non-file URI schemes remain invalid. Multi-active roots fail
+   closed. Clients without roots capability fail closed in production.
+3. **Host-env** (`ADLC_CURSOR_MCP_ROOT` / `CURSOR_PROJECT_DIR`) is test-only,
+   available through direct `runRootsProxy` test injection. The production
+   wrapper hard-disables that fallback, so these environment variables cannot
+   unlock "MCP shipped."
+4. **Build lockstep:** `npm run build:cursor-mcp` regenerates
+   `lib/mcp-build-metadata.mjs` and the committed bundle. The build requires the
+   Cursor plugin, bundled `@adlc/core` / `@adlc/tickets` packages, and declared
+   dependency ranges to remain lockstep. It records the exact pinned esbuild
+   version. One synchronous builder serves the CLI, no-write freshness test,
+   and release flow; packaging compares both metadata and bundle bytes. Release
+   regenerates both after version writes and before drift, packaging, or
+   publish checks.
+5. **Installed-Cursor proof (2026-09-14, Cursor Desktop 3.20.10):** a local
+   plugin copy with no consumer-workspace shim and no plugin-cache
+   `node_modules` proved that Cursor expands `${CURSOR_PLUGIN_ROOT}` in both
+   `args` and `cwd`, boots the bundle from the plugin root, advertises Roots,
+   and answers `roots/list`. The response used a bare absolute path in
+   `roots[].uri`, exposing the decoder defect fixed here. A post-fix live run
+   then bound that root, exposed `adlc_gate` and `adlc_prosecute`, and
+   `adlc_gate gate-manifest show` returned `ok` with `exitCode: 0`. This build
+   advertises `roots.listChanged: false`, so
+   `notifications/roots/list_changed` rebind remains unverified; multi-root
+   fail-closed behavior is unit-tested but has not been exercised live. Cursor
+   3.20.10 is the observed version, not a claimed minimum.
+6. **Ship gate:** installed proof must still cover multi-root refusal and rebind
+   on a Cursor build that supports `listChanged`. Until then:
+   **one-root channel proven / rebind and live ambiguity unverified.**
+7. `packages/cli/lib/mcp-server.mjs` remains frozen (T65 rail).
 
 ## T66: prosecutor agents (packaged-but-unverified)
 
