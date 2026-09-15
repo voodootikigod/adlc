@@ -364,4 +364,20 @@ final word — verify.
 - Read the reviewer's `mode:` line: summary mode (diff over the byte cap) = zero findings =
   false green. Read `findings[]` every round; exit 0 alone is not the ship signal.
 - After a killed mutation-gate run, `git status` and `git checkout --` the mutant it left.
-- `mergeStateStatus: BEHIND` is not blocking here; do not reflex-rebase.
+- **`mergeStateStatus: BEHIND` ALWAYS blocks a merge here — rebase onto the current
+  main tip.** The `main protection` ruleset sets `strict_required_status_checks_policy:
+  true` (GitHub's "require branches to be up to date"), so `gh pr merge` refuses with
+  *"To have the pull request merged after all the requirements have been met"* until the
+  branch is current. An earlier version of this line said the opposite — do not
+  reflex-rebase — which was wrong and cost a confusing refused merge. **Rebase LAST**:
+  for a trust-root lane a rebase moves the revision digest, so an attestation recorded
+  before it is invalidated and has to be re-signed by the key holder. Get CI green,
+  rebase, re-derive, then attest.
+- **Only `test (18)`, `test (20)` and `test (22)` are REQUIRED checks.** `gate`,
+  `rails-guard` and `mutation-gate` run and report but do not gate the merge button —
+  they are enforced by convention and review here, not by the ruleset. Two consequences:
+  do not describe them to the user as blocking; and a flaky test suite blocks EVERY merge
+  in the repo, so a flake in those three is throughput work, not test hygiene.
+- **`gh pr checks` can report a job as `pending` that has already FAILED.** Confirm
+  against the run itself (`gh run list --branch <b>`, then `gh api …/runs/<id>/jobs`)
+  before concluding a PR is merely still building. Observed twice in one session.
