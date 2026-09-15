@@ -9,7 +9,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { rmSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, rmSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -402,4 +402,19 @@ test('a set whose claimed verdict does not survive re-verification is refused', 
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(ghWrites(box), [], 'an issue that changed since grooming must not be actioned');
   assert.match(r.stdout, /changed since the set was generated/);
+});
+
+test('an apply run leaves no artifact directory behind', () => {
+  // The leak that exhausted every inode on /tmp while df reported 41% used. A
+  // scheduled sweep runs this repeatedly, so "cleans up eventually" is not a
+  // property — it either removes its scratch or it accumulates forever.
+  const before = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const r = run(['--apply', '--set', setFile(box)], box);
+  assert.equal(r.status, 0, r.stderr);
+  const after = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
+  assert.equal(after, before, 'the per-run artifact directory must be removed');
 });
