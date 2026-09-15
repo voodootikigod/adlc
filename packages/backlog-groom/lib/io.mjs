@@ -121,7 +121,7 @@ export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef =
   } catch {
     return null;
   }
-  if (!present) return { autonomyFloor: [...DEFAULT_AUTONOMY_FLOOR], frozenPaths: [], absent: true };
+  if (!present) return { autonomyFloor: [...DEFAULT_AUTONOMY_FLOOR], frozenPaths: [] };
 
   let raw;
   try {
