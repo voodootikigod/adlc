@@ -53,14 +53,21 @@ The core is deterministic and has no model. Two things need judgment:
 
 ## Running it
 
+**There is no `backlog-groom` on PATH and no `adlc backlog-groom` subcommand yet.**
+Registering the verb means editing `packages/cli/lib/registry.mjs`, which is a
+frozen rail of an in-flight ticket, so the binary is invoked by path until that
+ticket ships. Tracked in #1021.
+
 ```bash
 # Read-only: verify, cluster, rank. Writes nothing, anywhere.
-backlog-groom --json --out groomed.json
+node packages/backlog-groom/bin/backlog-groom.mjs --json --out groomed.json
 
 # Apply conclusions. Every action is gated and floored; nothing is applied
 # without an approve from a provider distinct from the deciding one.
-backlog-groom --apply --set groomed.json
+node packages/backlog-groom/bin/backlog-groom.mjs --apply --set groomed.json
 ```
+
+When the verb lands, both become `adlc backlog-groom …` and this note goes away.
 
 Read the run's **route distribution** before trusting its conclusions. A sweep
 that mechanically verified 4% of the backlog is still useful, but it is not a

@@ -56,8 +56,8 @@ reachable with no possibility of a write, so the two never share a code path a
 flag could flip.
 
 ```bash
-backlog-groom --json --out groomed.json     # read-only, writes nothing anywhere
-backlog-groom --apply --set groomed.json    # gated, floored, comment-first
+node packages/backlog-groom/bin/backlog-groom.mjs --json --out groomed.json     # read-only, writes nothing anywhere
+node packages/backlog-groom/bin/backlog-groom.mjs --apply --set groomed.json    # gated, floored, comment-first
 ```
 
 Three things stand between a verdict and a closed issue, and they answer
