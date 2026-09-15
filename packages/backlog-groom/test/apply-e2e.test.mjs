@@ -6,15 +6,30 @@
 // that a run which cannot review WRITES NOTHING. A fake `gh` on PATH records
 // every call, so "nothing was written" is an assertion rather than a hope.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { contentHash } from '../lib/content-hash.mjs';
+
+/**
+ * Every sandbox this file creates, removed when the file finishes.
+ *
+ * `mkdtempSync` with no cleanup leaks a git repository per test, per run. That
+ * is invisible until the filesystem runs out of INODES — which reports as "no
+ * space left on device" while df still shows most of the disk free.
+ */
+const SANDBOXES = [];
+const registerSandbox = (dir) => { SANDBOXES.push(dir); return dir; };
+after(() => {
+  for (const dir of SANDBOXES) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
@@ -26,7 +41,7 @@ const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-
  * writes that did NOT happen.
  */
 function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'groom-apply-'));
+  const dir = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-apply-')));
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
   const log = join(dir, 'gh.log');

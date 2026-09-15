@@ -147,3 +147,11 @@ test('every write path validates the selector, not just the read', () => {
 test('a valid selector passes through as a string', () => {
   assert.equal(issueSelector(705), '705');
 });
+
+test('issue #1 is a real issue number and is accepted', () => {
+  // The boundary is zero, not one. Every repository has an issue #1, and a
+  // validator that rejected it would be unusable on the oldest issues in a
+  // backlog — which is exactly where a grooming sweep starts.
+  assert.equal(issueSelector(1), '1');
+  assert.throws(() => issueSelector(0), /positive integer/);
+});

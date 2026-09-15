@@ -12,7 +12,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -178,6 +178,11 @@ if (values.apply) {
     saveLedger(ledgerPath, ledger);
   } finally {
     releaseLock();
+    // The artifact directory is per-run scratch. Left behind, a scheduled sweep
+    // leaks one git-sized directory per run until the filesystem runs out of
+    // INODES — which reports as "no space left on device" while df still shows
+    // plenty of free bytes, and is a genuinely confusing afternoon.
+    try { rmSync(artifactDir, { recursive: true, force: true }); } catch { /* scratch */ }
   }
 
   console.log(serialiseJson(applied).trimEnd());
