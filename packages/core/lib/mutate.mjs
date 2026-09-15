@@ -467,18 +467,21 @@ export function generateMutants(content, { targetLines, maxMutants = 50 } = {}) 
     const prefix = original.match(CLOSED_COMMENT_PREFIX)?.[1] ?? '';
     const body = original.slice(prefix.length);
     if (SKIP_LINE.test(body)) continue;
-    let producedForLine = 0;
+    // Boolean, not a counter: the value is only ever read as "did anything fire",
+    // so `count += 1` vs `+= 2` would be an EQUIVALENT mutant — it survives while
+    // changing nothing, which is a false gate failure. A flag has no off-by-one.
+    let producedForLine = false;
     for (const op of OPERATORS) {
       const mutatedBody = op.apply(body);
       if (mutatedBody === null || mutatedBody === body) continue;
       // `original` stays the WHOLE line, including the stripped prefix, so
       // applyMutant's identity check still addresses the real file content.
       mutants.push({ line: lineNo, operator: op.name, original, mutated: prefix + mutatedBody });
-      producedForLine += 1;
+      producedForLine = true;
       if (mutants.length >= maxMutants) break;
     }
     // Only when nothing above could see this line (#1013).
-    if (producedForLine === 0 && mutants.length < maxMutants) {
+    if (!producedForLine && mutants.length < maxMutants) {
       for (const op of FALLBACK_OPERATORS) {
         const mutatedBody = op.apply(body);
         if (mutatedBody === null || mutatedBody === body) continue;
