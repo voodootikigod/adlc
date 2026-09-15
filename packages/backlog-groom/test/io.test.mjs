@@ -98,16 +98,24 @@ test('baseFloorFromGit returns the floor recorded at the merge base', () => {
   const seen = [];
   const run = (args) => {
     seen.push(args);
-    return args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'ls-tree') return '.claude/backlog-groom-profile.json\n';
+    return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
   };
   assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run, baseRef: 'origin/main' }), ['close', 'relabel']);
   assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'origin/main']);
-  assert.deepEqual(seen[1], ['show', 'deadbeef:.claude/backlog-groom-profile.json']);
+  assert.deepEqual(seen[1], ['ls-tree', '--name-only', 'deadbeef', '--', '.claude/backlog-groom-profile.json']);
+  assert.deepEqual(seen[2], ['show', 'deadbeef:.claude/backlog-groom-profile.json']);
 });
 
 test('baseFloorFromGit compares against the ref it was given', () => {
   const seen = [];
-  const run = (args) => { seen.push(args); return args[0] === 'merge-base' ? 'cafe\n' : JSON.stringify({ schemaVersion: 1 }); };
+  const run = (args) => {
+    seen.push(args);
+    if (args[0] === 'merge-base') return 'cafe\n';
+    if (args[0] === 'ls-tree') return 'p.json\n';
+    return JSON.stringify({ schemaVersion: 1 });
+  };
   baseFloorFromGit('p.json', { run, baseRef: 'upstream/trunk' });
   assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'upstream/trunk']);
 });
@@ -115,7 +123,11 @@ test('baseFloorFromGit compares against the ref it was given', () => {
 test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the key', () => {
   // Omission at the base means the base floor was the conservative default, not
   // nothing — so a head that empties the floor is still a widening.
-  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1 }));
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'ls-tree') return 'p.json\n';
+    return JSON.stringify({ schemaVersion: 1 });
+  };
   assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
 });
 
@@ -127,9 +139,21 @@ test('baseFloorFromGit treats an ABSENT base profile as the default floor', () =
   // adopted a profile yet.
   const run = (args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
-    throw new Error('fatal: path does not exist');
+    if (args[0] === 'ls-tree') return '';
+    throw new Error('should not read a file that is not there');
   };
   assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
+});
+
+test('a git FAILURE is not read as an absent profile', () => {
+  // `git show` fails the same way for "no such path" and for a corrupt object
+  // store, and treating every failure as absence hands back the permissive
+  // default floor exactly when the repository cannot be read.
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    throw new Error('fatal: not a git repository');
+  };
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 
 test('an absent base profile still catches a head floor that widens on the default', () => {
@@ -137,7 +161,8 @@ test('an absent base profile still catches a head floor that widens on the defau
   // argued: emptying the floor is a widening even when the base declared nothing.
   const run = (args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
-    throw new Error('fatal: path does not exist');
+    if (args[0] === 'ls-tree') return '';
+    throw new Error('unreachable');
   };
   const base = baseFloorFromGit('p.json', { run });
   assert.deepEqual(floorWidening(base, []), ['close']);
@@ -146,7 +171,11 @@ test('an absent base profile still catches a head floor that widens on the defau
 test('baseFloorFromGit returns null when the base profile is PRESENT but unreadable', () => {
   // Distinct from absent: a file that exists may have declared a FULLER floor
   // than the default, so assuming the default would under-detect a widening.
-  const run = (args) => (args[0] === 'merge-base' ? 'deadbeef\n' : '{ not json');
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'ls-tree') return 'p.json\n';
+    return '{ not json';
+  };
   assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 
@@ -158,8 +187,11 @@ test('baseFloorFromGit returns null when the merge base cannot be resolved', () 
 test('baseFloorFromGit returns null when the base profile has an unknown key', () => {
   // A base profile this build cannot parse is a base floor this build does not
   // know — the same unknown, reached a different way.
-  const run = (args) =>
-    args[0] === 'merge-base' ? 'deadbeef\n' : JSON.stringify({ schemaVersion: 1, autonmyFloor: [] });
+  const run = (args) => {
+    if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'ls-tree') return 'p.json\n';
+    return JSON.stringify({ schemaVersion: 1, autonmyFloor: [] });
+  };
   assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 
@@ -246,6 +278,7 @@ test('baseFloorFromGit uses the resolved ref when given none', () => {
     seen.push(args);
     if (args[0] === 'symbolic-ref') return 'origin/trunk\n';
     if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close'] });
   };
   baseFloorFromGit('p.json', { run });

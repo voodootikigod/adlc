@@ -14,7 +14,7 @@ adversarial review and bounded by the project's autonomy floor.
 
 **This skill must NEVER mutate GitHub directly.** Never close, reopen, edit,
 comment on, label, lock or transfer an issue through `gh`, and never reach the
-REST API with a write method. Every write flows through `backlog-groom apply`.
+REST API with a write method. Every write flows through `backlog-groom --apply`.
 
 This is not style. One such call here bypasses the autonomy floor, the
 adversarial gate and the comment-first rule **in one call** — structurally the
@@ -59,7 +59,7 @@ backlog-groom --json --out groomed.json
 
 # Apply conclusions. Every action is gated and floored; nothing is applied
 # without an approve from a provider distinct from the deciding one.
-backlog-groom apply --set groomed.json
+backlog-groom --apply --set groomed.json
 ```
 
 Read the run's **route distribution** before trusting its conclusions. A sweep

@@ -40,14 +40,18 @@ export const PURE_HELPERS = Object.freeze(['marker', 'parseMarker', 'planAction'
 const MARKER_PREFIX = 'backlog-groom';
 
 /** The durable idempotence marker for one issue at one revision. */
-export function marker(number, contentHash) {
-  return `<!-- ${MARKER_PREFIX}:${number}:${contentHash} -->`;
+export function marker(number, contentHash, action = 'close') {
+  // The ACTION is part of the marker for the same reason it is part of the gate
+  // key: a close and a relabel on one issue at one revision are different
+  // decisions, and a shared marker would let the first one's comment suppress
+  // the second one's evidence.
+  return `<!-- ${MARKER_PREFIX}:${number}:${action}:${contentHash} -->`;
 }
 
 /** Parse a marker back, or null. */
 export function parseMarker(text) {
-  const m = /<!--\s*backlog-groom:(\d+):([^\s>]+?)\s*-->/.exec(String(text ?? ''));
-  return m ? { number: Number(m[1]), contentHash: m[2] } : null;
+  const m = /<!--\s*backlog-groom:(\d+):([a-z-]+):([^\s>]+?)\s*-->/.exec(String(text ?? ''));
+  return m ? { number: Number(m[1]), action: m[2], contentHash: m[3] } : null;
 }
 
 /** The comment body: the evidence, the rationale, and the marker. */
@@ -58,7 +62,7 @@ export function renderComment(action) {
     action.evidence ?? '(no evidence recorded)',
     '',
     action.gate?.reviewer ? `Reviewed by \`${action.gate.reviewer}\` (distinct from the deciding provider).` : '',
-    marker(action.number, action.contentHash),
+    marker(action.number, action.contentHash, action.action),
   ]
     .filter((l) => l !== '')
     .join('\n');
@@ -125,7 +129,7 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     let alreadyCommented = false;
     try {
       const existing = gh.comments(action.number) ?? [];
-      const want = marker(action.number, action.contentHash);
+      const want = marker(action.number, action.contentHash, action.action);
       // OUR OWN marker only. The marker is derived from the issue number and a
       // content hash, both of which anyone can compute, so a third party can
       // post one and suppress the evidence comment — leaving the tool to act

@@ -15,6 +15,21 @@
 /**
  * @param {{spawn: Function}} io
  */
+/**
+ * A safe issue selector.
+ *
+ * The number reaches this from a JSON file on disk and goes straight into gh's
+ * argv. `--repo other/owner` is a perfectly good string, so an unvalidated
+ * selector lets a crafted set point every call at a repository the operator
+ * never named — and then comment on and close issues there.
+ */
+export function issueSelector(number) {
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new Error(`backlog-groom: issue selector must be a positive integer, got ${JSON.stringify(number)}`);
+  }
+  return String(number);
+}
+
 export function makeGhWriter({ spawn } = {}) {
   const gh = (args, input) => {
     const res = spawn('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024 });
@@ -30,14 +45,14 @@ export function makeGhWriter({ spawn } = {}) {
   return {
     /** The issue as it is NOW — body and labels included, for re-validation. */
     issue: (number) => {
-      const raw = gh(['issue', 'view', String(number), '--json', 'number,title,body,labels,updatedAt']);
+      const raw = gh(['issue', 'view', issueSelector(number), '--json', 'number,title,body,labels,updatedAt']);
       const parsed = JSON.parse(raw);
       return { ...parsed, labels: (parsed.labels ?? []).map((l) => l.name ?? l) };
     },
     /** The authenticated login, so a comment can be attributed. */
     login: () => JSON.parse(gh(['api', 'user'])).login,
     comments: (number) => {
-      const raw = gh(['issue', 'view', String(number), '--json', 'comments']);
+      const raw = gh(['issue', 'view', issueSelector(number), '--json', 'comments']);
       let parsed;
       try {
         parsed = JSON.parse(raw);
@@ -54,14 +69,14 @@ export function makeGhWriter({ spawn } = {}) {
       // trail exists to inform.
       return (parsed.comments ?? []).map((c) => ({ body: c.body ?? '', author: c.author?.login ?? c.author ?? null }));
     },
-    comment: (number, body) => gh(['issue', 'comment', String(number), '--body-file', '-'], body),
+    comment: (number, body) => gh(['issue', 'comment', issueSelector(number), '--body-file', '-'], body),
     apply: (number, action, detail = {}) => {
-      if (action === 'close') return gh(['issue', 'close', String(number)]);
+      if (action === 'close') return gh(['issue', 'close', issueSelector(number)]);
       if (action === 'relabel') {
         // Remove then add, both in one gh call: two calls could leave the issue
         // with neither label if the second failed, and the comment has already
         // claimed the change.
-        const args = ['issue', 'edit', String(number)];
+        const args = ['issue', 'edit', issueSelector(number)];
         if (detail.from) args.push('--remove-label', detail.from);
         if (detail.to) args.push('--add-label', detail.to);
         if (args.length === 3) throw new Error(`relabel for issue ${number} names neither a from nor a to label`);

@@ -44,12 +44,19 @@ function fakeGh({ failOn = null, existingComments = [] } = {}) {
 
 // ---- the marker ------------------------------------------------------------
 
-test('the marker names the issue and the revision it was written for', () => {
-  const m = marker(7, 'abc123');
+test('the marker names the issue, the action and the revision', () => {
+  const m = marker(7, 'abc123', 'close');
   assert.match(m, /backlog-groom/);
   assert.match(m, /7/);
   assert.match(m, /abc123/);
-  assert.deepEqual(parseMarker(m), { number: 7, contentHash: 'abc123' });
+  assert.deepEqual(parseMarker(m), { number: 7, action: 'close', contentHash: 'abc123' });
+});
+
+test('a close and a relabel on one issue and revision get DIFFERENT markers', () => {
+  // Same reason the gate key carries the action: they are different decisions,
+  // and a shared marker would let the first one's comment suppress the second
+  // one's evidence.
+  assert.notEqual(marker(7, 'abc123', 'close'), marker(7, 'abc123', 'relabel'));
 });
 
 test('a marker for a different revision does not match this one', () => {

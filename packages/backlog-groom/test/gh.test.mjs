@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeGhWriter } from '../lib/gh.mjs';
+import { makeGhWriter, issueSelector } from '../lib/gh.mjs';
 
 const ok = (stdout = '') => ({ status: 0, stdout });
 
@@ -122,4 +122,28 @@ test('a failure with no stderr and no error still names the gh subcommand', () =
 test('stderr is preferred over the generic message when gh explains itself', () => {
   const gh = makeGhWriter({ spawn: () => ({ status: 1, stderr: '  could not resolve to an Issue\n' }) });
   assert.throws(() => gh.comments(7), /could not resolve to an Issue/);
+});
+
+// ---- the issue selector is argv, so it must be a number --------------------
+
+test('a non-numeric issue selector is refused before any gh call', () => {
+  // `--repo other/owner` is a perfectly good string. An unvalidated selector,
+  // read from a JSON file on disk, would let a crafted set point every call at a
+  // repository the operator never named — and close issues there.
+  const gh = makeGhWriter({ spawn: () => { throw new Error('must not spawn'); } });
+  for (const bad of ['--repo other/owner', '7 --repo x', 1.5, -1, 0, null, undefined, '7']) {
+    assert.throws(() => gh.comments(bad), /positive integer/, `${JSON.stringify(bad)} must be refused`);
+  }
+});
+
+test('every write path validates the selector, not just the read', () => {
+  const gh = makeGhWriter({ spawn: () => { throw new Error('must not spawn'); } });
+  assert.throws(() => gh.comment('--repo x', 'body'), /positive integer/);
+  assert.throws(() => gh.apply('--repo x', 'close'), /positive integer/);
+  assert.throws(() => gh.apply('--repo x', 'relabel', { to: 'a' }), /positive integer/);
+  assert.throws(() => gh.issue('--repo x'), /positive integer/);
+});
+
+test('a valid selector passes through as a string', () => {
+  assert.equal(issueSelector(705), '705');
 });

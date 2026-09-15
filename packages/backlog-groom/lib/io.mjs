@@ -111,15 +111,24 @@ export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = n
   }
   if (!mergeBase) return null;
 
+  // ABSENCE IS PROVEN, not inferred from a failure. `git show` fails the same way
+  // for "no such path" and for a corrupt object store or a bad revision, and
+  // treating every failure as absence hands back the permissive default floor
+  // exactly when the repository cannot be read.
+  let present;
+  try {
+    present = String(run(['ls-tree', '--name-only', mergeBase, '--', profilePath])).trim() !== '';
+  } catch {
+    return null;
+  }
+  if (!present) return [...DEFAULT_AUTONOMY_FLOOR];
+
   let raw;
   try {
     raw = run(['show', `${mergeBase}:${profilePath}`]);
   } catch {
-    // Absent at the base means the DEFAULT floor was in force there — not that
-    // the floor is unknown. Refusing here would make the tool unusable on any
-    // repo that has not yet adopted a profile, and it buys nothing: the default
-    // is the most conservative floor, so a head that narrows it is still caught.
-    return [...DEFAULT_AUTONOMY_FLOOR];
+    // Listed as present but unreadable: genuinely unknown.
+    return null;
   }
 
   try {

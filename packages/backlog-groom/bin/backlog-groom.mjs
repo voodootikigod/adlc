@@ -107,21 +107,24 @@ if (values.apply) {
   }
 
   const ledgerPath = values.ledger ?? '.adlc/backlog-groom-ledger.json';
-  let ledger;
-  try {
-    ledger = loadLedger(ledgerPath);
-  } catch (err) {
-    opError(describeError(err, 'could not load the gate ledger'));
-  }
 
-  // One write transaction at a time. Two concurrent runs would both read a
-  // ledger with no entry for a revision, both obtain an approval for it, and
-  // both comment and close the same issue.
+  // LOCK FIRST, then read. Loading the ledger before taking the lock is a
+  // read-then-lock race: two runs can both read a ledger with no entry for a
+  // revision, then serialise on the lock and each act on the stale copy it
+  // already holds.
   let releaseLock;
   try {
     releaseLock = acquireApplyLock(`${ledgerPath}.lock`);
   } catch (err) {
     opError(describeError(err, 'could not take the apply lock'));
+  }
+
+  let ledger;
+  try {
+    ledger = loadLedger(ledgerPath);
+  } catch (err) {
+    releaseLock();
+    opError(describeError(err, 'could not load the gate ledger'));
   }
 
   // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
