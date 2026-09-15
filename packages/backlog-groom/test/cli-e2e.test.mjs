@@ -6,19 +6,36 @@
 // `gh` rather than the module keeps the test hermetic while still exercising the
 // real wiring end to end.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+
+import { EMIT_SCHEMA_VERSION } from '../lib/emit.mjs';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * Every sandbox this file creates, removed when the file finishes.
+ *
+ * `mkdtempSync` with no cleanup leaks a git repository per test, per run. That
+ * is invisible until the filesystem runs out of INODES — which reports as "no
+ * space left on device" while df still shows most of the disk free.
+ */
+const SANDBOXES = [];
+const registerSandbox = (dir) => { SANDBOXES.push(dir); return dir; };
+after(() => {
+  for (const dir of SANDBOXES) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
 /** A scratch dir with a `gh` shim that answers with `issues`. */
 function sandbox(issues = []) {
-  const dir = mkdtempSync(join(tmpdir(), 'groom-e2e-'));
+  const dir = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-e2e-')));
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
   const gh = join(bin, 'gh');
@@ -82,7 +99,9 @@ test('--json emits the groomed set, and --out writes it', () => {
   const r = run(['--json', '--out', out], box);
   assert.equal(r.status, 0, r.stderr);
   const parsed = JSON.parse(r.stdout);
-  assert.equal(parsed.schemaVersion, 1);
+  // Against the CONSTANT, not a literal: a literal here is a second place the
+  // schema version has to be remembered, and it was already forgotten once.
+  assert.equal(parsed.schemaVersion, EMIT_SCHEMA_VERSION);
   assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), parsed, 'the file and stdout must agree');
 });
 

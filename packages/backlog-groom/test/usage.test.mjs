@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FLAGS, renderUsage, validateThreshold } from '../lib/usage.mjs';
+import { FLAGS, renderUsage, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
 
 /** Return the error a thunk threw; `assert.throws` returns undefined. */
 function caughtUsage(fn) {
@@ -64,4 +64,63 @@ test('--threshold rejects anything outside 0..1, and non-numbers, naming what it
     assert.equal(err.isOpError, true, `${JSON.stringify(bad)} must be an operational error`);
     assert.ok(err.message.includes(String(bad)), 'the message names the value it got');
   }
+});
+
+test('a flag longer than the help column still gets a separating space', () => {
+  // padEnd collapses to nothing once the flag outgrows the column, and the help
+  // then abuts the flag name — reading as one longer flag that does not exist.
+  const usage = renderUsage([{ name: 'a-very-long-flag-name-indeed', arg: null, help: 'HELPTEXT' }]);
+  assert.ok(!usage.includes('indeedHELPTEXT'), 'help must not abut the flag name');
+  assert.match(usage, /--a-very-long-flag-name-indeed\s+HELPTEXT/);
+});
+
+test('short flags align their help at a fixed column', () => {
+  // The column is the POINT of padding — help that starts wherever each flag
+  // happens to end is not a table. Pinned exactly, so the column constant is
+  // observable rather than free to drift.
+  const usage = renderUsage([
+    { name: 'a', arg: null, help: 'AAA' },
+    { name: 'bbb', arg: 'x', help: 'BBB' },
+  ]);
+  const [l1, l2] = usage.split('\n').filter((l) => l.includes('AAA') || l.includes('BBB'));
+  assert.equal(l1.indexOf('AAA'), l2.indexOf('BBB'), 'both help strings must start at the same column');
+  assert.equal(l1.indexOf('AAA'), 24, 'two leading spaces plus a 22-character flag column');
+});
+
+test('a flag that overruns the column is separated by exactly one space', () => {
+  // Not "at least one": an overrun flag that kept padding to some larger column
+  // would silently re-align the whole table around its longest entry.
+  const usage = renderUsage([{ name: 'x'.repeat(30), arg: null, help: 'HELP' }]);
+  const line = usage.split('\n').find((l) => l.includes('HELP'));
+  assert.match(line, /^ {2}--x+ HELP$/, 'exactly one space between an overrun flag and its help');
+});
+
+// ---- the --apply guard, out of the binary ----------------------------------
+
+test('--apply without --set is refused, and the message names the flag and its value', () => {
+  // Naming the flag is not enough to act on: an operator who reads "--set" still
+  // has to guess whether it takes a value. The message has to carry the
+  // placeholder, so it is asserted whole rather than by substring.
+  assert.equal(validateApplyArgs({ apply: true }), '--apply requires --set <path> — the groomed set to act on');
+});
+
+test('--apply with --set is accepted', () => {
+  assert.equal(validateApplyArgs({ apply: true, set: 'groomed.json' }), null);
+});
+
+test('without --apply the set is not required', () => {
+  // The read path must stay usable with no write flags at all; demanding --set
+  // unconditionally would make the read-only mode unreachable.
+  assert.equal(validateApplyArgs({}), null);
+  assert.equal(validateApplyArgs({ set: 'x.json' }), null);
+});
+
+test('describeError passes an operational message through untouched', () => {
+  const err = Object.assign(new Error('profile: unknown key "x"'), { isOpError: true });
+  assert.equal(describeError(err, 'apply failed'), 'profile: unknown key "x"');
+});
+
+test('describeError prefixes an unexpected failure with its context', () => {
+  // A bare ENOENT tells the operator nothing about which file or which step.
+  assert.equal(describeError(new Error('ENOENT'), 'apply failed'), 'apply failed: ENOENT');
 });

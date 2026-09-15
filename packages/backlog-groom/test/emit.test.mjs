@@ -17,7 +17,7 @@ import { groom } from '../lib/groom.mjs';
 import { parseProfile } from '../lib/profile.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = JSON.parse(readFileSync(join(HERE, 'fixtures', 'groomed-set.v1.json'), 'utf8'));
+const FIXTURE = JSON.parse(readFileSync(join(HERE, 'fixtures', 'groomed-set.v4.json'), 'utf8'));
 
 const PROFILE = parseProfile({
   schemaVersion: 1,

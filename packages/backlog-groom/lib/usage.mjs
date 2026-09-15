@@ -14,6 +14,8 @@ export const FLAGS = [
   { name: 'threshold', arg: 'n', default: '0.2', help: 'relation candidate-filter threshold (default 0.2)' },
   { name: 'json', arg: null, help: 'emit the groomed set as JSON instead of the report' },
   { name: 'out', arg: 'path', help: 'write the groomed set JSON to a file' },
+  { name: 'apply', arg: null, help: 'apply gated conclusions to GitHub (writes; off by default)' },
+  { name: 'set', arg: 'path', help: 'with --apply: the groomed set JSON to act on' },
   { name: 'help', arg: null, help: 'show this message' },
 ];
 
@@ -38,13 +40,21 @@ export function parseOptions(flags = FLAGS) {
 }
 
 /** Render the usage block from the flag table. */
+/** The help column the flag list pads to, when the flag is short enough to fit. */
+const COLUMN = 22;
+
 export function renderUsage(flags = FLAGS) {
   const lines = ['backlog-groom — groom a GitHub issue backlog against the code (read-only)', ''];
   for (const f of flags) {
     const left = f.arg ? `--${f.name} <${f.arg}>` : `--${f.name}`;
-    lines.push(`  ${left.padEnd(22)}${f.help}`);
+    // At least ONE space, always. A bare padEnd collapses to zero padding once a
+    // flag outgrows the column, and the help text then runs straight into the
+    // flag name — which reads as a different, longer flag.
+    lines.push(`  ${left.padEnd(Math.max(COLUMN, left.length + 1))}${f.help}`);
   }
-  lines.push('', 'This command never writes to GitHub.');
+  lines.push('', 'Without --apply this command never writes to GitHub.');
+  lines.push('With --apply, every action is gated by an independent reviewer and bounded by');
+  lines.push('the autonomy floor; nothing is written that both did not permit.');
   return lines.join('\n');
 }
 
@@ -66,4 +76,31 @@ export function validateThreshold(raw) {
     throw Object.assign(new Error(`--threshold must be a number between 0 and 1, got: ${raw}`), { isOpError: true });
   }
   return n;
+}
+
+/**
+ * Validate the `--apply` flag combination. Returns an error message, or null.
+ *
+ * IN LIB FOR THE SAME REASON THE REST OF THIS FILE IS: a guard left in the
+ * binary is reachable only by spawning the process, so it goes untested and an
+ * inverted comparison — demanding `--set` only when it was already supplied —
+ * passes every suite while making the write path unusable or, worse, usable
+ * without the set it is supposed to act on.
+ */
+export function validateApplyArgs(values = {}) {
+  if (!values.apply) return null;
+  if (!values.set) return '--apply requires --set <path> — the groomed set to act on';
+  return null;
+}
+
+/**
+ * The message an operational error should print.
+ *
+ * An `isOpError` already carries a message written for an operator; anything
+ * else is an unexpected failure and needs its context prefixed, or the operator
+ * sees a bare `ENOENT` with no clue which file. Extracted because the ternary is
+ * a branch, and a branch in the binary is a branch nothing tests.
+ */
+export function describeError(err, context) {
+  return err?.isOpError ? err.message : `${context}: ${err?.message ?? err}`;
 }

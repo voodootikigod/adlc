@@ -110,6 +110,7 @@ export function groom({ profile, cache = null, judge = null, io = {}, relationTh
       (profile.frozenPaths ?? []).some((g) => globMatch(g, r.path))
     );
     row.units = units;
+    row.frozen = frozen;
     row.rank = rankIssue({
       verdict: row.verified.verdict,
       labels: row.labels,
