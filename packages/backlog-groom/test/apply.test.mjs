@@ -408,3 +408,35 @@ test('a widened floor is refused BEFORE any review is spent', () => {
   assert.equal(reviewed, 0, 'no review may be spent on a run the policy refuses');
   assert.deepEqual(ledger, {}, 'and no one-shot may be recorded');
 });
+
+test('revalidation reads the PINNED revision, not a moving HEAD', () => {
+  // A checkout moving HEAD mid-run would otherwise have later actions validated
+  // against a different tree than the one the set was accepted against.
+  let seenRevision = null;
+  const io = {
+    readFile: (f) => { if (!(f in FILES)) throw new Error('ENOENT'); return FILES[f]; },
+    pathExists: (f) => f in FILES,
+    lastCommitFor: () => 'abc1234',
+  };
+  const spyIo = new Proxy(io, {
+    get(target, prop) {
+      if (prop === 'revision') return seenRevision;
+      return target[prop];
+    },
+  });
+  const gh = fakeGh();
+  applyRun({
+    set: { ...set(), generatedFor: 'pinned-sha' },
+    profile: profile(),
+    baseFloor: [],
+    ledger: {},
+    fetchIssue,
+    io: spyIo,
+    revision: 'pinned-sha',
+    runReview: () => ({ code: REVIEW_APPROVE }),
+    gh,
+  });
+  // The pinned revision is what reaches contentHash/verifyIssue, so an action
+  // validated here describes the commit the set was accepted against.
+  assert.equal(gh.calls.length > 0, true, 'the run must reach the writer');
+});

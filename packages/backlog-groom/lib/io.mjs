@@ -6,7 +6,7 @@
  * the cache only when there is no cache, say — passes every suite.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
@@ -218,6 +218,7 @@ export function acquireApplyLock(path, io = {}) {
     write = writeFileSync,
     read = (p) => readFileSync(p, 'utf8'),
     alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
+    rename = renameSync,
     pid = process.pid,
   } = io;
 
@@ -249,9 +250,22 @@ export function acquireApplyLock(path, io = {}) {
       );
     }
 
-    // The holder is gone. Clear and retake, and if THAT races another recovering
-    // process the second mkdir fails and it refuses, as it should.
-    try { rmdir(path, { recursive: true, force: true }); } catch { /* fall through to the retake */ }
+    // The holder is gone — but CLEARING then retaking is not safe. Two recoverers
+    // interleave: A removes and recreates, B removes A's NEW lock and recreates
+    // it, and both proceed to mutate GitHub. Instead each recoverer tries to
+    // RENAME the stale directory to a name only it knows. rename is atomic, so
+    // exactly one succeeds and the losers get ENOENT and refuse.
+    const claimed = `${path}.stale-${pid}-${Date.now()}`;
+    try {
+      rename(path, claimed);
+    } catch (claimErr) {
+      throw Object.assign(
+        new Error(`backlog-groom: another run recovered the stale lock at ${path} first (${claimErr.code ?? claimErr.message})`),
+        { isOpError: true }
+      );
+    }
+    try { rmdir(claimed, { recursive: true, force: true }); } catch { /* the claim is what mattered */ }
+
     try {
       take();
     } catch (retakeErr) {

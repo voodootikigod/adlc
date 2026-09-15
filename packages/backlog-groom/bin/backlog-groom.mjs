@@ -12,9 +12,9 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { groom } from '../lib/groom.mjs';
@@ -110,6 +110,11 @@ if (values.apply) {
   // the caller can reset: point at a fresh file and every spent review is
   // forgotten. Same reasoning as the floor's comparison ref.
   const ledgerPath = '.adlc/backlog-groom-ledger.json';
+
+  // The ledger's directory may not exist on a repo that has not adopted ADLC,
+  // and the documented --apply command should work there rather than failing on
+  // a missing parent.
+  try { mkdirSync(dirname(ledgerPath), { recursive: true }); } catch { /* the lock will report it */ }
 
   // LOCK FIRST, then read. Loading the ledger before taking the lock is a
   // read-then-lock race: two runs can both read a ledger with no entry for a

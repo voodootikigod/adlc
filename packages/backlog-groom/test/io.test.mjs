@@ -307,6 +307,7 @@ test('a lock left by a DEAD process is recovered rather than blocking forever', 
     mkdir: () => { mkdirCalls += 1; if (mkdirCalls === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
     read: () => JSON.stringify({ pid: 4242, startedAt: 'then' }),
     alive: () => false,
+    rename: () => {},
     rmdir: () => { removed = true; },
     write: () => {},
   });
@@ -334,6 +335,7 @@ test('losing the race to recover a stale lock refuses rather than proceeding', (
       mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
       read: () => JSON.stringify({ pid: 4242 }),
       alive: () => false,
+      rename: () => {},
       rmdir: () => {},
     })
   );
@@ -352,4 +354,27 @@ test('the lock records its owner so a later run can decide', () => {
   assert.match(written[0][0], /owner\.json$/);
   assert.equal(written[0][1].pid, 99);
   release();
+});
+
+test('two recoverers of one stale lock cannot both win', () => {
+  // rmdir-then-mkdir interleaves: A removes and recreates, B removes A's NEW
+  // lock and recreates it, and both proceed to mutate GitHub. The claim is an
+  // atomic rename, so exactly one wins and the loser refuses.
+  let renames = 0;
+  const attempt = () =>
+    acquireApplyLock('/tmp/x.lock', {
+      mkdir: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => JSON.stringify({ pid: 4242 }),
+      alive: () => false,
+      rename: () => { renames += 1; if (renames > 1) throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
+      rmdir: () => {},
+    });
+  // First recoverer claims the stale dir, then fails to retake (mkdir still
+  // throws in this fake) — but it got the claim.
+  assert.ok(thrownIo(attempt));
+  // Second recoverer loses the rename and says so, rather than clearing the
+  // winner's lock.
+  const err = thrownIo(attempt);
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /recovered the stale lock.*first/);
 });

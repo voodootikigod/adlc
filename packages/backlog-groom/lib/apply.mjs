@@ -182,6 +182,10 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
     );
   }
 
+  // `revision` spread LAST so a supplied io cannot unpin the snapshot every read
+  // in this run is supposed to share — the same rule the read pipeline uses.
+  const pinnedIo = revision ? { ...io, revision } : io;
+
   const proposed = actionsFromSet(set);
 
   // VALIDATE THE POLICY BEFORE SPENDING ANY REVIEW. The floor was previously
@@ -207,7 +211,10 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
   const revalidated = [];
   const stale = [];
   for (const action of proposed) {
-    const check = revalidateAction(action, { fetchIssue, profile, io });
+    // The revision is PINNED into io: revalidation must read the same commit the
+    // set was accepted against, or a checkout moving HEAD mid-run has every later
+    // action validated against a different tree than the first.
+    const check = revalidateAction(action, { fetchIssue, profile, io: pinnedIo });
     if (check.ok) revalidated.push(action);
     else stale.push({ number: action.number, action: action.action, reason: check.reason });
   }
@@ -232,7 +239,7 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
     self,
     // The window between validation and the write is where the issue can change
     // under us; this closes it as far as a two-step process can.
-    recheck: (action) => revalidateAction(action, { fetchIssue, profile, io }),
+    recheck: (action) => revalidateAction(action, { fetchIssue, profile, io: pinnedIo }),
   });
 
   return {

@@ -260,8 +260,11 @@ test('an unwritable ledger FAILS the run rather than warning', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  // .adlc is removed so the fixed ledger path is unwritable.
+  // .adlc replaced by a FILE, so neither the parent mkdir nor the ledger write
+  // can succeed. (Removing the directory no longer suffices: the CLI creates it,
+  // which is the documented behaviour on a repo that has not adopted ADLC.)
   rmSync(join(box.dir, '.adlc'), { recursive: true, force: true });
+  writeFileSync(join(box.dir, '.adlc'), 'not a directory\n');
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /ledger/i);
