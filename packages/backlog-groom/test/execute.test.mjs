@@ -252,3 +252,28 @@ test('a successful action is marked applied so the next run skips it', () => {
   executeActions({ actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.equal(ledger[gateKey(a)].applied, true);
 });
+
+test('a failed applied-checkpoint stops the run rather than continuing', () => {
+  // The action landed on GitHub. If the ledger cannot record that, the next run
+  // will repeat it — and continuing to further actions would compound the
+  // problem across several issues rather than one.
+  const gh = fakeGh();
+  const a = approved();
+  const b = approved({ number: 9, contentHash: 'zzz' });
+  const ledger = { ...ledgerFor(a), ...ledgerFor(b) };
+  assert.throws(
+    () =>
+      executeActions({
+        actions: [a, b],
+        floor: [],
+        baseFloor: [],
+        ledger,
+        gh,
+        self: 'me',
+        onApplied: () => { throw new Error('EACCES'); },
+      }),
+    (err) => err.isOpError === true
+  );
+  // Only the first action was attempted; the second never reached the writer.
+  assert.equal(gh.calls.filter((c) => c[0] === 'apply').length, 1);
+});

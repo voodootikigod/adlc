@@ -18,6 +18,7 @@ import { contentHash } from './content-hash.mjs';
 import { globMatch } from './cluster.mjs';
 import { verifyIssue } from './verify.mjs';
 import { executeActions } from './execute.mjs';
+import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed } from './floor.mjs';
 
 /**
  * Actions the emitted set proposes, in the shape the gate and executor expect.
@@ -158,7 +159,7 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null } = {}) {
+export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
@@ -183,10 +184,30 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
 
   const proposed = actionsFromSet(set);
 
+  // VALIDATE THE POLICY BEFORE SPENDING ANY REVIEW. The floor was previously
+  // checked inside executeActions, after gating — so a misconfigured profile
+  // burned every action's one shot and then refused the run, leaving those
+  // revisions permanently demoted for a recoverable config error.
+  assertFloor(profile.autonomyFloor);
+  assertFloorNotWidened({ base: baseFloor, head: profile.autonomyFloor, authorized: floorWideningAuthorized });
+  if (baseFrozenPaths !== null) {
+    assertFrozenPathsNotNarrowed({ base: baseFrozenPaths, head: profile.frozenPaths ?? [], authorized: floorWideningAuthorized });
+  }
+
+  // NO FAIL-OPEN SEAM. Without a way to re-read the issue there is no way to
+  // check the set's claims, and proceeding would trust a file on disk for every
+  // security-relevant fact — the exact hole re-validation exists to close.
+  if (proposed.length > 0 && typeof fetchIssue !== 'function') {
+    throw Object.assign(
+      new Error('backlog-groom: no way to re-read issues, so the set\'s claims cannot be checked — refusing to act'),
+      { isOpError: true }
+    );
+  }
+
   const revalidated = [];
   const stale = [];
   for (const action of proposed) {
-    const check = fetchIssue ? revalidateAction(action, { fetchIssue, profile, io }) : { ok: true };
+    const check = revalidateAction(action, { fetchIssue, profile, io });
     if (check.ok) revalidated.push(action);
     else stale.push({ number: action.number, action: action.action, reason: check.reason });
   }

@@ -101,7 +101,7 @@ export function resolveTrustedBaseRef({ run = defaultGitRun } = {}) {
   return 'origin/main';
 }
 
-export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = null } = {}) {
+export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef = null } = {}) {
   const ref = baseRef ?? resolveTrustedBaseRef({ run });
   let mergeBase;
   try {
@@ -121,7 +121,7 @@ export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = n
   } catch {
     return null;
   }
-  if (!present) return [...DEFAULT_AUTONOMY_FLOOR];
+  if (!present) return { autonomyFloor: [...DEFAULT_AUTONOMY_FLOOR], frozenPaths: [], absent: true };
 
   let raw;
   try {
@@ -132,8 +132,7 @@ export function baseFloorFromGit(profilePath, { run = defaultGitRun, baseRef = n
   }
 
   try {
-    const parsed = parseProfile(JSON.parse(raw));
-    return parsed.autonomyFloor;
+    return parseProfile(JSON.parse(raw));
   } catch {
     // PRESENT but unreadable is genuinely unknown, and distinct from absent: the
     // file may have declared a fuller floor than the default, so assuming the
@@ -266,4 +265,10 @@ export function acquireApplyLock(path, io = {}) {
   return () => {
     try { rmdir(path, { recursive: true, force: true }); } catch { /* releasing a lock must never mask the run's own error */ }
   };
+}
+
+/** Just the floor, for callers that only need that half. */
+export function baseFloorFromGit(profilePath, opts = {}) {
+  const base = baseProfileFromGit(profilePath, opts);
+  return base ? base.autonomyFloor : null;
 }

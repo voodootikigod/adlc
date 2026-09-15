@@ -123,3 +123,28 @@ export function assertFloorNotWidened({ base, head, authorized = false } = {}) {
       'no longer requires a human. Widening the floor is a privileged change and needs explicit trust-root authorization.'
   );
 }
+
+/**
+ * Frozen paths removed relative to the merge base.
+ *
+ * The same asymmetry the floor uses, for the same reason. `frozenPaths` marks
+ * issues that are never auto-actioned, so DELETING an entry is exactly as
+ * privileged as removing a class from the floor — and guarding one while
+ * leaving the other editable just moves the escalation one key down the file.
+ */
+export function frozenPathsRemoved(base, head) {
+  const headSet = new Set(head ?? []);
+  return (base ?? []).filter((g) => !headSet.has(g));
+}
+
+/** Refuse a profile that unfreezes paths relative to the merge base. */
+export function assertFrozenPathsNotNarrowed({ base, head, authorized = false } = {}) {
+  if (!Array.isArray(base)) {
+    throw opError('backlog-groom: could not read frozenPaths at the merge base — refusing to act on an unknown baseline');
+  }
+  const removed = frozenPathsRemoved(base, head);
+  if (removed.length === 0 || authorized) return head;
+  throw opError(
+    `backlog-groom: frozenPaths no longer covers ${removed.join(', ')} — unfreezing a path is a privileged change and needs explicit trust-root authorization.`
+  );
+}

@@ -21,7 +21,7 @@ import { groom } from '../lib/groom.mjs';
 import { headCommit } from '../lib/verify.mjs';
 import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
-import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit, loadLedger, saveLedger, acquireApplyLock } from '../lib/io.mjs';
+import { loadProfile, loadCache, saveCache, serialiseJson, baseProfileFromGit, loadLedger, saveLedger, acquireApplyLock } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
 import { makeGhWriter } from '../lib/gh.mjs';
 import { makeReviewRunner, reviewerPair, buildActionArtifact, artifactName } from '../lib/gate.mjs';
@@ -130,7 +130,9 @@ if (values.apply) {
   // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
   // the floor guard refuses to act on an unknown base rather than assuming one.
   // No caller-chosen ref: resolveTrustedBaseRef reads it from the repository.
-  const baseFloor = baseFloorFromGit(profilePath);
+  const baseProfile = baseProfileFromGit(profilePath);
+  const baseFloor = baseProfile ? baseProfile.autonomyFloor : null;
+  const baseFrozenPaths = baseProfile ? (baseProfile.frozenPaths ?? []) : null;
 
   const pair = reviewerPair(profile);
   if (!pair.ok) console.error(`backlog-groom: ${pair.reason} — every action will demote to a proposal`);
@@ -154,6 +156,7 @@ if (values.apply) {
       set,
       profile,
       baseFloor,
+      baseFrozenPaths,
       ledger,
       runReview,
       gh: ghIo,

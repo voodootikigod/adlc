@@ -168,7 +168,18 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     }
 
     if (ledger?.[gateKey(action)]) ledger[gateKey(action)].applied = true;
-    onApplied?.(ledger);
+    // A checkpoint that cannot be written means the NEXT run will not know this
+    // action already happened, and will repeat it. Continuing to further actions
+    // would compound that, so the run stops here with the executed ones recorded.
+    try {
+      onApplied?.(ledger);
+    } catch (err) {
+      executed.push({ number: action.number, action: action.action, resumed: alreadyCommented });
+      throw Object.assign(
+        new Error(`backlog-groom: issue #${action.number} was actioned but the ledger could not record it (${err.message}) — stopping before a retry repeats it`),
+        { isOpError: true, executed, demoted, failed }
+      );
+    }
     executed.push({ number: action.number, action: action.action, resumed: alreadyCommented });
   }
 

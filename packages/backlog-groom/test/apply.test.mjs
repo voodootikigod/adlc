@@ -10,12 +10,27 @@ import { actionsFromSet, applyRun, revalidateAction } from '../lib/apply.mjs';
 import { contentHash } from '../lib/content-hash.mjs';
 import { REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
 
+// A world where issue 705's cited snippet is genuinely gone and 706's is not,
+// so re-validation reaches the same verdicts the set claims.
+const FILES = { 'src/a.mjs': 'something else\n', 'src/b.mjs': 'still here\n' };
+const IO = {
+  readFile: (f) => { if (!(f in FILES)) throw new Error('ENOENT'); return FILES[f]; },
+  pathExists: (f) => f in FILES,
+  lastCommitFor: () => 'abc1234',
+};
+const BODIES = {
+  705: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n',
+  706: '**Location** `src/b.mjs:1`\n\n```\nstill here\n```\n',
+};
+const fetchIssue = (n) => ({ number: n, title: 't', body: BODIES[n] ?? '', labels: [], updatedAt: `u${n}` });
+const HASH = { 705: contentHash(['src/a.mjs'], IO), 706: contentHash(['src/b.mjs'], IO) };
+
 const set = (over = {}) => ({
-  schemaVersion: 2,
+  schemaVersion: 4,
   issues: [
-    { number: 705, verdict: 'fixed', contentHash: 'h705', evidence: 'the cited line is gone', labels: [], units: [] },
-    { number: 706, verdict: 'valid', contentHash: 'h706', evidence: 'still there', labels: [], units: [] },
-    { number: 700, verdict: 'unverifiable', contentHash: null, evidence: null, labels: [], units: [] },
+    { number: 705, verdict: 'fixed', contentHash: HASH[705], evidence: 'the cited line is gone', updatedAt: 'u705', frozen: false, labels: [], units: [] },
+    { number: 706, verdict: 'valid', contentHash: HASH[706], evidence: 'still there', updatedAt: 'u706', frozen: false, labels: [], units: [] },
+    { number: 700, verdict: 'unverifiable', contentHash: null, evidence: null, updatedAt: 'u700', frozen: false, labels: [], units: [] },
   ],
   proposals: [],
   ...over,
@@ -61,7 +76,7 @@ test('relabel proposals carry the issue contentHash so they can be gated', () =>
     set({ proposals: [{ number: 706, action: 'relabel', field: 'priority', from: 'P3-low', to: 'P1-high', evidence: 'rank disagrees' }] })
   );
   const relabel = actions.find((a) => a.action === 'relabel');
-  assert.equal(relabel.contentHash, 'h706');
+  assert.equal(relabel.contentHash, HASH[706]);
 });
 
 test('a proposal for an issue absent from the set is dropped, not guessed at', () => {
@@ -73,14 +88,14 @@ test('a proposal for an issue absent from the set is dropped, not guessed at', (
 
 test('an approved action reaches the writer, comment first', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh });
+  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
   assert.equal(out.executed.length, 1);
 });
 
 test('a refused action writes nothing and is reported with its reason', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(out.executed.length, 0);
   assert.equal(out.gateDemotions.length, 1);
@@ -95,6 +110,8 @@ test('AC8: with no distinct provider nothing is written and the reviewer is neve
     profile: profile({ providers: { decider: 'anthropic' } }),
     baseFloor: [],
     ledger: {},
+    fetchIssue,
+    io: IO,
     runReview: () => { called += 1; return { code: REVIEW_APPROVE }; },
     gh,
   });
@@ -111,6 +128,8 @@ test('the floor outranks an approve', () => {
     profile: profile({ autonomyFloor: ['close'] }),
     baseFloor: ['close'],
     ledger: {},
+    fetchIssue,
+    io: IO,
     runReview: () => ({ code: REVIEW_APPROVE }),
     gh,
   });
@@ -121,7 +140,7 @@ test('the floor outranks an approve', () => {
 test('AC24: a widened floor refuses the run before any write', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: set(), profile: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ set: set(), profile: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -130,7 +149,7 @@ test('AC24: a widened floor refuses the run before any write', () => {
 test('AC14: the ledger persists across the run so a replay within it is refused', () => {
   const ledger = {};
   const gh = fakeGh();
-  applyRun({ set: set(), profile: profile(), baseFloor: [], ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  applyRun({ set: set(), profile: profile(), baseFloor: [], ledger, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
 
   let called = 0;
   const second = applyRun({
@@ -138,6 +157,8 @@ test('AC14: the ledger persists across the run so a replay within it is refused'
     profile: profile(),
     baseFloor: [],
     ledger,
+    fetchIssue,
+    io: IO,
     runReview: () => { called += 1; return { code: REVIEW_APPROVE }; },
     gh,
   });
@@ -228,6 +249,8 @@ test('a stale set is refused before anything is gated', () => {
         profile: profile(),
         baseFloor: [],
         ledger: {},
+        fetchIssue,
+        io: IO,
         revision: 'newsha',
         runReview: () => { reviewed += 1; return { code: REVIEW_APPROVE }; },
         gh,
@@ -245,6 +268,8 @@ test('a set generated for the current revision proceeds', () => {
     profile: profile(),
     baseFloor: [],
     ledger: {},
+    fetchIssue,
+    io: IO,
     revision: 'samesha',
     runReview: () => ({ code: REVIEW_APPROVE }),
     gh,
@@ -262,6 +287,8 @@ test('each gate decision is checkpointed before any write', () => {
     profile: profile(),
     baseFloor: [],
     ledger: {},
+    fetchIssue,
+    io: IO,
     runReview: () => ({ code: REVIEW_APPROVE }),
     persist: (l) => checkpoints.push(Object.keys(l).length),
     gh,
@@ -344,4 +371,40 @@ test('a set with no generatedFor is refused when a revision is known', () => {
     () => applyRun({ set: { issues: [], proposals: [] }, profile: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
+});
+
+test('applyRun refuses when it has no way to re-read issues', () => {
+  // A fail-open seam: without fetchIssue the set's claims cannot be checked, and
+  // proceeding would trust a file on disk for every security-relevant fact.
+  const gh = fakeGh();
+  assert.throws(
+    () => applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    (err) => err.isOpError === true
+  );
+  assert.equal(gh.calls.length, 0);
+});
+
+test('a widened floor is refused BEFORE any review is spent', () => {
+  // The gate previously ran first, so a recoverable config error burned every
+  // action's one shot and then refused the run — permanently demoting those
+  // revisions for a typo.
+  const gh = fakeGh();
+  let reviewed = 0;
+  const ledger = {};
+  assert.throws(
+    () =>
+      applyRun({
+        set: set(),
+        profile: profile({ autonomyFloor: [] }),
+        baseFloor: ['close'],
+        ledger,
+        fetchIssue,
+        io: IO,
+        runReview: () => { reviewed += 1; return { code: REVIEW_APPROVE }; },
+        gh,
+      }),
+    (err) => err.isOpError === true
+  );
+  assert.equal(reviewed, 0, 'no review may be spent on a run the policy refuses');
+  assert.deepEqual(ledger, {}, 'and no one-shot may be recorded');
 });

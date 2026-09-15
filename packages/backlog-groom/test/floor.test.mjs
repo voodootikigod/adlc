@@ -15,6 +15,8 @@ import {
   floorWidening,
   assertFloorNotWidened,
   blockedByFloor,
+  frozenPathsRemoved,
+  assertFrozenPathsNotNarrowed,
 } from '../lib/floor.mjs';
 import { DEFAULT_PROFILE } from '../lib/profile.mjs';
 
@@ -186,4 +188,31 @@ test('AC6: a declared write entry point refuses a floored action', async () => {
   assert.equal(writes.length, 0, 'a floored action must not reach the writer at all');
   assert.equal(result.executed.length, 0);
   assert.equal(result.demoted[0].reason, 'floor');
+});
+
+// ---- frozenPaths gets the same asymmetry as the floor -----------------------
+
+test('unfreezing a path is a widening and is refused', () => {
+  // Guarding the floor while leaving frozenPaths editable just moves the
+  // escalation one key down the same file.
+  assert.deepEqual(frozenPathsRemoved(['a/**', 'b/**'], ['a/**']), ['b/**']);
+  const err = thrown(() => assertFrozenPathsNotNarrowed({ base: ['a/**', 'b/**'], head: ['a/**'] }));
+  assert.ok(err);
+  assert.equal(err.isOpError, true);
+  assert.match(err.message, /b\/\*\*/);
+});
+
+test('freezing MORE paths is an ordinary change', () => {
+  assert.deepEqual(frozenPathsRemoved(['a/**'], ['a/**', 'b/**']), []);
+  assert.doesNotThrow(() => assertFrozenPathsNotNarrowed({ base: ['a/**'], head: ['a/**', 'b/**'] }));
+});
+
+test('an explicit authorization permits unfreezing', () => {
+  assert.doesNotThrow(() => assertFrozenPathsNotNarrowed({ base: ['a/**'], head: [], authorized: true }));
+});
+
+test('an unreadable base frozenPaths fails closed', () => {
+  const err = thrown(() => assertFrozenPathsNotNarrowed({ base: null, head: [] }));
+  assert.ok(err);
+  assert.equal(err.isOpError, true);
 });
