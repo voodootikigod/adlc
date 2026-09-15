@@ -277,3 +277,29 @@ test('a failed applied-checkpoint stops the run rather than continuing', () => {
   // Only the first action was attempted; the second never reached the writer.
   assert.equal(gh.calls.filter((c) => c[0] === 'apply').length, 1);
 });
+
+test('an issue that changed between validation and the write is not actioned', () => {
+  // The TOCTOU window: a long review or a slow sweep leaves time for the issue
+  // to be edited, fixed by someone else, or closed. The last thing before the
+  // mutation is a fresh look rather than a memory of one.
+  const gh = fakeGh();
+  const a = approved();
+  const result = executeActions({
+    actions: [a],
+    floor: [],
+    baseFloor: [],
+    ledger: ledgerFor(a),
+    gh,
+    self: 'me',
+    recheck: () => ({ ok: false, reason: 'issue #7 changed since the set was generated' }),
+  });
+  assert.equal(gh.calls.length, 0, 'nothing may be written once the facts have moved');
+  assert.equal(result.demoted[0].reason, 'changed');
+});
+
+test('a passing recheck lets the action through', () => {
+  const gh = fakeGh();
+  const a = approved();
+  executeActions({ actions: [a], floor: [], baseFloor: [], ledger: ledgerFor(a), gh, self: 'me', recheck: () => ({ ok: true }) });
+  assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
+});

@@ -78,16 +78,24 @@ export function ledgerApproves(ledger, action) {
   if (!entry || entry.verdict !== 'approve') return false;
   // Bound to the revision AND the issue, not merely present under the key: a
   // ledger hand-edited to move an approval between issues must not pass.
-  return entry.contentHash === action?.contentHash && entry.number === action?.number && entry.action === action?.action;
+  return (
+    entry.contentHash === action?.contentHash &&
+    entry.number === action?.number &&
+    entry.action === action?.action &&
+    (entry.field ?? null) === (action?.field ?? null)
+  );
 }
 
 /** The replay key: one verdict per issue per revision of the code it cites. */
-export function gateKey({ number, contentHash, action } = {}) {
+export function gateKey({ number, contentHash, action, field = null } = {}) {
   // The ACTION is part of the key. Without it a close and a relabel on the same
   // issue at the same revision collide: whichever is gated first records the
   // key, and the second is refused as a replay of a decision that was never
   // about it.
-  return `${number}:${action}:${contentHash}`;
+  // FIELD too: a priority relabel and an area relabel on one issue share both
+  // the action and the revision, so without it the first to be gated records the
+  // key and the second is refused as a replay of a decision about something else.
+  return `${number}:${action}${field ? `:${field}` : ''}:${contentHash}`;
 }
 
 /**
@@ -176,7 +184,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     // rule unenforced for exactly the case a caller can manufacture at will: a
     // spawn failure or a timeout, retried until the reviewer finally answers.
     const reason = `the review could not complete: ${err?.message ?? err}`;
-    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action };
+    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null };
     return { verdict: 'demote', reason };
   }
 
@@ -196,6 +204,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     contentHash: action.contentHash,
     number: action.number,
     action: action.action,
+    field: action.field ?? null,
   };
   return { verdict, reason };
 }

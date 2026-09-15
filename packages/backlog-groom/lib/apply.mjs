@@ -230,6 +230,9 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
     gh,
     onApplied: persist,
     self,
+    // The window between validation and the write is where the issue can change
+    // under us; this closes it as far as a two-step process can.
+    recheck: (action) => revalidateAction(action, { fetchIssue, profile, io }),
   });
 
   return {

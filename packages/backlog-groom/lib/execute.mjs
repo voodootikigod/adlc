@@ -99,7 +99,7 @@ export function planAction(action, { floor = [], ledger = null } = {}) {
  * @param {object} o.gh - `{comments(number), comment(number, body), apply(number, action)}`
  * @returns {{executed:object[], demoted:object[], failed:object[]}}
  */
-export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null } = {}) {
+export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null, recheck = null } = {}) {
   // Validate and compare BEFORE any write. A run must not apply its first
   // action and discover the policy problem on its second — a half-applied sweep
   // under a floor nobody authorised is worse than a refused one.
@@ -122,6 +122,18 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     if (!plan.do) {
       demoted.push({ number: action.number, action: action.action, reason: plan.reason });
       continue;
+    }
+
+    // Re-check IMMEDIATELY before writing. Validation happened when the run
+    // started, and a long review or a slow sweep leaves a window in which the
+    // issue can be edited, fixed by someone else, or closed — so the last thing
+    // before the mutation is a fresh look rather than a memory of one.
+    if (recheck) {
+      const fresh = recheck(action);
+      if (!fresh.ok) {
+        demoted.push({ number: action.number, action: action.action, reason: 'changed', detail: fresh.reason });
+        continue;
+      }
     }
 
     // Resume rather than re-comment: our own marker for THIS revision means the

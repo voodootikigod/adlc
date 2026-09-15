@@ -260,7 +260,9 @@ test('an unwritable ledger FAILS the run rather than warning', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const r = run(['--apply', '--set', set, '--ledger', join(box.dir, 'nope', 'ledger.json')], box);
+  // .adlc is removed so the fixed ledger path is unwritable.
+  rmSync(join(box.dir, '.adlc'), { recursive: true, force: true });
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /ledger/i);
   assert.deepEqual(ghWrites(box), [], 'nothing may be written');
@@ -272,9 +274,8 @@ test('a corrupt ledger refuses the run instead of starting from empty', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const ledger = join(box.dir, 'ledger.json');
-  writeFileSync(ledger, '{ truncated');
-  const r = run(['--apply', '--set', set, '--ledger', ledger], box);
+  writeFileSync(join(box.dir, '.adlc', 'backlog-groom-ledger.json'), '{ truncated');
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 1);
   assert.deepEqual(ghWrites(box), [], 'a ledger that cannot prove a revision was reviewed must stop the run');
 });
@@ -285,9 +286,8 @@ test('a held apply lock refuses a concurrent run', () => {
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const set = setFile(box);
-  const ledger = join(box.dir, 'ledger.json');
-  mkdirSync(`${ledger}.lock`, { recursive: true });
-  const r = run(['--apply', '--set', set, '--ledger', ledger], box);
+  mkdirSync(join(box.dir, '.adlc', 'backlog-groom-ledger.json.lock'), { recursive: true });
+  const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /lock/i);
   assert.deepEqual(ghWrites(box), []);
@@ -417,4 +417,28 @@ test('an apply run leaves no artifact directory behind', () => {
   assert.equal(r.status, 0, r.stderr);
   const after = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
   assert.equal(after, before, 'the per-run artifact directory must be removed');
+});
+
+test('the ledger path is fixed, so a caller cannot reset the one-shot rule', () => {
+  // A caller-chosen ledger is a one-shot rule the caller can forget: point at a
+  // fresh file and every spent review is available again.
+  const box = sandbox();
+  const r = run(['--apply', '--set', setFile(box), '--ledger', '/tmp/elsewhere.json'], box);
+  assert.equal(r.status, 1, 'the flag must not exist');
+  assert.deepEqual(ghWrites(box), []);
+});
+
+test('a failed apply still clears its artifact directory', () => {
+  // The failure branch is the one that has been running long enough to have
+  // written artifacts, and a scheduled sweep that fails repeatedly leaks fastest.
+  const before = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  // A widened floor: refused after the artifact directory exists.
+  writeFileSync(join(box.dir, '.claude', 'backlog-groom-profile.json'), JSON.stringify({ schemaVersion: 1, autonomyFloor: [], frozenPaths: [], providers: { decider: 'anthropic', reviewer: 'openai' } }));
+  const r = run(['--apply', '--set', setFile(box)], box);
+  const after = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
+  assert.equal(after, before, `artifact dir leaked on exit ${r.status}`);
 });

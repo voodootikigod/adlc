@@ -332,3 +332,23 @@ test('an approval for a close does not license a relabel', () => {
   const approvedClose = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'close' } };
   assert.equal(ledgerApproves(approvedClose, { number: 7, action: 'relabel', contentHash: 'h' }), false);
 });
+
+test('a priority relabel and an area relabel on one issue are separate decisions', () => {
+  // Same action, same revision, different field. Without the field in the key
+  // the first to be gated records it and the second is refused as a replay of a
+  // decision that was about something else entirely.
+  const a = { number: 7, action: 'relabel', field: 'priority', contentHash: 'h' };
+  const b = { number: 7, action: 'relabel', field: 'area', contentHash: 'h' };
+  assert.notEqual(gateKey(a), gateKey(b));
+
+  const ledger = {};
+  gateAction({ action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const second = gateAction({ action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  assert.equal(second.verdict, 'approve');
+});
+
+test('an approval for one relabel field does not license another', () => {
+  const a = { number: 7, action: 'relabel', field: 'priority', contentHash: 'h' };
+  const approvedPriority = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'relabel', field: 'priority' } };
+  assert.equal(ledgerApproves(approvedPriority, { number: 7, action: 'relabel', field: 'area', contentHash: 'h' }), false);
+});

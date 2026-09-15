@@ -106,7 +106,10 @@ if (values.apply) {
     opError(`could not read ${values.set}: ${err.message}`);
   }
 
-  const ledgerPath = values.ledger ?? '.adlc/backlog-groom-ledger.json';
+  // FIXED, not caller-chosen. A ledger path the caller picks is a one-shot rule
+  // the caller can reset: point at a fresh file and every spent review is
+  // forgotten. Same reasoning as the floor's comparison ref.
+  const ledgerPath = '.adlc/backlog-groom-ledger.json';
 
   // LOCK FIRST, then read. Loading the ledger before taking the lock is a
   // read-then-lock race: two runs can both read a ledger with no entry for a
@@ -141,6 +144,15 @@ if (values.apply) {
   // whole-set artifact would return one verdict for the batch, which is not
   // attributable to the specific write being executed.
   const artifactDir = mkdtempSync(join(tmpdir(), 'backlog-groom-'));
+  // Releasing the lock and clearing the scratch directory, together, so no exit
+  // path can do one and forget the other. The artifact directory left behind
+  // leaks one git-sized directory per run until the filesystem runs out of
+  // INODES — which reports as "no space left on device" while df still shows
+  // plenty of free bytes, and is a genuinely confusing afternoon.
+  const cleanup = () => {
+    try { releaseLock(); } catch { /* releasing must never mask the run's own error */ }
+    try { rmSync(artifactDir, { recursive: true, force: true }); } catch { /* scratch */ }
+  };
   const runReview = (action) =>
     makeReviewRunner({
       spawn: spawnSync,
@@ -173,19 +185,18 @@ if (values.apply) {
       persist: (l) => saveLedger(ledgerPath, l),
     });
   } catch (err) {
-    releaseLock();
+    // ONE cleanup path, reached by success and failure alike. Two of them drift:
+    // the failure branch was already the one that forgot the artifact directory,
+    // which is precisely the run that has been going long enough to have written
+    // some, and a scheduled sweep that fails repeatedly leaks fastest.
+    cleanup();
     opError(describeError(err, 'apply failed'));
   }
 
   try {
     saveLedger(ledgerPath, ledger);
   } finally {
-    releaseLock();
-    // The artifact directory is per-run scratch. Left behind, a scheduled sweep
-    // leaks one git-sized directory per run until the filesystem runs out of
-    // INODES — which reports as "no space left on device" while df still shows
-    // plenty of free bytes, and is a genuinely confusing afternoon.
-    try { rmSync(artifactDir, { recursive: true, force: true }); } catch { /* scratch */ }
+    cleanup();
   }
 
   console.log(serialiseJson(applied).trimEnd());
