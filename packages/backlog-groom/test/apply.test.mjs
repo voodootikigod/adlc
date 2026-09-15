@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { actionsFromSet, applyRun } from '../lib/apply.mjs';
+import { actionsFromSet, applyRun, revalidateAction } from '../lib/apply.mjs';
+import { contentHash } from '../lib/content-hash.mjs';
 import { REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
 
 const set = (over = {}) => ({
@@ -266,4 +267,56 @@ test('each gate decision is checkpointed before any write', () => {
     gh,
   });
   assert.ok(checkpoints.length >= 1, 'the ledger must be checkpointed');
+});
+
+// ---- the set is a proposal, not a capability -------------------------------
+
+test('a set claiming a contentHash the code does not produce is refused', () => {
+  // The replay bypass: change contentHash in the set, get a fresh gate key, and
+  // buy another review for unchanged code until one approves.
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nreal\n```\n', labels: [] });
+  const out = revalidateAction(
+    { number: 1, action: 'close', contentHash: 'forged' },
+    { fetchIssue, profile: { frozenPaths: [] }, io: { readFile: () => 'real\n' } }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /contentHash/);
+});
+
+test('a set claiming frozen=false for a frozen path is refused', () => {
+  // frozen is a mutable field in a file on disk; the profile is the authority.
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `packages/rails-guard/x.mjs:1`\n\n```\nreal\n```\n', labels: [] });
+  const io = { readFile: () => 'real\n' };
+  const hash = contentHash(['packages/rails-guard/x.mjs'], io);
+  const out = revalidateAction(
+    { number: 1, action: 'close', contentHash: hash },
+    { fetchIssue, profile: { frozenPaths: ['packages/rails-guard/**'] }, io }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /frozen/);
+});
+
+test('an issue that cannot be re-read is refused rather than assumed unchanged', () => {
+  const out = revalidateAction(
+    { number: 1, action: 'close', contentHash: 'h' },
+    { fetchIssue: () => { throw new Error('404'); }, profile: {}, io: {} }
+  );
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /could not re-read/);
+});
+
+test('a set whose claims match the repository is accepted', () => {
+  const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nreal\n```\n', labels: [] });
+  const io = { readFile: () => 'real\n' };
+  const hash = contentHash(['src/a.mjs'], io);
+  const out = revalidateAction({ number: 1, action: 'close', contentHash: hash }, { fetchIssue, profile: { frozenPaths: [] }, io });
+  assert.equal(out.ok, true);
+});
+
+test('a set with no generatedFor is refused when a revision is known', () => {
+  const gh = fakeGh();
+  assert.throws(
+    () => applyRun({ set: { issues: [], proposals: [] }, profile: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    (err) => err.isOpError === true
+  );
 });

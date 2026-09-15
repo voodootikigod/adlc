@@ -13,7 +13,9 @@
  */
 
 import { gateAction } from './gate.mjs';
-import { ACTION_CLASSES } from './floor.mjs';
+import { classifyIssue } from './classify.mjs';
+import { contentHash } from './content-hash.mjs';
+import { globMatch } from './cluster.mjs';
 import { executeActions } from './execute.mjs';
 
 /**
@@ -76,6 +78,47 @@ export function actionsFromSet(set) {
 }
 
 /**
+ * Re-derive, from the repository and a FRESHLY fetched issue, the facts the set
+ * merely claims.
+ *
+ * THE SET IS A PROPOSAL, NOT A CAPABILITY. It is a JSON file on disk that any
+ * caller can edit, so every security-relevant field in it — `frozen`,
+ * `contentHash` — is a claim rather than evidence. Trusting them lets an edited
+ * set unfreeze a protected path, or mint a fresh `contentHash` to buy a second
+ * review for unchanged code and repeat until one approves.
+ *
+ * So the write path recomputes both from the issue's real body at HEAD and
+ * refuses any action whose set disagrees. The set still chooses WHICH issues to
+ * act on; it no longer gets to say what is true about them.
+ *
+ * @returns {{ok: true}|{ok: false, reason: string}}
+ */
+export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) {
+  let issue;
+  try {
+    issue = fetchIssue(action.number);
+  } catch (err) {
+    return { ok: false, reason: `could not re-read issue #${action.number}: ${err.message}` };
+  }
+  if (!issue) return { ok: false, reason: `issue #${action.number} could not be re-read` };
+
+  const classified = classifyIssue(issue);
+  const paths = (classified.references ?? []).map((r) => r.path);
+  const fresh = contentHash(paths, io);
+
+  if (fresh !== action.contentHash) {
+    // Either the code moved under the set, or the set was edited. Both mean the
+    // verdict in hand does not describe what is there now.
+    return { ok: false, reason: `the issue's cited code no longer hashes to the set's contentHash (set ${action.contentHash}, now ${fresh})` };
+  }
+
+  const frozen = paths.some((path) => (profile?.frozenPaths ?? []).some((g) => globMatch(g, path)));
+  if (frozen) return { ok: false, reason: `issue #${action.number} cites a frozen path` };
+
+  return { ok: true };
+}
+
+/**
  * Gate every action, then execute the survivors.
  *
  * @param {object} o
@@ -87,12 +130,21 @@ export function actionsFromSet(set) {
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null } = {}) {
+export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {} } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
   // verdict was computed.
-  if (revision && set?.generatedFor && set.generatedFor !== revision) {
+  // REQUIRED, not merely checked when present: a set that omits generatedFor
+  // would otherwise skip the staleness check entirely, which is the shape a
+  // hand-crafted set takes.
+  if (revision && !set?.generatedFor) {
+    throw Object.assign(
+      new Error('backlog-groom: this groomed set declares no generatedFor revision — refusing to act on evidence whose revision cannot be checked'),
+      { isOpError: true }
+    );
+  }
+  if (revision && set.generatedFor !== revision) {
     throw Object.assign(
       new Error(
         `backlog-groom: this groomed set was generated for ${set.generatedFor}, but the repository is at ${revision} — re-run the read path before applying`
@@ -103,7 +155,15 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
 
   const proposed = actionsFromSet(set);
 
-  const gated = proposed.map((action) => {
+  const revalidated = [];
+  const stale = [];
+  for (const action of proposed) {
+    const check = fetchIssue ? revalidateAction(action, { fetchIssue, profile, io }) : { ok: true };
+    if (check.ok) revalidated.push(action);
+    else stale.push({ number: action.number, action: action.action, reason: check.reason });
+  }
+
+  const gated = revalidated.map((action) => {
     const gate = gateAction({ action, profile, ledger, runReview: () => runReview(action) });
     // Checkpoint BEFORE any write. A verdict that exists only in memory is a
     // verdict a crash erases, and the next run would review the same revision
@@ -123,6 +183,7 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
 
   return {
     proposed: proposed.length,
+    stale,
     ...result,
     // The demoted set is the interesting half of the report: it is where this
     // tool's judgment and an independent reviewer disagreed. Surfacing the

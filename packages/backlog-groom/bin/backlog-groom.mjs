@@ -24,7 +24,7 @@ import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, descri
 import { loadProfile, loadCache, saveCache, serialiseJson, baseFloorFromGit, loadLedger, saveLedger, acquireApplyLock } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
 import { makeGhWriter } from '../lib/gh.mjs';
-import { makeReviewRunner, reviewerPair, buildActionArtifact } from '../lib/gate.mjs';
+import { makeReviewRunner, reviewerPair, buildActionArtifact, artifactName } from '../lib/gate.mjs';
 
 /**
  * The operational-error exit code, named once and used by BOTH exit paths.
@@ -143,6 +143,8 @@ if (values.apply) {
       reviewer: pair.reviewer,
     })();
 
+  const ghIo = makeGhWriter({ spawn: spawnSync });
+
   let applied;
   try {
     applied = applyRun({
@@ -151,7 +153,10 @@ if (values.apply) {
       baseFloor,
       ledger,
       runReview,
-      gh: makeGhWriter({ spawn: spawnSync }),
+      gh: ghIo,
+      // Re-derive the set's security-relevant claims from the live issue and the
+      // repository, rather than trusting a JSON file any caller can edit.
+      fetchIssue: (n) => ghIo.issue(n),
       floorWideningAuthorized: values['authorize-floor-widening'],
       // The set describes one revision; acting on it at another closes issues on
       // evidence that no longer describes the code.
@@ -205,7 +210,7 @@ process.exitCode = 0;
 
 /** Write one action's review artifact and return its path. */
 function writeArtifact(dir, action) {
-  const path = join(dir, `action-${action.number}-${action.contentHash}.md`);
+  const path = join(dir, artifactName(action));
   writeFileSync(path, `${buildActionArtifact(action)}\n`);
   return path;
 }

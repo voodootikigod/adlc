@@ -20,6 +20,8 @@
  * nothing" are opposite facts that an exit-code truthiness check would merge.
  */
 
+import { createHash } from 'node:crypto';
+
 /** `adversarial-review` exit codes (its documented contract). */
 export const REVIEW_APPROVE = 0;
 export const REVIEW_NEEDS_ATTENTION = 2;
@@ -205,6 +207,20 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
  * The artifact carries the revision it is bound to, so the verdict recorded
  * against `(issue, contentHash)` describes the same thing the reviewer read.
  */
+/**
+ * A filesystem-safe name for one action's artifact.
+ *
+ * DERIVED, never interpolated from caller data. `contentHash` reaches this from
+ * a JSON file on disk, so a crafted value like `x/../../../etc/target` would
+ * make `join` resolve outside the scratch directory and truncate whatever is
+ * there. Hashing the pair gives a fixed-shape name with no separators and no
+ * dots to walk.
+ */
+export function artifactName(action) {
+  const digest = createHash('sha256').update(`${action?.number}:${action?.contentHash}`).digest('hex').slice(0, 32);
+  return `action-${digest}.md`;
+}
+
 export function buildActionArtifact(action) {
   return [
     `# Proposed ${action.action} — issue #${action.number}`,

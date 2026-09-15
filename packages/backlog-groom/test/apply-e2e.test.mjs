@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { contentHash } from '../lib/content-hash.mjs';
+
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
 /**
@@ -29,10 +31,39 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   mkdirSync(bin);
   const log = join(dir, 'gh.log');
 
+  // The issue the set will act on, cited against a file that really exists in
+  // this repo — the write path re-derives the contentHash from it, so a stub
+  // that answers with an empty object is refused (correctly) before any write.
+  const ISSUE = {
+    number: 705,
+    title: 'a real citation',
+    body: '**Location** `src/cited.mjs:1`\n\n```\nconst x = 1;\n```\n',
+    labels: [{ name: 'bug' }],
+    updatedAt: '2026-09-01T00:00:00Z',
+  };
+  // A heredoc, not `echo`: dash's echo interprets backslash escapes, so the \n
+  // inside the issue body would become a real newline and the JSON would arrive
+  // corrupt — which the write path then reports as an unreadable issue.
   writeFileSync(
     join(bin, 'gh'),
-    `#!/bin/sh\necho "$@" >> ${log}\n` +
-      `case "$2" in\n  view) echo '{"comments":[]}' ;;\n  *) ${ghFails ? 'exit 1' : 'echo ok'} ;;\nesac\n`
+    [
+      '#!/bin/sh',
+      `echo "$@" >> ${log}`,
+      'case "$*" in',
+      '  *"--json comments"*)',
+      "    cat <<'JSON'",
+      '{"comments":[]}',
+      'JSON',
+      '    ;;',
+      '  *view*)',
+      "    cat <<'JSON'",
+      JSON.stringify(ISSUE),
+      'JSON',
+      '    ;;',
+      `  *) ${ghFails ? 'exit 1' : 'echo ok'} ;;`,
+      'esac',
+      '',
+    ].join('\n')
   );
   chmodSync(join(bin, 'gh'), 0o755);
 
@@ -49,16 +80,22 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   git('config', 'user.name', 'test');
   git('config', 'commit.gpgsign', 'false');
   writeFileSync(join(dir, 'seed.txt'), 'seed\n');
-  if (profile) git('add', '-A');
-  else writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'cited.mjs'), 'const x = 1;\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'seed', '--no-gpg-sign');
   // A real remote-tracking ref: the floor's comparison ref is resolved from the
   // REPOSITORY, never from a flag, so the fixture has to provide the thing the
   // resolver looks for rather than pointing the tool at a branch of its choosing.
   git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  // The hash the write path will recompute. Derived the same way the tool does,
+  // so the fixture cannot drift from the implementation's definition of it.
+  const hash = contentHash(['src/cited.mjs'], {
+    readFile: (f) => spawnSync('git', ['show', `${head}:${f}`], { cwd: dir, encoding: 'utf8' }).stdout,
+  });
 
-  return { dir, bin, log };
+  return { dir, bin, log, head, hash };
 }
 
 function run(args, { dir, bin }) {
@@ -71,14 +108,24 @@ function run(args, { dir, bin }) {
 
 const ghCalls = (box) => (existsSync(box.log) ? readFileSync(box.log, 'utf8').trim().split('\n').filter(Boolean) : []);
 
+/**
+ * Only the calls that CHANGE something.
+ *
+ * `issue view` is how the write path re-derives the set's claims, so a run that
+ * reads several issues and writes nothing is the correct shape for a refusal —
+ * asserting on every gh call would count those reads as writes.
+ */
+const ghWrites = (box) => ghCalls(box).filter((c) => /^issue (comment|close|edit)\b/.test(c));
+
 /** A groomed set with exactly one closable issue. */
-function setFile(box, { contentHash = 'h1' } = {}) {
+function setFile(box, { hash = box.hash } = {}) {
   const p = join(box.dir, 'groomed.json');
   writeFileSync(
     p,
     JSON.stringify({
-      schemaVersion: 2,
-      issues: [{ number: 705, verdict: 'fixed', contentHash, evidence: 'the cited line is gone', labels: [], units: [] }],
+      schemaVersion: 3,
+      generatedFor: box.head,
+      issues: [{ number: 705, verdict: 'fixed', contentHash: hash, evidence: 'the cited line is gone', frozen: false, labels: [], units: [] }],
       proposals: [],
     })
   );
@@ -107,7 +154,7 @@ test('with no declared providers the reviewer is never spawned and nothing is wr
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(ghCalls(box), [], 'no reviewer, no writes');
+  assert.deepEqual(ghWrites(box), [], 'no reviewer, no writes');
   assert.match(r.stderr, /demote/i);
   // git's own diagnostics must not leak into the operator's stderr. The default
   // runner pipes stdout and IGNORES stderr precisely so a missing profile at the
@@ -126,8 +173,7 @@ test('a floored close is never written, even with an approving reviewer', () => 
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
-  const calls = ghCalls(box);
-  assert.equal(calls.filter((c) => c.startsWith('issue close')).length, 0, 'the floor must block the close');
+  assert.deepEqual(ghWrites(box), [], 'the floor must block the close');
   const out = JSON.parse(r.stdout);
   assert.equal(out.demoted[0].reason, 'floor');
 });
@@ -141,7 +187,7 @@ test('an approved, unfloored close comments first and then closes', () => {
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
 
-  const calls = ghCalls(box).filter((c) => !c.startsWith('review'));
+  const calls = ghWrites(box);
   const commentAt = calls.findIndex((c) => c.startsWith('issue comment'));
   const closeAt = calls.findIndex((c) => c.startsWith('issue close'));
   assert.ok(commentAt >= 0, `expected a comment, got: ${JSON.stringify(calls)}`);
@@ -157,9 +203,7 @@ test('a reviewer that refuses blocks the close entirely', () => {
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
-  const calls = ghCalls(box);
-  assert.equal(calls.filter((c) => c.startsWith('issue close')).length, 0);
-  assert.equal(calls.filter((c) => c.startsWith('issue comment')).length, 0, 'a refused action leaves no trace');
+  assert.deepEqual(ghWrites(box), [], 'a refused action leaves no trace');
 });
 
 test('a reviewer that ERRORS blocks the close — an error is not an approve', () => {
@@ -170,7 +214,7 @@ test('a reviewer that ERRORS blocks the close — an error is not an approve', (
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(ghCalls(box).filter((c) => c.startsWith('issue close')).length, 0);
+  assert.deepEqual(ghWrites(box), []);
 });
 
 test('the gate ledger persists, so a second run does not re-review the same revision', () => {
@@ -201,7 +245,7 @@ test('an unwritable ledger FAILS the run rather than warning', () => {
   const r = run(['--apply', '--set', set, '--ledger', join(box.dir, 'nope', 'ledger.json')], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /ledger/i);
-  assert.equal(ghCalls(box).filter((c) => c.startsWith('issue')).length, 0, 'nothing may be written');
+  assert.deepEqual(ghWrites(box), [], 'nothing may be written');
 });
 
 test('a corrupt ledger refuses the run instead of starting from empty', () => {
@@ -214,7 +258,7 @@ test('a corrupt ledger refuses the run instead of starting from empty', () => {
   writeFileSync(ledger, '{ truncated');
   const r = run(['--apply', '--set', set, '--ledger', ledger], box);
   assert.equal(r.status, 1);
-  assert.deepEqual(ghCalls(box), [], 'a ledger that cannot prove a revision was reviewed must stop the run');
+  assert.deepEqual(ghWrites(box), [], 'a ledger that cannot prove a revision was reviewed must stop the run');
 });
 
 test('a held apply lock refuses a concurrent run', () => {
@@ -228,7 +272,7 @@ test('a held apply lock refuses a concurrent run', () => {
   const r = run(['--apply', '--set', set, '--ledger', ledger], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /lock/i);
-  assert.deepEqual(ghCalls(box), []);
+  assert.deepEqual(ghWrites(box), []);
 });
 
 test('a set generated for a different revision is refused', () => {
@@ -251,7 +295,7 @@ test('a set generated for a different revision is refused', () => {
   const r = run(['--apply', '--set', p], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /generated for/i);
-  assert.deepEqual(ghCalls(box), []);
+  assert.deepEqual(ghWrites(box), []);
 });
 
 test('an issue whose cited paths are frozen is never auto-actioned', () => {
@@ -264,13 +308,14 @@ test('an issue whose cited paths are frozen is never auto-actioned', () => {
     p,
     JSON.stringify({
       schemaVersion: 3,
-      issues: [{ number: 705, verdict: 'fixed', contentHash: 'h1', evidence: 'gone', frozen: true, labels: [], units: [] }],
+      generatedFor: box.head,
+      issues: [{ number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', frozen: true, labels: [], units: [] }],
       proposals: [],
     })
   );
   const r = run(['--apply', '--set', p], box);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(ghCalls(box), [], 'a frozen path means no action at all, not even a review');
+  assert.deepEqual(ghWrites(box), [], 'a frozen path means no action at all, not even a review');
 });
 
 test('the apply path exposes no way to choose the floor comparison ref', () => {
@@ -297,10 +342,11 @@ test('each action is reviewed with its OWN artifact, not the whole set', () => {
   writeFileSync(
     p,
     JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      generatedFor: box.head,
       issues: [
-        { number: 705, verdict: 'fixed', contentHash: 'h705', evidence: 'gone', labels: [], units: [] },
-        { number: 706, verdict: 'fixed', contentHash: 'h706', evidence: 'also gone', labels: [], units: [] },
+        { number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', frozen: false, labels: [], units: [] },
+        { number: 706, verdict: 'fixed', contentHash: box.hash, evidence: 'also gone', frozen: false, labels: [], units: [] },
       ],
       proposals: [],
     })

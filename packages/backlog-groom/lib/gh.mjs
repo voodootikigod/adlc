@@ -28,6 +28,12 @@ export function makeGhWriter({ spawn } = {}) {
   };
 
   return {
+    /** The issue as it is NOW — body and labels included, for re-validation. */
+    issue: (number) => {
+      const raw = gh(['issue', 'view', String(number), '--json', 'number,title,body,labels,updatedAt']);
+      const parsed = JSON.parse(raw);
+      return { ...parsed, labels: (parsed.labels ?? []).map((l) => l.name ?? l) };
+    },
     comments: (number) => {
       const raw = gh(['issue', 'view', String(number), '--json', 'comments']);
       let parsed;
