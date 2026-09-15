@@ -1673,3 +1673,48 @@ test('parseArgs: does not intercept help if options explicitly declares it', () 
   });
   assert.equal(parsed.values.help, true);
 });
+
+// ── value-substitute fallback operator (#1013) ───────────────────────────────
+//
+// generateMutants reported a plainly mutable line as unmutable, so hollow-test's
+// diff-scoped gate refused the run as unverifiable. These pin both the fix and
+// the two constraints that keep it from producing FALSE gate failures.
+
+const subsOf = (src) =>
+  generateMutants(src, { maxMutants: 1000 }).filter((m) => m.operator === 'value-substitute');
+
+test('value-substitute: a const bound to a call is mutable (#1013)', () => {
+  const subs = subsOf('const tag = randomUUID();\n');
+  assert.equal(subs.length, 1, 'exactly one value-substitute mutant');
+  assert.equal(subs[0].mutated, 'const tag = undefined;');
+});
+
+test('value-substitute: does NOT double-cover a line an existing operator handles (#1013)', () => {
+  // `if (a > b) {` is invert-comparison's; the fallback must stay out of its way,
+  // or every already-covered line gains a second, redundant mutant.
+  const src = 'if (a > b) {\n';
+  assert.ok(generateMutants(src).length > 0, 'an existing operator still covers it');
+  assert.equal(subsOf(src).length, 0, 'the fallback added nothing');
+});
+
+test('value-substitute: skips let/var — those initializers are equivalent mutants (#1013)', () => {
+  // `let out = ''; … out = run();` is overwritten before it is read, so
+  // substituting survives while changing nothing: a false gate failure.
+  assert.equal(subsOf("let out = '';\n").length, 0, 'let is excluded');
+  assert.equal(subsOf('var x = f();\n').length, 0, 'var is excluded');
+  assert.equal(subsOf('const y = f();\n').length, 1, 'const is still covered');
+});
+
+test('value-substitute: skips a const already bound to the sentinel (#1013)', () => {
+  assert.equal(subsOf('const x = undefined;\n').length, 0);
+  assert.equal(subsOf('const x = null;\n').length, 0);
+});
+
+test('value-substitute: does not resurrect import lines (SKIP_LINE unchanged) (#1013)', () => {
+  assert.equal(subsOf("import { randomUUID } from 'node:crypto';\n").length, 0);
+});
+
+test('value-substitute is not also a primary operator — no double-cover by name (#1013)', () => {
+  assert.ok(!OPERATORS.some((o) => o.name === 'value-substitute'),
+    'the fallback must stay out of OPERATORS, or every covered line gains a redundant mutant');
+});
