@@ -15,10 +15,10 @@
 import { gateAction } from './gate.mjs';
 import { classifyIssue } from './classify.mjs';
 import { contentHash } from './content-hash.mjs';
-import { globMatch } from './cluster.mjs';
+import { globMatch, unitsForIssue } from './cluster.mjs';
 import { verifyIssue } from './verify.mjs';
 import { executeActions } from './execute.mjs';
-import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed } from './floor.mjs';
+import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed, assertPolicyUnchanged } from './floor.mjs';
 
 /**
  * Actions the emitted set proposes, in the shape the gate and executor expect.
@@ -121,26 +121,11 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
   const frozen = paths.some((path) => (profile?.frozenPaths ?? []).some((g) => globMatch(g, path)));
   if (frozen) return { ok: false, reason: `issue #${action.number} cites a frozen path` };
 
-  // RELABEL TARGETS ARE RE-DERIVED, not taken from the set. `from`/`to` go
-  // straight into `gh issue edit --remove-label/--add-label`, so a crafted set
-  // could otherwise strip or attach any label it liked on any issue it names.
-  if (action.action === 'relabel') {
-    const priority = Object.values(profile?.labels?.priority ?? {});
-    const areaPrefix = profile?.labels?.areaPrefix ?? 'area:';
-    const units = (profile?.units ?? []).map((u) => `${areaPrefix}${u.name}`);
-    const sanctioned = new Set([...priority, ...units]);
+  const recomputed = verifyIssue(classified, io);
 
-    if (!sanctioned.has(action.to)) {
-      return { ok: false, reason: `relabel target ${JSON.stringify(action.to)} is not a label this profile declares` };
-    }
-    if (action.from && !sanctioned.has(action.from)) {
-      return { ok: false, reason: `relabel source ${JSON.stringify(action.from)} is not a label this profile declares` };
-    }
-    // And the label being removed must actually be on the issue right now.
-    const current = (issue.labels ?? []).map((l) => l?.name ?? l);
-    if (action.from && !current.includes(action.from)) {
-      return { ok: false, reason: `issue #${action.number} does not currently carry ${JSON.stringify(action.from)}` };
-    }
+  if (action.action === 'relabel') {
+    const relabel = revalidateRelabel(action, { issue, classified, recomputed, profile });
+    if (!relabel.ok) return relabel;
   }
 
   // The issue's own revision, not only the code's. A body or label edited after
@@ -158,12 +143,76 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
   // the set describes the right thing; they say nothing about whether its
   // CONCLUSION is right. Without this, a hand-written set can claim `fixed` for
   // an issue whose defect is still there, pass every other check, and close it.
-  const recomputed = verifyIssue(classified, io);
   if (action.verdict && recomputed.verdict !== action.verdict) {
     return { ok: false, reason: `the set claims verdict ${action.verdict} for issue #${action.number}, but re-verification says ${recomputed.verdict}` };
   }
   if (action.action === 'close' && recomputed.verdict !== 'fixed') {
     return { ok: false, reason: `a close needs a re-verified 'fixed' verdict; issue #${action.number} re-verifies as ${recomputed.verdict}` };
+  }
+
+  return { ok: true };
+}
+
+/** The two relabel triggers §3.4a defines; nothing else produces a relabel. */
+export const RELABEL_FIELDS = Object.freeze(['priority', 'area']);
+
+/**
+ * Re-derive a relabel's terms, rather than taking them from the set.
+ *
+ * `from`/`to` go straight into `gh issue edit --remove-label/--add-label`, and
+ * `field` is part of the one-shot key, so each is a claim to check:
+ *
+ *  - FIELD is one of the two triggers, exactly. A free-form field is a free key:
+ *    `priority`, `Priority` and `priority ` would be three one-shot slots for one
+ *    relabel, and three reviews to ask until one approves.
+ *  - Both labels belong to THAT field's class, so a priority slot cannot carry an
+ *    area move or the reverse.
+ *  - FROM is required and differs from TO. A relabel with no source only adds, and
+ *    stacks a second priority label beside the first.
+ *  - An AREA target is DERIVED: §3.4a calls it mechanically provable, so it must
+ *    be proven here — the verified locations sit in exactly one unit, and the
+ *    target is that unit. A declared label is not evidence the code lives there.
+ *    A priority target is a rank judgment over the whole backlog and cannot be
+ *    re-derived from one issue; it stays the reviewer's to judge.
+ *
+ * @returns {{ok: true}|{ok: false, reason: string}}
+ */
+export function revalidateRelabel(action, { issue, classified, recomputed, profile } = {}) {
+  const refuse = (reason) => ({ ok: false, reason: `relabel on issue #${action?.number}: ${reason}` });
+
+  if (!RELABEL_FIELDS.includes(action?.field)) {
+    return refuse(`field ${JSON.stringify(action?.field)} is not one of ${RELABEL_FIELDS.join(', ')}`);
+  }
+  if (typeof action.from !== 'string' || action.from === '') return refuse('a relabel must name the label it replaces');
+  if (action.from === action.to) return refuse(`source and target are both ${JSON.stringify(action.to)}`);
+
+  const areaPrefix = profile?.labels?.areaPrefix ?? 'area:';
+  const units = profile?.units ?? [];
+  const classLabels = action.field === 'priority'
+    ? new Set(Object.values(profile?.labels?.priority ?? {}))
+    : new Set(units.map((u) => `${areaPrefix}${u.name}`));
+
+  if (!classLabels.has(action.to)) {
+    return refuse(`target ${JSON.stringify(action.to)} is not a ${action.field} label this profile declares`);
+  }
+  if (!classLabels.has(action.from)) {
+    return refuse(`source ${JSON.stringify(action.from)} is not a ${action.field} label this profile declares`);
+  }
+
+  // The label being removed must actually be on the issue right now.
+  const current = (issue?.labels ?? []).map((l) => l?.name ?? l);
+  if (!current.includes(action.from)) {
+    return refuse(`the issue does not currently carry ${JSON.stringify(action.from)}`);
+  }
+
+  if (action.field === 'area') {
+    const inUnits = unitsForIssue(recomputed, classified, units);
+    if (inUnits.length !== 1) {
+      return refuse(`the issue's verified locations do not sit in exactly one unit (${inUnits.length}), so no area move is provable`);
+    }
+    if (action.to !== `${areaPrefix}${inUnits[0]}`) {
+      return refuse(`the verified locations sit in ${areaPrefix}${inUnits[0]}, not ${JSON.stringify(action.to)}`);
+    }
   }
 
   return { ok: true };
@@ -176,12 +225,14 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
  * @param {object} o.set - an emitted groomed set
  * @param {object} o.profile - parsed profile
  * @param {string[]|null} o.baseFloor - the floor at the merge base
+ * @param {object|null} o.basePolicy - the profile at the merge base; its
+ *   providers, labels and units must equal the working copy's
  * @param {object} o.ledger - the replay ledger (persisted by the caller)
  * @param {Function} o.runReview - injected reviewer, called with the ACTION so
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null } = {}) {
+export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
@@ -219,6 +270,11 @@ export function applyRun({ set, profile, baseFloor, ledger = {}, runReview, gh, 
   if (baseFrozenPaths !== null) {
     assertFrozenPathsNotNarrowed({ base: baseFrozenPaths, head: profile.frozenPaths ?? [], authorized: floorWideningAuthorized });
   }
+  // The rest of the policy is the base's too. The reviewer and the sanctioned
+  // relabel targets are authorization terms, so a working copy that changes them
+  // is the person being checked choosing how they are checked. REQUIRED: an
+  // omitted base fails closed instead of skipping the comparison.
+  assertPolicyUnchanged({ base: basePolicy, head: profile });
 
   // NO FAIL-OPEN SEAM. Without a way to re-read the issue there is no way to
   // check the set's claims, and proceeding would trust a file on disk for every

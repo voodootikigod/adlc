@@ -325,3 +325,97 @@ test('deepClone rejects numeric-looking keys JSON does not treat as indices', ()
   // Canonical indices are of course fine.
   assert.deepEqual(deepClone(Object.assign([], { 0: 'a', 1: 'b' })), ['a', 'b']);
 });
+
+// ── planCreateBatch: the atomic multi-ticket write path (#1003) ──────────────
+//
+// Edges live on the BLOCKING ticket and name their dependent, and schema.mjs
+// rejects an edge to an unknown ticket — so a loop of planCreate cannot build a
+// multi-level DAG in forward order at all, and in reverse order it is still
+// non-atomic. One #plan call lets validateTickets see the whole set.
+
+const batchTicket = (id, edges = []) => ({ ...ticket(id), edges });
+
+test('planCreateBatch: a multi-level DAG applies in one transaction (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-'));
+  try {
+    const path = writeDirectory(root, []);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    const plan = service.planCreateBatch([
+      batchTicket('T1', [{ to: 'T2' }]),
+      batchTicket('T2', [{ to: 'T3' }]),
+      batchTicket('T3'),
+    ]);
+    assert.equal(plan.operation, 'batch-create');
+    const after = service.apply(plan);
+    for (const id of ['T1', 'T2', 'T3']) assert.ok(after.get(id), `${id} present`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('planCreateBatch: looping planCreate forward CANNOT build the same DAG (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-loop-'));
+  try {
+    const path = writeDirectory(root, []);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    // T1 blocks T2, so T1's edge names a ticket that does not exist yet.
+    assert.throws(() => service.apply(service.planCreate(batchTicket('T1', [{ to: 'T2' }]))),
+      (e) => e.code === 'INVALID_TICKET_STORE',
+      'validateTickets rejects the forward edge — the defect planCreateBatch exists to fix');
+    // …and the same three tickets DO land when planned as one batch.
+    const ok = service.apply(service.planCreateBatch([
+      batchTicket('T1', [{ to: 'T2' }]), batchTicket('T2'),
+    ]));
+    assert.ok(ok.get('T1') && ok.get('T2'), 'the batch path builds what the loop cannot');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('planCreateBatch: an id already in the store is rejected and nothing is written (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-exists-'));
+  try {
+    const path = writeDirectory(root, [ticket('A')]);
+    const store = new DirectoryTicketStore(path);
+    const service = new TicketService(store, { root });
+    const before = store.load().hash;
+    assert.throws(() => service.planCreateBatch([batchTicket('B'), batchTicket('A')]),
+      (e) => e.code === 'TICKET_EXISTS' && /\bA\b/.test(e.message),
+      'the error must name the ticket that actually collided, not merely throw');
+    assert.equal(store.load().hash, before, 'store untouched');
+    // A batch that collides with NOTHING must still apply against a non-empty
+    // store — the inverse case, without which "does this id exist" passing is
+    // indistinguishable from "does any other id exist".
+    const ok = service.apply(service.planCreateBatch([batchTicket('B')]));
+    assert.ok(ok.get('A') && ok.get('B'), 'non-colliding batch lands beside existing tickets');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('planCreateBatch: a duplicate id within the batch is rejected (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-dupe-'));
+  try {
+    const path = writeDirectory(root, []);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    assert.throws(() => service.planCreateBatch([batchTicket('X'), batchTicket('X')]),
+      (e) => e.code === 'TICKET_EXISTS');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('planCreateBatch: a non-array or empty batch is rejected (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-empty-'));
+  try {
+    const path = writeDirectory(root, []);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    assert.throws(() => service.planCreateBatch([]), (e) => e.code === 'INVALID_BATCH');
+    assert.throws(() => service.planCreateBatch('nope'), (e) => e.code === 'INVALID_BATCH');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('planCreateBatch: the plan is store-scoped, carrying no per-ticket binding (#1003)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-batch-scope-'));
+  try {
+    const path = writeDirectory(root, []);
+    const service = new TicketService(new DirectoryTicketStore(path), { root });
+    const plan = service.planCreateBatch([batchTicket('P'), batchTicket('Q')]);
+    assert.equal(plan.ticketId, null, 'ticketId null => recordTicketEvidence derives bindingScope "store"');
+    assert.deepEqual(plan.fileOperations.map((f) => f.id).sort(), ['P', 'Q']);
+    assert.deepEqual(plan.changedFields, ['edges', 'id', 'rails', 'scope', 'title'],
+      'changedFields is the sorted union of keys across the batch');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

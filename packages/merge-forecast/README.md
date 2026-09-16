@@ -11,7 +11,7 @@ merge-forecast [options]
 
 Options:
   --tickets <path>           Path to tickets JSON (default: .adlc/tickets.json)
-  --width <N>                Desired fan-out width; gate fails (exit 2) if > certifiedWidth
+  --width <N>                Desired fan-out width; gate fails (exit 2) if > firstWaveWidth
   --build-min <X>            Mean ticket build time in minutes (for backpressure width)
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes
   --co-change-limit <N>      Git log depth for co-change mining (default: 500)
@@ -27,7 +27,7 @@ Options:
 |------|---------|
 | 0    | Gate passes — schedule is safe at the recommended width |
 | 1    | Operational error — bad tickets file, unresolvable input |
-| 2    | Gate fails — `--width` exceeds certifiedWidth, or vetoed/high-risk pair scheduled concurrently |
+| 2    | Gate fails — `--width` exceeds firstWaveWidth, or vetoed/high-risk pair scheduled concurrently |
 
 ## Signals
 
@@ -45,9 +45,11 @@ Pairs at or above `--conflict-threshold` get a `SEQUENCE` verdict. Below thresho
 
 ## Width Analysis
 
-- **certifiedWidth** — greedy largest independent set among wave-1 tickets (tickets where all pairs are below threshold).
+- **firstWaveWidth** — greedy largest independent set among **wave-1** tickets (tickets where all pairs are below threshold). Answers *how wide can I dispatch right now*. This is the number `--width` is gated against.
+- **scheduleWidth** — the same computation applied to **every** wave, taking the widest. Answers *how wide can this schedule ever go*. For a foundation-first DAG, wave 1 holds a single ticket, so `firstWaveWidth` is 1 while `scheduleWidth` reports the fan-out behind it.
+- **certifiedWidth** — *deprecated alias of `firstWaveWidth`*, retained for existing consumers. It tracks wave 1, not `scheduleWidth`.
 - **backpressureWidth** — `round(buildMin / mergeMin)` when both flags are given. Derived from integrator-lane throughput: if builds complete faster than merges absorb them, queue depth compounds.
-- **recommendedWidth** — `min(certifiedWidth, backpressureWidth?, --width?)`.
+- **recommendedWidth** — `min(firstWaveWidth, backpressureWidth?, --width?)`.
 
 ## Schedule
 

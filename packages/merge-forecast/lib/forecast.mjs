@@ -44,6 +44,8 @@ export async function runForecast(opts) {
       pairs: [],
       waves: [],
       mergeOrder: [],
+      firstWaveWidth: 0,
+      scheduleWidth: 0,
       certifiedWidth: 0,
       backpressureWidth: null,
       recommendedWidth: 0,
@@ -131,9 +133,24 @@ export async function runForecast(opts) {
   const waves = topoWaves(tickets);
   const order = mergeOrder(tickets);
 
-  // CertifiedWidth: greedy largest set of pairwise-below-threshold tickets in wave 1
+  // Two different questions, two different numbers (#997).
+  //
+  // firstWaveWidth answers "how wide can I dispatch RIGHT NOW" — the greedy
+  // largest set of pairwise-below-threshold tickets in wave 1. It is what the
+  // --width gate has always measured, and it stays that way.
+  //
+  // scheduleWidth answers "how wide can this schedule EVER go" — the same
+  // computation over every wave, taking the widest. For a foundation-first DAG
+  // (ADLC.md D2) wave 1 holds one ticket, so firstWaveWidth is 1 while the
+  // fan-out wave behind it may support many; reporting only the former told
+  // operators the graph was serial when it was not.
   const wave1 = waves[0] ?? [];
-  const certifiedWidth = computeCertifiedWidth(wave1, pairResults, conflictThreshold);
+  const firstWaveWidth = computeWaveWidth(wave1, pairResults, conflictThreshold);
+  const scheduleWidth = waves.reduce(
+    (widest, wave) =>
+      Math.max(widest, computeWaveWidth(wave, pairResults, conflictThreshold)),
+    0
+  );
 
   // BackpressureWidth
   const backpressureWidth =
@@ -142,7 +159,7 @@ export async function runForecast(opts) {
       : null;
 
   // RecommendedWidth
-  const candidates = [certifiedWidth];
+  const candidates = [firstWaveWidth];
   if (backpressureWidth !== null) candidates.push(backpressureWidth);
   if (width !== null) candidates.push(width);
   const recommendedWidth = Math.min(...candidates);
@@ -150,10 +167,13 @@ export async function runForecast(opts) {
   // Gate failures
   const gateFailures = [];
 
-  // Fail if --width exceeds certifiedWidth
-  if (width !== null && width > certifiedWidth) {
+  // Fail if --width exceeds the wave-1 number (see #997: the gate is
+  // deliberately measured against wave 1, not scheduleWidth)
+  if (width !== null && width > firstWaveWidth) {
     gateFailures.push(
-      `--width ${width} exceeds certifiedWidth ${certifiedWidth}`
+      `--width ${width} exceeds firstWaveWidth ${firstWaveWidth} — this gate ` +
+        `measures wave 1 only (what can be dispatched now), not the whole ` +
+        `schedule, whose widest wave is scheduleWidth ${scheduleWidth}`
     );
   }
 
@@ -187,7 +207,12 @@ export async function runForecast(opts) {
     pairs: pairResults,
     waves,
     mergeOrder: order,
-    certifiedWidth,
+    firstWaveWidth,
+    scheduleWidth,
+    // Deprecated alias of firstWaveWidth, kept because external consumers read
+    // it (see README). It tracks wave 1, NOT scheduleWidth — repointing it
+    // would silently change the meaning of every existing reader.
+    certifiedWidth: firstWaveWidth,
     backpressureWidth,
     recommendedWidth,
     warnings,
@@ -197,17 +222,19 @@ export async function runForecast(opts) {
 }
 
 /**
- * Greedy largest set of pairwise-below-threshold tickets from a wave.
- * Build the conflict graph among wave1 tickets, then find a greedy independent set.
+ * Greedy largest set of pairwise-below-threshold tickets from ONE wave.
+ * Build the conflict graph among that wave's tickets, then find a greedy
+ * independent set. Nothing here is specific to wave 1 — it is called once for
+ * wave 1 (firstWaveWidth) and once per wave (scheduleWidth).
  */
-function computeCertifiedWidth(wave1Ids, pairResults, threshold) {
-  if (wave1Ids.length === 0) return 0;
+function computeWaveWidth(waveIds, pairResults, threshold) {
+  if (waveIds.length === 0) return 0;
 
-  // Build conflict adjacency set among wave1 tickets
+  // Build conflict adjacency set among this wave's tickets
   const conflicted = new Set();
   for (const pr of pairResults) {
     if (pr.score >= threshold || pr.hardVeto) {
-      if (wave1Ids.includes(pr.a) && wave1Ids.includes(pr.b)) {
+      if (waveIds.includes(pr.a) && waveIds.includes(pr.b)) {
         conflicted.add(`${pr.a}|${pr.b}`);
         conflicted.add(`${pr.b}|${pr.a}`);
       }
@@ -220,12 +247,12 @@ function computeCertifiedWidth(wave1Ids, pairResults, threshold) {
 
   // Greedy: try each ticket as a starting point and build the largest set
   let best = 0;
-  for (let start = 0; start < wave1Ids.length; start++) {
+  for (let start = 0; start < waveIds.length; start++) {
     const chosen = [];
     // Start from `start` index to vary greedy seed
     const order = [
-      ...wave1Ids.slice(start),
-      ...wave1Ids.slice(0, start),
+      ...waveIds.slice(start),
+      ...waveIds.slice(0, start),
     ];
     for (const id of order) {
       if (!hasConflict(id, chosen)) chosen.push(id);

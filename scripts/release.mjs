@@ -25,6 +25,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 // tooling. No published @adlc/* package gains a runtime dependency from it —
 // see the note on relativeSpecifiers for why a real parser is required here.
 import { parse } from 'acorn';
+import { buildCursorMcp as defaultBuildCursorMcp } from './build-cursor-mcp.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PKGS = join(ROOT, 'packages');
@@ -827,6 +828,7 @@ export function releaseMain(
     // step 5's fail-closed behavior is testable at all.
     packImpl = defaultPackImpl,
     isPublished = defaultIsPublished,
+    cursorMcpBuilder = defaultBuildCursorMcp,
   } = {}
 ) {
   const version = argv[0];
@@ -930,6 +932,22 @@ export function releaseMain(
   // Omitting this is the bug that left the lockfile at 1.0.2 (npm ci broke).
   regenerateLockfile(root);
   console.log('regenerated package-lock.json');
+
+  // Generated Cursor MCP artifacts embed package versions, so rebuild after
+  // version writes and before any drift, packaging, or publish check.
+  const cursorWrapperSource = join(pluginsDir, 'adlc-cursor', 'bin', 'adlc-mcp-wrapper.mjs');
+  if (existsSync(cursorWrapperSource)) {
+    try {
+      cursorMcpBuilder({ root, write: true });
+      console.log('regenerated Cursor MCP metadata and bundle');
+    } catch (err) {
+      console.error(`Cursor MCP build failed — aborting before drift/publish checks: ${err.message}`);
+      return 1;
+    }
+  } else if (root === ROOT) {
+    console.error(`Cursor MCP build source missing — refusing production release: ${cursorWrapperSource}`);
+    return 1;
+  }
 
   // 3. Fail closed on any residual drift — a missed package.json or a stale
   // lockfile aborts the release instead of shipping an inconsistent suite.

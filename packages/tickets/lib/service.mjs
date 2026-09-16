@@ -113,6 +113,62 @@ export class TicketService {
     });
   }
 
+  /**
+   * Plan the creation of MANY tickets as one transaction (#1003).
+   *
+   * Not sugar over planCreate in a loop. Edges live on the BLOCKING ticket and
+   * name their dependent, and validateTickets rejects an edge to an unknown
+   * ticket — so a forward-order loop cannot build a multi-level DAG at all, and
+   * a reverse-topological one is still non-atomic (a failure at k leaves k-1
+   * tickets active) and emits N unrelated-looking audit entries for one logical
+   * operation. Pushing the whole set inside ONE #plan call is what lets
+   * validateTickets see the complete graph.
+   *
+   * The plan is deliberately STORE-scoped: `ticketId` is null, so
+   * recordTicketEvidence derives `bindingScope: 'store'` and the transaction
+   * records one `batch-create` entry with the store hashes. Per-ticket
+   * provenance belongs to the caller's own gate entries, NOT here — emitting a
+   * derived id array would put `ticketIds` into AUDIT_FIELDS, where
+   * auditFieldsMatch compares it byte-for-byte against a recovery replay.
+   */
+  planCreateBatch(inputs = []) {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw invalid('INVALID_BATCH', 'planCreateBatch requires a non-empty array of tickets');
+    }
+    const batch = inputs.map((input) => {
+      const ticket = deepClone(input);
+      if (!ticket.id) ticket.id = generateTicketId();
+      return ticket;
+    });
+    // Duplicates inside the batch, before any store guard runs: two identical
+    // ids would otherwise reach #plan and only the second would be seen.
+    const seen = new Set();
+    for (const ticket of batch) {
+      if (seen.has(ticket.id)) throw conflict('TICKET_EXISTS', `duplicate id within batch: ${ticket.id}`);
+      seen.add(ticket.id);
+    }
+    // The same guards planCreate runs before mutating — omitting either opens an
+    // unguarded write door past #235.
+    for (const ticket of batch) {
+      this.#assertIdNotArchived(ticket.id);
+      this.#assertNoManifestRails(ticket.rails);
+    }
+    const changedFields = [...new Set(batch.flatMap((ticket) => Object.keys(ticket)))].sort();
+    return this.#plan('batch-create', (tickets) => {
+      for (const ticket of batch) {
+        if (tickets.some((item) => item.id === ticket.id)) {
+          throw conflict('TICKET_EXISTS', `ticket already exists: ${ticket.id}`);
+        }
+      }
+      tickets.push(...batch);
+      return {
+        ticketId: null,
+        changedFields,
+        fileOperations: batch.map((ticket) => ({ action: 'create', id: ticket.id })),
+      };
+    });
+  }
+
   planUpdate(id, input, { expect, authorized = false } = {}) {
     return this.#plan('update', (tickets, snapshot) => {
       const index = tickets.findIndex((ticket) => ticket.id === id);

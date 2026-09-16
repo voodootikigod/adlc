@@ -54,12 +54,25 @@ export function parseMarker(text) {
   return m ? { number: Number(m[1]), action: m[2], contentHash: m[3] } : null;
 }
 
+/**
+ * Evidence with every HTML-comment opener neutralised.
+ *
+ * The resume check looks for a marker inside our own comments, and the evidence
+ * is set-supplied text that lands in those comments. Evidence carrying another
+ * action's marker would make that action find "its" trail on the issue and act
+ * with none. Escaping `<!--` means the only marker a comment can hold is the one
+ * `renderComment` appends.
+ */
+function neutraliseMarkers(text) {
+  return String(text).replaceAll('<!--', '&lt;!--');
+}
+
 /** The comment body: the evidence, the rationale, and the marker. */
 export function renderComment(action) {
   return [
     `**backlog-groom — ${action.action}**`,
     '',
-    action.evidence ?? '(no evidence recorded)',
+    neutraliseMarkers(action.evidence ?? '(no evidence recorded)'),
     '',
     action.gate?.reviewer ? `Reviewed by \`${action.gate.reviewer}\` (distinct from the deciding provider).` : '',
     marker(action.number, action.contentHash, action.action),

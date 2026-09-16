@@ -10,7 +10,7 @@
  * Exit codes:
  *   0  gate passes
  *   1  operational error (bad tickets file, not a git repo for co-change)
- *   2  gate fails (--width > certifiedWidth, or vetoed pair concurrent)
+ *   2  gate fails (--width > firstWaveWidth, or vetoed pair concurrent)
  */
 
 import { parseArgs, loadTickets, pass, opError, printJson } from '@adlc/core';
@@ -40,7 +40,8 @@ Usage:
 
 Options:
   --tickets <path>           Path to tickets JSON (default: .adlc/tickets.json)
-  --width <N>                Desired fan-out width; exit 2 if > certifiedWidth
+  --width <N>                Desired fan-out width; exit 2 if > firstWaveWidth
+                             (wave 1 only, not the whole schedule)
   --build-min <X>            Mean ticket build time in minutes (for backpressure)
   --merge-min <Y>            Mean merge-rebase-regreen time in minutes
   --co-change-limit <N>      Git log depth for co-change mining (default: 500)
@@ -52,7 +53,7 @@ Options:
 Exit codes:
   0  Gate passes
   1  Operational error (bad tickets file, etc.)
-  2  Gate fails (--width > certifiedWidth, vetoed pair concurrent)
+  2  Gate fails (--width > firstWaveWidth, vetoed pair concurrent)
 `);
   process.exit(0);
 }
@@ -106,7 +107,8 @@ if (ticketErrors.length > 0) {
   if (cycle) {
     const message = `dependency ${cycle} — cannot schedule`;
     const result = {
-      pairs: [], waves: [], mergeOrder: [], certifiedWidth: 0,
+      pairs: [], waves: [], mergeOrder: [],
+      firstWaveWidth: 0, scheduleWidth: 0, certifiedWidth: 0,
       backpressureWidth: null, recommendedWidth: 0, warnings: [],
       gateFailures: [message],
       pullQueueNote: 'idle builders claim next unblocked',

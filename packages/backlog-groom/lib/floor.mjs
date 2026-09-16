@@ -153,3 +153,38 @@ export function assertFrozenPathsNotNarrowed({ base, head, authorized = false } 
     `backlog-groom: frozenPaths no longer covers ${removed.join(', ')} — unfreezing a path is a privileged change and needs explicit trust-root authorization.`
   );
 }
+
+/** The profile keys, beyond the floor and frozen paths, that set authorization terms. */
+export const POLICY_KEYS = Object.freeze(['providers', 'labels', 'units']);
+
+/** JSON with object keys sorted at every depth, so key order is not a difference. */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Refuse a working copy whose reviewer or relabel vocabulary differs from the base.
+ *
+ * `providers.reviewer` becomes `adversarial-review --provider <reviewer>`, which
+ * accepts any local command, and `labels`/`units` are the only labels a relabel
+ * may target. Read from the working copy, each is a term of the check chosen by
+ * the person being checked. There is no safe direction to change them in, so
+ * unlike the floor this is equality, not an asymmetry.
+ *
+ * @param {{base: object|null, head: object}} o
+ */
+export function assertPolicyUnchanged({ base, head } = {}) {
+  if (typeof base !== 'object' || base === null || Array.isArray(base)) {
+    throw opError('backlog-groom: could not read the profile at the merge base — refusing to act on an unknown reviewer and label policy');
+  }
+  const changed = POLICY_KEYS.filter((key) => canonical(base[key]) !== canonical(head?.[key]));
+  if (changed.length === 0) return head;
+  throw opError(
+    `backlog-groom: ${changed.join(', ')} differ from the merge base — the reviewer and the labels a relabel may target are ` +
+      'authorization terms, so a change to them must land on the default branch before --apply uses it.'
+  );
+}

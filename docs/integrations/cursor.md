@@ -189,11 +189,18 @@ These are the real residual gaps after the native-parity build — no overstatem
   actually abort the Write on the target platform?) — maintainer harness under
   [`scripts/cursor-deny-proof/`](../../scripts/cursor-deny-proof/README.md); dated results in
   [ADR 0006](../adr/0006-adlc-cursor-integration.md).
-- **MCP channel unverified.** `mcp.json` ships a lifecycle Roots proxy
-  (`bin/adlc-mcp-wrapper.mjs` → `adlc mcp-server` with resolved consumer cwd;
-  tools `adlc_gate` / `adlc_prosecute`). Until an installed-Cursor Roots proof
-  is recorded (incl. multi-root refuse), status is **wrapper landed / channel
-  unverified** — not MCP shipped.
+- **MCP one-root channel proven; rebind and live ambiguity unverified.** A
+  2026-09-14 live test on Cursor
+  Desktop 3.20.10 proved `${CURSOR_PLUGIN_ROOT}` expansion in `args` and `cwd`,
+  bundle startup without plugin-cache `node_modules` or a consumer-workspace
+  shim, and a successful `roots/list` response. Cursor returned the Root `uri`
+  as a bare absolute path rather than `file://`; this release accepts both
+  forms while rejecting relative paths and non-file schemes. The post-fix run
+  bound successfully, exposed `adlc_gate` and `adlc_prosecute`, and
+  `adlc_gate gate-manifest show` returned `ok` with `exitCode: 0`. That Cursor
+  build advertised `roots.listChanged: false`, so rebind remains unverified,
+  and multi-root refusal has not been exercised live. Do not claim MCP fully
+  shipped.
 - **Prosecutor agents packaged-but-unverified.** Prefer Task fan-out via
   `agents/prosecutor-*` (fresh context). Sequential same-context remains a
   degraded fallback with **weaker independence**. Agents-backed publication
@@ -220,8 +227,9 @@ publish the plugin listing.
 ## Before submit
 
 1. Wave gates honest:
-   - MCP: **wrapper landed / channel unverified** until installed-Cursor Roots
-     proof (AC7) is recorded in ADR-0006 — do **not** claim MCP shipped.
+   - MCP: **one-root channel proven / rebind and live ambiguity unverified**
+     until rebind and live multi-root proofs are recorded in ADR-0006 — do
+     **not** claim MCP fully shipped.
    - Agents: **packaged-but-unverified** until AC10 installed-Cursor fan-out
      proof — do **not** claim agents-backed P5.
    - T67 subagent hooks + T68 deny-proof harness must be present; live deny

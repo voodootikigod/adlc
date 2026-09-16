@@ -35,13 +35,19 @@ in-session (no API keys). Prefer that over wiring providers.
 **Enforcement honesty:** Cursor `preToolUse` deny is best-effort. The
 unbypassable control is the CI rail-freeze gate (`docs/ci/rails-guard.yml`).
 
-**MCP tools (packaged):** the plugin ships `mcp.json` → a lifecycle Roots
-proxy (`bin/adlc-mcp-wrapper.mjs`) that spawns `adlc mcp-server` only after
-resolving a consumer root. Tools: `adlc_gate`, `adlc_prosecute`. Requires
-`adlc` on PATH (`npm i -g @adlc/cli`). Status until an installed-Cursor Roots
-proof is recorded: **wrapper landed / channel unverified** — do not treat MCP
-as production-shipped. Never guess `process.cwd()`; multi-root ambiguity fails
-closed.
+**MCP tools (packaged):** the plugin ships `mcp.json`, which asks Cursor to
+expand `${CURSOR_PLUGIN_ROOT}` and launch a bundled lifecycle Roots proxy. The
+launcher needs no plugin-cache `node_modules`. Cursor Desktop 3.20.10 live
+proof confirms expansion in `args` and `cwd`, bundle boot, and a `roots/list`
+response carrying a bare absolute-path `uri`; the proxy accepts that form and
+`file://` URIs. The post-fix run bound, exposed `adlc_gate` and
+`adlc_prosecute`, and `adlc_gate gate-manifest show` returned `ok` with
+`exitCode: 0`. It spawns `adlc mcp-server` only after resolving a consumer
+root. Requires a global `@adlc/cli` installation resolvable by Cursor's
+Node/npm environment (`npm i -g @adlc/cli`), without launching a Windows
+`.cmd` shim. Rebind and live multi-root refusal remain unverified — do not treat
+MCP as production-shipped. Never guess
+`process.cwd()`; multi-root ambiguity fails closed.
 
 **P5 caveat:** prefer Task fan-out via packaged `agents/prosecutor-*` (fresh
 context per lens). Sequential same-context is a **degraded fallback** with

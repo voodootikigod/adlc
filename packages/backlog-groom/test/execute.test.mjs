@@ -7,11 +7,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { marker, parseMarker, planAction, executeActions } from '../lib/execute.mjs';
-import { gateKey } from '../lib/gate.mjs';
+import { gateKey, artifactDigest } from '../lib/gate.mjs';
 
-/** A ledger holding a real approve bound to this action's revision. */
+/** A ledger holding a real approve bound to this action's revision and reviewed artifact. */
 function ledgerFor(action, verdict = 'approve') {
-  return { [gateKey(action)]: { verdict, contentHash: action.contentHash, number: action.number, action: action.action } };
+  return { [gateKey(action)]: { verdict, contentHash: action.contentHash, number: action.number, action: action.action, artifactDigest: artifactDigest(action) } };
 }
 
 const approved = (over = {}) => ({

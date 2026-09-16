@@ -9,6 +9,7 @@
     "apps/*"
   ],
   "scripts": {
+    "build:cursor-mcp": "node scripts/build-cursor-mcp.mjs",
     "test": "node scripts/run-tests.mjs",
     "preflight": "node scripts/preflight.mjs",
     "release": "node scripts/release.mjs"
@@ -20,6 +21,7 @@
     "@earendil-works/pi-coding-agent": "0.80.3",
     "@opencode-ai/plugin": "^1.17.13",
     "acorn": "^8.17.0",
+    "esbuild": "0.28.1",
     "typescript": "^5.4.5"
   },
   "license": "MIT"
