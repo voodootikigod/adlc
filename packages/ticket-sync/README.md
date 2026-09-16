@@ -21,6 +21,9 @@ adlc-ticket-sync --help
 | `adlc-ticket-sync doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |
 
 Dry-run by default — pass `--write` to apply. `--json` on all commands.
+`--limit <n>` caps how many issues `pull`/`push`/`sync` list from the tracker
+(default 500). A listing that reaches the cap is refused as possibly truncated
+rather than synced, so raise it (or narrow `select` in config) when that happens.
 Exit codes: `0` ok · `1` operational · `2` blocked.
 
 ```bash
