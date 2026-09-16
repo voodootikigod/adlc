@@ -10,7 +10,6 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync,
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
-import { DEFAULT_AUTONOMY_FLOOR } from './floor.mjs';
 
 /** The profile schema version a bare, profile-less repo is treated as declaring. */
 export const IMPLIED_SCHEMA_VERSION = 1;
@@ -121,7 +120,10 @@ export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef =
   } catch {
     return null;
   }
-  if (!present) return { autonomyFloor: [...DEFAULT_AUTONOMY_FLOOR], frozenPaths: [] };
+  // The WHOLE default profile, not just the floor: the base supplies every
+  // authorization term the write path compares against — reviewer and relabel
+  // vocabulary included — and an absent profile's terms are the defaults.
+  if (!present) return parseProfile({ schemaVersion: IMPLIED_SCHEMA_VERSION });
 
   let raw;
   try {
@@ -214,6 +216,32 @@ export function saveLedger(path, ledger, io = {}) {
 /** How long an owner-less lock may sit before it is presumed abandoned. */
 export const STALE_LOCK_MS = 60 * 60 * 1000;
 
+/** Identity and mtime of the lock directory, or null when it cannot be read. */
+function lockStat(path, { stat = statSync } = {}) {
+  try {
+    const st = stat(path);
+    return { ino: st.ino, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the directory at `claimed` is the lock that was judged stale.
+ *
+ * A lock with an owner is identified by its owner file, byte for byte — a fresh
+ * holder writes a new pid and start time. An owner-less lock has nothing to
+ * compare but the directory itself, so its inode and mtime must both match.
+ */
+function sameLock(claimed, judged, { read, io }) {
+  let raw = null;
+  try { raw = read(`${claimed}/owner.json`); } catch { /* absent */ }
+  if (raw !== judged.ownerRaw) return false;
+  if (judged.ownerRaw !== null) return true;
+  const now = lockStat(claimed, io);
+  return Boolean(now && judged.stat && now.ino === judged.stat.ino && now.mtimeMs === judged.stat.mtimeMs);
+}
+
 /** Age of the lock directory, or null when it cannot be determined. */
 function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
   try {
@@ -247,8 +275,12 @@ export function acquireApplyLock(path, io = {}) {
   try {
     take();
   } catch (err) {
+    let ownerRaw = null;
+    try { ownerRaw = read(ownerFile); } catch { /* an unreadable owner is an unknown owner */ }
     let owner = null;
-    try { owner = JSON.parse(read(ownerFile)); } catch { /* an unreadable owner is an unknown owner */ }
+    try { owner = ownerRaw === null ? null : JSON.parse(ownerRaw); } catch { /* an unparseable owner is an unknown owner */ }
+    // What was judged stale, so the claim below can prove it took THAT lock.
+    const judged = { ownerRaw, stat: lockStat(path, io) };
 
     // An owner-less lock is normally treated as live — but a process killed
     // between `mkdir` and writing the metadata leaves one permanently, with
@@ -280,6 +312,18 @@ export function acquireApplyLock(path, io = {}) {
     } catch (claimErr) {
       throw Object.assign(
         new Error(`backlog-groom: another run recovered the stale lock at ${path} first (${claimErr.code ?? claimErr.message})`),
+        { isOpError: true }
+      );
+    }
+    // The rename moves whatever is at the path NOW, which is only the lock judged
+    // stale if nobody recovered it in between. A recoverer that lost that race has
+    // just moved the WINNER's live lock, and clearing it would put two runs in one
+    // transaction. So prove the claim before clearing it, and hand a lock that is
+    // not the judged one straight back.
+    if (!sameLock(claimed, judged, { read, io })) {
+      try { rename(claimed, path); } catch { /* best effort: the holder's own release clears its path */ }
+      throw Object.assign(
+        new Error(`backlog-groom: another run recovered the stale lock at ${path} first — the lock now there is live, and was left in place`),
         { isOpError: true }
       );
     }

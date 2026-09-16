@@ -108,6 +108,13 @@ test('--apply with --set is accepted', () => {
   assert.equal(validateApplyArgs({ apply: true, set: 'groomed.json' }), null);
 });
 
+test('--apply with --profile is refused, and --profile alone is not', () => {
+  // The merge-base policy is read from git at the working profile's path, so a
+  // caller-chosen path is a caller-chosen baseline. The read path keeps the flag.
+  assert.match(validateApplyArgs({ apply: true, set: 'groomed.json', profile: 'alt.json' }), /--profile cannot be used with --apply/);
+  assert.equal(validateApplyArgs({ profile: 'alt.json' }), null);
+});
+
 test('without --apply the set is not required', () => {
   // The read path must stay usable with no write flags at all; demanding --set
   // unconditionally would make the read-only mode unreachable.
