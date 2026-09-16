@@ -67,7 +67,8 @@ export function formatForecast(result) {
   lines.push('');
   lines.push('── Width Analysis ────────────────────────────────────────────────');
   lines.push('');
-  lines.push(`  Certified width  : ${result.certifiedWidth}`);
+  lines.push(`  First-wave width : ${result.firstWaveWidth} (dispatchable now)`);
+  lines.push(`  Schedule width   : ${result.scheduleWidth} (widest wave)`);
   if (result.backpressureWidth !== null) {
     lines.push(`  Backpressure width: ${result.backpressureWidth}`);
   }

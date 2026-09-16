@@ -178,3 +178,117 @@ describe('merge-forecast CLI parameter validation', () => {
     });
   });
 });
+
+// ─── #997: the help text's claims about the width gate must be TRUE ──────────
+//
+// Renaming certifiedWidth → firstWaveWidth touched three help lines that assert
+// things about the binary's behaviour: which exit code the width gate uses,
+// that the comparison is strict, and that it measures wave 1 rather than the
+// whole schedule. Those claims are PARSED out of --help and checked against
+// what the binary actually does, following
+// packages/spec-lint/test/readme-exit-codes.test.mjs — so a prose rewording is
+// free, but a claim that stops being true is not.
+describe('merge-forecast CLI --help documents the width gate truthfully (#997)', () => {
+  function help() {
+    const res = spawnSync(process.execPath, [CLI, '--help'], {
+      encoding: 'utf8', cwd: repoRoot,
+    });
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    return res.stdout;
+  }
+
+  // Foundation-first DAG: wave 1 is T0 alone, wave 2 is T1 + T2 (disjoint
+  // scopes, no conflict). So firstWaveWidth is 1 and scheduleWidth is 2 — the
+  // gap that makes "wave 1 only" a checkable claim rather than a slogan.
+  function withDag(fn) {
+    const dir = mkdtempSync(join(tmpdir(), 'mf-cli-997-'));
+    const ticketsFile = join(dir, 'tickets.json');
+    writeFileSync(ticketsFile, JSON.stringify({
+      tickets: [
+        { id: 'T0', title: 'foundation', scope: ['packages/aa/**'], edges: [{ to: 'T1' }, { to: 'T2' }] },
+        { id: 'T1', title: 'one', scope: ['packages/bb/**'] },
+        { id: 'T2', title: 'two', scope: ['packages/cc/**'] },
+      ],
+    }));
+    try {
+      fn(ticketsFile);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function runWidth(ticketsFile, width) {
+    return spawnSync(
+      process.execPath,
+      [CLI, '--tickets', ticketsFile, '--width', String(width), '--json'],
+      { encoding: 'utf8', cwd: repoRoot }
+    );
+  }
+
+  test('the --width entry is listed with its placeholder and its gate claim', () => {
+    // Same contract as the --graph-coupling entry above: the options table is
+    // user-facing, so a dropped or garbled entry is a real regression.
+    assert.match(
+      help(),
+      /^\s*--width <N>\s+Desired fan-out width; exit \d+ if > firstWaveWidth$/m
+    );
+  });
+
+  test('the exit code the help documents is the exit code the binary produces', () => {
+    const m = help().match(/--width <N>\s+Desired fan-out width; exit (\d+) if > firstWaveWidth/);
+    assert.ok(m, 'help does not document an exit code for the width gate');
+    const documented = Number(m[1]);
+
+    withDag((ticketsFile) => {
+      const res = runWidth(ticketsFile, 2);
+      assert.equal(
+        res.status, documented,
+        `help promises exit ${documented}; binary exited ${res.status}`
+      );
+    });
+  });
+
+  test('the comparison the exit-code table documents predicts the boundary', () => {
+    const m = help().match(/Gate fails \(--width (\S+) firstWaveWidth,/);
+    assert.ok(m, 'the exit-code table does not state the width comparison');
+    const op = m[1];
+
+    // Evaluate the DOCUMENTED rule at width === firstWaveWidth (which is 1 for
+    // this DAG) and hold the binary to it, rather than asserting the operator
+    // spelling. A strict '>' predicts the gate passes there; anything
+    // inclusive predicts it fails.
+    const predictsFailure = { '>': false, '>=': true, '<': true, '<=': true }[op];
+    assert.notEqual(predictsFailure, undefined, `unrecognized comparison in help: ${op}`);
+
+    withDag((ticketsFile) => {
+      const res = runWidth(ticketsFile, 1);
+      assert.equal(
+        res.status === 2, predictsFailure,
+        `help documents "--width ${op} firstWaveWidth" but at width === firstWaveWidth the binary exited ${res.status}`
+      );
+    });
+  });
+
+  test('the help claims the gate measures wave 1 only, and the binary agrees', () => {
+    const m = help().match(/\(wave (\d+) only, not the whole schedule\)/);
+    assert.ok(m, 'help does not state which wave the gate measures');
+    const documentedWave = Number(m[1]);
+
+    withDag((ticketsFile) => {
+      const res = runWidth(ticketsFile, 2);
+      const parsed = JSON.parse(res.stdout);
+
+      // The gate must reject a width the SCHEDULE could support but wave 1
+      // cannot — otherwise "not the whole schedule" is false.
+      assert.equal(parsed.scheduleWidth, 2);
+      assert.equal(parsed.firstWaveWidth, 1);
+      assert.equal(res.status, 2);
+
+      // And the wave the help names must be the one whose width bounds it.
+      assert.equal(
+        parsed.waves[documentedWave - 1].length, parsed.firstWaveWidth,
+        `help says wave ${documentedWave}, but the gate is bounded by wave 1`
+      );
+    });
+  });
+});
