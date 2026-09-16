@@ -81,10 +81,20 @@ for (const [label, args, expected] of [
   });
 }
 
-test('--help documents --limit', () => {
+/** The default `--help` promises, as the number it prints. */
+function helpStatedDefault() {
   const r = runBin(['--help']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /--limit <n>/);
+  const m = /^--limit <n> caps how many issues pull\/push list from the tracker \(default (\d+)\)\.$/m.exec(r.stdout);
+  assert.ok(m, `--help must describe --limit and its default, got:\n${r.stdout}`);
+  return m[1];
+}
+
+test('--help documents --limit in the usage line and describes it', () => {
+  const r = runBin(['--help']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /\[--limit <n>\] \[--json\]/);
+  helpStatedDefault();
 });
 
 /**
@@ -138,12 +148,15 @@ for (const sub of ['pull', 'push']) {
     assert.equal(limitOf(calls[0]), '1000');
   });
 
-  test(`${sub} without --limit keeps the provider default of 500`, () => {
+  test(`${sub} without --limit keeps the provider default, which is the one --help states`, () => {
     const repo = repoWithFakeGh();
     const r = repo.run([sub]);
     const calls = repo.listCalls();
     assert.equal(calls.length, 1, `expected one issue list call, got ${JSON.stringify(calls)}; stderr: ${r.stderr}`);
     assert.equal(limitOf(calls[0]), '500');
+    // An operator deciding how far to raise the cap reads the default from --help;
+    // a stated default that differs from the real one sends them the wrong way.
+    assert.equal(helpStatedDefault(), limitOf(calls[0]));
   });
 }
 
