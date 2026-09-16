@@ -18,6 +18,7 @@ import {
   reviewArgv,
   buildActionArtifact,
   ledgerApproves,
+  artifactDigest,
 } from '../lib/gate.mjs';
 
 const action = (over = {}) => ({ number: 7, action: 'close', contentHash: 'abc123', evidence: 'the cited lines are gone', ...over });
@@ -305,7 +306,11 @@ test('AC14: a THROWN review is recorded, so it cannot be retried until it passes
 
 test('ledgerApproves requires an approve bound to the same issue AND revision', () => {
   const a = action();
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action } }, a), true);
+  const digest = artifactDigest(a);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action, artifactDigest: digest } }, a), true);
+  // An entry that does not name the artifact it approved approves nothing.
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action } }, a), false);
+  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action, artifactDigest: artifactDigest({ ...a, evidence: 'other' }) } }, a), false);
   assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'demote', contentHash: a.contentHash, number: a.number, action: a.action } }, a), false);
   assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: 'other', number: a.number, action: a.action } }, a), false);
   assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action } }, a), false);

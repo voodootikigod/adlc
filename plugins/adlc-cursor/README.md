@@ -45,10 +45,17 @@ project files.
 - **`afterFileEdit` audit** — observational rail + flail notice.
 - **`beforeShellExecution` advisory** — honesty nudge; never denies.
 - **`stop` / `beforeSubmitPrompt`** — stop-audit + preflight (Cursor-documented).
-- **MCP (wrapper landed / channel unverified)** — `mcp.json` runs the Roots
-  proxy (`bin/adlc-mcp-wrapper.mjs`) then `adlc mcp-server` with the resolved
-  consumer cwd. Exposes `adlc_gate` / `adlc_prosecute`. Missing `adlc` on PATH
-  surfaces as Cursor's normal MCP start failure (`npm i -g @adlc/cli`).
+- **MCP (one-root channel proven / rebind unverified)** — a live test on
+  Cursor Desktop 3.20.10 proved `${CURSOR_PLUGIN_ROOT}` expansion in `args` and
+  `cwd`, bundled startup without plugin-cache `node_modules` or a consumer
+  shim, and a `roots/list` response. The post-fix run bound, exposed
+  `adlc_gate` / `adlc_prosecute`, and returned `ok` / `exitCode: 0` for
+  `adlc_gate gate-manifest show`. The proxy accepts Cursor's bare absolute-path
+  Root values as well as `file://` URIs, then runs `adlc mcp-server` with the
+  resolved consumer cwd. It requires a global `@adlc/cli` installation
+  resolvable by Cursor's Node/npm environment (`npm i -g @adlc/cli`) and never
+  launches a Windows `.cmd` shim. `roots/list_changed` rebind and live
+  multi-root refusal remain unverified.
 - **Skills** — `adlc` phase router + `adlc-init`.
 - **Command palette** — `/adlc-init`, `/adlc-ticket`, `/adlc-spec`,
   `/adlc-approve-spec`, `/adlc-decompose`, `/adlc-verify-build`,

@@ -311,7 +311,7 @@ export const CURSOR_INTEGRATION = {
   slug: 'cursor',
   name: 'Cursor',
   status: 'marketplace',
-  tagline: 'Marketplace plugin with sessionStart context, preToolUse rails, packaged prosecutor agents + MCP wrapper (channel unverified), /adlc-* commands, and CI as the backstop.',
+  tagline: 'Marketplace plugin with sessionStart context, preToolUse rails, packaged prosecutor agents + one-root MCP channel live proven on Cursor 3.20.10; rebind and live multi-root ambiguity not proven, /adlc-* commands, and CI as the backstop.',
   install: [
     '# Cursor → Settings → Plugins → Add marketplace:',
     '#   https://github.com/voodootikigod/adlc',
@@ -384,8 +384,8 @@ export const CURSOR_INTEGRATION = {
       key: 'mcp',
       count: 2,
       label: 'MCP tools',
-      title: 'Wrapper landed / channel unverified',
-      detail: 'mcp.json runs a Roots proxy to adlc mcp-server. Do not claim MCP shipped until installed-Cursor Roots proof.',
+      title: 'One-root channel proven / not fully shipped',
+      detail: 'mcp.json runs a Roots proxy to adlc mcp-server. One-root MCP is live proven on Cursor 3.20.10; rebind and live multi-root ambiguity are not proven. Do not claim MCP fully shipped.',
       items: ['adlc_gate', 'adlc_prosecute'],
     },
     {

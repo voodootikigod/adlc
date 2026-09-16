@@ -75,7 +75,7 @@ existing required job instead).
 
 | Capability | CC | Codex | OC | Pi | Cursor | agy | Copilot |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Model-callable gate tool | ✅ MCP (`adlc_gate`/`adlc_prosecute`) | ✅ MCP | ✅ native plugin tool | ✅ native tool | ❌ commands only | ❌ skill/CLI only | ✅ MCP (`adlc_gate`/`adlc_prosecute`) via `.mcp.json` → `adlc mcp-server`; headless-MCP caveat #633 |
+| Model-callable gate tool | ✅ MCP (`adlc_gate`/`adlc_prosecute`) | ✅ MCP | ✅ native plugin tool | ✅ native tool | ⚠️ one-root MCP channel live proven on Cursor 3.20.10 (`adlc_gate`/`adlc_prosecute`); rebind and live multi-root ambiguity not proven, so MCP is not fully shipped | ❌ skill/CLI only | ✅ MCP (`adlc_gate`/`adlc_prosecute`) via `.mcp.json` → `adlc mcp-server`; headless-MCP caveat #633 |
 | Keyless LLM-backed gates | ✅ `--prompt-only` | ✅ `--prompt-only` | ✅ live keyless child-session bridge | ✅ keyless via session model | ✅ `--prompt-only` | ✅ `--prompt-only` | ✅ `--prompt-only` |
 | Commands / phase suite | ✅ `/adlc:*` (5) | ✅ `$adlc*` skills (6) | ✅ `/adlc-*` full suite | ✅ `/adlc-*` + `/ticket` + accept/rollback | ✅ `/adlc-*` full suite | ⚠️ commands auto-convert to skills | ✅ skills suite (`adlc`, `adlc-init`, `adlc-ticket`, `adlc-prosecute`, `adlc-distill`, `adlc-maintain`) |
 

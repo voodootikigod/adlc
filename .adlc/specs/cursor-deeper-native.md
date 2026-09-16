@@ -341,17 +341,20 @@ raw `adlc mcp-server` (direct wiring is a packaging/smoke failure):
   "mcpServers": {
     "adlc": {
       "command": "node",
-      "args": ["./bin/adlc-mcp-wrapper.mjs"]
+      "args": ["${CURSOR_PLUGIN_ROOT}/bin/adlc-mcp-wrapper.bundle.mjs"],
+      "cwd": "${CURSOR_PLUGIN_ROOT}"
     }
   }
 }
 ```
 
-Exact relative wrapper path may be `./bin/...` or `./lib/...` under
-`plugins/adlc-cursor/` as shipped — smoke asserts the entry invokes the
-wrapper module, not `["mcp-server"]` on the `adlc` binary. The wrapper
-resolves consumer root then `spawn`s `adlc mcp-server` with that cwd.
-Document that a missing `adlc` on PATH yields Cursor’s normal MCP start
+The plugin-root-anchored bundled path and cwd are required. Cursor's plugin
+cache does not run `npm install`, so the launcher bundles its JavaScript
+dependencies and embeds generated version metadata; it must not require
+plugin-cache `node_modules` or read a neighboring `package.json`. Smoke asserts
+the entry invokes the bundle, not `["mcp-server"]` on the `adlc` binary. The
+wrapper resolves the consumer root, then `spawn`s `adlc mcp-server` with that
+cwd. Document that a missing `adlc` on PATH yields Cursor’s normal MCP start
 failure; skills/README tell the user to `npm i -g @adlc/cli`.
 
 **Consumer workspace for MCP (binding):** `packages/cli/lib/mcp-server.mjs`
@@ -377,18 +380,29 @@ exists (`roots/list` is post-initialize). Do **not** claim Roots as a
 pre-spawn source unless T65 ships a **lifecycle-aware MCP proxy** that
 completes initialize, requests Roots, then forwards to `adlc mcp-server`.
 
-**Mandatory shipped path (T65 lifecycle proxy):** after initialize, negotiate
-capabilities; if client lacks roots, fail closed (do not fall back to guessing
-cwd). Request `roots/list`; decode each Root `uri` from `file://`
-(percent-decoding; Windows `file:///C:/...` / `file://localhost/C:/...`
-forms) into normalized absolute paths before the sessionStart algorithm.
-If `listChanged` is false, still fail closed on any observed root drift that
-cannot be refreshed. On `notifications/roots/list_changed` (when supported):
-stop accepting new tool calls, re-request/reclassify Roots, fail closed on
-ambiguity, drain/terminate the old child, rebind (generation-bound) before
-resuming; in-flight calls must not mutate the stale root. Expanding
-`ALLOWED_GATES` or editing frozen `mcp-server.mjs` remains out of scope.
-AC7 fixtures must use real `roots/list` Root objects (not bare path strings).
+**Mandatory shipped path (T65 lifecycle proxy):** reply to `initialize`, then
+wait for the client's `notifications/initialized` before requesting
+`roots/list`. Queue early `tools/list` / `tools/call` requests until Roots bind;
+a Roots JSON-RPC error or refused resolution must explicitly fail every queued
+request. If the client lacks roots, fail closed (do not fall back to guessing
+cwd). Decode each Root object's `uri` from either `file://` (percent-decoding;
+Windows `file:///C:/...` / `file://localhost/C:/...`) or a bare absolute POSIX,
+Windows drive, or Cursor `/c:/...` path. Reject bare Root strings, relative
+paths, and non-file URI schemes.
+
+Real `roots/list` results are the exclusive production workspace-root channel:
+do not merge ambient `CURSOR_PROJECT_DIR` into them. Keep store-selection env
+such as `ADLC_TICKET_STORE` available to the shared T64 classifier. Every Roots
+request has a unique generation/request id; stale responses are ignored and
+must never rebind an old path. If `listChanged` is false, still fail closed on
+any observed root drift that cannot be refreshed. On
+`notifications/roots/list_changed` (when supported), explicitly fail queued and
+already-forwarded in-flight client requests, retire the old child, request and
+classify fresh Roots, fail closed on ambiguity, and rebind before resuming.
+Track only real forwarded client request ids and remove each id when the child
+replies. Expanding `ALLOWED_GATES` or editing frozen `mcp-server.mjs` remains
+out of scope. AC7 fixtures must use real `roots/list` Root objects (not bare
+path strings).
 
 Thin host-env wrapper may exist for local/dev unit tests only — not for
 "MCP shipped." T64 session-resolution records remain for hooks/AC17, not as
@@ -400,13 +414,15 @@ session-id handoff is evidenced. Thin host-env helpers are test-only.
 
 AC7 unit/subprocess MUST include: (a) host-env success without session id or
 cwd heuristics; (b) absent host env → fail closed even if cwd is ADLC-bearing
-(unrelated repo / plugin checkout). **Production ship gate (binding):** do not
-mark Cursor MCP as shipped in matrix/docs and do not complete T69 publication
-until an **installed-Cursor** proof records that the lifecycle Roots proxy
-resolves a consumer root (incl. multi-root ambiguity/refuse) without
-harness-injected env. Until that proof, MCP remains "wrapper landed / channel
-unverified." Host-env-only thin wrapper does not unlock shipped. Session-index MCP
-fallback stays locked until session-id handoff is evidenced.
+(unrelated repo / plugin checkout). **Production ship gate (binding):** Cursor
+Desktop 3.20.10 live proof on 2026-09-14 records plugin-root expansion, bundled
+boot without a shim or plugin-cache dependencies, one-root post-fix binding,
+both MCP tools, and `adlc_gate gate-manifest show` returning `ok` with
+`exitCode: 0`. Do not mark Cursor MCP fully shipped or complete T69 publication
+until live proof also covers multi-root ambiguity/refusal and `list_changed`
+rebind. This Cursor build advertised `listChanged: false`, so rebind could not
+be exercised. Host-env-only thin wrapper does not unlock shipped. Session-index
+MCP fallback stays locked until session-id handoff is evidenced.
 
 AC7 verification MUST launch through the **shipped `mcp.json` entry**
 (not a test-only argv root). Required now: host-env success; absent host env

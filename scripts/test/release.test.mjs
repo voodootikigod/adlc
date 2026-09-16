@@ -107,6 +107,47 @@ test('releaseMain bumps packages, versioned plugins, and root in lockstep', () =
   }
 });
 
+test('releaseMain invokes the Cursor MCP builder with the fixture root after version bump', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  const cursorBin = join(pluginsDir, 'adlc-cursor', 'bin');
+  mkdirSync(cursorBin);
+  writeFileSync(join(cursorBin, 'adlc-mcp-wrapper.mjs'), '// fixture wrapper\n');
+  const calls = [];
+  try {
+    const rc = releaseMain(['1.2.0'], {
+      root, packagesDir, pluginsDir, regenerateLockfile() {},
+      cursorMcpBuilder(options) { calls.push(options); },
+    });
+    assert.equal(rc, 0);
+    assert.deepEqual(calls, [{ root, write: true }]);
+    assert.equal(ver(join(pluginsDir, 'adlc-cursor', 'package.json')), '1.2.0');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('releaseMain --publish refuses stale embedded Cursor metadata before publish', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  const cursor = join(pluginsDir, 'adlc-cursor');
+  mkdirSync(join(cursor, 'bin'));
+  mkdirSync(join(cursor, 'lib'));
+  writeFileSync(join(cursor, 'bin', 'adlc-mcp-wrapper.mjs'), '// fixture wrapper\n');
+  writeFileSync(join(cursor, 'lib', 'mcp-build-metadata.mjs'), "pluginVersion: '1.0.0'\n");
+  let published = 0;
+  try {
+    const rc = releaseMain(['1.2.0', '--publish'], {
+      root, packagesDir, pluginsDir, regenerateLockfile() {},
+      cursorMcpBuilder({ root: builderRoot }) {
+        assert.equal(builderRoot, root);
+        const pluginVersion = ver(join(builderRoot, 'plugins', 'adlc-cursor', 'package.json'));
+        const embedded = readFileSync(join(builderRoot, 'plugins', 'adlc-cursor', 'lib', 'mcp-build-metadata.mjs'), 'utf8');
+        if (!embedded.includes(`pluginVersion: '${pluginVersion}'`)) throw new Error('stale embedded metadata');
+      },
+      publishImpl() { published += 1; },
+    });
+    assert.equal(rc, 1);
+    assert.equal(published, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('releaseMain repins internal @adlc deps, preserving range prefixes', () => {
   const { root, packagesDir, pluginsDir } = makeRepo();
   try {

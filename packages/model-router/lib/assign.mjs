@@ -17,7 +17,11 @@
  * 3. LADDER (has slack → cost-optimal)
  *    - float > 0
  *    → mode: 'ladder'
- *    → startTier: railDensity >= 0.5 ? 'cheap' : 'mid'
+ *    → startTier: railDensity >= CHEAP_TIER_MIN_DENSITY (0.5) ? 'cheap' : 'mid'
+ *
+ * The `floor` is consulted ONLY by Rule 1b. It is the frontier/P3 cutoff, not
+ * the cheap-tier threshold: a ticket that clears it starts its ladder according
+ * to CHEAP_TIER_MIN_DENSITY, which no flag moves (#700).
  */
 
 import { railDensity as computeRailDensity } from './density.mjs';
@@ -25,6 +29,9 @@ import { bestTierFromPriors } from './priors.mjs';
 import { assertFloor, DEFAULT_FLOOR } from './floor.mjs';
 
 const FRONTIER_CATEGORIES = new Set(['contract', 'spec', 'architecture']);
+
+/** Rail density at or above which a ladder ticket starts on the cheap tier. */
+export const CHEAP_TIER_MIN_DENSITY = 0.5;
 
 /**
  * Default per-tier token ceilings (ADLC.md D1: model-router emits
@@ -113,7 +120,7 @@ export function assignTicket(ticket, float, priors, floor = DEFAULT_FLOOR) {
   }
 
   // Rule 3: Has float → ladder (cost-optimal)
-  const startTier = density >= 0.5 ? 'cheap' : 'mid';
+  const startTier = density >= CHEAP_TIER_MIN_DENSITY ? 'cheap' : 'mid';
   return {
     id,
     tier: startTier,

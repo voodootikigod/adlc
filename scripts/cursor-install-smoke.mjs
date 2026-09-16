@@ -50,15 +50,22 @@ else {
   else {
     const mcp = JSON.parse(read(mcpPath));
     const adlc = mcp.mcpServers?.adlc;
+    const bundleArg = adlc?.args?.find((arg) => /adlc-mcp-wrapper\.bundle\.mjs$/.test(String(arg)));
     if (!adlc) fail('mcp.json missing mcpServers.adlc');
-    else if (adlc.command !== 'node' || !(adlc.args ?? []).some((a) => /adlc-mcp-wrapper\.mjs/.test(String(a)))) {
-      fail('mcp.json must launch node ./bin/adlc-mcp-wrapper.mjs (Roots proxy)');
-    } else if (JSON.stringify(adlc).includes('mcp-server')) {
+    else if (
+      adlc.command !== 'node'
+      || !bundleArg?.includes('${CURSOR_PLUGIN_ROOT}')
+      || !adlc.cwd?.includes('${CURSOR_PLUGIN_ROOT}')
+    ) {
+      fail('mcp.json must launch the bundled Roots proxy from ${CURSOR_PLUGIN_ROOT}');
+    } else if (/"command"\s*:\s*"adlc"|"mcp-server"/.test(JSON.stringify(adlc))) {
       fail('mcp.json must not wire raw adlc mcp-server (use the wrapper)');
-    } else ok('mcp.json wires Roots proxy wrapper');
+    } else ok('mcp.json wires plugin-root-anchored, bundled Roots proxy');
   }
   if (!existsSync(join(PLUGIN, 'bin', 'adlc-mcp-wrapper.mjs'))) fail('bin/adlc-mcp-wrapper.mjs missing');
   else ok('bin/adlc-mcp-wrapper.mjs present');
+  if (!existsSync(join(PLUGIN, 'bin', 'adlc-mcp-wrapper.bundle.mjs'))) fail('bin/adlc-mcp-wrapper.bundle.mjs missing');
+  else ok('bin/adlc-mcp-wrapper.bundle.mjs present');
   const manifest = JSON.parse(read(join(PLUGIN, '.cursor-plugin', 'plugin.json')));
   if (manifest.mcpServers !== './mcp.json') fail('.cursor-plugin/plugin.json mcpServers must be ./mcp.json');
   else ok('plugin.json discovers mcp.json');
@@ -423,6 +430,34 @@ else {
   if (!/\.cursor-plugin\/marketplace\.json|cursor marketplace|marketplace plugin/i.test(doc)) fail('cursor.md does not describe marketplace plugin install');
   else ok('cursor.md describes marketplace plugin install');
 }
+
+// ---- T65 docs: every surviving surface describes the bundled launch honestly ----
+for (const relativePath of [
+  'docs/integrations/cursor.md',
+  'apps/docs/content/docs/integrations/cursor.mdx',
+  'plugins/adlc-cursor/README.md',
+  'plugins/adlc-cursor/skills/adlc/SKILL.md',
+]) {
+  const body = read(join(ROOT, relativePath));
+  if (!/CURSOR_PLUGIN_ROOT/.test(body) || !/bundl/i.test(body)) {
+    fail(`${relativePath} must describe the bundled \${CURSOR_PLUGIN_ROOT} launch`);
+  } else if (!/node_modules/.test(body)) {
+    fail(`${relativePath} must state that plugin-cache node_modules is not required`);
+  } else if (!/unverified|pending/i.test(body)) {
+    fail(`${relativePath} must preserve the installed-Cursor proof caveat`);
+  } else ok(`${relativePath} documents the bundled MCP launch honestly`);
+}
+const capabilityMatrix = read(join(ROOT, 'docs', 'integrations', 'harness-capability-matrix.md'));
+if (!/one-root MCP channel live proven on Cursor 3\.20\.10/i.test(capabilityMatrix)) {
+  fail('harness-capability-matrix.md must record the qualified Cursor one-root MCP proof');
+} else if (!/rebind and live multi-root ambiguity not proven/i.test(capabilityMatrix)) {
+  fail('harness-capability-matrix.md must preserve the Cursor rebind and live multi-root caveat');
+} else if (!/MCP is not fully shipped/i.test(capabilityMatrix)) {
+  fail('harness-capability-matrix.md must not claim Cursor MCP is fully shipped');
+} else {
+  ok('harness-capability-matrix.md qualifies the Cursor MCP proof');
+}
+
 
 // ---- AC5: ADR exists and pins the Cursor hook facts ----
 const adrPath = join(ROOT, 'docs', 'adr', '0006-adlc-cursor-integration.md');

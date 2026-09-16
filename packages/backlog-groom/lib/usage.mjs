@@ -8,7 +8,7 @@
  * without a test noticing.
  */
 export const FLAGS = [
-  { name: 'profile', arg: 'path', help: 'profile JSON (default .claude/backlog-groom-profile.json)' },
+  { name: 'profile', arg: 'path', help: 'profile JSON (default .claude/backlog-groom-profile.json; not with --apply)' },
   { name: 'cache', arg: 'path', help: 'cache file (default .adlc/backlog-groom-cache.json; gitignored)' },
   { name: 'no-cache', arg: null, help: 'verify everything, ignoring and not writing the cache' },
   { name: 'threshold', arg: 'n', default: '0.2', help: 'relation candidate-filter threshold (default 0.2)' },
@@ -90,6 +90,13 @@ export function validateThreshold(raw) {
 export function validateApplyArgs(values = {}) {
   if (!values.apply) return null;
   if (!values.set) return '--apply requires --set <path> — the groomed set to act on';
+  // The base profile is read from git at the same path as the working one, so a
+  // caller-chosen path is a caller-chosen baseline: one absent at the merge base
+  // compares against the permissive defaults, and the committed floor, frozen
+  // paths and reviewer stop binding. Same reason --base-ref and --ledger are gone.
+  if (values.profile !== undefined) {
+    return '--profile cannot be used with --apply — the write path reads .claude/backlog-groom-profile.json, the file its merge-base policy is compared against';
+  }
   return null;
 }
 

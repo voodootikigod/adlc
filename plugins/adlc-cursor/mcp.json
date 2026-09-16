@@ -2,7 +2,8 @@
   "mcpServers": {
     "adlc": {
       "command": "node",
-      "args": ["./bin/adlc-mcp-wrapper.mjs"]
+      "args": ["${CURSOR_PLUGIN_ROOT}/bin/adlc-mcp-wrapper.bundle.mjs"],
+      "cwd": "${CURSOR_PLUGIN_ROOT}"
     }
   }
 }

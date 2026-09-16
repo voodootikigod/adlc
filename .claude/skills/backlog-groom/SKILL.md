@@ -92,6 +92,11 @@ indistinguishable from a complete one, so the run says which it had.
 - **The floor outranks the reviewer.** Classes listed in `autonomyFloor` always
   require a human, however confident the review was. Widening the floor is a
   privileged change measured against the merge base, not the working copy.
+- **The rest of the policy is the merge base's too.** A working copy whose
+  `providers`, `labels` or `units` differ from the base is refused, and `--apply`
+  refuses `--profile`. To change who reviews or what a relabel may target, land
+  the profile change on the default branch first; do not edit it locally to get
+  a run through.
 
 ## Reporting back
 
