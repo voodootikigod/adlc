@@ -678,7 +678,225 @@ describe('runForecast', () => {
       // Request width=10 which should fail
       const result = await runForecast({ tickets, root, width: 10 });
 
-      assert.ok(result.gateFailures.some((f) => f.includes('certifiedWidth')));
+      assert.ok(result.gateFailures.some((f) => f.includes('firstWaveWidth')));
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  // ─── #997: firstWaveWidth vs scheduleWidth ─────────────────────────────────
+  //
+  // `certifiedWidth` is computed from wave 1 only. For a foundation-first DAG —
+  // the shape ADLC.md D2 recommends — wave 1 holds ONE ticket, so the number is
+  // 1 no matter how wide the graph gets later. These tests pin both numbers so
+  // the name can no longer do two jobs.
+
+  test('foundation-first DAG: firstWaveWidth is 1 but scheduleWidth is the fan-out', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      // Separate commits so no pair picks up co-change coupling.
+      gitCommit(root, { 'src/core/index.js': '// core' }, 'init core');
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+      gitCommit(root, { 'src/c/index.js': '// c' }, 'init c');
+      gitCommit(root, { 'src/d/index.js': '// d' }, 'init d');
+      gitCommit(root, { 'src/final/index.js': '// final' }, 'init final');
+
+      const tickets = [
+        mkTicket('T0', {
+          scope: ['src/core/**'],
+          edges: [{ to: 'T1' }, { to: 'T2' }, { to: 'T3' }, { to: 'T4' }],
+        }),
+        mkTicket('T1', { scope: ['src/a/**'], edges: [{ to: 'T5' }] }),
+        mkTicket('T2', { scope: ['src/b/**'], edges: [{ to: 'T5' }] }),
+        mkTicket('T3', { scope: ['src/c/**'], edges: [{ to: 'T5' }] }),
+        mkTicket('T4', { scope: ['src/d/**'], edges: [{ to: 'T5' }] }),
+        mkTicket('T5', { scope: ['src/final/**'] }),
+      ];
+      const result = await runForecast({ tickets, root });
+
+      assert.deepEqual(result.waves, [['T0'], ['T1', 'T2', 'T3', 'T4'], ['T5']]);
+      assert.equal(result.firstWaveWidth, 1, 'wave 1 holds only the foundation');
+      assert.equal(result.scheduleWidth, 4, 'the fan-out wave supports four builders');
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('certifiedWidth is an exact alias of firstWaveWidth', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/core/index.js': '// core' }, 'init core');
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+
+      const tickets = [
+        mkTicket('T0', { scope: ['src/core/**'], edges: [{ to: 'T1' }, { to: 'T2' }] }),
+        mkTicket('T1', { scope: ['src/a/**'] }),
+        mkTicket('T2', { scope: ['src/b/**'] }),
+      ];
+      const result = await runForecast({ tickets, root });
+
+      // The alias is the compatibility contract for existing consumers, and it
+      // must track the WAVE-1 number — not the new schedule-wide one — or every
+      // caller reading it silently changes meaning.
+      assert.equal(result.certifiedWidth, result.firstWaveWidth);
+      assert.equal(result.certifiedWidth, 1);
+      assert.equal(result.scheduleWidth, 2);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('flat DAG: firstWaveWidth equals scheduleWidth', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+      gitCommit(root, { 'src/c/index.js': '// c' }, 'init c');
+
+      const tickets = [
+        mkTicket('T1', { scope: ['src/a/**'] }),
+        mkTicket('T2', { scope: ['src/b/**'] }),
+        mkTicket('T3', { scope: ['src/c/**'] }),
+      ];
+      const result = await runForecast({ tickets, root });
+
+      assert.equal(result.waves.length, 1);
+      assert.equal(result.firstWaveWidth, 3);
+      assert.equal(result.scheduleWidth, 3);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('conflicting pair inside a later wave lowers scheduleWidth below the wave size', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/core/index.js': '// core' }, 'init core');
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+      gitCommit(root, { 'src/shared/index.js': '// shared' }, 'init shared');
+
+      // T3 and T4 both claim src/shared/** — a hard veto — so the four-ticket
+      // wave can only dispatch three at once.
+      const tickets = [
+        mkTicket('T0', {
+          scope: ['src/core/**'],
+          edges: [{ to: 'T1' }, { to: 'T2' }, { to: 'T3' }, { to: 'T4' }],
+        }),
+        mkTicket('T1', { scope: ['src/a/**'] }),
+        mkTicket('T2', { scope: ['src/b/**'] }),
+        mkTicket('T3', { scope: ['src/shared/**'] }),
+        mkTicket('T4', { scope: ['src/shared/**'] }),
+      ];
+      const result = await runForecast({ tickets, root, conflictThreshold: 0.5 });
+
+      assert.equal(result.waves[1].length, 4, 'four tickets are topologically ready');
+      assert.equal(result.scheduleWidth, 3, 'but the vetoed pair cannot both run');
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('--width gate boundary is unchanged and still measured against wave 1', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/core/index.js': '// core' }, 'init core');
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+
+      const tickets = [
+        mkTicket('T0', { scope: ['src/core/**'], edges: [{ to: 'T1' }, { to: 'T2' }] }),
+        mkTicket('T1', { scope: ['src/a/**'] }),
+        mkTicket('T2', { scope: ['src/b/**'] }),
+      ];
+
+      // firstWaveWidth is 1; scheduleWidth is 2. The gate must still compare
+      // against the WAVE-1 number, so width=1 passes and width=2 fails even
+      // though the schedule could eventually support 2.
+      const atBoundary = await runForecast({ tickets, root, width: 1 });
+      assert.deepEqual(atBoundary.gateFailures, []);
+
+      const overBoundary = await runForecast({ tickets, root, width: 2 });
+      assert.equal(overBoundary.gateFailures.length, 1);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('the --width failure message names wave 1 and reports scheduleWidth', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/core/index.js': '// core' }, 'init core');
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+      gitCommit(root, { 'src/b/index.js': '// b' }, 'init b');
+
+      const tickets = [
+        mkTicket('T0', { scope: ['src/core/**'], edges: [{ to: 'T1' }, { to: 'T2' }] }),
+        mkTicket('T1', { scope: ['src/a/**'] }),
+        mkTicket('T2', { scope: ['src/b/**'] }),
+      ];
+      const result = await runForecast({ tickets, root, width: 3 });
+
+      const msg = result.gateFailures.find((f) => f.includes('--width 3'));
+      assert.ok(msg, 'the width gate failed');
+      // The operator must learn WHY a foundation-first DAG rejects a wide
+      // request, which means the message has to say it is a wave-1 number and
+      // show what the schedule itself could support.
+      assert.match(msg, /firstWaveWidth 1/);
+      assert.match(msg, /wave 1/i);
+      assert.match(msg, /scheduleWidth 2/);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('dependency-cycle early return still carries both width fields', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a/index.js': '// a' }, 'init a');
+
+      const tickets = [
+        mkTicket('T1', { scope: ['src/a/**'], edges: [{ to: 'T2' }] }),
+        mkTicket('T2', { scope: ['src/b/**'], edges: [{ to: 'T1' }] }),
+      ];
+      const result = await runForecast({ tickets, root });
+
+      assert.ok(result.gateFailures.some((f) => f.includes('dependency cycle')));
+      // A consumer reading the new fields on the failure path must not see
+      // `undefined` — it would render as "Schedule width: undefined".
+      assert.equal(result.firstWaveWidth, 0);
+      assert.equal(result.scheduleWidth, 0);
+      assert.equal(result.certifiedWidth, 0);
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('an empty ticket list reports zero for both widths', async () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/a.js': '// a' }, 'init');
+
+      const result = await runForecast({ tickets: [], root });
+
+      // scheduleWidth folds over the waves, so its seed is only observable
+      // when there are NO waves to fold. Without this case a non-zero seed
+      // reports a schedule that can absorb builders it does not have.
+      assert.deepEqual(result.waves, []);
+      assert.equal(result.scheduleWidth, 0);
+      assert.equal(result.firstWaveWidth, 0);
+      assert.equal(result.certifiedWidth, 0);
+      assert.equal(result.recommendedWidth, 0);
     } finally {
       cleanup(root);
     }
