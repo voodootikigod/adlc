@@ -1,0 +1,24 @@
+{
+  "body": "Source: GitHub issue #700 (documentation, tokenomics, P2-medium). Re-verified on main @ b4cff43c: the `--floor` flag row in `packages/model-router/README.md:19` and `docs/tools/model-router.md:38` reads `Minimum rail density for cheap-tier assignment`; `apps/docs/content/docs/toolkit/model-router.mdx:32` reads the same and then adds the frontier/P3 behaviour. In `lib/assign.mjs` the floor is consulted only at Rule 1b (`density < floor` sends the ticket to frontier with a P3 finding, line 89); the cheap-vs-mid ladder start is a hardcoded `density >= 0.5 ? 'cheap' : 'mid'` (line 116) that `--floor` cannot move. The README's own Rule 3 section states the 0.5 correctly; the flag table is the wrong half. An operator who raises or lowers `--floor` to change cheap-tier routing moves only the frontier cutoff.\n\nCONTEXT FOR THE BUILDER. Package `packages/model-router`: `bin/model-router.mjs` (CLI), `lib/router.mjs` (orchestration, exit codes), `lib/assign.mjs` (`assignTicket(ticket, float, priors, floor)`: the routing rules), `lib/floor.mjs` (`assertFloor`, `DEFAULT_FLOOR`), `lib/density.mjs`, `lib/priors.mjs`, `lib/format.mjs`, `lib/active-tickets.mjs`. Tests: `npm test -w packages/model-router` from the worktree root. Consumers importing this package: `packages/backlog-groom/lib/floor.mjs`, `packages/backlog-groom/lib/profile.mjs`, `packages/fleet/lib/quartermaster.mjs`, `packages/merge-forecast/lib/active-tickets.mjs`; their suites must stay green.\n\nNORMATIVE BEHAVIOUR.\n1. Name the threshold: export `CHEAP_TIER_MIN_DENSITY = 0.5` from `lib/assign.mjs` and use it at the ladder-start site. Routing behaviour is unchanged for every input.\n2. The `--floor` row in all three docs files describes it, in the same words in each, as the rail-density floor below which a ticket is forced to frontier and raises a P3 finding (exit 2), and states that it does not move the cheap/mid ladder start, which is a fixed `railDensity >= 0.5`. The existing `(0, 1]` range and zero-rejection sentence stays. The phrase `cheap-tier assignment` no longer appears in any of the three rows.\n3. A new test, `packages/model-router/test/floor-ladder.test.mjs`, pins the behaviour the docs now claim: for a ladder-eligible ticket at or above the floor, the start tier is the same under different floors (e.g. floor 0.05 and floor 0.25 for densities 0.3 and 0.6); a density exactly `CHEAP_TIER_MIN_DENSITY` starts cheap and one just below starts mid; `CHEAP_TIER_MIN_DENSITY === 0.5`. It also reads each of the three docs files' `--floor` row and asserts it names the frontier/P3 role, contains `0.5`, and does not contain `cheap-tier assignment`.\n\nACCEPTANCE CRITERIA.\n- AC1 `CHEAP_TIER_MIN_DENSITY` is exported, equals 0.5, and decides the ladder start at the boundary. verify: `node --test packages/model-router/test/floor-ladder.test.mjs`\n- AC2 Changing the floor does not change the start tier of a ladder ticket at or above both floors. verify: `node --test packages/model-router/test/floor-ladder.test.mjs`\n- AC3 All three `--floor` rows describe the frontier/P3 cutoff and the fixed 0.5 ladder start. verify: `node --test packages/model-router/test/floor-ladder.test.mjs`\n- AC4 No docs row still calls `--floor` the cheap-tier threshold. verify: `grep -c \"cheap-tier assignment\" packages/model-router/README.md docs/tools/model-router.md apps/docs/content/docs/toolkit/model-router.mdx` (each 0)\n- AC5 Existing suite and consumer suites green. verify: `npm test -w packages/model-router && node scripts/run-tests.mjs backlog-groom fleet merge-forecast`\n- AC6 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0 (also run `--max 80` once locally)\n\nOUT OF SCOPE: making the 0.5 configurable; any routing change; the Rule 3 prose (already correct); other open model-router issues.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M2NACK7P366J2Q6K7DNA3QWQ",
+  "rails": [
+    "packages/model-router/lib/router.mjs",
+    "packages/model-router/lib/floor.mjs",
+    "packages/model-router/lib/density.mjs",
+    "packages/model-router/lib/priors.mjs",
+    "packages/model-router/lib/format.mjs",
+    "packages/model-router/lib/active-tickets.mjs",
+    "packages/model-router/bin/model-router.mjs",
+    "packages/model-router/test/floor-zero.test.mjs",
+    "packages/model-router/test/active-tickets.test.mjs"
+  ],
+  "scope": [
+    "packages/model-router/**",
+    "docs/tools/model-router.md",
+    "apps/docs/content/docs/toolkit/model-router.mdx"
+  ],
+  "title": "model-router: describe --floor as the frontier/P3 cutoff, not the cheap-tier threshold"
+}
