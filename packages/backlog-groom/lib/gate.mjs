@@ -78,12 +78,29 @@ export function ledgerApproves(ledger, action) {
   if (!entry || entry.verdict !== 'approve') return false;
   // Bound to the revision AND the issue, not merely present under the key: a
   // ledger hand-edited to move an approval between issues must not pass.
+  // And bound to WHAT WAS REVIEWED. The key names the decision's slot, not its
+  // content: a relabel approved from P3-low to P2-medium shares its key with one
+  // to P1-high, and a close shares its key with the same close carrying other
+  // evidence. Without the digest, a later set re-uses the approval for a target
+  // or a rationale no reviewer ever read.
   return (
     entry.contentHash === action?.contentHash &&
     entry.number === action?.number &&
     entry.action === action?.action &&
-    (entry.field ?? null) === (action?.field ?? null)
+    (entry.field ?? null) === (action?.field ?? null) &&
+    typeof entry.artifactDigest === 'string' &&
+    entry.artifactDigest === artifactDigest(action)
   );
+}
+
+/**
+ * The digest of exactly what the reviewer is shown for an action.
+ *
+ * Recorded with every verdict and required by `ledgerApproves`, so an approval
+ * covers the artifact that was reviewed and nothing that merely shares its key.
+ */
+export function artifactDigest(action) {
+  return createHash('sha256').update(buildActionArtifact(action ?? {})).digest('hex');
 }
 
 /** The replay key: one verdict per issue per revision of the code it cites. */
@@ -184,7 +201,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     // rule unenforced for exactly the case a caller can manufacture at will: a
     // spawn failure or a timeout, retried until the reviewer finally answers.
     const reason = `the review could not complete: ${err?.message ?? err}`;
-    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null };
+    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) };
     return { verdict: 'demote', reason };
   }
 
@@ -205,6 +222,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     number: action.number,
     action: action.action,
     field: action.field ?? null,
+    artifactDigest: artifactDigest(action),
   };
   return { verdict, reason };
 }

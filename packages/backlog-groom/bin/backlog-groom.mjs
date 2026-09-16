@@ -175,6 +175,7 @@ if (values.apply) {
       profile,
       baseFloor,
       baseFrozenPaths,
+      basePolicy: baseProfile,
       ledger,
       runReview,
       gh: ghIo,

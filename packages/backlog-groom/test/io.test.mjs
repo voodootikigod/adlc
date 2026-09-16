@@ -393,10 +393,13 @@ test('an owner-less lock is live until the TTL, then presumed abandoned', () => 
   assert.equal(fresh.isOpError, true, 'a recent owner-less lock is still respected');
 
   let made = 0;
+  // ONE fixed mtime: a directory's mtime does not move between two stats, and the
+  // recovery now checks that what it claimed is the lock it judged expired.
+  const expiredAt = Date.now() - (2 * 60 * 60 * 1000);
   const release = acquireApplyLock('/tmp/x.lock', {
     mkdir: () => { made += 1; if (made === 1) throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
     read: () => { throw new Error('ENOENT'); },
-    stat: () => ({ mtimeMs: Date.now() - (2 * 60 * 60 * 1000) }),
+    stat: () => ({ ino: 1, mtimeMs: expiredAt }),
     rename: () => {},
     rmdir: () => {},
     write: () => {},

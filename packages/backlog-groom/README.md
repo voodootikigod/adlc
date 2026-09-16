@@ -79,6 +79,11 @@ in force and is not.
 A missing profile is fine — the defaults are a complete, conservative profile.
 A malformed one is not: that is a statement you made and got wrong.
 
+The write path treats the profile as a trust root and compares it against the
+merge base with the default branch: a wider `autonomyFloor`, fewer `frozenPaths`,
+or different `providers`, `labels` or `units` refuse `--apply`, and `--apply`
+refuses `--profile` because the baseline is read at the profile's own path.
+
 ## Incrementality
 
 A gitignored cache at `.adlc/backlog-groom-cache.json`, keyed per issue on

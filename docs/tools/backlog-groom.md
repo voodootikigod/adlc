@@ -157,6 +157,17 @@ claim of whoever is widening it. An unreadable base floor refuses rather than
 assuming an empty one — otherwise deleting the profile at the base would be the
 cheapest possible widening.
 
+The rest of the policy is the merge base's too. `providers`, `labels` and
+`units` decide who reviews and which labels a relabel may target, so a working
+copy that changes them is refused until the change lands on the default branch.
+For the same reason `--apply` refuses `--profile`: the baseline is read from git
+at the profile's path, and a path of the caller's choosing is a baseline of the
+caller's choosing. A relabel's `field` is exactly `priority` or `area`, it names
+the label it replaces, and an area target must be the unit the issue's verified
+locations sit in. An approval covers the artifact the reviewer read and nothing
+else: the same issue and revision with another target or other evidence is not
+licensed by it.
+
 ## Execution is idempotent by design
 
 Every action comments its evidence and a durable marker **first**, then acts.

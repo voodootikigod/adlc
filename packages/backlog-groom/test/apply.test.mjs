@@ -88,14 +88,14 @@ test('a proposal for an issue absent from the set is dropped, not guessed at', (
 
 test('an approved action reaches the writer, comment first', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh });
+  const out = applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
   assert.equal(out.executed.length, 1);
 });
 
 test('a refused action writes nothing and is reported with its reason', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  const out = applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(out.executed.length, 0);
   assert.equal(out.gateDemotions.length, 1);
@@ -107,7 +107,7 @@ test('AC8: with no distinct provider nothing is written and the reviewer is neve
   let called = 0;
   const out = applyRun({
     set: set(),
-    profile: profile({ providers: { decider: 'anthropic' } }),
+    profile: profile({ providers: { decider: 'anthropic' } }), basePolicy: profile({ providers: { decider: 'anthropic' } }),
     baseFloor: [],
     ledger: {},
     fetchIssue,
@@ -125,7 +125,7 @@ test('the floor outranks an approve', () => {
   const gh = fakeGh();
   const out = applyRun({
     set: set(),
-    profile: profile({ autonomyFloor: ['close'] }),
+    profile: profile({ autonomyFloor: ['close'] }), basePolicy: profile({ autonomyFloor: ['close'] }),
     baseFloor: ['close'],
     ledger: {},
     fetchIssue,
@@ -140,7 +140,7 @@ test('the floor outranks an approve', () => {
 test('AC24: a widened floor refuses the run before any write', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: set(), profile: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ set: set(), profile: profile({ autonomyFloor: [] }), basePolicy: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -149,12 +149,12 @@ test('AC24: a widened floor refuses the run before any write', () => {
 test('AC14: the ledger persists across the run so a replay within it is refused', () => {
   const ledger = {};
   const gh = fakeGh();
-  applyRun({ set: set(), profile: profile(), baseFloor: [], ledger, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
 
   let called = 0;
   const second = applyRun({
     set: set(),
-    profile: profile(),
+    profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger,
     fetchIssue,
@@ -246,7 +246,7 @@ test('a stale set is refused before anything is gated', () => {
     () =>
       applyRun({
         set: { ...set(), generatedFor: 'oldsha' },
-        profile: profile(),
+        profile: profile(), basePolicy: profile(),
         baseFloor: [],
         ledger: {},
         fetchIssue,
@@ -265,7 +265,7 @@ test('a set generated for the current revision proceeds', () => {
   const gh = fakeGh();
   const out = applyRun({
     set: { ...set(), generatedFor: 'samesha' },
-    profile: profile(),
+    profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger: {},
     fetchIssue,
@@ -284,7 +284,7 @@ test('each gate decision is checkpointed before any write', () => {
   const checkpoints = [];
   applyRun({
     set: set(),
-    profile: profile(),
+    profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger: {},
     fetchIssue,
@@ -368,7 +368,7 @@ test('a set omitting updatedAt is refused rather than skipping the check', () =>
 test('a set with no generatedFor is refused when a revision is known', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: { issues: [], proposals: [] }, profile: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ set: { issues: [], proposals: [] }, profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
 });
@@ -378,7 +378,7 @@ test('applyRun refuses when it has no way to re-read issues', () => {
   // proceeding would trust a file on disk for every security-relevant fact.
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: set(), profile: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -395,7 +395,7 @@ test('a widened floor is refused BEFORE any review is spent', () => {
     () =>
       applyRun({
         set: set(),
-        profile: profile({ autonomyFloor: [] }),
+        profile: profile({ autonomyFloor: [] }), basePolicy: profile({ autonomyFloor: [] }),
         baseFloor: ['close'],
         ledger,
         fetchIssue,
@@ -427,7 +427,7 @@ test('revalidation reads the PINNED revision, not a moving HEAD', () => {
   const gh = fakeGh();
   applyRun({
     set: { ...set(), generatedFor: 'pinned-sha' },
-    profile: profile(),
+    profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger: {},
     fetchIssue,
@@ -463,7 +463,7 @@ test('a relabel to a label the profile does not declare is refused', () => {
     { fetchIssue: labelledIssue(['P3-low']), profile: labelProfile(), io: IO }
   );
   assert.equal(out.ok, false);
-  assert.match(out.reason, /not a label this profile declares/);
+  assert.match(out.reason, /not a priority label this profile declares/);
 });
 
 test('a relabel removing a label the issue does not carry is refused', () => {
@@ -485,11 +485,21 @@ test('a relabel between declared labels the issue really has is accepted', () =>
   assert.equal(out.ok, true, out.reason);
 });
 
-test('an area relabel may target a declared unit', () => {
-  const hash = contentHash(['src/a.mjs'], IO);
+test('an area relabel may target the declared unit its verified locations sit in', () => {
+  // This used to accept area:review → area:review for a path in no unit at all:
+  // a declared label was treated as enough. An area move is mechanically
+  // provable (§3.4a), so the target must be the unit the location proves.
+  const files = { 'packages/review/x.mjs': 'something else\n' };
+  const io = { readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; }, pathExists: (f) => f in files, lastCommitFor: () => 'abc1234' };
+  const hash = contentHash(['packages/review/x.mjs'], io);
+  const profile = { ...labelProfile(), units: [...labelProfile().units, { name: 'docs', paths: ['docs/**'] }] };
   const out = revalidateAction(
-    { number: 1, action: 'relabel', field: 'area', from: 'area:review', to: 'area:review', contentHash: hash, updatedAt: 'u1' },
-    { fetchIssue: labelledIssue(['area:review']), profile: labelProfile(), io: IO }
+    { number: 1, action: 'relabel', field: 'area', from: 'area:docs', to: 'area:review', contentHash: hash, updatedAt: 'u1' },
+    {
+      fetchIssue: () => ({ number: 1, title: 't', body: '**Location** `packages/review/x.mjs:1`\n\n```\ngone\n```\n', labels: ['area:docs'], updatedAt: 'u1' }),
+      profile,
+      io,
+    }
   );
   assert.equal(out.ok, true, out.reason);
 });

@@ -40,7 +40,7 @@ const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-
  * the `gh` shim appends every invocation to a log, so a test can assert on
  * writes that did NOT happen.
  */
-function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
+function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels = ['bug'] } = {}) {
   const dir = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-apply-')));
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
@@ -63,7 +63,7 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
     // this a genuinely `fixed` issue — the write path re-verifies the verdict,
     // so a fixture whose defect is still present is refused (correctly).
     body: '**Location** `src/cited.mjs:1`\n\n```\nconst removedLongAgo = 1;\n```\n',
-    labels: [{ name: 'bug' }],
+    labels: issueLabels.map((name) => ({ name })),
     updatedAt: '2026-09-01T00:00:00Z',
   };
   // A heredoc, not `echo`: dash's echo interprets backslash escapes, so the \n
@@ -468,6 +468,41 @@ test('an apply run leaves no artifact directory behind', () => {
   assert.ok(artifact?.startsWith(box.tmp), `the artifact must have been written under the sandbox TMPDIR, got ${artifact}`);
   assert.equal(existsSync(dirname(artifact)), false, 'the per-run artifact directory must be removed');
   assert.deepEqual(artifactDirs(box), []);
+});
+
+test('--profile is refused on --apply, so the caller cannot choose the baseline policy is compared against', () => {
+  // The base profile is read from git at the SAME path as the working one. A
+  // path the caller picks is a path absent at the merge base, whose baseline is
+  // the permissive default — so frozenPaths the committed profile declares no
+  // longer bind, and a relabel on a frozen issue goes through.
+  const providers = { decider: 'anthropic', reviewer: 'openai' };
+  const box = sandbox({
+    reviewExit: 0,
+    issueLabels: ['P3-low'],
+    profile: { schemaVersion: 1, autonomyFloor: ['close'], frozenPaths: ['src/**'], providers },
+  });
+  const p = join(box.dir, 'groomed.json');
+  writeFileSync(
+    p,
+    JSON.stringify({
+      schemaVersion: 3,
+      generatedFor: box.head,
+      issues: [{ number: 705, verdict: 'fixed', contentHash: box.hash, evidence: 'gone', updatedAt: '2026-09-01T00:00:00Z', frozen: false, labels: [], units: [] }],
+      proposals: [{ number: 705, action: 'relabel', field: 'priority', from: 'P3-low', to: 'P2-medium', evidence: 'rank disagrees' }],
+    })
+  );
+
+  // Control: under the committed profile the issue cites a frozen path, so
+  // nothing is written.
+  const control = run(['--apply', '--set', p], box);
+  assert.equal(control.status, 0, control.stderr);
+  assert.deepEqual(ghWrites(box), [], 'the committed frozenPaths must block the relabel');
+
+  writeFileSync(join(box.dir, 'alt-profile.json'), JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close'], frozenPaths: [], providers }));
+  const r = run(['--apply', '--set', p, '--profile', 'alt-profile.json'], box);
+  assert.deepEqual(ghWrites(box), [], 'nothing may be written');
+  assert.equal(r.status, 1, `--profile must be refused on --apply: ${r.stderr}`);
+  assert.match(r.stderr, /--profile/);
 });
 
 test('the ledger path is fixed, so a caller cannot reset the one-shot rule', () => {
