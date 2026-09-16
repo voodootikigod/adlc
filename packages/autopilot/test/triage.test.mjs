@@ -448,3 +448,27 @@ export async function ac96_fenceIsNotForgeable() {
   } finally { h.cleanup(); }
 }
 test('AC96: the model-input fence label carries a per-call nonce — a forged END marker computed from the capped length cannot close it, and two calls never share a label', ac96_fenceIsNotForgeable);
+
+// #1007: the shaping payload is `Title: <title>\n\n<body>`, so tail truncation
+// dropped the one line that states what the issue IS, and the model was handed
+// an anonymous fragment of a body. Head-biased now.
+test('the shaping fence keeps the issue TITLE and opening when the body is over cap (#1007)', async () => {
+  const n = 13;
+  const url = `https://github.com/o/r/issues/${n}`;
+  const body = `OPENING_LINE ${'z'.repeat(20_000)} TRAILING_LINE`;
+  let prompt = null;
+  const h = makeTriageCtx({
+    issues: [ISSUE(n, { body })],
+    claude: (args, io) => { prompt = io.stdin; return { stdout: claudeResult(shapedTicket(n, url)) }; },
+  });
+  try {
+    await triage({ ctx: h.ctx, issue: ISSUE(n, { body }), authorization: AUTHORIZED });
+    assert.ok(prompt, 'the shaping prompt was captured');
+    const m = /<<UNTRUSTED:github-issue-[0-9a-f]{16}[^\n]*\n([\s\S]*?)\n<<END:github-issue/.exec(prompt);
+    assert.ok(m, `the fenced issue block was found: ${prompt.slice(0, 300)}`);
+    const fenced = m[1];
+    assert.ok(fenced.startsWith('Title: Add the widget'), 'the title survives truncation');
+    assert.match(fenced, /OPENING_LINE/, 'the opening of the body survives');
+    assert.ok(!fenced.includes('TRAILING_LINE'), 'the trailing detail is what gets dropped');
+  } finally { h.cleanup(); }
+});

@@ -3,10 +3,11 @@
 import { fence } from '@adlc/core';
 
 // The spec IS the payload here, not one field among many, so any cap truncates
-// the very artifact under review — and fence() is tail-biased, so an over-cap
-// spec would silently lose its OPENING sections (#1007). The cap is therefore
-// deliberately generous rather than the 8000 used elsewhere: large enough that
-// a realistic spec is never truncated, while still bounding a pathological one.
+// the very artifact under review. Two defences: the fence is head-biased
+// (#1007), so an over-cap spec loses its trailing detail rather than its
+// opening constraints, and the cap is deliberately generous rather than the
+// 8000 used elsewhere — large enough that a realistic spec is never truncated,
+// while still bounding a pathological one.
 const SPEC_MAX_CHARS = 64_000;
 
 export const SYSTEM_PROMPT =
@@ -19,7 +20,7 @@ export const SYSTEM_PROMPT =
  */
 export function buildPrompt(specContent) {
   return (
-    fence('SPEC', specContent.trim(), SPEC_MAX_CHARS) +
+    fence('SPEC', specContent.trim(), SPEC_MAX_CHARS, { bias: 'head' }) +
     '\n\n' +
     'It is three months later and this project FAILED in production. ' +
     'Write the postmortem. ' +

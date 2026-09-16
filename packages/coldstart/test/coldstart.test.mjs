@@ -103,14 +103,23 @@ describe('prompt construction', () => {
   });
 
   // issue #281: the ticket JSON is fenced before embedding, capped at exactly
-  // 8000 chars (tail-biased) — pins the exact boundary, not just "some cap".
-  test('buildPrompt fences the ticket content and caps it to exactly 8000 chars, tail-biased', () => {
-    const ticket = { id: 'T8', title: 'Big ticket', body: 'x'.repeat(20_000) };
+  // 8000 chars — pins the exact boundary, not just "some cap".
+  //
+  // #1007: head-biased. ticketToText emits id and title FIRST, so tail
+  // truncation left this gate auditing a ticket whose identity and opening
+  // requirements had been cut away — and the surviving tail reads as coherent,
+  // so it can audit clean. Either direction produces invalid JSON once the
+  // payload is over cap; head at least keeps what the ticket IS.
+  test('buildPrompt fences the ticket content, caps it to exactly 8000 chars, and keeps its OPENING', () => {
+    const ticket = { id: 'T8', title: 'Big ticket', body: `OPENING_REQUIREMENT ${'x'.repeat(20_000)}` };
     const prompt = buildPrompt(ticket);
     // The tag is a per-call nonce (#1005) — assert the shape, not the literal.
-    assert.match(prompt, /<<UNTRUSTED:TICKET \(truncated, showing last 8000 of \d+ chars\):[0-9a-f-]{36}>>/);
+    assert.match(prompt, /<<UNTRUSTED:TICKET \(truncated, showing first 8000 of \d+ chars\):[0-9a-f-]{36}>>/);
     const embedded = prompt.match(/<<UNTRUSTED:TICKET[^\n]*\n([\s\S]*?)\n<<END:TICKET/)[1];
     assert.equal(embedded.length, 8000);
+    assert.match(embedded, /"id": "T8"/, 'the gate must still know WHICH ticket it is auditing');
+    assert.match(embedded, /"title": "Big ticket"/);
+    assert.match(embedded, /OPENING_REQUIREMENT/, 'the opening requirement must survive');
   });
 
   test('buildPrompt frames the ticket as data to audit, not instructions to the auditor', () => {
