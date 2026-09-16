@@ -45,6 +45,13 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
   const log = join(dir, 'gh.log');
+  // The binary's TMPDIR, private to this sandbox. The artifact-directory tests
+  // count `backlog-groom-*` entries, and in the shared system tmpdir any other
+  // run of the binary — a concurrent test process, a second CI job on the same
+  // runner — creates and removes the same prefix mid-count. A SIBLING of the
+  // repo rather than inside it, so the artifacts never dirty the work tree the
+  // tool reads from.
+  const tmp = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-apply-tmp-')));
 
   // The issue the set will act on, cited against a file that really exists in
   // this repo — the write path re-derives the contentHash from it, so a stub
@@ -62,10 +69,20 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
   // A heredoc, not `echo`: dash's echo interprets backslash escapes, so the \n
   // inside the issue body would become a real newline and the JSON would arrive
   // corrupt — which the write path then reports as an unreadable issue.
+  //
+  // STDIN IS DRAINED FIRST. `issue comment` pipes its body in (`--body-file -`),
+  // and a child that exits without reading closes the pipe's read end: if that
+  // happens before node has written the body, spawnSync reports EPIPE, the writer
+  // throws, and the run records a failed comment and never closes — after this
+  // shim has already LOGGED the comment. That is #1018's exact signature, and it
+  // is a race, not a size limit: with this fixture's ~200-byte body it hit 5 of
+  // 2000 spawns on an idle machine and 675 of 2000 with the CPUs saturated, as a
+  // CI runner executing test files in parallel is. Draining took both to 0.
   writeFileSync(
     join(bin, 'gh'),
     [
       '#!/bin/sh',
+      'cat > /dev/null',
       `echo "$@" >> ${log}`,
       'case "$*" in',
       '  *"--json comments"*)',
@@ -113,16 +130,30 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false } = {}) {
     readFile: (f) => spawnSync('git', ['show', `${head}:${f}`], { cwd: dir, encoding: 'utf8' }).stdout,
   });
 
-  return { dir, bin, log, head, hash };
+  return { dir, bin, log, tmp, head, hash };
 }
 
-function run(args, { dir, bin }) {
+function run(args, { dir, bin, tmp }) {
   return spawnSync(process.execPath, [BIN, ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp },
   });
 }
+
+/** The `backlog-groom-*` scratch directories currently in a sandbox's TMPDIR. */
+const artifactDirs = (box) => readdirSync(box.tmp).filter((f) => f.startsWith('backlog-groom-'));
+
+/**
+ * The artifact paths the reviewer was handed, from the shim's log.
+ *
+ * The positive control for the cleanup tests: an empty sandbox TMPDIR proves
+ * nothing unless the binary actually created its artifacts there.
+ */
+const reviewedArtifacts = (box) =>
+  ghCalls(box)
+    .filter((c) => c.startsWith('review'))
+    .map((c) => c.split(/\s+/).find((t) => t.endsWith('.md')));
 
 const ghCalls = (box) => (existsSync(box.log) ? readFileSync(box.log, 'utf8').trim().split('\n').filter(Boolean) : []);
 
@@ -209,7 +240,10 @@ test('an approved, unfloored close comments first and then closes', () => {
   const commentAt = calls.findIndex((c) => c.startsWith('issue comment'));
   const closeAt = calls.findIndex((c) => c.startsWith('issue close'));
   assert.ok(commentAt >= 0, `expected a comment, got: ${JSON.stringify(calls)}`);
-  assert.ok(closeAt >= 0, 'expected a close');
+  // The run's own report carries `failed[].reason`, which is the only place a
+  // comment that was logged and then failed says WHY — without it this
+  // assertion reports the symptom and discards the cause.
+  assert.ok(closeAt >= 0, `expected a close, got: ${JSON.stringify(calls)}\nrun output: ${r.stdout}`);
   assert.ok(commentAt < closeAt, 'the evidence must reach the issue before it goes quiet');
 });
 
@@ -424,15 +458,16 @@ test('an apply run leaves no artifact directory behind', () => {
   // The leak that exhausted every inode on /tmp while df reported 41% used. A
   // scheduled sweep runs this repeatedly, so "cleans up eventually" is not a
   // property — it either removes its scratch or it accumulates forever.
-  const before = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
   const box = sandbox({
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
   const r = run(['--apply', '--set', setFile(box)], box);
   assert.equal(r.status, 0, r.stderr);
-  const after = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
-  assert.equal(after, before, 'the per-run artifact directory must be removed');
+  const [artifact] = reviewedArtifacts(box);
+  assert.ok(artifact?.startsWith(box.tmp), `the artifact must have been written under the sandbox TMPDIR, got ${artifact}`);
+  assert.equal(existsSync(dirname(artifact)), false, 'the per-run artifact directory must be removed');
+  assert.deepEqual(artifactDirs(box), []);
 });
 
 test('the ledger path is fixed, so a caller cannot reset the one-shot rule', () => {
@@ -447,14 +482,28 @@ test('the ledger path is fixed, so a caller cannot reset the one-shot rule', () 
 test('a failed apply still clears its artifact directory', () => {
   // The failure branch is the one that has been running long enough to have
   // written artifacts, and a scheduled sweep that fails repeatedly leaks fastest.
-  const before = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
+  //
+  // The run must GENUINELY fail, and fail after an artifact exists. This test
+  // previously rewrote the profile with the same `autonomyFloor: []` the sandbox
+  // had already committed, so nothing was widened, the run exited 0, and it
+  // re-tested the success path under a failure-path name. Here the reviewer
+  // replaces the ledger file with a directory while it reviews, so the
+  // checkpoint that follows every gate decision throws — after the artifact was
+  // written and handed over, before any write to GitHub.
   const box = sandbox({
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
-  // A widened floor: refused after the artifact directory exists.
-  writeFileSync(join(box.dir, '.claude', 'backlog-groom-profile.json'), JSON.stringify({ schemaVersion: 1, autonomyFloor: [], frozenPaths: [], providers: { decider: 'anthropic', reviewer: 'openai' } }));
+  writeFileSync(
+    join(box.bin, 'adversarial-review'),
+    `#!/bin/sh\necho "review $@" >> ${box.log}\nrm -f .adlc/backlog-groom-ledger.json\nmkdir .adlc/backlog-groom-ledger.json\nexit 0\n`
+  );
   const r = run(['--apply', '--set', setFile(box)], box);
-  const after = readdirSync(tmpdir()).filter((f) => f.startsWith('backlog-groom-')).length;
-  assert.equal(after, before, `artifact dir leaked on exit ${r.status}`);
+  assert.equal(r.status, 1, `the run must fail, got exit ${r.status}: ${r.stderr}`);
+  assert.match(r.stderr, /could not persist the gate ledger/);
+  const [artifact] = reviewedArtifacts(box);
+  assert.ok(artifact?.startsWith(box.tmp), `the artifact must have been written under the sandbox TMPDIR, got ${artifact}`);
+  assert.equal(existsSync(dirname(artifact)), false, `artifact dir leaked on exit ${r.status}`);
+  assert.deepEqual(artifactDirs(box), []);
+  assert.deepEqual(ghWrites(box), [], 'a run that cannot record its authorization writes nothing');
 });
