@@ -28,7 +28,9 @@ adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--infer-sc
 | `--base-ref <ref>` | Git ref to check `scope` globs against (default `HEAD`). Point at `origin/main` to audit a branch's tickets against trunk. |
 | `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
 | `--write` | Archive stale tickets: move them out of `--tickets` into `--archive` (append/upsert by id; never clobbered, never deleted). |
-| `--json` | Machine-readable `{ baseRef, write, inferScope, stale[], active[], archived[] }`. |
+| `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], archived[], ceremonyCompleted[], needsCeremony[], blocked[] }`. |
+
+`--json` fields: `archived[]` lists the tickets `--write` moved out of the active directory store (`.adlc/tickets/`), so on that store it, not `tombstoned[]`, records what changed; `tombstoned[]` lists the in-place `completed: true` tombstones `--write` adds on the legacy flat-file store (`.adlc/tickets.json`); `blocked[]` lists stale tickets left unarchived because a ticket outside the batch still references them; `ceremony` is always `false` and `ceremonyCompleted[]` always empty since `--ceremony` was deprecated (#208), both retained for compatibility.
 
 ## Exit codes
 
