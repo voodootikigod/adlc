@@ -64,7 +64,7 @@ ticket.
 
 ## Honesty
 
-- MCP: wrapper landed / channel unverified until installed-Cursor Roots proof.
+- MCP: one-root channel proven; rebind and live multi-root refusal unverified.
 - P5 agents: packaged-but-unverified until installed-Cursor fan-out proof.
 - Marketplace listing URL: do not fabricate; see
   `docs/integrations/cursor.md` (Marketplace publish checklist).

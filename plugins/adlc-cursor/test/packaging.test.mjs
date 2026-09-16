@@ -13,15 +13,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { version as loadedEsbuildVersion } from 'esbuild';
+import { MCP_BUILD_METADATA } from '../lib/mcp-build-metadata.mjs';
+import { buildCursorMcp } from '../../../scripts/build-cursor-mcp.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(here, '..');
 const repoRoot = resolve(here, '..', '..', '..');
 const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
+const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
 
 // --- AC1: package.json field contract -------------------------------------
 
@@ -68,10 +72,28 @@ test('AC7/T65: mcp.json launches the Roots proxy wrapper, not raw adlc mcp-serve
   const adlc = mcp.mcpServers?.adlc;
   assert.ok(adlc, 'mcpServers.adlc required');
   assert.equal(adlc.command, 'node');
-  assert.ok(adlc.args?.some((a) => /adlc-mcp-wrapper\.mjs/.test(String(a))));
-  assert.ok(!JSON.stringify(adlc).includes('mcp-server'), 'must not wire raw mcp-server argv');
+  const bundleArg = adlc.args?.find((arg) => /adlc-mcp-wrapper\.bundle\.mjs$/.test(String(arg)));
+  assert.ok(bundleArg?.includes('${CURSOR_PLUGIN_ROOT}'), 'bundle path must be plugin-root anchored');
+  assert.ok(adlc.cwd?.includes('${CURSOR_PLUGIN_ROOT}'), 'cwd must be plugin-root anchored');
+  assert.doesNotMatch(JSON.stringify(adlc), /"command"\s*:\s*"adlc"|"mcp-server"/, 'must not wire raw mcp-server');
   assert.ok(existsSync(join(pkgDir, 'bin', 'adlc-mcp-wrapper.mjs')));
+  assert.ok(existsSync(join(pkgDir, 'bin', 'adlc-mcp-wrapper.bundle.mjs')));
   assert.equal(pkg.cursor?.mcpServers, './mcp.json');
+});
+
+test('AC7/T65: bundle metadata locksteps plugin, bundled packages, and esbuild', () => {
+  const expectedDependencies = {};
+  for (const name of ['core', 'tickets']) {
+    const packageJson = JSON.parse(readFileSync(join(repoRoot, 'packages', name, 'package.json'), 'utf8'));
+    const packageName = `@adlc/${name}`;
+    assert.equal(packageJson.version, pkg.version, `${packageName} must lockstep the Cursor plugin`);
+    assert.equal(pkg.dependencies[packageName], `^${packageJson.version}`);
+    expectedDependencies[packageName] = packageJson.version;
+  }
+  assert.deepEqual(MCP_BUILD_METADATA.bundledDependencies, expectedDependencies);
+  assert.equal(MCP_BUILD_METADATA.pluginVersion, pkg.version);
+  assert.equal(rootPkg.devDependencies.esbuild, loadedEsbuildVersion, 'esbuild must be pinned exactly');
+  assert.equal(MCP_BUILD_METADATA.esbuildVersion, loadedEsbuildVersion);
 });
 
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
@@ -132,6 +154,23 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
 
 // --- AC2: files allowlist + real npm pack ----------------------------------
 
+test('AC2: official dry-run builder matches committed metadata and bundle', () => {
+  const metadataPath = join(pkgDir, 'lib', 'mcp-build-metadata.mjs');
+  const bundlePath = join(pkgDir, 'bin', 'adlc-mcp-wrapper.bundle.mjs');
+  const before = [statSync(metadataPath).mtimeMs, statSync(bundlePath).mtimeMs];
+  const generated = buildCursorMcp({ root: repoRoot, write: false });
+  assert.deepEqual([statSync(metadataPath).mtimeMs, statSync(bundlePath).mtimeMs], before,
+    'dry-run builder must not write generated files');
+  assert.deepEqual(readFileSync(metadataPath), generated.metadata,
+    'stale MCP build metadata; run npm run build:cursor-mcp');
+  assert.deepEqual(
+    readFileSync(bundlePath),
+    generated.bundle,
+    `stale MCP bundle (expected esbuild ${rootPkg.devDependencies.esbuild}, actual ${loadedEsbuildVersion}); `
+      + 'run npm install, then npm run build:cursor-mcp',
+  );
+});
+
 test('AC2: files allowlist ships the runtime surface and never test/', () => {
   const files = pkg.files ?? [];
   for (const entry of ['agents/', 'bin/', 'command/', 'constants.mjs', 'hooks/', 'hooks.json', 'lib/', 'mcp.json', 'rails-checker.mjs', 'rules/', 'skills/', '.cursor-plugin/', 'assets/', 'README.md', 'LICENSE']) {
@@ -152,7 +191,8 @@ test('AC2: npm pack --dry-run ships the runtime surface and NO test files', () =
   for (const file of ['constants.mjs', 'hooks.json', 'mcp.json', 'rails-checker.mjs', 'README.md', 'LICENSE']) {
     assert.ok(paths.includes(file), `pack must include ${file}`);
   }
-  assert.ok(paths.some((p) => p.includes('adlc-mcp-wrapper.mjs')), 'pack must include MCP wrapper');
+  assert.ok(paths.includes('bin/adlc-mcp-wrapper.mjs'), 'pack must include MCP wrapper source');
+  assert.ok(paths.includes('bin/adlc-mcp-wrapper.bundle.mjs'), 'pack must include self-contained MCP wrapper');
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);
 });
 

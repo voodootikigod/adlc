@@ -28,15 +28,70 @@ export function fileUriToPath(uri) {
   }
 }
 
-/** Extract absolute paths from a roots/list result payload. */
+/**
+ * Resolve the filesystem location carried by an MCP Root object.
+ *
+ * Cursor 3.20 can return bare absolute paths instead of file: URIs. A URI
+ * scheme requires at least two characters before ":" so Windows drive
+ * letters are not misclassified as schemes.
+ */
+export function rootUriToPath(uri) {
+  if (typeof uri !== 'string' || !uri.trim()) return null;
+  const raw = uri.trim();
+  if (/^file:/i.test(raw)) return fileUriToPath(raw);
+
+  const windows = raw.match(/^([A-Za-z]):[\\/](.*)$/);
+  if (windows) {
+    return normalizeRootPath(raw) || `${windows[1]}:\\${windows[2].replace(/\//g, '\\')}`;
+  }
+
+  const cursorWindows = raw.match(/^\/([A-Za-z]):\/(.*)$/);
+  if (cursorWindows) {
+    return normalizeRootPath(raw) || `${cursorWindows[1]}:\\${cursorWindows[2].replace(/\//g, '\\')}`;
+  }
+
+  if (/^[A-Za-z][A-Za-z0-9+.-]+:/.test(raw)) return null;
+  if (!raw.startsWith('/')) return null;
+  return normalizeRootPath(raw);
+}
+
+/**
+ * Decode a roots/list response without silently dropping invalid Root entries.
+ *
+ * @returns {{ ok: true, paths: string[] } | { ok: false, message: string }}
+ */
+export function decodeRootsListResult(result) {
+  const roots = result?.roots;
+  if (!Array.isArray(roots)) {
+    return { ok: false, message: 'roots/list result must contain a roots array' };
+  }
+  const out = [];
+  for (const [index, root] of roots.entries()) {
+    if (!root || typeof root !== 'object' || Array.isArray(root)) {
+      return { ok: false, message: `Root at index ${index} must be an object with a uri` };
+    }
+    const uri = root.uri;
+    if (typeof uri !== 'string' || !uri.trim()) {
+      return { ok: false, message: `Root at index ${index} must have a uri` };
+    }
+    const path = rootUriToPath(uri);
+    if (!path) {
+      return { ok: false, message: `Root at index ${index} has an unsupported or relative uri` };
+    }
+    out.push(path);
+  }
+  return { ok: true, paths: [...new Set(out)] };
+}
+
+/** Extract valid absolute paths for callers that do not need failure detail. */
 export function pathsFromRootsListResult(result) {
   const roots = result?.roots;
   if (!Array.isArray(roots)) return [];
-  const out = [];
+  const paths = [];
   for (const root of roots) {
-    const uri = root?.uri ?? root?.URL ?? root?.url;
-    const p = fileUriToPath(uri);
-    if (p) out.push(p);
+    if (!root || typeof root !== 'object' || Array.isArray(root)) continue;
+    const path = rootUriToPath(root.uri);
+    if (path) paths.push(path);
   }
-  return [...new Set(out)];
+  return [...new Set(paths)];
 }

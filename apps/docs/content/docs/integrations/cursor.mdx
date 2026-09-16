@@ -1,6 +1,6 @@
 ---
 title: Cursor
-description: "Native ADLC integration for Cursor: marketplace plugin with sessionStart context, preToolUse rails, packaged prosecutor agents + MCP wrapper (channel unverified), /adlc-* commands, and CI as the backstop."
+description: "Native ADLC integration for Cursor: marketplace plugin with sessionStart context, preToolUse rails, packaged prosecutor agents + MCP one-root channel (rebind unverified), /adlc-* commands, and CI as the backstop."
 ---
 
 # ADLC in Cursor
@@ -12,8 +12,8 @@ integration ships as `plugins/adlc-cursor` with a Cursor marketplace manifest
 
 ## Status
 
-**Marketplace plugin shipped** (hooks/commands/skills/rules). MCP is **wrapper
-landed / channel unverified** until an installed-Cursor Roots proof is recorded.
+**Marketplace plugin shipped** (hooks/commands/skills/rules). The MCP one-root
+channel is proven; rebind and live multi-root refusal remain **unverified**.
 Prosecutor agents are **packaged-but-unverified** until AC10 fan-out proof.
 A live deny-proof harness lives under `scripts/cursor-deny-proof/` (result
 pending maintainer run).
@@ -25,8 +25,16 @@ pending maintainer run).
 - **`afterFileEdit` / `beforeShellExecution`** — observational / advisory only.
 - **`preCompact` + `subagentStart` / `subagentStop`** — compaction reminder + P5 defense-in-depth.
 - **`stop` / `beforeSubmitPrompt`** — on by default.
-- **MCP Roots proxy** — `mcp.json` → `bin/adlc-mcp-wrapper.mjs` → `adlc mcp-server`
-  (`adlc_gate` / `adlc_prosecute`). Requires `adlc` on PATH.
+- **MCP Roots proxy** — `mcp.json` asks Cursor to expand
+  `${CURSOR_PLUGIN_ROOT}` and launch the bundled wrapper, which then runs
+  `adlc mcp-server` (`adlc_gate` / `adlc_prosecute`) after Roots resolution.
+  Cursor Desktop 3.20.10 live proof confirms expansion in `args` and `cwd`,
+  startup without plugin-cache `node_modules` or a consumer shim, and a
+  `roots/list` response. The post-fix run bound, exposed `adlc_gate` and
+  `adlc_prosecute`, and returned `ok` / `exitCode: 0` for
+  `adlc_gate gate-manifest show`. The decoder accepts both `file://` and bare
+  absolute Root paths. It requires a global `@adlc/cli` installation resolvable
+  by Cursor's Node/npm environment, without launching a Windows `.cmd` shim.
 - **Prosecutor agents** — `agents/prosecutor-*` with `readonly: true`; prefer Task fan-out.
 - **Command palette** — `/adlc-*` including one-flow `/adlc-init`.
 
@@ -82,7 +90,9 @@ npx adlc-cursor .
 ## Gaps
 
 - **Live deny-proof** — harness at `scripts/cursor-deny-proof/`; dated ADR result pending.
-- **MCP channel unverified** — Roots proxy shipped; installed-Cursor proof still required.
+- **MCP rebind and live ambiguity unverified** — expansion, bundle boot,
+  one-root binding, and both MCP tools are proven. `roots/list_changed` rebind
+  and live multi-root refusal remain unverified.
 - **Prosecutor agents packaged-but-unverified** — agents-backed claim waits on fan-out proof.
   Sequential same-context remains a degraded fallback with **weaker independence**.
 - **buildgate has no unbypassable backstop.**

@@ -4,20 +4,35 @@
 // Missing `adlc` on PATH surfaces as Cursor's normal MCP start failure;
 // install with: npm i -g @adlc/cli
 
-import { fileURLToPath } from 'node:url';
-import { runRootsProxy } from '../lib/mcp-roots-proxy.mjs';
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { runRootsProxy } from "../lib/mcp-roots-proxy.mjs";
 
 async function main() {
-  // Production: Roots only (no host-env unlock). Tests import runRootsProxy with allowHostEnvFallback.
+  // Production: Roots only. Test-only host-env fallback is injected directly
+  // through runRootsProxy and must never be controlled by the host environment.
   await runRootsProxy({
     input: process.stdin,
     output: process.stdout,
     env: process.env,
-    allowHostEnvFallback: process.env.ADLC_CURSOR_MCP_ALLOW_HOSTENV === '1',
+    allowHostEnvFallback: false,
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+if (
+  process.argv[1] &&
+  canonicalPath(fileURLToPath(import.meta.url)) ===
+    canonicalPath(process.argv[1])
+) {
   main().catch((err) => {
     process.stderr.write(`adlc-mcp-wrapper: ${err?.message ?? err}\n`);
     process.exit(1);

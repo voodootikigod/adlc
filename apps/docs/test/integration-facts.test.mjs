@@ -220,6 +220,15 @@ test('Cursor marketing facts describe the marketplace plugin install', () => {
   assert.match(cursor?.note ?? '', /marketplace|\.cursor-plugin/i);
 });
 
+test('Cursor marketing facts qualify the live MCP proof', () => {
+  const cursor = integrationFor('cursor');
+  const mcp = cursor?.surfaces.find((surface) => surface.key === 'mcp');
+  assert.match(cursor?.tagline ?? '', /one-root MCP channel live proven on Cursor 3\.20\.10/i);
+  assert.match(mcp?.detail ?? '', /rebind and live multi-root ambiguity are not proven/i);
+  assert.match(mcp?.title ?? '', /not fully shipped/i);
+  assert.match(mcp?.detail ?? '', /Do not claim MCP fully shipped/i);
+});
+
 test('Codex marketing facts describe the native marketplace surface', () => {
   const codex = integrationFor('codex');
   assert.equal(codex?.status, 'marketplace');
