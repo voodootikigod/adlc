@@ -29,7 +29,7 @@ adlc model-router [--tickets <path>] [--floor <number>] [--json]
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
-| `--floor <n>` | `0.2` | Minimum rail density for cheap-tier assignment; below it a ticket is forced to frontier and flagged as a P3 finding. `n` must be greater than 0 and at most 1 — `0` is rejected (exit 1) because it would disable the gate entirely. |
+| `--floor <n>` | `0.2` | Rail-density floor: a non-frontier-category ticket whose `railDensity` is below it is forced to frontier and raises a P3 finding (exit 2). It does not move the cheap/mid ladder start, which is a fixed `railDensity >= 0.5`. `n` must be greater than 0 and at most 1 — `0` is rejected (exit 1) because it would disable the gate entirely. |
 | `--json` | off | Machine-readable output: `{ assignments, p3Findings }`. |
 
 Assignment is rule-based: `contract`/`spec`/`architecture` categories (or any
