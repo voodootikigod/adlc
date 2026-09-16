@@ -145,8 +145,14 @@ test('an area relabel to the unit the verified locations ARE in is accepted', ()
 });
 
 test('a relabel with no source label is refused rather than stacking a second label', () => {
-  const out = revalidateAction(relabel({ from: null }), { fetchIssue: issue(['P3-low']), profile: profile(), io: IO });
-  assert.equal(out.ok, false);
+  // Refused for THAT reason, not incidentally by a later membership check: the
+  // operator needs to know the set omitted the source, not that "null" is an
+  // undeclared label.
+  for (const from of [null, undefined, '']) {
+    const out = revalidateAction(relabel({ from }), { fetchIssue: issue(['P3-low']), profile: profile(), io: IO });
+    assert.equal(out.ok, false);
+    assert.match(out.reason, /must name the label it replaces/, `from=${JSON.stringify(from)}`);
+  }
 });
 
 // ---- the evidence cannot suppress another action's comment -------------------
@@ -223,6 +229,29 @@ test('a working copy re-mapping a priority label is refused', () => {
   );
 });
 
+test('the same policy with its keys in a different order is not a change', () => {
+  // A profile is JSON someone edits by hand; reordering keys changes nothing it
+  // says, and refusing the run for it would train operators to ignore the check.
+  const reordered = {
+    ...POLICY,
+    providers: { reviewer: 'openai', decider: 'anthropic' },
+    labels: { areaPrefix: 'area:', priority: { low: 'P3-low', high: 'P1-high', medium: 'P2-medium' } },
+    units: POLICY.units.map((u) => ({ paths: u.paths, name: u.name })),
+  };
+  const out = applyRun({
+    set: { schemaVersion: 4, issues: [], proposals: [] },
+    profile: reordered,
+    baseFloor: [],
+    basePolicy: POLICY,
+    ledger: {},
+    fetchIssue: issue([]),
+    io: IO,
+    runReview: () => ({ code: REVIEW_APPROVE }),
+    gh: fakeGh(),
+  });
+  assert.equal(out.executed.length, 0);
+});
+
 test('an unknown base policy refuses the run rather than skipping the comparison', () => {
   assert.throws(
     () => applyRun({
@@ -285,6 +314,33 @@ test('a stale-lock recoverer that loses the race does not take the winner\'s liv
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('an owner-less recoverer that loses the race does not take a lock whose owner is not written yet', () => {
+  // The winner's fresh lock has no owner file for the instant between its mkdir
+  // and its metadata write, so the owner bytes match the judged (absent) ones.
+  // Only the directory's identity tells the two apart.
+  const path = '/tmp/groom-owner-less.lock';
+  const old = Date.now() - STALE_LOCK_MS - 60_000;
+  const renames = [];
+  const removed = [];
+  let mkdirs = 0;
+  assert.throws(
+    () => acquireApplyLock(path, {
+      pid: 555,
+      mkdir: () => { mkdirs += 1; throw Object.assign(new Error('exists'), { code: 'EEXIST' }); },
+      read: () => { throw new Error('ENOENT'); },
+      // The judged lock is old; what sits at the claimed path is a new directory.
+      stat: (p) => (p === path ? { ino: 1, mtimeMs: old } : { ino: 2, mtimeMs: Date.now() }),
+      rename: (from, to) => renames.push([from, to]),
+      rmdir: (p) => removed.push(p),
+    }),
+    (err) => err.isOpError === true && /left in place/.test(err.message)
+  );
+  assert.equal(mkdirs, 1, 'the lock must not be retaken');
+  assert.deepEqual(removed, [], 'the claimed live lock must not be cleared');
+  assert.equal(renames.length, 2, 'claimed, then handed back');
+  assert.deepEqual(renames[1], [renames[0][1], path]);
 });
 
 test('an expired owner-less lock is still recovered when nobody else got there first', () => {
