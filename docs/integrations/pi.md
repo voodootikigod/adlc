@@ -95,6 +95,15 @@ This gives the human constant visibility into the active enforcement context.
 
 ### 3.5 Context-Rot Handoff Deny (F3)
 
+> **Ships OFF as of 1.11.1** — see [#966](https://github.com/voodootikigod/adlc/issues/966).
+> The deny-set was blocking edits and shell across live sessions, so pi's `checkHandoff()`
+> call sites are gated behind `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`, which **defaults off**.
+> The implementation and its tests are intact. Everything below describes the gate as it
+> behaves when that flag is set; by default none of it fires. That flag decides whether the
+> gate RUNS at all — it is not a bypass. Once it is on and a deny is active, no environment
+> variable clears that deny; see
+> [claude-code.md](./claude-code.md#recovering-from-a-handoff-deny) for the recovery path.
+
 pi is the first adapter with a **real** context-fill signal rather than a transcript-size
 proxy: `ctx.getContextUsage().percent` is a live 0–100 reading of the window. The handoff
 gate feeds it to the shared bands in `@adlc/context-handoff` — **50%** warns, **60%** is the

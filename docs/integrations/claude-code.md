@@ -141,7 +141,7 @@ merge") keeps its full descriptive text.
 | **adversarial-review trigger** | Stop | Advisory by default: diffs the working tree/branch against the [ADR-0007](../adr/0007-multimodel-adversarial-review.md) §1 risk-tier path patterns (auth/trust boundary, security controls/deny paths, secrets, data-loss ops, schema/migration, CI/CD/supply-chain) and warns if a risk-gated change has no `adversarial-review` gate-manifest record. This is the mechanical trigger [ADR-0005](../adr/0005-adversarial-design-review-gate.md)/[ADR-0007](../adr/0007-multimodel-adversarial-review.md) deferred pending operator-reliance proving insufficient — set `ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1` to make it block (Stop `decision: "block"`) instead of just warn. |
 | **rails-guard** | PreToolUse | **Enforcing**: denies structured edits (Edit/Write/MultiEdit) to frozen rail paths declared in tickets. Bash is not gated in-session (a shell can't be reliably parsed); Bash rail mutations are caught by the CI diff gate at commit time. |
 | **build-gate** | PreToolUse | **Enforcing** (issue #48): for the *active* ticket (`ADLC_TICKET` env var or `.adlc/current-ticket.json`), denies a structured edit when the ticket is high-risk (declared `risk: 'high'`, or derived from category/external-effect/identity-mutation/trust-root-touch signals) AND this session's context-fitness signal (transcript tool-call depth or byte size) is past threshold — i.e. a context-rot backstop on the riskiest builds. Bash is not gated in-session (same reason as rails-guard) and, unlike rails, there is no CI backstop for it — see Gaps below. |
-| **context-handoff** | PreToolUse | **Enforcing** (T157 / context-rot handoff slice 4): evaluates D1–D3 via `@adlc/context-handoff` (`loadDenyRecords` / `mutationGateInputFromLoad` / `evaluateMutationGate`). Denies Edit/Write/MultiEdit/NotebookEdit **and Bash|Shell** under an active deny-set (fail-closed-all); ensures a deny marker when the absolute handoff/hard band fires; protects `.adlc/handoffs/denies/**`, `.adlc/.deny-store`, and `*.resume-auth.json` / `*.model-ok` / `*.lock`. Session id from `session_id` / `sessionId` / transcript basename. |
+| **context-handoff** | — | **Ships DISCONNECTED as of 1.11.1 — see [#966](https://github.com/voodootikigod/adlc/issues/966).** `hooks.json` wires no `handoff` verb, so nothing evaluates this gate on a tool call. The implementation is intact and still tested; reconnecting is re-adding the removed entries. When wired it is an enforcing gate (T157 / context-rot handoff slice 4): evaluates D1–D3 via `@adlc/context-handoff` (`loadDenyRecords` / `mutationGateInputFromLoad` / `evaluateMutationGate`), denies Edit/Write/MultiEdit/NotebookEdit **and Bash\|Shell** under an active deny-set (fail-closed-all), ensures a deny marker when the absolute handoff/hard band fires, and protects `.adlc/handoffs/denies/**`, `.adlc/.deny-store`, and `*.resume-auth.json` / `*.model-ok` / `*.lock`. If you are seeing handoff denials, you are running a pre-1.11.1 install — see [Recovering from a handoff deny](#recovering-from-a-handoff-deny). |
 
 All hooks no-op unless the repo is ADLC-initialized. Rail enforcement
 additionally no-ops until a ticket declares `rails`, so installing the plugin
@@ -265,6 +265,38 @@ If the CLI command also fails, remove the stale entry:
 $EDITOR ~/.claude/plugins/installed_plugins.json   # delete the "adlc@adlc" key
 claude plugin install adlc@adlc
 ```
+
+### Recovering from a handoff deny
+
+The context-rot handoff gate ships **disconnected** as of 1.11.1 ([#966](https://github.com/voodootikigod/adlc/issues/966)), so a current install cannot produce these denials. A **stale plugin install** can — most often one still registered at *user* scope from before the upgrade. Check with `/plugin` and remove the old entry.
+
+If you are wedged, the denial looks like this and applies to **every** Bash call, read-only ones included — `git status` and `ls` are denied too, which is why the agent cannot diagnose its own wedge:
+
+```
+mutation denied (D3:unauthorized_open:<session-id>, bash_fail_closed_under_deny).
+Resume via host `adlc handoff resume` / repair, or continue in a fresh session.
+Agent Shell cannot clear deny-set.
+```
+
+**The message's own two suggestions do not always work.** A deny marker with `ticket_id: null` and `content_hash: null` is *orphaned-unbound*: nothing can ever consume it, so neither `adlc handoff resume` nor starting a fresh session clears it. That case is what `doctor` is for:
+
+```sh
+adlc handoff doctor                                    # list orphaned-unbound markers and who wrote them
+ADLC_MANIFEST_KEY=… adlc handoff doctor --clear --write # clear them
+```
+
+Which tool to reach for:
+
+| Situation | Remedy |
+|---|---|
+| Deny marker bound to a real ticket, work is genuinely handed off | `adlc handoff resume` |
+| Orphaned-unbound marker (`ticket_id: null`, `content_hash: null`) | `adlc handoff doctor --clear --write` |
+| One-off override needed for a bound deny | signed bypass grant (below) |
+| Stale plugin install still arming the gate | remove the old install; the current one does not wire it |
+
+**There is no environment kill switch, by design.** There is no `ADLC_HANDOFF_BYPASS` and no `ADLC_HANDOFF_ENFORCEMENT` — grepping for one will not find it. This deliberately differs from `ADLC_RAILS_BYPASS`: the only override is a **signed one-shot grant** at `.adlc/handoffs/<session>.bypass-grant.json` (HMAC-SHA256, requires `ADLC_MANIFEST_KEY`), so a bypass cannot be handed out by an agent that can only set environment variables.
+
+(The `pi` and `opencode` adapters are disconnected differently — they keep their call sites behind an **opt-in** `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`, which defaults off. That flag decides whether the gate runs at all; it is not a bypass. With it set and a deny active, the recovery path above is still the only way out.)
 
 ### `npm warn Unknown user config "min-release-age"` during install
 
