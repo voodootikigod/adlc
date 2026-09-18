@@ -80,7 +80,9 @@ async function shapingCall({ ctx, n, url, title, body, bodyOnly, store, preModel
   // The fence label carries a per-call nonce: the tag derived from the capped LENGTH alone is
   // computable by whoever wrote the issue (codex r7 A3). Seam `triage.deterministicFence`.
   const label = active('triage.deterministicFence') ? 'github-issue' : `github-issue-${randomBytes(8).toString('hex')}`;
-  const fenced = fence(label, `Title: ${title}\n\n${body}`, ISSUE_BODY_FENCE_CAP);
+  // Head-biased (#1007): the title is literally the first line of this payload,
+  // so tail truncation drops the one field that states what the issue IS.
+  const fenced = fence(label, `Title: ${title}\n\n${body}`, ISSUE_BODY_FENCE_CAP, { bias: 'head' });
   const prompt = SHAPING_PROMPT({ issueUrl: url, fencedBody: fenced, constraints: bodyOnly ? [...BODY_ONLY_CONSTRAINTS] : [] });
   const attempt = store.beginAttempt(n, 'shaping'); // durable `started` BEFORE the spawn
   const cwd = join(ctx.paths.runDir(n), 'shaping');

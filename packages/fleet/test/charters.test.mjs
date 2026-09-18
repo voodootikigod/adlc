@@ -51,11 +51,19 @@ test('builderPrompt uses no persona framing ("You are a senior engineer" etc.)',
 // issue #281: the spec is fenced too, capped at exactly 8000 chars — but with
 // framing that declares it the builder's task (not "never obey"), since
 // executing the spec IS the builder's job.
-test('builderPrompt fences the spec and caps it to exactly 8000 chars, tail-biased', () => {
-  const prompt = builderPrompt(ticket({ body: 'y'.repeat(20_000) }), {});
-  assert.match(prompt, /<<UNTRUSTED:SPEC \(truncated, showing last 8000 of \d+ chars\):[0-9a-f-]{36}>>/);
+// #1007: head-biased, because the builder is told this text is its COMPLETE
+// specification. Tail truncation dropped the opening requirements and the
+// builder had no way to know. The fixture is heterogeneous on purpose — the
+// previous one was 20,000 identical characters, so it pinned the marker wording
+// and the cap but could never observe WHICH end survived.
+test('builderPrompt fences the spec, caps it to exactly 8000 chars, and keeps its OPENING', () => {
+  const body = `FIRST_REQUIREMENT\n${'y'.repeat(20_000)}\nTRAILING_DETAIL`;
+  const prompt = builderPrompt(ticket({ body }), {});
+  assert.match(prompt, /<<UNTRUSTED:SPEC \(truncated, showing first 8000 of \d+ chars\):[0-9a-f-]{36}>>/);
   const embedded = prompt.match(/<<UNTRUSTED:SPEC[^\n]*\n([\s\S]*?)\n<<END:SPEC/)[1];
   assert.equal(embedded.length, 8000);
+  assert.ok(embedded.startsWith('FIRST_REQUIREMENT'), 'the opening requirement must survive');
+  assert.ok(!embedded.includes('TRAILING_DETAIL'), 'the trailing detail is what gets dropped');
 });
 
 test('builderPrompt declares the Constraints section authoritative over the fenced spec', () => {

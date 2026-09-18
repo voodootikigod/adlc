@@ -484,3 +484,15 @@ test('CLI: --record-verdict "" without --prompt-only → exit 1 with the mutual-
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// #1007: the spec IS the payload here, so a tail-truncated spec would have the
+// premortem analyse an artifact whose constraints had been cut off the top.
+test('buildPrompt keeps the OPENING of an over-cap spec', () => {
+  const spec = `# CRITICAL CONSTRAINT AT TOP\n${'y'.repeat(70_000)}\nTRAILING_SECTION`;
+  const prompt = buildPrompt(spec);
+  const m = /<<UNTRUSTED:SPEC[^\n]*\n([\s\S]*?)\n<<END:SPEC/.exec(prompt);
+  assert.ok(m, 'the spec is fenced');
+  assert.ok(m[1].startsWith('# CRITICAL CONSTRAINT AT TOP'), 'the opening constraint survives');
+  assert.ok(!m[1].includes('TRAILING_SECTION'), 'the trailing section is what gets dropped');
+  assert.match(prompt, /truncated, showing first 64000 of \d+ chars/);
+});

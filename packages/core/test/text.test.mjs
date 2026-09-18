@@ -135,3 +135,98 @@ test('fence: the opening and closing markers carry the same nonce', () => {
   assert.ok(open && close, 'both markers carry a nonce');
   assert.equal(open[1], close[1], 'a fence must be closed by its own nonce');
 });
+
+// ── fence: explicit head/tail bias (#1007) ───────────────────────────────
+//
+// tail() bias is right for a log — the failure is at the end — and exactly
+// backwards for a specification, whose opening carries the constraints. An
+// over-cap spec silently lost its beginning and every downstream gate ran on
+// the remainder with a clean exit: coldstart would audit the surviving tail,
+// find it internally coherent, and return zero gaps for a ticket whose opening
+// requirements no longer existed.
+
+test('fence with bias head keeps the OPENING of over-length content (#1007 reproduction)', () => {
+  const CAP = 8000;
+  const spec = `CRITICAL CONSTRAINT AT TOP\n${'y'.repeat(CAP + 50)}`;
+  const result = fence('SPEC', spec, CAP, { bias: 'head' });
+  assert.ok(
+    result.includes('CRITICAL CONSTRAINT AT TOP'),
+    'the opening constraint must survive truncation for spec-shaped content'
+  );
+});
+
+test('fence with bias head drops the END, keeping exactly maxChars from the start', () => {
+  const content = `${'HEAD_MARKER'}${'z'.repeat(500)}`;
+  const result = fence('SPEC', content, 20, { bias: 'head' });
+  assert.match(result, /HEAD_MARKER/);
+  assert.ok(!result.includes('zzzzzzzzzzzzzzzzzzzzzzzzz'), 'the tail must be dropped');
+  const body = result.match(/>>\n([\s\S]*)\n<<END/)[1];
+  assert.equal(body.length, 20);
+  assert.equal(body, content.slice(0, 20));
+});
+
+test('fence with bias tail still keeps the END — the log contract is unchanged', () => {
+  const content = `${'START'.repeat(200)}${'TAIL_MARKER'}`;
+  const result = fence('GATE', content, 20, { bias: 'tail' });
+  assert.match(result, /TAIL_MARKER/);
+  assert.ok(!result.includes('STARTSTART'), 'the beginning of the log must still be dropped');
+});
+
+test('omitting opts is byte-for-byte identical to an explicit tail bias', () => {
+  // The default IS the compatibility contract: every existing call site passes
+  // three arguments, and none of them may change behaviour. Compared with the
+  // nonce tags normalized away, since those differ per call by construction.
+  const content = 'x'.repeat(5000);
+  const strip = (s) => s.replace(/[0-9a-f-]{36}/g, '<TAG>');
+  assert.equal(
+    strip(fence('BUILD', content, 1000)),
+    strip(fence('BUILD', content, 1000, { bias: 'tail' }))
+  );
+  assert.equal(
+    strip(fence('BUILD', content, 1000)),
+    strip(fence('BUILD', content, 1000, {}))
+  );
+});
+
+test('the truncation marker names the end that was KEPT, not just that it truncated', () => {
+  const content = 'q'.repeat(5000);
+  // The marker is the only signal a model gets about what is missing. Saying
+  // "last" while keeping the first is worse than saying nothing at all.
+  assert.match(
+    fence('SPEC', content, 1000, { bias: 'head' }),
+    /truncated, showing first 1000 of 5000 chars/
+  );
+  assert.match(
+    fence('GATE', content, 1000, { bias: 'tail' }),
+    /truncated, showing last 1000 of 5000 chars/
+  );
+});
+
+test('fence rejects an unrecognized bias and names the offending value', () => {
+  // Fail closed the way maxChars already does. A silently-ignored typo at a
+  // call site that believed it had opted out reinstates the whole defect.
+  for (const bad of ['start', 'front', 'HEAD', 'Tail', '', 0, null]) {
+    assert.throws(
+      () => fence('SPEC', 'content', 100, { bias: bad }),
+      (err) => err instanceof Error && /bias/.test(err.message) && err.message.includes(JSON.stringify(bad)),
+      `bias ${JSON.stringify(bad)} must be rejected with a message naming it`
+    );
+  }
+});
+
+test('under-cap content is untouched and unmarked under BOTH biases', () => {
+  for (const bias of ['head', 'tail']) {
+    const result = fence('SPEC', 'short enough', 1000, { bias });
+    assert.ok(!result.includes('truncated'), `bias ${bias} must not mark short content`);
+    assert.match(result, /short enough/);
+  }
+});
+
+test('the fence tag stays a per-call nonce under both biases (no #1005 regression)', () => {
+  for (const bias of ['head', 'tail']) {
+    const a = fence('SPEC', 'same content', 100, { bias });
+    const b = fence('SPEC', 'same content', 100, { bias });
+    const tagOf = (s) => s.match(/^<<UNTRUSTED:SPEC:([0-9a-f-]{36})>>/)[1];
+    assert.notEqual(tagOf(a), tagOf(b), `bias ${bias} must not make the tag predictable`);
+  }
+});
