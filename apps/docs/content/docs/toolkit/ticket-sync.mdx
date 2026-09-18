@@ -16,7 +16,7 @@ The ticket backlog and its external tracker drift apart the moment either is edi
 ## Usage
 
 ```sh
-adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--json]
+adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--limit <n>] [--json]
 ```
 
 The standalone binary is `adlc-ticket-sync`; the same command dispatches through the umbrella as `adlc ticket`.
@@ -30,6 +30,7 @@ The standalone binary is `adlc-ticket-sync`; the same command dispatches through
 | `--write` | Apply changes (dry-run without it). |
 | `--force` | Override a blocked pull. |
 | `--allow-rail-narrowing` | Permit a pull that narrows declared rails. |
+| `--limit <n>` | Cap on issues listed from the tracker (default 500; a positive integer). A listing that reaches the cap is refused as possibly truncated, so raise it or narrow `select`. |
 | `--json` | Machine-readable output on all commands. |
 
 ## Exit codes

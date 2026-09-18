@@ -11,9 +11,10 @@ import { push } from '../lib/push.mjs';
 import { doctor } from '../lib/doctor.mjs';
 import { makeGhRunner } from '../lib/gh.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
+import { parseLimit } from '../lib/limit.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
-const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--allow-unsigned] [--json]
+const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [--allow-rail-narrowing] [--allow-unsigned] [--limit <n>] [--json]
 
   pull    import issues from the external tracker into .adlc/tickets.json
   push    write ADLC tickets/outcomes back to the tracker (update + idempotent create)
@@ -22,6 +23,9 @@ const USAGE = `usage: adlc ticket <pull|push|sync|doctor> [--write] [--force] [-
 
 Dry-run by default; pass --write to apply. Exit: 0 ok · 1 operational · 2 blocked.
 
+--limit <n> caps how many issues pull/push list from the tracker (default 500).
+A listing that reaches the cap is refused as possibly truncated, never synced.
+
 Once any ticket declares a rail the store is a frozen trust root: a --write against
 it records a signed audit entry and needs ADLC_MANIFEST_KEY. --allow-unsigned
 records that entry unsigned instead, deliberately.
@@ -29,13 +33,23 @@ records that entry unsigned instead, deliberately.
 
 export function parseFlags(args) {
   const flags = { write: false, force: false, 'allow-rail-narrowing': false, 'allow-unsigned': false, json: false, help: false };
-  for (const a of args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
     if (a === '--write') flags.write = true;
     else if (a === '--force') flags.force = true;
     else if (a === '--allow-rail-narrowing') flags['allow-rail-narrowing'] = true;
     else if (a === '--allow-unsigned') flags['allow-unsigned'] = true;
     else if (a === '--json') flags.json = true;
     else if (a === '--archive') {} // retained for store-doctor CLI compatibility
+    // The truncation refusal tells the operator to raise --limit, so the flag has
+    // to exist. It consumes the next token; a bad or missing value is an
+    // operational error like any unknown flag, never a silently different cap.
+    else if (a === '--limit') {
+      const parsed = parseLimit(args[i + 1]);
+      if (!parsed.ok) { process.stderr.write(`${parsed.error}\n`); process.exit(1); }
+      flags.limit = parsed.value;
+      i += 1;
+    }
     // `adlc ticket <pull|push|sync|doctor>` routes here, so this is the parser a
     // user reaches when they follow `adlc ticket <command> --help`. Rejecting
     // --help as an unknown flag made that instruction a dead end for four of the
@@ -99,6 +113,7 @@ async function main() {
       write: flags.write,
       force: flags.force,
       allowRailNarrowing: flags['allow-rail-narrowing'],
+      limit: flags.limit,
     });
     report(result, flags.json);
     process.exit(result.exitCode);
@@ -113,6 +128,7 @@ async function main() {
       runner: makeGhRunner(),
       gitRemoteUrl: gitRemoteUrl(),
       write: flags.write,
+      limit: flags.limit,
     });
     report(result, flags.json);
     process.exit(result.exitCode);
@@ -121,7 +137,7 @@ async function main() {
   if (sub === 'sync') {
     const common = {
       dir: process.cwd(), provider: githubProvider(), runner: makeGhRunner(), gitRemoteUrl: gitRemoteUrl(),
-      key: resolveKeyFromEnv(), allowUnsigned: Boolean(flags['allow-unsigned']),
+      key: resolveKeyFromEnv(), allowUnsigned: Boolean(flags['allow-unsigned']), limit: flags.limit,
     };
     const { exitCode, pulled, pushed } = await syncFlow(
       () => pull({ ...common, write: flags.write, force: flags.force, allowRailNarrowing: flags['allow-rail-narrowing'] }),
