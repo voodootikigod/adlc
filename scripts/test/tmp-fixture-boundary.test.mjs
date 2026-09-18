@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -99,6 +99,8 @@ const ALLOWLIST = new Set([
   'packages/review-calibration/test/min-plants-floor.test.mjs',
   'packages/review-calibration/test/review-calibration.test.mjs',
   'packages/runner/test/cli-exit-codes.test.mjs',
+  'packages/runner/test/codex-integration.test.mjs',
+  'packages/runner/test/runner.test.mjs',
   'packages/skill-rot/test/frontmatter-preserve.test.mjs',
   'packages/skill-rot/test/skill-rot.test.mjs',
   'packages/spec-lint/test/readme-exit-codes.test.mjs',
@@ -107,6 +109,7 @@ const ALLOWLIST = new Set([
   'packages/tickets/test/manifest-rails.test.mjs',
   'packages/tickets/test/manifest-segments.test.mjs',
   'packages/tickets/test/pointer-bounded.test.mjs',
+  'packages/tickets/test/pointer.test.mjs',
   'plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs',
   'plugins/adlc-claude-code/hooks/test/handoff-resolve-global.test.mjs',
   'plugins/adlc-claude-code/hooks/test/handoff-secret-scrub.test.mjs',
@@ -124,6 +127,7 @@ const ALLOWLIST = new Set([
   'plugins/adlc-cursor/test/mcp-wrapper.test.mjs',
   'plugins/adlc-cursor/test/session-start.test.mjs',
   'plugins/adlc-gemini/test/case-sensitivity.test.mjs',
+  'plugins/adlc-gemini/test/decide.test.mjs',
   'plugins/adlc-gemini/test/projection.test.mjs',
   'plugins/adlc-gemini/test/root.test.mjs',
   'plugins/adlc-herdr/test/action-dispatch.test.mjs',
@@ -173,6 +177,7 @@ export function isSuiteDirectory(name) {
  */
 function suiteFiles(path, inSuite = false) {
   const files = [];
+  if (!existsSync(path)) return files;
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name === 'node_modules') continue;
     const full = join(path, entry.name);
@@ -223,8 +228,27 @@ export function removalHelpers(body) {
 export function unremovedFixtures(body) {
   const helpers = removalHelpers(body);
   const drains = /after\s*\(/.test(body) && /rmSync\s*\(/.test(body);
+  const count = (re) => (body.match(re) || []).length;
   const leaks = [];
 
+  /**
+   * Removal SITES for a name, not merely "does one exist". `dir` and `root` are
+   * the common fixture names here, so a file-wide existence test lets one
+   * cleaned fixture launder every later fixture that reuses the name. Counting
+   * keeps removals in step with creations.
+   *
+   * Registration is the exception and stays uncounted: one collection drained
+   * by an after() hook covers any number of members, so a single add() site
+   * inside a helper legitimately serves every call.
+   */
+  const removalSites = (name) =>
+    count(new RegExp(String.raw`rmSync\s*\(\s*${name}\b`, 'g'))
+    + [...helpers].reduce((n, helper) => n + count(new RegExp(String.raw`\b${helper}\s*\(\s*${name}\s*\)`, 'g')), 0);
+
+  const registered = (name) =>
+    drains && new RegExp(String.raw`\w+\s*\.\s*(?:add|push)\s*\(\s*${name}\b`).test(body);
+
+  const seen = new Map();
   for (const match of body.matchAll(/mkdtempSync\s*\(/g)) {
     const before = body.slice(Math.max(0, match.index - 120), match.index);
     const binding = before.match(/(?:const|let|var)\s+(\w+)\s*=\s*$/)
@@ -236,14 +260,13 @@ export function unremovedFixtures(body) {
       continue;
     }
     const name = binding[1];
-    const removed =
-      new RegExp(String.raw`rmSync\s*\(\s*${name}\b`).test(body)
-      || [...helpers].some((helper) => new RegExp(String.raw`\b${helper}\s*\(\s*${name}\s*\)`).test(body))
-      || (drains && new RegExp(String.raw`\w+\s*\.\s*(?:add|push)\s*\(\s*${name}\b`).test(body));
+    const nth = (seen.get(name) ?? 0) + 1;
+    seen.set(name, nth);
 
-    if (!removed) {
-      leaks.push(`line ${line}: fixture "${name}" is never removed (no rmSync, cleanup helper, or registered after() hook)`);
-    }
+    if (registered(name) || nth <= removalSites(name)) continue;
+    leaks.push(
+      `line ${line}: fixture "${name}" is never removed (no rmSync, cleanup helper, or registered after() hook)`,
+    );
   }
   return leaks;
 }
@@ -342,6 +365,42 @@ test('a registry that is never drained is still a leak', () => {
     dirs.add(dir);
   `;
   assert.equal(unremovedFixtures(undrained).length, 1);
+});
+
+test('one cleaned fixture does not launder a second fixture of the same name', () => {
+  // `dir` and `root` are the two most common fixture names in this repo, so a
+  // file-wide "is there an rmSync(dir) anywhere" test would mark every later
+  // `const dir = mkdtempSync(...)` clean because an earlier one was removed.
+  // Removal sites must therefore keep pace with creation sites.
+  const reused = `
+    test('a', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'x-'));
+      rmSync(dir, { recursive: true, force: true });
+    });
+    test('b', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'x-'));
+      assert.ok(dir);
+    });
+  `;
+  const leaks = unremovedFixtures(reused);
+  assert.equal(leaks.length, 1, 'the second, uncleaned "dir" must still be reported');
+  assert.match(leaks[0], /line 7/, 'and it must name the uncleaned site, not the cleaned one');
+
+  // The registry shape stays N-safe: one drained collection covers any number
+  // of fixtures, so it must not be penalised by the same counting rule.
+  const manyViaRegistry = `
+    const dirs = new Set();
+    after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+    test('a', () => { const dir = mkdtempSync(join(tmpdir(), 'x-')); dirs.add(dir); });
+    test('b', () => { const dir = mkdtempSync(join(tmpdir(), 'x-')); dirs.add(dir); });
+  `;
+  assert.deepEqual(unremovedFixtures(manyViaRegistry), [], 'a drained registry covers every member');
+});
+
+test('the scan tolerates a missing top-level directory', () => {
+  // scanRepo walks a fixed list; a repo without one of them must fail with a
+  // clear empty result, never an ENOENT crash inside the test runner.
+  assert.deepEqual(suiteFiles(join(ROOT, "no-such-directory-here")), []);
 });
 
 test('a same-file rmSync on a DIFFERENT binding does not launder a leak', () => {
