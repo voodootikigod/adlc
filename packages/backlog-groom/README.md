@@ -102,6 +102,15 @@ have found.
 A true miss rate would need ground truth this tool does not have; reporting one
 would be false precision. The excluded count is what is actually knowable.
 
+Choose `--threshold` from those reported numbers. Because judgment is per pair,
+the only useful threshold is one whose surfaced count will actually be judged,
+and that count collapses steeply: measured on this repo at 381 open issues
+(72,390 pairs), the `0.2` default surfaces 23,327 pairs, `0.3` surfaces 360,
+`0.35` surfaces 47, `0.4` surfaces 13, `0.5` surfaces 1, and `0.6` and above
+surface none. `0.4` is a reasonable starting point. The figures scale with
+backlog size and title similarity, so re-measure rather than reusing them — every
+run prints `relationFilter`.
+
 ## Honesty rules
 
 Every run leads with its route distribution, and a truncated fetch says so

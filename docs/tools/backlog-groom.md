@@ -208,3 +208,13 @@ stands between a groomed set and a closed issue.
 pass never surfaces is a relation the tool cannot report. The filter's threshold
 and miss rate are printed with every run so the ceiling is visible rather than
 implied.
+
+Read those numbers and choose `--threshold` from them. Relations need a judgment
+per surfaced pair, so the only useful threshold is one whose `pairsSurfaced` will
+actually be worked through — and the count collapses steeply. Measured on this
+repo at 381 open issues (72,390 pairs): `0.2` (the default) surfaces 23,327,
+`0.3` surfaces 360, `0.35` surfaces 47, `0.4` surfaces 13, `0.5` surfaces 1, and
+`0.6` and above surface none. `0.4` is a reasonable starting point; the default is
+not, because an unjudged pair is not a relation. These figures scale with backlog
+size and title similarity, so re-measure rather than treating them as constants —
+every run prints them.

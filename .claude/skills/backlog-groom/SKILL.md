@@ -60,7 +60,9 @@ ticket ships. Tracked in #1021.
 
 ```bash
 # Read-only: verify, cluster, rank. Writes nothing, anywhere.
-node packages/backlog-groom/bin/backlog-groom.mjs --json --out groomed.json
+# --threshold: see "Pick the relation threshold from the run's own numbers" below.
+# The 0.2 default surfaces far more candidate pairs than anyone will judge.
+node packages/backlog-groom/bin/backlog-groom.mjs --threshold 0.4 --json --out groomed.json
 
 # Apply conclusions. Every action is gated and floored; nothing is applied
 # without an approve from a provider distinct from the deciding one.
@@ -68,6 +70,36 @@ node packages/backlog-groom/bin/backlog-groom.mjs --apply --set groomed.json
 ```
 
 When the verb lands, both become `adlc backlog-groom …` and this note goes away.
+
+### Pick the relation threshold from the run's own numbers
+
+Relations need a judgment per surfaced pair, and YOU supply it — so the only
+threshold worth running is one whose `pairsSurfaced` you will actually work
+through. Every run prints `relationFilter` with `pairsTotal`, `pairsSurfaced` and
+`excludedRate`; read it and re-run with a different `--threshold` rather than
+accepting whatever the default gives.
+
+The count collapses steeply, so the useful range is narrow. Measured on this repo
+at 381 open issues (72,390 pairs):
+
+| `--threshold` | pairs surfaced |
+|---|---|
+| 0.2 (the default) | 23,327 |
+| 0.3 | 360 |
+| 0.35 | 47 |
+| 0.4 | 13 |
+| 0.5 | 1 |
+| 0.6 and up | 0 |
+
+**0.4 is the starting point above**, because ~13 pairs is a number a run can
+actually judge; 0.35 buys more recall for ~47. The default's 23,327 is not a
+backlog of work, it is a way to emit nothing — and an unjudged pair is not a
+relation, so a threshold you cannot work through surfaces exactly as many
+relations as one that surfaces none.
+
+These figures scale with backlog size and how similar the titles are, so treat
+them as this repo's shape today, not a constant. Re-measure when the backlog
+changes materially: the numbers come free with every run.
 
 Read the run's **route distribution** before trusting its conclusions. A sweep
 that mechanically verified 4% of the backlog is still useful, but it is not a
