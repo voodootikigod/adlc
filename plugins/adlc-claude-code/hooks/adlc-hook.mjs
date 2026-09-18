@@ -150,9 +150,20 @@ function emit(obj) {
  *
  * Returns the spawn result, or null when `adlc` is not on PATH (ENOENT) —
  * the signal to no-op rather than error.
+ *
+ * BOUNDED, because an unbounded spawnSync waits forever on a child that never
+ * exits, and the only other bound is adlc-hook-run.mjs's per-mode
+ * self-termination — which anything calling this module directly (every test in
+ * hooks/test/) does not get. A timeout sets `error`, which the existing ENOENT
+ * branch below already maps to the no-op signal, so a wedged `adlc` degrades
+ * exactly like a missing one. Same budget as the `adlc` spawn in
+ * recoveryExceptionAllowed, and not overridable from the environment: this is a
+ * safety bound, not a tuning knob.
  */
+const ADLC_CLI_TIMEOUT_MS = 5000;
+
 function runAdlc(args) {
-  const r = spawnSync('adlc', args, { encoding: 'utf8' });
+  const r = spawnSync('adlc', args, { encoding: 'utf8', timeout: ADLC_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' });
   if (r.error) return null;
   return r;
 }
@@ -735,11 +746,34 @@ function unquoteGitStatusPath(raw) {
  * first reachable trunk candidate — "diffs the working tree/branch" per the
  * issue. Best-effort: any git failure (not a repo, no candidate base reachable,
  * git missing) yields an empty set rather than throwing — `review` is advisory
- * and must never crash or fail closed on a git problem.
+ * and must never crash or fail closed on a git problem. A git that never exits
+ * is just another such failure, and is bounded below.
  */
+const GIT_SCAN_DEADLINE_MS = 5000;
+
+// The floor under every per-call timeout, and it is load-bearing rather than
+// cosmetic: spawnSync treats `timeout: 0` as NO timeout (measured — a child
+// sleeping 30 s was never killed), and a negative one throws. So an exhausted
+// budget computing 0 would hand the last git call an UNBOUNDED wait, which is
+// the hang this whole change exists to remove. One millisecond is effectively
+// "fail now" while still being a real bound.
+const MIN_GIT_CALL_MS = 1;
+
 function gitChangedPaths() {
   const paths = new Set();
-  const runGit = (args) => spawnSync('git', args, { encoding: 'utf8' });
+  // ONE budget for the WHOLE scan, not one per call — the same shape
+  // repoManifestChainIsSigned uses for its own multi-step walk. This function
+  // issues up to eight git commands (status, ls-files, a rev-parse plus a
+  // merge-base per trunk candidate, diff), so a per-call timeout would let a
+  // wedged git cost eight times the bound. Each call gets whatever is left;
+  // once it is spent the rest fail immediately and we return the paths gathered
+  // so far, which is precisely the best-effort contract above.
+  const startMs = Date.now();
+  const runGit = (args) => spawnSync('git', args, {
+    encoding: 'utf8',
+    timeout: Math.max(MIN_GIT_CALL_MS, GIT_SCAN_DEADLINE_MS - (Date.now() - startMs)),
+    killSignal: 'SIGKILL',
+  });
 
   const status = runGit(['status', '--porcelain', '--no-renames']);
   if (!status.error && status.status === 0 && status.stdout) {
