@@ -751,6 +751,14 @@ function unquoteGitStatusPath(raw) {
  */
 const GIT_SCAN_DEADLINE_MS = 5000;
 
+// The floor under every per-call timeout, and it is load-bearing rather than
+// cosmetic: spawnSync treats `timeout: 0` as NO timeout (measured — a child
+// sleeping 30 s was never killed), and a negative one throws. So an exhausted
+// budget computing 0 would hand the last git call an UNBOUNDED wait, which is
+// the hang this whole change exists to remove. One millisecond is effectively
+// "fail now" while still being a real bound.
+const MIN_GIT_CALL_MS = 1;
+
 function gitChangedPaths() {
   const paths = new Set();
   // ONE budget for the WHOLE scan, not one per call — the same shape
@@ -763,7 +771,7 @@ function gitChangedPaths() {
   const startMs = Date.now();
   const runGit = (args) => spawnSync('git', args, {
     encoding: 'utf8',
-    timeout: Math.max(1, GIT_SCAN_DEADLINE_MS - (Date.now() - startMs)),
+    timeout: Math.max(MIN_GIT_CALL_MS, GIT_SCAN_DEADLINE_MS - (Date.now() - startMs)),
     killSignal: 'SIGKILL',
   });
 
