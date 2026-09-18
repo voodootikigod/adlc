@@ -28,7 +28,7 @@ rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--pro
 | `--min N` | `2` | Minimum cluster size to author a lens |
 | `--out-dir PATH` | `.adlc/lenses` | Directory to write lens files into |
 | `--write` | false | Emit lens files (default: dry-run) |
-| `--llm` | false | Use LLM to sharpen lens title and charter (one `mid` call per cluster) |
+| `--llm` | false | Use LLM to sharpen lens title and charter (one `mid` call per cluster); failed refinements are reported, and the command exits 1 if every cluster fails |
 | `--prompt-only` | false | Print LLM prompts and exit 0 (no API key required) |
 | `--json` | false | Machine-readable JSON output |
 
@@ -113,7 +113,8 @@ or stack traces being passed directly to API response bodies or client UI.
       "title": "Error Exposure Leak",
       "count": 6,
       "prCount": 4,
-      "path": ".adlc/lenses/lens-error-expose-raw.md"
+      "path": ".adlc/lenses/lens-error-expose-raw.md",
+      "refined": true
     }
   ]
 }
@@ -135,7 +136,7 @@ illustrative-only "Example Objections" section, separate from the Charter.
 | Code | Meaning |
 |------|---------|
 | 0 | Success — mining complete |
-| 1 | Operational error — `gh` missing, auth failure, no PRs found |
+| 1 | Operational error — `gh` missing, auth failure, no PRs found, or `--llm` was requested and every cluster refinement failed |
 | 2 | Gate fails (reserved; currently unused by this tool) |
 
 ## Requirements
