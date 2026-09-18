@@ -179,3 +179,23 @@ test('buildRouteJudgePrompt: asks for equivalent/answer/variants JSON', () => {
   assert.ok(prompt.includes('"answer"'));
   assert.ok(prompt.includes('"variants"'));
 });
+
+// #1007: the contract between two adjacent tickets is implied by what each one
+// states UP FRONT. Tail truncation handed the reader the trailing detail of
+// each body and dropped the interface requirements at the top.
+test('buildEdgePrompt keeps the OPENING of an over-cap ticket body', () => {
+  const big = (id) => ({
+    id,
+    title: `Ticket ${id}`,
+    body: `INTERFACE_CONTRACT_${id} ${'q'.repeat(9000)} TRAILING_${id}`,
+  });
+  const prompt = buildEdgePrompt(big('A'), big('B'));
+
+  for (const id of ['A', 'B']) {
+    const m = new RegExp(`<<UNTRUSTED:ticket-${id}-body[^\\n]*\\n([\\s\\S]*?)\\n<<END:ticket-${id}-body`).exec(prompt);
+    assert.ok(m, `ticket ${id}'s body is fenced`);
+    assert.ok(m[1].startsWith(`INTERFACE_CONTRACT_${id}`), `ticket ${id} keeps its opening contract`);
+    assert.ok(!m[1].includes(`TRAILING_${id}`), `ticket ${id} drops its trailing detail instead`);
+  }
+  assert.match(prompt, /truncated, showing first 8000 of \d+ chars/);
+});

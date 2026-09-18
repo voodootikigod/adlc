@@ -83,7 +83,11 @@ ${readingText}`;
  */
 export function buildEdgePrompt(ticketA, ticketB) {
   const bodyBlock = (ticket) =>
-    ticket.body ? fence(`ticket-${ticket.id}-body`, ticket.body, TICKET_BODY_CAP) : '(no body)';
+    ticket.body
+      // Head-biased (#1007): the contract between two tickets is implied by
+      // what each one states up front, not by its trailing detail.
+      ? fence(`ticket-${ticket.id}-body`, ticket.body, TICKET_BODY_CAP, { bias: 'head' })
+      : '(no body)';
 
   return `You are given two adjacent tickets in a parallel development plan.
 Write the exact interface/contract (types, function signatures, endpoint shapes, error cases)

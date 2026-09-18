@@ -27,21 +27,38 @@ export function tail(str, maxChars = 4000) {
  * already in use by packages/fleet).
  *
  * maxChars is REQUIRED (issue #280) — every existing call site had no cap,
- * so a single pathological log could blow a downstream context. Content is
- * tail()-biased when it needs truncation: for a build/gate/prosecution log,
- * the FAILURE is almost always at the end, not the start.
+ * so a single pathological log could blow a downstream context.
+ *
+ * Truncation direction is explicit (#1007). It defaults to 'tail' because that
+ * is right for the majority of call sites — for a build/gate/prosecution log
+ * the FAILURE is at the end, not the start — but it is exactly backwards for a
+ * specification, whose OPENING carries the constraints. A tail-truncated spec
+ * lost its beginning silently and every downstream gate then ran on the
+ * remainder with a clean exit: coldstart would audit the surviving tail, find
+ * it internally coherent, and return zero gaps for a ticket whose opening
+ * requirements no longer existed. Spec-shaped call sites pass bias: 'head'.
  *
  * @param {string} label
  * @param {string} content
  * @param {number} maxChars
+ * @param {{bias?: 'head'|'tail'}} [opts]
  * @returns {string}
  */
-export function fence(label, content, maxChars) {
+export function fence(label, content, maxChars, opts = {}) {
   if (!Number.isInteger(maxChars) || maxChars < 0) {
     throw new Error('fence: maxChars must be a non-negative integer');
   }
+  const { bias = 'tail' } = opts ?? {};
+  // Fail closed on an unrecognized bias rather than falling back to the
+  // default. A silently-ignored typo ('start', 'front', 'HEAD') at a call site
+  // that believed it had opted out reinstates the whole defect, invisibly.
+  if (bias !== 'head' && bias !== 'tail') {
+    throw new Error(
+      `fence: bias must be 'head' or 'tail', got: ${JSON.stringify(bias)}`
+    );
+  }
   const raw = content ?? '';
-  const capped = tail(raw, maxChars);
+  const capped = bias === 'head' ? raw.slice(0, maxChars) : tail(raw, maxChars);
   const truncated = capped.length < raw.length;
   // The tag is a per-call nonce (#1005). It was previously derived from the
   // capped length, which made it computable by whoever wrote the content:
@@ -53,6 +70,12 @@ export function fence(label, content, maxChars) {
   // construction, which is the property the fence needs and the only one it
   // ever claimed.
   const tag = randomUUID();
-  const marker = truncated ? `${label} (truncated, showing last ${maxChars} of ${raw.length} chars)` : label;
+  // Name the end that was KEPT. The marker is the only signal the model gets
+  // about what is missing, and saying "last" while keeping the first is worse
+  // than saying nothing.
+  const kept = bias === 'head' ? 'first' : 'last';
+  const marker = truncated
+    ? `${label} (truncated, showing ${kept} ${maxChars} of ${raw.length} chars)`
+    : label;
   return `<<UNTRUSTED:${marker}:${tag}>>\n${capped}\n<<END:${label}:${tag}>>`;
 }
