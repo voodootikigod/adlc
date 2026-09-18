@@ -104,6 +104,123 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {})
  * @param {{ [file: string]: Set<number> }} changedLines - From mutate.changedLinesFromDiff()
  * @returns {string[]} Array of file paths eligible for mutation.
  */
+/**
+ * Classify every line of a source file as code-bearing or not (#1032).
+ *
+ * "Code-bearing" means the line contains at least one character that is part of
+ * the PROGRAM rather than a comment. This exists so a diff that changed only
+ * comments can be reported as not-covered instead of failing closed, and the
+ * whole design is biased one way: an ambiguous line must come out as CODE.
+ * Getting that backwards means a real, unverified change passes silently, which
+ * is the vacuous-pass class #70/#41/#35/#658 exist to close.
+ *
+ * It scans the WHOLE file, because comment state crosses lines: a `// ...` line
+ * inside a multi-line template literal is string DATA, and treating it as a
+ * comment would skip a genuine behaviour change.
+ *
+ * Two deliberate non-features:
+ *
+ * - NO regex-literal state. A `/` that is not followed by `/` or `*` is treated
+ *   as ordinary code, which is true whether it is division or the start of a
+ *   regex, and a regex literal cannot span a line. The only misread available is
+ *   a `//` INSIDE a regex (`/a\/\//`), which stops the scan early on a line the
+ *   opening `/` already marked as code — it cannot change that line's verdict and
+ *   cannot leak state into the next line.
+ * - NO `${}` tracking inside templates. Every line in template state is marked
+ *   code-bearing outright, including whitespace-only ones, since a change to the
+ *   indentation inside a template changes the string it produces.
+ *
+ * Returns { codeBearing, trustworthy }. `codeBearing` is 1-based (index 0 is
+ * unused). `trustworthy` is false when the file ends mid-block-comment or
+ * mid-template, or a quote is left unterminated — states that mean the scan lost
+ * track, so every caller must treat the file as code.
+ */
+function scanCodeBearingLines(source) {
+  const lines = String(source).split('\n');
+  const codeBearing = new Array(lines.length + 1).fill(false);
+  let state = 'code';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNo = i + 1;
+    // A line that OPENS inside a template is string content even before any
+    // character is examined — including a blank one.
+    if (state === 'template') codeBearing[lineNo] = true;
+
+    let j = 0;
+    while (j < line.length) {
+      const ch = line[j];
+      const next = line[j + 1];
+
+      if (state === 'block') {
+        if (ch === '*' && next === '/') { state = 'code'; j += 2; continue; }
+        j++;
+        continue;
+      }
+
+      if (state === 'template') {
+        codeBearing[lineNo] = true;
+        if (ch === '\\') { j += 2; continue; }
+        if (ch === '`') { state = 'code'; j++; continue; }
+        j++;
+        continue;
+      }
+
+      // state === 'code'
+      if (ch === ' ' || ch === '\t' || ch === '\r') { j++; continue; }
+      if (ch === '/' && next === '/') { j = line.length; continue; }
+      if (ch === '/' && next === '*') { state = 'block'; j += 2; continue; }
+
+      codeBearing[lineNo] = true;
+
+      if (ch === '`') { state = 'template'; j++; continue; }
+      if (ch === "'" || ch === '"') {
+        j++;
+        let closed = false;
+        while (j < line.length) {
+          if (line[j] === '\\') { j += 2; continue; }
+          if (line[j] === ch) { closed = true; j++; break; }
+          j++;
+        }
+        // An unterminated quote is a syntax error or a scan that lost its place;
+        // either way the rest of the file cannot be trusted.
+        if (!closed) return { codeBearing, trustworthy: false };
+        continue;
+      }
+      j++;
+    }
+  }
+
+  return { codeBearing, trustworthy: state === 'code' };
+}
+
+/**
+ * True only when EVERY changed line is provably comment text or blank (#1032).
+ *
+ * False on any doubt: an untrustworthy scan, a line number outside the file, an
+ * empty change set (nothing changed means this predicate has no opinion, and a
+ * caller must not read that as permission to skip). An `import`, `export` or
+ * `console.log` line is CODE here even though no mutation operator can see it —
+ * that is a different cause (#1031) and must keep failing closed.
+ *
+ * @param {string} source            current file content
+ * @param {Iterable<number>} changed 1-based changed line numbers
+ */
+export function changedLinesAreCommentOnly(source, changed) {
+  const numbers = [...(changed ?? [])];
+  if (numbers.length === 0) return false;
+
+  const { codeBearing, trustworthy } = scanCodeBearingLines(source);
+  if (!trustworthy) return false;
+
+  const lineCount = codeBearing.length - 1;
+  for (const n of numbers) {
+    if (!Number.isInteger(n) || n < 1 || n > lineCount) return false;
+    if (codeBearing[n]) return false;
+  }
+  return true;
+}
+
 export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {
   return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs }));
 }
