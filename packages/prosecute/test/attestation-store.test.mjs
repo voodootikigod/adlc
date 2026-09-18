@@ -2,7 +2,7 @@
 // manifest TRUNCATION gap (#355, #354 F1 follow-up). Pure and gate-agnostic: no git
 // awareness, no knowledge of the cross-model gate name — callers pass already-scoped
 // entry arrays and a store file path.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,11 +14,26 @@ import {
   mirrorObservedAttestations,
 } from '../lib/attestation-store.mjs';
 
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
+
 const KEY = 'test-attestation-store-key';
 const WRONG_KEY = 'wrong-key';
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'adlc-attestation-store-'));
+  return fixture('adlc-attestation-store-');
 }
 
 function signedEntry(key, { seq, revision, provider = 'openai', authorProvider = 'anthropic', verdict = 'approve', prev = null }) {

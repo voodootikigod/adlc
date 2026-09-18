@@ -5,7 +5,7 @@
 // Presence of the adoption record IS required-mode — there is no separate boolean.
 // A malformed record must never be silently treated the same as an absent one: callers
 // (verifiers) fail closed on `valid: false`, distinct from `present: false`.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,21 @@ import {
   MAX_CONFIG_JSON_BYTES,
 } from '../lib/generation-descriptor.mjs';
 
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
+
 const FP_A = 'a'.repeat(64);
 const FP_B = 'b'.repeat(64);
 
@@ -32,7 +47,7 @@ const FP_B = 'b'.repeat(64);
 const DIR = join('repo', '.adlc');
 
 function makeAdlcDir() {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const root = fixture('adlc-generation-descriptor-');
   const dir = join(root, '.adlc');
   mkdirSync(dir, { recursive: true });
   return { root, dir };
@@ -237,7 +252,7 @@ test('.adlc ITSELF being a symlink is caught by readAdoptionRecord, even when th
 });
 
 test('.adlc genuinely absent entirely (no directory at all) is the only case reported present:false', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const root = fixture('adlc-generation-descriptor-');
   const dir = join(root, '.adlc');
   assert.deepEqual(readAdoptionRecord(dir), { present: false });
 });
@@ -450,14 +465,14 @@ test('containment is still enforced when dir itself does NOT YET EXIST and mustE
   // mustExist:false, and the whole function returned BEFORE the containment check ever
   // ran — so an out-of-tree target was silently "approved" whenever dir hadn't been
   // created yet (the normal state before initial adoption).
-  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const root = fixture('adlc-generation-descriptor-');
   const dir = join(root, '.adlc'); // deliberately never created
   const outsideSibling = join(root, 'CONTRIBUTING.md');
   assert.throws(() => assertGenerationDirNotSymlinked(dir, outsideSibling, { mustExist: false }), /not inside/);
 });
 
 test('a genuine descendant is still tolerated when dir does not yet exist and mustExist:false', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-generation-descriptor-'));
+  const root = fixture('adlc-generation-descriptor-');
   const dir = join(root, '.adlc');
   const generationDir = join(dir, 'manifest-generations', 'g1');
   assert.doesNotThrow(() => assertGenerationDirNotSymlinked(dir, generationDir, { mustExist: false }));

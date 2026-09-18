@@ -1,17 +1,34 @@
 // Shared fixtures for the per-concern prosecute test files (mirrors packages/gate-fuzzing's
 // one-file-per-concern split). Not itself a *.test.mjs file, so `node --test test/*.test.mjs`
 // does not try to run it directly.
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { after } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
 
 export const FIXTURE_REVISION = 'fixture-revision';
 export const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
 
+// Every factory below mints a directory per call, and the callers are spread
+// across the whole prosecute suite — so cleanup belongs here, once, rather than
+// in each caller's finally. The hook is registered when a test file imports this
+// module, so it drains that file's fixtures when the file finishes.
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 export function tmpAdlc() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-prosecute-'));
+  const dir = fixture('adlc-prosecute-');
   writeFileSync(join(dir, 'tickets.json'), JSON.stringify({
     tickets: [
       { id: 'T1', title: 'Fixture ticket', scope: ['src/**'], rails: ['test/**'], edges: [] },
@@ -22,7 +39,7 @@ export function tmpAdlc() {
 }
 
 export function gitRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-prosecute-git-'));
+  const dir = fixture('adlc-prosecute-git-');
   const g = (...args) => execFileSync('git', args, {
     cwd: dir,
     encoding: 'utf8',

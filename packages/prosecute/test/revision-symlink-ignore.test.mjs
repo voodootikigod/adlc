@@ -10,18 +10,33 @@
 // and the worktree revision hashed evidence that itself embeds the revision —
 // making the git-worktree: hash non-deterministic across cwd forms. The test forces
 // the same condition portably with an explicit symlink (no /var dependency).
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, symlinkSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveRevision } from '@adlc/core';
 
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
+
 describe('@adlc/core resolveRevision — symlinked ignore paths', () => {
   it('honors an ignore path given via a symlink alias of cwd (revision stays stable)', () => {
     // realpathSync so `real` is canonical — the same form process.cwd() would report.
-    const real = realpathSync.native(mkdtempSync(join(tmpdir(), 'rev-real-')));
+    const real = realpathSync.native(fixture('rev-real-'));
     const g = (...a) => execFileSync('git', a, { cwd: real, stdio: ['ignore', 'pipe', 'ignore'] });
     g('init', '-q', '-b', 'main');
     g('config', 'user.email', 't@t.co');
@@ -37,7 +52,7 @@ describe('@adlc/core resolveRevision — symlinked ignore paths', () => {
 
     // Reference that SAME file through a symlink alias of the repo root — the alias
     // form that broke ignore-matching before the fix.
-    const aliasParent = realpathSync.native(mkdtempSync(join(tmpdir(), 'rev-alias-')));
+    const aliasParent = realpathSync.native(fixture('rev-alias-'));
     const alias = join(aliasParent, 'link');
     symlinkSync(real, alias);
     const aliasEvidence = join(alias, 'evidence.txt');

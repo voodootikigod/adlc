@@ -10,7 +10,7 @@
 // carry-forward were free, a verdict would ride forward over bases nobody examined — worse than
 // the treadmill, which at least forced a fresh look. Premortem F1; the maintainer capped the
 // chain at 3.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -20,6 +20,21 @@ import {
   recordCrossModelReview as realRecordCrossModelReview, carryForwardCrossModelReview as realCarryForwardCrossModelReview, CARRY_FORWARD_MAX_DEPTH,
 } from '../lib/cross-model.mjs';
 import { readEntries, ledgerPath, sha256 } from '@adlc/core';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 process.env.ADLC_MANIFEST_KEY = 'carry-forward-test-key';
 
@@ -37,7 +52,7 @@ function withoutKey(fn) {
 }
 
 function ledger() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-carry-'));
+  const dir = fixture('adlc-carry-');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   return join(dir, '.adlc');
 }
@@ -48,7 +63,7 @@ const clean = (d) => rmSync(join(d, '..'), { recursive: true, force: true });
 // always null, so a segment can never be "open" and this test's scenario cannot
 // be reproduced).
 function gitLedger() {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-carry-git-'));
+  const root = fixture('adlc-carry-git-');
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'feat/carry-forward-test');
   g('config', 'user.email', 't@t.co');

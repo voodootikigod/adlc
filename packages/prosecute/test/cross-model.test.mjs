@@ -5,7 +5,7 @@
 // is revision-bound and distinct-provider: a stale-revision or same-provider
 // attestation does NOT satisfy it, and recordCrossModelReview() refuses to CREATE
 // a same-provider (non cross-model) record.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,21 @@ import { signEntry } from '@adlc/gate-manifest/lib/sign.mjs';
 import { ledgerPath, sha256, resolveRevision, resolveChangeSetRevision, changeSetDigest, readEntries } from '@adlc/core';
 import { gitRepo } from './helpers.mjs';
 import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 // Hand-build a segment file directly (the segment WRITER is T-MANIFEST-FOREST slice
 // 3, not yet built — see gate-manifest's forest-format.test.mjs for the same
@@ -77,7 +92,7 @@ function withoutKey(fn) {
 }
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
+  return fixture('adlc-cross-model-');
 }
 
 describe('recordCrossModelReview — fail-closed validation', () => {
@@ -621,7 +636,7 @@ describe('cross-model works on an unsigned legacy manifest (#326 — not inert, 
 // actually distinguishes the two, so it is what proves the function reads lenient.
 describe('manifestChainBreakReason (#378)', () => {
   it('returns null for a legacy-unsigned-only manifest (lenient, not strict)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
+    const dir = fixture('adlc-cross-model-');
     try {
       withoutKey(() => {
         record({ gate: 'legacy-1', ticket: 'T0', rawData: JSON.stringify({ ok: true }), dir });
@@ -632,7 +647,7 @@ describe('manifestChainBreakReason (#378)', () => {
   });
 
   it('returns "unsigned entry" for a signed-then-unsigned manifest', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-cross-model-'));
+    const dir = fixture('adlc-cross-model-');
     try {
       recordCrossModelReview({ ticket: 'T1', revision: 'rev-1', provider: 'openai', authorProvider: 'anthropic', verdict: 'approve', dir });
       withoutKey(() => {
