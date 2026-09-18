@@ -118,7 +118,9 @@ matching, and is exactly the check the issue's worked example did by hand.
 | `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
 | `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
 | `--ceremony` | **Deprecated (#208).** Fails closed and redirects to `adlc ticket complete <id> --write --authorize --json`. Rail-freezing tickets are completed per-ticket via that command, not in bulk here. |
-| `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], ceremonyCompleted[], needsCeremony[] }`. |
+| `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], archived[], ceremonyCompleted[], needsCeremony[], blocked[] }`. |
+
+`--json` fields: `archived[]` lists the tickets `--write` moved out of the active directory store (`.adlc/tickets/`), so on that store it, not `tombstoned[]`, records what changed; `tombstoned[]` lists the in-place `completed: true` tombstones `--write` adds on the legacy flat-file store (`.adlc/tickets.json`); `blocked[]` lists stale tickets left unarchived because a ticket outside the batch still references them; `ceremony` is always `false` and `ceremonyCompleted[]` always empty since `--ceremony` was deprecated (#208), both retained for compatibility.
 
 ## Exit codes
 
