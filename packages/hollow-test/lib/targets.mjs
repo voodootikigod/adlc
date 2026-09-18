@@ -240,8 +240,9 @@ function scanCodeBearingLines(source) {
  *
  * Deliberately ignorant of strings and templates: that ignorance is the point,
  * because it cannot inherit a corrupted state from earlier in the file. A line
- * that closes a block and then carries code is code, which is also how
- * `/* closed *​/ const limit = 3;` stays mutable (mutate.mjs, #372 defect 4).
+ * that closes a block and then carries code is code, which is also how a
+ * closed block-comment prefix followed by a statement stays mutable
+ * (see CLOSED_COMMENT_PREFIX in mutate.mjs, #372 defect 4).
  */
 function lexicalCommentLines(source) {
   const lines = String(source).split('\n');

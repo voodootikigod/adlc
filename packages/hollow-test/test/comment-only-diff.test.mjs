@@ -116,6 +116,25 @@ describe('changedLinesAreCommentOnly', () => {
       'the code line after it must NOT be swallowed by a spurious block comment');
   });
 
+  it('a regex is recognised after EVERY operator that can precede one', () => {
+    // Exercises REGEX_MAY_FOLLOW per character rather than as a blob. Drop one
+    // member and the regex after it parses as division, so its embedded
+    // backtick opens a template and swallows the following comment line — the
+    // exact corruption the adapter.mjs case produced.
+    for (const op of ['=', '(', ',', ':', '[', '!', '&', '|', '?', '{', ';',
+                      '+', '-', '*', '%', '~', '^', '<', '>']) {
+      const src = lines(
+        `const x = a ${op} /[\`]/;`,
+        '// an ordinary comment',
+        'const after = 1;'
+      );
+      assert.equal(changedLinesAreCommentOnly(src, [2]), true,
+        `a regex after ${JSON.stringify(op)} must be consumed, leaving line 2 a comment`);
+      assert.equal(changedLinesAreCommentOnly(src, [3]), false,
+        `code after a regex following ${JSON.stringify(op)} must stay code`);
+    }
+  });
+
   it('a division sign is not mistaken for a regex', () => {
     const src = lines('const half = total / 2;', '// note');
     assert.equal(changedLinesAreCommentOnly(src, [1]), false);
