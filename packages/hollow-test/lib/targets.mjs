@@ -104,48 +104,62 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {})
  * @param {{ [file: string]: Set<number> }} changedLines - From mutate.changedLinesFromDiff()
  * @returns {string[]} Array of file paths eligible for mutation.
  */
+// ── comment-only change detection (#1032) ──────────────────────────────────
+//
+// #658 makes hollow-test fail closed when a diff-derived file yields zero
+// mutants. Right for a real code change no operator can see; wrong for a diff
+// that changed only comments, where there is no behaviour to mutate at all.
+//
+// The entire design is biased one way. Calling a comment "code" costs a
+// needless fail-closed. Calling code "a comment" SILENTLY SKIPS an unverified
+// change — the vacuous-pass class #70/#41/#35/#658 exist to close, and the
+// failure this file already warns about: "a coverage gate that reports green by
+// not looking is worse than no gate."
+//
+// So a line is a comment only when TWO INDEPENDENT PASSES AGREE:
+//
+//   1. a stateful scan of the whole file, which is the only thing that can see
+//      that a `// ...` line sitting inside a multi-line template literal is
+//      string DATA rather than a comment, and
+//   2. a purely lexical per-line rule that knows nothing about state.
+//
+// Requiring agreement is what makes the mistakes safe in BOTH directions, and
+// it is not theoretical. `packages/context-handoff/lib/adapter.mjs` contains
+// `/(?:[^\s;|&`'"()]*[/\\])?.../` — a regex whose character class holds a
+// backtick. A scanner without regex handling reads that backtick as opening a
+// template, and ~500 lines later a backtick inside a comment closes it, leaving
+// a `/*` inside the prose `` `.adlc/*` `` to open a SPURIOUS BLOCK COMMENT.
+// Every real code line after that reads as comment text. Pass 2 disagrees on
+// each of them, so they stay code.
+
+/** Characters after which a `/` begins a regex literal rather than a division. */
+const REGEX_MAY_FOLLOW = new Set([
+  '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*',
+  '%', '~', '^', '<', '>', '\n',
+]);
+
 /**
- * Classify every line of a source file as code-bearing or not (#1032).
+ * Pass 1 — stateful scan. Returns the 1-based line numbers bearing at least one
+ * character of PROGRAM (as opposed to comment), plus whether the scan can be
+ * trusted at all.
  *
- * "Code-bearing" means the line contains at least one character that is part of
- * the PROGRAM rather than a comment. This exists so a diff that changed only
- * comments can be reported as not-covered instead of failing closed, and the
- * whole design is biased one way: an ambiguous line must come out as CODE.
- * Getting that backwards means a real, unverified change passes silently, which
- * is the vacuous-pass class #70/#41/#35/#658 exist to close.
- *
- * It scans the WHOLE file, because comment state crosses lines: a `// ...` line
- * inside a multi-line template literal is string DATA, and treating it as a
- * comment would skip a genuine behaviour change.
- *
- * Two deliberate non-features:
- *
- * - NO regex-literal state. A `/` that is not followed by `/` or `*` is treated
- *   as ordinary code, which is true whether it is division or the start of a
- *   regex, and a regex literal cannot span a line. The only misread available is
- *   a `//` INSIDE a regex (`/a\/\//`), which stops the scan early on a line the
- *   opening `/` already marked as code — it cannot change that line's verdict and
- *   cannot leak state into the next line.
- * - NO `${}` tracking inside templates. Every line in template state is marked
- *   code-bearing outright, including whitespace-only ones, since a change to the
- *   indentation inside a template changes the string it produces.
- *
- * Returns { codeBearing, trustworthy }. `codeBearing` is 1-based (index 0 is
- * unused). `trustworthy` is false when the file ends mid-block-comment or
- * mid-template, or a quote is left unterminated — states that mean the scan lost
- * track, so every caller must treat the file as code.
+ * `trustworthy` is false when the file ends mid-block-comment, mid-template or
+ * mid-string, or a regex literal never closes: the scan has lost its place, and
+ * every caller must fall back to treating the file as code.
  */
 function scanCodeBearingLines(source) {
   const lines = String(source).split('\n');
-  const codeBearing = new Array(lines.length + 1).fill(false);
+  const codeBearing = new Set();
   let state = 'code';
+  let lastSignificant = '\n';
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineNo = i + 1;
-    // A line that OPENS inside a template is string content even before any
-    // character is examined — including a blank one.
-    if (state === 'template') codeBearing[lineNo] = true;
+    // A line that OPENS inside a template is string content before any
+    // character is read — including a blank one, since whitespace inside a
+    // template is part of the value it produces.
+    if (state === 'template') codeBearing.add(lineNo);
 
     let j = 0;
     while (j < line.length) {
@@ -159,9 +173,9 @@ function scanCodeBearingLines(source) {
       }
 
       if (state === 'template') {
-        codeBearing[lineNo] = true;
+        codeBearing.add(lineNo);
         if (ch === '\\') { j += 2; continue; }
-        if (ch === '`') { state = 'code'; j++; continue; }
+        if (ch === '`') { state = 'code'; lastSignificant = '`'; j++; continue; }
         j++;
         continue;
       }
@@ -171,9 +185,33 @@ function scanCodeBearingLines(source) {
       if (ch === '/' && next === '/') { j = line.length; continue; }
       if (ch === '/' && next === '*') { state = 'block'; j += 2; continue; }
 
-      codeBearing[lineNo] = true;
+      codeBearing.add(lineNo);
 
-      if (ch === '`') { state = 'template'; j++; continue; }
+      if (ch === '/' && REGEX_MAY_FOLLOW.has(lastSignificant)) {
+        // A regex literal. Consume it whole so a backtick or quote inside it —
+        // `[^\s;|&`'"()]` is a real example in this repo — cannot be mistaken
+        // for the start of a template or string. Character classes are tracked
+        // because `/` inside `[...]` does not terminate the literal.
+        j++;
+        let inClass = false;
+        let closed = false;
+        while (j < line.length) {
+          const c = line[j];
+          if (c === '\\') { j += 2; continue; }
+          if (inClass) { if (c === ']') inClass = false; j++; continue; }
+          if (c === '[') { inClass = true; j++; continue; }
+          if (c === '/') { closed = true; j++; break; }
+          j++;
+        }
+        // Regex literals cannot span lines, so an unclosed one means the
+        // "is this a regex" guess was wrong and the scan is off the rails.
+        if (!closed) return { codeBearing, lineCount: lines.length, trustworthy: false };
+        lastSignificant = '/';
+        continue;
+      }
+
+      if (ch === '`') { state = 'template'; lastSignificant = '`'; j++; continue; }
+
       if (ch === "'" || ch === '"') {
         j++;
         let closed = false;
@@ -182,26 +220,68 @@ function scanCodeBearingLines(source) {
           if (line[j] === ch) { closed = true; j++; break; }
           j++;
         }
-        // An unterminated quote is a syntax error or a scan that lost its place;
-        // either way the rest of the file cannot be trusted.
-        if (!closed) return { codeBearing, trustworthy: false };
+        if (!closed) return { codeBearing, lineCount: lines.length, trustworthy: false };
+        lastSignificant = ch;
         continue;
       }
+
+      lastSignificant = ch;
       j++;
     }
   }
 
-  return { codeBearing, trustworthy: state === 'code' };
+  return { codeBearing, lineCount: lines.length, trustworthy: state === 'code' };
+}
+
+/**
+ * Pass 2 — stateless lexical rule. A line is comment-shaped when it is blank,
+ * starts with `//`, or lies inside a block that OPENS on a line whose first
+ * non-whitespace characters are `/*`.
+ *
+ * Deliberately ignorant of strings and templates: that ignorance is the point,
+ * because it cannot inherit a corrupted state from earlier in the file. A line
+ * that closes a block and then carries code is code, which is also how
+ * `/* closed *​/ const limit = 3;` stays mutable (mutate.mjs, #372 defect 4).
+ */
+function lexicalCommentLines(source) {
+  const lines = String(source).split('\n');
+  const commentShaped = new Set();
+  let inBlock = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNo = i + 1;
+    const trimmed = line.trim();
+
+    if (inBlock) {
+      const closeAt = line.indexOf('*/');
+      if (closeAt === -1) { commentShaped.add(lineNo); continue; }
+      inBlock = false;
+      if (line.slice(closeAt + 2).trim() === '') commentShaped.add(lineNo);
+      continue;
+    }
+
+    if (trimmed === '' || trimmed.startsWith('//')) { commentShaped.add(lineNo); continue; }
+
+    if (trimmed.startsWith('/*')) {
+      const closeAt = line.indexOf('*/');
+      if (closeAt === -1) { commentShaped.add(lineNo); inBlock = true; continue; }
+      if (line.slice(closeAt + 2).trim() === '') commentShaped.add(lineNo);
+    }
+  }
+
+  return commentShaped;
 }
 
 /**
  * True only when EVERY changed line is provably comment text or blank (#1032).
  *
- * False on any doubt: an untrustworthy scan, a line number outside the file, an
- * empty change set (nothing changed means this predicate has no opinion, and a
- * caller must not read that as permission to skip). An `import`, `export` or
- * `console.log` line is CODE here even though no mutation operator can see it —
- * that is a different cause (#1031) and must keep failing closed.
+ * False on any doubt: an untrustworthy scan, a line number outside the file, a
+ * line the two passes disagree about, or an empty change set (nothing changed
+ * means this predicate has no opinion, and a caller must not read that as
+ * permission to skip). An `import`, `export` or `console.log` line is CODE here
+ * even though no mutation operator can see it — that is a different cause
+ * (#1031) and must keep failing closed.
  *
  * @param {string} source            current file content
  * @param {Iterable<number>} changed 1-based changed line numbers
@@ -210,13 +290,15 @@ export function changedLinesAreCommentOnly(source, changed) {
   const numbers = [...(changed ?? [])];
   if (numbers.length === 0) return false;
 
-  const { codeBearing, trustworthy } = scanCodeBearingLines(source);
+  const { codeBearing, lineCount, trustworthy } = scanCodeBearingLines(source);
   if (!trustworthy) return false;
 
-  const lineCount = codeBearing.length - 1;
+  const commentShaped = lexicalCommentLines(source);
+
   for (const n of numbers) {
     if (!Number.isInteger(n) || n < 1 || n > lineCount) return false;
-    if (codeBearing[n]) return false;
+    if (codeBearing.has(n)) return false;
+    if (!commentShaped.has(n)) return false;
   }
   return true;
 }

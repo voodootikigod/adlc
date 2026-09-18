@@ -99,6 +99,36 @@ describe('changedLinesAreCommentOnly', () => {
     assert.equal(changedLinesAreCommentOnly(src, [2]), true);
   });
 
+  it('a backtick inside a REGEX character class does not open a template', () => {
+    // Found in packages/context-handoff/lib/adapter.mjs. Without regex
+    // handling the backtick in the class opened a template, a later backtick
+    // in prose closed it, and the `/*` inside `` `.adlc/*` `` then opened a
+    // SPURIOUS BLOCK COMMENT — after which real code read as comment text.
+    const src = lines(
+      'const re =',
+      '  /(?:adlc\\s+)?(?:[^\\s;|&`\'"()]*[/\\\\])?handoff/gi;',
+      '// paths are gitignored (`.adlc/*`), so nothing appears in a diff.',
+      'export function run() { return re; }'
+    );
+    assert.equal(changedLinesAreCommentOnly(src, [3]), true,
+      'the prose line is a comment');
+    assert.equal(changedLinesAreCommentOnly(src, [4]), false,
+      'the code line after it must NOT be swallowed by a spurious block comment');
+  });
+
+  it('a division sign is not mistaken for a regex', () => {
+    const src = lines('const half = total / 2;', '// note');
+    assert.equal(changedLinesAreCommentOnly(src, [1]), false);
+    assert.equal(changedLinesAreCommentOnly(src, [2]), true);
+  });
+
+  it('the two passes must AGREE — a comment-shaped line inside a template is code', () => {
+    // Pass 2 alone calls line 3 a comment; pass 1 knows it is template data.
+    // Disagreement resolves to code, which is the whole safety property.
+    const src = lines('const t = `', 'a', '// data', '`;', 'const after = 1;');
+    assert.equal(changedLinesAreCommentOnly(src, [3]), false);
+  });
+
   it('fails closed on an unterminated block comment', () => {
     const src = lines('const a = 1;', '/* never closed', '// looks like a comment');
     assert.equal(changedLinesAreCommentOnly(src, [3]), false);
