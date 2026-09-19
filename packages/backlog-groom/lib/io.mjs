@@ -85,30 +85,107 @@ export function saveCache(path, cache, io = {}) {
  *
  * @returns {string[]|null}
  */
-export function resolveTrustedBaseRef({ run = defaultGitRun } = {}) {
-  // Resolved from the REPOSITORY, never from a caller-supplied flag. A caller
-  // who picks the comparison ref can pick `HEAD`, which makes the merge base the
-  // working copy: a floor widened from ['close'] to [] then compares equal to
-  // itself and passes without authorization. The whole check is only meaningful
-  // against a ref the person being checked does not choose.
+/**
+ * The head commit of the REMOTE's default branch, or null.
+ *
+ * THE BASELINE MUST NOT COME FROM A LOCAL REF (#1036). The floor is compared
+ * against the profile at the merge base, so whoever picks the comparison point
+ * decides the answer. `--base-ref` was removed because passing `HEAD` made the
+ * merge base the working copy — a widened floor then compared equal to itself —
+ * but reading `refs/remotes/origin/HEAD` or `origin/main` reproduced exactly
+ * that with no flag: `git update-ref refs/remotes/origin/main HEAD` is a local
+ * write, and this package's own e2e fixture does it to build a base.
+ *
+ * ONE QUESTION TO ONE REMOTE. `ls-remote --symref origin HEAD` answers with the
+ * remote's own default branch and the commit it points at, over a single
+ * connection:
+ *
+ *     ref: refs/heads/main<TAB>HEAD
+ *     <sha><TAB>HEAD
+ *
+ * An earlier version asked the forge instead (`gh api repos/<owner>/<repo>`) and
+ * resolved that branch name against `origin`. It needed a slug parsed out of the
+ * remote URL, and it could not bind the two: `gh` answers from whatever host it
+ * is configured for, so an SSH alias, an enterprise remote or a filesystem remote
+ * had its branch name chosen by a DIFFERENT forge that happened to hold a
+ * same-named repository. Asking the remote itself removes the slug, the host, the
+ * forge dependency and that whole class of mismatch.
+ *
+ * Every failure returns null, which the floor guards turn into a refusal. There
+ * is deliberately no fallback to a local ref: falling back would restore the hole
+ * exactly when the remote could not contradict it.
+ */
+export function resolveRemoteBaseSha({ run = defaultGitRun } = {}) {
+  let out;
   try {
-    const head = String(run(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
-    if (head) return head;
+    out = String(run(['ls-remote', '--symref', 'origin', 'HEAD']) ?? '');
   } catch {
-    // No origin/HEAD configured — fall through to the conventional default.
+    return null; // no origin, unreachable, or not a repository we can ask
   }
-  return 'origin/main';
+
+  // The sha line is the one whose ref is HEAD; the `ref:` line names the branch
+  // and carries no sha. Matched rather than indexed, because git is free to emit
+  // further symref lines above it.
+  const sha = out
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 2 && parts[1] === 'HEAD')
+    .map((parts) => parts[0])
+    .find((candidate) => /^[0-9a-f]{40}$/.test(candidate));
+  if (!sha) return null;
+
+  // THE SHA MUST BE IN THE LOCAL OBJECT DATABASE, or `merge-base` cannot use it.
+  // `ls-remote` answers with where the branch points NOW, which in any clone that
+  // has not fetched recently is a commit this repository has never seen — so the
+  // anchoring would refuse every run on an ordinary stale clone, which is a
+  // refusal nobody can act on rather than a safety property. Fetching that one
+  // commit is cheap and moves no ref: the baseline still comes from the remote's
+  // answer, not from anything local.
+  try {
+    run(['cat-file', '-e', sha + '^{commit}']);
+    return sha;
+  } catch {
+    // Not present — fetch it, then insist on it.
+  }
+  try {
+    run(['fetch', '--quiet', 'origin', sha]);
+  } catch {
+    // A server that refuses a by-sha fetch still serves its default branch.
+    try {
+      run(['fetch', '--quiet', 'origin', 'HEAD']);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    run(['cat-file', '-e', sha + '^{commit}']);
+  } catch {
+    return null; // still absent: the baseline cannot be read, so refuse
+  }
+  return sha;
 }
 
-export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef = null } = {}) {
-  const ref = baseRef ?? resolveTrustedBaseRef({ run });
+export function baseProfileFromGit(profilePath, { run = defaultGitRun } = {}) {
+  // Anchored to the remote, never to a local ref — see resolveRemoteBaseSha.
+  const remoteSha = resolveRemoteBaseSha({ run });
+  if (!remoteSha) return null;
+
   let mergeBase;
   try {
-    mergeBase = String(run(['merge-base', 'HEAD', ref])).trim();
+    mergeBase = String(run(['merge-base', 'HEAD', remoteSha])).trim();
   } catch {
     return null;
   }
   if (!mergeBase) return null;
+
+  // REACHABLE FROM THE REMOTE HEAD, proven rather than assumed. A merge base is
+  // only a trustworthy baseline if it is part of the history the remote actually
+  // published; `--is-ancestor` exits non-zero when it is not.
+  try {
+    run(['merge-base', '--is-ancestor', mergeBase, remoteSha]);
+  } catch {
+    return null;
+  }
 
   // ABSENCE IS PROVEN, not inferred from a failure. `git show` fails the same way
   // for "no such path" and for a corrupt object store or a bad revision, and
@@ -143,12 +220,50 @@ export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef =
   }
 }
 
+/**
+ * The environment child processes get: ours, minus the ledger signing key.
+ *
+ * A child that can read the key can mint its own approvals, which is the whole
+ * authorization boundary. The apply path also deletes it from its own
+ * environment, so this is the second of two locks on the same door — and the
+ * cheap one, since every spawn in this module goes through here.
+ */
+function childEnv() {
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  return env;
+}
+
+/**
+ * How long any child of this module may take.
+ *
+ * The baseline lookup runs `ls-remote` and sometimes `fetch` — network calls —
+ * and the apply lock is already held when it does. An unbounded spawn waits
+ * forever on a remote that accepts the connection and then stops answering, so
+ * the run would hang holding the lock and every later apply would refuse behind
+ * it. A timeout turns that into an ordinary refusal, which the floor guards
+ * already know how to handle.
+ */
+export const CHILD_TIMEOUT_MS = 30_000;
+
+/** The spawn options every child of this module gets: no key, and a bound. */
+export function childRunOpts() {
+  return {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    // `stdio: 'pipe'` rather than a positional array: execFileSync's DEFAULT
+    // writes the child's stderr to the parent's, so a profile simply absent at
+    // the merge base — an ordinary, expected state — would print a fatal-looking
+    // git error beside a run that succeeded. Specifying 'pipe' captures it.
+    stdio: 'pipe',
+    env: childEnv(),
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  };
+}
+
 function defaultGitRun(args) {
-  // `stdio: 'pipe'` rather than a positional array: execFileSync's DEFAULT
-  // writes the child's stderr to the parent's, so a profile simply absent at the
-  // merge base — an ordinary, expected state — would print a fatal-looking git
-  // error beside a run that succeeded. Specifying 'pipe' captures it instead.
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
+  return execFileSync('git', args, childRunOpts());
 }
 
 /**

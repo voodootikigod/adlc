@@ -9,6 +9,11 @@ import assert from 'node:assert/strict';
 import { actionsFromSet, applyRun, revalidateAction } from '../lib/apply.mjs';
 import { contentHash } from '../lib/content-hash.mjs';
 import { REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
+import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
+
+// Ledger entries are signed now (#1035): a fixture must seal what it writes, and
+// every call that reads authorization must be given the key.
+const TEST_KEY = 'unit-test-ledger-key-0123456789ab';
 
 // A world where issue 705's cited snippet is genuinely gone and 706's is not,
 // so re-validation reaches the same verdicts the set claims.
@@ -88,14 +93,14 @@ test('a proposal for an issue absent from the set is dropped, not guessed at', (
 
 test('an approved action reaches the writer, comment first', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh });
+  const out = applyRun({ key: TEST_KEY, set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
   assert.equal(out.executed.length, 1);
 });
 
 test('a refused action writes nothing and is reported with its reason', () => {
   const gh = fakeGh();
-  const out = applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  const out = applyRun({ key: TEST_KEY, set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(out.executed.length, 0);
   assert.equal(out.gateDemotions.length, 1);
@@ -105,7 +110,7 @@ test('a refused action writes nothing and is reported with its reason', () => {
 test('AC8: with no distinct provider nothing is written and the reviewer is never called', () => {
   const gh = fakeGh();
   let called = 0;
-  const out = applyRun({
+  const out = applyRun({ key: TEST_KEY,
     set: set(),
     profile: profile({ providers: { decider: 'anthropic' } }), basePolicy: profile({ providers: { decider: 'anthropic' } }),
     baseFloor: [],
@@ -123,7 +128,7 @@ test('AC8: with no distinct provider nothing is written and the reviewer is neve
 
 test('the floor outranks an approve', () => {
   const gh = fakeGh();
-  const out = applyRun({
+  const out = applyRun({ key: TEST_KEY,
     set: set(),
     profile: profile({ autonomyFloor: ['close'] }), basePolicy: profile({ autonomyFloor: ['close'] }),
     baseFloor: ['close'],
@@ -140,7 +145,7 @@ test('the floor outranks an approve', () => {
 test('AC24: a widened floor refuses the run before any write', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: set(), profile: profile({ autonomyFloor: [] }), basePolicy: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ key: TEST_KEY, set: set(), profile: profile({ autonomyFloor: [] }), basePolicy: profile({ autonomyFloor: [] }), baseFloor: ['close'], ledger: {}, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -149,10 +154,10 @@ test('AC24: a widened floor refuses the run before any write', () => {
 test('AC14: the ledger persists across the run so a replay within it is refused', () => {
   const ledger = {};
   const gh = fakeGh();
-  applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
+  applyRun({ key: TEST_KEY, set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger, fetchIssue, io: IO, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }), gh });
 
   let called = 0;
-  const second = applyRun({
+  const second = applyRun({ key: TEST_KEY,
     set: set(),
     profile: profile(), basePolicy: profile(),
     baseFloor: [],
@@ -244,7 +249,7 @@ test('a stale set is refused before anything is gated', () => {
   let reviewed = 0;
   assert.throws(
     () =>
-      applyRun({
+      applyRun({ key: TEST_KEY,
         set: { ...set(), generatedFor: 'oldsha' },
         profile: profile(), basePolicy: profile(),
         baseFloor: [],
@@ -263,7 +268,7 @@ test('a stale set is refused before anything is gated', () => {
 
 test('a set generated for the current revision proceeds', () => {
   const gh = fakeGh();
-  const out = applyRun({
+  const out = applyRun({ key: TEST_KEY,
     set: { ...set(), generatedFor: 'samesha' },
     profile: profile(), basePolicy: profile(),
     baseFloor: [],
@@ -282,7 +287,7 @@ test('each gate decision is checkpointed before any write', () => {
   // next run would review the same revision again.
   const gh = fakeGh();
   const checkpoints = [];
-  applyRun({
+  applyRun({ key: TEST_KEY,
     set: set(),
     profile: profile(), basePolicy: profile(),
     baseFloor: [],
@@ -368,7 +373,7 @@ test('a set omitting updatedAt is refused rather than skipping the check', () =>
 test('a set with no generatedFor is refused when a revision is known', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: { issues: [], proposals: [] }, profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ key: TEST_KEY, set: { issues: [], proposals: [] }, profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
 });
@@ -378,7 +383,7 @@ test('applyRun refuses when it has no way to re-read issues', () => {
   // proceeding would trust a file on disk for every security-relevant fact.
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ key: TEST_KEY, set: set(), profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -393,7 +398,7 @@ test('a widened floor is refused BEFORE any review is spent', () => {
   const ledger = {};
   assert.throws(
     () =>
-      applyRun({
+      applyRun({ key: TEST_KEY,
         set: set(),
         profile: profile({ autonomyFloor: [] }), basePolicy: profile({ autonomyFloor: [] }),
         baseFloor: ['close'],
@@ -425,7 +430,7 @@ test('revalidation reads the PINNED revision, not a moving HEAD', () => {
     },
   });
   const gh = fakeGh();
-  applyRun({
+  applyRun({ key: TEST_KEY,
     set: { ...set(), generatedFor: 'pinned-sha' },
     profile: profile(), basePolicy: profile(),
     baseFloor: [],

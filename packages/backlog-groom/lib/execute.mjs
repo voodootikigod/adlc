@@ -21,7 +21,8 @@
  */
 
 import { assertFloor, assertFloorNotWidened, blockedByFloor } from './floor.mjs';
-import { ledgerApproves, gateKey } from './gate.mjs';
+import { ledgerApproves, gateKey, ledgerEntryFor } from './gate.mjs';
+import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
 
 /**
  * The exported functions that can cause a GitHub write.
@@ -89,14 +90,14 @@ export function renderComment(action) {
  * floor is the operator's policy about who may act on evidence at all. A
  * sufficiently confident reviewer must not be able to talk past a policy.
  */
-export function planAction(action, { floor = [], ledger = null } = {}) {
+export function planAction(action, { floor = [], ledger = null, key = null } = {}) {
   if (blockedByFloor(action?.action, floor)) return { do: false, reason: 'floor' };
   // The LEDGER is the authority, never the action's own `gate` field. A
   // caller-supplied `{ gate: { verdict: 'approve' } }` is a claim anyone can
   // construct; trusting it would put the entire gate behind an `if` whose
   // condition the caller writes. Without a ledger there is no authorization at
   // all, so the answer is no.
-  if (!ledgerApproves(ledger, action)) return { do: false, reason: 'gate' };
+  if (!ledgerApproves(ledger, action, key)) return { do: false, reason: 'gate' };
   return { do: true, reason: null };
 }
 
@@ -112,7 +113,7 @@ export function planAction(action, { floor = [], ledger = null } = {}) {
  * @param {object} o.gh - `{comments(number), comment(number, body), apply(number, action)}`
  * @returns {{executed:object[], demoted:object[], failed:object[]}}
  */
-export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null, recheck = null } = {}) {
+export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null, recheck = null, key = null } = {}) {
   // Validate and compare BEFORE any write. A run must not apply its first
   // action and discover the policy problem on its second — a half-applied sweep
   // under a floor nobody authorised is worse than a refused one.
@@ -126,12 +127,17 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
   for (const action of actions) {
     // Already done. A run that applied the action and then failed to persist —
     // or crashed — must not repeat the mutation on the next attempt.
-    if (ledger?.[gateKey(action)]?.applied === true) {
+    //
+    // SIGNED, like the approval itself (#1035). `applied` decides whether the
+    // write is skipped and REPORTED AS EXECUTED, so an unsigned one lets a caller
+    // have the tool announce a close it never performed — and suppress the retry
+    // that would have performed it.
+    if (ledgerEntryFor(ledger, action, key)?.applied === true) {
       executed.push({ number: action.number, action: action.action, resumed: true, alreadyApplied: true });
       continue;
     }
 
-    const plan = planAction(action, { floor, ledger });
+    const plan = planAction(action, { floor, ledger, key });
     if (!plan.do) {
       demoted.push({ number: action.number, action: action.action, reason: plan.reason });
       continue;
@@ -192,7 +198,12 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
       continue;
     }
 
-    if (ledger?.[gateKey(action)]) ledger[gateKey(action)].applied = true;
+    // RE-SEALED, because the signature covers every field: writing `applied`
+    // without re-signing would invalidate the very approval that licensed this
+    // write, and the next run would re-review a decision already acted on.
+    if (ledger?.[gateKey(action)]) {
+      ledger[gateKey(action)] = sealLedgerEntry(key, { ...ledger[gateKey(action)], applied: true });
+    }
     // A checkpoint that cannot be written means the NEXT run will not know this
     // action already happened, and will repeat it. Continuing to further actions
     // would compound that, so the run stops here with the executed ones recorded.

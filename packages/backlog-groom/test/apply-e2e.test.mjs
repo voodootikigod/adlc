@@ -34,6 +34,15 @@ after(() => {
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
 /**
+ * The ledger signing key every apply run gets (#1035).
+ *
+ * Writes are a key-holder act: without a key no verdict can be sealed, so every
+ * action demotes. The no-key posture has its own test below; every other test
+ * here is about what happens once the key exists.
+ */
+const LEDGER_KEY = 'e2e-ledger-key-0123456789abcdef';
+
+/**
  * A scratch repo with a recorded `gh` and a scripted `adversarial-review`.
  *
  * `reviewExit` is the reviewer's exit code — the whole verdict contract — and
@@ -84,7 +93,16 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
       '#!/bin/sh',
       'cat > /dev/null',
       `echo "$@" >> ${log}`,
+      // What the child can SEE, recorded per call: the signing key must not reach
+      // any subprocess, and "must not" is only a claim until something looks.
+      `echo "gh:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}`,
       'case "$*" in',
+      // The read path's issue fetch. Answered with an empty list: the read-only
+      // assertion below is about which calls are NOT made, so the set's contents
+      // are beside the point.
+      '  *"issue list"*)',
+      "    echo '[]'",
+      '    ;;',
       '  *"--json comments"*)',
       "    cat <<'JSON'",
       '{"comments":[]}',
@@ -102,7 +120,20 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   );
   chmodSync(join(bin, 'gh'), 0o755);
 
-  writeFileSync(join(bin, 'adversarial-review'), `#!/bin/sh\necho "review $@" >> ${log}\nexit ${reviewExit}\n`);
+  // A `git` that records what it can see and then delegates to the real one. The
+  // key reaches git through headCommit, contentHash and revalidation, so a leak
+  // check that only watched gh and the reviewer would have missed three callers.
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(
+    join(bin, 'git'),
+    `#!/bin/sh\necho "git:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\necho "$@" >> ${join(dir, 'gitargs.log')}\nexec ${realGit} "$@"\n`
+  );
+  chmodSync(join(bin, 'git'), 0o755);
+
+  writeFileSync(
+    join(bin, 'adversarial-review'),
+    `#!/bin/sh\necho "review $@" >> ${log}\necho "review:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\nexit ${reviewExit}\n`
+  );
   chmodSync(join(bin, 'adversarial-review'), 0o755);
 
   mkdirSync(join(dir, '.adlc'));
@@ -119,10 +150,17 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   writeFileSync(join(dir, 'src', 'cited.mjs'), 'const x = 1;\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'seed', '--no-gpg-sign');
-  // A real remote-tracking ref: the floor's comparison ref is resolved from the
-  // REPOSITORY, never from a flag, so the fixture has to provide the thing the
-  // resolver looks for rather than pointing the tool at a branch of its choosing.
-  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  // A REAL REMOTE, not a local remote-tracking ref (#1036). The baseline is now
+  // resolved by asking the forge for the default branch and the remote where it
+  // points, precisely because `git update-ref refs/remotes/origin/main HEAD` —
+  // what this fixture used to do — is a local write that let a caller choose the
+  // comparison point. So the fixture publishes a bare repo and pushes to it, and
+  // the fake `gh` answers the default-branch query.
+  const remote = join(dir, 'remote.git');
+  spawnSync('git', ['init', '--bare', '-q', '-b', 'main', remote], { encoding: 'utf8' });
+  git('branch', '-M', 'main');
+  git('remote', 'add', 'origin', remote);
+  git('push', '-q', 'origin', 'main');
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
   // The hash the write path will recompute. Derived the same way the tool does,
   // so the fixture cannot drift from the implementation's definition of it.
@@ -133,11 +171,11 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   return { dir, bin, log, tmp, head, hash };
 }
 
-function run(args, { dir, bin, tmp }) {
+function run(args, { dir, bin, tmp }, { env = {} } = {}) {
   return spawnSync(process.execPath, [BIN, ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: tmp, ADLC_MANIFEST_KEY: LEDGER_KEY, ...env },
   });
 }
 
@@ -541,4 +579,69 @@ test('a failed apply still clears its artifact directory', () => {
   assert.equal(existsSync(dirname(artifact)), false, `artifact dir leaked on exit ${r.status}`);
   assert.deepEqual(artifactDirs(box), []);
   assert.deepEqual(ghWrites(box), [], 'a run that cannot record its authorization writes nothing');
+});
+
+test('AC5: with no signing key, --apply writes nothing and says why', () => {
+  // Writes are a key-holder act (#1035). Without a key no verdict can be sealed,
+  // so nothing can authorize a write — but the run is still useful: it reports
+  // what it WOULD do, and exits 0, because proposing is the unattended half.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const r = run(['--apply', '--set', setFile(box)], box, { env: { ADLC_MANIFEST_KEY: '' } });
+
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(ghWrites(box), [], 'no key, no writes');
+  assert.match(r.stderr, /ADLC_MANIFEST_KEY/, 'the operator must be told which key is missing');
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.executed.length, 0);
+  assert.equal(out.proposed, 1, 'the run still reports what it would have done');
+  // And it must not have spent a review it could never act on, which would also
+  // burn the one-shot for the run that does hold the key.
+  assert.deepEqual(ghCalls(box).filter((c) => c.startsWith('review')), []);
+});
+
+test('AC9: a read-only run never reaches the remote for a baseline', () => {
+  // The baseline lookup is an --apply concern. A plain groom run must stay as
+  // offline as it was: it already reads issues through gh, but it must not gain
+  // the remote round-trip the floor comparison needs.
+  const box = sandbox();
+  const r = run(['--json'], box);
+  assert.equal(r.status, 0, r.stderr);
+
+  // Asserted against the GIT calls, because the baseline no longer involves a
+  // forge at all — `ls-remote --symref origin HEAD` is the whole lookup, so that
+  // is the call whose absence means the read path stayed local.
+  const gitCalls = existsSync(join(box.dir, 'childenv.log'))
+    ? readFileSync(join(box.dir, 'gitargs.log'), 'utf8')
+    : '';
+  // The positive control: git WAS used (the read path verifies premises against
+  // the working tree), so the absence of ls-remote is a fact about this run
+  // rather than about a run that never spawned git at all.
+  assert.ok(gitCalls.trim().length > 0, 'the read path must have used git, or this proves nothing');
+  assert.ok(!gitCalls.includes('ls-remote'), `the read path must not reach the remote: ${gitCalls}`);
+});
+
+test('no child process can read the signing key', () => {
+  // The key authorizes writes, so a child that can read it can mint approvals —
+  // and both children here are programs the profile names, not code this tool
+  // controls. Each fake records what it saw; every line must say `unset`.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const r = run(['--apply', '--set', setFile(box)], box);
+  assert.equal(r.status, 0, r.stderr);
+
+  const seen = readFileSync(join(box.dir, 'childenv.log'), 'utf8').trim().split('\n').filter(Boolean);
+  // Each KIND of child must appear, or the assertion below passes on whichever
+  // one happened to run: the key reaches git through headCommit, contentHash and
+  // revalidation, and that is the caller a gh-only check would miss.
+  assert.ok(seen.some((l) => l.startsWith('gh:')), `no gh call observed: ${JSON.stringify(seen)}`);
+  assert.ok(seen.some((l) => l.startsWith('git:')), `no git call observed: ${JSON.stringify(seen)}`);
+  assert.ok(seen.some((l) => l.startsWith('review:')), `no reviewer call observed: ${JSON.stringify(seen)}`);
+  assert.deepEqual([...new Set(seen.map((l) => l.split(':')[1]))], ['unset'], `a child saw the key: ${JSON.stringify(seen)}`);
+  // And the run still worked, so the stripping did not simply break the children.
+  assert.ok(ghWrites(box).some((c) => c.startsWith('issue close')));
 });
