@@ -93,6 +93,9 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
       '#!/bin/sh',
       'cat > /dev/null',
       `echo "$@" >> ${log}`,
+      // What the child can SEE, recorded per call: the signing key must not reach
+      // any subprocess, and "must not" is only a claim until something looks.
+      `echo "gh:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}`,
       'case "$*" in',
       // The baseline query (#1036): `gh api repos/<owner>/<repo> --jq
       // .default_branch`. Answered before the read cases below, since `repos/`
@@ -123,7 +126,10 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   );
   chmodSync(join(bin, 'gh'), 0o755);
 
-  writeFileSync(join(bin, 'adversarial-review'), `#!/bin/sh\necho "review $@" >> ${log}\nexit ${reviewExit}\n`);
+  writeFileSync(
+    join(bin, 'adversarial-review'),
+    `#!/bin/sh\necho "review $@" >> ${log}\necho "review:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\nexit ${reviewExit}\n`
+  );
   chmodSync(join(bin, 'adversarial-review'), 0o755);
 
   mkdirSync(join(dir, '.adlc'));
@@ -605,4 +611,22 @@ test('AC9: a read-only run never asks the forge for the baseline', () => {
     [],
     'the read path must not resolve a baseline'
   );
+});
+
+test('no child process can read the signing key', () => {
+  // The key authorizes writes, so a child that can read it can mint approvals —
+  // and both children here are programs the profile names, not code this tool
+  // controls. Each fake records what it saw; every line must say `unset`.
+  const box = sandbox({
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const r = run(['--apply', '--set', setFile(box)], box);
+  assert.equal(r.status, 0, r.stderr);
+
+  const seen = readFileSync(join(box.dir, 'childenv.log'), 'utf8').trim().split('\n').filter(Boolean);
+  assert.ok(seen.length > 0, 'the children must actually have run, or this proves nothing');
+  assert.deepEqual([...new Set(seen.map((l) => l.split(':')[1]))], ['unset'], `a child saw the key: ${JSON.stringify(seen)}`);
+  // And the run still worked, so the stripping did not simply break the children.
+  assert.ok(ghWrites(box).some((c) => c.startsWith('issue close')));
 });
