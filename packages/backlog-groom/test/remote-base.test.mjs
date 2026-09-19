@@ -16,7 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveRemoteBaseSha, baseProfileFromGit } from '../lib/io.mjs';
+import { resolveRemoteBaseSha, baseProfileFromGit, childRunOpts } from '../lib/io.mjs';
 
 const REMOTE_HEAD = 'f'.repeat(40);
 const MERGE_BASE = 'e'.repeat(40);
@@ -180,10 +180,9 @@ test('the forge is asked for the default branch specifically', () => {
   const { run, ghRun, calls } = seams();
   resolveRemoteBaseSha({ run, ghRun });
 
-  assert.ok(
-    calls.includes('gh api repos/voodootikigod/adlc --jq .default_branch'),
-    `the default-branch query must be explicit, got ${JSON.stringify(calls)}`
-  );
+  const query = calls.find((c) => c.startsWith('gh api'));
+  assert.match(query, /repos\/voodootikigod\/adlc/, `the query must name the repo: ${query}`);
+  assert.match(query, /--jq \.default_branch/, `the query must ask for the default branch: ${query}`);
 });
 
 test('an empty or blank default branch refuses rather than asking for refs/heads/', () => {
@@ -227,4 +226,37 @@ test('a fetched-but-still-absent commit refuses', () => {
     throw new Error(`unexpected git call: ${args.join(' ')}`);
   };
   assert.equal(resolveRemoteBaseSha({ run, ghRun: () => 'main\n' }), null);
+});
+
+test('the forge query names the origin HOST, so an enterprise remote is not asked on github.com', () => {
+  // `gh` resolves a host from its own configuration. Asking it about owner/repo
+  // without saying where would look up a same-named repository on whatever forge
+  // gh defaults to, and use THAT repo's default branch as this one's baseline.
+  const { run, ghRun, calls } = seams({ remoteUrl: 'git@corp-forge.example.com:org/repo.git' });
+
+  assert.equal(resolveRemoteBaseSha({ run, ghRun }), REMOTE_HEAD);
+  const query = calls.find((c) => c.startsWith('gh api'));
+  assert.match(query, /--hostname corp-forge\.example\.com/, `the host must be named: ${query}`);
+});
+
+test('a remote with no host names none, rather than inventing one', () => {
+  // A filesystem remote has no forge to ask; gh is left to its own resolution
+  // rather than being handed a path segment as a hostname.
+  const { run, ghRun, calls } = seams({ remoteUrl: '/srv/git/team/repo.git' });
+
+  resolveRemoteBaseSha({ run, ghRun });
+  const query = calls.find((c) => c.startsWith('gh api'));
+  assert.ok(query && !query.includes('--hostname'), `no host should be claimed: ${query}`);
+});
+
+test('every child of the baseline path is bounded and key-free', () => {
+  // The apply lock is held while these run, and they are network calls: gh api,
+  // ls-remote, and sometimes fetch. Unbounded, a remote that accepts the
+  // connection and then stops answering hangs the run holding the lock, and every
+  // later apply refuses behind it.
+  const opts = childRunOpts();
+
+  assert.ok(Number.isFinite(opts.timeout) && opts.timeout > 0, `a finite timeout is required, got ${opts.timeout}`);
+  assert.equal(opts.killSignal, 'SIGKILL', 'a child that ignores TERM must still be reaped');
+  assert.equal('ADLC_MANIFEST_KEY' in opts.env, false, 'no child may inherit the signing key');
 });
