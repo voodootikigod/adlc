@@ -81,6 +81,37 @@ export function reviewerPair(profile) {
  * key nothing verifies, and nothing is authorized: the run still proposes, and a
  * write becomes a key-holder act.
  */
+export function entryBindsAction(entry, action) {
+  // The signature covers the entry's CONTENT, not the ledger slot it sits in, so
+  // a validly signed entry can be copied under another action's key. Everything
+  // that binds a record to its action is checked here, in one place, because the
+  // two callers — the approval check and the applied fast path — were drifting:
+  // one verified the binding and the other only the signature, so a signed
+  // `applied` entry moved to another slot suppressed that action's write.
+  return (
+    entry?.contentHash === action?.contentHash &&
+    entry?.number === action?.number &&
+    entry?.action === action?.action &&
+    (entry?.field ?? null) === (action?.field ?? null) &&
+    typeof entry?.artifactDigest === 'string' &&
+    entry.artifactDigest === artifactDigest(action)
+  );
+}
+
+/**
+ * True when the ledger holds a SIGNED entry bound to this exact action.
+ *
+ * The shared precondition of both authorization reads: signed under our key, and
+ * about this action rather than merely stored under its key.
+ */
+export function ledgerEntryFor(ledger, action, key = null) {
+  const entry = ledger?.[gateKey(action ?? {})];
+  if (!entry) return null;
+  if (!verifyLedgerEntry(key, entry)) return null;
+  if (!entryBindsAction(entry, action)) return null;
+  return entry;
+}
+
 export function ledgerApproves(ledger, action, key = null) {
   const entry = ledger?.[gateKey(action ?? {})];
   if (!entry || entry.verdict !== 'approve') return false;
