@@ -131,20 +131,16 @@ export function ledgerApproves(ledger, action, key = null) {
   if (!entry || entry.verdict !== 'approve') return false;
   if (!verifyLedgerEntry(key, entry)) return false;
   // Bound to the revision AND the issue, not merely present under the key: a
-  // ledger hand-edited to move an approval between issues must not pass.
-  // And bound to WHAT WAS REVIEWED. The key names the decision's slot, not its
-  // content: a relabel approved from P3-low to P2-medium shares its key with one
-  // to P1-high, and a close shares its key with the same close carrying other
-  // evidence. Without the digest, a later set re-uses the approval for a target
-  // or a rationale no reviewer ever read.
-  return (
-    entry.contentHash === action?.contentHash &&
-    entry.number === action?.number &&
-    entry.action === action?.action &&
-    (entry.field ?? null) === (action?.field ?? null) &&
-    typeof entry.artifactDigest === 'string' &&
-    entry.artifactDigest === artifactDigest(action)
-  );
+  // ledger hand-edited to move an approval between issues must not pass. And
+  // bound to WHAT WAS REVIEWED — the digest — because the slot names the
+  // decision, not its content: a relabel approved from P3-low to P2-medium
+  // shares its slot with one to P1-high, and a close shares its slot with the
+  // same close carrying other evidence.
+  //
+  // Both conditions live in `entryBindsAction` rather than being restated here:
+  // this function and the applied fast path had already drifted apart once, one
+  // checking the binding and the other only the signature.
+  return entryBindsAction(entry, action);
 }
 
 /**
