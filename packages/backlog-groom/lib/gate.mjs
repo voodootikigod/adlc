@@ -81,6 +81,20 @@ export function reviewerPair(profile) {
  * key nothing verifies, and nothing is authorized: the run still proposes, and a
  * write becomes a key-holder act.
  */
+export function entryBindsSlot(entry, action) {
+  // WHAT THE SLOT NAMES: the issue, the action, the field and the revision — and
+  // deliberately NOT the artifact digest, because the digest changes the moment
+  // the artifact is reworded and "reword it and ask again" is what the one shot
+  // refuses. This is the replay identity; `entryBindsAction` adds the digest for
+  // the authorization reads, which must cover what the reviewer actually read.
+  return (
+    entry?.contentHash === action?.contentHash &&
+    entry?.number === action?.number &&
+    entry?.action === action?.action &&
+    (entry?.field ?? null) === (action?.field ?? null)
+  );
+}
+
 export function entryBindsAction(entry, action) {
   // The signature covers the entry's CONTENT, not the ledger slot it sits in, so
   // a validly signed entry can be copied under another action's key. Everything
@@ -248,7 +262,13 @@ export function gateAction({ action, profile, ledger = {}, runReview, key = null
   // and "reword it and ask again" is the exact bypass the one shot exists to
   // refuse. Binding belongs to the authorization reads, which must cover what was
   // reviewed; replay belongs to the slot.
-  if (Object.hasOwn(ledger, slot) && verifyLedgerEntry(key, ledger[slot])) {
+  // Bound to the slot as well as signed: the signature covers the entry's
+  // content, not where it is filed, so a signed entry copied under another
+  // action's key would otherwise read as that action's spent review — blocking a
+  // legitimate action permanently, since the binding check downstream then
+  // refuses to act on it too. A relocated entry is not this action's decision, so
+  // this action is reviewed and the entry replaced.
+  if (verifyLedgerEntry(key, ledger?.[slot]) && entryBindsSlot(ledger[slot], action)) {
     return {
       verdict: 'demote',
       reason: `this revision was already gated (verdict: ${ledger[slot].verdict}); a second review of the same (issue, contentHash) is refused`,
