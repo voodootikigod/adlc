@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -60,7 +61,7 @@ function runReview(dir, { env = {} } = {}) {
   const input = JSON.stringify({ cwd: dir });
   let out = '';
   try {
-    out = execFileSync(process.execPath, [HOOK, 'review'], {
+    out = runHook([HOOK, 'review'], {
       input,
       encoding: 'utf8',
       env: { ...process.env, PATH: process.env.PATH, ...env },
@@ -404,7 +405,7 @@ test('ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 + stop_hook_active=true → advisory
     const input = JSON.stringify({ cwd: dir, stop_hook_active: true });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'review'], {
+      out = runHook([HOOK, 'review'], {
         input,
         encoding: 'utf8',
         env: { ...process.env, PATH: WITH_ADLC, ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT: '1' },

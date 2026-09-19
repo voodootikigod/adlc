@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, realpathSync } f
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
@@ -66,7 +66,7 @@ test('adlc-build-gate.mjs still enforces (denies) a high-risk degraded session w
     // emitDeny's own comment in adlc-build-gate.mjs). A true allow is exit 0
     // with EMPTY stdout. Both cases exit 0, so stdout content — not exit
     // code — is what distinguishes "denied" from "silently never ran".
-    const stdout = execFileSync(process.execPath, [hookCopyPath], {
+    const stdout = runHook([hookCopyPath], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       cwd: repoRoot,

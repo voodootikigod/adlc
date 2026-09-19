@@ -18,8 +18,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+
 import { ticketFilename } from '../generated-ticket-reader.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
@@ -63,7 +64,7 @@ function runRails(ticketsJson, relPath, { env = {}, keepDir = false, rawFilePath
     try {
       // Use the absolute node path so the child always launches, even when a
       // test overrides PATH to control whether `adlc` is reachable.
-      out = execFileSync(process.execPath, [HOOK, 'rails'], {
+      out = runHook([HOOK, 'rails'], {
         input,
         encoding: 'utf8',
         env: childEnv(env),
@@ -105,7 +106,7 @@ test('sharded ticket store enforces declared rails and freezes every shard', () 
     writeFileSync(join(store, ticketFilename(ticket.id)), JSON.stringify(ticket));
     const run = (filePath) => {
       try {
-        return execFileSync(process.execPath, [HOOK, 'rails'], {
+        return runHook([HOOK, 'rails'], {
           cwd: dir,
           input: JSON.stringify({ cwd: dir, tool_input: { file_path: join(dir, filePath) } }),
           encoding: 'utf8',
@@ -224,7 +225,6 @@ test('a COMPLETED ticket with a non-array rails object still fails closed', () =
   assert.doesNotMatch(r.out, /no rails declared/);
 });
 
-
 // ---- #243: the frozen-rail denial states its SCOPE honestly ----
 // The hook gates structured edits only; a shell write to a rail (cat >>, perl -i)
 // is NOT blocked in-session. If the message only says "blocked during build", an
@@ -257,7 +257,6 @@ test('#243: the active-ticket pointer denial does not falsely claim CI catches a
   assert.match(r.out, /active-ticket pointer/i);        // the scoped caveat is present
 });
 
-
 // ---- trust root: tickets.json is frozen once rails exist (structured edits) ----
 
 const RAIL_T = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.ts"]}]}';
@@ -265,7 +264,6 @@ const RAIL_T = '{"tickets":[{"id":"T1","rails":["test/auth/**","src/types/api.d.
 test('editing .adlc/tickets.json while rails exist → deny (trust root)', () => {
   assert.equal(runRails(RAIL_T, '.adlc/tickets.json').verdict, 'deny');
 });
-
 
 test('editing .adlc/tickets.json with NO rails declared → allow (authoring the first ticket)', () => {
   assert.equal(runRails('{"tickets":[]}', '.adlc/tickets.json').verdict, 'allow');
@@ -298,7 +296,7 @@ function runPayload(ticketsJson, toolInput, { env = {}, cwdOverride = null } = {
     const input = JSON.stringify({ cwd: cwdOverride ?? dir, tool_input: toolInput });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], {
+      out = runHook([HOOK, 'rails'], {
         input,
         encoding: 'utf8',
         env: childEnv({ CLAUDE_PROJECT_DIR: '', ...env }),
@@ -348,7 +346,7 @@ test('a RELATIVE file_path from a subdir resolves against the invocation dir →
     const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: 'secret.js' } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -368,7 +366,7 @@ test('RELATIVE file_path with CLAUDE_PROJECT_DIR set to the root resolves agains
     const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: 'secret.js' } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -389,7 +387,7 @@ test('a nested subdir .adlc does NOT shadow the git-root rail config → deny', 
     const input = JSON.stringify({ cwd: join(dir, 'src', 'sub'), tool_name: 'Edit', tool_input: { file_path: join(dir, 'src', 'secret.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -409,7 +407,7 @@ test('hook invoked from a SUBDIR (no CLAUDE_PROJECT_DIR) still gates a rail → 
     const input = JSON.stringify({ cwd: join(dir, 'src'), tool_name: 'Edit', tool_input: { file_path: join(dir, 'src', 'secret.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -430,7 +428,7 @@ test('rail on a symlinked dir, editing the REAL path directly → deny (resolved
     const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'real_dir', 'f.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -457,7 +455,7 @@ test('a rail defined on a symlinked FILE → editing the symlink path → deny (
     const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'src', 'api.d.ts') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -478,7 +476,7 @@ test('a rail defined on a SYMLINKED dir matches the resolved target → deny', (
     const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'symdir', 'f.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -501,7 +499,7 @@ test('editing a symlink that resolves to a rail file → deny', () => {
     const input = JSON.stringify({ cwd: dir, tool_input: { file_path: join(dir, 'src', 'link.d.ts') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -522,7 +520,7 @@ test('writing a NEW nested file under a symlinked rail dir → deny', () => {
     const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'link', 'newsub', 'f.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -541,7 +539,7 @@ test('structured edit (Edit) with no extractable path while rails exist → fail
     const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { foo: 'bar' } });
     let code = 0;
     try {
-      execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       code = e.status;
     }
@@ -560,7 +558,7 @@ test('writing under a BROKEN symlink that points at a (not-yet-existing) rail di
     const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'link', 'new', 'f.js') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -580,7 +578,7 @@ test('an UNRECOGNIZED matched tool targeting a rail → deny (fail closed by def
     const input = JSON.stringify({ cwd: dir, tool_name: 'SomeFutureEditTool', tool_input: { file_path: join(dir, 'test', 'x.test.mjs') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -602,7 +600,7 @@ test('editing the real target of a symlinked .adlc/tickets.json → deny (trust 
     const input = JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'cfg', 'real-tickets.json') } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -622,7 +620,7 @@ test('a symlink loop in the target path → fail closed (no infinite resolution)
     const input = JSON.stringify({ cwd: dir, tool_name: 'Write', tool_input: { file_path: join(dir, 'a', 'x.js') } });
     let code = 0;
     try {
-      execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
+      runHook([HOOK, 'rails'], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '' } });
     } catch (e) {
       code = e.status;
     }
@@ -637,7 +635,7 @@ test('a symlink loop in the target path → fail closed (no infinite resolution)
 test('malformed stdin in rails mode → fail closed (deny)', () => {
   let code = 0;
   try {
-    execFileSync(process.execPath, [HOOK, 'rails'], { input: 'not json at all', encoding: 'utf8' });
+    runHook([HOOK, 'rails'], { input: 'not json at all', encoding: 'utf8' });
   } catch (e) {
     code = e.status;
   }
@@ -742,7 +740,7 @@ test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', (
     const input = JSON.stringify({ cwd: dir, tool_input: { files: ['a/x.mjs', 'b/y.mjs'] } });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'rails'], {
+      out = runHook([HOOK, 'rails'], {
         input, encoding: 'utf8', env: { ...process.env, ADLC_RAILS_BYPASS: '1', PATH: WITH_ADLC, CLAUDE_PROJECT_DIR: '' },
       });
     } catch (e) {
@@ -756,7 +754,6 @@ test('bypass on a multi-file edit hitting two rails → allow + BOTH audited', (
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 // ---- #204: hermetic suite, scoped bypass, in-session observability ----
 // (out is raw JSON with backslash-escaped quotes — match unquoted fragments only.)
@@ -853,7 +850,7 @@ function runRailsIn(startDir, filePath, home) {
   delete env.ADLC_TICKETS;
   let out = '';
   try {
-    out = execFileSync(process.execPath, [HOOK, 'rails'], { input, encoding: 'utf8', env });
+    out = runHook([HOOK, 'rails'], { input, encoding: 'utf8', env });
   } catch (e) {
     out = e.stdout ?? '';
   }
@@ -884,7 +881,7 @@ test('a bare .adlc directory above a repo is not adopted as the ADLC root', () =
     delete env.ADLC_TICKETS;
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'manifest'], {
+      out = runHook([HOOK, 'manifest'], {
         input: JSON.stringify({ cwd: join(project, 'src') }),
         encoding: 'utf8',
         env,

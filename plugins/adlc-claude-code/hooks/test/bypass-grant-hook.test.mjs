@@ -22,8 +22,9 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+
 import { writeDenyRecord, writeBypassGrant, bypassGrantPath } from '@adlc/context-handoff';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-hook.mjs');
@@ -78,7 +79,7 @@ function runHookOnce({ sessionId, seed, manifestKeyEnv }) {
     let out = '';
     let status = 0;
     try {
-      out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+      out = runHook([HOOK, 'handoff'], {
         input: JSON.stringify(payload),
         encoding: 'utf8',
         env: {

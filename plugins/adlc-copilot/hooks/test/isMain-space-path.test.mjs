@@ -21,7 +21,7 @@ import { mkdtempSync, mkdirSync, rmSync, cpSync, realpathSync, readFileSync, wri
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
@@ -49,7 +49,7 @@ test('adlc-lifecycle.mjs still runs main() when its OWN install path contains a 
     let stdout = '';
     let stderr = '';
     try {
-      stdout = execFileSync(process.execPath, [hookCopyPath, 'bogus-mode-xyz'], {
+      stdout = runHook([hookCopyPath, 'bogus-mode-xyz'], {
         input: '{}',
         encoding: 'utf8',
         env,
@@ -106,7 +106,7 @@ test('adlc-lifecycle.mjs still runs main() with NO mode argument (default contex
 
     let stdout = '';
     try {
-      stdout = execFileSync(process.execPath, [hookCopyPath], {
+      stdout = runHook([hookCopyPath], {
         input: JSON.stringify({ cwd: repoRoot }),
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],

@@ -19,11 +19,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-rails-guard.mjs');
 const ticket = { id: 'T1', title: 'Active', scope: ['src/**'], rails: ['test/**'], edges: [] };
@@ -40,14 +41,13 @@ function withRepo(fn) {
 /** Run the hook with a shell payload; returns { status, stderr }. */
 function shell(root, command) {
   const { ADLC_P4_ENFORCEMENT: _e, ADLC_TICKET: _t, ADLC_TICKETS: _ts, ADLC_TICKET_STORE: _s, ADLC_RAILS_BYPASS: _b, ...base } = process.env;
-  return spawnSync(process.execPath, [HOOK], {
+  return spawnHook([HOOK], {
     cwd: root,
     env: base,
     input: JSON.stringify({ tool_name: 'shell', tool_input: { command } }),
     encoding: 'utf8',
   });
 }
-
 
 const DENIED = 2;
 
