@@ -136,3 +136,46 @@ test('the default branch is whatever the forge says, not a hardcoded main', () =
   assert.equal(resolveRemoteBaseSha({ run, ghRun }), REMOTE_HEAD);
   assert.ok(calls.some((c) => c.includes('trunk')), `the remote branch must be the forge's default: ${JSON.stringify(calls)}`);
 });
+
+test('a deep remote path takes the LAST two segments as owner/repo', () => {
+  // A self-hosted forge or a filesystem remote carries a deeper path. Taking any
+  // other pair asks the forge about a repository nobody named — and the answer to
+  // the wrong question is not a baseline.
+  const { run, ghRun, calls } = seams({ remoteUrl: 'ssh://git@gh.example.com:22/team/sub/repo.git' });
+
+  assert.equal(resolveRemoteBaseSha({ run, ghRun }), REMOTE_HEAD);
+  assert.ok(
+    calls.some((c) => c.includes('repos/sub/repo')),
+    `the last two segments name the repo, got ${JSON.stringify(calls)}`
+  );
+});
+
+test('a malformed segment refuses even when the other one is fine', () => {
+  // Either half being unusable makes the pair unusable: a slug is both segments
+  // or it is nothing.
+  for (const remoteUrl of ['https://github.com/owner/re po', 'https://github.com/ow ner/repo']) {
+    const { run, ghRun } = seams({ remoteUrl });
+    assert.equal(resolveRemoteBaseSha({ run, ghRun }), null, `${remoteUrl} must not resolve`);
+  }
+});
+
+test('the forge is asked for the default branch specifically', () => {
+  // The whole argv, not just the path: dropping the jq filter returns the entire
+  // repository document, and a JSON blob is not a branch name.
+  const { run, ghRun, calls } = seams();
+  resolveRemoteBaseSha({ run, ghRun });
+
+  assert.ok(
+    calls.includes('gh api repos/voodootikigod/adlc --jq .default_branch'),
+    `the default-branch query must be explicit, got ${JSON.stringify(calls)}`
+  );
+});
+
+test('an empty or blank default branch refuses rather than asking for refs/heads/', () => {
+  // `refs/heads/` with no branch is a prefix, and ls-remote would answer it with
+  // whatever comes first — a baseline nobody chose.
+  for (const defaultBranch of ['', '   ', 'two words']) {
+    const { run, ghRun } = seams({ defaultBranch });
+    assert.equal(resolveRemoteBaseSha({ run, ghRun }), null, `branch ${JSON.stringify(defaultBranch)} must refuse`);
+  }
+});

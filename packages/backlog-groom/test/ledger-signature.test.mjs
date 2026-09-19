@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { signLedgerEntry, verifyLedgerEntry } from '../lib/ledger-sig.mjs';
-import { ledgerApproves, gateKey, artifactDigest } from '../lib/gate.mjs';
+import { ledgerApproves, gateKey, artifactDigest, gateAction } from '../lib/gate.mjs';
 import { executeActions } from '../lib/execute.mjs';
 
 const KEY = 'a'.repeat(64);
@@ -149,4 +149,54 @@ test('a signed applied flag is honoured, so a resumed run does not repeat the wr
 
   assert.equal(result.executed.length, 1);
   assert.equal(result.executed[0].alreadyApplied, true);
+});
+
+test('the signature is over content, not key order: a nested object signs the same either way', () => {
+  // Canonicalisation has to be recursive. If nested objects were stringified as
+  // they came, the same entry written by two code paths could canonicalise
+  // differently and a legitimate approval would fail to verify.
+  const a = { verdict: 'approve', gate: { reviewer: 'openai', decider: 'anthropic' }, number: 7 };
+  const b = { number: 7, gate: { decider: 'anthropic', reviewer: 'openai' }, verdict: 'approve' };
+
+  assert.equal(signLedgerEntry(KEY, a), signLedgerEntry(KEY, b));
+  assert.equal(verifyLedgerEntry(KEY, { ...a, sig: signLedgerEntry(KEY, b) }), true);
+});
+
+test('a differing nested value still changes the signature', () => {
+  // The other half: order-insensitive must not mean content-insensitive.
+  const a = { verdict: 'approve', gate: { reviewer: 'openai' } };
+  const b = { verdict: 'approve', gate: { reviewer: 'anthropic' } };
+  assert.notEqual(signLedgerEntry(KEY, a), signLedgerEntry(KEY, b));
+});
+
+test('a short key is still a key', () => {
+  // The guard rejects an ABSENT key, not a short one. Rejecting by length would
+  // silently refuse to verify entries this same code signed.
+  const entry = { verdict: 'approve', number: 7 };
+  assert.equal(verifyLedgerEntry('k', { ...entry, sig: signLedgerEntry('k', entry) }), true);
+});
+
+test('AC5: gateAction demotes with a REASON when no key is available, and spawns no review', () => {
+  // Not null, and not a thrown error: the run reports why each action demoted,
+  // and the caller reads `verdict`. Returning null would make every consumer's
+  // `gate?.verdict` undefined and the reason unreportable.
+  for (const noKey of [null, undefined, '']) {
+    const out = gateAction({
+      action,
+      profile: { providers: { decider: 'anthropic', reviewer: 'openai' } },
+      ledger: {},
+      runReview: () => { throw new Error('a review must not be spawned without a key'); },
+      key: noKey,
+    });
+    assert.equal(out.verdict, 'demote', `key ${JSON.stringify(noKey)} must demote`);
+    assert.match(out.reason, /key/i, 'the reason must name the missing key');
+  }
+});
+
+test('no key leaves the ledger untouched, so the run that has one is not refused as a replay', () => {
+  // Recording a verdict would burn the one-shot: the revision would read as
+  // already gated, and the key-holder's run would be refused.
+  const ledger = {};
+  gateAction({ action, profile: { providers: { decider: 'anthropic', reviewer: 'openai' } }, ledger, runReview: () => ({ code: 0 }), key: null });
+  assert.deepEqual(ledger, {});
 });
