@@ -36,7 +36,13 @@ function seams({
   isAncestor = true,
   profileAtBase = '{"schemaVersion":1,"autonomyFloor":["close"]}',
   failGh = false,
+  // A stale clone: the remote's head is not in the local object database until
+  // it is fetched. `shaPresent` is what `cat-file -e` reports, and it flips to
+  // true once a fetch succeeds — the sequence a real clone goes through.
+  shaPresent = true,
+  fetchWorks = true,
 } = {}) {
+  let present = shaPresent;
   const calls = [];
   const run = (args) => {
     calls.push(['git', ...args].join(' '));
@@ -58,6 +64,15 @@ function seams({
       }
       if (mergeBase === null) throw new Error('fatal: no merge base');
       return mergeBase;
+    }
+    if (cmd === 'cat-file') {
+      if (!present) throw new Error('fatal: Not a valid object name');
+      return '';
+    }
+    if (cmd === 'fetch') {
+      if (!fetchWorks) throw new Error('fatal: could not fetch');
+      present = true;
+      return '';
     }
     if (cmd === 'ls-tree') return profileAtBase === null ? '' : PROFILE;
     if (cmd === 'show') return profileAtBase;
@@ -178,4 +193,38 @@ test('an empty or blank default branch refuses rather than asking for refs/heads
     const { run, ghRun } = seams({ defaultBranch });
     assert.equal(resolveRemoteBaseSha({ run, ghRun }), null, `branch ${JSON.stringify(defaultBranch)} must refuse`);
   }
+});
+
+test('a stale clone fetches the remote head rather than refusing', () => {
+  // ls-remote answers with where the branch points NOW, which a clone that has
+  // not fetched recently has never seen. Refusing there would block every apply
+  // on an ordinary working copy — a refusal nobody can act on is not a safety
+  // property.
+  const { run, ghRun, calls } = seams({ shaPresent: false });
+
+  assert.equal(resolveRemoteBaseSha({ run, ghRun }), REMOTE_HEAD);
+  assert.ok(calls.some((c) => c.startsWith('git fetch')), `the missing commit must be fetched: ${JSON.stringify(calls)}`);
+  // And no local ref is moved by any of it.
+  assert.ok(!calls.some((c) => c.includes('update-ref')), 'the baseline must not write a local ref');
+});
+
+test('a commit that cannot be fetched refuses rather than guessing a baseline', () => {
+  const { run, ghRun } = seams({ shaPresent: false, fetchWorks: false });
+  assert.equal(resolveRemoteBaseSha({ run, ghRun }), null);
+});
+
+test('a fetched-but-still-absent commit refuses', () => {
+  // The fetch reported success and the object is still not there: something is
+  // wrong with the object store, and a baseline that cannot be read is no
+  // baseline. `present` deliberately stays false here.
+  const calls = [];
+  const run = (args) => {
+    calls.push(args[0]);
+    if (args[0] === 'remote') return 'git@github.com:acme/widgets.git';
+    if (args[0] === 'ls-remote') return `${REMOTE_HEAD}\trefs/heads/main\n`;
+    if (args[0] === 'cat-file') throw new Error('fatal: Not a valid object name');
+    if (args[0] === 'fetch') return '';
+    throw new Error(`unexpected git call: ${args.join(' ')}`);
+  };
+  assert.equal(resolveRemoteBaseSha({ run, ghRun: () => 'main\n' }), null);
 });

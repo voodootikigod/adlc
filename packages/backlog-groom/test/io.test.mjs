@@ -105,6 +105,8 @@ function remoteRun(body) {
   return (args) => {
     if (args[0] === 'remote') return 'git@github.com:acme/widgets.git\n';
     if (args[0] === 'ls-remote') return `${REMOTE_SHA}\trefs/heads/main\n`;
+    if (args[0] === 'cat-file') return ''; // the remote head is already local
+    if (args[0] === 'fetch') return '';
     if (args[0] === 'merge-base' && args.includes('--is-ancestor')) return '';
     return body(args);
   };

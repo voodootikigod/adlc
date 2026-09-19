@@ -230,10 +230,25 @@ export function gateAction({ action, profile, ledger = {}, runReview, key = null
   }
 
   const slot = gateKey(action);
-  if (Object.hasOwn(ledger, slot)) {
-    // The refusal is unconditional — it does not matter whether the prior
-    // verdict was an approve or a demote, because "ask again and see" is the
-    // bypass regardless of which way the first answer went.
+  // ONLY A VALIDLY SIGNED ENTRY SPENDS THE ONE SHOT. The refusal is otherwise
+  // unconditional — an approve and a demote both block a second attempt, because
+  // "ask again and see" is the bypass whichever way the first answer went — but
+  // an entry we cannot verify is not a record of a review that happened. Treating
+  // one as spent would strand every action carrying a ledger written before
+  // signing existed, with deleting the whole ledger as the only way out, which
+  // costs more replay protection than it buys. An unverifiable entry is therefore
+  // replaced by a freshly signed verdict rather than honoured.
+  //
+  // This does not hand a caller a re-roll: an attacker who can corrupt an entry
+  // to force a re-review can equally delete it, so the ledger's integrity has
+  // never rested on unreadable entries being treated as decisions.
+  // SIGNED, but NOT bound to the artifact. The slot already names the issue, the
+  // action, the field and the revision; the artifact digest deliberately takes no
+  // part here, because the digest changes the moment the artifact is reworded —
+  // and "reword it and ask again" is the exact bypass the one shot exists to
+  // refuse. Binding belongs to the authorization reads, which must cover what was
+  // reviewed; replay belongs to the slot.
+  if (Object.hasOwn(ledger, slot) && verifyLedgerEntry(key, ledger[slot])) {
     return {
       verdict: 'demote',
       reason: `this revision was already gated (verdict: ${ledger[slot].verdict}); a second review of the same (issue, contentHash) is refused`,
