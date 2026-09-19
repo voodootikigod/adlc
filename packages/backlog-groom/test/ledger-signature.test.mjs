@@ -294,3 +294,38 @@ test('a signed entry relocated under another slot does not strand that action', 
   assert.equal(out.verdict, 'approve');
   assert.equal(ledgerApproves(ledger, other, KEY), true, 'and the replacement authorizes the action it is about');
 });
+
+test('every field of the slot identity binds independently', () => {
+  // One differing field is enough to make an entry someone else's decision.
+  // Varying two at once would let a check that required only ONE match pass.
+  const cases = [
+    ['number', { ...action, number: 706 }],
+    ['contentHash', { ...action, contentHash: 'h2' }],
+    ['action', { ...action, action: 'relabel', field: 'priority' }],
+  ];
+
+  for (const [name, other] of cases) {
+    const ledger = { [gateKey(other)]: approvedEntry() }; // 705's close, filed elsewhere
+    let reviewed = 0;
+    gateAction({
+      action: other,
+      profile: { providers: { decider: 'anthropic', reviewer: 'openai' } },
+      ledger,
+      runReview: () => { reviewed += 1; return { code: 0 }; },
+      key: KEY,
+    });
+    assert.equal(reviewed, 1, `a differing ${name} must not read as this action's spent review`);
+  }
+});
+
+test('an approval differing in exactly one bound field authorizes nothing', () => {
+  for (const [name, entry] of [
+    ['number', approvedEntry(KEY, { number: 999 })],
+    ['contentHash', approvedEntry(KEY, { contentHash: 'other' })],
+    ['action', approvedEntry(KEY, { action: 'relabel' })],
+    ['field', approvedEntry(KEY, { field: 'priority' })],
+    ['artifactDigest', approvedEntry(KEY, { artifactDigest: 'deadbeef' })],
+  ]) {
+    assert.equal(ledgerApproves(ledgerWith(entry), action, KEY), false, `a differing ${name} must not authorize`);
+  }
+});
