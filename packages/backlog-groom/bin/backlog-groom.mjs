@@ -153,14 +153,16 @@ if (values.apply) {
   // demotes. Said once, plainly, because a run that proposes instead of closing
   // otherwise looks like a reviewer problem rather than a missing key.
   const ledgerKey = process.env.ADLC_MANIFEST_KEY || null;
-  // NO CHILD SEES THE KEY. Every subprocess this path starts — the reviewer,
-  // which is a command the profile names, and `gh` — would otherwise inherit it
-  // through the ambient environment, and a key a child can read is a key that can
-  // mint its own approvals. Stripping it here rather than at each call site means
-  // a spawn added later cannot leak it by forgetting to.
-  const childEnv = { ...process.env };
-  delete childEnv.ADLC_MANIFEST_KEY;
-  const spawnWithoutKey = (cmd, args, opts = {}) => spawnSync(cmd, args, { ...opts, env: childEnv });
+  // TAKEN OUT OF THE ENVIRONMENT ENTIRELY, once, here. Every subprocess this path
+  // starts inherits `process.env`: the reviewer (a command the profile names),
+  // `gh`, and the several git calls behind headCommit, contentHash and
+  // revalidation. A key a child can read is a key that can mint its own
+  // approvals, so sanitizing each spawn site is the wrong shape — it only has to
+  // be forgotten once, and the first version of this change did forget three.
+  // Deleting it from the parent's own environment covers every spawn that exists
+  // and every one added later; the value lives on in `ledgerKey`, threaded
+  // explicitly to the only code entitled to it.
+  delete process.env.ADLC_MANIFEST_KEY;
   if (!ledgerKey) {
     console.error(
       'backlog-groom: no ADLC_MANIFEST_KEY is set, so no verdict can be signed — ' +
@@ -183,12 +185,12 @@ if (values.apply) {
   };
   const runReview = (action) =>
     makeReviewRunner({
-      spawn: spawnWithoutKey,
+      spawn: spawnSync,
       artifactPath: writeArtifact(artifactDir, action),
       reviewer: pair.reviewer,
     })();
 
-  const ghIo = makeGhWriter({ spawn: spawnWithoutKey });
+  const ghIo = makeGhWriter({ spawn: spawnSync });
 
   let applied;
   try {
