@@ -670,10 +670,16 @@ export function evaluateHandoffPreToolUse({
   // neither (an ambiguous or unparseable one still fails closed, by
   // construction of the ladder) cannot touch it either. This also closes an
   // inconsistency rather than opening one: the `Read` tool already bypasses
-  // this guard completely (only Edit/Write/MultiEdit/NotebookEdit/Bash are
-  // wired to it — see hooks.json), so a plain `ls`/`cat`/`grep` under `.adlc/`
-  // was being refused while reading the identical bytes through a different
-  // tool was not.
+  // this guard completely (it reaches this adapter only for the mutating tool
+  // verbs — Edit/Write/MultiEdit/NotebookEdit/Bash), so a plain `ls`/`cat`/
+  // `grep` under `.adlc/` was being refused while reading the identical bytes
+  // through a different tool was not.
+  //
+  // NOTE (#995): this previously cited hooks.json as the source of that tool
+  // list. As of 1.11.1 that citation is wrong — #966 removed the handoff
+  // entries from every harness's hooks.json, so nothing dispatches this gate
+  // automatically at all. The scope reasoning above is a property of the
+  // adapter's own inputs and still holds; only the pointer was stale.
   const shellClassification = isBash ? classifyShellCommand(bashCommand) : null;
   const shellGenuinelyReadOnly = shellClassification !== null
     && shellClassification.readOnly

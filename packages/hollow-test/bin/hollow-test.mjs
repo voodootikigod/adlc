@@ -10,7 +10,7 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
-  filterTargetFiles, buildFileTargets, readFileSafe,
+  filterTargetFiles, buildFileTargets, readFileSafe, changedLinesAreCommentOnly,
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
 import { runMutant, runTest } from '../lib/runner.mjs';
@@ -302,7 +302,36 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFiles = filterTargetFiles(changedLines, { testGlobs, sourceGlobs });
+const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, sourceGlobs });
+
+// ── comment-only diffs are NOT COVERED, not a failure (#1032) ───────────────
+//
+// The zero-mutant refusal below (#658) is right for a real code change no
+// operator can see, and wrong for a diff that changed only comments: there is
+// no behaviour to mutate, so there is nothing that COULD have been verified.
+// Those files join the same "not covered" bucket as a .md file rather than
+// failing the gate.
+//
+// The predicate fails closed on every doubt (see changedLinesAreCommentOnly),
+// and a file that cannot be read stays eligible so the existing unreadable-file
+// path reports it rather than this one swallowing it.
+const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
+  const content = readFileSafe(resolve(root, f));
+  if (content === null) return false;
+  return changedLinesAreCommentOnly(content, changedLines[f] ?? []);
+});
+const commentOnly = new Set(commentOnlyFiles);
+const diffEligibleFiles = diffEligibleFilesAll.filter((f) => !commentOnly.has(f));
+
+// Never a SILENT skip. A coverage gate that goes green by not looking is worse
+// than no gate, so say exactly what was not covered and why.
+if (commentOnlyFiles.length > 0 && !useJson) {
+  console.log(
+    `hollow-test: ${commentOnlyFiles.length} changed file(s) touched only comment or blank ` +
+    'lines, so there is no changed behaviour to mutate and this gate does not cover them:'
+  );
+  for (const f of commentOnlyFiles) console.log(`  ${f}`);
+}
 
 // ── explicit --target / --rails resolution ──────────────────────────────────
 // These bypass EXCLUDE_PATH_RE deliberately: the caller is asking, by name,
@@ -451,6 +480,14 @@ for (const f of explicitFiles) {
 // (0 mutants, exit 0). A rails-only or test-only diff (P3 characterization /
 // rails-authoring tickets) must not silently satisfy this gate — refuse to
 // run instead, and point the caller at --target/--rails (issues #70, #41).
+
+// The whole diff was comments. Nothing was skipped by accident and nothing is
+// unverified — there is simply no changed behaviour in it. Reported, then a
+// clean exit, rather than the "nothing to mutate" refusal below, which exists
+// for a diff whose source files were never eligible in the first place.
+if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && commentOnlyFiles.length > 0) {
+  pass(useJson ? undefined : 'comment-only diff — no changed behaviour to mutate');
+}
 
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
   opError(

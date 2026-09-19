@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// ADLC hooks — one helper, five modes:
+// ADLC hooks — one helper, nine modes. The annotation in brackets is the
+// SHIPPED status, and scripts/test/handoff-wiring-drift.test.mjs holds it to
+// what hooks.json actually dispatches:
 //   preflight  (SessionStart)  → environment readiness before fan-out  [advisory]
+//   context    (SessionStart/PreCompact/PostCompact/SubagentStart/SubagentStop) → context-rot capture/restore [advisory]
 //   flail      (PostToolUse)    → flail-detection over the transcript    [advisory]
 //   manifest   (Stop)           → gate-evidence chain integrity audit    [advisory]
 //   review     (Stop)           → mechanical adversarial-review trigger  [advisory by
@@ -8,8 +11,14 @@
 //                                  ADLC_ADVERSARIAL_REVIEW_ENFORCEMENT=1 — see review()]
 //   rails      (PreToolUse)     → block edits to frozen rail paths        [ENFORCING]
 //   buildgate  (PreToolUse)     → fitness-to-build gate (issue #48)        [ENFORCING]
-//   handoff    (PreToolUse)     → context-rot deny/handoff (D1–D3)         [ENFORCING]
-//   handoffstart (SessionStart) → continuation context / operator one-liner [advisory]
+//   handoff    (PreToolUse)     → context-rot deny/handoff (D1–D3)         [DISCONNECTED — see #966]
+//   handoffstart (SessionStart) → continuation context / operator one-liner [DISCONNECTED — see #966]
+//
+// handoff/handoffstart: #966 removed their hooks.json entries in 1.11.1 because
+// the deny-set was blocking edits and shell across live workstreams. The
+// implementation below is INTACT and still unit-tested — only the automatic
+// per-tool-call wiring is off, and reconnecting is re-adding those two entries.
+// Do not "clean up" the handoff code on the assumption that it is dead.
 //
 // CONTRACT: preflight/flail/manifest must NEVER block and stay SILENT unless
 // there is something to flag. `rails`, `buildgate`, and `handoff` are the
@@ -2655,11 +2664,15 @@ if (isMain) {
   try {
     await main();
   } catch (err) {
-    // The `rails`/`buildgate`/`handoff` modes are ENFORCING — a crash must FAIL CLOSED,
+    // The `rails`/`buildgate` modes are ENFORCING — a crash must FAIL CLOSED,
     // never fall through to exit 0 (which the harness reads as "allow"). Emit a
     // deny and exit 2 so the PreToolUse call is blocked even if the deny
     // payload is missed. The advisory modes (preflight/flail/manifest/review)
     // legitimately swallow their own errors.
+    //
+    // `handoff` is held to the same fail-closed treatment even though #966
+    // unwired it in 1.11.1, so that reconnecting it cannot silently land
+    // fail-open. See ENFORCING_MODES in adlc-hook-run.mjs.
     if (MODE === 'rails') {
       try {
         denyRail(`rails hook errored (${err?.message ?? 'unknown'}) — failing closed`);

@@ -20,6 +20,14 @@ import { spawnSync } from 'node:child_process';
 // In Claude Code a PreToolUse hook blocks the tool ONLY on exit code 2; exit 1 is a
 // non-blocking error that lets the tool proceed (fail OPEN). So a timed-out enforcing
 // hook must exit 2, not 1. Advisory modes exit 0 so they never block the user.
+// `handoff` is DISCONNECTED as of 1.11.1 (#966 removed its hooks.json entries
+// because the deny-set was blocking work across live sessions) and is kept in
+// this set DELIBERATELY. The disconnect is temporary — #966 describes
+// reconnecting as re-adding those entries — and this set is what decides
+// fail-closed vs fail-open on a timeout or crash. Dropping it would mean the
+// day the verb is re-wired it silently lands fail-OPEN, which is the failure
+// this set exists to prevent. A dead entry costs nothing: nothing dispatches
+// the verb, so the branch is unreachable until it is wired again.
 export const ENFORCING_MODES = new Set(['rails', 'buildgate', 'handoff']);
 
 /** Exit code for a hook that timed out or was killed by a signal. */
@@ -81,7 +89,10 @@ const TIMEOUTS_MS = {
   review: 25_000,     // hooks.json: 30 s
   rails: 10_000,      // hooks.json: 15 s — enforcing hook: deny on timeout
   buildgate: 10_000,  // hooks.json: 15 s — enforcing hook: deny on timeout
-  handoff: 10_000,    // hooks.json timeout minus buffer — enforcing: deny on timeout
+  // DISCONNECTED (#966): hooks.json no longer carries a handoff entry, so there
+  // is no timeout to derive this from. Retained at the enforcing budget so a
+  // reconnect inherits deny-on-timeout rather than a default.
+  handoff: 10_000,
   // SessionStart continuation notice: advisory, so a timeout exits 0. Same
   // budget as the enforcing modes, minus the same buffer — the value is stated
   // once here rather than restated from hooks.json, which is free to drift.

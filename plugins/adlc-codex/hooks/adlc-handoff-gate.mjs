@@ -4,6 +4,12 @@
 // slice 4). Codex is an ENFORCING tier: under the deny-set the agent loses
 // structured edits AND the shell wholesale.
 //
+// DISCONNECTED as of 1.11.1 — #966 removed this hook's entry from
+// plugins/adlc-codex/hooks/hooks.json because the deny-set was blocking work
+// across live sessions. The logic below is intact and still tested; nothing
+// dispatches it. The enforcement described above is what it WOULD do once
+// re-wired, not what ships today.
+//
 // Unlike adlc-rails-guard.mjs / adlc-build-gate.mjs, this hook does NOT inline
 // a copy of the logic it enforces. D1-D3, the band thresholds, the protected
 // path list and the mutating-shell detector all come from
