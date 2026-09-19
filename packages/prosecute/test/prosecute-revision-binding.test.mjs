@@ -8,7 +8,7 @@
 // seedOpenFindingsFromManifest() (~L153-168) only reopens findings recorded `entry.revision ===
 // revision`, so a stale finding recorded at one revision must not block a later, different
 // revision from converging.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,6 +17,21 @@ import { runProsecution } from '../lib/run.mjs';
 import { canonicalJson, resolveRevision, resolveChangeSetRevision, sha256 } from '@adlc/core';
 import { ticketHash as domainTicketHash } from '@adlc/tickets';
 import { FIXTURE_REVISION, finding, gitRepo, input, killedFinding, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 describe('revision binding: transcript and review-packet proofs', () => {
   it('requires a readable review transcript', () => {
@@ -357,7 +372,7 @@ describe('revision binding: manifest-seeded open findings are revision-scoped', 
     // Use a separate scratch directory for the stale-revision fixture files so they don't
     // collide with (and get silently overwritten by) the default-revision fixtures the
     // `input()` helper below writes into the shared `dir` for the second prosecution.
-    const staleEvidenceDir = mkdtempSync(join(tmpdir(), 'adlc-prosecute-stale-'));
+    const staleEvidenceDir = fixture('adlc-prosecute-stale-');
     const first = runProsecution({
       provenance: {
         reviewer: 'fixture-reviewer',

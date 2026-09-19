@@ -10,7 +10,7 @@
 //   FIX C: the ticket table for rails-deny-path tiering is read from the SAME --dir
 //          the prosecution uses, not a hard-coded .adlc/tickets.json.
 // The recorded revision is resolved the SAME way the gate resolves it (no --revision).
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,21 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
 import { migrateLegacyStore } from '@adlc/tickets';
 import { resolveProsecutionRevision } from '../lib/run.mjs';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -62,7 +77,7 @@ function lastManifestEntry(dir) {
 // spuriously tiers under the working-tree-inclusive changed-file set. `featurePath`
 // (if given) is committed on the `feat` branch.
 function scratchRepo(featurePath, { baselineFiles = {}, ledgerDir = '.adlc', rails = [], migrateStore = false, extraTickets = [] } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-xm-cli-'));
+  const dir = fixture('adlc-xm-cli-');
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');
@@ -224,7 +239,7 @@ describe('adlc-prosecute trust-root-tier CLI gate', () => {
     // change (gate bypass). The canonical rails must still tier it. Explicit
     // --revision keeps the transcript binding stable regardless of --dir.
     const repo = scratchRepo('src/secure/secret.mjs', { ledgerDir: '.adlc', rails: ['src/secure/**'] });
-    const outside = mkdtempSync(join(tmpdir(), 'adlc-escape-'));
+    const outside = fixture('adlc-escape-');
     try {
       writeFileSync(join(outside, 'tickets.json'), JSON.stringify({
         tickets: [{ id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] }],

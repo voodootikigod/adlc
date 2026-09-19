@@ -1,10 +1,10 @@
 // scaffold.test.mjs — the scaffolder writes valid Cursor config, merges hooks
 // without clobbering the user's other hooks, and is idempotent.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +21,22 @@ import {
   ensureFormatterIgnores as coreEnsureFormatterIgnores,
 } from '@adlc/core';
 
-const mkRepo = () => mkdtempSync(join(tmpdir(), 'adlc-cursor-scaffold-'));
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
+
+const mkRepo = () => fixture('adlc-cursor-scaffold-');
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 
 test('scaffold creates config, hooks.json (dispatcher + audit + shell advisory) and the rule', () => {
@@ -211,7 +226,7 @@ function runScaffoldCli(cliArgs, { extraEnv = {} } = {}) {
   const target = mkRepo();
   // Spawn from a DIFFERENT cwd so a broken positional-arg parse (falling back
   // to '.') scaffolds the wrong directory and the assertions below catch it.
-  const spawnCwd = mkdtempSync(join(tmpdir(), 'adlc-cursor-cli-cwd-'));
+  const spawnCwd = fixture('adlc-cursor-cli-cwd-');
   const env = { ...process.env };
   delete env.ADLC_CURSOR_WIRE_UNPINNED; // isolate from the outer environment
   Object.assign(env, extraEnv);

@@ -3,9 +3,9 @@
 // interrogation summary bound to a real, unchanged spec file, recorded after
 // the latest spec-lint/premortem evidence
 // (.adlc/specs/p0-p1-human-interrogation.md, design D4).
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { assertPhase } from '../lib/assertions.mjs';
@@ -13,10 +13,25 @@ import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manif
 import { sha256 } from '@adlc/core';
 import { ticketHash as domainTicketHash } from '@adlc/tickets';
 
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
+
 const appendManifestEntry = (entry, dir, opts = {}) => realAppendManifestEntry(entry, dir, { key: null, ...opts });
 
 function tmpAdlc() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-runner-p0p1-'));
+  const dir = fixture('adlc-runner-p0p1-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }

@@ -10,13 +10,28 @@
 // are recorded deliberately via --allow-unknown-ticket; a repo with NO store
 // records freely; a store that exists but cannot be resolved is an operational
 // error (exit 1), never treated as absent.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ticketFilename } from '@adlc/tickets';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -36,7 +51,7 @@ function runBin(args, cwd, env = {}) {
 // A scratch git repo; `tickets` seeds a legacy canonical store at .adlc/tickets.json,
 // null seeds NO store at all.
 function repoWithStore(tickets) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-unknown-ticket-'));
+  const dir = fixture('adlc-unknown-ticket-');
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');
@@ -121,7 +136,7 @@ describe('record-cross-model unknown-ticket refusal (#485)', () => {
   });
 
   it('outside any git repository with no store, records freely', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-no-git-'));
+    const dir = fixture('adlc-no-git-');
     mkdirSync(join(dir, '.adlc'), { recursive: true });
     const r = runBin(record('ANY-ID'), dir);
     assert.equal(r.status, 0, r.stderr);
@@ -130,7 +145,7 @@ describe('record-cross-model unknown-ticket refusal (#485)', () => {
   });
 
   it('a store in a NON-git directory still validates ids (not-a-repo is not store absence)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-no-git-store-'));
+    const dir = fixture('adlc-no-git-store-');
     mkdirSync(join(dir, '.adlc'), { recursive: true });
     writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({
       tickets: [{ id: 'T1', title: 'Fixture T1', scope: [], rails: [], edges: [] }],
@@ -221,7 +236,7 @@ describe('record-cross-model unknown-ticket refusal (#485)', () => {
     // about store absence. The refusal must be exit 1 with nothing written —
     // treating it as absent would recreate the permanent-typo write.
     const dir = repoWithStore(['T1']);
-    const nodeDir = mkdtempSync(join(tmpdir(), 'adlc-nogit-path-'));
+    const nodeDir = fixture('adlc-nogit-path-');
     const r = runBin(record('T-DOES-NOT-EXIST'), dir, { PATH: nodeDir });
     assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
     assert.match(r.stderr, /git discovery failed/);
@@ -318,7 +333,7 @@ describe('record-cross-model unknown-ticket refusal (#485)', () => {
     // ledger, an unknown id refuses, and a caller-side absent store never
     // makes the check vacuous.
     const worker = repoWithStore(['T1']);
-    const controller = mkdtempSync(join(tmpdir(), 'adlc-controller-'));
+    const controller = fixture('adlc-controller-');
     const workerDir = join(worker, '.adlc');
 
     const denied = runBin(['record-cross-model', '--ticket', 'T-DOES-NOT-EXIST', '--provider', 'openai',
@@ -481,7 +496,7 @@ describe('record-cross-model unknown-ticket refusal (#485)', () => {
     rmSync(join(dir, '.adlc', 'tickets.json'));
 
     const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-    const shimDir = mkdtempSync(join(tmpdir(), 'git-shim-'));
+    const shimDir = fixture('git-shim-');
     writeFileSync(join(shimDir, 'git'), [
       '#!/bin/sh',
       'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--quiet" ] && [ "$4" = "HEAD" ]; then',

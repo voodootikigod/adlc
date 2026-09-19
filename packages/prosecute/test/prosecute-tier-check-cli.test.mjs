@@ -9,13 +9,28 @@
 //   - the add-vs-alter calibration (#326): an ADDITIVE ticket write does NOT tier,
 //     while ALTERING an existing ticket contract DOES;
 //   - a tiered change with no --author-provider fails closed (exit 1).
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+
+// Fixture directories are registered as they are minted and removed when this
+// file finishes, so repeated runs do not accumulate directories under tmpdir().
+const fixtures = new Set();
+after(() => {
+  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+  fixtures.clear();
+});
+
+function fixture(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtures.add(dir);
+  return dir;
+}
+
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -50,7 +65,7 @@ function runBin(args, cwd, env = {}) {
 const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
 
 function scratchRepo({ baseTickets, mutate }) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-tier-check-'));
+  const dir = fixture('adlc-tier-check-');
   const g = (...a) => execFileSync('git', a, {
     cwd: dir,
     encoding: 'utf8',
@@ -479,7 +494,7 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
   // gate binds to (revisionIgnorePaths only excludes .adlc/manifest.jsonl, not an arbitrary
   // store path).
   function attestationStoreDir() {
-    return mkdtempSync(join(tmpdir(), 'adlc-attestations-'));
+    return fixture('adlc-attestations-');
   }
 
   it('mirror-attestations appends a new cross-model entry and is idempotent', () => {
