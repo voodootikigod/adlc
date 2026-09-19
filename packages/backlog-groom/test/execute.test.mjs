@@ -8,10 +8,17 @@ import assert from 'node:assert/strict';
 
 import { marker, parseMarker, planAction, executeActions } from '../lib/execute.mjs';
 import { gateKey, artifactDigest } from '../lib/gate.mjs';
+import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
+
+// Ledger entries are HMAC-signed now (#1035), so a fixture has to seal what it
+// writes. Sealed, not merely signed-looking: these tests are about the FIELD
+// checks — a stale revision, an approval moved between issues — and an entry
+// that failed on its signature would pass them for the wrong reason.
+const TEST_KEY = 'execute-test-key-0123456789abcdef';
 
 /** A ledger holding a real approve bound to this action's revision and reviewed artifact. */
 function ledgerFor(action, verdict = 'approve') {
-  return { [gateKey(action)]: { verdict, contentHash: action.contentHash, number: action.number, action: action.action, artifactDigest: artifactDigest(action) } };
+  return { [gateKey(action)]: sealLedgerEntry(TEST_KEY, { verdict, contentHash: action.contentHash, number: action.number, action: action.action, artifactDigest: artifactDigest(action) }) };
 }
 
 const approved = (over = {}) => ({
@@ -69,7 +76,7 @@ test('a marker for a different revision does not match this one', () => {
 
 test('AC9: the comment carrying the evidence precedes the action', () => {
   const gh = fakeGh();
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
+  executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
   assert.match(gh.calls[0][2], /every cited line is gone/);
 });
@@ -78,7 +85,7 @@ test('AC9: an action whose comment write fails does not proceed', () => {
   // The trail must be on the issue BEFORE it goes quiet. If the trail could not
   // be written, the issue does not go quiet.
   const gh = fakeGh({ failOn: 'comment' });
-  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
+  const result = executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment']);
   assert.equal(result.executed.length, 0);
   assert.equal(result.failed.length, 1);
@@ -87,7 +94,7 @@ test('AC9: an action whose comment write fails does not proceed', () => {
 
 test('AC9: the comment body carries the marker', () => {
   const gh = fakeGh();
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
+  executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh });
   assert.ok(gh.calls[0][2].includes(marker(7, 'abc123')));
 });
 
@@ -96,7 +103,7 @@ test('AC9: the comment body carries the marker', () => {
 test('an action without an approve never reaches the writer', () => {
   const gh = fakeGh();
   const a = approved();
-  const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger: ledgerFor(a, 'demote'), gh });
+  const result = executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger: ledgerFor(a, 'demote'), gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.executed.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
@@ -105,7 +112,7 @@ test('an action without an approve never reaches the writer', () => {
 test('an action with a MISSING gate verdict is demoted, not assumed approved', () => {
   // Absence of a refusal is not an approval.
   const gh = fakeGh();
-  const result = executeActions({ actions: [approved({ gate: undefined })], floor: [], baseFloor: [], ledger: {}, gh });
+  const result = executeActions({ key: TEST_KEY, actions: [approved({ gate: undefined })], floor: [], baseFloor: [], ledger: {}, gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
 });
@@ -117,7 +124,7 @@ test('AC15: a re-run after comment-succeeded/action-failed resumes at the action
   // never landed. Re-commenting would stack a second identical rationale, and
   // every retry would add another.
   const gh = fakeGh({ existingComments: [{ body: `prior body\n${marker(7, 'abc123')}`, author: 'me' }] });
-  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
+  const result = executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['apply'], 'the comment must not be repeated');
   assert.equal(result.executed.length, 1);
   assert.equal(result.executed[0].resumed, true);
@@ -126,7 +133,7 @@ test('AC15: a re-run after comment-succeeded/action-failed resumes at the action
 test('AC15: a marker for a DIFFERENT revision does not suppress the comment', () => {
   // Stale evidence from an older revision is not this decision's trail.
   const gh = fakeGh({ existingComments: [{ body: `older\n${marker(7, 'oldhash')}`, author: 'me' }] });
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
+  executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });
 
@@ -136,7 +143,7 @@ test('AC15: a mid-sweep failure leaves the remaining actions untouched and resum
   const gh = fakeGh({ failOn: 'apply' });
   const a = approved();
   const b = approved({ number: 9, contentHash: 'zzz' });
-  const result = executeActions({ actions: [a, b], floor: [], baseFloor: [], ledger: { ...ledgerFor(a), ...ledgerFor(b) }, gh });
+  const result = executeActions({ key: TEST_KEY, actions: [a, b], floor: [], baseFloor: [], ledger: { ...ledgerFor(a), ...ledgerFor(b) }, gh });
   assert.equal(result.executed.length, 0);
   assert.equal(result.failed.length, 2);
   // Both got their comment first, so both are resumable at the action on a re-run.
@@ -149,7 +156,7 @@ test('the floor blocks before the comment, not after it', () => {
   // A floored action must leave no trace at all: a "closing because…" comment on
   // an issue that will never be closed is worse than silence.
   const gh = fakeGh();
-  const result = executeActions({ actions: [approved()], floor: ['close'], baseFloor: ['close'], ledger: ledgerFor(approved()), gh });
+  const result = executeActions({ key: TEST_KEY, actions: [approved()], floor: ['close'], baseFloor: ['close'], ledger: ledgerFor(approved()), gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'floor');
 });
@@ -159,7 +166,7 @@ test('a widened floor refuses the whole run before any write', () => {
   // discover the policy problem on the second.
   const gh = fakeGh();
   assert.throws(
-    () => executeActions({ actions: [approved()], floor: [], baseFloor: ['close'], ledger: ledgerFor(approved()), gh }),
+    () => executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: ['close'], ledger: ledgerFor(approved()), gh }),
     (err) => err.isOpError === true
   );
   assert.equal(gh.calls.length, 0);
@@ -169,10 +176,10 @@ test('a widened floor refuses the whole run before any write', () => {
 
 test('planAction is pure and explains every refusal', () => {
   const a = approved();
-  assert.equal(planAction(a, { floor: [], ledger: ledgerFor(a) }).do, true);
-  assert.equal(planAction(a, { floor: ['close'], ledger: ledgerFor(a) }).do, false);
-  assert.equal(planAction(a, { floor: ['close'], ledger: ledgerFor(a) }).reason, 'floor');
-  assert.equal(planAction(a, { floor: [], ledger: ledgerFor(a, 'demote') }).reason, 'gate');
+  assert.equal(planAction(a, { key: TEST_KEY, floor: [], ledger: ledgerFor(a) }).do, true);
+  assert.equal(planAction(a, { key: TEST_KEY, floor: ['close'], ledger: ledgerFor(a) }).do, false);
+  assert.equal(planAction(a, { key: TEST_KEY, floor: ['close'], ledger: ledgerFor(a) }).reason, 'floor');
+  assert.equal(planAction(a, { key: TEST_KEY, floor: [], ledger: ledgerFor(a, 'demote') }).reason, 'gate');
 });
 
 // ---- the ledger is the authority, not the caller's claim -------------------
@@ -182,7 +189,7 @@ test('a FORGED approval on the action is refused — the ledger decides', () => 
   // `gate: { verdict: 'approve' }` trivially; if that were authorization, the
   // reviewer could be skipped entirely by anyone importing the module.
   const gh = fakeGh();
-  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: {}, gh });
+  const result = executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: {}, gh });
   assert.equal(gh.calls.length, 0, 'a forged approval must not reach the writer');
   assert.equal(result.demoted[0].reason, 'gate');
 });
@@ -190,8 +197,8 @@ test('a FORGED approval on the action is refused — the ledger decides', () => 
 test('an approval bound to a DIFFERENT revision does not license this one', () => {
   const gh = fakeGh();
   const a = approved();
-  const stale = { [gateKey(a)]: { verdict: 'approve', contentHash: 'someotherhash', number: a.number, action: a.action } };
-  const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger: stale, gh });
+  const stale = { [gateKey(a)]: sealLedgerEntry(TEST_KEY, { verdict: 'approve', contentHash: 'someotherhash', number: a.number, action: a.action }) };
+  const result = executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger: stale, gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
 });
@@ -200,14 +207,14 @@ test('an approval bound to a DIFFERENT issue does not license this one', () => {
   // A ledger edited to move an approval between issues must not pass.
   const gh = fakeGh();
   const a = approved();
-  const moved = { [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action } };
-  const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger: moved, gh });
+  const moved = { [gateKey(a)]: sealLedgerEntry(TEST_KEY, { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action }) };
+  const result = executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger: moved, gh });
   assert.equal(gh.calls.length, 0);
 });
 
 test('no ledger at all means no authorization', () => {
   const gh = fakeGh();
-  const result = executeActions({ actions: [approved()], floor: [], baseFloor: [], gh });
+  const result = executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], gh });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.demoted[0].reason, 'gate');
 });
@@ -219,7 +226,7 @@ test('a marker posted by SOMEONE ELSE does not suppress the evidence comment', (
   // which anyone can compute. If a third party's comment counted, anyone could
   // silence the trail and let the tool act unexplained.
   const gh = fakeGh({ existingComments: [{ body: `nice try\n${marker(7, 'abc123')}`, author: 'someone-else' }] });
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
+  executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply'], 'the trail must be written');
 });
 
@@ -227,7 +234,7 @@ test('with an UNKNOWN identity no comment counts as ours', () => {
   // Fail toward writing the evidence again. A duplicate rationale is noise; a
   // missing one is an issue that went quiet with no explanation.
   const gh = fakeGh({ existingComments: [{ body: marker(7, 'abc123'), author: 'me' }] });
-  executeActions({ actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: null });
+  executeActions({ key: TEST_KEY, actions: [approved()], floor: [], baseFloor: [], ledger: ledgerFor(approved()), gh, self: null });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });
 
@@ -238,9 +245,11 @@ test('an action already marked applied is not performed again', () => {
   // not close an issue twice or re-comment on it.
   const gh = fakeGh();
   const a = approved();
-  const ledger = ledgerFor(a);
-  ledger[gateKey(a)].applied = true;
-  const result = executeActions({ actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  // Sealed WITH the flag: the signature covers every field, so a legitimate
+  // resume carries `applied` inside what was signed. Setting it afterwards is the
+  // forgery case, and ledger-signature.test.mjs pins that it grants nothing.
+  const ledger = { [gateKey(a)]: sealLedgerEntry(TEST_KEY, { ...ledgerFor(a)[gateKey(a)], applied: true }) };
+  const result = executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.equal(gh.calls.length, 0);
   assert.equal(result.executed[0].alreadyApplied, true);
 });
@@ -249,7 +258,7 @@ test('a successful action is marked applied so the next run skips it', () => {
   const gh = fakeGh();
   const a = approved();
   const ledger = ledgerFor(a);
-  executeActions({ actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.equal(ledger[gateKey(a)].applied, true);
 });
 
@@ -263,7 +272,7 @@ test('a failed applied-checkpoint stops the run rather than continuing', () => {
   const ledger = { ...ledgerFor(a), ...ledgerFor(b) };
   assert.throws(
     () =>
-      executeActions({
+      executeActions({ key: TEST_KEY,
         actions: [a, b],
         floor: [],
         baseFloor: [],
@@ -284,7 +293,7 @@ test('an issue that changed between validation and the write is not actioned', (
   // mutation is a fresh look rather than a memory of one.
   const gh = fakeGh();
   const a = approved();
-  const result = executeActions({
+  const result = executeActions({ key: TEST_KEY,
     actions: [a],
     floor: [],
     baseFloor: [],
@@ -300,6 +309,6 @@ test('an issue that changed between validation and the write is not actioned', (
 test('a passing recheck lets the action through', () => {
   const gh = fakeGh();
   const a = approved();
-  executeActions({ actions: [a], floor: [], baseFloor: [], ledger: ledgerFor(a), gh, self: 'me', recheck: () => ({ ok: true }) });
+  executeActions({ key: TEST_KEY, actions: [a], floor: [], baseFloor: [], ledger: ledgerFor(a), gh, self: 'me', recheck: () => ({ ok: true }) });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });

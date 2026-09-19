@@ -14,7 +14,7 @@ function thrownIo(fn) {
   try { fn(); } catch (err) { return err; }
   return null;
 }
-import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, resolveTrustedBaseRef, loadCache, loadLedger, saveLedger, acquireApplyLock, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
+import { IMPLIED_SCHEMA_VERSION, baseFloorFromGit, loadCache, loadLedger, saveLedger, acquireApplyLock, loadProfile, saveCache, serialiseJson } from '../lib/io.mjs';
 
 test('a MISSING profile is not an error — the defaults are a complete profile', () => {
   const p = loadProfile('nope.json', { exists: () => false, readFile: () => { throw new Error('must not read'); } });
@@ -91,44 +91,66 @@ test('a valid JSON PRIMITIVE is not a cache — it degrades to empty rather than
 
 // ---- baseFloorFromGit — AC24's read side ------------------------------------
 
+
+/**
+ * A `run` that answers the remote-anchored baseline lookup (#1036).
+ *
+ * `body` handles the questions each test actually cares about (merge-base,
+ * ls-tree, show); everything the anchoring itself needs — the origin URL, the
+ * remote head, the reachability proof — is answered here once, so the tests stay
+ * about the floor rather than about plumbing.
+ */
+function remoteRun(body) {
+  const REMOTE_SHA = 'a'.repeat(40);
+  return (args) => {
+    if (args[0] === 'remote') return 'git@github.com:acme/widgets.git\n';
+    if (args[0] === 'ls-remote') return `${REMOTE_SHA}\trefs/heads/main\n`;
+    if (args[0] === 'merge-base' && args.includes('--is-ancestor')) return '';
+    return body(args);
+  };
+}
+const remoteGh = () => 'main\n';
+
 test('baseFloorFromGit returns the floor recorded at the merge base', () => {
   // The argv is asserted IN FULL, not by its first element: a dropped argument
   // would silently change which revision is read, and a fake that only inspects
   // args[0] would report success for a git call that asked a different question.
   const seen = [];
-  const run = (args) => {
+  const run = remoteRun((args) => {
     seen.push(args);
     if (args[0] === 'merge-base') return 'deadbeef\n';
     if (args[0] === 'ls-tree') return '.claude/backlog-groom-profile.json\n';
     return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
-  };
-  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run, baseRef: 'origin/main' }), ['close', 'relabel']);
-  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'origin/main']);
+  });
+  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run, ghRun: remoteGh }), ['close', 'relabel']);
+  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'a'.repeat(40)]);
   assert.deepEqual(seen[1], ['ls-tree', '--name-only', 'deadbeef', '--', '.claude/backlog-groom-profile.json']);
   assert.deepEqual(seen[2], ['show', 'deadbeef:.claude/backlog-groom-profile.json']);
 });
 
-test('baseFloorFromGit compares against the ref it was given', () => {
+test('baseFloorFromGit takes no caller-supplied ref at all', () => {
+  // There is no `baseRef` option any more (#1036): the comparison point is the
+  // remote's head, and a caller who could name it could name HEAD.
   const seen = [];
-  const run = (args) => {
+  const run = remoteRun((args) => {
     seen.push(args);
     if (args[0] === 'merge-base') return 'cafe\n';
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1 });
-  };
-  baseFloorFromGit('p.json', { run, baseRef: 'upstream/trunk' });
-  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'upstream/trunk']);
+  });
+  baseFloorFromGit('p.json', { run, ghRun: remoteGh, baseRef: 'upstream/trunk' });
+  assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'a'.repeat(40)], 'a supplied ref must be ignored');
 });
 
 test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the key', () => {
   // Omission at the base means the base floor was the conservative default, not
   // nothing — so a head that empties the floor is still a widening.
-  const run = (args) => {
+  const run = remoteRun((args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1 });
-  };
-  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
+  });
+  assert.deepEqual(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), ['close']);
 });
 
 test('baseFloorFromGit treats an ABSENT base profile as the default floor', () => {
@@ -137,12 +159,12 @@ test('baseFloorFromGit treats an ABSENT base profile as the default floor', () =
   // floor, deleting the profile at the base still cannot widen anything. The
   // alternative, refusing, would make the tool unusable on any repo that has not
   // adopted a profile yet.
-  const run = (args) => {
+  const run = remoteRun((args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
     if (args[0] === 'ls-tree') return '';
     throw new Error('should not read a file that is not there');
-  };
-  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
+  });
+  assert.deepEqual(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), ['close']);
 });
 
 test('a git FAILURE is not read as an absent profile', () => {
@@ -159,24 +181,24 @@ test('a git FAILURE is not read as an absent profile', () => {
 test('an absent base profile still catches a head floor that widens on the default', () => {
   // The safety property that makes the choice above sound, asserted rather than
   // argued: emptying the floor is a widening even when the base declared nothing.
-  const run = (args) => {
+  const run = remoteRun((args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
     if (args[0] === 'ls-tree') return '';
     throw new Error('unreachable');
-  };
-  const base = baseFloorFromGit('p.json', { run });
+  });
+  const base = baseFloorFromGit('p.json', { run, ghRun: remoteGh });
   assert.deepEqual(floorWidening(base, []), ['close']);
 });
 
 test('baseFloorFromGit returns null when the base profile is PRESENT but unreadable', () => {
   // Distinct from absent: a file that exists may have declared a FULLER floor
   // than the default, so assuming the default would under-detect a widening.
-  const run = (args) => {
+  const run = remoteRun((args) => {
     if (args[0] === 'merge-base') return 'deadbeef\n';
     if (args[0] === 'ls-tree') return 'p.json\n';
     return '{ not json';
-  };
-  assert.equal(baseFloorFromGit('p.json', { run }), null);
+  });
+  assert.equal(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), null);
 });
 
 test('baseFloorFromGit returns null when the merge base cannot be resolved', () => {
@@ -250,39 +272,35 @@ test('a held apply lock refuses the second run', () => {
 });
 
 // ---- the trusted comparison ref, which the caller must NOT choose ----------
+//
+// The local-ref tests that lived here (origin/HEAD resolution and its
+// origin/main fallback) pinned behaviour #1036 deleted: reading a local ref let
+// `git update-ref refs/remotes/origin/main HEAD` choose the comparison point.
+// The replacement — resolution from the remote, and a refusal on every way of
+// failing to reach it — is covered in remote-base.test.mjs.
 
-test('the trusted base ref is read from the repository', () => {
-  const seen = [];
-  const run = (args) => { seen.push(args); return 'origin/trunk\n'; };
-  assert.equal(resolveTrustedBaseRef({ run }), 'origin/trunk');
-  assert.deepEqual(seen[0], ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
-    'the ref must be resolved from origin/HEAD, not guessed');
-});
-
-test('an empty symbolic-ref answer falls back to the conventional default', () => {
-  // Returning the empty string would hand `git merge-base HEAD ''` an argument
-  // it cannot resolve, and the floor check would then fail closed for a repo
-  // that is perfectly fine.
-  assert.equal(resolveTrustedBaseRef({ run: () => '\n' }), 'origin/main');
-});
-
-test('no origin/HEAD configured falls back to the conventional default', () => {
-  assert.equal(resolveTrustedBaseRef({ run: () => { throw new Error('not a symbolic ref'); } }), 'origin/main');
-});
-
-test('baseFloorFromGit uses the resolved ref when given none', () => {
-  // The important half: with no explicit ref the comparison still happens
-  // against something the caller did not choose.
+test('baseFloorFromGit compares against the REMOTE head, never a local ref', () => {
   const seen = [];
   const run = (args) => {
     seen.push(args);
-    if (args[0] === 'symbolic-ref') return 'origin/trunk\n';
-    if (args[0] === 'merge-base') return 'deadbeef\n';
+    if (args[0] === 'remote') return 'git@github.com:acme/widgets.git\n';
+    if (args[0] === 'ls-remote') return `${'a'.repeat(40)}\trefs/heads/trunk\n`;
+    if (args[0] === 'merge-base') return args.includes('--is-ancestor') ? '' : 'deadbeef\n';
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close'] });
   };
-  baseFloorFromGit('p.json', { run });
-  assert.deepEqual(seen[1], ['merge-base', 'HEAD', 'origin/trunk']);
+  const ghRun = () => 'trunk\n';
+
+  baseFloorFromGit('p.json', { run, ghRun });
+
+  assert.ok(
+    seen.some((args) => args[0] === 'merge-base' && args[1] === 'HEAD' && args[2] === 'a'.repeat(40)),
+    `the merge base must be taken against the remote head, got ${JSON.stringify(seen)}`
+  );
+  assert.ok(
+    !seen.some((args) => args[0] === 'symbolic-ref'),
+    'a local symbolic-ref must not decide the baseline'
+  );
 });
 
 test('a lock held by a LIVE process is refused', () => {

@@ -22,6 +22,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
+
 /** `adversarial-review` exit codes (its documented contract). */
 export const REVIEW_APPROVE = 0;
 export const REVIEW_NEEDS_ATTENTION = 2;
@@ -72,10 +74,17 @@ export function reviewerPair(profile) {
  * The authority on whether a write is licensed. A caller-supplied `gate` object
  * is a claim, not authorization: any library caller can construct one, and
  * trusting it would put the whole gate behind an `if` the caller controls.
+ *
+ * SIGNATURE FIRST (#1035). Every other field below is one the caller can
+ * compute — `artifactDigest` is exported and pure — so field checks alone made
+ * the ledger a place to write an approval rather than a record of one. Without a
+ * key nothing verifies, and nothing is authorized: the run still proposes, and a
+ * write becomes a key-holder act.
  */
-export function ledgerApproves(ledger, action) {
+export function ledgerApproves(ledger, action, key = null) {
   const entry = ledger?.[gateKey(action ?? {})];
   if (!entry || entry.verdict !== 'approve') return false;
+  if (!verifyLedgerEntry(key, entry)) return false;
   // Bound to the revision AND the issue, not merely present under the key: a
   // ledger hand-edited to move an approval between issues must not pass.
   // And bound to WHAT WAS REVIEWED. The key names the decision's slot, not its
@@ -169,9 +178,18 @@ export function makeReviewRunner({ spawn, artifactPath, reviewer, timeout = 600 
  *   testable without a reviewer, and so the CLI owns process spawning
  * @returns {{verdict:'approve'|'demote', reason:string|null}}
  */
-export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
+export function gateAction({ action, profile, ledger = {}, runReview, key = null } = {}) {
   const pair = reviewerPair(profile);
   if (!pair.ok) return { verdict: 'demote', reason: pair.reason };
+
+  // NO KEY, NO REVIEW — checked before anything is spawned. A verdict recorded
+  // without a signature can never authorize a write (#1035), so running the
+  // reviewer here would spend real provider budget on an answer nothing can act
+  // on AND burn the one-shot: the revision would be marked gated, so the run
+  // that DOES hold the key would be refused as a replay.
+  if (typeof key !== 'string' || key.length === 0) {
+    return { verdict: 'demote', reason: 'no signing key is available, so no verdict can authorize a write' };
+  }
 
   if (!action?.contentHash) {
     // No revision to bind a verdict to means a replay would be undetectable, so
@@ -180,14 +198,14 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     return { verdict: 'demote', reason: 'the action has no contentHash, so no gate verdict can be bound to a revision' };
   }
 
-  const key = gateKey(action);
-  if (Object.hasOwn(ledger, key)) {
+  const slot = gateKey(action);
+  if (Object.hasOwn(ledger, slot)) {
     // The refusal is unconditional — it does not matter whether the prior
     // verdict was an approve or a demote, because "ask again and see" is the
     // bypass regardless of which way the first answer went.
     return {
       verdict: 'demote',
-      reason: `this revision was already gated (verdict: ${ledger[key].verdict}); a second review of the same (issue, contentHash) is refused`,
+      reason: `this revision was already gated (verdict: ${ledger[slot].verdict}); a second review of the same (issue, contentHash) is refused`,
     };
   }
 
@@ -201,7 +219,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     // rule unenforced for exactly the case a caller can manufacture at will: a
     // spawn failure or a timeout, retried until the reviewer finally answers.
     const reason = `the review could not complete: ${err?.message ?? err}`;
-    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) };
+    ledger[slot] = sealLedgerEntry(key, { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) });
     return { verdict: 'demote', reason };
   }
 
@@ -213,7 +231,9 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
       ? 'the reviewer raised a material finding'
       : `the review could not complete (exit ${code})`;
 
-  ledger[key] = {
+  // SEALED, not merely written: the signature is what makes this a record of a
+  // verdict rather than a place to write one.
+  ledger[slot] = sealLedgerEntry(key, {
     verdict,
     reason,
     reviewer: pair.reviewer,
@@ -223,7 +243,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     action: action.action,
     field: action.field ?? null,
     artifactDigest: artifactDigest(action),
-  };
+  });
   return { verdict, reason };
 }
 

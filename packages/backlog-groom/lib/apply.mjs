@@ -232,7 +232,7 @@ export function revalidateRelabel(action, { issue, classified, recomputed, profi
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null } = {}) {
+export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null, key = null } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
@@ -298,7 +298,7 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
   }
 
   const gated = revalidated.map((action) => {
-    const gate = gateAction({ action, profile, ledger, runReview: () => runReview(action) });
+    const gate = gateAction({ action, profile, ledger, runReview: () => runReview(action), key });
     // Checkpoint BEFORE any write. A verdict that exists only in memory is a
     // verdict a crash erases, and the next run would review the same revision
     // again — the one-shot rule surviving only as long as the process does.
@@ -308,6 +308,7 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
 
   const result = executeActions({
     actions: gated,
+    key,
     floor: profile.autonomyFloor,
     baseFloor,
     floorWideningAuthorized,

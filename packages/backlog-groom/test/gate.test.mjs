@@ -20,6 +20,11 @@ import {
   ledgerApproves,
   artifactDigest,
 } from '../lib/gate.mjs';
+import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
+
+// Ledger entries are signed now (#1035): a fixture must seal what it writes, and
+// every call that reads authorization must be given the key.
+const TEST_KEY = 'unit-test-ledger-key-0123456789ab';
 
 const action = (over = {}) => ({ number: 7, action: 'close', contentHash: 'abc123', evidence: 'the cited lines are gone', ...over });
 const profile = (over = {}) => ({ providers: { decider: 'anthropic', reviewer: 'openai' }, ...over });
@@ -60,7 +65,7 @@ test('AC8: with no distinct provider every action demotes, and nothing throws', 
   // reviewer is unavailable, which is routine (quota, offline, one provider
   // configured). Demote, report, carry on.
   const ledger = {};
-  const out = gateAction({ action: action(), profile: { providers: {} }, ledger, runReview: () => { throw new Error('must not be called'); } });
+  const out = gateAction({ key: TEST_KEY, action: action(), profile: { providers: {} }, ledger, runReview: () => { throw new Error('must not be called'); } });
   assert.equal(out.verdict, 'demote');
   assert.match(out.reason, /provider/i);
 });
@@ -91,14 +96,14 @@ test('exactly one artifact is reviewed per invocation', () => {
 
 test('AC7: an approve licenses the action and is recorded against the revision', () => {
   const ledger = {};
-  const out = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  const out = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(out.verdict, 'approve');
   assert.ok(ledger[gateKey(action())], 'the verdict must be recorded against (issue, contentHash)');
 });
 
 test('AC7: needs-attention demotes to a proposal', () => {
   const ledger = {};
-  const out = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const out = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
   assert.equal(out.verdict, 'demote');
 });
 
@@ -107,14 +112,14 @@ test('AC7: a reviewer ERROR demotes — an error is not an approve', () => {
   // "approved" is the single cheapest way to turn an unavailable reviewer into
   // a rubber stamp.
   const ledger = {};
-  const out = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: 1 }) });
+  const out = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: 1 }) });
   assert.equal(out.verdict, 'demote');
   assert.match(out.reason, /error|could not/i);
 });
 
 test('AC7: a thrown reviewer demotes rather than propagating', () => {
   const ledger = {};
-  const out = gateAction({
+  const out = gateAction({ key: TEST_KEY,
     action: action(),
     profile: profile(),
     ledger,
@@ -125,7 +130,7 @@ test('AC7: a thrown reviewer demotes rather than propagating', () => {
 
 test('AC7: an unrecognised exit code demotes', () => {
   const ledger = {};
-  const out = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: 37 }) });
+  const out = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: 37 }) });
   assert.equal(out.verdict, 'demote');
 });
 
@@ -136,11 +141,11 @@ test('AC14: a second gate attempt for the same (issue, contentHash) is refused',
   // the artifact and asks again until it gets an approve. Re-asking is the
   // bypass, so re-asking is what gets refused — by code, not by instructions.
   const ledger = {};
-  const first = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const first = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
   assert.equal(first.verdict, 'demote');
 
   let called = 0;
-  const second = gateAction({
+  const second = gateAction({ key: TEST_KEY,
     action: action({ evidence: 'a much more persuasive retelling' }),
     profile: profile(),
     ledger,
@@ -153,8 +158,8 @@ test('AC14: a second gate attempt for the same (issue, contentHash) is refused',
 
 test('AC14: a replay cannot upgrade a prior demote, even to the same verdict', () => {
   const ledger = {};
-  gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
-  const replay = gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const replay = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(replay.verdict, 'demote');
 });
 
@@ -162,8 +167,8 @@ test('AC14: a DIFFERENT contentHash is a different revision and may be reviewed'
   // The refusal is about re-asking for the same code, not about the issue ever
   // being reviewable again. Code changing is the legitimate reason to re-ask.
   const ledger = {};
-  gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
-  const out = gateAction({ action: action({ contentHash: 'def456' }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const out = gateAction({ key: TEST_KEY, action: action({ contentHash: 'def456' }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(out.verdict, 'approve');
 });
 
@@ -172,14 +177,14 @@ test('AC14: an action with no contentHash cannot be gated at all', () => {
   // there is no revision to bind a verdict to, so a replay would be undetectable
   // — the one-shot guarantee simply does not exist for it.
   const ledger = {};
-  const out = gateAction({ action: action({ contentHash: null }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  const out = gateAction({ key: TEST_KEY, action: action({ contentHash: null }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(out.verdict, 'demote');
   assert.match(out.reason, /contentHash|revision/i);
 });
 
 test('the ledger records the verdict, the reviewer and the revision', () => {
   const ledger = {};
-  gateAction({ action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   const entry = ledger[gateKey(action())];
   assert.equal(entry.verdict, 'approve');
   assert.equal(entry.reviewer, 'openai');
@@ -202,9 +207,9 @@ test('a literal exit 2 demotes and a literal exit 0 approves', () => {
   // The same contract exercised by VALUE rather than by constant, so a drifted
   // constant is caught by behaviour and not only by its own assertion.
   const l1 = {};
-  assert.equal(gateAction({ action: action(), profile: profile(), ledger: l1, runReview: () => ({ code: 0 }) }).verdict, 'approve');
+  assert.equal(gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger: l1, runReview: () => ({ code: 0 }) }).verdict, 'approve');
   const l2 = {};
-  assert.equal(gateAction({ action: action(), profile: profile(), ledger: l2, runReview: () => ({ code: 2 }) }).verdict, 'demote');
+  assert.equal(gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger: l2, runReview: () => ({ code: 2 }) }).verdict, 'demote');
 });
 
 // ---- makeReviewRunner: the spawn branches, out of the binary ----------------
@@ -292,12 +297,12 @@ test('AC14: a THROWN review is recorded, so it cannot be retried until it passes
   // Without this the one-shot rule is unenforced for exactly the case a caller
   // can manufacture at will: kill the reviewer, retry, repeat until an approve.
   const ledger = {};
-  const first = gateAction({ action: action(), profile: profile(), ledger, runReview: () => { throw new Error('timeout'); } });
+  const first = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => { throw new Error('timeout'); } });
   assert.equal(first.verdict, 'demote');
   assert.ok(ledger[gateKey(action())], 'the spent attempt must be on the ledger');
 
   let called = 0;
-  const second = gateAction({ action: action(), profile: profile(), ledger, runReview: () => { called += 1; return { code: REVIEW_APPROVE }; } });
+  const second = gateAction({ key: TEST_KEY, action: action(), profile: profile(), ledger, runReview: () => { called += 1; return { code: REVIEW_APPROVE }; } });
   assert.equal(called, 0, 'a failed review has spent the one shot for this revision');
   assert.equal(second.verdict, 'demote');
 });
@@ -307,15 +312,21 @@ test('AC14: a THROWN review is recorded, so it cannot be retried until it passes
 test('ledgerApproves requires an approve bound to the same issue AND revision', () => {
   const a = action();
   const digest = artifactDigest(a);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action, artifactDigest: digest } }, a), true);
+  // Every entry here is SEALED, so each assertion turns on the field it varies
+  // rather than on a missing signature — the unsigned and tampered cases are
+  // pinned separately in ledger-signature.test.mjs.
+  const sealed = (entry) => ({ [gateKey(a)]: sealLedgerEntry(TEST_KEY, entry) });
+  const base = { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action, artifactDigest: digest };
+
+  assert.equal(ledgerApproves(sealed(base), a, TEST_KEY), true);
   // An entry that does not name the artifact it approved approves nothing.
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: a.number, action: a.action, artifactDigest: artifactDigest({ ...a, evidence: 'other' }) } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'demote', contentHash: a.contentHash, number: a.number, action: a.action } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: 'other', number: a.number, action: a.action } }, a), false);
-  assert.equal(ledgerApproves({ [gateKey(a)]: { verdict: 'approve', contentHash: a.contentHash, number: 999, action: a.action } }, a), false);
-  assert.equal(ledgerApproves({}, a), false);
-  assert.equal(ledgerApproves(null, a), false);
+  assert.equal(ledgerApproves(sealed({ ...base, artifactDigest: undefined }), a, TEST_KEY), false);
+  assert.equal(ledgerApproves(sealed({ ...base, artifactDigest: artifactDigest({ ...a, evidence: 'other' }) }), a, TEST_KEY), false);
+  assert.equal(ledgerApproves(sealed({ ...base, verdict: 'demote' }), a, TEST_KEY), false);
+  assert.equal(ledgerApproves(sealed({ ...base, contentHash: 'other' }), a, TEST_KEY), false);
+  assert.equal(ledgerApproves(sealed({ ...base, number: 999 }), a, TEST_KEY), false);
+  assert.equal(ledgerApproves({}, a, TEST_KEY), false);
+  assert.equal(ledgerApproves(null, a, TEST_KEY), false);
 });
 
 test('a close and a relabel on the same issue and revision are separate decisions', () => {
@@ -326,16 +337,16 @@ test('a close and a relabel on the same issue and revision are separate decision
   assert.notEqual(gateKey(a), gateKey(b));
 
   const ledger = {};
-  const first = gateAction({ action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const first = gateAction({ key: TEST_KEY, action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
   assert.equal(first.verdict, 'demote');
-  const second = gateAction({ action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  const second = gateAction({ key: TEST_KEY, action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(second.verdict, 'approve', 'a different action is a different decision');
 });
 
 test('an approval for a close does not license a relabel', () => {
   const a = { number: 7, action: 'close', contentHash: 'h' };
   const approvedClose = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'close' } };
-  assert.equal(ledgerApproves(approvedClose, { number: 7, action: 'relabel', contentHash: 'h' }), false);
+  assert.equal(ledgerApproves(approvedClose, { number: 7, action: 'relabel', contentHash: 'h' }, TEST_KEY), false);
 });
 
 test('a priority relabel and an area relabel on one issue are separate decisions', () => {
@@ -347,13 +358,13 @@ test('a priority relabel and an area relabel on one issue are separate decisions
   assert.notEqual(gateKey(a), gateKey(b));
 
   const ledger = {};
-  gateAction({ action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
-  const second = gateAction({ action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_NEEDS_ATTENTION }) });
+  const second = gateAction({ key: TEST_KEY, action: b, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   assert.equal(second.verdict, 'approve');
 });
 
 test('an approval for one relabel field does not license another', () => {
   const a = { number: 7, action: 'relabel', field: 'priority', contentHash: 'h' };
   const approvedPriority = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'relabel', field: 'priority' } };
-  assert.equal(ledgerApproves(approvedPriority, { number: 7, action: 'relabel', field: 'area', contentHash: 'h' }), false);
+  assert.equal(ledgerApproves(approvedPriority, { number: 7, action: 'relabel', field: 'area', contentHash: 'h' }, TEST_KEY), false);
 });
