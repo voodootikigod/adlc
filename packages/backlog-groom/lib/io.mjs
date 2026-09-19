@@ -166,8 +166,23 @@ export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun
   return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
+/**
+ * The environment child processes get: ours, minus the ledger signing key.
+ *
+ * A child that can read the key can mint its own approvals, which is the whole
+ * authorization boundary. Stripped HERE, in the module that does the spawning,
+ * rather than only at the call sites: the first version sanitized the binary's
+ * two spawns and still leaked through this file's own `gh` call, because a leak
+ * only has to be forgotten once.
+ */
+function childEnv() {
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  return env;
+}
+
 function defaultGhRun(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe', env: childEnv() });
 }
 
 export function baseProfileFromGit(profilePath, { run = defaultGitRun, ghRun = defaultGhRun } = {}) {
@@ -230,7 +245,7 @@ function defaultGitRun(args) {
   // writes the child's stderr to the parent's, so a profile simply absent at the
   // merge base — an ordinary, expected state — would print a fatal-looking git
   // error beside a run that succeeded. Specifying 'pipe' captures it instead.
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
+  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe', env: childEnv() });
 }
 
 /**

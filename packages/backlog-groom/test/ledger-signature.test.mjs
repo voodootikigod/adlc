@@ -205,3 +205,29 @@ test('no key leaves the ledger untouched, so the run that has one is not refused
     assert.deepEqual(ledger, {}, `key ${JSON.stringify(noKey)} must leave the ledger untouched`);
   }
 });
+
+test('a signed applied entry copied under another action grants nothing', () => {
+  // The signature covers the entry's CONTENT, not the ledger slot it sits in. So
+  // a legitimately applied entry can be copied under a different action's key,
+  // and a fast path that checked only the signature would report that action as
+  // already done — leaving it unwritten and suppressing the retry.
+  const other = { ...action, number: 706, contentHash: 'h2' };
+  const applied = approvedEntry(KEY, { applied: true });
+  const gh = {
+    comments: () => [],
+    comment: () => { throw new Error('must not comment'); },
+    apply: () => { throw new Error('must not write'); },
+  };
+
+  const result = executeActions({
+    actions: [other],
+    floor: [],
+    baseFloor: [],
+    ledger: { [gateKey(other)]: applied }, // action 705's entry, filed under 706
+    gh,
+    key: KEY,
+  });
+
+  assert.deepEqual(result.executed, [], 'a relocated entry must not read as an execution');
+  assert.equal(result.demoted[0].reason, 'gate');
+});

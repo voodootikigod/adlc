@@ -21,7 +21,7 @@
  */
 
 import { assertFloor, assertFloorNotWidened, blockedByFloor } from './floor.mjs';
-import { ledgerApproves, gateKey } from './gate.mjs';
+import { ledgerApproves, gateKey, ledgerEntryFor } from './gate.mjs';
 import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
 
 /**
@@ -132,7 +132,7 @@ export function executeActions({ actions = [], floor = [], baseFloor = null, flo
     // write is skipped and REPORTED AS EXECUTED, so an unsigned one lets a caller
     // have the tool announce a close it never performed — and suppress the retry
     // that would have performed it.
-    if (ledger?.[gateKey(action)]?.applied === true && verifyLedgerEntry(key, ledger[gateKey(action)])) {
+    if (ledgerEntryFor(ledger, action, key)?.applied === true) {
       executed.push({ number: action.number, action: action.action, resumed: true, alreadyApplied: true });
       continue;
     }
