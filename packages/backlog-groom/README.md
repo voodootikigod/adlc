@@ -84,15 +84,18 @@ merge base with the default branch: a wider `autonomyFloor`, fewer `frozenPaths`
 or different `providers`, `labels` or `units` refuse `--apply`, and `--apply`
 refuses `--profile` because the baseline is read at the profile's own path.
 
-**That baseline is anchored to the REMOTE** (#1036). The default branch and the
-commit it points at come from the forge and `git ls-remote`, and the merge base
-must be reachable from that commit. Local refs decide nothing: `git update-ref
-refs/remotes/origin/main HEAD` is a local write, and a baseline the caller can
-move is not a baseline. Every way of failing to reach the remote — no origin, no
-`gh`, an unreachable repository, a merge base outside the remote's history —
-refuses the run rather than falling back, because a fallback would restore the
-hole exactly when the remote could not contradict it. Only `--apply` does this;
-the read path stays offline-friendly.
+**That baseline is anchored to the REMOTE** (#1036). `git ls-remote --symref
+origin HEAD` asks the remote for its own default branch and the commit it points
+at, in one exchange, and the merge base must be reachable from that commit. Local
+refs decide nothing: `git update-ref refs/remotes/origin/main HEAD` is a local
+write, and a baseline the caller can move is not a baseline. Asking the remote
+directly also binds the branch to the commit — an earlier version asked a forge
+API for the branch name, which a different host holding a same-named repository
+could answer. Every way of failing to reach the remote — no origin, an
+unreachable repository, a commit that cannot be fetched, a merge base outside the
+remote's history — refuses the run rather than falling back, because a fallback
+would restore the hole exactly when the remote could not contradict it. Only
+`--apply` reaches the remote; the read path stays as local as it was.
 
 ## The gate ledger is signed
 

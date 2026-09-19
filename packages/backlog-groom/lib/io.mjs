@@ -86,43 +86,6 @@ export function saveCache(path, cache, io = {}) {
  * @returns {string[]|null}
  */
 /**
- * `owner/repo` from the origin remote's URL, or null.
- *
- * Parsed rather than assumed: the forge is asked about THIS repository, and a
- * URL shape that cannot be parsed must refuse rather than guess a name that
- * would send the question somewhere else.
- */
-export function parseOriginSlug(url) {
-  const text = String(url ?? '').trim();
-  if (!text) return null;
-  // git@host:owner/repo(.git) and scheme://host/owner/repo(.git) both reduce to
-  // the last two path segments.
-  // Any scheme, spelled as "everything up to the first ://" rather than as a
-  // character class: enumerating the legal scheme characters buys nothing here
-  // (a string that reaches this is already someone's configured remote) and gets
-  // the class itself wrong for schemes nobody listed.
-  const withoutScheme = text.replace(/^[^:/?#]+:\/\//, '').replace(/^[^@]+@/, '');
-  const path = withoutScheme.replace(/^[^/:]+[:/]/, '').replace(/\.git$/, '').replace(/\/+$/, '');
-  // The LAST TWO segments, not exactly two: a self-hosted forge or a filesystem
-  // remote carries a deeper path, and hard-coding github.com's shape would refuse
-  // to resolve a baseline for repositories that have a perfectly good one. A
-  // wrong guess costs nothing — the forge is then asked about a repo that does
-  // not exist, which errors, which refuses.
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length < 2) return null;
-  const [owner, repo] = parts.slice(-2);
-  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
-  // The HOST too, when the URL names one. `gh` otherwise answers from whatever
-  // forge it is configured for, so an enterprise origin's slug would be looked up
-  // on github.com — and a same-named repository there would name a default branch
-  // that has nothing to do with this remote. A filesystem remote names no host;
-  // there is no forge to ask, and `gh` is left to its own resolution.
-  const hostMatch = /^([^/:]+)[:/]/.exec(withoutScheme);
-  const host = hostMatch && hostMatch[1].includes('.') ? hostMatch[1] : null;
-  return { slug: `${owner}/${repo}`, host };
-}
-
-/**
  * The head commit of the REMOTE's default branch, or null.
  *
  * THE BASELINE MUST NOT COME FROM A LOCAL REF (#1036). The floor is compared
@@ -133,47 +96,43 @@ export function parseOriginSlug(url) {
  * that with no flag: `git update-ref refs/remotes/origin/main HEAD` is a local
  * write, and this package's own e2e fixture does it to build a base.
  *
- * So the question goes to the remote: the forge names the default branch, and
- * `ls-remote` says where it points. Both are network calls, and `--apply`
- * already requires `gh` and the network; the read path never calls this.
+ * ONE QUESTION TO ONE REMOTE. `ls-remote --symref origin HEAD` answers with the
+ * remote's own default branch and the commit it points at, over a single
+ * connection:
+ *
+ *     ref: refs/heads/main<TAB>HEAD
+ *     <sha><TAB>HEAD
+ *
+ * An earlier version asked the forge instead (`gh api repos/<owner>/<repo>`) and
+ * resolved that branch name against `origin`. It needed a slug parsed out of the
+ * remote URL, and it could not bind the two: `gh` answers from whatever host it
+ * is configured for, so an SSH alias, an enterprise remote or a filesystem remote
+ * had its branch name chosen by a DIFFERENT forge that happened to hold a
+ * same-named repository. Asking the remote itself removes the slug, the host, the
+ * forge dependency and that whole class of mismatch.
  *
  * Every failure returns null, which the floor guards turn into a refusal. There
- * is deliberately no fallback to a local ref: falling back would restore the
- * hole exactly when the remote could not contradict it.
+ * is deliberately no fallback to a local ref: falling back would restore the hole
+ * exactly when the remote could not contradict it.
  */
-export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun } = {}) {
-  let origin;
+export function resolveRemoteBaseSha({ run = defaultGitRun } = {}) {
+  let out;
   try {
-    origin = parseOriginSlug(run(['remote', 'get-url', 'origin']));
+    out = String(run(['ls-remote', '--symref', 'origin', 'HEAD']) ?? '');
   } catch {
-    return null; // no origin remote
+    return null; // no origin, unreachable, or not a repository we can ask
   }
-  if (!origin) return null;
-  const { slug, host } = origin;
 
-  let branch;
-  try {
-    const argv = ['api', `repos/${slug}`, '--jq', '.default_branch'];
-    if (host) argv.push('--hostname', host);
-    const raw = ghRun(argv);
-    branch = String(raw ?? '').trim();
-    // `gh api --jq` prints the field; a JSON object means the jq filter was not
-    // applied, so read it rather than using the whole document as a branch name.
-    if (branch.startsWith('{')) branch = String(JSON.parse(branch)?.default_branch ?? '').trim();
-  } catch {
-    return null; // gh missing, unauthenticated, offline, or the repo is unreachable
-  }
-  if (!branch || /\s/.test(branch)) return null;
-
-  let sha;
-  try {
-    const line = String(run(['ls-remote', 'origin', `refs/heads/${branch}`]) ?? '').trim();
-    sha = line.split(/\s+/)[0] ?? '';
-  } catch {
-    return null; // the remote could not be reached
-  }
-  // A 40-hex sha or nothing. A short, empty or malformed answer is not a base.
-  if (!/^[0-9a-f]{40}$/.test(sha)) return null;
+  // The sha line is the one whose ref is HEAD; the `ref:` line names the branch
+  // and carries no sha. Matched rather than indexed, because git is free to emit
+  // further symref lines above it.
+  const sha = out
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 2 && parts[1] === 'HEAD')
+    .map((parts) => parts[0])
+    .find((candidate) => /^[0-9a-f]{40}$/.test(candidate));
+  if (!sha) return null;
 
   // THE SHA MUST BE IN THE LOCAL OBJECT DATABASE, or `merge-base` cannot use it.
   // `ls-remote` answers with where the branch points NOW, which in any clone that
@@ -183,7 +142,7 @@ export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun
   // commit is cheap and moves no ref: the baseline still comes from the remote's
   // answer, not from anything local.
   try {
-    run(['cat-file', '-e', `${sha}^{commit}`]);
+    run(['cat-file', '-e', sha + '^{commit}']);
     return sha;
   } catch {
     // Not present — fetch it, then insist on it.
@@ -191,67 +150,24 @@ export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun
   try {
     run(['fetch', '--quiet', 'origin', sha]);
   } catch {
-    // A server that refuses a by-sha fetch still serves the branch.
+    // A server that refuses a by-sha fetch still serves its default branch.
     try {
-      run(['fetch', '--quiet', 'origin', branch]);
+      run(['fetch', '--quiet', 'origin', 'HEAD']);
     } catch {
       return null;
     }
   }
   try {
-    run(['cat-file', '-e', `${sha}^{commit}`]);
+    run(['cat-file', '-e', sha + '^{commit}']);
   } catch {
     return null; // still absent: the baseline cannot be read, so refuse
   }
   return sha;
 }
 
-/**
- * The environment child processes get: ours, minus the ledger signing key.
- *
- * A child that can read the key can mint its own approvals, which is the whole
- * authorization boundary. Stripped HERE, in the module that does the spawning,
- * rather than only at the call sites: the first version sanitized the binary's
- * two spawns and still leaked through this file's own `gh` call, because a leak
- * only has to be forgotten once.
- */
-function childEnv() {
-  const env = { ...process.env };
-  delete env.ADLC_MANIFEST_KEY;
-  return env;
-}
-
-/**
- * How long any child of this module may take.
- *
- * The baseline lookup runs `gh api`, `ls-remote` and sometimes `fetch` — all
- * network calls — and the apply lock is already held when it does. An unbounded
- * spawnSync waits forever on a remote that accepts the connection and then stops
- * answering, so the run would hang holding the lock and every later apply would
- * refuse behind it. A timeout turns that into an ordinary refusal, which the
- * floor guards already know how to handle.
- */
-export const CHILD_TIMEOUT_MS = 30_000;
-
-/** The spawn options every child of this module gets: no key, and a bound. */
-export function childRunOpts() {
-  return {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: 'pipe',
-    env: childEnv(),
-    timeout: CHILD_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-  };
-}
-
-function defaultGhRun(args) {
-  return execFileSync('gh', args, childRunOpts());
-}
-
-export function baseProfileFromGit(profilePath, { run = defaultGitRun, ghRun = defaultGhRun } = {}) {
+export function baseProfileFromGit(profilePath, { run = defaultGitRun } = {}) {
   // Anchored to the remote, never to a local ref — see resolveRemoteBaseSha.
-  const remoteSha = resolveRemoteBaseSha({ run, ghRun });
+  const remoteSha = resolveRemoteBaseSha({ run });
   if (!remoteSha) return null;
 
   let mergeBase;
@@ -304,11 +220,49 @@ export function baseProfileFromGit(profilePath, { run = defaultGitRun, ghRun = d
   }
 }
 
+/**
+ * The environment child processes get: ours, minus the ledger signing key.
+ *
+ * A child that can read the key can mint its own approvals, which is the whole
+ * authorization boundary. The apply path also deletes it from its own
+ * environment, so this is the second of two locks on the same door — and the
+ * cheap one, since every spawn in this module goes through here.
+ */
+function childEnv() {
+  const env = { ...process.env };
+  delete env.ADLC_MANIFEST_KEY;
+  return env;
+}
+
+/**
+ * How long any child of this module may take.
+ *
+ * The baseline lookup runs `ls-remote` and sometimes `fetch` — network calls —
+ * and the apply lock is already held when it does. An unbounded spawn waits
+ * forever on a remote that accepts the connection and then stops answering, so
+ * the run would hang holding the lock and every later apply would refuse behind
+ * it. A timeout turns that into an ordinary refusal, which the floor guards
+ * already know how to handle.
+ */
+export const CHILD_TIMEOUT_MS = 30_000;
+
+/** The spawn options every child of this module gets: no key, and a bound. */
+export function childRunOpts() {
+  return {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    // `stdio: 'pipe'` rather than a positional array: execFileSync's DEFAULT
+    // writes the child's stderr to the parent's, so a profile simply absent at
+    // the merge base — an ordinary, expected state — would print a fatal-looking
+    // git error beside a run that succeeded. Specifying 'pipe' captures it.
+    stdio: 'pipe',
+    env: childEnv(),
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  };
+}
+
 function defaultGitRun(args) {
-  // `stdio: 'pipe'` rather than a positional array: execFileSync's DEFAULT
-  // writes the child's stderr to the parent's, so a profile simply absent at the
-  // merge base — an ordinary, expected state — would print a fatal-looking git
-  // error beside a run that succeeded. Specifying 'pipe' captures it instead.
   return execFileSync('git', args, childRunOpts());
 }
 

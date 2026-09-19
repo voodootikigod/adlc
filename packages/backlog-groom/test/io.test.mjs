@@ -103,15 +103,15 @@ test('a valid JSON PRIMITIVE is not a cache — it degrades to empty rather than
 function remoteRun(body) {
   const REMOTE_SHA = 'a'.repeat(40);
   return (args) => {
-    if (args[0] === 'remote') return 'git@github.com:acme/widgets.git\n';
-    if (args[0] === 'ls-remote') return `${REMOTE_SHA}\trefs/heads/main\n`;
+    // `ls-remote --symref origin HEAD` answers with the remote's own default
+    // branch and the commit it points at, in one exchange — no forge involved.
+    if (args[0] === 'ls-remote') return `ref: refs/heads/main\tHEAD\n${REMOTE_SHA}\tHEAD\n`;
     if (args[0] === 'cat-file') return ''; // the remote head is already local
     if (args[0] === 'fetch') return '';
     if (args[0] === 'merge-base' && args.includes('--is-ancestor')) return '';
     return body(args);
   };
 }
-const remoteGh = () => 'main\n';
 
 test('baseFloorFromGit returns the floor recorded at the merge base', () => {
   // The argv is asserted IN FULL, not by its first element: a dropped argument
@@ -124,7 +124,7 @@ test('baseFloorFromGit returns the floor recorded at the merge base', () => {
     if (args[0] === 'ls-tree') return '.claude/backlog-groom-profile.json\n';
     return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close', 'relabel'] });
   });
-  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run, ghRun: remoteGh }), ['close', 'relabel']);
+  assert.deepEqual(baseFloorFromGit('.claude/backlog-groom-profile.json', { run }), ['close', 'relabel']);
   assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'a'.repeat(40)]);
   assert.deepEqual(seen[1], ['ls-tree', '--name-only', 'deadbeef', '--', '.claude/backlog-groom-profile.json']);
   assert.deepEqual(seen[2], ['show', 'deadbeef:.claude/backlog-groom-profile.json']);
@@ -140,7 +140,7 @@ test('baseFloorFromGit takes no caller-supplied ref at all', () => {
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1 });
   });
-  baseFloorFromGit('p.json', { run, ghRun: remoteGh, baseRef: 'upstream/trunk' });
+  baseFloorFromGit('p.json', { run, baseRef: 'upstream/trunk' });
   assert.deepEqual(seen[0], ['merge-base', 'HEAD', 'a'.repeat(40)], 'a supplied ref must be ignored');
 });
 
@@ -152,7 +152,7 @@ test('baseFloorFromGit returns the DEFAULT floor when the base profile omits the
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1 });
   });
-  assert.deepEqual(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), ['close']);
+  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
 });
 
 test('baseFloorFromGit treats an ABSENT base profile as the default floor', () => {
@@ -166,7 +166,7 @@ test('baseFloorFromGit treats an ABSENT base profile as the default floor', () =
     if (args[0] === 'ls-tree') return '';
     throw new Error('should not read a file that is not there');
   });
-  assert.deepEqual(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), ['close']);
+  assert.deepEqual(baseFloorFromGit('p.json', { run }), ['close']);
 });
 
 test('a git FAILURE is not read as an absent profile', () => {
@@ -188,7 +188,7 @@ test('an absent base profile still catches a head floor that widens on the defau
     if (args[0] === 'ls-tree') return '';
     throw new Error('unreachable');
   });
-  const base = baseFloorFromGit('p.json', { run, ghRun: remoteGh });
+  const base = baseFloorFromGit('p.json', { run });
   assert.deepEqual(floorWidening(base, []), ['close']);
 });
 
@@ -200,7 +200,7 @@ test('baseFloorFromGit returns null when the base profile is PRESENT but unreada
     if (args[0] === 'ls-tree') return 'p.json\n';
     return '{ not json';
   });
-  assert.equal(baseFloorFromGit('p.json', { run, ghRun: remoteGh }), null);
+  assert.equal(baseFloorFromGit('p.json', { run }), null);
 });
 
 test('baseFloorFromGit returns null when the merge base cannot be resolved', () => {
@@ -285,15 +285,14 @@ test('baseFloorFromGit compares against the REMOTE head, never a local ref', () 
   const seen = [];
   const run = (args) => {
     seen.push(args);
-    if (args[0] === 'remote') return 'git@github.com:acme/widgets.git\n';
-    if (args[0] === 'ls-remote') return `${'a'.repeat(40)}\trefs/heads/trunk\n`;
+    if (args[0] === 'ls-remote') return `ref: refs/heads/trunk\tHEAD\n${'a'.repeat(40)}\tHEAD\n`;
+    if (args[0] === 'cat-file') return '';
     if (args[0] === 'merge-base') return args.includes('--is-ancestor') ? '' : 'deadbeef\n';
     if (args[0] === 'ls-tree') return 'p.json\n';
     return JSON.stringify({ schemaVersion: 1, autonomyFloor: ['close'] });
   };
-  const ghRun = () => 'trunk\n';
 
-  baseFloorFromGit('p.json', { run, ghRun });
+  baseFloorFromGit('p.json', { run });
 
   assert.ok(
     seen.some((args) => args[0] === 'merge-base' && args[1] === 'HEAD' && args[2] === 'a'.repeat(40)),

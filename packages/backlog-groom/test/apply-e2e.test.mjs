@@ -97,12 +97,6 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
       // any subprocess, and "must not" is only a claim until something looks.
       `echo "gh:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}`,
       'case "$*" in',
-      // The baseline query (#1036): `gh api repos/<owner>/<repo> --jq
-      // .default_branch`. Answered before the read cases below, since `repos/`
-      // would otherwise fall through to the catch-all and return "ok".
-      '  *"api repos/"*)',
-      '    echo main',
-      '    ;;',
       // The read path's issue fetch. Answered with an empty list: the read-only
       // assertion below is about which calls are NOT made, so the set's contents
       // are beside the point.
@@ -132,7 +126,7 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
   writeFileSync(
     join(bin, 'git'),
-    `#!/bin/sh\necho "git:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\nexec ${realGit} "$@"\n`
+    `#!/bin/sh\necho "git:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\necho "$@" >> ${join(dir, 'gitargs.log')}\nexec ${realGit} "$@"\n`
   );
   chmodSync(join(bin, 'git'), 0o755);
 
@@ -608,19 +602,25 @@ test('AC5: with no signing key, --apply writes nothing and says why', () => {
   assert.deepEqual(ghCalls(box).filter((c) => c.startsWith('review')), []);
 });
 
-test('AC9: a read-only run never asks the forge for the baseline', () => {
+test('AC9: a read-only run never reaches the remote for a baseline', () => {
   // The baseline lookup is an --apply concern. A plain groom run must stay as
   // offline as it was: it already reads issues through gh, but it must not gain
-  // the default-branch query the floor comparison needs.
+  // the remote round-trip the floor comparison needs.
   const box = sandbox();
   const r = run(['--json'], box);
-
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(
-    ghCalls(box).filter((c) => c.includes('api repos/')),
-    [],
-    'the read path must not resolve a baseline'
-  );
+
+  // Asserted against the GIT calls, because the baseline no longer involves a
+  // forge at all — `ls-remote --symref origin HEAD` is the whole lookup, so that
+  // is the call whose absence means the read path stayed local.
+  const gitCalls = existsSync(join(box.dir, 'childenv.log'))
+    ? readFileSync(join(box.dir, 'gitargs.log'), 'utf8')
+    : '';
+  // The positive control: git WAS used (the read path verifies premises against
+  // the working tree), so the absence of ls-remote is a fact about this run
+  // rather than about a run that never spawned git at all.
+  assert.ok(gitCalls.trim().length > 0, 'the read path must have used git, or this proves nothing');
+  assert.ok(!gitCalls.includes('ls-remote'), `the read path must not reach the remote: ${gitCalls}`);
 });
 
 test('no child process can read the signing key', () => {
