@@ -135,10 +135,10 @@ indistinguishable from a complete one, so the run says which it had.
   the profile change on the default branch first; do not edit it locally to get
   a run through.
 - **The baseline comes from the remote, so `--apply` needs network.** The commit
-  the policy is compared against is the forge's default branch head, not a local
-  `refs/remotes/...` ref, and the merge base must be reachable from it. If the
-  remote cannot be reached the run refuses rather than falling back to a local
-  ref. A read-only groom is unaffected and still works offline.
+  the policy is compared against is the remote's own HEAD (`ls-remote --symref`),
+  not a local `refs/remotes/...` ref, and the merge base must be reachable from
+  it. If the remote cannot be reached the run refuses rather than falling back to
+  a local ref. A read-only groom is unaffected and still works offline.
 
 ## Reporting back
 
