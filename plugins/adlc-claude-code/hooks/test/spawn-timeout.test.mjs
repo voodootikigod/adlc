@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
@@ -93,7 +94,7 @@ function runHookTimed(mode, { cwd, fakeBinDir }) {
   const started = Date.now();
   let timedOut = false;
   try {
-    execFileSync(process.execPath, [HOOK, mode], {
+    runHook([HOOK, mode], {
       input: JSON.stringify({ cwd }),
       encoding: 'utf8',
       cwd,

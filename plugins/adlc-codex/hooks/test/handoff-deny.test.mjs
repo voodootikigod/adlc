@@ -18,7 +18,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
+
 import {
   ensureDenyMarker,
   writeDenyRecord,
@@ -86,7 +87,7 @@ function runHandoff({
     let out = '';
     let status = 0;
     try {
-      execFileSync(process.execPath, [HOOK], {
+      runHook([HOOK], {
         input,
         encoding: 'utf8',
         cwd: dir,
@@ -367,7 +368,7 @@ test('the direct-execution guard survives a path containing a space', () => {
       let status = 0;
       let out = '';
       try {
-        execFileSync(process.execPath, [join(copyDir, 'adlc-handoff-gate.mjs')], {
+        runHook([join(copyDir, 'adlc-handoff-gate.mjs')], {
           input: JSON.stringify({
             session_id: 'consumer-spaced',
             tool_name: 'apply_patch',
@@ -677,7 +678,7 @@ test('an incomplete transcript scan restricts an ordinary mutation but never pwd
     let applyOut = '';
     let applyStatus = 0;
     try {
-      execFileSync(process.execPath, [HOOK], { input: applyPatchPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+      runHook([HOOK], { input: applyPatchPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       applyOut = e.stderr ?? '';
       applyStatus = e.status ?? 1;
@@ -693,7 +694,7 @@ test('an incomplete transcript scan restricts an ordinary mutation but never pwd
     });
     let pwdStatus = 0;
     try {
-      execFileSync(process.execPath, [HOOK], { input: pwdPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+      runHook([HOOK], { input: pwdPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       pwdStatus = e.status ?? 1;
     }
@@ -724,7 +725,7 @@ test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows or
     let status = 0;
     let out = '';
     try {
-      execFileSync(process.execPath, [HOOK], {
+      runHook([HOOK], {
         input: payload,
         encoding: 'utf8',
         cwd: dir,

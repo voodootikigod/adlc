@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -28,7 +28,7 @@ function envWithoutPluginData(extra = {}) {
 }
 
 function runFlail(cwd, env) {
-  return spawnSync(process.execPath, [HOOK, 'flail'], {
+  return spawnHook([HOOK, 'flail'], {
     cwd,
     env,
     input: JSON.stringify({ cwd, ...FAILING_TOOL }),

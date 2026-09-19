@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { observeHandoffSignals, boundedTailRead } from '../adlc-handoff-gate.mjs';
 import { evaluateBands, WARN_DEPTH, HANDOFF_DEPTH, HARD_DEPTH } from '@adlc/context-handoff';
 import { buildCodexRollout } from '../../../../packages/build-gate/test/fixtures/codex-rollout.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const MAX_ACTIVE_CONTEXT_BYTES = 8 * 1024 * 1024;
 const MAX_SCAN_WALL_MS = 500;
@@ -203,7 +204,7 @@ test('tail-read-worker.mjs exits exactly 1 on any failure — its own stable con
   const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'tail-read-worker.mjs');
   let status = 0;
   try {
-    execFileSync(process.execPath, [workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    runHook([workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     status = e.status ?? 1;
   }

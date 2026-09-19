@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-rails-guard.mjs');
 
@@ -18,7 +19,7 @@ function fixture(ticket, fn) {
 
 function run(root, env = {}) {
   const { ADLC_P4_ENFORCEMENT: _enforcement, ADLC_TICKET: _ticket, ADLC_TICKETS: _tickets, ADLC_TICKET_STORE: _store, ...base } = process.env;
-  return spawnSync(process.execPath, [HOOK], {
+  return spawnHook([HOOK], {
     cwd: root,
     env: { ...base, ...env },
     input: JSON.stringify({ tool_name: 'apply_patch', tool_input: { path: 'test/frozen.test.mjs' } }),
