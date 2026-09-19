@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const hook = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-rails-guard.mjs');
 
@@ -20,7 +21,7 @@ test('Codex self-contained hook reads a sharded store and freezes shard paths', 
     writeFileSync(join(store, shard), JSON.stringify(ticket));
     const run = (path) => {
       try {
-        execFileSync(process.execPath, [hook], {
+        runHook([hook], {
           cwd: root,
           input: JSON.stringify({ tool_name: 'apply_patch', input: { path } }),
           encoding: 'utf8',

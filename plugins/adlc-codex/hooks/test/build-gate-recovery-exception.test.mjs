@@ -25,7 +25,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+// Imported under an alias: this file already has its own runHook/spawnHook.
+import { runHook as runBoundedHook } from './helpers/run-hook.mjs';
 import { RECOVERY_CLI_PATH } from '@adlc/context-handoff';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,7 +47,7 @@ function runHook(hookPath, dir, payload) {
   let out = '';
   let status = 0;
   try {
-    execFileSync(process.execPath, [hookPath], {
+    runBoundedHook([hookPath], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       cwd: dir,

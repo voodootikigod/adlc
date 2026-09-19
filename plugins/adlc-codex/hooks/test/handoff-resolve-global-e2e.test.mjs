@@ -24,7 +24,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+// Imported under an alias: this file already has its own runHook/spawnHook.
+import { runHook as runBoundedHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
@@ -66,7 +67,7 @@ function runHook({ hook, project, env }) {
     file_path: join(project, 'src', 'app.mjs'),
   });
   try {
-    execFileSync(process.execPath, [hook], {
+    runBoundedHook([hook], {
       input: payload,
       encoding: 'utf8',
       cwd: project,

@@ -19,10 +19,11 @@
 // The unit tests that do import it live in wrapper-entry-point.test.mjs.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK_RUN_URL = pathToFileURL(join(HOOKS_DIR, 'adlc-hook-run.mjs')).href;
@@ -51,7 +52,7 @@ function importWithEntry(argv1, mode) {
     `await import(${JSON.stringify(HOOK_RUN_URL)});`,
     `console.log(${JSON.stringify(SENTINEL)});`,
   ].join('\n');
-  return spawnSync(process.execPath, ['--input-type=module', '-e', src], {
+  return spawnHook(['--input-type=module', '-e', src], {
     encoding: 'utf8',
     input: '',
     timeout: 60_000,
@@ -128,7 +129,7 @@ describe('adlc-hook-run: unresolvable argv[1] at import time (spawned, real exit
       `await import(${JSON.stringify(HOOK_RUN_URL)});`,
       `console.log(${JSON.stringify(SENTINEL)});`,
     ].join('\n');
-    const r = spawnSync(process.execPath, ['--input-type=module', '-e', src], {
+    const r = spawnHook(['--input-type=module', '-e', src], {
       encoding: 'utf8',
       input: '',
       timeout: 60_000,

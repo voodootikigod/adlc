@@ -18,9 +18,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 
 import { HOOK_SECRET_ENV_VARS, scrubHookSecrets } from '@adlc/context-handoff';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-handoff-gate.mjs');
@@ -87,7 +87,7 @@ function isolatedPluginDir() {
 
 function runHookIn(root, hookPath = HOOK) {
   try {
-    execFileSync(process.execPath, [hookPath], {
+    runHook([hookPath], {
       input: JSON.stringify({ session_id: 'sess-a', tool_name: 'apply_patch', file_path: 'src/a.mjs' }),
       encoding: 'utf8',
       cwd: root,

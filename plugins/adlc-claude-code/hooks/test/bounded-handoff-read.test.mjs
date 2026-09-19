@@ -11,6 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { boundedHandoffRead } from '../adlc-hook.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const MAX_SCAN_WALL_MS = 500;
 
@@ -61,7 +62,7 @@ test('tail-read-worker.mjs exits exactly 1 on any failure — its own stable con
   const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'tail-read-worker.mjs');
   let status = 0;
   try {
-    execFileSync(process.execPath, [workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    runHook([workerPath, '/definitely/does/not/exist.jsonl', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     status = e.status ?? 1;
   }
