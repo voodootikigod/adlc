@@ -127,12 +127,12 @@ test('AC8: every remote-resolution failure refuses rather than falling back', ()
   }
 });
 
-test('the sha is taken from the HEAD line, not from whichever line came first', () => {
-  // git may emit several lines, the symref one first and other refs after.
-  // Indexing by position would read a branch name as a commit, or another ref's
-  // tip as the baseline.
+test('the sha is taken from the HEAD line, not from any other ref git listed', () => {
+  // git may emit several lines. The decoy comes FIRST here: a filter that only
+  // checked "this line has two fields" would take another branch's tip as the
+  // baseline, and a test whose decoy trailed the real answer would not notice.
   const { run } = seams({
-    lsRemote: `ref: refs/heads/trunk\tHEAD\n${REMOTE_HEAD}\tHEAD\n${'b'.repeat(40)}\trefs/heads/other\n`,
+    lsRemote: `ref: refs/heads/trunk\tHEAD\n${'b'.repeat(40)}\trefs/heads/other\n${REMOTE_HEAD}\tHEAD\n`,
   });
   assert.equal(resolveRemoteBaseSha({ run }), REMOTE_HEAD);
 });
@@ -144,13 +144,44 @@ test('a stale clone fetches the remote head rather than refusing', () => {
   const { run, calls } = seams({ shaPresent: false });
 
   assert.equal(resolveRemoteBaseSha({ run }), REMOTE_HEAD);
-  assert.ok(calls.some((c) => c.startsWith('git fetch')), `the missing commit must be fetched: ${JSON.stringify(calls)}`);
+  // The fetch must NAME the commit it needs. `git fetch origin` with nothing
+  // after it fetches the configured refspec, which may not include this commit
+  // at all — and then the run refuses anyway, having done the work.
+  assert.ok(
+    calls.includes(`git fetch --quiet origin ${REMOTE_HEAD}`),
+    `the missing commit must be fetched by sha: ${JSON.stringify(calls)}`
+  );
   assert.ok(!calls.some((c) => c.includes('update-ref')), 'the baseline must not write a local ref');
 });
 
 test('a commit that cannot be fetched refuses rather than guessing a baseline', () => {
   const { run } = seams({ shaPresent: false, fetchWorks: false });
   assert.equal(resolveRemoteBaseSha({ run }), null);
+});
+
+test('a server that refuses a by-sha fetch is asked for HEAD before giving up', () => {
+  // Not every server allows fetching an arbitrary commit. Falling back to the
+  // ref it certainly does serve is the difference between working on those
+  // servers and refusing on them.
+  const calls = [];
+  let present = false;
+  const run = (args) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'ls-remote') return `${REMOTE_HEAD}\tHEAD\n`;
+    if (args[0] === 'cat-file') {
+      if (!present) throw new Error('fatal: Not a valid object name');
+      return '';
+    }
+    if (args[0] === 'fetch') {
+      if (args[3] === REMOTE_HEAD) throw new Error('error: Server does not allow request for unadvertised object');
+      present = true;
+      return '';
+    }
+    throw new Error(`unexpected git call: ${args.join(' ')}`);
+  };
+
+  assert.equal(resolveRemoteBaseSha({ run }), REMOTE_HEAD);
+  assert.ok(calls.includes('fetch --quiet origin HEAD'), `the fallback must name HEAD: ${JSON.stringify(calls)}`);
 });
 
 test('a fetched-but-still-absent commit refuses', () => {
