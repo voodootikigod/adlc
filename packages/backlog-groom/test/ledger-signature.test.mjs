@@ -189,14 +189,19 @@ test('AC5: gateAction demotes with a REASON when no key is available, and spawns
       key: noKey,
     });
     assert.equal(out.verdict, 'demote', `key ${JSON.stringify(noKey)} must demote`);
-    assert.match(out.reason, /key/i, 'the reason must name the missing key');
+    // The EXACT no-key reason, not merely something mentioning a key: a run that
+    // fell through and failed inside the reviewer also reports a reason, and
+    // matching loosely would accept that as if the guard had fired.
+    assert.match(out.reason, /no signing key is available/i, `key ${JSON.stringify(noKey)} must report the missing key`);
   }
 });
 
 test('no key leaves the ledger untouched, so the run that has one is not refused as a replay', () => {
   // Recording a verdict would burn the one-shot: the revision would read as
   // already gated, and the key-holder's run would be refused.
-  const ledger = {};
-  gateAction({ action, profile: { providers: { decider: 'anthropic', reviewer: 'openai' } }, ledger, runReview: () => ({ code: 0 }), key: null });
-  assert.deepEqual(ledger, {});
+  for (const noKey of [null, undefined, '']) {
+    const ledger = {};
+    gateAction({ action, profile: { providers: { decider: 'anthropic', reviewer: 'openai' } }, ledger, runReview: () => ({ code: 0 }), key: noKey });
+    assert.deepEqual(ledger, {}, `key ${JSON.stringify(noKey)} must leave the ledger untouched`);
+  }
 });
