@@ -85,30 +85,108 @@ export function saveCache(path, cache, io = {}) {
  *
  * @returns {string[]|null}
  */
-export function resolveTrustedBaseRef({ run = defaultGitRun } = {}) {
-  // Resolved from the REPOSITORY, never from a caller-supplied flag. A caller
-  // who picks the comparison ref can pick `HEAD`, which makes the merge base the
-  // working copy: a floor widened from ['close'] to [] then compares equal to
-  // itself and passes without authorization. The whole check is only meaningful
-  // against a ref the person being checked does not choose.
-  try {
-    const head = String(run(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
-    if (head) return head;
-  } catch {
-    // No origin/HEAD configured — fall through to the conventional default.
-  }
-  return 'origin/main';
+/**
+ * `owner/repo` from the origin remote's URL, or null.
+ *
+ * Parsed rather than assumed: the forge is asked about THIS repository, and a
+ * URL shape that cannot be parsed must refuse rather than guess a name that
+ * would send the question somewhere else.
+ */
+export function parseOriginSlug(url) {
+  const text = String(url ?? '').trim();
+  if (!text) return null;
+  // git@host:owner/repo(.git) and scheme://host/owner/repo(.git) both reduce to
+  // the last two path segments.
+  const withoutScheme = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@]+@/, '');
+  const path = withoutScheme.replace(/^[^/:]+[:/]/, '').replace(/\.git$/, '').replace(/\/+$/, '');
+  // The LAST TWO segments, not exactly two: a self-hosted forge or a filesystem
+  // remote carries a deeper path, and hard-coding github.com's shape would refuse
+  // to resolve a baseline for repositories that have a perfectly good one. A
+  // wrong guess costs nothing — the forge is then asked about a repo that does
+  // not exist, which errors, which refuses.
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  const [owner, repo] = parts.slice(-2);
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
+  return `${owner}/${repo}`;
 }
 
-export function baseProfileFromGit(profilePath, { run = defaultGitRun, baseRef = null } = {}) {
-  const ref = baseRef ?? resolveTrustedBaseRef({ run });
+/**
+ * The head commit of the REMOTE's default branch, or null.
+ *
+ * THE BASELINE MUST NOT COME FROM A LOCAL REF (#1036). The floor is compared
+ * against the profile at the merge base, so whoever picks the comparison point
+ * decides the answer. `--base-ref` was removed because passing `HEAD` made the
+ * merge base the working copy — a widened floor then compared equal to itself —
+ * but reading `refs/remotes/origin/HEAD` or `origin/main` reproduced exactly
+ * that with no flag: `git update-ref refs/remotes/origin/main HEAD` is a local
+ * write, and this package's own e2e fixture does it to build a base.
+ *
+ * So the question goes to the remote: the forge names the default branch, and
+ * `ls-remote` says where it points. Both are network calls, and `--apply`
+ * already requires `gh` and the network; the read path never calls this.
+ *
+ * Every failure returns null, which the floor guards turn into a refusal. There
+ * is deliberately no fallback to a local ref: falling back would restore the
+ * hole exactly when the remote could not contradict it.
+ */
+export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun } = {}) {
+  let slug;
+  try {
+    slug = parseOriginSlug(run(['remote', 'get-url', 'origin']));
+  } catch {
+    return null; // no origin remote
+  }
+  if (!slug) return null;
+
+  let branch;
+  try {
+    const raw = ghRun(['api', `repos/${slug}`, '--jq', '.default_branch']);
+    branch = String(raw ?? '').trim();
+    // `gh api --jq` prints the field; a JSON object means the jq filter was not
+    // applied, so read it rather than using the whole document as a branch name.
+    if (branch.startsWith('{')) branch = String(JSON.parse(branch)?.default_branch ?? '').trim();
+  } catch {
+    return null; // gh missing, unauthenticated, offline, or the repo is unreachable
+  }
+  if (!branch || /\s/.test(branch)) return null;
+
+  let sha;
+  try {
+    const line = String(run(['ls-remote', 'origin', `refs/heads/${branch}`]) ?? '').trim();
+    sha = line.split(/\s+/)[0] ?? '';
+  } catch {
+    return null; // the remote could not be reached
+  }
+  // A 40-hex sha or nothing. A short, empty or malformed answer is not a base.
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+function defaultGhRun(args) {
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe' });
+}
+
+export function baseProfileFromGit(profilePath, { run = defaultGitRun, ghRun = defaultGhRun } = {}) {
+  // Anchored to the remote, never to a local ref — see resolveRemoteBaseSha.
+  const remoteSha = resolveRemoteBaseSha({ run, ghRun });
+  if (!remoteSha) return null;
+
   let mergeBase;
   try {
-    mergeBase = String(run(['merge-base', 'HEAD', ref])).trim();
+    mergeBase = String(run(['merge-base', 'HEAD', remoteSha])).trim();
   } catch {
     return null;
   }
   if (!mergeBase) return null;
+
+  // REACHABLE FROM THE REMOTE HEAD, proven rather than assumed. A merge base is
+  // only a trustworthy baseline if it is part of the history the remote actually
+  // published; `--is-ancestor` exits non-zero when it is not.
+  try {
+    run(['merge-base', '--is-ancestor', mergeBase, remoteSha]);
+  } catch {
+    return null;
+  }
 
   // ABSENCE IS PROVEN, not inferred from a failure. `git show` fails the same way
   // for "no such path" and for a corrupt object store or a bad revision, and

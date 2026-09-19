@@ -116,6 +116,11 @@ indistinguishable from a complete one, so the run says which it had.
   succeeding.
 - **Only an explicit approve licenses a write.** A reviewer error, a timeout and
   a material finding all demote. "Not blocked" is not "approved".
+- **No key means no writes.** Ledger entries are HMAC-signed with
+  `ADLC_MANIFEST_KEY`, and an unsigned or altered entry authorizes nothing. With
+  no key set, every action demotes to a proposal, the run still reports what it
+  would have done, and it exits 0 — say so plainly rather than treating it as a
+  reviewer problem. Closing an issue is a key-holder act; proposing is not.
 - **No distinct provider means no autonomous writes.** If the profile does not
   declare both `providers.decider` and a different `providers.reviewer`, every
   action demotes to a proposal and the run still produces its report. That is the
@@ -129,6 +134,11 @@ indistinguishable from a complete one, so the run says which it had.
   refuses `--profile`. To change who reviews or what a relabel may target, land
   the profile change on the default branch first; do not edit it locally to get
   a run through.
+- **The baseline comes from the remote, so `--apply` needs network.** The commit
+  the policy is compared against is the forge's default branch head, not a local
+  `refs/remotes/...` ref, and the merge base must be reachable from it. If the
+  remote cannot be reached the run refuses rather than falling back to a local
+  ref. A read-only groom is unaffected and still works offline.
 
 ## Reporting back
 
