@@ -163,7 +163,37 @@ export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun
     return null; // the remote could not be reached
   }
   // A 40-hex sha or nothing. A short, empty or malformed answer is not a base.
-  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  if (!/^[0-9a-f]{40}$/.test(sha)) return null;
+
+  // THE SHA MUST BE IN THE LOCAL OBJECT DATABASE, or `merge-base` cannot use it.
+  // `ls-remote` answers with where the branch points NOW, which in any clone that
+  // has not fetched recently is a commit this repository has never seen — so the
+  // anchoring would refuse every run on an ordinary stale clone, which is a
+  // refusal nobody can act on rather than a safety property. Fetching that one
+  // commit is cheap and moves no ref: the baseline still comes from the remote's
+  // answer, not from anything local.
+  try {
+    run(['cat-file', '-e', `${sha}^{commit}`]);
+    return sha;
+  } catch {
+    // Not present — fetch it, then insist on it.
+  }
+  try {
+    run(['fetch', '--quiet', 'origin', sha]);
+  } catch {
+    // A server that refuses a by-sha fetch still serves the branch.
+    try {
+      run(['fetch', '--quiet', 'origin', branch]);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    run(['cat-file', '-e', `${sha}^{commit}`]);
+  } catch {
+    return null; // still absent: the baseline cannot be read, so refuse
+  }
+  return sha;
 }
 
 /**

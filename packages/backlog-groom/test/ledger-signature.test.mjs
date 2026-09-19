@@ -231,3 +231,44 @@ test('a signed applied entry copied under another action grants nothing', () => 
   assert.deepEqual(result.executed, [], 'a relocated entry must not read as an execution');
   assert.equal(result.demoted[0].reason, 'gate');
 });
+
+test('an unsigned legacy entry is re-reviewed, not treated as a spent one-shot', () => {
+  // A ledger written before signing existed carries no `sig`. Treating it as a
+  // decision already taken would strand the action permanently, with deleting the
+  // whole ledger as the only remedy — which costs more replay protection than
+  // honouring an unreadable entry ever bought.
+  const legacy = approvedEntry();
+  delete legacy.sig;
+  const ledger = ledgerWith(legacy);
+  let reviewed = 0;
+
+  const out = gateAction({
+    action,
+    profile: { providers: { decider: 'anthropic', reviewer: 'openai' } },
+    ledger,
+    runReview: () => { reviewed += 1; return { code: 0 }; },
+    key: KEY,
+  });
+
+  assert.equal(reviewed, 1, 'an unverifiable entry must not consume the one shot');
+  assert.equal(out.verdict, 'approve');
+  // …and the replacement is sealed, so the next run sees a real record.
+  assert.equal(verifyLedgerEntry(KEY, ledger[gateKey(action)]), true);
+});
+
+test('a validly signed entry still spends the one shot, whichever way it went', () => {
+  // The property the above must not break: re-asking after a refusal is the
+  // bypass the one-shot exists to stop.
+  const ledger = ledgerWith(approvedEntry(KEY, { verdict: 'demote', reason: 'the reviewer raised a material finding' }));
+
+  const out = gateAction({
+    action,
+    profile: { providers: { decider: 'anthropic', reviewer: 'openai' } },
+    ledger,
+    runReview: () => { throw new Error('a second review must not be spawned'); },
+    key: KEY,
+  });
+
+  assert.equal(out.verdict, 'demote');
+  assert.match(out.reason, /already gated/);
+});

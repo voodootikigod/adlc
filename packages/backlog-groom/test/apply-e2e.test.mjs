@@ -126,6 +126,16 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   );
   chmodSync(join(bin, 'gh'), 0o755);
 
+  // A `git` that records what it can see and then delegates to the real one. The
+  // key reaches git through headCommit, contentHash and revalidation, so a leak
+  // check that only watched gh and the reviewer would have missed three callers.
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(
+    join(bin, 'git'),
+    `#!/bin/sh\necho "git:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\nexec ${realGit} "$@"\n`
+  );
+  chmodSync(join(bin, 'git'), 0o755);
+
   writeFileSync(
     join(bin, 'adversarial-review'),
     `#!/bin/sh\necho "review $@" >> ${log}\necho "review:\${ADLC_MANIFEST_KEY:-unset}" >> ${join(dir, 'childenv.log')}\nexit ${reviewExit}\n`
@@ -625,7 +635,12 @@ test('no child process can read the signing key', () => {
   assert.equal(r.status, 0, r.stderr);
 
   const seen = readFileSync(join(box.dir, 'childenv.log'), 'utf8').trim().split('\n').filter(Boolean);
-  assert.ok(seen.length > 0, 'the children must actually have run, or this proves nothing');
+  // Each KIND of child must appear, or the assertion below passes on whichever
+  // one happened to run: the key reaches git through headCommit, contentHash and
+  // revalidation, and that is the caller a gh-only check would miss.
+  assert.ok(seen.some((l) => l.startsWith('gh:')), `no gh call observed: ${JSON.stringify(seen)}`);
+  assert.ok(seen.some((l) => l.startsWith('git:')), `no git call observed: ${JSON.stringify(seen)}`);
+  assert.ok(seen.some((l) => l.startsWith('review:')), `no reviewer call observed: ${JSON.stringify(seen)}`);
   assert.deepEqual([...new Set(seen.map((l) => l.split(':')[1]))], ['unset'], `a child saw the key: ${JSON.stringify(seen)}`);
   // And the run still worked, so the stripping did not simply break the children.
   assert.ok(ghWrites(box).some((c) => c.startsWith('issue close')));
