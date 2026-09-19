@@ -272,3 +272,25 @@ test('a validly signed entry still spends the one shot, whichever way it went', 
   assert.equal(out.verdict, 'demote');
   assert.match(out.reason, /already gated/);
 });
+
+test('a signed entry relocated under another slot does not strand that action', () => {
+  // The signature covers content, not the slot it is filed under. A relocated
+  // entry read as "already gated" would block the action forever: the reviewer
+  // is never consulted, and the binding check downstream refuses to act on it
+  // either, so nothing can recover it short of editing the ledger by hand.
+  const other = { ...action, number: 706, contentHash: 'h2' };
+  const ledger = { [gateKey(other)]: approvedEntry() }; // 705's entry, filed under 706
+  let reviewed = 0;
+
+  const out = gateAction({
+    action: other,
+    profile: { providers: { decider: 'anthropic', reviewer: 'openai' } },
+    ledger,
+    runReview: () => { reviewed += 1; return { code: 0 }; },
+    key: KEY,
+  });
+
+  assert.equal(reviewed, 1, 'a relocated entry must not read as this action’s spent review');
+  assert.equal(out.verdict, 'approve');
+  assert.equal(ledgerApproves(ledger, other, KEY), true, 'and the replacement authorizes the action it is about');
+});
