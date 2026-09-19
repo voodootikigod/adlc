@@ -84,6 +84,30 @@ merge base with the default branch: a wider `autonomyFloor`, fewer `frozenPaths`
 or different `providers`, `labels` or `units` refuse `--apply`, and `--apply`
 refuses `--profile` because the baseline is read at the profile's own path.
 
+**That baseline is anchored to the REMOTE** (#1036). The default branch and the
+commit it points at come from the forge and `git ls-remote`, and the merge base
+must be reachable from that commit. Local refs decide nothing: `git update-ref
+refs/remotes/origin/main HEAD` is a local write, and a baseline the caller can
+move is not a baseline. Every way of failing to reach the remote — no origin, no
+`gh`, an unreachable repository, a merge base outside the remote's history —
+refuses the run rather than falling back, because a fallback would restore the
+hole exactly when the remote could not contradict it. Only `--apply` does this;
+the read path stays offline-friendly.
+
+## The gate ledger is signed
+
+Each entry in `.adlc/backlog-groom-ledger.json` carries an HMAC over its whole
+content, keyed by `ADLC_MANIFEST_KEY` and domain-separated from every other
+signed artifact (#1035). `ledgerApproves` refuses an entry whose signature is
+missing, wrong, or no longer matches what it covers — including `applied`, which
+decides whether a write is skipped and reported as already done.
+
+**Writing is therefore a key-holder act.** With no key nothing can be sealed, so
+every action demotes to a proposal, the run still reports what it would have
+done, and it exits 0. An unattended agent proposes; closing an issue takes the
+key. The signature is the one field a caller cannot compute — every other one,
+`artifactDigest` included, is derivable from the action itself.
+
 ## Incrementality
 
 A gitignored cache at `.adlc/backlog-groom-cache.json`, keyed per issue on
