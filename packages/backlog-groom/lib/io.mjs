@@ -112,7 +112,14 @@ export function parseOriginSlug(url) {
   if (parts.length < 2) return null;
   const [owner, repo] = parts.slice(-2);
   if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null;
-  return `${owner}/${repo}`;
+  // The HOST too, when the URL names one. `gh` otherwise answers from whatever
+  // forge it is configured for, so an enterprise origin's slug would be looked up
+  // on github.com — and a same-named repository there would name a default branch
+  // that has nothing to do with this remote. A filesystem remote names no host;
+  // there is no forge to ask, and `gh` is left to its own resolution.
+  const hostMatch = /^([^/:]+)[:/]/.exec(withoutScheme);
+  const host = hostMatch && hostMatch[1].includes('.') ? hostMatch[1] : null;
+  return { slug: `${owner}/${repo}`, host };
 }
 
 /**
@@ -135,17 +142,20 @@ export function parseOriginSlug(url) {
  * hole exactly when the remote could not contradict it.
  */
 export function resolveRemoteBaseSha({ run = defaultGitRun, ghRun = defaultGhRun } = {}) {
-  let slug;
+  let origin;
   try {
-    slug = parseOriginSlug(run(['remote', 'get-url', 'origin']));
+    origin = parseOriginSlug(run(['remote', 'get-url', 'origin']));
   } catch {
     return null; // no origin remote
   }
-  if (!slug) return null;
+  if (!origin) return null;
+  const { slug, host } = origin;
 
   let branch;
   try {
-    const raw = ghRun(['api', `repos/${slug}`, '--jq', '.default_branch']);
+    const argv = ['api', `repos/${slug}`, '--jq', '.default_branch'];
+    if (host) argv.push('--hostname', host);
+    const raw = ghRun(argv);
     branch = String(raw ?? '').trim();
     // `gh api --jq` prints the field; a JSON object means the jq filter was not
     // applied, so read it rather than using the whole document as a branch name.
@@ -211,8 +221,32 @@ function childEnv() {
   return env;
 }
 
+/**
+ * How long any child of this module may take.
+ *
+ * The baseline lookup runs `gh api`, `ls-remote` and sometimes `fetch` — all
+ * network calls — and the apply lock is already held when it does. An unbounded
+ * spawnSync waits forever on a remote that accepts the connection and then stops
+ * answering, so the run would hang holding the lock and every later apply would
+ * refuse behind it. A timeout turns that into an ordinary refusal, which the
+ * floor guards already know how to handle.
+ */
+export const CHILD_TIMEOUT_MS = 30_000;
+
+/** The spawn options every child of this module gets: no key, and a bound. */
+export function childRunOpts() {
+  return {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: 'pipe',
+    env: childEnv(),
+    timeout: CHILD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  };
+}
+
 function defaultGhRun(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe', env: childEnv() });
+  return execFileSync('gh', args, childRunOpts());
 }
 
 export function baseProfileFromGit(profilePath, { run = defaultGitRun, ghRun = defaultGhRun } = {}) {
@@ -275,7 +309,7 @@ function defaultGitRun(args) {
   // writes the child's stderr to the parent's, so a profile simply absent at the
   // merge base — an ordinary, expected state — would print a fatal-looking git
   // error beside a run that succeeded. Specifying 'pipe' captures it instead.
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: 'pipe', env: childEnv() });
+  return execFileSync('git', args, childRunOpts());
 }
 
 /**
