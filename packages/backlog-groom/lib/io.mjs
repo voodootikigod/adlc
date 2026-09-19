@@ -97,7 +97,11 @@ export function parseOriginSlug(url) {
   if (!text) return null;
   // git@host:owner/repo(.git) and scheme://host/owner/repo(.git) both reduce to
   // the last two path segments.
-  const withoutScheme = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@]+@/, '');
+  // Any scheme, spelled as "everything up to the first ://" rather than as a
+  // character class: enumerating the legal scheme characters buys nothing here
+  // (a string that reaches this is already someone's configured remote) and gets
+  // the class itself wrong for schemes nobody listed.
+  const withoutScheme = text.replace(/^[^:/?#]+:\/\//, '').replace(/^[^@]+@/, '');
   const path = withoutScheme.replace(/^[^/:]+[:/]/, '').replace(/\.git$/, '').replace(/\/+$/, '');
   // The LAST TWO segments, not exactly two: a self-hosted forge or a filesystem
   // remote carries a deeper path, and hard-coding github.com's shape would refuse
