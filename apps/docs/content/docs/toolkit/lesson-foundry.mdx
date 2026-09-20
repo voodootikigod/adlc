@@ -23,7 +23,7 @@ dollars-per-catch LLM finding into a free-forever deterministic one.
 ## Usage
 
 ```sh
-adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [--gate] [--llm] [--prompt-only] [--json]
+adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [--gate] [--allow-missing-ledger] [--llm] [--prompt-only] [--json]
 ```
 
 | Flag | Description |
@@ -33,6 +33,7 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 | `--out-dir <path>` | Output directory for defense files (default `.adlc/lessons`). |
 | `--write` | Emit files (default is dry-run, which prints what would be written). |
 | `--gate` | Exit 2 if any cluster ≥ `--min` has no defense file in `--out-dir`. |
+| `--allow-missing-ledger` | Allow missing ledger file when --gate is set (bootstrap opt-in). |
 | `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. |
 | `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
 | `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |

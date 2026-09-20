@@ -24,14 +24,15 @@ Converts prosecution findings into permanent defenses. Every recurring finding i
 lesson-foundry [options]
 
 Options:
-  --ledger <name>    Ledger name to read findings from (default: findings)
-  --min <n>          Minimum cluster size to surface (default: 2)
-  --out-dir <path>   Output directory for defense files (default: .adlc/lessons)
-  --write            Emit files (default: dry-run — prints what WOULD be written)
-  --gate             Exit 2 if any cluster >= --min has no defense file in --out-dir
-  --llm              Refine cluster wording via one mid-tier LLM call per cluster
-  --prompt-only      Print LLM prompts and exit 0 (works with zero API keys)
-  --json             Machine-readable output (stdout JSON, errors to stderr)
+  --ledger <name>          Ledger name to read findings from (default: findings)
+  --min <n>                Minimum cluster size to surface (default: 2)
+  --out-dir <path>         Output directory for defense files (default: .adlc/lessons)
+  --write                  Emit files (default: dry-run — prints what WOULD be written)
+  --gate                   Exit 2 if any cluster >= --min has no defense file in --out-dir
+  --allow-missing-ledger   Allow missing ledger file when --gate is set (bootstrap opt-in).
+  --llm                    Refine cluster wording via one mid-tier LLM call per cluster
+  --prompt-only            Print LLM prompts and exit 0 (works with zero API keys)
+  --json                   Machine-readable output (stdout JSON, errors to stderr)
 ```
 
 ## Exit codes
