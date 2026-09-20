@@ -22,6 +22,9 @@
  *     unguarded while the file appears to say otherwise.
  */
 
+import { canonicalJson } from './canonical-json.mjs';
+import { opError } from './op-error.mjs';
+
 /** Every action class the write path can perform. */
 export const ACTION_CLASSES = Object.freeze(['close', 'relabel', 'duplicate-link', 'comment']);
 
@@ -33,10 +36,6 @@ export const ACTION_CLASSES = Object.freeze(['close', 'relabel', 'duplicate-link
  * the backlog and is never looked at again.
  */
 export const DEFAULT_AUTONOMY_FLOOR = Object.freeze(['close']);
-
-function opError(message) {
-  return Object.assign(new Error(message), { isOpError: true });
-}
 
 /**
  * Validate a floor, returning it unchanged.
@@ -95,23 +94,21 @@ export function floorWidening(base, head) {
 /**
  * Refuse a floor widened relative to the MERGE BASE (§3.7, AC24).
  *
- * The comparison is against the base and not the working copy because the
- * working copy is exactly what someone widening the floor controls: a check
- * that reads only the checked-out profile validates the attacker's own claim.
+ * Compared against the base because the working copy is what someone widening
+ * the floor controls: a check reading only the checked-out profile validates
+ * the attacker's own claim.
  *
- * `authorized` is a LIBRARY seam for tests and is deliberately NOT reachable from
- * the CLI. A flag that waives the check is not a weaker version of the trust-root
- * path — it is a complete bypass of it, available to anyone who can type. The
- * real path to a wider floor is to land the profile change on the default
- * branch: once the base carries it, there is no widening left to detect.
+ * There is no waiver — no flag, no option, no profile key. The path to a wider
+ * floor is landing the profile change on the default branch, after which the
+ * base carries it.
  *
  * It is not a profile key either, for the same reason the comparison is against
  * the base rather than the working copy: a key inside the profile granting
  * permission to widen that same profile is circular.
  *
- * @param {{base: string[]|null, head: string[], authorized?: boolean}} o
+ * @param {{base: string[]|null, head: string[]}} o
  */
-export function assertFloorNotWidened({ base, head, authorized = false } = {}) {
+export function assertFloorNotWidened({ base, head } = {}) {
   if (!Array.isArray(base)) {
     // "Unreadable" is not "empty". Treating an unknown base as no-floor would
     // make DELETING the profile at the merge base the cheapest possible
@@ -122,7 +119,6 @@ export function assertFloorNotWidened({ base, head, authorized = false } = {}) {
   }
   const widened = floorWidening(base, head);
   if (widened.length === 0) return head;
-  if (authorized) return head;
   throw opError(
     `backlog-groom: autonomyFloor is WIDER than at the merge base — ${widened.join(', ')} ` +
       'no longer requires a human. Widening the floor is a privileged change and needs explicit trust-root authorization.'
@@ -143,12 +139,12 @@ export function frozenPathsRemoved(base, head) {
 }
 
 /** Refuse a profile that unfreezes paths relative to the merge base. */
-export function assertFrozenPathsNotNarrowed({ base, head, authorized = false } = {}) {
+export function assertFrozenPathsNotNarrowed({ base, head } = {}) {
   if (!Array.isArray(base)) {
     throw opError('backlog-groom: could not read frozenPaths at the merge base — refusing to act on an unknown baseline');
   }
   const removed = frozenPathsRemoved(base, head);
-  if (removed.length === 0 || authorized) return head;
+  if (removed.length === 0) return head;
   throw opError(
     `backlog-groom: frozenPaths no longer covers ${removed.join(', ')} — unfreezing a path is a privileged change and needs explicit trust-root authorization.`
   );
@@ -156,15 +152,6 @@ export function assertFrozenPathsNotNarrowed({ base, head, authorized = false } 
 
 /** The profile keys, beyond the floor and frozen paths, that set authorization terms. */
 export const POLICY_KEYS = Object.freeze(['providers', 'labels', 'units']);
-
-/** JSON with object keys sorted at every depth, so key order is not a difference. */
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
-}
 
 /**
  * Refuse a working copy whose reviewer or relabel vocabulary differs from the base.
@@ -181,7 +168,7 @@ export function assertPolicyUnchanged({ base, head } = {}) {
   if (typeof base !== 'object' || base === null || Array.isArray(base)) {
     throw opError('backlog-groom: could not read the profile at the merge base — refusing to act on an unknown reviewer and label policy');
   }
-  const changed = POLICY_KEYS.filter((key) => canonical(base[key]) !== canonical(head?.[key]));
+  const changed = POLICY_KEYS.filter((key) => canonicalJson(base[key]) !== canonicalJson(head?.[key]));
   if (changed.length === 0) return head;
   throw opError(
     `backlog-groom: ${changed.join(', ')} differ from the merge base — the reviewer and the labels a relabel may target are ` +

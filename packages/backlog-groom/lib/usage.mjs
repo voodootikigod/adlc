@@ -39,10 +39,10 @@ export function parseOptions(flags = FLAGS) {
   return out;
 }
 
-/** Render the usage block from the flag table. */
 /** The help column the flag list pads to, when the flag is short enough to fit. */
 const COLUMN = 22;
 
+/** Render the usage block from the flag table. */
 export function renderUsage(flags = FLAGS) {
   const lines = ['backlog-groom — groom a GitHub issue backlog against the code (read-only)', ''];
   for (const f of flags) {

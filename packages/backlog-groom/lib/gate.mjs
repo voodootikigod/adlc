@@ -69,24 +69,16 @@ export function reviewerPair(profile) {
 }
 
 /**
- * True when the ledger holds an APPROVE bound to this exact action's revision.
+ * True when the ledger entry matches the action's slot identity.
  *
- * The authority on whether a write is licensed. A caller-supplied `gate` object
- * is a claim, not authorization: any library caller can construct one, and
- * trusting it would put the whole gate behind an `if` the caller controls.
+ * Slot identity is issue, action, field and revision, and deliberately not the
+ * artifact digest, so rewording an artifact cannot buy a second review.
  *
- * SIGNATURE FIRST (#1035). Every other field below is one the caller can
- * compute — `artifactDigest` is exported and pure — so field checks alone made
- * the ledger a place to write an approval rather than a record of one. Without a
- * key nothing verifies, and nothing is authorized: the run still proposes, and a
- * write becomes a key-holder act.
+ * @param {object} entry
+ * @param {object} action
+ * @returns {boolean}
  */
 export function entryBindsSlot(entry, action) {
-  // WHAT THE SLOT NAMES: the issue, the action, the field and the revision — and
-  // deliberately NOT the artifact digest, because the digest changes the moment
-  // the artifact is reworded and "reword it and ask again" is what the one shot
-  // refuses. This is the replay identity; `entryBindsAction` adds the digest for
-  // the authorization reads, which must cover what the reviewer actually read.
   return (
     entry?.contentHash === action?.contentHash &&
     entry?.number === action?.number &&
@@ -95,18 +87,20 @@ export function entryBindsSlot(entry, action) {
   );
 }
 
+/**
+ * True when the ledger entry is bound to the slot and to the reviewed artifact digest.
+ *
+ * Action binding adds the digest because a signature covers an entry's content,
+ * not the slot it is filed under, and because one slot is shared by a relabel to
+ * two different targets and by a close carrying different evidence.
+ *
+ * @param {object} entry
+ * @param {object} action
+ * @returns {boolean}
+ */
 export function entryBindsAction(entry, action) {
-  // The signature covers the entry's CONTENT, not the ledger slot it sits in, so
-  // a validly signed entry can be copied under another action's key. Everything
-  // that binds a record to its action is checked here, in one place, because the
-  // two callers — the approval check and the applied fast path — were drifting:
-  // one verified the binding and the other only the signature, so a signed
-  // `applied` entry moved to another slot suppressed that action's write.
   return (
-    entry?.contentHash === action?.contentHash &&
-    entry?.number === action?.number &&
-    entry?.action === action?.action &&
-    (entry?.field ?? null) === (action?.field ?? null) &&
+    entryBindsSlot(entry, action) &&
     typeof entry?.artifactDigest === 'string' &&
     entry.artifactDigest === artifactDigest(action)
   );
@@ -126,21 +120,21 @@ export function ledgerEntryFor(ledger, action, key = null) {
   return entry;
 }
 
+/**
+ * True when the ledger holds an APPROVE bound to this exact action's revision.
+ *
+ * The authority on whether a write is licensed. A caller-supplied `gate` object
+ * is a claim, not authorization: any library caller can construct one, and
+ * trusting it would put the whole gate behind an `if` the caller controls.
+ *
+ * SIGNATURE FIRST (#1035). Every other field below is one the caller can
+ * compute — `artifactDigest` is exported and pure — so field checks alone made
+ * the ledger a place to write an approval rather than a record of one. Without a
+ * key nothing verifies, and nothing is authorized: the run still proposes, and a
+ * write becomes a key-holder act.
+ */
 export function ledgerApproves(ledger, action, key = null) {
-  const entry = ledger?.[gateKey(action ?? {})];
-  if (!entry || entry.verdict !== 'approve') return false;
-  if (!verifyLedgerEntry(key, entry)) return false;
-  // Bound to the revision AND the issue, not merely present under the key: a
-  // ledger hand-edited to move an approval between issues must not pass. And
-  // bound to WHAT WAS REVIEWED — the digest — because the slot names the
-  // decision, not its content: a relabel approved from P3-low to P2-medium
-  // shares its slot with one to P1-high, and a close shares its slot with the
-  // same close carrying other evidence.
-  //
-  // Both conditions live in `entryBindsAction` rather than being restated here:
-  // this function and the applied fast path had already drifted apart once, one
-  // checking the binding and the other only the signature.
-  return entryBindsAction(entry, action);
+  return ledgerEntryFor(ledger, action, key)?.verdict === 'approve';
 }
 
 /**
@@ -240,36 +234,30 @@ export function gateAction({ action, profile, ledger = {}, runReview, key = null
   }
 
   const slot = gateKey(action);
-  // ONLY A VALIDLY SIGNED ENTRY SPENDS THE ONE SHOT. The refusal is otherwise
-  // unconditional — an approve and a demote both block a second attempt, because
-  // "ask again and see" is the bypass whichever way the first answer went — but
-  // an entry we cannot verify is not a record of a review that happened. Treating
-  // one as spent would strand every action carrying a ledger written before
-  // signing existed, with deleting the whole ledger as the only way out, which
-  // costs more replay protection than it buys. An unverifiable entry is therefore
-  // replaced by a freshly signed verdict rather than honoured.
-  //
-  // This does not hand a caller a re-roll: an attacker who can corrupt an entry
-  // to force a re-review can equally delete it, so the ledger's integrity has
-  // never rested on unreadable entries being treated as decisions.
-  // SIGNED, but NOT bound to the artifact. The slot already names the issue, the
-  // action, the field and the revision; the artifact digest deliberately takes no
-  // part here, because the digest changes the moment the artifact is reworded —
-  // and "reword it and ask again" is the exact bypass the one shot exists to
-  // refuse. Binding belongs to the authorization reads, which must cover what was
-  // reviewed; replay belongs to the slot.
-  // Bound to the slot as well as signed: the signature covers the entry's
-  // content, not where it is filed, so a signed entry copied under another
-  // action's key would otherwise read as that action's spent review — blocking a
-  // legitimate action permanently, since the binding check downstream then
-  // refuses to act on it too. A relocated entry is not this action's decision, so
-  // this action is reviewed and the entry replaced.
+  // One shot per slot: a verified, slot-bound entry (approve OR demote) refuses a
+  // second review. Not bound to artifactDigest, so rewording cannot buy a re-roll.
+  // An unverifiable or relocated entry is not a record of a review: overwrite it.
   if (verifyLedgerEntry(key, ledger?.[slot]) && entryBindsSlot(ledger[slot], action)) {
     return {
       verdict: 'demote',
       reason: `this revision was already gated (verdict: ${ledger[slot].verdict}); a second review of the same (issue, contentHash) is refused`,
     };
   }
+
+  const record = (verdict, reason) => {
+    ledger[slot] = sealLedgerEntry(key, {
+      verdict,
+      reason,
+      reviewer: pair.reviewer,
+      decider: pair.decider,
+      contentHash: action.contentHash,
+      number: action.number,
+      action: action.action,
+      field: action.field ?? null,
+      artifactDigest: artifactDigest(action),
+    });
+    return { verdict, reason };
+  };
 
   let code;
   try {
@@ -281,8 +269,7 @@ export function gateAction({ action, profile, ledger = {}, runReview, key = null
     // rule unenforced for exactly the case a caller can manufacture at will: a
     // spawn failure or a timeout, retried until the reviewer finally answers.
     const reason = `the review could not complete: ${err?.message ?? err}`;
-    ledger[slot] = sealLedgerEntry(key, { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) });
-    return { verdict: 'demote', reason };
+    return record('demote', reason);
   }
 
   const approved = code === REVIEW_APPROVE;
@@ -293,34 +280,9 @@ export function gateAction({ action, profile, ledger = {}, runReview, key = null
       ? 'the reviewer raised a material finding'
       : `the review could not complete (exit ${code})`;
 
-  // SEALED, not merely written: the signature is what makes this a record of a
-  // verdict rather than a place to write one.
-  ledger[slot] = sealLedgerEntry(key, {
-    verdict,
-    reason,
-    reviewer: pair.reviewer,
-    decider: pair.decider,
-    contentHash: action.contentHash,
-    number: action.number,
-    action: action.action,
-    field: action.field ?? null,
-    artifactDigest: artifactDigest(action),
-  });
-  return { verdict, reason };
+  return record(verdict, reason);
 }
 
-/**
- * The review artifact for ONE action.
- *
- * §3.6 requires one issue per artifact, and the reason is attribution rather
- * than size: a reviewer handed the whole groomed set returns one verdict for the
- * batch, and treating that as authorization for each action means an approve
- * never confirmed the specific write being executed. A batch containing one
- * unsafe close would license the unsafe close along with everything else.
- *
- * The artifact carries the revision it is bound to, so the verdict recorded
- * against `(issue, contentHash)` describes the same thing the reviewer read.
- */
 /**
  * A filesystem-safe name for one action's artifact.
  *
@@ -335,23 +297,30 @@ export function artifactName(action) {
   return `action-${digest}.md`;
 }
 
+/**
+ * The review artifact for ONE action.
+ *
+ * §3.6 requires one issue per artifact, and the reason is attribution rather
+ * than size: a reviewer handed the whole groomed set returns one verdict for the
+ * batch, and treating that as authorization for each action means an approve
+ * never confirmed the specific write being executed. A batch containing one
+ * unsafe close would license the unsafe close along with everything else.
+ *
+ * The artifact carries the revision it is bound to, so the verdict recorded
+ * against `(issue, contentHash)` describes the same thing the reviewer read.
+ */
 export function buildActionArtifact(action) {
   return [
     `# Proposed ${action.action} — issue #${action.number}`,
-    '',
     `- issue: #${action.number}`,
     `- action: ${action.action}`,
     `- revision (contentHash): ${action.contentHash}`,
     action.field ? `- field: ${action.field}` : '',
     action.from ? `- from: ${action.from}` : '',
     action.to ? `- to: ${action.to}` : '',
-    '',
     '## Evidence',
-    '',
     typeof action.evidence === 'string' ? action.evidence : JSON.stringify(action.evidence ?? null, null, 2),
-    '',
     '## What is being asked',
-    '',
     `Is this ${action.action} justified by the evidence above, for this issue, at this revision?`,
     'A material objection means the action is demoted to a proposal for a human.',
   ]

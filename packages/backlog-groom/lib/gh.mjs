@@ -13,9 +13,6 @@
  */
 
 /**
- * @param {{spawn: Function}} io
- */
-/**
  * A safe issue selector.
  *
  * The number reaches this from a JSON file on disk and goes straight into gh's
@@ -30,6 +27,10 @@ export function issueSelector(number) {
   return String(number);
 }
 
+/**
+ * @param {{spawn: Function}} io
+ * @returns {{comments: Function, comment: Function, apply: Function}}
+ */
 export function makeGhWriter({ spawn } = {}) {
   const gh = (args, input) => {
     const res = spawn('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024 });

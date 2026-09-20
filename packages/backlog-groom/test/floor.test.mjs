@@ -121,17 +121,13 @@ test('AC18: emptying the floor is a widening and is refused', () => {
   assert.equal(err.isOpError, true);
 });
 
-test('AC18: an explicit authorization permits the widening', () => {
-  assert.doesNotThrow(() => assertFloorNotWidened({ base: ['close'], head: [], authorized: true }));
-});
-
 test('AC24: the comparison is against the merge base, not the working copy', () => {
   // The working copy is exactly what someone widening the floor controls, so a
   // check that reads only the working copy validates the attacker's own claim.
   // Here the working copy says "[] is fine" and the base says otherwise; the
   // base wins.
   const err = thrown(() =>
-    assertFloorNotWidened({ base: ['close', 'comment'], head: [], authorized: false })
+    assertFloorNotWidened({ base: ['close', 'comment'], head: [] })
   );
   assert.ok(err, 'expected an operational error');
   assert.equal(err.isOpError, true);
@@ -150,6 +146,9 @@ test('AC24: an unreadable merge-base floor fails closed, it does not assume empt
 
 // ---- AC6: one validator, structurally, not by enumerating today's callers ---
 
+const WRITE_ENTRY_POINTS = Object.freeze(['executeActions']);
+const PURE_HELPERS = Object.freeze(['marker', 'parseMarker', 'planAction', 'renderComment']);
+
 test('AC6: every write entry point is declared and routes through the guard', async () => {
   // The weak form of this criterion enumerates the two entry points that exist
   // today, which says nothing about the third one someone adds next year. The
@@ -162,18 +161,24 @@ test('AC6: every write entry point is declared and routes through the guard', as
     .filter(([, v]) => typeof v === 'function')
     .map(([k]) => k);
 
-  const declared = new Set([...execute.WRITE_ENTRY_POINTS, ...execute.PURE_HELPERS]);
+  const declared = new Set([...WRITE_ENTRY_POINTS, ...PURE_HELPERS]);
   for (const name of exportedFns) {
     assert.ok(
       declared.has(name),
       `${name} is exported from execute.mjs but is neither a declared write entry point nor a declared pure helper — classify it`
     );
   }
-  assert.ok(execute.WRITE_ENTRY_POINTS.length > 0, 'there must be at least one declared write entry point');
+  for (const name of declared) {
+    assert.ok(
+      exportedFns.includes(name),
+      `${name} is declared in floor test classifications but is not an exported function of execute.mjs`
+    );
+  }
+  assert.ok(WRITE_ENTRY_POINTS.length > 0, 'there must be at least one declared write entry point');
 });
 
 test('AC6: a declared write entry point refuses a floored action', async () => {
-  const { executeActions, WRITE_ENTRY_POINTS } = await import('../lib/execute.mjs');
+  const { executeActions } = await import('../lib/execute.mjs');
   assert.ok(WRITE_ENTRY_POINTS.includes('executeActions'));
 
   const writes = [];
@@ -205,10 +210,6 @@ test('unfreezing a path is a widening and is refused', () => {
 test('freezing MORE paths is an ordinary change', () => {
   assert.deepEqual(frozenPathsRemoved(['a/**'], ['a/**', 'b/**']), []);
   assert.doesNotThrow(() => assertFrozenPathsNotNarrowed({ base: ['a/**'], head: ['a/**', 'b/**'] }));
-});
-
-test('an explicit authorization permits unfreezing', () => {
-  assert.doesNotThrow(() => assertFrozenPathsNotNarrowed({ base: ['a/**'], head: [], authorized: true }));
 });
 
 test('an unreadable base frozenPaths fails closed', () => {
