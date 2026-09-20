@@ -13,7 +13,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
@@ -26,7 +26,7 @@ function runContext(ticketsJson, currentTicket, { eventName = 'PreCompact' } = {
     const input = JSON.stringify({ cwd: dir, hook_event_name: eventName });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'context'], { input, encoding: 'utf8' });
+      out = runHook([HOOK, 'context'], { input, encoding: 'utf8' });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -42,7 +42,7 @@ test('no .adlc/ — silent, no output', () => {
     const input = JSON.stringify({ cwd: dir, hook_event_name: 'PreCompact' });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'context'], { input, encoding: 'utf8' });
+      out = runHook([HOOK, 'context'], { input, encoding: 'utf8' });
     } catch (e) {
       out = e.stdout ?? '';
     }
@@ -104,7 +104,7 @@ test('malformed current-ticket.json — silent (advisory, never crashes)', () =>
     const input = JSON.stringify({ cwd: dir, hook_event_name: 'PreCompact' });
     let out = '';
     try {
-      out = execFileSync(process.execPath, [HOOK, 'context'], { input, encoding: 'utf8' });
+      out = runHook([HOOK, 'context'], { input, encoding: 'utf8' });
     } catch (e) {
       out = e.stdout ?? '';
     }

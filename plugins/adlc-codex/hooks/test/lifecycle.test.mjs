@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-lifecycle.mjs');
 
@@ -18,7 +19,7 @@ function fixture(fn) {
 }
 
 function run(root, mode, payload, env = {}) {
-  return spawnSync(process.execPath, [HOOK, mode], {
+  return spawnHook([HOOK, mode], {
     cwd: root,
     env: { ...process.env, PLUGIN_DATA: join(root, '.plugin-data'), ...env },
     input: JSON.stringify({ cwd: root, ...payload }),
@@ -101,7 +102,7 @@ function envWithoutPluginData(extra = {}) {
 test('a tool failure outside an ADLC repo creates no .adlc directory', () => {
   const plain = mkdtempSync(join(tmpdir(), 'adlc-codex-plain-'));
   try {
-    const result = spawnSync(process.execPath, [HOOK, 'flail'], {
+    const result = spawnHook([HOOK, 'flail'], {
       cwd: plain,
       // No PLUGIN_DATA: exercise the DEFAULT path, which is the one that bit us.
       env: envWithoutPluginData(),
@@ -117,7 +118,7 @@ test('a tool failure outside an ADLC repo creates no .adlc directory', () => {
 
 test('a tool failure inside a real ADLC repo still records flail state', () => {
   fixture((root) => {
-    const result = spawnSync(process.execPath, [HOOK, 'flail'], {
+    const result = spawnHook([HOOK, 'flail'], {
       cwd: root,
       env: envWithoutPluginData(),
       input: JSON.stringify({ cwd: root, ...FAILING_TOOL }),
@@ -135,7 +136,7 @@ test('an explicit PLUGIN_DATA is honored even outside a repo (the host chose it)
   const plain = mkdtempSync(join(tmpdir(), 'adlc-codex-explicit-'));
   try {
     const chosen = join(plain, 'host-state');
-    const result = spawnSync(process.execPath, [HOOK, 'flail'], {
+    const result = spawnHook([HOOK, 'flail'], {
       cwd: plain,
       env: envWithoutPluginData({ PLUGIN_DATA: chosen }),
       input: JSON.stringify({ cwd: plain, ...FAILING_TOOL }),
@@ -156,7 +157,7 @@ test('a tool failure in a SUBDIRECTORY records against the repo root', () => {
   fixture((root) => {
     const sub = join(root, 'packages', 'app');
     mkdirSync(sub, { recursive: true });
-    const result = spawnSync(process.execPath, [HOOK, 'flail'], {
+    const result = spawnHook([HOOK, 'flail'], {
       cwd: sub,
       env: envWithoutPluginData(),
       input: JSON.stringify({ cwd: sub, ...FAILING_TOOL }),
@@ -181,7 +182,7 @@ test('the ancestor walk stops at a .git boundary instead of leaking into a paren
     writeFileSync(join(ws, '.adlc', 'tickets.json'), '{"tickets":[]}\n');
     const child = join(ws, 'child-repo');
     mkdirSync(join(child, '.git'), { recursive: true });
-    const result = spawnSync(process.execPath, [HOOK, 'flail'], {
+    const result = spawnHook([HOOK, 'flail'], {
       cwd: child,
       env: envWithoutPluginData(),
       input: JSON.stringify({ cwd: child, ...FAILING_TOOL }),

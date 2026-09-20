@@ -11,7 +11,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+// Imported under an alias: this file already has its own runHook/spawnHook.
+import { runHook as runBoundedHook } from './helpers/run-hook.mjs';
 import {
   existsSync,
   mkdirSync,
@@ -41,7 +42,7 @@ const DENIER = 'denier-session';
 const SUCCESSOR = 'successor-session';
 
 function handoffCli(args, cwd) {
-  return execFileSync(process.execPath, [HANDOFF_BIN, ...args], {
+  return runBoundedHook([HANDOFF_BIN, ...args], {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, ADLC_MANIFEST_KEY: KEY },
@@ -74,7 +75,7 @@ function continueFor(root, { denier = DENIER, successor = SUCCESSOR } = {}) {
 
 /** Run the SessionStart hook; returns the parsed emission, or null for silence. */
 function runHook(root, payload, env = {}) {
-  const out = execFileSync(process.execPath, [HOOK, 'handoffstart'], {
+  const out = runBoundedHook([HOOK, 'handoffstart'], {
     cwd: root,
     encoding: 'utf8',
     input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: root, ...payload }),
@@ -534,7 +535,7 @@ test('a hostile project package cannot read the manifest key from the SessionSta
     }
 
     try {
-      execFileSync(process.execPath, [join(hooks, 'adlc-hook.mjs'), 'handoffstart'], {
+      runBoundedHook([join(hooks, 'adlc-hook.mjs'), 'handoffstart'], {
         cwd: root,
         encoding: 'utf8',
         input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: root, session_id: 'sess-a' }),
@@ -564,7 +565,7 @@ test('the handoff deny message tells the session to write its handoff summary', 
     armDeny(root, 'denied-now');
     let stdout = '';
     try {
-      execFileSync(process.execPath, [HOOK, 'handoff'], {
+      runBoundedHook([HOOK, 'handoff'], {
         cwd: root,
         encoding: 'utf8',
         input: JSON.stringify({

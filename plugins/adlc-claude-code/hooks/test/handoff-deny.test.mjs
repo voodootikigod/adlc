@@ -17,7 +17,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
+
 import {
   ensureDenyMarker,
   writeDenyRecord,
@@ -112,7 +113,7 @@ function runHandoff({
     let out = '';
     let status = 0;
     try {
-      out = execFileSync(process.execPath, argv, {
+      out = runHook(argv, {
         input,
         encoding: 'utf8',
         env: hookEnv,
@@ -311,7 +312,7 @@ test('no usable session id under deny-store pressure → fail closed', () => {
     let out = '';
     let status = 0;
     try {
-      out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+      out = runHook([HOOK, 'handoff'], {
         input,
         encoding: 'utf8',
         env: {
@@ -692,7 +693,7 @@ test('malformed stdin → deny (fail closed)', () => {
   let out = '';
   let status = 0;
   try {
-    out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+    out = runHook([HOOK, 'handoff'], {
       input: '{not-json',
       encoding: 'utf8',
       env: {
@@ -715,7 +716,7 @@ test('unenterable project cwd → deny (fail closed)', () => {
   let out = '';
   let status = 0;
   try {
-    out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+    out = runHook([HOOK, 'handoff'], {
       input: JSON.stringify({
         cwd: missing,
         session_id: 'sess-missing',
@@ -801,7 +802,7 @@ test('missing transcript_path file does not invent hard-band deny', () => {
     let out = '';
     let status = 0;
     try {
-      out = execFileSync(process.execPath, [HOOK, 'handoff'], {
+      out = runHook([HOOK, 'handoff'], {
         input,
         encoding: 'utf8',
         env: {
