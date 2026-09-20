@@ -1,4 +1,5 @@
 {
+ "permissions": { "allow": ["Bash(gh issue comment:*)"] },
   "enabledPlugins": {
     "adlc@adlc": true
   },
