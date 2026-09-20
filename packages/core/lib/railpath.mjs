@@ -1,9 +1,9 @@
 // railpath.mjs — symlink-aware rail-path canonicalization.
 //
-// Security-relevant: a symlink whose real target is a frozen rail (e.g. an
-// alias pointing at .adlc/tickets.json) must not slip a write past a lexical
-// name check. First shipped inline in plugins/adlc-opencode/rails-checker.mjs;
-// hoisted here so every integration adapter shares one implementation.
+// Maps a tool-supplied path to the forward-slash, root-relative path a write
+// would really land on. A symlink whose real target is a frozen rail must not
+// pass a lexical check. Falls back to the lexical path for anything that
+// cannot be resolved.
 
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
@@ -22,11 +22,14 @@ function realpathOr(p) {
  */
 export function resolveRailPath(filePath, root) {
   const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
-  let resolved;
-  if (existsSync(abs)) {
-    resolved = realpathOr(abs);
-  } else {
-    resolved = join(realpathOr(dirname(abs)), basename(abs));
+  const tail = [];
+  let cur = abs;
+  while (!existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    tail.unshift(basename(cur));
+    cur = parent;
   }
+  const resolved = tail.length ? join(realpathOr(cur), tail.join('/')) : realpathOr(cur);
   return relative(realpathOr(root), resolved).split('\\').join('/');
 }
