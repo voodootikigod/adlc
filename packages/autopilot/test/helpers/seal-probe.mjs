@@ -2,6 +2,11 @@ import { realpathSync, writeSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { active, activeSeams, enable, seamsSealed } from '../../lib/mutations.mjs';
 
+// Guarantee synchronous stdout output so piped spawnSync cannot lose buffered help text before process.exit
+console.log = (...args) => {
+  writeSync(1, args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ') + '\n');
+};
+
 enable('keys.leakKey');
 
 process.on('exit', () => {

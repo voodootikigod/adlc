@@ -121,6 +121,7 @@ test('bin entry seals seams before handling --help', () => {
     encoding: 'utf8',
   });
   assert.equal(res.status, 0, `probe failed with status ${res.status}: ${res.stderr}`);
+  // probe helper writes help text synchronously to fd 1 before process.exit, ensuring output is captured
   assert.match(res.stdout, /adlc-autopilot/);
   const probeLine = res.stderr
     .split('\n')
