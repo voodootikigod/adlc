@@ -7,7 +7,7 @@ discovery skill.
 
 > Design and rationale: [OpenCode integration plan](../opencode-integration-plan.md)
 > (the authoritative contract) and [ADR 0004](../adr/0004-adlc-opencode-integration.md).
-> Adoption guide: [`../opencode.md`](../opencode.md). The full thesis: [`../../ADLC.md`](../../ADLC.md).
+> The full thesis: [`../../ADLC.md`](../../ADLC.md).
 
 ## Status
 

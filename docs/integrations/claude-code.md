@@ -3,7 +3,7 @@
 The `@adlc/*` toolkit is a set of gate-shaped CLIs. This plugin makes the whole
 **Agentic Development Lifecycle** usable from inside Claude Code: the gates fire
 at the right lifecycle moments — some automatically — and the model reaches for
-the right gate without you memorizing 20 tools.
+the right gate without you memorizing every tool.
 
 > Design and rationale: [ADR 0003 — Bringing the ADLC to Claude Code as a plugin](../adr/0003-adlc-claude-code-plugin.md).
 > The full thesis: [`../../ADLC.md`](../../ADLC.md).

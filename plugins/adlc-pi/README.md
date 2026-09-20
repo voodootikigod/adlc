@@ -48,7 +48,7 @@ than in a version range.
 - **Build-gate + flail backstops** — a degraded (context-rot) session on a high-risk
   ticket is denied its build until an audited override is recorded; repeated errors, scope
   churn, and oversized logs surface as advisories.
-- **Context-rot handoff gate** — a session whose context window has filled past the
+- **Context-rot handoff gate** (off by default since 1.11.1; needs `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`) — a session whose context window has filled past the
   handoff band loses its mutating tools until an operator hands the work off. See
   [The handoff gate](#the-handoff-gate).
 - **Ticket doctrine injection** — the active ticket's scope, rails, and spec are appended
@@ -74,12 +74,14 @@ than in a version range.
 
 Enforcement is opt-in by activating a ticket — set `ADLC_TICKET` or write
 `.adlc/current-ticket.json` (tickets file overridable via `ADLC_TICKETS`). With no active
-ticket the extension is inert — with one deliberate exception, the handoff gate below.
+ticket the extension is inert — with one deliberate exception, the handoff gate below (when it is enabled).
 Once a ticket resolves, the extension **fails closed**: an unreadable/unparseable tickets
 file or an unknown ticket id blocks all tool calls until fixed. The commit-time backstop is
 the harness-agnostic CI gate `scripts/rails-guard-ci.mjs` — make it a required check.
 
 ## The handoff gate
+
+> **Off by default since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)). The gate runs only when `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1` is set in the environment the harness starts from. That flag decides whether the gate runs at all; it does not clear an active deny. The rest of this section describes the gate with the flag set.
 
 pi reports a live context-fill percentage (`ctx.getContextUsage().percent`), and the
 handoff gate watches it against three bands: **50%** warns, **60%** is the handoff band,

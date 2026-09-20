@@ -1,6 +1,7 @@
 # Sharded Ticket Store — Implementation and Rollout Plan
 
-> **Status:** Approved design, implementation pending. Execute with TDD, one slice per
+> **Status:** Executed — shipped as `packages/tickets` (#180, migrated here in #321). Kept as the
+> record of the rollout plan. The plan said: execute with TDD, one slice per
 > worktree/PR, and the ADLC gates named below. The normative contract is
 > [`docs/specs/sharded-ticket-store.md`](../../specs/sharded-ticket-store.md); architectural
 > rationale is [ADR-0010](../../adr/0010-sharded-ticket-store.md).

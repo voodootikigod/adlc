@@ -1,6 +1,6 @@
 # OpenCode Integration Continuation — land Phase 4, flush install friction, absorb the 1.17.17 surface
 
-Status: PROPOSED (P0/P1 — evaluation + execution plan)
+Status: SHIPPED — executed as tickets T30-T35 in `plugins/adlc-opencode`, all completed 2026-07-10.
 Branch: `opencode-integration`
 Supersedes nothing; continues `docs/specs/opencode-native-flush.md` (Phases 1–3 merged).
 Baseline verified 2026-07-09 against `@opencode-ai/plugin` / `@opencode-ai/sdk` **1.17.17**

@@ -5,6 +5,8 @@ mutation deny (D1–D3), and the operator CLI for
 write/resume/bypass/repair/unlock/continue. Binding design:
 [`docs/specs/context-rot-handoff.md`](../../docs/specs/context-rot-handoff.md).
 
+> **Status since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)): no harness evaluates the session-terminal deny (D1-D3) by default. The Claude Code and Codex plugins ship without the hook entry; pi and OpenCode run the gate only with `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`. The band thresholds are still consumed by `build-gate`, and the `adlc handoff` CLI is unaffected.
+
 ```sh
 adlc handoff write --session <id> [--ticket <id>] [--write] [--json]
 adlc handoff resume --session <consumer> --deny-session <denier> [--write]

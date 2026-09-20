@@ -23,7 +23,7 @@ full thesis in [ADLC.md](./ADLC.md).
 
 Each tool is a small CLI that enforces one machine-checkable gate. They share a runtime
 convention (`.adlc/` for tickets, ledgers, and gate evidence) and a common contract
-(see [CONVENTIONS.md](./CONVENTIONS.md)) so 22 independently built tools feel like one
+(see [CONVENTIONS.md](./CONVENTIONS.md)) so independently built tools feel like one
 product.
 
 ## Install
@@ -168,15 +168,12 @@ your only rail control — wire it and make it a required check.
 
 | Directory | Contents |
 |---|---|
-| `packages/` | The toolkit: 22 zero-dependency, gate-shaped CLIs |
-| `plugins/adlc-claude-code/` | Claude Code integration (skill, commands, hooks, subagent) |
-| `plugins/adlc-codex/` | Codex integration (hooks and skills; no TypeScript package) |
-| `plugins/adlc-gemini/` | Google Gemini integration — Antigravity and JetSki (native plugin system, skills, hooks) |
-| `plugins/adlc-pi/` | Pi harness integration package (TypeScript, skills, tests) |
+| `packages/` | The toolkit: zero-dependency, gate-shaped CLIs, one directory per tool |
+| `plugins/` | Native harness integrations, one `adlc-<name>/` directory each |
 | `docs/` | Lifecycle thesis, integration guides, ADRs, CI templates |
-| `.claude/commands/` | Maintainer commands for this repo (release workflow) |
+| `.claude/skills/` | Maintainer skills for this repo; the release procedure is `.claude/release-profile.md` |
 | `scripts/` | Release, smoke test, and CI helper scripts (not published; run by `npm test` and CI) |
-| `.adlc/` | Runtime data directory (tickets, gate evidence — gitignored except example) |
+| `.adlc/` | Runtime data directory: the ticket store, specs, lessons and gate-evidence manifest are tracked; session-local state is gitignored |
 | `.claude-plugin/` | Repo-root marketplace manifest (`marketplace.json`) — the index `npx plugins add voodootikigod/adlc` (and the native `/plugin marketplace add voodootikigod/adlc`) read to resolve the plugin. See [ADR 0003](./docs/adr/0003-adlc-claude-code-plugin.md) for the subdirectory-source assumption and Pre-GA checklist. |
 
 ## Design principles

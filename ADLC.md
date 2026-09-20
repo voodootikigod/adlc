@@ -536,11 +536,12 @@ human-judgment-is-irreplaceable, instead of human-as-tired-diff-scroller.
 
 ## Appendix C — The Missing Toolkit
 
-Tools that should exist and mostly don't. Same DNA as `adversarial-review` and
+The tools this lifecycle needs. Every tool below now ships as `packages/<name>` in
+this repository. Same DNA as `adversarial-review` and
 `skill-mining`: small, `npx`-runnable, zero-dependency where possible, fresh
 contexts by construction, deterministic exit codes (0 = pass, 2 = gate fails)
-so every one of them can sit in CI. Ordered by phase, with a build-priority
-verdict at the end.
+so every one of them can sit in CI. Ordered by phase; the order they were
+prioritised in is recorded at the end.
 
 ### C1. `spec-lint` — P1 gate
 
@@ -709,7 +710,9 @@ diff is six items. The human reviews intent-vs-behavior — the one judgment
 machines can't make — while the manifest (C11) proves the machines already
 did the rest.
 
-### Build priority (see also Appendix D tools)
+### Build priority (historical; see also Appendix D tools)
+
+Every tool in this table has shipped; it records the order they were prioritised in and why.
 
 | Tier | Tools | Why first |
 |------|-------|-----------|
@@ -720,8 +723,8 @@ did the rest.
 
 The through-line: `adversarial-review` made *review* independent and
 gate-shaped; `skill-mining` made *knowledge* persistent and load-shaped. The
-tier-one three make *trust* measurable (C8), *lessons* permanent (C9), and
-*rails* honest (C4) — the remaining unmeasured, unpersisted, gameable parts
+tier-one three made *trust* measurable (C8), *lessons* permanent (C9), and
+*rails* honest (C4) — at the time, the unmeasured, unpersisted, gameable parts
 of the loop.
 
 ---

@@ -1,7 +1,7 @@
 # Fleet Orchestration — `@adlc/fleet` (parallel ticket execution on the ADLC)
 
-Status: PROPOSED (P1 — pending G1 user approval; no implementation code may be
-written until the Approval line below is filled in)
+Status: SHIPPED — implemented as `packages/fleet` (#165). This is the approved P1 spec, kept as
+the design record; where it and the code differ, `packages/fleet/README.md` is current.
 Ticket: T42
 Approval: APPROVED by chris@voodootikigod.com 2026-07-12 (P1 G1). Gated by
 `adlc spec-lint` (14/14) + premortem (5 findings folded) + a 6-pass cross-model

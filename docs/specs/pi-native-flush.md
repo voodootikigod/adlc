@@ -1,6 +1,6 @@
 # Pi Native Flush — making adlc-pi robust, feature-complete, and native-feeling
 
-Status: PROPOSED (plan for review)
+Status: SHIPPED — Phases 1-5 merged into `plugins/adlc-pi` (#118, #121, #122, #125, #131). The to-do language below describes the state before that work.
 Branch: `pi-integration`
 Inputs: full plugin audit (live behavioral probes included), the six-integration capability
 benchmark, and a verified inventory of pi's extension surface as of

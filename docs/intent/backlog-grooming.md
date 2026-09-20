@@ -1,6 +1,7 @@
 # Intent — backlog grooming skill
 
-Status: **confirmed intent**, not yet specified or built. Produced by an
+Status: **confirmed intent**, since specified (`.adlc/specs/backlog-grooming.md`) and built as
+`packages/backlog-groom` (#1012, #1016). Produced by an
 `interview-me` session on 2026-09-11 and confirmed line-by-line by the repo owner.
 Downstream is `/adlc:adlc-spec` → ticket → lane. This document is the contract that
 spec work consumes; it is not itself a spec and carries no acceptance criteria.

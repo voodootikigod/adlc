@@ -1,6 +1,6 @@
 # Copilot Integration — Verified Contract Appendix (#240 probe)
 
-> Resolves the 🧪 claims in [copilot-integration-plan.md](../copilot-integration-plan.md)
+> Resolves the 🧪 claims in the Copilot integration plan (not part of this repository's main branch)
 > against a **real binary**, per issue #240. This appendix is the foundation
 > #242 (`plugins/adlc-copilot`) must build on. Where a plan assumption was
 > wrong, the verified fact here **overrides** it.

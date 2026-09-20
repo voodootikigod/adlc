@@ -2,7 +2,7 @@
 name: release-audit
 description: >-
   Production-readiness audit of the whole @adlc suite before cutting a release. Audits every
-  shipped artifact in parallel — all 31 packages and all 8 host plugins — plus four
+  shipped artifact in parallel — every package and every host plugin — plus four
   suite-level agents, hunting release-BLOCKING issues rather than general code smells. Also
   triages open GitHub issues against the code to say which still reproduce. Runs on the
   currently selected model; no cross-model provider. Triggers on "release audit", "are we

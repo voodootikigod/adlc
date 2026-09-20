@@ -8,7 +8,7 @@
 
 **Related:** [Issue autopilot (local substrate) spec](../specs/issue-autopilot-local.md),
 issue #237 (the original GitHub-Actions design, T55), [ADR-0010](./0010-adlc-fleet-orchestration.md)
-(fleet orchestration), [ADR-0007](./0007-cross-model-review.md) (cross-model review),
+(fleet orchestration), [ADR-0007](./0007-multimodel-adversarial-review.md) (cross-model review),
 PRs #877 / #880 (the spec), the fleet-extensions ticket T-01M0Z3G8MATGSZ0ECB6FAE0R08
 and the build ticket T-01M0Z3FN7SAS4HAH7CS63YQ0DH.
 
