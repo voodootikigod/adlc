@@ -26,7 +26,7 @@ npm install -g @adlc/model-ratchet   # or use npx
 ## Usage
 
 ```
-model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--json]
+model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 ```
 
 ### Flags
@@ -37,6 +37,7 @@ model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [
 | `--review-cmd <cmd>` | — | Shell command to run per file. Use `{file}` as placeholder. |
 | `--churn-limit <n>` | `1000` | Commit history depth for churn computation |
 | `--dry-run` | `false` | Print prosecution plan only; do not run review-cmd |
+| `--allow-empty` | `false` | Allow review mode to exit 0 when zero candidate files are selected |
 | `--json` | `false` | Machine-readable JSON output |
 | `--help` | — | Show help |
 
@@ -48,7 +49,7 @@ SCORE = churn(limit)[file] × (1 + inDegree)
 
 - **churn(limit)[file]** — number of distinct commits touching the file in the
   last `--churn-limit` commits (via `git log`).
-- **inDegree** — number of repo source files (`.mjs/.js/.ts/.tsx/.py`, walk
+- **inDegree** — number of repo source files (`.mjs/.js/.ts/.tsx/.py/.cjs/.mts/.cts/.jsx`, walk
   skips `node_modules/`, `.git/`, `dist/`) whose `import`/`require`/`from`
   specifiers resolve (relative resolution, try extensions) to this file.
 
@@ -105,7 +106,7 @@ Exit codes other than 0 or 2 cause an operational error (tool exits 1).
 |------|---------|
 | `0` | Success — plan printed or review run complete |
 | `1` | Operational error — not a git repo, bad `--review-cmd` exit code, bad args |
-| `2` | Not used by `model-ratchet` itself (reserved for gate-fail; review-cmd findings go to ledger) |
+| `2` | Gate failure — review mode with zero candidate files selected and `--allow-empty` not set |
 
 ## Examples
 

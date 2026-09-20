@@ -18,13 +18,14 @@ const { values } = parseArgs({
     'review-cmd': { type: 'string' },
     'churn-limit':{ type: 'string',  default: '1000' },
     'dry-run':    { type: 'boolean', default: false },
+    'allow-empty':{ type: 'boolean', default: false },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
 });
 
 if (values.help) {
-  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--json]
+  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 
 Scheduled re-prosecution of hot paths (ADLC C12) — every model release is a
 free re-audit. Identifies hotspot files (churn × criticality) and either
@@ -37,6 +38,7 @@ Options:
   --churn-limit <n>   Commit history depth for churn computation (default: 1000)
   --dry-run           Print plan only, do not run review-cmd (default when no
                       --review-cmd is supplied)
+  --allow-empty       Allow review mode to exit 0 when zero candidate files are selected
   --json              Machine-readable JSON output
   --help              Show this help
 
@@ -59,8 +61,7 @@ With --review-cmd:
 Exit codes:
   0  Success (plan printed or review run complete)
   1  Operational error (not a git repo, review-cmd bad exit, etc.)
-  2  Not used by this tool directly (reserved for gate-fail; review-cmd
-     findings are appended to ledger, not a gate-fail of model-ratchet itself)
+  2  Gate failure (review mode with zero candidate files selected and --allow-empty not set)
 
 ADLC phase: C12 / D1-D3 maintenance ratchet
 
@@ -152,6 +153,25 @@ if (dryRun) {
 // Review mode — run per file
 // ---------------------------------------------------------------------------
 
+if (selected.length === 0 && !values['allow-empty']) {
+  if (values.json) {
+    printJson({
+      mode: 'review',
+      top: topCount,
+      churnLimit,
+      reviewCmd,
+      selectedCount: 0,
+      files: [],
+      results: [],
+      totalFindings: 0,
+      totalRejected: 0,
+      operationalError: false,
+    });
+  }
+  process.stderr.write('warning: no source files selected for review\n');
+  process.exit(2);
+}
+
 const fileResults = [];
 let operationalError = false;
 
@@ -213,6 +233,7 @@ if (values.json) {
     top: topCount,
     churnLimit,
     reviewCmd,
+    selectedCount: selected.length,
     files: selected,
     results: fileResults.map(({ file, findings, rejected, exitCode, error }) => ({
       file,

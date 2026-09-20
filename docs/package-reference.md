@@ -59,7 +59,7 @@ adlc gate-manifest attest [--ticket id] [--dir path]
 adlc hollow-test --test-cmd "node --test test/" [options]
 adlc lesson-foundry [options]
 adlc merge-forecast [options]
-adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--json]
+adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 adlc model-router [--tickets <path>] [--floor <number>] [--json]
 adlc parallax --request "text"
 adlc parallax --file req.md
