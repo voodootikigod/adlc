@@ -111,3 +111,6 @@ criterion's mutation fixture is proven to BITE. The execution passes take ~25
 minutes; without the variable only the static checks run (the root suite and
 the mutation gate stay fast). Run the full gate before merging a change to this
 package.
+
+Mutation seams are test-only fault injection mechanisms maintained in module-private state by `lib/mutations.mjs`. The CLI entry point `bin/adlc-autopilot.mjs` invokes `sealSeams()` prior to dispatching commands, preventing any seam from being activated within a CLI process. The limits of this seal are explicit: only processes initiated through the binary entry point are sealed; callers importing `lib/` modules directly in-process (such as test runners) remain unsealed. Hostile code running in-process could already access sensitive keys from the environment directly, and sealing does not defend against pre-execution code such as `--require` or `--import` preloads or loader hooks that run before `main()`.
+
