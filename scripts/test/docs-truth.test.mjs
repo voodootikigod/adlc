@@ -16,10 +16,24 @@ const WIRED = {
   'claude-code': /adlc-hook-run\.mjs\s+handoff\b/.test(read('plugins/adlc-claude-code/hooks/hooks.json')),
   codex: hooksJsonMentions('plugins/adlc-codex/hooks/hooks.json', 'adlc-handoff-gate'),
 };
-const OPT_IN_FLAG = "env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1'";
+
+function isOptInGuarded(file, flagVar = 'CONTEXT_ROT_HANDOFF_ENABLED') {
+  const content = read(file);
+  if (!content.includes("env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1'")) return false;
+  const lines = content.split('\n');
+  const callIndices = lines
+    .map((l, i) => (/checkHandoff\s*\(/.test(l) && !l.includes('import') && !l.trim().startsWith('//') ? i : -1))
+    .filter((i) => i >= 0);
+  if (callIndices.length === 0) return false;
+  return callIndices.every((idx) => {
+    const prior = lines.slice(Math.max(0, idx - 10), idx).join('\n');
+    return new RegExp(`if\\s*\\(\\s*${flagVar}\\s*\\)`).test(prior);
+  });
+}
+
 const OPT_IN = {
-  pi: read('plugins/adlc-pi/lib/extension.mjs').includes(OPT_IN_FLAG),
-  opencode: read('plugins/adlc-opencode/index.mjs').includes(OPT_IN_FLAG),
+  pi: isOptInGuarded('plugins/adlc-pi/lib/extension.mjs'),
+  opencode: isOptInGuarded('plugins/adlc-opencode/index.mjs'),
 };
 const STATUS = /1\.11\.1/;
 const ISSUE = /#966|issues\/966/;
@@ -88,9 +102,16 @@ test('every list item or table row that names the handoff gate carries a status 
     for (let j = i + 1; j < lines.length && /^\s{2,}\S/.test(lines[j]); j++) item += `\n${lines[j]}`;
     if (!MARK.test(item)) failures.push(`${file}:${i + 1}`);
   }
-  // claude-code.mdx: a line naming the handoff deny must carry the marker (or not name it at all)
-  read('apps/docs/content/docs/integrations/claude-code.mdx').split('\n').forEach((l, i) => {
-    if (/handoff/i.test(l) && !MARK.test(l)) failures.push(`claude-code.mdx:${i + 1}`);
+  // claude-code.mdx: symmetric with WIRED['claude-code']
+  const ccLines = read('apps/docs/content/docs/integrations/claude-code.mdx').split('\n');
+  ccLines.forEach((l, i) => {
+    if (/handoff/i.test(l)) {
+      if (!WIRED['claude-code']) {
+        if (!MARK.test(l)) failures.push(`claude-code.mdx:${i + 1} lacks status marker while unwired`);
+      } else {
+        if (MARK.test(l)) failures.push(`claude-code.mdx:${i + 1} carries unwired status marker while hook is wired`);
+      }
+    }
   });
   assert.deepEqual(failures, []);
 });
@@ -136,8 +157,8 @@ test('ADLC.md Appendix C does not call shipped tools missing', () => {
   const adlc = read('ADLC.md');
   const names = [...adlc.matchAll(/^### C\d+\. `([a-z-]+)`/gm)].map((m) => m[1]);
   assert.equal(names.length, 14);
-  const allShip = names.every((n) => existsSync(join(ROOT, 'packages', n, 'package.json')));
-  if (!allShip) return;
+  const missing = names.filter((n) => !existsSync(join(ROOT, 'packages', n, 'package.json')));
+  assert.deepEqual(missing, []);
   const appendix = section(adlc, /^## Appendix C/);
   assert.doesNotMatch(firstBlock(appendix), /mostly don't/);
   assert.match(section(adlc, /^### Build priority/).concat(/^### Build priority.*$/m.exec(adlc)[0]), /historical|as built|shipped/i);
@@ -155,9 +176,23 @@ test('status headers of shipped designs do not say proposed or pending', () => {
   ];
   const failures = [];
   for (const [file, impl] of docs) {
-    if (!existsSync(join(ROOT, impl))) continue;
-    const status = read(file).split('\n').slice(0, 12).find((l) => /Status:?\**/i.test(l)) ?? '';
-    if (/PROPOSED|pending|not yet/i.test(status)) failures.push(`${file}: ${status.trim()}`);
+    if (!existsSync(join(ROOT, impl))) {
+      failures.push(`${file}: claimed implementation path ${impl} does not exist on disk`);
+      continue;
+    }
+    const text = read(file);
+    const statusMatch = /(?:^|\n)(>?\s*\*?\*?Status:?\*?\*?[^\n]*(?:\n(?![#\n])[^\n]+)*)/i.exec(text);
+    const status = statusMatch ? statusMatch[1] : '';
+    if (!status) {
+      failures.push(`${file}: no Status header found in top 12 lines`);
+      continue;
+    }
+    if (/PROPOSED|pending|not yet/i.test(status)) {
+      failures.push(`${file}: status still says proposed/pending/not yet: ${status.trim()}`);
+    }
+    if (!status.includes(impl)) {
+      failures.push(`${file}: status line does not cite implementing path ${impl}: ${status.trim()}`);
+    }
   }
   assert.deepEqual(failures, []);
 });
