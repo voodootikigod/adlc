@@ -3,7 +3,7 @@ title: core
 description: Documentation for the core tool in the ADLC toolkit.
 ---
 
-# @adlc/core — FROZEN CONTRACT
+# @adlc/core
 
 **ADLC Phase:** Shared foundation
 
@@ -23,10 +23,11 @@ flowchart TD
 
 
 
-Shared library for all ADLC tools. **This package is frozen during tool
-builds (rails).** Tools import from it; tools never modify it. If the API is
-insufficient for your tool, work around it inside your own package and note
-the gap in your README — do not edit core.
+Shared library for all ADLC tools. Tools import from it and never keep a
+private copy of what it exports. When a second package needs a helper, promote
+it here: add a test in `packages/core/test/`, a declaration in `index.d.ts`,
+and no new runtime dependency. A defect in a core primitive is fixed here, with
+a regression test. The full rule is CONVENTIONS.md hard rule 2.
 
 Import surface (from a tool at `packages/<name>/`):
 

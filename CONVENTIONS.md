@@ -32,20 +32,25 @@ package.json template:
 
 1. **Zero runtime dependencies.** Node 18+ built-ins and `@adlc/core` only.
    Import core via relative path: `import { … } from '../../core/index.mjs'`.
-2. **Core is frozen to ADDITIONS.** Never *add* to `packages/core/`. If core
-   lacks something, implement locally in your `lib/` and note the gap in
-   your README under "Core gaps".
+2. **Shared helpers live in core.** When a second package needs a helper,
+   promote it into `packages/core/` and import it from there: never keep a
+   copy, and never re-implement something core already exports. An addition
+   to core ships with a test in `packages/core/test/` and a declaration in
+   `packages/core/index.d.ts`, and adds no runtime dependency to core.
+   Dependencies point one way: core imports only `@adlc/tickets`, and
+   `@adlc/gate-manifest` imports core. A helper that needs a package which
+   imports core is promoted into that package instead, on the same terms.
 
-   **A defect in an existing core primitive is fixed in core**, not worked
-   around locally. Core exists so that one implementation is correct for every
-   caller; patching around it leaves the other callers broken and buries the
-   finding in one package's source. Worked example — #1005: `fence()`'s
-   delimiter was forgeable by the content it was fencing. It was found once,
-   patched locally in `@adlc/autopilot`, and seventeen other call sites kept
-   the defect until it was fixed in core. A core defect fix must ship a
-   regression test in `packages/core/test/` and name the issue it closes.
+   **A defect in a core primitive is fixed in core**, not worked around
+   locally: a local patch leaves every other caller broken. Worked example —
+   #1005: `fence()`'s delimiter was forgeable by the content it fenced. It
+   was patched locally in `@adlc/autopilot`, and seventeen other call sites
+   kept the defect until it was fixed in core. A core defect fix ships a
+   regression test in `packages/core/test/` and names the issue it closes.
 3. **Scope discipline.** Write ONLY inside your own `packages/<name>/`.
-   Never touch other packages, ADLC.md, root files, or `.adlc/`.
+   Never touch other packages, ADLC.md, root files, or `.adlc/`. The one
+   exception is a helper promotion under rule 2, made as its own change,
+   which touches core and the packages that drop their copy.
 4. **Exit codes:** 0 = gate passes · 1 = operational error (bad input,
    missing binary, network) · 2 = gate fails. Use `pass/gateFail/opError`
    from core. CI gating depends on this.

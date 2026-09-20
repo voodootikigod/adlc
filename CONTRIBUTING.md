@@ -66,8 +66,10 @@ These rules from [CONVENTIONS.md](./CONVENTIONS.md) are what make the toolkit co
 PRs that violate them will be asked to change:
 
 1. **Zero runtime dependencies.** Node 18+ built-ins and `@adlc/core` only.
-2. **`@adlc/core` is frozen.** Never edit `packages/core/`. If core lacks something,
-   implement it locally in your `lib/` and note the gap in your README under "Core gaps".
+2. **Shared helpers live in `@adlc/core`.** When a second package needs a helper, promote
+   it into `packages/core/` (test in `packages/core/test/`, no new runtime dependency)
+   instead of copying it, and never re-implement something core exports. A defect in a
+   core primitive is fixed in core.
 3. **Scope discipline.** A change to one tool stays inside `packages/<name>/`. Don't
    touch other packages, `ADLC.md`, or root files in the same PR unless that *is* the change.
 4. **Exit codes:** `0` = gate passes · `1` = operational error · `2` = gate fails. Use
