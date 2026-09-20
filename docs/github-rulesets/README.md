@@ -18,7 +18,7 @@ JSON so the configuration lives in version control instead of only in the GitHub
 | Rule | Effect |
 | --- | --- |
 | `pull_request` | No direct pushes — changes land via PR. Stale approvals dismissed on new commits; all review threads must be resolved; squash-only merges. |
-| `required_status_checks` (strict) | CI `test (18)`, `test (20)`, `test (22)` must pass and the branch must be up to date before merge. |
+| `required_status_checks` (strict) | CI `test (18)`, `test (20)`, `test (22)`, `rails-guard`, `mutation-gate`, `gate` must pass and the branch must be up to date before merge. The list of required checks is declared in `docs/ci/required-gates.json`; a test keeps this file and that declaration equal, and `scripts/gate-liveness.mjs` compares the live ruleset with it. |
 | `required_linear_history` | No merge commits — pairs with squash merges. |
 | `non_fast_forward` | Blocks force pushes. |
 | `deletion` | Blocks branch deletion. |

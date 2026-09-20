@@ -1,0 +1,66 @@
+{
+  "branch": "main",
+  "pullRequestReview": "none",
+  "workflows": {
+    ".github/workflows/ci.yml": {
+      "test": {
+        "blocking": true,
+        "contexts": [
+          "test (18)",
+          "test (20)",
+          "test (22)"
+        ]
+      },
+      "opencode-live-latest": {
+        "blocking": false,
+        "why": "advisory drift canaries, continue-on-error"
+      },
+      "codex-live-latest": {
+        "blocking": false,
+        "why": "advisory drift canaries, continue-on-error"
+      },
+      "pre-ga-gate": {
+        "blocking": false,
+        "why": "all three ADR 0003 items it greps for are checked, so it cannot fail; slated for removal"
+      },
+      "rails-guard": {
+        "blocking": true,
+        "contexts": [
+          "rails-guard"
+        ]
+      },
+      "mutation-gate": {
+        "blocking": true,
+        "contexts": [
+          "mutation-gate"
+        ]
+      }
+    },
+    ".github/workflows/cross-model-gate.yml": {
+      "gate": {
+        "blocking": true,
+        "contexts": [
+          "gate"
+        ]
+      }
+    },
+    ".github/workflows/actionlint.yml": {
+      "actionlint": {
+        "blocking": false,
+        "why": "workflow lint, advisory"
+      }
+    },
+    ".github/workflows/router-drift.yml": {
+      "router-drift": {
+        "blocking": false,
+        "why": "the same drift assertion already runs inside the required test job via scripts/test/router-drift.test.mjs"
+      }
+    },
+    ".github/workflows/ticket-store-platform.yml": {
+      "ticket-store-platform": {
+        "blocking": false,
+        "why": "cross-OS matrix for one package, advisory"
+      }
+    }
+  }
+}

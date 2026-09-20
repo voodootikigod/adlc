@@ -22,12 +22,11 @@ name: cross-model-gate
 #   • Keep `permissions:` at the minimum (contents: read). pull_request_target defaults to write.
 #   • Do not add steps that echo secrets or pass ${{ secrets.* }} to anything touching ./_pr.
 #
-# ENFORCEMENT (do this to make the gate binding): mark the `gate` job below as a REQUIRED status
-# check via branch protection / a ruleset on `main`. It fails closed (exit 2) on a missing or
-# FORGED (unsigned / wrong-key / rewritten-sig) attestation, so as a required check it BLOCKS the
-# merge on those. Until that protection is configured this repo has none, so the gate is only a
-# trustworthy SIGNAL the maintainer merges on — an intentional fallback, not the end state. It
-# runs as a separate workflow (not folded into the required test job) precisely so it can hold
+# ENFORCEMENT: whether the `gate` job below is declared merge-blocking is recorded in
+# docs/ci/required-gates.json; scripts/gate-liveness.mjs checks the live ruleset against
+# that declaration. It fails closed (exit 2) on a missing or FORGED (unsigned / wrong-key /
+# rewritten-sig) attestation, so when required by branch protection it blocks merges. It
+# runs as a separate workflow (not folded into the test job) precisely so it can hold
 # the key safely; that separation is compatible with making it required.
 #
 # TRUNCATION CLOSED (#355, #354 F1 follow-up — opt-in, THIS REPO ONLY, not a required ADLC

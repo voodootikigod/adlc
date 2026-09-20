@@ -29,9 +29,12 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "test (18)" },
-          { "context": "test (20)" },
-          { "context": "test (22)" }
+          { "context": "test (18)", "integration_id": 15368 },
+          { "context": "test (20)", "integration_id": 15368 },
+          { "context": "test (22)", "integration_id": 15368 },
+          { "context": "rails-guard", "integration_id": 15368 },
+          { "context": "mutation-gate", "integration_id": 15368 },
+          { "context": "gate", "integration_id": 15368 }
         ]
       }
     }

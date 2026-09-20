@@ -2,18 +2,14 @@ name: Router drift
 
 # The single source of truth for the six ADLC phase routers is
 # scripts/router/router-model.mjs; the committed router files are rendered from it by
-# scripts/router/gen-routers.mjs. This workflow is the permanent, required gate that
-# fails a PR whose committed router file drifted from the canonical source (someone
+# scripts/router/gen-routers.mjs. This workflow detects
+# a PR whose committed router file drifted from the canonical source (someone
 # hand-edited a generated file instead of the model, or forgot to regenerate).
 #
-# ============================================================
-# ACTION REQUIRED — GITHUB REPOSITORY SETTINGS
-# ============================================================
-# Add "router-drift" as a required status check in
-# Settings > Branches > Branch protection rules for main. A failing-but-not-required
-# check does not block a merge (premortem finding #3: the drift check must be required,
-# not advisory).
-# ============================================================
+# Whether this job is declared merge-blocking is recorded in
+# docs/ci/required-gates.json; scripts/gate-liveness.mjs checks the live ruleset
+# against that declaration. The same drift assertion also runs inside the
+# required test job via scripts/test/router-drift.test.mjs.
 
 on:
   push:
