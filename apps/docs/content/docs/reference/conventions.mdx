@@ -30,11 +30,14 @@ The `package.json` is uniform: `@adlc/<name>`, `"type": "module"`, a single `bin
 
 1. **Zero runtime dependencies.** Node 18+ built-ins and `@adlc/core` only. Core is
    imported by relative path (`../../core/index.mjs`).
-2. **Core is frozen.** Never edit anything under `packages/core/`. If core lacks
-   something, implement it locally in your `lib/` and note the gap in your README under
-   "Core gaps."
+2. **Shared helpers live in core.** When a second package needs a helper, promote it into
+   `packages/core/` (test in `packages/core/test/`, no new runtime dependency) instead of
+   keeping a copy, and never re-implement something core exports. A defect in a core
+   primitive is fixed in core, not worked around locally.
 3. **Scope discipline.** Write ONLY inside your own `packages/<name>/`. Never touch other
-   packages, `ADLC.md`, root files, or `.adlc/`.
+   packages, `ADLC.md`, root files, or `.adlc/`. The one exception is a helper promotion
+   under rule 2, made as its own change, which touches core and the packages that drop
+   their copy.
 4. **Exit codes are the contract.** `0` = gate passes, `1` = operational error, `2` = gate
    fails, produced with `pass` / `opError` / `gateFail` from core. CI gating depends on
    this. See [Exit Codes](/docs/reference/exit-codes).

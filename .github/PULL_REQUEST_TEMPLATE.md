@@ -25,7 +25,7 @@ Keep PRs focused — one logical change per PR.
 - [ ] I read [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md) and [CONVENTIONS.md](../blob/main/CONVENTIONS.md).
 - [ ] Changes stay inside a single `packages/<name>/` (or are an intentional cross-cutting change).
 - [ ] No new runtime dependencies (Node built-ins + `@adlc/core` only).
-- [ ] `packages/core/` is unchanged (it is frozen).
+- [ ] No helper is copied from `@adlc/core` or another package; anything added to `packages/core/` has a test in `packages/core/test/`.
 - [ ] Exit codes follow the contract (0 = pass, 1 = op error, 2 = gate fail).
 - [ ] LLM-backed changes support `--prompt-only`; output supports `--json`.
 - [ ] Added/updated tests; they run offline and leave no trace.

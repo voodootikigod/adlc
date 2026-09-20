@@ -1,20 +1,21 @@
 ---
 title: core
-description: "The frozen shared foundation every ADLC tool imports: exit-code helpers, provider selection, and the ledger, ticket, rail, and mutation primitives."
+description: "The shared foundation every ADLC tool imports: exit-code helpers, provider selection, and the ledger, ticket, rail, and mutation primitives."
 ---
 
 # core
 
-**Package:** `@adlc/core` · **Role:** the shared library every gate imports · **Status:** frozen contract.
+**Package:** `@adlc/core` · **Role:** the shared library every gate imports.
 
 ## What it is
 
-`@adlc/core` is the foundation the whole toolkit stands on. Every gate imports
-from it; no gate modifies it. It is a **frozen contract during tool builds**: a
-rail. If a tool needs something core doesn't offer, it works around the gap in
-its own package and notes it in its README rather than editing core. That
-discipline is what keeps twenty-plus independently published tools behaving
-identically at their boundaries.
+`@adlc/core` is the foundation the whole toolkit stands on: every gate imports
+from it, and none keeps a private copy of what it exports. When a second tool
+needs a helper, the helper is promoted into core, with a test and no new
+runtime dependency, rather than copied; a defect in a core primitive is fixed
+in core so every caller gets the fix. That discipline is what keeps
+twenty-plus independently published tools behaving identically at their
+boundaries.
 
 Downstream tools inherit five things from core: the exit-code convention, LLM
 provider selection, the append-only ledger, the ticket/rail/glob engine, and the
@@ -85,5 +86,5 @@ The rest of core is the deterministic machinery the gates share:
 
 ## Go deeper
 
-The full import surface and frozen-contract notes:
+The full import surface:
 [packages/core](https://github.com/voodootikigod/adlc/tree/main/packages/core).
