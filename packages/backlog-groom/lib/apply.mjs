@@ -21,14 +21,6 @@ import { executeActions } from './execute.mjs';
 import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed, assertPolicyUnchanged } from './floor.mjs';
 
 /**
- * Actions the emitted set proposes, in the shape the gate and executor expect.
- *
- * `close` is derived from a `fixed` verdict; the set's own `proposals` carry
- * relabels and relations. An issue with no contentHash yields no action at all —
- * §2.2 leaves it with no revision to bind a verdict to, so it can neither be
- * gated nor replay-protected.
- */
-/**
  * Action classes the writer can actually perform.
  *
  * Narrower than ACTION_CLASSES on purpose: the FLOOR must know about every class
@@ -39,6 +31,14 @@ import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed, asser
  */
 export const EXECUTABLE_ACTIONS = Object.freeze(['close', 'relabel']);
 
+/**
+ * Actions the emitted set proposes, in the shape the gate and executor expect.
+ *
+ * `close` is derived from a `fixed` verdict; the set's own `proposals` carry
+ * relabels and relations. An issue with no contentHash yields no action at all —
+ * §2.2 leaves it with no revision to bind a verdict to, so it can neither be
+ * gated nor replay-protected.
+ */
 export function actionsFromSet(set) {
   const out = [];
   const byNumber = new Map((set?.issues ?? []).map((i) => [i.number, i]));
@@ -232,7 +232,7 @@ export function revalidateRelabel(action, { issue, classified, recomputed, profi
  *   each review is bound to one issue rather than to the whole set
  * @param {object} o.gh - injected writer
  */
-export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, runReview, gh, floorWideningAuthorized = false, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null, key = null } = {}) {
+export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, runReview, gh, revision = null, persist = null, fetchIssue = null, io = {}, self = null, baseFrozenPaths = null, key = null } = {}) {
   // A set describes ONE revision. Acting on a set generated against a different
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
@@ -266,9 +266,9 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
   // burned every action's one shot and then refused the run, leaving those
   // revisions permanently demoted for a recoverable config error.
   assertFloor(profile.autonomyFloor);
-  assertFloorNotWidened({ base: baseFloor, head: profile.autonomyFloor, authorized: floorWideningAuthorized });
+  assertFloorNotWidened({ base: baseFloor, head: profile.autonomyFloor });
   if (baseFrozenPaths !== null) {
-    assertFrozenPathsNotNarrowed({ base: baseFrozenPaths, head: profile.frozenPaths ?? [], authorized: floorWideningAuthorized });
+    assertFrozenPathsNotNarrowed({ base: baseFrozenPaths, head: profile.frozenPaths ?? [] });
   }
   // The rest of the policy is the base's too. The reviewer and the sanctioned
   // relabel targets are authorization terms, so a working copy that changes them
@@ -311,7 +311,6 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
     key,
     floor: profile.autonomyFloor,
     baseFloor,
-    floorWideningAuthorized,
     ledger,
     gh,
     onApplied: persist,

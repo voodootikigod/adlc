@@ -30,11 +30,11 @@
  */
 export const CACHE_SCHEMA_VERSION = 2;
 
-/** Unambiguous composite key: length-delimited so two fields cannot alias. */
 /** The only verdicts and routes a cache entry may claim. */
 const VALID_VERDICTS = new Set(['valid', 'fixed', 'moved', 'unverifiable', 'unverified']);
 const VALID_ROUTES = new Set(['mechanical', 'model', 'unverifiable']);
 
+/** Unambiguous composite key: length-delimited so two fields cannot alias. */
 export function cacheKeyFor({ updatedAt, contentHash }) {
   const u = String(updatedAt ?? '');
   const c = contentHash == null ? '' : String(contentHash);

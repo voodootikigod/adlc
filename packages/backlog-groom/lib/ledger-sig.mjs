@@ -9,12 +9,10 @@
  * close with no reviewer ever having run. An HMAC the caller cannot forge is what
  * makes the record mean something.
  *
- * NOT `@adlc/gate-manifest`'s `sign.mjs`, deliberately. That package's `exports`
- * map is root-only and re-exports one function, so reaching its signing helpers
- * would mean widening the public surface of an ENFORCEMENT_PREFIXES package —
- * making every future ledger change a trust-root change, with the signing
- * ceremony that implies. The primitive is three lines of `node:crypto`; the
- * coupling would be permanent.
+ * NOT `@adlc/gate-manifest`'s `signEntry`, deliberately. That function signs the
+ * manifest's fixed field set, so a ledger entry would canonicalise to `{}` and
+ * every entry would carry the same signature; it also has no domain prefix.
+ * Only the key variable (`ADLC_MANIFEST_KEY`) is shared.
  *
  * DOMAIN-SEPARATED for the same reason the ticket store and the active store use
  * distinct domain prefixes: a signature over one kind of record must never verify
@@ -22,25 +20,10 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { canonicalJson } from './canonical-json.mjs';
 
 /** Prefix bound into every ledger signature. Changing it invalidates them all. */
 export const LEDGER_SIG_DOMAIN = 'adlc:backlog-groom-ledger:v1\0';
-
-/**
- * Deterministic JSON: object keys sorted, recursively.
- *
- * `JSON.stringify` preserves insertion order, so the same entry written by two
- * code paths could canonicalise differently and fail to verify. Sorting makes the
- * bytes a function of the CONTENT alone.
- */
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const keys = Object.keys(value).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value === undefined ? null : value);
-}
 
 /**
  * The bytes a signature covers: the whole entry except `sig` itself.

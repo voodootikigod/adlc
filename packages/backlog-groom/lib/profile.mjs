@@ -17,6 +17,8 @@
  * default and only a deliberate `[]` may widen.
  */
 
+import { opError } from './op-error.mjs';
+
 /** Profile schema versions this build understands. */
 export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1]);
 
@@ -42,9 +44,6 @@ const PRIORITY_KEYS = new Set(['high', 'medium', 'low']);
 const PROVIDERS_KEYS = new Set(['decider', 'reviewer']);
 const UNIT_KEYS = new Set(['name', 'paths']);
 
-function opError(message) {
-  return Object.assign(new Error(message), { isOpError: true });
-}
 
 function isPlainObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);

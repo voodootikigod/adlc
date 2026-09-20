@@ -1,9 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { artifactDigest, buildActionArtifact, entryBindsAction, gateAction, ledgerApproves } from '../lib/gate.mjs';
 import { ledgerEntryBytes, signLedgerEntry } from '../lib/ledger-sig.mjs';
-import { renderComment } from '../lib/execute.mjs';
-import { assertPolicyUnchanged } from '../lib/floor.mjs';
+import { executeActions, renderComment } from '../lib/execute.mjs';
+import { assertFloorNotWidened, assertFrozenPathsNotNarrowed, assertPolicyUnchanged } from '../lib/floor.mjs';
+import { applyRun } from '../lib/apply.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const libDir = join(__dirname, '..', 'lib');
+const binDir = join(__dirname, '..', 'bin');
 
 const KEY = 'k'.repeat(32);
 const CLOSE = { number: 705, action: 'close', contentHash: 'c0ffee', evidence: 'lib/a.mjs:2 no longer contains the cited line' };
@@ -244,4 +253,164 @@ test('golden: assertPolicyUnchanged key order, units null/undefined, and provide
     () => assertPolicyUnchanged({ base, head: { ...head, providers: { reviewer: 'x', decider: 'd' } } }),
     (err) => err.isOpError === true && /providers/.test(err.message)
   );
+});
+
+test('docs: no doc block in lib/ or bin/ is directly followed by another', () => {
+  const libFiles = readdirSync(libDir).filter((f) => f.endsWith('.mjs')).map((f) => join(libDir, f));
+  const binFiles = readdirSync(binDir).filter((f) => f.endsWith('.mjs')).map((f) => join(binDir, f));
+  const files = [...libFiles, ...binFiles];
+
+  for (const file of files) {
+    const content = readFileSync(file, 'utf8');
+    const stacked = content.match(/\*\/[ \t]*\n[ \t]*\/\*\*/g);
+    assert.equal(stacked, null, `${file} contains stacked doc blocks directly followed by another`);
+  }
+});
+
+test('docs: named functions are each immediately preceded by a doc block', () => {
+  const fns = [
+    'ledgerApproves',
+    'entryBindsSlot',
+    'entryBindsAction',
+    'buildActionArtifact',
+    'actionsFromSet',
+    'cacheKeyFor',
+    'makeGhWriter',
+    'baseProfileFromGit',
+    'baseFloorFromGit',
+    'acquireApplyLock',
+    'renderUsage',
+  ];
+
+  const libFiles = readdirSync(libDir).filter((f) => f.endsWith('.mjs')).map((f) => join(libDir, f));
+
+  for (const fn of fns) {
+    let found = false;
+    for (const file of libFiles) {
+      const content = readFileSync(file, 'utf8');
+      const re = new RegExp(`/\\*\\*[\\s\\S]*?\\*/\\s*(?:export\\s+)?(?:async\\s+)?function\\s+${fn}\\b`);
+      if (re.test(content)) {
+        found = true;
+        break;
+      }
+    }
+    assert.ok(found, `Expected ${fn} to be immediately preceded by a doc block in lib/`);
+  }
+});
+
+test('structure: gate.mjs states sealLedgerEntry and entry?.contentHash exactly once', () => {
+  const content = readFileSync(join(libDir, 'gate.mjs'), 'utf8');
+  const sealMatches = content.match(/sealLedgerEntry\(/g) || [];
+  assert.equal(sealMatches.length, 1, `Expected exactly 1 sealLedgerEntry( in gate.mjs, found ${sealMatches.length}`);
+  const hashMatches = content.match(/entry\?\.contentHash/g) || [];
+  assert.equal(hashMatches.length, 1, `Expected exactly 1 entry?.contentHash in gate.mjs, found ${hashMatches.length}`);
+});
+
+test('structure: no line is only empty string in gate.mjs or execute.mjs', () => {
+  for (const file of ['gate.mjs', 'execute.mjs']) {
+    const lines = readFileSync(join(libDir, file), 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      assert.notEqual(lines[i].trim(), "'',", `Line ${i + 1} in ${file} is only '',`);
+    }
+  }
+});
+
+test('structure: verifyLedgerEntry does not appear in execute.mjs', () => {
+  const content = readFileSync(join(libDir, 'execute.mjs'), 'utf8');
+  assert.equal(content.includes('verifyLedgerEntry'), false, 'verifyLedgerEntry should not appear in execute.mjs');
+});
+
+test('waiver: assertFloorNotWidened throws isOpError even with authorized: true', () => {
+  assert.throws(
+    () => assertFloorNotWidened({ base: ['close'], head: [], authorized: true }),
+    (err) => err.isOpError === true
+  );
+});
+
+test('waiver: assertFrozenPathsNotNarrowed throws isOpError even with authorized: true', () => {
+  assert.throws(
+    () => assertFrozenPathsNotNarrowed({ base: ['a/**'], head: [], authorized: true }),
+    (err) => err.isOpError === true
+  );
+});
+
+test('waiver: applyRun throws WIDER isOpError with floorWideningAuthorized: true', () => {
+  const basePolicy = {
+    providers: { reviewer: 'r', decider: 'd' },
+    labels: { priority: { high: 'a', low: 'b' }, areaPrefix: 'area:' },
+    units: [],
+  };
+  assert.throws(
+    () =>
+      applyRun({
+        set: { issues: [] },
+        basePolicy,
+        profile: { ...basePolicy, autonomyFloor: [] },
+        baseFloor: ['close'],
+        floorWideningAuthorized: true,
+      }),
+    (err) => err.isOpError === true && /WIDER/.test(err.message)
+  );
+});
+
+test('waiver: executeActions throws WIDER isOpError with floorWideningAuthorized: true', () => {
+  assert.throws(
+    () =>
+      executeActions({
+        actions: [],
+        floor: [],
+        baseFloor: ['close'],
+        floorWideningAuthorized: true,
+      }),
+    (err) => err.isOpError === true && /WIDER/.test(err.message)
+  );
+});
+
+test('helpers: canonical-json exports canonicalJson matching byte pins', async () => {
+  const { canonicalJson } = await import('../lib/canonical-json.mjs');
+  assert.equal(canonicalJson(undefined), 'null');
+  assert.equal(canonicalJson(null), 'null');
+  assert.equal(canonicalJson('x'), '"x"');
+  assert.equal(canonicalJson(7), '7');
+  assert.equal(canonicalJson(true), 'true');
+  assert.equal(canonicalJson([1, [2, undefined, null]]), '[1,[2,null,null]]');
+  assert.equal(canonicalJson({ b: 1, a: 2 }), '{"a":2,"b":1}');
+  assert.equal(canonicalJson({ a: undefined }), '{"a":null}');
+  assert.equal(canonicalJson({ z: { y: [{ b: 1, a: undefined }] } }), '{"z":{"y":[{"a":null,"b":1}]}}');
+});
+
+test('helpers: op-error exports opError returning isOpError tagged Error', async () => {
+  const { opError } = await import('../lib/op-error.mjs');
+  const err = opError('m');
+  assert.ok(err instanceof Error);
+  assert.equal(err.message, 'm');
+  assert.equal(err.isOpError, true);
+});
+
+test('helpers: single canonicalJson, no canonical(, single opError across lib', () => {
+  const libFiles = readdirSync(libDir).filter((f) => f.endsWith('.mjs')).map((f) => join(libDir, f));
+  let canonicalJsonCount = 0;
+  let canonicalCount = 0;
+  let opErrorCount = 0;
+
+  for (const file of libFiles) {
+    const content = readFileSync(file, 'utf8');
+    const cj = content.match(/function\s+canonicalJson\b/g);
+    if (cj) canonicalJsonCount += cj.length;
+    const c = content.match(/function\s+canonical\(/g);
+    if (c) canonicalCount += c.length;
+    const oe = content.match(/function\s+opError\b/g);
+    if (oe) opErrorCount += oe.length;
+  }
+
+  assert.equal(canonicalJsonCount, 1, `Expected exactly 1 function canonicalJson across lib/, found ${canonicalJsonCount}`);
+  assert.equal(canonicalCount, 0, `Expected 0 function canonical( across lib/, found ${canonicalCount}`);
+  assert.equal(opErrorCount, 1, `Expected exactly 1 function opError across lib/, found ${opErrorCount}`);
+});
+
+test('helpers: every export of execute.mjs is a function', async () => {
+  const execute = await import('../lib/execute.mjs');
+  for (const [name, val] of Object.entries(execute)) {
+    assert.equal(typeof val, 'function', `${name} in execute.mjs must be a function, got ${typeof val}`);
+  }
 });

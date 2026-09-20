@@ -22,21 +22,7 @@
 
 import { assertFloor, assertFloorNotWidened, blockedByFloor } from './floor.mjs';
 import { ledgerApproves, gateKey, ledgerEntryFor } from './gate.mjs';
-import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
-
-/**
- * The exported functions that can cause a GitHub write.
- *
- * DECLARED, not inferred, and asserted by the floor suite: every exported
- * function must appear here or in PURE_HELPERS. The weak form of "one validator,
- * every entry point" enumerates the callers that exist today and says nothing
- * about the third one added next year; forcing every new export to be classified
- * is the version that still works after everyone who wrote it has moved on.
- */
-export const WRITE_ENTRY_POINTS = Object.freeze(['executeActions']);
-
-/** Exported functions that cannot write — pure decisions and formatting. */
-export const PURE_HELPERS = Object.freeze(['marker', 'parseMarker', 'planAction', 'renderComment']);
+import { sealLedgerEntry } from './ledger-sig.mjs';
 
 const MARKER_PREFIX = 'backlog-groom';
 
@@ -72,9 +58,7 @@ function neutraliseMarkers(text) {
 export function renderComment(action) {
   return [
     `**backlog-groom — ${action.action}**`,
-    '',
     neutraliseMarkers(action.evidence ?? '(no evidence recorded)'),
-    '',
     action.gate?.reviewer ? `Reviewed by \`${action.gate.reviewer}\` (distinct from the deciding provider).` : '',
     marker(action.number, action.contentHash, action.action),
   ]
@@ -109,16 +93,15 @@ export function planAction(action, { floor = [], ledger = null, key = null } = {
  * @param {object} o.ledger - the gate ledger; the ONLY source of authorization
  * @param {string[]} o.floor - the working-copy autonomy floor
  * @param {string[]|null} o.baseFloor - the floor at the MERGE BASE (§3.7/AC24)
- * @param {boolean} [o.floorWideningAuthorized] - explicit trust-root authorization
  * @param {object} o.gh - `{comments(number), comment(number, body), apply(number, action)}`
  * @returns {{executed:object[], demoted:object[], failed:object[]}}
  */
-export function executeActions({ actions = [], floor = [], baseFloor = null, floorWideningAuthorized = false, ledger = null, gh, onApplied = null, self = null, recheck = null, key = null } = {}) {
+export function executeActions({ actions = [], floor = [], baseFloor = null, ledger = null, gh, onApplied = null, self = null, recheck = null, key = null } = {}) {
   // Validate and compare BEFORE any write. A run must not apply its first
   // action and discover the policy problem on its second — a half-applied sweep
   // under a floor nobody authorised is worse than a refused one.
   assertFloor(floor);
-  assertFloorNotWidened({ base: baseFloor, head: floor, authorized: floorWideningAuthorized });
+  assertFloorNotWidened({ base: baseFloor, head: floor });
 
   const executed = [];
   const demoted = [];

@@ -72,20 +72,6 @@ export function saveCache(path, cache, io = {}) {
 }
 
 /**
- * The autonomy floor as it exists at the MERGE BASE with the default branch.
- *
- * §3.7/AC24: the comparison that makes the floor a floor is against the base,
- * not the checked-out file. The working copy is exactly what someone widening
- * the floor controls, so a check reading only the working copy validates the
- * attacker's own claim.
- *
- * Returns `null` when the base profile cannot be read — and `null` is NOT an
- * empty floor. `assertFloorNotWidened` refuses to act on a null base precisely
- * so that deleting the profile at the base cannot become the cheapest widening.
- *
- * @returns {string[]|null}
- */
-/**
  * The head commit of the REMOTE's default branch, or null.
  *
  * THE BASELINE MUST NOT COME FROM A LOCAL REF (#1036). The floor is compared
@@ -165,6 +151,14 @@ export function resolveRemoteBaseSha({ run = defaultGitRun } = {}) {
   return sha;
 }
 
+/**
+ * The parsed profile at the merge base with the remote's default branch,
+ * or the default profile when the file is provably absent there.
+ *
+ * @param {string} profilePath
+ * @param {object} [opts]
+ * @returns {object|null} null when the base cannot be read
+ */
 export function baseProfileFromGit(profilePath, { run = defaultGitRun } = {}) {
   // Anchored to the remote, never to a local ref — see resolveRemoteBaseSha.
   const remoteSha = resolveRemoteBaseSha({ run });
@@ -320,14 +314,6 @@ export function saveLedger(path, ledger, io = {}) {
   }
 }
 
-/**
- * Take an exclusive lock for the apply transaction, or throw.
- *
- * `mkdir` is atomic, so exactly one process wins. Without it two runs starting
- * together both read a ledger with no entry for a revision, both obtain an
- * approval for it, and both comment and close the same issue — the one-shot rule
- * holding within a process and not across them.
- */
 /** How long an owner-less lock may sit before it is presumed abandoned. */
 export const STALE_LOCK_MS = 60 * 60 * 1000;
 
@@ -366,6 +352,14 @@ function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
   }
 }
 
+/**
+ * Take an exclusive lock for the apply transaction, or throw.
+ *
+ * `mkdir` is atomic, so exactly one process wins. Without it two runs starting
+ * together both read a ledger with no entry for a revision, both obtain an
+ * approval for it, and both comment and close the same issue — the one-shot rule
+ * holding within a process and not across them.
+ */
 export function acquireApplyLock(path, io = {}) {
   const {
     mkdir = mkdirSync,
@@ -459,7 +453,20 @@ export function acquireApplyLock(path, io = {}) {
   };
 }
 
-/** Just the floor, for callers that only need that half. */
+/**
+ * The autonomy floor as it exists at the MERGE BASE with the default branch.
+ *
+ * §3.7/AC24: the comparison that makes the floor a floor is against the base,
+ * not the checked-out file. The working copy is exactly what someone widening
+ * the floor controls, so a check reading only the working copy validates the
+ * attacker's own claim.
+ *
+ * Returns `null` when the base profile cannot be read — and `null` is NOT an
+ * empty floor. `assertFloorNotWidened` refuses to act on a null base precisely
+ * so that deleting the profile at the base cannot become the cheapest widening.
+ *
+ * @returns {string[]|null}
+ */
 export function baseFloorFromGit(profilePath, opts = {}) {
   const base = baseProfileFromGit(profilePath, opts);
   return base ? base.autonomyFloor : null;
