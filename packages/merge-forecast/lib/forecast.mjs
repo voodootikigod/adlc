@@ -67,6 +67,11 @@ export async function runForecast(opts) {
   if (isGitRepo(root)) {
     try {
       coChangeData = coChange(coChangeLimit, root);
+      if (Object.keys(coChangeData.fileCounts).length === 0) {
+        warnings.push('co-change: zero commits or empty file history');
+      } else if (Object.keys(coChangeData.pairCounts).length === 0) {
+        warnings.push('co-change: empty co-change pairs in history');
+      }
     } catch (err) {
       const msg = err.message ?? String(err);
       if (msg.includes('shallow') || msg.includes('no commits')) {

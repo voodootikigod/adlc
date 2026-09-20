@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #682 (bug, P1-high, area:review). Re-verified on main @ e4a62e78: packages/merge-forecast/bin/merge-forecast.mjs:70. `const coChangeLimit = parseNum(values['co-change-limit'], 'co-change-limit', 500, true);` has no floor check. Passing `--co-change-limit 0` passes 0 directly to `coChange` -> `git log -n 0`, which returns empty pairCounts and fileCounts, silently disabling co-change coupling and flipping a failing gate (exit 2) to exit 0.\n\nCONTEXT FOR THE BUILDER. Package `packages/merge-forecast`: `bin/merge-forecast.mjs` (CLI entry point, parses flags and handles opError), `lib/co-change.mjs` (runs git log and parses commits), `lib/forecast.mjs` (runs forecast calculations), `lib/graph.mjs`, `lib/matrix.mjs`. Tests: `npm test -w packages/merge-forecast` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `bin/merge-forecast.mjs`: Reject `--co-change-limit < 1` via `opError(\"--co-change-limit must be >= 1, got: \" + val)`.\n2. When `coChange` yields zero commits or empty fileCounts/pairCounts, push a warning to `warnings[]` so empty history is visibly communicated rather than silently reported as \"no coupling\".\n3. Documentation: update `packages/merge-forecast/README.md`, `docs/tools/merge-forecast.md`, and `apps/docs/content/docs/toolkit/merge-forecast.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 `merge-forecast --co-change-limit 0` exits 1 with operational error message naming `--co-change-limit must be >= 1`. verify: `node --test packages/merge-forecast/test/co-change-floor.test.mjs`\n- AC2 Negative `--co-change-limit` values (e.g. -1) are rejected via opError. verify: `node --test packages/merge-forecast/test/co-change-floor.test.mjs`\n- AC3 When git history yields zero commits or empty co-change pairs, output includes a descriptive warning in `warnings`. verify: `node --test packages/merge-forecast/test/co-change-floor.test.mjs`\n- AC4 Existing test suite passes with no regressions. verify: `npm test -w packages/merge-forecast`\n- AC5 Docs updated in all three mirror files. verify: `grep -c \"co-change-limit\" packages/merge-forecast/README.md docs/tools/merge-forecast.md apps/docs/content/docs/toolkit/merge-forecast.mdx` (each >= 1)\n- AC6 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Changing the default co-change limit or algorithm.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M30DP35KDYJB9R0P8VM2D8FZ",
+  "rails": [
+    "packages/merge-forecast/lib/graph.mjs",
+    "packages/merge-forecast/lib/matrix.mjs"
+  ],
+  "scope": [
+    "packages/merge-forecast/**",
+    "docs/tools/merge-forecast.md",
+    "apps/docs/content/docs/toolkit/merge-forecast.mdx"
+  ],
+  "title": "merge-forecast: enforce --co-change-limit >= 1 and warn when history is empty"
+}
