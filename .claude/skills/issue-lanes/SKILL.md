@@ -113,6 +113,16 @@ cd .worktrees/fix-<n> && npm ci --ignore-scripts --no-audit --no-fund   # ~1 min
 - Always spell the start point `refs/remotes/origin/main`.
 - Never symlink `node_modules` into a lane: the root `node_modules/@adlc/*` entries are
   RELATIVE symlinks, so the lane would import MAIN's packages, not its own.
+  - **How you find out you did it anyway**, because the symptom names neither
+    `node_modules` nor the symlink. Two guards red, on a diff that cannot have caused
+    them — a docs-only change is enough:
+    `✖ production ticket-store filesystem writers are confined to approved adapters`
+    naming `plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs`, and
+    `✖ the generated Cursor MCP bundle is exempted only when builder-verified`. That
+    reads as a stale committed bundle, and the suggested fix — rebuild and commit the
+    bundle — would commit a WRONG bundle built against MAIN's packages. Both pass on a
+    clean checkout. Before believing any cross-tree guard, check `ls -ld node_modules`;
+    if it is a symlink, `rm` it and run a real `npm ci`, then re-run.
 - `.worktrees/` is gitignored; disk is the only cost.
 
 ## 3. Tickets (P0) — one per lane, written IN the lane
@@ -333,9 +343,44 @@ final word — verify.
   renamed in a PR` (a false positive from staleness, not a real violation) — rebase that PR
   onto the new main tip and re-push to clear it. Then the worktree cleanup checklist in
   `~/.claude/rules/common/worktrees.md`.
+  - **WHEN to complete, relative to an open PR queue.** The paragraph above is the
+    mechanism; this is the timing, and the two halves come from opposite failures — each
+    is wrong on its own. Two sessions derived contradictory rules from this file on
+    2026-09-19 because it stopped at "ask before doing this".
+  - **Complete PROMPTLY.** Rails are unioned across every NON-COMPLETED ticket, so a
+    shipped-but-uncompleted ticket freezes its rails repo-wide for every other lane.
+    `T-01M1KT58RQE7SEVJMG00YK235J` shipped in PR #973 (`6bf8841c`, 2026-09-04) and was
+    left open for **twelve days**, freezing six context-handoff and CLI paths and
+    blocking an unrelated lane from editing a single comment. "Batch the completes until
+    the queue drains" invites exactly that, and it is the worse failure.
+  - **Enumerate who it lands on BEFORE you push**, one line per open PR:
+    `git merge-base --is-ancestor <segment-commit> <pr-head>` — true means that PR
+    already contains your segment and is unaffected.
+  - **Announce rather than defer.** The `main protection` ruleset sets
+    `strict_required_status_checks_policy: true`, so BEHIND already blocks every merge
+    and that rebase was owed regardless of your push. You add no NET work — you change
+    only WHEN staleness surfaces and HOW IT READS, and `… committed segments cannot be
+    removed or renamed in a PR` reads like an integrity violation, so an unfamiliar
+    owner burns time proving they deleted nothing. Tell them "pushing segment X now", or
+    rebase the PRs you own. The announcement IS the obligation.
+  - **Wait only for something time-critical in flight** — a queue-unblocking hotfix,
+    where one confusing red on the PR that must merge cleanly is worth the delay. That
+    narrow case only, never as a general policy.
 
 ## Gotchas that are not in the ticket bodies
 
+- **A GREEN PR IS NOT EVIDENCE `main` WILL BE GREEN AFTER IT MERGES.**
+  `strict_required_status_checks_policy` evaluates up-to-dateness at MERGE TIME against
+  the base tip, not against the prospective merged state, so two individually-green PRs
+  merging seconds apart can leave `main` red. Measured: #1046 merged 16:35:58Z adding
+  `scripts/test/tmp-fixture-boundary.test.mjs`; #1034 merged 16:36:10Z, **twelve seconds
+  later**. `git merge-base --is-ancestor 051c1812 dad19f26` is false and
+  `git ls-tree -r dad19f26 -- scripts/test/tmp-fixture-boundary.test.mjs` is empty — the
+  guard did not exist on the head that PR's CI ran, so it could not have flagged the file
+  it later flagged on `main`. **When `main` reds right after a merge, check for a
+  same-minute neighbour BEFORE hunting a bug in your own diff** — two sessions each burned
+  a round on this, hours apart. A merge queue is the structural fix (it re-runs required
+  checks against the prospective merged state) and is tracked in #1051.
 - Never run a gate or suite as `… | tail` in a background task — the exit you read is
   tail's. Redirect to a file and `echo EXIT=$?` on its own line.
 - **EVERY command, with NO exceptions, starts with `cd /abs/worktree &&` — including
