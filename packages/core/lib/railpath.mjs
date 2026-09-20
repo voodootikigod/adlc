@@ -30,6 +30,6 @@ export function resolveRailPath(filePath, root) {
     tail.unshift(basename(cur));
     cur = parent;
   }
-  const resolved = tail.length ? join(realpathOr(cur), ...tail) : realpathOr(cur);
+  const resolved = tail.length ? join(realpathOr(cur), tail.join('/')) : realpathOr(cur);
   return relative(realpathOr(root), resolved).split('\\').join('/');
 }
