@@ -120,7 +120,8 @@ follow from what a deny actually means:
   from disk, so it reaches later sessions in the repo too, and an open record denies every
   session, not only the one that tripped the band.
 
-**Containment.** A **ticket store** is the opt-in — `.adlc/tickets.json`, `.adlc/tickets/`,
+**Containment.** When enabled via `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`, a **ticket store** is
+the containment boundary — `.adlc/tickets.json`, `.adlc/tickets/`,
 or whatever `ADLC_TICKET_STORE`/`ADLC_TICKETS` names — which is exactly the predicate
 `resolveRailsInForce` keys on. The gate returns allow, writing nothing, wherever there is no
 store, at any fill percent.

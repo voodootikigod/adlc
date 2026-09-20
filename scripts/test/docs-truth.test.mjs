@@ -215,18 +215,19 @@ test('status headers of shipped designs do not say proposed or pending', () => {
       failures.push(`${file}: claimed implementation path ${impl} does not exist on disk`);
       continue;
     }
-    const text = read(file);
-    const statusMatch = /(?:^|\n)(>?\s*\*?\*?Status:?\*?\*?[^\n]*(?:\n(?![#\n])[^\n]+)*)/i.exec(text);
-    const status = statusMatch ? statusMatch[1] : '';
-    if (!status) {
+    const lines = read(file).split('\n').slice(0, 12);
+    const statusIdx = lines.findIndex((l) => /Status:?\**/i.test(l));
+    if (statusIdx === -1) {
       failures.push(`${file}: no Status header found in top 12 lines`);
       continue;
     }
-    if (/PROPOSED|pending|not yet/i.test(status)) {
-      failures.push(`${file}: status still says proposed/pending/not yet: ${status.trim()}`);
+    const nextLine = lines[statusIdx + 1] ?? '';
+    const statusHeader = lines[statusIdx] + (nextLine && !nextLine.includes(':') && !nextLine.startsWith('#') && !nextLine.startsWith('---') ? ' ' + nextLine : '');
+    if (/PROPOSED|pending|not yet/i.test(statusHeader)) {
+      failures.push(`${file}: status still says proposed/pending/not yet: ${statusHeader.trim()}`);
     }
-    if (!status.includes(impl)) {
-      failures.push(`${file}: status line does not cite implementing path ${impl}: ${status.trim()}`);
+    if (!statusHeader.includes(impl)) {
+      failures.push(`${file}: status header does not cite implementing path ${impl}: ${statusHeader.trim()}`);
     }
   }
   assert.deepEqual(failures, []);
