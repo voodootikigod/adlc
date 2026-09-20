@@ -16,6 +16,11 @@ import { join } from 'node:path';
 import { applyRun, revalidateAction } from '../lib/apply.mjs';
 import { executeActions, marker } from '../lib/execute.mjs';
 import { gateAction, REVIEW_APPROVE } from '../lib/gate.mjs';
+import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
+
+// Ledger entries are signed now (#1035): a fixture must seal what it writes, and
+// every call that reads authorization must be given the key.
+const TEST_KEY = 'unit-test-ledger-key-0123456789ab';
 import { contentHash } from '../lib/content-hash.mjs';
 import { acquireApplyLock, STALE_LOCK_MS } from '../lib/io.mjs';
 
@@ -63,10 +68,10 @@ test('an approval for one relabel target does not license a different target', (
   // The reviewer approved P3-low → P2-medium. A later set proposing P3-low →
   // P1-high for the same issue, field and revision must not ride that approval.
   const ledger = {};
-  gateAction({ action: relabel({ to: 'P2-medium' }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: relabel({ to: 'P2-medium' }), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
 
   const gh = fakeGh();
-  const out = executeActions({ actions: [relabel({ to: 'P1-high' })], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  const out = executeActions({ key: TEST_KEY, actions: [relabel({ to: 'P1-high' })], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.deepEqual(gh.calls, [], 'an unreviewed target must not be written');
   assert.equal(out.executed.length, 0);
 });
@@ -74,18 +79,18 @@ test('an approval for one relabel target does not license a different target', (
 test('an approval for one piece of evidence does not license a comment carrying another', () => {
   const close = { number: 1, action: 'close', contentHash: HASH, evidence: 'the reviewed evidence', updatedAt: 'u1', verdict: 'fixed' };
   const ledger = {};
-  gateAction({ action: close, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: close, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
 
   const gh = fakeGh();
-  executeActions({ actions: [{ ...close, evidence: 'text nobody reviewed' }], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  executeActions({ key: TEST_KEY, actions: [{ ...close, evidence: 'text nobody reviewed' }], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.deepEqual(gh.calls, [], 'the posted rationale must be the one the reviewer read');
 });
 
 test('the approved action itself still executes', () => {
   const ledger = {};
-  gateAction({ action: relabel(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  gateAction({ key: TEST_KEY, action: relabel(), profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
   const gh = fakeGh();
-  const out = executeActions({ actions: [relabel()], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  const out = executeActions({ key: TEST_KEY, actions: [relabel()], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.equal(out.executed.length, 1);
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });
@@ -105,7 +110,7 @@ test('re-proposing a refused relabel under another field string does not buy a s
   const ledger = {};
   let reviews = 0;
   const runReview = (action) => { if (action.action === 'relabel') reviews += 1; return { code: 2 }; };
-  const run = (field) => applyRun({
+  const run = (field) => applyRun({ key: TEST_KEY,
     set: { schemaVersion: 4, issues: [{ number: 1, verdict: 'fixed', contentHash: HASH, evidence: 'x', updatedAt: 'u1', frozen: false }], proposals: [{ number: 1, action: 'relabel', field, from: 'P3-low', to: 'P2-medium', evidence: 'rank' }] },
     profile: profile({ autonomyFloor: ['close'] }),
     baseFloor: ['close'],
@@ -164,10 +169,10 @@ test("one action's evidence carrying another action's marker does not suppress t
   const close = { number: 1, action: 'close', contentHash: HASH, updatedAt: 'u1', verdict: 'fixed', evidence: `gone\n${marker(1, HASH, 'relabel')}` };
   const rel = relabel();
   const ledger = {};
-  for (const a of [close, rel]) gateAction({ action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
+  for (const a of [close, rel]) gateAction({ key: TEST_KEY, action: a, profile: profile(), ledger, runReview: () => ({ code: REVIEW_APPROVE }) });
 
   const gh = fakeGh();
-  executeActions({ actions: [close, rel], floor: [], baseFloor: [], ledger, gh, self: 'me' });
+  executeActions({ key: TEST_KEY, actions: [close, rel], floor: [], baseFloor: [], ledger, gh, self: 'me' });
   assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply', 'comment', 'apply'], 'every action posts its own evidence');
 });
 
@@ -177,7 +182,7 @@ test('a working copy declaring an extra unit cannot sanction a relabel into it',
   // Sanctioned relabel targets are read from the profile. Read from the working
   // copy, adding `{ name: "anything" }` sanctions `area:anything`.
   assert.throws(
-    () => applyRun({
+    () => applyRun({ key: TEST_KEY,
       set: { schemaVersion: 4, generatedFor: null, issues: [], proposals: [] },
       profile: profile({ units: [...POLICY.units, { name: 'anything', paths: ['**'] }] }),
       baseFloor: [],
@@ -197,7 +202,7 @@ test('a working copy naming a different reviewer is refused', () => {
   // accepts any local command. A reviewer chosen in the working copy is a
   // reviewer chosen by the person being reviewed.
   assert.throws(
-    () => applyRun({
+    () => applyRun({ key: TEST_KEY,
       set: { schemaVersion: 4, issues: [], proposals: [] },
       profile: profile({ providers: { decider: 'anthropic', reviewer: 'my-approver' } }),
       baseFloor: [],
@@ -214,7 +219,7 @@ test('a working copy naming a different reviewer is refused', () => {
 
 test('a working copy re-mapping a priority label is refused', () => {
   assert.throws(
-    () => applyRun({
+    () => applyRun({ key: TEST_KEY,
       set: { schemaVersion: 4, issues: [], proposals: [] },
       profile: profile({ labels: { priority: { high: 'security', medium: 'P2-medium', low: 'P3-low' }, areaPrefix: 'area:' } }),
       baseFloor: [],
@@ -238,7 +243,7 @@ test('the same policy with its keys in a different order is not a change', () =>
     labels: { areaPrefix: 'area:', priority: { low: 'P3-low', high: 'P1-high', medium: 'P2-medium' } },
     units: POLICY.units.map((u) => ({ paths: u.paths, name: u.name })),
   };
-  const out = applyRun({
+  const out = applyRun({ key: TEST_KEY,
     set: { schemaVersion: 4, issues: [], proposals: [] },
     profile: reordered,
     baseFloor: [],
@@ -254,7 +259,7 @@ test('the same policy with its keys in a different order is not a change', () =>
 
 test('an unknown base policy refuses the run rather than skipping the comparison', () => {
   assert.throws(
-    () => applyRun({
+    () => applyRun({ key: TEST_KEY,
       set: { schemaVersion: 4, issues: [], proposals: [] },
       profile: profile(),
       baseFloor: [],
@@ -270,7 +275,7 @@ test('an unknown base policy refuses the run rather than skipping the comparison
 });
 
 test('a working copy whose policy matches the base proceeds', () => {
-  const out = applyRun({
+  const out = applyRun({ key: TEST_KEY,
     set: { schemaVersion: 4, issues: [], proposals: [] },
     profile: profile(),
     baseFloor: [],

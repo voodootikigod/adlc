@@ -22,6 +22,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
+
 /** `adversarial-review` exit codes (its documented contract). */
 export const REVIEW_APPROVE = 0;
 export const REVIEW_NEEDS_ATTENTION = 2;
@@ -72,25 +74,73 @@ export function reviewerPair(profile) {
  * The authority on whether a write is licensed. A caller-supplied `gate` object
  * is a claim, not authorization: any library caller can construct one, and
  * trusting it would put the whole gate behind an `if` the caller controls.
+ *
+ * SIGNATURE FIRST (#1035). Every other field below is one the caller can
+ * compute — `artifactDigest` is exported and pure — so field checks alone made
+ * the ledger a place to write an approval rather than a record of one. Without a
+ * key nothing verifies, and nothing is authorized: the run still proposes, and a
+ * write becomes a key-holder act.
  */
-export function ledgerApproves(ledger, action) {
-  const entry = ledger?.[gateKey(action ?? {})];
-  if (!entry || entry.verdict !== 'approve') return false;
-  // Bound to the revision AND the issue, not merely present under the key: a
-  // ledger hand-edited to move an approval between issues must not pass.
-  // And bound to WHAT WAS REVIEWED. The key names the decision's slot, not its
-  // content: a relabel approved from P3-low to P2-medium shares its key with one
-  // to P1-high, and a close shares its key with the same close carrying other
-  // evidence. Without the digest, a later set re-uses the approval for a target
-  // or a rationale no reviewer ever read.
+export function entryBindsSlot(entry, action) {
+  // WHAT THE SLOT NAMES: the issue, the action, the field and the revision — and
+  // deliberately NOT the artifact digest, because the digest changes the moment
+  // the artifact is reworded and "reword it and ask again" is what the one shot
+  // refuses. This is the replay identity; `entryBindsAction` adds the digest for
+  // the authorization reads, which must cover what the reviewer actually read.
   return (
-    entry.contentHash === action?.contentHash &&
-    entry.number === action?.number &&
-    entry.action === action?.action &&
-    (entry.field ?? null) === (action?.field ?? null) &&
-    typeof entry.artifactDigest === 'string' &&
+    entry?.contentHash === action?.contentHash &&
+    entry?.number === action?.number &&
+    entry?.action === action?.action &&
+    (entry?.field ?? null) === (action?.field ?? null)
+  );
+}
+
+export function entryBindsAction(entry, action) {
+  // The signature covers the entry's CONTENT, not the ledger slot it sits in, so
+  // a validly signed entry can be copied under another action's key. Everything
+  // that binds a record to its action is checked here, in one place, because the
+  // two callers — the approval check and the applied fast path — were drifting:
+  // one verified the binding and the other only the signature, so a signed
+  // `applied` entry moved to another slot suppressed that action's write.
+  return (
+    entry?.contentHash === action?.contentHash &&
+    entry?.number === action?.number &&
+    entry?.action === action?.action &&
+    (entry?.field ?? null) === (action?.field ?? null) &&
+    typeof entry?.artifactDigest === 'string' &&
     entry.artifactDigest === artifactDigest(action)
   );
+}
+
+/**
+ * True when the ledger holds a SIGNED entry bound to this exact action.
+ *
+ * The shared precondition of both authorization reads: signed under our key, and
+ * about this action rather than merely stored under its key.
+ */
+export function ledgerEntryFor(ledger, action, key = null) {
+  const entry = ledger?.[gateKey(action ?? {})];
+  if (!entry) return null;
+  if (!verifyLedgerEntry(key, entry)) return null;
+  if (!entryBindsAction(entry, action)) return null;
+  return entry;
+}
+
+export function ledgerApproves(ledger, action, key = null) {
+  const entry = ledger?.[gateKey(action ?? {})];
+  if (!entry || entry.verdict !== 'approve') return false;
+  if (!verifyLedgerEntry(key, entry)) return false;
+  // Bound to the revision AND the issue, not merely present under the key: a
+  // ledger hand-edited to move an approval between issues must not pass. And
+  // bound to WHAT WAS REVIEWED — the digest — because the slot names the
+  // decision, not its content: a relabel approved from P3-low to P2-medium
+  // shares its slot with one to P1-high, and a close shares its slot with the
+  // same close carrying other evidence.
+  //
+  // Both conditions live in `entryBindsAction` rather than being restated here:
+  // this function and the applied fast path had already drifted apart once, one
+  // checking the binding and the other only the signature.
+  return entryBindsAction(entry, action);
 }
 
 /**
@@ -169,9 +219,18 @@ export function makeReviewRunner({ spawn, artifactPath, reviewer, timeout = 600 
  *   testable without a reviewer, and so the CLI owns process spawning
  * @returns {{verdict:'approve'|'demote', reason:string|null}}
  */
-export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
+export function gateAction({ action, profile, ledger = {}, runReview, key = null } = {}) {
   const pair = reviewerPair(profile);
   if (!pair.ok) return { verdict: 'demote', reason: pair.reason };
+
+  // NO KEY, NO REVIEW — checked before anything is spawned. A verdict recorded
+  // without a signature can never authorize a write (#1035), so running the
+  // reviewer here would spend real provider budget on an answer nothing can act
+  // on AND burn the one-shot: the revision would be marked gated, so the run
+  // that DOES hold the key would be refused as a replay.
+  if (typeof key !== 'string' || key.length === 0) {
+    return { verdict: 'demote', reason: 'no signing key is available, so no verdict can authorize a write' };
+  }
 
   if (!action?.contentHash) {
     // No revision to bind a verdict to means a replay would be undetectable, so
@@ -180,14 +239,35 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     return { verdict: 'demote', reason: 'the action has no contentHash, so no gate verdict can be bound to a revision' };
   }
 
-  const key = gateKey(action);
-  if (Object.hasOwn(ledger, key)) {
-    // The refusal is unconditional — it does not matter whether the prior
-    // verdict was an approve or a demote, because "ask again and see" is the
-    // bypass regardless of which way the first answer went.
+  const slot = gateKey(action);
+  // ONLY A VALIDLY SIGNED ENTRY SPENDS THE ONE SHOT. The refusal is otherwise
+  // unconditional — an approve and a demote both block a second attempt, because
+  // "ask again and see" is the bypass whichever way the first answer went — but
+  // an entry we cannot verify is not a record of a review that happened. Treating
+  // one as spent would strand every action carrying a ledger written before
+  // signing existed, with deleting the whole ledger as the only way out, which
+  // costs more replay protection than it buys. An unverifiable entry is therefore
+  // replaced by a freshly signed verdict rather than honoured.
+  //
+  // This does not hand a caller a re-roll: an attacker who can corrupt an entry
+  // to force a re-review can equally delete it, so the ledger's integrity has
+  // never rested on unreadable entries being treated as decisions.
+  // SIGNED, but NOT bound to the artifact. The slot already names the issue, the
+  // action, the field and the revision; the artifact digest deliberately takes no
+  // part here, because the digest changes the moment the artifact is reworded —
+  // and "reword it and ask again" is the exact bypass the one shot exists to
+  // refuse. Binding belongs to the authorization reads, which must cover what was
+  // reviewed; replay belongs to the slot.
+  // Bound to the slot as well as signed: the signature covers the entry's
+  // content, not where it is filed, so a signed entry copied under another
+  // action's key would otherwise read as that action's spent review — blocking a
+  // legitimate action permanently, since the binding check downstream then
+  // refuses to act on it too. A relocated entry is not this action's decision, so
+  // this action is reviewed and the entry replaced.
+  if (verifyLedgerEntry(key, ledger?.[slot]) && entryBindsSlot(ledger[slot], action)) {
     return {
       verdict: 'demote',
-      reason: `this revision was already gated (verdict: ${ledger[key].verdict}); a second review of the same (issue, contentHash) is refused`,
+      reason: `this revision was already gated (verdict: ${ledger[slot].verdict}); a second review of the same (issue, contentHash) is refused`,
     };
   }
 
@@ -201,7 +281,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     // rule unenforced for exactly the case a caller can manufacture at will: a
     // spawn failure or a timeout, retried until the reviewer finally answers.
     const reason = `the review could not complete: ${err?.message ?? err}`;
-    ledger[key] = { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) };
+    ledger[slot] = sealLedgerEntry(key, { verdict: 'demote', reason, reviewer: pair.reviewer, decider: pair.decider, contentHash: action.contentHash, number: action.number, action: action.action, field: action.field ?? null, artifactDigest: artifactDigest(action) });
     return { verdict: 'demote', reason };
   }
 
@@ -213,7 +293,9 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
       ? 'the reviewer raised a material finding'
       : `the review could not complete (exit ${code})`;
 
-  ledger[key] = {
+  // SEALED, not merely written: the signature is what makes this a record of a
+  // verdict rather than a place to write one.
+  ledger[slot] = sealLedgerEntry(key, {
     verdict,
     reason,
     reviewer: pair.reviewer,
@@ -223,7 +305,7 @@ export function gateAction({ action, profile, ledger = {}, runReview } = {}) {
     action: action.action,
     field: action.field ?? null,
     artifactDigest: artifactDigest(action),
-  };
+  });
   return { verdict, reason };
 }
 

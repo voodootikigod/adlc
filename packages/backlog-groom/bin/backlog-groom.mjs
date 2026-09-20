@@ -138,13 +138,37 @@ if (values.apply) {
 
   // Read the floor as it exists at the MERGE BASE. Null means unreadable, and
   // the floor guard refuses to act on an unknown base rather than assuming one.
-  // No caller-chosen ref: resolveTrustedBaseRef reads it from the repository.
+  // No caller-chosen ref, and no LOCAL ref either: the baseline is anchored to
+  // the remote's default branch (#1036), because `git update-ref` is a local
+  // write and a baseline the caller can move is not a baseline.
   const baseProfile = baseProfileFromGit(profilePath);
   const baseFloor = baseProfile ? baseProfile.autonomyFloor : null;
   const baseFrozenPaths = baseProfile ? (baseProfile.frozenPaths ?? []) : null;
 
   const pair = reviewerPair(profile);
   if (!pair.ok) console.error(`backlog-groom: ${pair.reason} — every action will demote to a proposal`);
+
+  // The ledger's signing key (#1035). Writes are a KEY-HOLDER act: without it a
+  // verdict cannot be sealed, so nothing can authorize a write and every action
+  // demotes. Said once, plainly, because a run that proposes instead of closing
+  // otherwise looks like a reviewer problem rather than a missing key.
+  const ledgerKey = process.env.ADLC_MANIFEST_KEY || null;
+  // TAKEN OUT OF THE ENVIRONMENT ENTIRELY, once, here. Every subprocess this path
+  // starts inherits `process.env`: the reviewer (a command the profile names),
+  // `gh`, and the several git calls behind headCommit, contentHash and
+  // revalidation. A key a child can read is a key that can mint its own
+  // approvals, so sanitizing each spawn site is the wrong shape — it only has to
+  // be forgotten once, and the first version of this change did forget three.
+  // Deleting it from the parent's own environment covers every spawn that exists
+  // and every one added later; the value lives on in `ledgerKey`, threaded
+  // explicitly to the only code entitled to it.
+  delete process.env.ADLC_MANIFEST_KEY;
+  if (!ledgerKey) {
+    console.error(
+      'backlog-groom: no ADLC_MANIFEST_KEY is set, so no verdict can be signed — ' +
+      'every action will demote to a proposal and nothing will be written'
+    );
+  }
 
   // ONE artifact per action, written to a scratch file the reviewer reads. The
   // whole-set artifact would return one verdict for the batch, which is not
@@ -177,6 +201,7 @@ if (values.apply) {
       baseFrozenPaths,
       basePolicy: baseProfile,
       ledger,
+      key: ledgerKey,
       runReview,
       gh: ghIo,
       // Re-derive the set's security-relevant claims from the live issue and the
