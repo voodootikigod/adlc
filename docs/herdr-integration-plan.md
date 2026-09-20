@@ -4,7 +4,8 @@ Exploration and phased plan for `plugins/adlc-herdr` — a [herdr](https://herdr
 plugin that makes the ADLC visible and operable from the terminal multiplexer
 layer, regardless of which harness runs in each pane.
 
-Status: **plan** (approved architecture, not yet built). Companion tickets:
+Status: **shipped** — built as `plugins/adlc-herdr` (first merged in #333). This document is the
+original plan, kept as the design record. Companion tickets:
 `t-herdr-*` in `.adlc/tickets/`.
 
 ---

@@ -99,7 +99,11 @@ made. **Make it a required check.**
 
 ## Context-rot handoff
 
-pi is an **enforcing** tier for the context-rot handoff, and the only harness
+<Callout type="warn">
+**Off by default since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)). The gate runs only when `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1` is set in the environment the harness starts from. That flag decides whether the gate runs at all; it does not clear an active deny. The rest of this section describes the gate with the flag set.
+</Callout>
+
+With the flag set, pi enforces the context-rot handoff, and it is the only harness
 with a *real* context-fill signal: `ctx.getContextUsage().percent` is a live
 reading of the window, not a transcript-size proxy. It feeds the band join
 directly as `pct`.

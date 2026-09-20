@@ -6,12 +6,10 @@ trusted lifecycle hooks, an allowlisted MCP declaration, and project-agent templ
 ## Install
 
 ADLC publishes `@adlc/cli` and `@adlc/codex` in one lockstep release. Use
-`@adlc/cli` **1.11.0 or newer**: the context-rot handoff gate hard-requires
-`@adlc/context-handoff` exports that first ship in 1.11.0 and fails closed below
-it, denying every structured edit and mutating shell command. (Secondarily,
-1.4.2 or newer is what lets the MCP transport launch `adlc mcp-server`; the
-handoff gate is the binding constraint.) Codex installs the plugin itself
-through its Git marketplace:
+`@adlc/cli` **1.11.0 or newer**, the suite-wide floor (see
+[Version requirements](https://github.com/voodootikigod/adlc/blob/main/docs/toolkit.md#version-requirements)).
+(1.4.2 or newer is what lets the MCP transport launch `adlc mcp-server`.) Codex
+installs the plugin itself through its Git marketplace:
 
 ```sh
 npm install -g @adlc/cli@latest
@@ -41,7 +39,9 @@ transport. Remove with `codex plugin remove adlc-codex@adlc`.
 
 ## Context-rot handoff gate
 
-The plugin's `adlc-handoff-gate` hook runs on every tool call. Once the session
+> **Not wired since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)). The plugin's `hooks/hooks.json` has no entry for this gate, so nothing in this section runs in a current install, and no setting turns it on. The hook code still ships and is still tested. The rest of this section describes the gate as it behaves when wired.
+
+When wired, the plugin's `adlc-handoff-gate` hook runs on every tool call. Once the session
 crosses the deny band, it denies structured edits and mutating shell commands
 until the work is handed off to a fresh session, so a context-degraded session
 cannot keep writing.

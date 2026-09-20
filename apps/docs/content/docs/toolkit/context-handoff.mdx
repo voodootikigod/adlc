@@ -7,6 +7,10 @@ description: Absolute context-band signals, session-terminal mutation deny (D1�
 
 **ADLC phase: P4 continuity (F3)** · **Library + CLI:** absolute context bands, session-terminal mutation deny (D1–D3), and operator handoff commands.
 
+<Callout type="warn">
+**Status since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)): no harness evaluates the session-terminal deny (D1-D3) by default. The Claude Code and Codex plugins ship without the hook entry; pi and OpenCode run the gate only with `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`. The band thresholds are still consumed by `build-gate`, and the `adlc handoff` CLI is unaffected.
+</Callout>
+
 <PhaseDiagram phase="P4" />
 
 ## What it defends against

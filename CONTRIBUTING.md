@@ -129,7 +129,7 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
    | gate | what it checks |
    | --- | --- |
    | tests | the full workspace suite |
-   | rail-freeze | no frozen rail edited, and no *existing* ticket changed in `.adlc/tickets.json` |
+   | rail-freeze | no frozen rail edited, and no *existing* ticket changed in the ticket store (`.adlc/tickets/`) |
    | mutation-gate | changed code has tests that notice it being broken |
    | findings-ledger | the committed findings ledger carries no secret or raw dump (git-boundary backstop, ADR 0014) |
    | findings-append-only | the durable findings ledger is only extended, never deleted/truncated/rewritten (ADR 0014) |

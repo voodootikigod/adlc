@@ -1,6 +1,6 @@
 # Spec — Sharded ticket store and ticket domain (`@adlc/tickets`)
 
-**Status:** Approved design; implementation pending
+**Status:** Shipped — `packages/tickets` (#180); this repository's own store migrated in #321.
 
 **Date:** 2026-07-13
 

@@ -1,7 +1,7 @@
 # ADLC Tool Conventions — READ BEFORE BUILDING
 
 Every tool in `packages/` follows these rules. They are the contract that
-makes 17 independently built tools feel like one product.
+makes independently built tools feel like one product.
 
 ## Layout
 

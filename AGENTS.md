@@ -23,11 +23,11 @@ base.
 
 **`adlc rails-guard` is not the CI check.** They sound interchangeable and are
 not: `scripts/rails-guard-ci.mjs` additionally forbids any change to an existing
-ticket's contract in `.adlc/tickets.json`. A clean `adlc rails-guard` has
+ticket's contract in the ticket store (`.adlc/tickets/`). A clean `adlc rails-guard` has
 already been reported as "ready to merge" on a branch CI then rejected. The
 weaker check is the more discoverable one — prefer `npm run preflight`.
 
-## `.adlc/tickets.json` is the rail trust root
+## The ticket store is the rail trust root
 
 Anything that can rewrite the ticket store can weaken its own rails, so CI
 freezes it: a PR may **add** a ticket, never alter an existing one.
@@ -48,19 +48,6 @@ session. Choosing an id from a snapshot taken earlier silently **overwrites
 someone else's ticket**, which is exactly what the gate rejects. Re-read shared
 mutable state at the moment you use it, not when you start.
 
-### Resolving a `.adlc/tickets.json` conflict during a rebase
-
-`--ours` and `--theirs` are **inverted in a rebase**: `--ours` is upstream, and
-`--theirs` is the commit being replayed. `git checkout --theirs` therefore keeps
-*your* stale store and silently drops tickets that landed on the base — which
-the rail-freeze gate then rejects as removals. Name the ref explicitly instead
-of relying on the side words, then re-add your ticket:
-
-```sh
-git checkout origin/main -- .adlc/tickets.json
-adlc ticket create --input <file> --write
-```
-
 ## Undoing an experiment: copy, don't `git checkout`
 
 Mutation testing and gate-bite checks mean deliberately breaking a file and
@@ -73,8 +60,8 @@ cp packages/x/lib/y.mjs /tmp/y.bak    # then mutate, test
 cp /tmp/y.bak packages/x/lib/y.mjs    # restore exactly what you had
 ```
 
-`git stash` has a sharper edge: this repo carries **long-lived stashes from other
-branches**. `git stash push` on a clean tree saves nothing, so a later
+`git stash` has a sharper edge: the stash list is shared by every worktree of a
+checkout, so it can hold entries from other branches and other sessions. `git stash push` on a clean tree saves nothing, so a later
 `git stash pop` silently pops *someone else's* entry. Never pair a bare
 push/pop around a checkout. If you already did, the entry is recoverable:
 
@@ -94,7 +81,7 @@ git worktree add .worktrees/<name> -b <branch> origin/main
 cd .worktrees/<name> && npm ci --ignore-scripts    # worktrees get no node_modules
 ```
 
-Never work in `/Users/voodootikigod/Projects/adlc` itself. If you need `main`,
+Never work in the primary checkout itself (the first entry of `git worktree list`). If you need `main`,
 read it by ref (`git show origin/main:<path>`) rather than checking it out.
 
 This used to be conditional on something running. It is not, because the failure
@@ -105,9 +92,9 @@ statement that session had made about "the main checkout" silently described a
 different branch. Nothing was running; the tree was clean; `git status` looked
 fine.
 
-A worktree shares **one index and one `HEAD`** with every other user of that
-checkout. A `checkout`, `commit`, `rebase`, or `stash` from either agent lands on
-the other's work.
+Two sessions in the same checkout share **one index and one `HEAD`**: a `checkout`,
+`commit`, `rebase`, or `stash` from either lands on the other's work. A `git worktree`
+has its own index and `HEAD`, which is what isolates it.
 
 The stakes here are higher than a merge conflict:
 
