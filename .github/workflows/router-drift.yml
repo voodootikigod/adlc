@@ -6,13 +6,6 @@ name: Router drift
 # fails a PR whose committed router file drifted from the canonical source (someone
 # hand-edited a generated file instead of the model, or forgot to regenerate).
 #
-# The consolidation-equivalence module (scripts/router/check-consolidation.mjs, AC5/AC8)
-# is prosecuted every run by its golden unit tests in scripts/test/, which the repo's
-# `npm test` job (see ci.yml) executes — it is a refactor-verification tool keyed to the
-# pre-consolidation merge-base, not a permanent routing-freeze, so it is intentionally
-# not wired here as a blocking merge-base comparison (that would false-positive on any
-# future intentional, harness-consistent routing change).
-#
 # ============================================================
 # ACTION REQUIRED — GITHUB REPOSITORY SETTINGS
 # ============================================================

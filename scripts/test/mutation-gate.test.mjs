@@ -655,11 +655,11 @@ test('#329: an added/modified source file is unaffected — still covered', () =
 
 // A source in a scripts/ SUBDIRECTORY could not reach the same-basename
 // convention at all: the pattern matched only files sitting directly in
-// scripts/. scripts/router/check-consolidation.mjs is fully covered by
-// scripts/test/check-consolidation.test.mjs, yet took the FULL-suite slow
-// path — one whole monorepo suite per mutant, which blew the wrapper's
-// 30-minute budget and failed the gate on an operational timeout rather than
-// on any finding.
+// scripts/. The motivating case (scripts/router/check-consolidation.mjs
+// and its same-basename test, both since removed) was fully covered, yet
+// took the FULL-suite slow path — one whole monorepo suite per mutant, which
+// blew the wrapper's 30-minute budget and failed the gate on an operational
+// timeout rather than on any finding.
 //
 // The fix must NOT be "widen the pattern": two files sharing a basename are
 // still different files, and mapping one to the other's test claims coverage
