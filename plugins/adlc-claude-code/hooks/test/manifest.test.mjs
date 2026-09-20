@@ -10,8 +10,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+
 import { record as realRecord } from '@adlc/gate-manifest/lib/record.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -39,7 +40,7 @@ function runManifest(dir, { env = {} } = {}) {
   const input = JSON.stringify({ cwd: dir });
   let out = '';
   try {
-    out = execFileSync(process.execPath, [HOOK, 'manifest'], {
+    out = runHook([HOOK, 'manifest'], {
       input,
       encoding: 'utf8',
       env: { ...process.env, PATH: WITH_ADLC, ...env },

@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, realpathSync } f
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(HOOKS_DIR, '..', '..', '..');
@@ -64,7 +64,7 @@ test('adlc-build-gate.mjs still enforces (denies) a high-risk degraded session w
     let status = 0;
     let stderr = '';
     try {
-      execFileSync(process.execPath, [hookCopyPath], {
+      runHook([hookCopyPath], {
         input: JSON.stringify(payload),
         encoding: 'utf8',
         cwd: repoRoot,

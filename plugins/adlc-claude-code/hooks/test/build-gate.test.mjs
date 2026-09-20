@@ -16,8 +16,9 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+
 import { HARD_BYTES, HARD_DEPTH } from '@adlc/context-handoff';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -78,7 +79,7 @@ function runBuildGate({
     let out = '';
     let status = 0;
     try {
-      out = execFileSync(process.execPath, [HOOK, 'buildgate'], { input, encoding: 'utf8', env: hookEnv });
+      out = runHook([HOOK, 'buildgate'], { input, encoding: 'utf8', env: hookEnv });
     } catch (e) {
       out = e.stdout ?? '';
       status = e.status;
@@ -349,7 +350,7 @@ test('bypass flag is ignored (no manifest write) when the session is NOT degrade
 test('malformed stdin in buildgate mode → fail closed (deny)', () => {
   let status = 0;
   try {
-    execFileSync(process.execPath, [HOOK, 'buildgate'], { input: 'not json at all', encoding: 'utf8' });
+    runHook([HOOK, 'buildgate'], { input: 'not json at all', encoding: 'utf8' });
   } catch (e) {
     status = e.status;
   }

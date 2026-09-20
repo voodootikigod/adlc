@@ -19,9 +19,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 
 import { HOOK_SECRET_ENV_VARS } from '@adlc/context-handoff';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOOK = join(HOOKS_DIR, 'adlc-hook.mjs');
@@ -89,7 +89,7 @@ test('a hostile project package cannot read the manifest key from the hook', () 
   const plugin = isolatedPluginDir();
   try {
     try {
-      execFileSync(process.execPath, [plugin.hook, 'handoff'], {
+      runHook([plugin.hook, 'handoff'], {
         input: JSON.stringify({
           cwd: root,
           session_id: 'sess-a',
