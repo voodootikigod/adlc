@@ -1,0 +1,44 @@
+name: Gate liveness
+
+# Verifies that the merge-blocking gates declared in docs/ci/required-gates.json
+# are configured as required status checks in the live GitHub ruleset for main.
+#
+# Runs on push to main, daily schedule, and manual dispatch. Not run on pull requests
+# because a pull request cannot repair a repository ruleset.
+#
+# This run is EXPECTED to be red (exit 2, naming rails-guard, mutation-gate, gate)
+# from the merge of this change until the repository admin updates the ruleset.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '37 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-liveness
+  cancel-in-progress: false
+
+jobs:
+  gate-liveness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Check gate liveness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/gate-liveness.mjs --repo "$GITHUB_REPOSITORY"
