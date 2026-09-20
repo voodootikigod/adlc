@@ -36,7 +36,6 @@ const ALLOWLIST = new Set([
   'packages/coldstart/test/coldstart-cache-e2e.test.mjs',
   'packages/coldstart/test/coldstart-offline.test.mjs',
   'packages/coldstart/test/coldstart.test.mjs',
-  'packages/coldstart/test/verdict-shape.test.mjs',
   'packages/consensus-fix/test/bin.test.mjs',
   'packages/consensus-fix/test/runner.test.mjs',
   'packages/consensus-fix/test/snapshot.test.mjs',
@@ -49,9 +48,6 @@ const ALLOWLIST = new Set([
   'packages/core/test/railpath.test.mjs',
   'packages/core/test/revision-change-set.test.mjs',
   'packages/core/test/scaffold-hygiene.test.mjs',
-  'packages/flail-detector/test/cli.test.mjs',
-  'packages/flail-detector/test/could-not-analyze.test.mjs',
-  'packages/flail-detector/test/record.test.mjs',
   'packages/fleet/test/config.test.mjs',
   'packages/fleet/test/egress.test.mjs',
   'packages/fleet/test/extensions.test.mjs',
@@ -67,19 +63,15 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
   'packages/gate-fuzzing/test/isolation.test.mjs',
-  'packages/gate-fuzzing/test/record.test.mjs',
   'packages/gate-manifest/test/enable.test.mjs',
   'packages/gate-manifest/test/forest-format.test.mjs',
   'packages/gate-manifest/test/gate-manifest.test.mjs',
   'packages/gate-manifest/test/key-ceremony.test.mjs',
   'packages/gate-manifest/test/migrate-branch.test.mjs',
   'packages/gate-manifest/test/migrate.test.mjs',
-  'packages/gate-manifest/test/segment-writer.test.mjs',
   'packages/gate-manifest/test/spend.test.mjs',
   'packages/gate-manifest/test/usage-roundtrip.test.mjs',
-  'packages/hollow-test/test/diff-zero-mutants.test.mjs',
   'packages/hollow-test/test/hollow-test.test.mjs',
-  'packages/hollow-test/test/starved-budget.test.mjs',
   'packages/hollow-test/test/unit.test.mjs',
   'packages/lesson-foundry/test/cli.test.mjs',
   'packages/lesson-foundry/test/foundry.test.mjs',
@@ -87,17 +79,11 @@ const ALLOWLIST = new Set([
   'packages/lesson-foundry/test/write-preserve-existing.test.mjs',
   'packages/merge-forecast/test/forecast.test.mjs',
   'packages/merge-forecast/test/high-risk-concurrent.test.mjs',
-  'packages/model-ratchet/test/integration.test.mjs',
-  'packages/model-ratchet/test/walk.test.mjs',
   'packages/model-router/test/floor-zero.test.mjs',
   'packages/model-router/test/model-router.test.mjs',
-  'packages/preflight/test/empty-test-cmd.test.mjs',
   'packages/preflight/test/integration.test.mjs',
   'packages/preflight/test/unit.test.mjs',
   'packages/quartermaster/test/registry-isolation.test.mjs',
-  'packages/rails-guard/test/sanctioned-disclosure.test.mjs',
-  'packages/review-calibration/test/min-plants-floor.test.mjs',
-  'packages/review-calibration/test/review-calibration.test.mjs',
   'packages/runner/test/cli-exit-codes.test.mjs',
   'packages/runner/test/codex-integration.test.mjs',
   'packages/runner/test/runner.test.mjs',
@@ -107,7 +93,6 @@ const ALLOWLIST = new Set([
   'packages/spec-lint/test/record.test.mjs',
   'packages/tickets/test/directory.test.mjs',
   'packages/tickets/test/manifest-rails.test.mjs',
-  'packages/tickets/test/manifest-segments.test.mjs',
   'packages/tickets/test/pointer-bounded.test.mjs',
   'packages/tickets/test/pointer.test.mjs',
   'plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs',
@@ -130,15 +115,7 @@ const ALLOWLIST = new Set([
   'plugins/adlc-gemini/test/decide.test.mjs',
   'plugins/adlc-gemini/test/projection.test.mjs',
   'plugins/adlc-gemini/test/root.test.mjs',
-  'plugins/adlc-herdr/test/action-dispatch.test.mjs',
-  'plugins/adlc-herdr/test/board-e2e.test.mjs',
-  'plugins/adlc-herdr/test/board.test.mjs',
   'plugins/adlc-herdr/test/fleet-bridge.test.mjs',
-  'plugins/adlc-herdr/test/on-event-e2e.test.mjs',
-  'plugins/adlc-herdr/test/repo-root.test.mjs',
-  'plugins/adlc-herdr/test/show-ticket.test.mjs',
-  'plugins/adlc-herdr/test/watcher-e2e.test.mjs',
-  'plugins/adlc-herdr/test/watcher.test.mjs',
   'plugins/adlc-opencode/test/handoff-deny.test.mjs',
   'plugins/adlc-opencode/test/scaffold.test.mjs',
   'plugins/adlc-opencode/test/session-hooks.test.mjs',
@@ -251,8 +228,14 @@ export function unremovedFixtures(body) {
   const seen = new Map();
   for (const match of body.matchAll(/mkdtempSync\s*\(/g)) {
     const before = body.slice(Math.max(0, match.index - 120), match.index);
-    const binding = before.match(/(?:const|let|var)\s+(\w+)\s*=\s*$/)
-      ?? before.match(/(?:const|let|var)\s+(\w+)\s*=\s*await\s+$/);
+    // A declaration is the common shape, but `let dir;` at describe() scope with
+    // `dir = mkdtempSync(...)` inside before() and `after(() => rmSync(dir))` is
+    // just as common and just as cleaned — reading only the declaration form
+    // reported those as unbound and reddened correct files. A bare assignment
+    // still has to pair with a removal below; only the BINDING is recognised here.
+    // Member assignments (`obj.dir = ...`) stay unbound: nothing pairs them.
+    const binding = before.match(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?$/)
+      ?? before.match(/(?:^|[;{}()\n,])\s*(\w+)\s*=\s*(?:await\s+)?$/);
     const line = lineOf(body, match.index);
 
     if (!binding) {
