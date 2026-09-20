@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { readActiveTicketPointer, resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
@@ -358,11 +359,10 @@ async function main() {
   if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-// Only run as a hook when executed directly (`node adlc-lifecycle.mjs <mode>`),
-// not when imported — the drift test imports this module for its pure
-// exports (classifyRiskTier, stopReview, ...) and must not trigger a live
-// stdin read.
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+// pathToFileURL, not a manual URL string: import.meta.url is percent-encoded
+// (spaces become %20), so a hand-built URL never matches on paths with spaces.
+// Boolean(argv[1]) prevents pathToFileURL(undefined) throwing when imported.
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   main().catch((error) => {
     process.stdout.write(`${JSON.stringify({ systemMessage: `ADLC advisory hook could not complete: ${error.message}` })}\n`);
