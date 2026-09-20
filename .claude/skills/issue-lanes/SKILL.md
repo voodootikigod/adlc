@@ -113,6 +113,16 @@ cd .worktrees/fix-<n> && npm ci --ignore-scripts --no-audit --no-fund   # ~1 min
 - Always spell the start point `refs/remotes/origin/main`.
 - Never symlink `node_modules` into a lane: the root `node_modules/@adlc/*` entries are
   RELATIVE symlinks, so the lane would import MAIN's packages, not its own.
+  - **How you find out you did it anyway**, because the symptom names neither
+    `node_modules` nor the symlink. Two guards red, on a diff that cannot have caused
+    them — a docs-only change is enough:
+    `✖ production ticket-store filesystem writers are confined to approved adapters`
+    naming `plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs`, and
+    `✖ the generated Cursor MCP bundle is exempted only when builder-verified`. That
+    reads as a stale committed bundle, and the suggested fix — rebuild and commit the
+    bundle — would commit a WRONG bundle built against MAIN's packages. Both pass on a
+    clean checkout. Before believing any cross-tree guard, check `ls -ld node_modules`;
+    if it is a symlink, `rm` it and run a real `npm ci`, then re-run.
 - `.worktrees/` is gitignored; disk is the only cost.
 
 ## 3. Tickets (P0) — one per lane, written IN the lane
