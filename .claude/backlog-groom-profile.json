@@ -28,5 +28,5 @@
     "priority": { "high": "P1-high", "medium": "P2-medium", "low": "P3-low" },
     "areaPrefix": "area:"
   },
-  "providers": { "decider": "anthropic", "reviewer": "openai" }
+  "providers": { "decider": "anthropic", "reviewer": "codex" }
 }
