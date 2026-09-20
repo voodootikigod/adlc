@@ -162,7 +162,11 @@ The rest of the policy is the merge base's too. `providers`, `labels` and
 copy that changes them is refused until the change lands on the default branch.
 For the same reason `--apply` refuses `--profile`: the baseline is read from git
 at the profile's path, and a path of the caller's choosing is a baseline of the
-caller's choosing. A relabel's `field` is exactly `priority` or `area`, it names
+caller's choosing. The commit it is read at comes from the REMOTE — `ls-remote
+--symref origin HEAD`, which answers with the remote's own default branch and its
+head, with the merge base required to be reachable from it — so a local `git
+update-ref` cannot move the comparison point either, and a remote that cannot be
+reached refuses the run instead of falling back. A relabel's `field` is exactly `priority` or `area`, it names
 the label it replaces, and an area target must be the unit the issue's verified
 locations sit in. An approval covers the artifact the reviewer read and nothing
 else: the same issue and revision with another target or other evidence is not
@@ -190,19 +194,27 @@ that a retry compounds.
 Two things this design does **not** defend against, recorded here because a limit
 nobody wrote down is indistinguishable from an oversight.
 
-**The gate ledger is not tamper-evident.** `.adlc/backlog-groom-ledger.json` is a
-local, gitignored file. Someone who can write it can add an `approve` entry and
-the write path will honour it without consulting a reviewer. It is loaded
-strictly — corruption is refused rather than treated as empty, so replay
-protection cannot be erased by deleting the file — but a *well-formed* forged
-entry is accepted.
+**The gate ledger is signed** (#1035). Each entry in
+`.adlc/backlog-groom-ledger.json` carries an HMAC over its whole content, keyed
+by `ADLC_MANIFEST_KEY` and domain-separated from every other signed artifact, and
+`ledgerApproves` refuses an entry whose signature is missing, wrong, or no longer
+matches what it covers. Hand-writing an `approve` no longer buys a write: it is
+the one thing in that file a caller cannot compute, because every other field —
+`artifactDigest` included — is derivable from the action.
 
-The reason it is a limit rather than a hole: anyone who can write that file can
-also edit the code that reads it. Signing entries would need a key, and this tool
-deliberately has none. The one asymmetry worth naming is that the ledger is
-untracked, so tampering leaves no trace in version control where a source edit
-would — which is why the autonomy floor, not the ledger, is the control that
-stands between a groomed set and a closed issue.
+Two consequences worth stating plainly:
+
+- **Writing is a key-holder act.** With no key present nothing can be sealed, so
+  every action demotes to a proposal, the run still reports what it would have
+  done, and it exits 0. That is the designed posture rather than a failure: an
+  unattended agent proposes, and closing an issue takes the key.
+- **`applied` is signed too.** It decides whether a write is skipped and reported
+  as already done, so an unsigned one would let a caller have the tool announce a
+  close it never performed — and suppress the retry that would have performed it.
+
+What signing does not do is make the ledger a substitute for the floor. An
+approval still only licenses the specific action it names, at the revision it was
+computed against, and the autonomy floor still outranks the reviewer.
 
 **Relations are bounded by the candidate filter's recall.** A pair the similarity
 pass never surfaces is a relation the tool cannot report. The filter's threshold
