@@ -6,6 +6,7 @@ import { parseArgs, printJson } from '@adlc/core';
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { dispatch } from '../lib/cli.mjs';
+import { sealSeams } from '../lib/mutations.mjs';
 
 const USAGE = `adlc-autopilot — quota-gated local issue-to-PR loop (also: adlc autopilot)
 
@@ -75,6 +76,7 @@ export function parseFlags(args) {
 }
 
 async function main() {
+  sealSeams();
   const raw = process.argv.slice(2);
   const sub = raw[0];
   if (!sub || sub === '--help' || sub === '-h') { console.log(USAGE); process.exit(0); }
