@@ -2,38 +2,73 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parse as parseAst } from 'acorn';
 
 const ROOT = process.cwd();
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 
 // ---- ground truth -----------------------------------------------------------
-function hooksJsonMentions(rel, needle) {
+function isPreToolUseWired(rel, needle) {
   const cfg = JSON.parse(read(rel));
-  return Object.values(cfg.hooks ?? {}).flat().flatMap((e) => e.hooks ?? [])
-    .some((h) => String(h.command ?? '').includes(needle));
+  const preToolHooks = cfg.hooks?.PreToolUse ?? [];
+  return preToolHooks.some((entry) =>
+    (entry.hooks ?? []).some((h) => String(h.command ?? '').includes(needle))
+  );
 }
+
 const WIRED = {
-  'claude-code': /adlc-hook-run\.mjs\s+handoff\b/.test(read('plugins/adlc-claude-code/hooks/hooks.json')),
-  codex: hooksJsonMentions('plugins/adlc-codex/hooks/hooks.json', 'adlc-handoff-gate'),
+  'claude-code': isPreToolUseWired('plugins/adlc-claude-code/hooks/hooks.json', 'adlc-hook-run.mjs') &&
+    read('plugins/adlc-claude-code/hooks/hooks.json').includes('handoff'),
+  codex: isPreToolUseWired('plugins/adlc-codex/hooks/hooks.json', 'adlc-handoff-gate'),
 };
 
-function isOptInGuarded(file, flagVar = 'CONTEXT_ROT_HANDOFF_ENABLED') {
-  const content = read(file);
-  if (!content.includes("env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1'")) return false;
-  const lines = content.split('\n');
-  const callIndices = lines
-    .map((l, i) => (/checkHandoff\s*\(/.test(l) && !l.includes('import') && !l.trim().startsWith('//') ? i : -1))
-    .filter((i) => i >= 0);
-  if (callIndices.length === 0) return false;
-  return callIndices.every((idx) => {
-    const prior = lines.slice(Math.max(0, idx - 10), idx).join('\n');
-    return new RegExp(`if\\s*\\(\\s*${flagVar}\\s*\\)`).test(prior);
-  });
+function isOptInGuardedAst(relPath) {
+  const code = read(relPath);
+  if (!code.includes("env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED === '1'")) return false;
+  const ast = parseAst(code, { ecmaVersion: 'latest', sourceType: 'module' });
+
+  let totalCalls = 0;
+  let guardedCalls = 0;
+
+  function walk(node, enclosingGuards = []) {
+    if (!node || typeof node !== 'object') return;
+    const currentGuards = [...enclosingGuards];
+    if (node.type === 'IfStatement') {
+      const test = node.test;
+      const isFlag =
+        (test.type === 'Identifier' && test.name === 'CONTEXT_ROT_HANDOFF_ENABLED') ||
+        (test.type === 'BinaryExpression' && code.slice(test.start, test.end).includes('ADLC_CONTEXT_ROT_HANDOFF_ENABLED'));
+      if (isFlag) {
+        currentGuards.push(node);
+      }
+    }
+    if (node.type === 'CallExpression') {
+      const callee = node.callee;
+      if (callee.type === 'Identifier' && callee.name === 'checkHandoff') {
+        totalCalls++;
+        if (currentGuards.length > 0) {
+          guardedCalls++;
+        }
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'test' && node.type === 'IfStatement') continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        child.forEach((c) => walk(c, currentGuards));
+      } else if (child && typeof child === 'object') {
+        walk(child, currentGuards);
+      }
+    }
+  }
+
+  walk(ast);
+  return totalCalls > 0 && totalCalls === guardedCalls;
 }
 
 const OPT_IN = {
-  pi: isOptInGuarded('plugins/adlc-pi/lib/extension.mjs'),
-  opencode: isOptInGuarded('plugins/adlc-opencode/index.mjs'),
+  pi: isOptInGuardedAst('plugins/adlc-pi/lib/extension.mjs'),
+  opencode: isOptInGuardedAst('plugins/adlc-opencode/index.mjs'),
 };
 const STATUS = /1\.11\.1/;
 const ISSUE = /#966|issues\/966/;
