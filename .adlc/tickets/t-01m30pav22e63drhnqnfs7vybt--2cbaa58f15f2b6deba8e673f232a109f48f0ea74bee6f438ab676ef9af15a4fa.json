@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #701 (bug, tokenomics, P1-high). Re-verified on main @ 16ba5fa8: packages/model-router/bin/model-router.mjs:74-87. `runRouter` returns `{ assignments, p3Findings, skippedLedger }`. In table mode, if `skippedLedger.length > 0`, it prints `Warning: N malformed ledger line(s) skipped.` to stderr. In `--json` mode, it emits `{ assignments, p3Findings }` on stdout with no mention of `skippedLedger`, and emits no warning to stderr, hiding corrupted ledger data from orchestrators.\n\nCONTEXT FOR THE BUILDER. Package `packages/model-router`: `bin/model-router.mjs` (CLI entry point), `lib/router.mjs` (runRouter), `lib/priors.mjs`, `lib/assign.mjs`, `lib/density.mjs`. Tests: `npm test -w packages/model-router` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `bin/model-router.mjs`: In `--json` mode (`values.json`), include `skippedLedger` (array of skipped lines, or `skippedLedgerCount: skippedLedger.length` alongside `skippedLedger`) in the emitted JSON object on stdout.\n2. In both table mode AND `--json` mode, when `skippedLedger.length > 0`, emit `Warning: ${skippedLedger.length} malformed ledger line(s) skipped.` to stderr.\n3. Documentation: update `packages/model-router/README.md` and make the SAME edit by hand in `docs/tools/model-router.md` and `apps/docs/content/docs/toolkit/model-router.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 `model-router --json` with malformed ledger lines surfaces `skippedLedger` in the JSON payload. verify: `node --test packages/model-router/test/skipped-ledger-json.test.mjs`\n- AC2 `model-router --json` with malformed ledger lines prints the warning to stderr. verify: `node --test packages/model-router/test/skipped-ledger-json.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/model-router`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"skippedLedger\" packages/model-router/README.md docs/tools/model-router.md apps/docs/content/docs/toolkit/model-router.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #702 (signature validation of priors) or #703 (manifest priors source description).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M30PAV22E63DRHNQNFS7VYBT",
+  "rails": [
+    "packages/model-router/lib/priors.mjs",
+    "packages/model-router/lib/density.mjs"
+  ],
+  "scope": [
+    "packages/model-router/**",
+    "docs/tools/model-router.md",
+    "apps/docs/content/docs/toolkit/model-router.mdx"
+  ],
+  "title": "model-router: include skippedLedger in --json output and keep stderr warning"
+}
