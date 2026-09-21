@@ -109,7 +109,7 @@ export function buildClusters(findings, minSize, threshold = 0.5) {
  * whole cluster is credited, which is the only remaining use of those markers.
  *
  * `readFile`/`readDir` are injected for testability; they default to real fs reads
- * that return '' / [] when the path is absent or unreadable.
+ * that return null / [] when the path is absent or unreadable.
  */
 export function findUnbankedClusters(
   clusters,
@@ -126,7 +126,7 @@ export function findUnbankedClusters(
   let templateContent = null;
   const getTemplate = () => {
     if (templateContent === null) {
-      templateContent = existsSync(templatePath) ? readFile(templatePath) : '';
+      templateContent = (existsSync(templatePath) ? readFile(templatePath) : '') ?? '';
     }
     return templateContent;
   };
@@ -151,21 +151,33 @@ export function findUnbankedClusters(
     // records none (a pre-overlap artifact, where coverage cannot be evaluated) does
     // its existence stand as a whole-cluster legacy credit.
     if (suffix && existsSync(`${outDir}/${name}${suffix}`)) {
-      const slugContent = readFile(`${outDir}/${name}${suffix}`) || '';
+      let slugContent;
+      try {
+        slugContent = readFile(`${outDir}/${name}${suffix}`);
+      } catch {
+        slugContent = null;
+      }
       // Grant filename-based legacy credit ONLY to an artifact that records no member
-      // metadata (genuinely pre-overlap). If it records members — whether ours or a
-      // DIFFERENT cluster's that merely shares the 50-char-truncated slug — fall through
-      // to the coverage/collision logic, which credits it only for the members it
-      // actually covers. Checking `!members.some(...)` here was the bug: a colliding
+      // metadata (genuinely pre-overlap) and has non-empty content (#672). If it records
+      // members — whether ours or a DIFFERENT cluster's that merely shares the 50-char-truncated
+      // slug — fall through to the coverage/collision logic, which credits it only for the
+      // members it actually covers. Checking `!members.some(...)` here was the bug: a colliding
       // artifact records none of OUR members, so it slipped through as a false credit.
-      if (!RECORDS_MEMBERS.test(slugContent)) return false;
+      // An empty, whitespace-only, or unreadable file must never grant legacy credit.
+      if (slugContent !== null && typeof slugContent === 'string' && slugContent.trim().length > 0 && !RECORDS_MEMBERS.test(slugContent)) return false;
     }
 
     // Gather the artifact content that actually references THIS cluster — by member
     // key, by the derived id, or by the legacy slug. For spec-gap the template holds
     // many lessons, so match per LINE; one lesson's marker must not credit another's.
     const candidates = suffix
-      ? listDir().filter((e) => e.endsWith(suffix)).map((e) => readFile(`${outDir}/${e}`) || '')
+      ? listDir().filter((e) => e.endsWith(suffix)).map((e) => {
+          try {
+            return readFile(`${outDir}/${e}`) || '';
+          } catch {
+            return '';
+          }
+        })
       : template.split('\n');
     const related = candidates.filter((c) =>
       members.some((m) => c.includes(m))
@@ -222,7 +234,7 @@ function defaultReadFile(path) {
   try {
     return readFileSync(path, 'utf8');
   } catch {
-    return '';
+    return null;
   }
 }
 

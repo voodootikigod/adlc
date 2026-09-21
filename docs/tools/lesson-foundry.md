@@ -34,7 +34,7 @@ Converts prosecution findings into permanent defenses. Every recurring finding i
    - **SKILL** — category is `convention`, `pattern`, `architecture`, or `style` → emits a `SKILL.md` stub with frontmatter and evidence quotes
    - **SPEC-GAP** — otherwise → appends a question to `interrogation-template.md` for P1 to address
 5. By default: dry-run (prints what would be written). Add `--write` to emit files.
-6. With `--gate`: exits 2 if any cluster has no existing defense file in `--out-dir`
+6. With `--gate`: exits 2 if any cluster has no existing non-empty defense file in `--out-dir`
 
 ## Usage
 
@@ -46,7 +46,7 @@ Options:
   --min <n>                Minimum cluster size to surface (default: 2)
   --out-dir <path>         Output directory for defense files (default: .adlc/lessons)
   --write                  Emit files (default: dry-run — prints what WOULD be written)
-  --gate                   Exit 2 if any cluster >= --min has no defense file in --out-dir
+  --gate                   Exit 2 if any cluster >= --min has no non-empty defense file in --out-dir
   --allow-missing-ledger   Allow missing ledger file when --gate is set (bootstrap opt-in).
   --llm                    Refine cluster wording via one mid-tier LLM call per cluster
   --prompt-only            Print LLM prompts and exit 0 (works with zero API keys)
@@ -59,7 +59,7 @@ Options:
 |------|---------|
 | 0 | Gate passes — no recurring unbanked lessons (or --gate not set) |
 | 1 | Operational error — bad input, unreadable ledger, write failure |
-| 2 | Gate fails — one or more clusters have no defense file in --out-dir |
+| 2 | Gate fails — one or more clusters have no non-empty defense file in --out-dir |
 
 ## Emitted file shapes
 
