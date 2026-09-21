@@ -80,7 +80,7 @@ export function checkSkill(skillPath, repoRoot, opts = {}) {
   // --write: upsert last-verified only when okCount > 0 && staleCount === 0
   if (opts.write && allOk) {
     const isoDate = new Date().toISOString().slice(0, 10);
-    stampVerified(skillPath, isoDate);
+    stampVerified(targetPath, isoDate);
   }
 
   return {
