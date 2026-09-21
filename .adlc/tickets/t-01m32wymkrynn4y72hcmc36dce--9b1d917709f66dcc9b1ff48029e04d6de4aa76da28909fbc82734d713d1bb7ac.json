@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #689 (bug, false-green, P1-high, area:review). Re-verified on main @ 91d2fba0: packages/model-ratchet/bin/model-ratchet.mjs:105-125. `isGitRepo(cwd)` succeeds from any subdirectory inside a git repository. However, `churn(churnLimit, cwd)` returns paths relative to the git repository root, while `walkSourceFiles(cwd)` returns paths relative to `cwd`. When run from a subdirectory, the two key-spaces never match: every file's churn score is 0, every file's total score is 0, the ranking falls back to arbitrary alphabetical order, and findings are appended to `<cwd>/.adlc/findings.jsonl` instead of the repository root's ledger.\n\nCONTEXT FOR THE BUILDER. Package `packages/model-ratchet`: `bin/model-ratchet.mjs` (CLI entry point), `lib/walk.mjs` (walkSourceFiles, computeInDegree), `lib/scoring.mjs`, `lib/graph.mjs`, `lib/format.mjs`, `lib/run-review.mjs`. Tests: `npm test -w packages/model-ratchet` from the worktree root. Note: `@adlc/core` already exports `repoRoot(cwd)` which executes `git rev-parse --show-toplevel`.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/model-ratchet/bin/model-ratchet.mjs`: import `repoRoot` from `@adlc/core`. After verifying `isGitRepo(cwd)`, resolve `const root = repoRoot(cwd);`.\n2. In `packages/model-ratchet/bin/model-ratchet.mjs`: pass `root` (instead of `cwd`) to `churn(churnLimit, root)`, `walkSourceFiles(root)`, and `computeInDegree(sourceFiles, root)`. Also ensure the findings ledger path resolves relative to `root` (`join(root, '.adlc', 'findings.jsonl')`).\n3. When run from any subdirectory of a git repository, candidate files and churn files share the same repo-relative key-space and receive non-zero churn scores.\n4. Documentation: update `packages/model-ratchet/README.md` and make the SAME edit by hand in `docs/tools/model-ratchet.md` and `apps/docs/content/docs/toolkit/model-ratchet.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 Running model-ratchet from a repository subdirectory calculates non-zero churn for hot files matching repo root. verify: `node --test packages/model-ratchet/test/subdirectory-root.test.mjs`\n- AC2 Running model-ratchet from a repository subdirectory targets `<root>/.adlc/findings.jsonl`. verify: `node --test packages/model-ratchet/test/subdirectory-root.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/model-ratchet`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"repository root\" packages/model-ratchet/README.md docs/tools/model-ratchet.md apps/docs/content/docs/toolkit/model-ratchet.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #688 (empty selection exit 2) or #690 (Windows backslash separator normalization).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M32WYMKRYNN4Y72HCMC36DCE",
+  "rails": [
+    "packages/model-ratchet/lib/scoring.mjs",
+    "packages/model-ratchet/lib/graph.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/**",
+    "docs/tools/model-ratchet.md",
+    "apps/docs/content/docs/toolkit/model-ratchet.mdx"
+  ],
+  "title": "model-ratchet: resolve git repository root for walk, churn, and findings ledger"
+}

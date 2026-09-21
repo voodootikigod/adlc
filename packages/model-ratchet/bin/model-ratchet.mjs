@@ -2,7 +2,8 @@
 // model-ratchet — ADLC C12 scheduled re-prosecution of hot paths.
 // Thin CLI: parse args, call lib, exit with the correct code.
 
-import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn } from '@adlc/core';
+import { join } from 'node:path';
+import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn, repoRoot } from '@adlc/core';
 import { walkSourceFiles, computeInDegree } from '../lib/walk.mjs';
 import { computeScores, topN } from '../lib/score.mjs';
 import { runReviewCmd, parseFindingsFromOutput } from '../lib/run-review.mjs';
@@ -109,19 +110,21 @@ if (!isGitRepo(cwd)) {
   opError('not a git repository (run from repo root)');
 }
 
+const root = repoRoot(cwd);
+
 // ---------------------------------------------------------------------------
 // Compute hot scores
 // ---------------------------------------------------------------------------
 
 let churnMap;
 try {
-  churnMap = churn(churnLimit, cwd);
+  churnMap = churn(churnLimit, root);
 } catch (err) {
   opError(`failed to compute churn: ${err.message}`);
 }
 
-const sourceFiles = walkSourceFiles(cwd);
-const inDegreeMap = computeInDegree(sourceFiles, cwd);
+const sourceFiles = walkSourceFiles(root);
+const inDegreeMap = computeInDegree(sourceFiles, root);
 
 // Merge: include all files that appear in either churn or sourceFiles
 const allFiles = new Set([...sourceFiles, ...Object.keys(churnMap)]);
@@ -178,7 +181,7 @@ let operationalError = false;
 for (const row of selected) {
   let result;
   try {
-    result = runReviewCmd(reviewCmd, row.file);
+    result = runReviewCmd(reviewCmd, row.file, root);
   } catch (err) {
     fileResults.push({ file: row.file, findings: [], exitCode: -1, error: err.message });
     operationalError = true;
@@ -208,7 +211,7 @@ for (const row of selected) {
   const rejected = [];
   for (const finding of parsed) {
     try {
-      appendEntry('findings', finding);
+      appendEntry('findings', finding, join(root, '.adlc'));
       findings.push(finding);
     } catch (err) {
       process.stderr.write(`error: finding for ${row.file} was NOT recorded: ${err.message}\n`);
