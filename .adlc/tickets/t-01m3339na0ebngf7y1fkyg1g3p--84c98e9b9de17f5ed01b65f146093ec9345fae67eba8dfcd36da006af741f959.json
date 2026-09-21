@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #640 (bug, false-green, P1-high, area:review). Re-verified on main @ 42cb00eb: packages/gate-fuzzing/lib/loop.mjs:111-135. In `runLoop`, when an adversary model returns unusable output (refusals, malformed text, invalid JSON), `parseCandidates` yields `candidates: []`. The loop destructures only `candidates` and discards `errors`. Zero candidates classified means `newDefeatsThisRound === 0`, advancing `dryStreak`. Three such rounds set `stoppedBy = 'dry'`, `exhaustive: true`, and the run exits 0 'clean' having classified zero candidates.\n\nCONTEXT FOR THE BUILDER. Package `packages/gate-fuzzing`: `bin/gate-fuzzing.mjs` (CLI entry point), `lib/loop.mjs` (runLoop, computeVerdict), `lib/candidate.mjs` (parseCandidates), `lib/classify.mjs`. Tests: `npm test -w packages/gate-fuzzing` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/gate-fuzzing/lib/loop.mjs`: when a fan query produces zero parsed candidates (or fails schema validation), count it as an invalid candidate generation round; if all results in a round produce zero valid candidates, mark the round as inconclusive (`inconclusiveRounds++`) rather than advancing `dryStreak`.\n2. In `packages/gate-fuzzing/lib/loop.mjs`: in `computeVerdict`, refuse to return `summary: 'clean'` or `exhaustive: true` if total candidates classified across the entire run is 0; return `summary: 'inconclusive'` and exit non-zero (exit 1 or 2) when no candidates were ever evaluated.\n3. In JSON and human report, surface parse/validation rejection counts and ensure `candidatesGenerated` reflects actual usable candidates.\n4. Documentation: update `packages/gate-fuzzing/README.md` and make the SAME edit by hand in `docs/tools/gate-fuzzing.md` and `apps/docs/content/docs/toolkit/gate-fuzzing.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 A run where the model returns unusable output (e.g. refusals) is marked inconclusive rather than clean/exhaustive. verify: `node --test packages/gate-fuzzing/test/unusable-candidates-inconclusive.test.mjs`\n- AC2 Zero classified candidates across a run produces inconclusive verdict and non-zero exit. verify: `node --test packages/gate-fuzzing/test/unusable-candidates-inconclusive.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/gate-fuzzing`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"inconclusive\" packages/gate-fuzzing/README.md docs/tools/gate-fuzzing.md apps/docs/content/docs/toolkit/gate-fuzzing.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #642 (witnessSource) or #643 (path traversal in record).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M3339NA0EBNGF7Y1FKYG1G3P",
+  "rails": [
+    "packages/gate-fuzzing/lib/witness.mjs",
+    "packages/gate-fuzzing/lib/oracle.mjs"
+  ],
+  "scope": [
+    "packages/gate-fuzzing/**",
+    "docs/tools/gate-fuzzing.md",
+    "apps/docs/content/docs/toolkit/gate-fuzzing.mdx"
+  ],
+  "title": "gate-fuzzing: do not advance dryStreak on unusable model output and refuse clean on zero classified candidates"
+}

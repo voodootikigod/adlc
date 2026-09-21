@@ -29,6 +29,7 @@ const { values } = parseArgs({
     'canary-budget':    { type: 'string', default: '2' },
     'behavioral-witness': { type: 'boolean', default: false },
     'allow-cmd':        { type: 'string', multiple: true },
+    'allow-empty':      { type: 'boolean', default: false },
     'unsafe-no-sandbox': { type: 'boolean', default: false },
     'strict-budget':    { type: 'boolean', default: false },
     'fail-on-behavioral': { type: 'boolean', default: false },
@@ -52,7 +53,7 @@ Usage:
                [--max-rounds <int>] [--dry-rounds <int>] [--token-budget <int>]
                [--witness-trials <int>] [--max-fail-rate <float>] [--canary-budget <int>]
                [--behavioral-witness] [--allow-cmd <name>...] [--unsafe-no-sandbox]
-               [--strict-budget] [--fail-on-behavioral]
+               [--allow-empty] [--strict-budget] [--fail-on-behavioral]
                [--record] [--triage] [--json] [--prompt-only] [--help]
 
 Options:
@@ -76,6 +77,7 @@ Options:
   --canary-budget <int>   Rounds to beat potency canary (default: 2)
   --behavioral-witness    Enable independent witness approval for behavioral defeats
   --allow-cmd <name>      Extend interpreter allowlist (default: node,git,npm,npx)
+  --allow-empty           Allow run to exit 0 when zero candidates are evaluated
   --unsafe-no-sandbox     Run without OS sandbox (ONLY inside disposable VM)
   --strict-budget         Any inconclusive stop → exit 1 (default: CI mode)
   --fail-on-behavioral    Behavioral defeats → exit 2 (default: REPORT only)
@@ -88,7 +90,7 @@ Options:
 Exit codes:
   0   Earned clean (canary beaten, no defeats found)
   1   Operational error (dirty tree, no sandbox, control self-test failed, etc.)
-  2   A gate was defeated by a wrong-but-passing, independently-witnessed candidate
+  2   A gate was defeated, or zero candidates were evaluated and --allow-empty not set
 
 Sandbox:
   gate-fuzzing executes adversary-generated diffs, setup, and witnesses.
@@ -316,6 +318,8 @@ const verdict = computeVerdict({
   stoppedBy: loopResult.stoppedBy,
   inconclusiveRounds: loopResult.inconclusiveRounds,
   rounds: loopResult.rounds,
+  candidatesClassified: loopResult.candidatesGenerated,
+  allowEmpty: values['allow-empty'],
   strictBudget: values['strict-budget'],
   failOnBehavioral: values['fail-on-behavioral'],
   independenceConfigured: independentApprovalFn !== null,
@@ -323,12 +327,24 @@ const verdict = computeVerdict({
 
 // ── report ────────────────────────────────────────────────────────────────────
 
+const {
+  candidatesGenerated,
+  candidatesParsed,
+  candidatesRejected,
+} = loopResult;
+
+if (candidatesGenerated === 0) {
+  console.error('WARNING: candidate generation returned 0 valid candidates (empty mutants pool)');
+}
+
 if (values.json) {
   printJson({
     exhaustive: loopResult.exhaustive,
     stoppedBy: loopResult.stoppedBy,
     rounds: loopResult.rounds,
-    candidatesGenerated: loopResult.rounds * fanWidth,
+    candidatesGenerated,
+    candidatesParsed,
+    candidatesRejected,
     defeats: verdict.defeats.map((d) => ({
       id: d.id,
       strategy: d.strategy,
@@ -352,6 +368,11 @@ if (values.json) {
 } else {
   console.log(`\ngate-fuzzing: ${verdict.summary}`);
   console.log(`  rounds: ${loopResult.rounds}, stoppedBy: ${loopResult.stoppedBy}`);
+  console.log(`  candidates: ${candidatesGenerated} usable`);
+  const rejectionsList = Object.entries(candidatesRejected).map(([k, v]) => `${k}:${v}`).join(', ');
+  if (rejectionsList) {
+    console.log(`  rejections: ${rejectionsList}`);
+  }
   console.log(`  defeats: ${verdict.defeats.length} (contract: ${verdict.contractDefeats}, behavioral: ${verdict.behavioralDefeats})`);
   console.log(`  tokensEstimated: ~${loopResult.tokensEstimated}`);
   if (verdict.inconclusive) {

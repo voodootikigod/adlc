@@ -26,7 +26,7 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 |------|---------|
 | `0` | Earned clean: potency canary beaten, no defeats found, dry streak reached |
 | `1` | Operational error: dirty tree, no sandbox binary, control self-test failed, all-inconclusive (strict), canary not beaten (strict) |
-| `2` | A gate was defeated: wrong-but-passing, surface-and-claim-bound, independently-witnessed |
+| `2` | A gate was defeated, or zero candidates were evaluated across the run and `--allow-empty` was not set |
 
 ## Flags
 
@@ -45,6 +45,7 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 | `--canary-budget <int>` | `2` | Rounds to beat potency canary |
 | `--behavioral-witness` | off | Use independent-context lens for behavioral gates |
 | `--allow-cmd <name>` | node,git,npm,npx | Extend interpreter allowlist |
+| `--allow-empty` | off | Allow run to exit 0 when zero candidates are evaluated |
 | `--unsafe-no-sandbox` | off | Skip OS sandbox (ONLY inside disposable VM) |
 | `--strict-budget` | off | Any inconclusive stop → exit 1 (CI recommended) |
 | `--fail-on-behavioral` | off | Behavioral defeats → exit 2 (default: REPORT only) |
@@ -52,6 +53,10 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 | `--triage` | off | Cheap-model root-cause annotation (never affects verdict) |
 | `--json` | off | Machine-readable JSON report |
 | `--prompt-only` | off | Print adversary prompts and exit 0 (zero API keys) |
+
+### Empty or unusable candidate generation
+
+When adversary queries produce unusable outputs (refusals, malformed JSON, or schema-invalid candidates), the round is marked inconclusive rather than advancing the dry streak. If zero candidates are evaluated across the entire run, `gate-fuzzing` refuses to report a `clean` or `exhaustive` verdict: it reports `summary: 'inconclusive'` and exits code 2 with a warning on stderr, unless `--allow-empty` is explicitly passed.
 
 ## Isolation & sandbox requirement
 

@@ -35,6 +35,8 @@ adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--provider <n
 | `--providers <a,b,c>` | Fan across distinct named providers, one candidate each. |
 | `--max-rounds <int>` / `--dry-rounds <int>` | Round ceiling (default `10`) and consecutive-dry stop count (default `3`). |
 | `--witness-trials <int>` | Unanimous witness runs per side (default `3`). |
+| `--allow-cmd <name>` | Extend interpreter allowlist (default: `node,git,npm,npx`). |
+| `--allow-empty` | Allow run to exit 0 when zero candidates are evaluated. |
 | `--unsafe-no-sandbox` | Skip the OS sandbox. Use only inside a disposable VM. |
 | `--strict-budget` | Any inconclusive stop becomes exit 1 (recommended for CI). |
 | `--fail-on-behavioral` | Behavioral defeats exit 2 (default: report only). |
@@ -42,12 +44,16 @@ adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--provider <n
 | `--json` | Machine-readable output. |
 | `--prompt-only` | Print adversary prompts and exit 0 (zero API keys). |
 
+### Empty or unusable candidate generation
+
+When adversary queries produce unusable outputs (refusals, malformed JSON, or schema-invalid candidates), the round is marked inconclusive rather than advancing the dry streak. If zero candidates are evaluated across the entire run, `gate-fuzzing` refuses to report a `clean` or `exhaustive` verdict: it reports `summary: 'inconclusive'` and exits code 2 with a warning on stderr, unless `--allow-empty` is explicitly passed.
+
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: earned clean. Potency canary beaten, no defeats found, dry streak reached.</span>
   <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, no sandbox binary, failed control self-test, or an inconclusive stop under `--strict-budget`.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate defeated. Wrong-but-passing, surface-bound, independently witnessed.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate defeated, or zero candidates were evaluated across the run and `--allow-empty` was not set.</span>
 </div>
 
 ## Example
