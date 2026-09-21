@@ -73,17 +73,17 @@ try {
 
 const { assignments, p3Findings, skippedLedger } = result;
 
+if (skippedLedger.length > 0) {
+  console.error(`\nWarning: ${skippedLedger.length} malformed ledger line(s) skipped.`);
+}
+
 if (values.json) {
-  printJson({ assignments, p3Findings });
+  printJson({ assignments, p3Findings, skippedLedger });
 } else {
   if (assignments.length === 0) {
     console.log('No tickets found.');
   } else {
     console.log(formatTable(assignments));
-  }
-
-  if (skippedLedger.length > 0) {
-    console.error(`\nWarning: ${skippedLedger.length} malformed ledger line(s) skipped.`);
   }
 
   if (p3Findings.length > 0) {

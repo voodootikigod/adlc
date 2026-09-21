@@ -43,8 +43,12 @@ export async function runRouter(opts = {}) {
   }
   const tickets = activeTickets(allTickets);
 
+  // Load manifest ledger for priors — forest-aware (T-MANIFEST-FOREST): once
+  // segmented, priors recorded post-cutover live in manifest.d/, not root.
+  const { entries, skipped: skippedLedger } = readManifestForest(adlcDir);
+
   if (tickets.length === 0) {
-    return { assignments: [], p3Findings: [], ticketErrors, skippedLedger: [] };
+    return { assignments: [], p3Findings: [], ticketErrors, skippedLedger };
   }
 
   // Compute CPM float
@@ -53,9 +57,6 @@ export async function runRouter(opts = {}) {
     throw Object.assign(new Error(cpmResult.error), { isOpError: true });
   }
 
-  // Load manifest ledger for priors — forest-aware (T-MANIFEST-FOREST): once
-  // segmented, priors recorded post-cutover live in manifest.d/, not root.
-  const { entries, skipped: skippedLedger } = readManifestForest(adlcDir);
   const priors = buildPriors(entries);
 
   // Assign routes

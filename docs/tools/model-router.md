@@ -65,7 +65,8 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
       "reason": "..."
     }
   ],
-  "p3Findings": []
+  "p3Findings": [],
+  "skippedLedger": []
 }
 ```
 
