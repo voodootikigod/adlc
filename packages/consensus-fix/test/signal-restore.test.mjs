@@ -278,6 +278,59 @@ test('winning candidate --apply writes atomically', () => {
     });
 
     assert.equal(res.status, 0);
+    assert.match(res.stdout, /Winning fix has been applied\./);
+    assert.equal(readFileSync(targetFile, 'utf8'), 'export const val = 2;\n');
+
+    const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('winning candidate --apply --json reports applied: true', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'consensus-fix-cli-apply-json-'));
+  try {
+    const targetFile = join(dir, 'target.mjs');
+    writeFileSync(targetFile, 'export const val = 1;\n');
+
+    const preload = join(dir, 'mock-llm.mjs');
+    writeFileSync(preload, `
+      globalThis.fetch = async () => new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              changes: [{
+                file: ${JSON.stringify(targetFile)},
+                hunks: [{ startLine: 1, endLine: 1, replacement: 'export const val = 2;' }]
+              }]
+            })
+          }
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 10 }
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    `);
+
+    const testCmd = `node -e "const fs = require('fs'); const c = fs.readFileSync('${targetFile}', 'utf8'); if (!c.includes('val = 2')) process.exit(1);"`;
+
+    const res = spawnSync(process.execPath, [
+      '--import', preload,
+      BIN,
+      '--test-cmd', testCmd,
+      '--files', targetFile,
+      '--n', '1',
+      '--allow-dirty',
+      '--apply',
+      '--json',
+    ], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: { ...process.env, OPENAI_API_KEY: 'mock-key' },
+    });
+
+    assert.equal(res.status, 0);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.winner.applied, true);
     assert.equal(readFileSync(targetFile, 'utf8'), 'export const val = 2;\n');
 
     const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));

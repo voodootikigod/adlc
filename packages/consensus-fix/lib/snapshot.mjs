@@ -42,30 +42,18 @@ export function writeFileAtomic(filePath, content) {
 
   const dir = dirname(realPath);
   const tmp = join(dir, `.${basename(realPath)}.${process.pid}.${randomUUID()}.tmp`);
-  let fd;
-  let created = false;
-  let open = false;
+  const fd = openSync(tmp, 'wx');
 
   try {
-    fd = openSync(tmp, 'wx');
-    created = true;
-    open = true;
     writeFileSync(fd, content, 'utf8');
     if (mode !== null) {
       fchmodSync(fd, mode);
     }
     closeSync(fd);
-    open = false;
     renameSync(tmp, realPath);
-    created = false;
-  } catch (err) {
-    if (open) {
-      try { closeSync(fd); } catch {}
-    }
-    if (created) {
-      try { unlinkSync(tmp); } catch {}
-    }
-    throw err;
+  } finally {
+    try { closeSync(fd); } catch {}
+    try { unlinkSync(tmp); } catch {}
   }
 }
 
