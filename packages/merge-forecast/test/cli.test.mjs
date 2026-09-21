@@ -14,8 +14,8 @@ function withTickets(fn) {
   const ticketsFile = join(dir, 'tickets.json');
   writeFileSync(ticketsFile, JSON.stringify({
     tickets: [
-      { id: 'T1', title: 'Ticket 1', scope: ['packages/a/**'] },
-      { id: 'T2', title: 'Ticket 2', scope: ['packages/b/**'] },
+      { id: 'T1', title: 'Ticket 1', scope: ['packages/autopilot/**'] },
+      { id: 'T2', title: 'Ticket 2', scope: ['packages/backlog-groom/**'] },
     ],
   }));
   try {
@@ -205,9 +205,9 @@ describe('merge-forecast CLI --help documents the width gate truthfully (#997)',
     const ticketsFile = join(dir, 'tickets.json');
     writeFileSync(ticketsFile, JSON.stringify({
       tickets: [
-        { id: 'T0', title: 'foundation', scope: ['packages/aa/**'], edges: [{ to: 'T1' }, { to: 'T2' }] },
-        { id: 'T1', title: 'one', scope: ['packages/bb/**'] },
-        { id: 'T2', title: 'two', scope: ['packages/cc/**'] },
+        { id: 'T0', title: 'foundation', scope: ['packages/core/**'], edges: [{ to: 'T1' }, { to: 'T2' }] },
+        { id: 'T1', title: 'one', scope: ['packages/autopilot/**'] },
+        { id: 'T2', title: 'two', scope: ['packages/backlog-groom/**'] },
       ],
     }));
     try {

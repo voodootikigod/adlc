@@ -45,6 +45,8 @@ Pairs at or above `--conflict-threshold` get a `SEQUENCE` verdict. Below thresho
 
 The `--co-change-limit` option must be an integer >= 1. When git history yields zero commits or empty co-change pairs, merge-forecast outputs a descriptive warning in `warnings`.
 
+Tickets with no scope or an empty scope emit a warning (`ticket "<id>" has no scope defined`), and tickets whose declared scope matches zero files in the repository emit a warning (`ticket "<id>" scope matches 0 files in repo`). Any pair involving an unscoped or zero-match ticket is treated as `SEQUENCE` (score 1.0, signal `unscoped`) and excluded from parallel wave width calculations.
+
 ## Width Analysis
 
 - **firstWaveWidth** — greedy largest independent set among **wave-1** tickets (tickets where all pairs are below threshold). Answers *how wide can I dispatch right now*. This is the number `--width` is gated against.

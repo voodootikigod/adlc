@@ -38,6 +38,8 @@ adlc merge-forecast [--tickets <path>] [--width <N>] [--build-min <X>] [--merge-
 
 The `--co-change-limit` option must be an integer >= 1. When git history yields zero commits or empty co-change pairs, merge-forecast outputs a descriptive warning in `warnings`.
 
+Tickets with no scope or an empty scope emit a warning (`ticket "<id>" has no scope defined`), and tickets whose declared scope matches zero files in the repository emit a warning (`ticket "<id>" scope matches 0 files in repo`). Any pair involving an unscoped or zero-match ticket is treated as `SEQUENCE` (score 1.0, signal `unscoped`) and excluded from parallel wave width calculations.
+
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
