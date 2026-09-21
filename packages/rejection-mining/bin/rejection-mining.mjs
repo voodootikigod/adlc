@@ -87,6 +87,9 @@ if (flags.llm && clusters.length > 0) {
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }
+  if (llmRefinements.size === 0) {
+    opError('LLM refinement failed for all clusters. Use --prompt-only to inspect prompts.');
+  }
 }
 
 // Attach LLM titles back to clusters for reporting
@@ -95,6 +98,7 @@ const enrichedClusters = clusters.map((c, idx) => {
   return {
     ...c,
     title: refinement?.title ?? null,
+    refined: refinement !== null,
   };
 });
 
@@ -111,12 +115,14 @@ if (flags.json) {
     skippedPRs,
   }));
 } else {
+  const failedRefinements = flags.llm ? (clusters.length - llmRefinements.size) : 0;
   const lines = buildHumanReport({
     clusters: enrichedClusters,
     lensPlans,
     totalSignals: signals.length,
     totalPRs,
     skippedPRs,
+    failedRefinements,
   });
   for (const l of lines) console.log(l);
 }

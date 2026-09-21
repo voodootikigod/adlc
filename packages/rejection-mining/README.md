@@ -111,6 +111,7 @@ or stack traces being passed directly to API response bodies or client UI.
     {
       "slug": "error-expose-raw",
       "title": "Error Exposure Leak",
+      "refined": true,
       "count": 6,
       "prCount": 4,
       "path": ".adlc/lenses/lens-error-expose-raw.md"
@@ -135,8 +136,10 @@ illustrative-only "Example Objections" section, separate from the Charter.
 | Code | Meaning |
 |------|---------|
 | 0 | Success — mining complete |
-| 1 | Operational error — `gh` missing, auth failure, no PRs found |
+| 1 | Operational error — `gh` missing, auth failure, no PRs found, or LLM refinement failed for all clusters |
 | 2 | Gate fails (reserved; currently unused by this tool) |
+
+When `--llm` is requested, if LLM refinement failed for all clusters, the command exits 1 with an operational error.
 
 ## Requirements
 
