@@ -26,6 +26,8 @@ adlc skill-rot [path ...] [--write] [--json]
 Positional paths override the default search roots (`.claude/skills`,
 `.agents/skills`, `skills`), which are searched only when they exist.
 
+Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs.
+
 | Flag | Description |
 | --- | --- |
 | `--write` | When every claim in a skill is ok, upsert `last-verified: <YYYY-MM-DD>` into its frontmatter. Skills with stale claims or zero claims are never stamped. |
