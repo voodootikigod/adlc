@@ -4,11 +4,11 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs';
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
-import { isGitRepo, coChange, topoSort } from '@adlc/core';
+import { isGitRepo, coChange, topoSort, globMatch } from '@adlc/core';
 
 /**
  * Run the full forecast.
@@ -26,13 +26,13 @@ import { isGitRepo, coChange, topoSort } from '@adlc/core';
 export async function runForecast(opts) {
   const {
     tickets,
-    root,
     coChangeLimit = 500,
     conflictThreshold = 0.5,
     width = null,
     buildMin = null,
     mergeMin = null,
   } = opts;
+  const root = resolve(opts.root ?? process.cwd());
 
   // Validate the ticket DAG (Spec D2): a dependency cycle makes the schedule
   // undefined. topoWaves drains indegree-0 nodes and silently DROPS any node
@@ -58,12 +58,24 @@ export async function runForecast(opts) {
     };
   }
 
-  // Walk the repo tree once
-  const repoFiles = walkTree(root);
+  // Walk the repo tree once and normalize to POSIX separators for glob matching
+  const repoFiles = walkTree(root).map((f) => f.replaceAll('\\', '/'));
+
+  // Validate ticket scopes (#680)
+  const warnings = [];
+  const unscopedTicketIds = new Set();
+  for (const t of tickets) {
+    if (!Array.isArray(t.scope) || t.scope.length === 0) {
+      warnings.push(`ticket "${t.id}" has no scope defined`);
+      unscopedTicketIds.add(t.id);
+    } else if (repoFiles.filter((f) => t.scope.some((g) => globMatch(g, f))).length === 0) {
+      warnings.push(`ticket "${t.id}" scope matches 0 files in repo`);
+      unscopedTicketIds.add(t.id);
+    }
+  }
 
   // Co-change data — degrade gracefully if not a git repo or shallow
   let coChangeData = null;
-  const warnings = [];
   if (isGitRepo(root)) {
     try {
       coChangeData = coChange(coChangeLimit, root);
@@ -112,6 +124,17 @@ export async function runForecast(opts) {
 
   // Score each pair
   const pairResults = pairs.map(([a, b]) => {
+    if (unscopedTicketIds.has(a.id) || unscopedTicketIds.has(b.id)) {
+      return {
+        pair: `${a.id}–${b.id}`,
+        a: a.id,
+        b: b.id,
+        score: 1.0,
+        signal: 'unscoped',
+        verdict: 'SEQUENCE',
+        hardVeto: false,
+      };
+    }
     const { score, signal, hardVeto } = pairScore(a, b, {
       repoFiles,
       root,
@@ -188,6 +211,11 @@ export async function runForecast(opts) {
     for (const id of waves[w]) waveMap.set(id, w);
   }
   const concurrentVetoes = pairResults.filter((pr) => {
+    // Unscoped/zero-match pairs are treated as SEQUENCE so computeWaveWidth
+    // excludes them from parallel wave width (firstWaveWidth / scheduleWidth).
+    // They emit warnings rather than hard vetoes, so width analysis bounds
+    // safe concurrency without gate-failing an unconfigured fan-out.
+    if (pr.signal === 'unscoped') return false;
     // A hard-vetoed pair (score 1.0, scope-overlap) is always high-risk; any
     // OTHER pair whose score has reached the conflict threshold (namespace
     // collision, import-radius, co-change) is high-risk too — the README's
