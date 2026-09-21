@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #673 (bug, false-green, P1-high, area:review). Re-verified on main @ 42cb00eb: packages/lesson-foundry/lib/foundry.mjs:66, bin/lesson-foundry.mjs. In `loadFindings`, unparseable and malformed ledger lines are dropped from findings and reported in `skipped`, but the downstream `--gate` check evaluates purely on surviving clusters. A corrupted or partially unparseable ledger silently drops lessons out of the denominator and exits 0 'clean'.\n\nCONTEXT FOR THE BUILDER. Package `packages/lesson-foundry`: `bin/lesson-foundry.mjs` (CLI entry point), `lib/foundry.mjs` (loadFindings, findUnbankedClusters), `lib/report.mjs`. Tests: `npm test -w packages/lesson-foundry` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/lesson-foundry/bin/lesson-foundry.mjs`: when `--gate` is requested, if `skipped > 0` and `--tolerate-malformed` is not provided (or `skipped > Number(values['tolerate-malformed'] ?? 0)`), fail the gate (exit 2) or error with `findings ledger contains ${skipped} malformed line(s)`.\n2. Add `--tolerate-malformed <n>` CLI option to permit explicit legacy tolerance when needed.\n3. In `--json` mode, ensure `skipped` malformed count is surfaced and triggers gate failure in gate verdict.\n4. Documentation: update `packages/lesson-foundry/README.md` and make the SAME edit by hand in `docs/tools/lesson-foundry.md` and `apps/docs/content/docs/toolkit/lesson-foundry.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 `lesson-foundry --gate` fails with exit 2 when findings ledger contains unparseable lines. verify: `node --test packages/lesson-foundry/test/malformed-ledger-gate.test.mjs`\n- AC2 `lesson-foundry --gate --tolerate-malformed 2` succeeds when skipped count is <= threshold. verify: `node --test packages/lesson-foundry/test/malformed-ledger-gate.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/lesson-foundry`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"tolerate-malformed\" packages/lesson-foundry/README.md docs/tools/lesson-foundry.md apps/docs/content/docs/toolkit/lesson-foundry.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #671 (missing ledger opError) or #672 (empty defense file).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M3339NSAEW4EQ61TCAHK2TBC",
+  "rails": [
+    "packages/lesson-foundry/lib/cluster-id.mjs",
+    "packages/lesson-foundry/lib/finding-hash.mjs"
+  ],
+  "scope": [
+    "packages/lesson-foundry/**",
+    "docs/tools/lesson-foundry.md",
+    "apps/docs/content/docs/toolkit/lesson-foundry.mdx"
+  ],
+  "title": "lesson-foundry: fail gate when findings ledger contains unparseable or malformed lines"
+}

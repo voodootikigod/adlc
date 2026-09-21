@@ -27,6 +27,7 @@ const { values: flags } = parseArgs({
     force:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
     'allow-missing-ledger': { type: 'boolean', default: false },
+    'tolerate-malformed':   { type: 'string' },
     llm:         { type: 'boolean', default: false },
     tier:        { type: 'string',  default: 'mid' },
     'prompt-only': { type: 'boolean', default: false },
@@ -38,6 +39,16 @@ const ledgerName = flags.ledger;
 const minSize    = parseInt(flags.min, 10);
 const outDir     = flags['out-dir'];
 const tier       = flags.tier;
+
+let tolerateMalformed = 0;
+if (flags['tolerate-malformed'] !== undefined) {
+  const rawTol = flags['tolerate-malformed'];
+  const parsed = Number(rawTol);
+  if (rawTol.trim() === '' || !Number.isInteger(parsed) || parsed < 0) {
+    opError(`--tolerate-malformed must be a non-negative integer (got: ${rawTol})`);
+  }
+  tolerateMalformed = parsed;
+}
 
 if (isNaN(minSize) || minSize < 1) {
   opError(`--min must be a positive integer (got: ${flags.min})`);
@@ -137,8 +148,13 @@ if (flags.write) {
 
 // Output (human or JSON)
 if (flags.json) {
+  const malformedFailed = flags.gate && skipped > tolerateMalformed;
   const gateResult = flags.gate
-    ? { unbanked: unbanked.map((c) => c.name), pass: unbanked.length === 0 }
+    ? {
+        unbanked: unbanked.map((c) => c.name),
+        skippedMalformed: skipped,
+        pass: unbanked.length === 0 && !malformedFailed,
+      }
     : null;
   printJson(buildJsonResult({
     clusters, skipped, filtered, plan, gateResult,
@@ -204,6 +220,13 @@ if (flags.write) {
 }
 
 // Exit
+if (flags.gate && skipped > tolerateMalformed) {
+  gateFail(
+    `lesson-foundry: findings ledger contains ${skipped} malformed line(s)`,
+    { skipped, tolerateMalformed }
+  );
+}
+
 if (flags.gate && unbanked.length > 0) {
   const names = unbanked.map((c) => c.name).join(', ');
   gateFail(
