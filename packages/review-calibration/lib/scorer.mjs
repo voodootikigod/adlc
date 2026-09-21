@@ -99,7 +99,7 @@ export async function scorePlants(plants, findings, deps) {
   const falsePositives = countFalsePositives(findings, plants, tolerance);
   const truePositives = caught;
   const precisionDenom = truePositives + falsePositives;
-  const precision = precisionDenom > 0 ? truePositives / precisionDenom : 1;
+  const precision = precisionDenom > 0 ? truePositives / precisionDenom : null;
 
   return { recall, caught, total, precision, truePositives, falsePositives, perCategory, results };
 }

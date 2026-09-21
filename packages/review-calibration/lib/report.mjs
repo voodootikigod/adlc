@@ -19,7 +19,8 @@
 export function buildJsonReport(scorecard) {
   const recallPass = scorecard.recall >= scorecard.minRecall;
   const precisionPass =
-    scorecard.minPrecision == null || scorecard.precision >= scorecard.minPrecision;
+    scorecard.minPrecision == null ||
+    (scorecard.precision !== null && scorecard.precision >= scorecard.minPrecision);
   return {
     recall: scorecard.recall,
     caught: scorecard.caught,
@@ -65,8 +66,10 @@ export function printScorecard(scorecard) {
     configuredJudgeEchoRecall, configuredJudgeBounded,
   } = scorecard;
   const pct = (n) => `${(n * 100).toFixed(1)}%`;
+  const formatPrecision = (p) => (p != null ? pct(p) : 'null');
   const recallPass = recall >= minRecall;
-  const precisionPass = minPrecision == null || precision >= minPrecision;
+  const precisionPass =
+    minPrecision == null || (precision != null && precision >= minPrecision);
   const pass = recallPass && precisionPass;
 
   console.log('');
@@ -75,7 +78,7 @@ export function printScorecard(scorecard) {
   console.log(`Plants:          ${total}`);
   console.log(`Overall recall:  ${pct(recall)}  (${caught}/${total} plants caught)`);
   console.log(`Min recall gate: ${pct(minRecall)}  [${recallPass ? 'PASS' : 'FAIL'}]`);
-  console.log(`Precision:       ${pct(precision)}  (${falsePositives} spurious finding(s))`);
+  console.log(`Precision:       ${formatPrecision(precision)}  (${falsePositives} spurious finding(s))`);
   if (minPrecision != null) {
     console.log(`Min precision:   ${pct(minPrecision)}  [${precisionPass ? 'PASS' : 'FAIL'}]`);
   }
@@ -119,6 +122,6 @@ export function printScorecard(scorecard) {
 
   console.log(pass
     ? `GATE PASS — recall ${pct(recall)} meets minimum ${pct(minRecall)}`
-    : `GATE FAIL — recall ${pct(recall)} / precision ${pct(precision)} below thresholds`);
+    : `GATE FAIL — recall ${pct(recall)} / precision ${formatPrecision(precision)} below thresholds`);
   console.log('');
 }

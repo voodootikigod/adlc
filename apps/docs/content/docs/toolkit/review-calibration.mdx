@@ -28,6 +28,11 @@ never be bounded — that run still completes and reports
 machine consumer. When no finding located a plant the judge was never consulted,
 and `configuredJudgeBounded` / `configuredJudgeEchoRecall` are `null`.
 
+When `truePositives + falsePositives === 0` (e.g.
+a reviewer produces zero findings, or none locating plants), `precision` is `null`
+(not 1.0) because precision cannot be evaluated; configuring `--min-precision`
+will fail the gate if precision is `null`.
+
 ## Usage
 
 ```sh

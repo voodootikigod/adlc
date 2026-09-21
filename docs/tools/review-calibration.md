@@ -189,7 +189,10 @@ review-calibration \
 
 `precision` is real: `truePositives / (truePositives + falsePositives)`, where a
 false positive is a finding that locates no plant (in a clean base + only-our-plants
-tree, nothing else is broken).
+tree, nothing else is broken). When `truePositives + falsePositives === 0` (e.g.
+a reviewer produces zero findings, or none locating plants), `precision` is `null`
+(not 1.0) because precision cannot be evaluated; configuring `--min-precision`
+will fail the gate if precision is `null`.
 
 ## Scoring logic
 
