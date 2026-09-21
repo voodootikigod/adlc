@@ -8,7 +8,17 @@ import { join, extname, dirname, resolve, relative } from 'node:path';
 // Source file extensions we care about
 // ---------------------------------------------------------------------------
 
-const SOURCE_EXTS = new Set(['.mjs', '.js', '.ts', '.tsx', '.py']);
+export const SOURCE_EXTS = new Set([
+  '.mjs',
+  '.js',
+  '.ts',
+  '.tsx',
+  '.py',
+  '.cjs',
+  '.mts',
+  '.cts',
+  '.jsx',
+]);
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__']);
 
