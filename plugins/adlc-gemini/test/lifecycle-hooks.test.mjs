@@ -122,6 +122,7 @@ function runCases(cases) {
   for (const tc of cases) {
     test(tc.name, (t) => {
       const res = stopWith(t, tc.calls, tc.options);
+      if (tc.exactResponse) assert.deepEqual(res, tc.exactResponse);
       if (tc.decision) assert.equal(res.decision, tc.decision, res.reason);
       if (tc.reason) assert.match(res.reason, tc.reason);
       if (typeof tc.assert === 'function') tc.assert(res, t);
@@ -168,6 +169,7 @@ const unverifiedEditsCases = [
     name: "onStop: returns decision: stop when enforcement is inactive",
     calls: [],
     options: { enforcement: '0' },
+    exactResponse: { decision: 'stop' },
     decision: 'stop',
   },
   {
