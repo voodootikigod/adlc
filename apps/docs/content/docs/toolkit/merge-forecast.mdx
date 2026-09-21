@@ -36,6 +36,8 @@ adlc merge-forecast [--tickets <path>] [--width <N>] [--build-min <X>] [--merge-
 | `--conflict-threshold <F>` | `0.5` | Pair score at or above this triggers a `SEQUENCE` verdict. |
 | `--json` | off | Machine-readable JSON output. |
 
+The `--co-change-limit` option must be an integer >= 1. When git history yields zero commits or empty co-change pairs, merge-forecast outputs a descriptive warning in `warnings`.
+
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>

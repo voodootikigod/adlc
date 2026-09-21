@@ -58,6 +58,8 @@ Each parallel-eligible ticket pair (neither is an ancestor of the other in the D
 
 Pairs at or above `--conflict-threshold` get a `SEQUENCE` verdict. Below threshold: `PARALLEL`.
 
+The `--co-change-limit` option must be an integer >= 1. When git history yields zero commits or empty co-change pairs, merge-forecast outputs a descriptive warning in `warnings`.
+
 ## Width Analysis
 
 - **certifiedWidth** — greedy largest independent set among wave-1 tickets (tickets where all pairs are below threshold).
