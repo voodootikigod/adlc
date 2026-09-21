@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
-import { classifyTestResult, runTest } from '../lib/runner.mjs';
+import { classifyTestResult, runTest, formatDiagnosticOutput, MAX_BASELINE_OUTPUT_BYTES } from '../lib/runner.mjs';
 
 const BIN = resolve(new URL('.', import.meta.url).pathname, '../bin/hollow-test.mjs');
 
@@ -137,5 +137,53 @@ describe('CLI: baseline test output reporting on failure (#288)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('truncates oversized baseline output preserving failure head and tail', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hollow-baseline-large-'));
+    try {
+      initRepo(dir);
+      writeFileSync(join(dir, 'file.mjs'), 'export const a = 1;\n');
+      commitAll(dir, 'initial');
+      writeFileSync(join(dir, 'file.mjs'), 'export const a = 2;\n');
+      commitAll(dir, 'update');
+
+      const result = runCli([
+        '--test-cmd', 'node -e "console.log(\'EARLY_FAILURE_HEAD \' + \'x\'.repeat(100000) + \' LATE_FAILURE_TAIL\'); process.exit(1);"',
+        '--base', 'HEAD~1',
+        '--max', '5',
+      ], dir);
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /EARLY_FAILURE_HEAD/);
+      assert.match(result.stderr, /LATE_FAILURE_TAIL/);
+      assert.match(result.stderr, /\[\.\.\. hollow-test: truncated \d+ bytes of output \.\.\.\]/);
+      assert.match(result.stderr, /baseline suite is not green/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('formatDiagnosticOutput', () => {
+  it('returns short output unchanged with trailing newline', () => {
+    assert.equal(formatDiagnosticOutput('hello'), 'hello\n');
+    assert.equal(formatDiagnosticOutput('hello\n'), 'hello\n');
+  });
+
+  it('handles empty or non-string gracefully', () => {
+    assert.equal(formatDiagnosticOutput(''), '');
+    assert.equal(formatDiagnosticOutput(null), '');
+    assert.equal(formatDiagnosticOutput(undefined), '');
+  });
+
+  it('truncates output exceeding maxBytes and preserves head and tail with a marker', () => {
+    const head = 'HEAD_START' + 'A'.repeat(50);
+    const tail = 'B'.repeat(50) + 'TAIL_END';
+    const text = head + 'MIDDLE'.repeat(200) + tail;
+    const formatted = formatDiagnosticOutput(text, 100);
+    assert.match(formatted, /^HEAD_START/);
+    assert.match(formatted, /TAIL_END\n?$/);
+    assert.match(formatted, /\[\.\.\. hollow-test: truncated \d+ bytes of output \.\.\.\]/);
   });
 });

@@ -23,6 +23,34 @@ function childEnv() {
 // suite we would legitimately point --test-cmd at.
 const MAX_TEST_OUTPUT_BYTES = 256 * 1024 * 1024;
 
+// Bound the diagnostic output emitted to stderr on baseline failure so massive
+// logs or process flailing do not flood CI logs or hide the failure summary.
+export const MAX_BASELINE_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * Format captured diagnostic output (stdout/stderr) for stderr reporting.
+ * Bounds output to MAX_BASELINE_OUTPUT_BYTES preserving head and tail with an
+ * explicit truncation marker so massive output does not flood CI logs.
+ *
+ * @param {string} output
+ * @param {number} [maxBytes]
+ * @returns {string}
+ */
+export function formatDiagnosticOutput(output, maxBytes = MAX_BASELINE_OUTPUT_BYTES) {
+  if (!output || typeof output !== 'string') return '';
+  if (output.length <= maxBytes) {
+    return output.endsWith('\n') ? output : `${output}\n`;
+  }
+  const headSize = Math.floor(maxBytes / 2);
+  const tailSize = maxBytes - headSize;
+  const head = output.slice(0, headSize);
+  const tail = output.slice(-tailSize);
+  const truncatedBytes = output.length - headSize - tailSize;
+  const marker = `\n[... hollow-test: truncated ${truncatedBytes} bytes of output ...]\n`;
+  const formatted = head + marker + tail;
+  return formatted.endsWith('\n') ? formatted : `${formatted}\n`;
+}
+
 /**
  * Run the test command once against whatever is currently on disk. Does NOT
  * mutate or restore any file — the caller controls file state. Used both for

@@ -13,7 +13,7 @@ import {
   filterTargetFiles, buildFileTargets, readFileSafe, changedLinesAreCommentOnly,
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
-import { runMutant, runTest } from '../lib/runner.mjs';
+import { runMutant, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
 import {
   ownerStateFor, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
   resolveTarget, recordPathFor, writeFileAtomic, sweepStaleTemps,
@@ -279,10 +279,10 @@ if (base === undefined) {
 const baseline = runTest(testCmd, timeoutMs, cwd);
 if (baseline.status !== 0) {
   if (baseline.stdout) {
-    process.stderr.write(baseline.stdout.endsWith('\n') ? baseline.stdout : `${baseline.stdout}\n`);
+    process.stderr.write(formatDiagnosticOutput(baseline.stdout));
   }
   if (baseline.stderr) {
-    process.stderr.write(baseline.stderr.endsWith('\n') ? baseline.stderr : `${baseline.stderr}\n`);
+    process.stderr.write(formatDiagnosticOutput(baseline.stderr));
   }
   // Report `reason` when the command could not be run to completion. Without it
   // a launch/buffer failure prints as "exit null", which reads as a failing
