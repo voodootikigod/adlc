@@ -131,11 +131,8 @@ Sibling tools:
 
 ## Core gaps
 
-`@adlc/core` (frozen) has no completion-aware ticket loader: `loadTickets`
-returns every ticket including ones tombstoned with `completed: true`. A
-finished ticket must not be assigned a model or gated, so
-`lib/active-tickets.mjs` filters completed tickets locally (dropping them and
-stripping edges to them so the remaining DAG stays valid). An identical copy
-lives in `merge-forecast` and `coldstart`. Everything else (`loadTickets`,
+`@adlc/core` provides `activeTickets` to filter completed tickets (dropping them and
+stripping edges to them so the remaining DAG stays valid) so finished tickets are not
+assigned a model or gated. Everything else (`loadTickets`,
 `computeFloat`, `readEntries`, `parseArgs`, `pass`, `gateFail`, `opError`,
 `printJson`) is available in `@adlc/core`.

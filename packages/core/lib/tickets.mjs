@@ -153,3 +153,25 @@ export function scopesOverlap(a, b) {
   }
   return false;
 }
+
+/**
+ * Filter completed (tombstoned) tickets out of a backlog enumeration.
+ * A ticket carrying `completed: true` is finished work: it must not
+ * be scheduled, routed, or audited as open backlog. Completed tickets are also
+ * dropped as prerequisites — an edge pointing to a completed (satisfied) ticket
+ * is removed from the survivors so the remaining DAG stays valid and self-consistent.
+ *
+ * @param {Array<object>} tickets
+ * @returns {Array<object>}
+ */
+export function activeTickets(tickets) {
+  const done = new Set(tickets.filter((t) => t.completed === true).map((t) => t.id));
+  if (done.size === 0) return tickets;
+  return tickets
+    .filter((t) => !done.has(t.id))
+    .map((t) =>
+      Array.isArray(t.edges) && t.edges.some((e) => done.has(e.to))
+        ? { ...t, edges: t.edges.filter((e) => !done.has(e.to)) }
+        : t,
+    );
+}

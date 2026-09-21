@@ -925,4 +925,35 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
     assert.equal(result.status, 1, `expected exit 1, got ${result.status}`);
     assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
   });
+
+  test('coldstart --all --prompt-only audits only the active ticket, skipping the completed one', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [
+        { id: 'T1', title: 'open work', scope: ['a/**'] },
+        { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
+      ]);
+      const result = runCLI(['--all', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /user \(T1\)/);
+      assert.doesNotMatch(result.stdout, /user \(T2\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('coldstart of a completed ticket BY ID still emits its prompt', () => {
+    const dir = makeTempDir();
+    try {
+      const ticketsPath = writeTickets(dir, [
+        { id: 'T1', title: 'open work', scope: ['a/**'] },
+        { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
+      ]);
+      const result = runCLI(['T2', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /user \(T2\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

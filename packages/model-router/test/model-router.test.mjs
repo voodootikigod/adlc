@@ -580,3 +580,20 @@ test('CLI: realistic fixture run', () => {
     cleanup(tmp);
   }
 });
+
+test('runRouter: completed ticket is not assigned, but active ticket depending on it routes', async () => {
+  const tmp = makeTmp();
+  try {
+    const ticketsPath = writeTickets(tmp, [
+      { id: 'T1', title: 'shipped', completed: true, scope: ['a/**'], rails: ['test/a/**'], edges: [{ to: 'T2' }] },
+      { id: 'T2', title: 'still open', scope: ['b/**'], rails: ['test/b/**'] },
+    ]);
+    const { assignments } = await runRouter({ ticketsPath, adlcDir: join(tmp, '.adlc') });
+    const ids = assignments.map((a) => a.id);
+    assert.ok(!ids.includes('T1'), 'completed T1 must not be assigned');
+    assert.ok(ids.includes('T2'), 'active T2 must still be assigned');
+  } finally {
+    cleanup(tmp);
+  }
+});
+

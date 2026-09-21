@@ -1918,7 +1918,7 @@ var ok = (value) => ({ ok: true, value });
 var fail = (kind, code, message) => ({ ok: false, kind, code, message });
 var invalid2 = (code, message) => fail("invalid", code, message);
 var conflict2 = (code, message) => fail("conflict", code, message);
-var isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+var isPlainObject2 = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 var trimmed = (value) => typeof value === "string" ? value.trim() : "";
 function conflictMessage(envId, fileId) {
   return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE2} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
@@ -1941,7 +1941,7 @@ function readActiveTicketPointer2(root = ".") {
     if (!id2) return invalid2("INVALID_CURRENT_TICKET", `${CURRENT_TICKET_FILE2} is an empty string pointer`);
     return ok({ present: true, id: id2, ticketHash: null, legacyString: true });
   }
-  if (!isPlainObject(parsed)) {
+  if (!isPlainObject2(parsed)) {
     return invalid2(
       "INVALID_CURRENT_TICKET",
       `${CURRENT_TICKET_FILE2} must be an object like {"id":"T1","ticketHash":"<64 hex>"} (got ${Array.isArray(parsed) ? "an array" : JSON.stringify(parsed)}). To deactivate, delete the file.`

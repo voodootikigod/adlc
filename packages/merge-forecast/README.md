@@ -89,9 +89,6 @@ merge-forecast --co-change-limit 1000
 
 ## Core Gaps
 
-`@adlc/core` (frozen) has no completion-aware ticket loader: `loadTickets`
-returns every ticket including ones tombstoned with `completed: true` (by
-`ticket-prune --write` or an admin completion). Backlog enumerators must not
-schedule finished work, so `lib/active-tickets.mjs` implements the filter
-locally (drop completed tickets and strip edges pointing to them, keeping the
-remaining DAG valid). An identical copy lives in `model-router` and `coldstart`.
+`@adlc/core` provides `activeTickets` to filter completed tickets (drop completed
+tickets and strip edges pointing to them, keeping the remaining DAG valid) so
+backlog enumerators do not schedule finished work.

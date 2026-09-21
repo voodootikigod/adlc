@@ -379,15 +379,15 @@ test('helpers: canonical-json exports canonicalJson matching byte pins', async (
   assert.equal(canonicalJson({ z: { y: [{ b: 1, a: undefined }] } }), '{"z":{"y":[{"a":null,"b":1}]}}');
 });
 
-test('helpers: op-error exports opError returning isOpError tagged Error', async () => {
-  const { opError } = await import('../lib/op-error.mjs');
-  const err = opError('m');
+test('helpers: OpError from @adlc/core returns isOpError tagged Error', async () => {
+  const { OpError } = await import('@adlc/core');
+  const err = new OpError('m');
   assert.ok(err instanceof Error);
   assert.equal(err.message, 'm');
   assert.equal(err.isOpError, true);
 });
 
-test('helpers: single canonicalJson, no canonical(, single opError across lib', () => {
+test('helpers: single canonicalJson, no canonical(, no local opError across lib', () => {
   const libFiles = readdirSync(libDir).filter((f) => f.endsWith('.mjs')).map((f) => join(libDir, f));
   let canonicalJsonCount = 0;
   let canonicalCount = 0;
@@ -405,7 +405,7 @@ test('helpers: single canonicalJson, no canonical(, single opError across lib', 
 
   assert.equal(canonicalJsonCount, 1, `Expected exactly 1 function canonicalJson across lib/, found ${canonicalJsonCount}`);
   assert.equal(canonicalCount, 0, `Expected 0 function canonical( across lib/, found ${canonicalCount}`);
-  assert.equal(opErrorCount, 1, `Expected exactly 1 function opError across lib/, found ${opErrorCount}`);
+  assert.equal(opErrorCount, 0, `Expected 0 function opError across lib/, found ${opErrorCount}`);
 });
 
 test('helpers: every export of execute.mjs is a function', async () => {
@@ -414,3 +414,16 @@ test('helpers: every export of execute.mjs is a function', async () => {
     assert.equal(typeof val, 'function', `${name} in execute.mjs must be a function, got ${typeof val}`);
   }
 });
+
+test('parseProfile: distinguishes array from non-array in error message', async () => {
+  const { parseProfile } = await import('../lib/profile.mjs');
+  assert.throws(
+    () => parseProfile([]),
+    (err) => err.isOpError === true && err.message.includes('expected a JSON object, got an array')
+  );
+  assert.throws(
+    () => parseProfile('string-val'),
+    (err) => err.isOpError === true && err.message.includes('expected a JSON object, got string')
+  );
+});
+

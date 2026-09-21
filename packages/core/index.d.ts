@@ -13,6 +13,14 @@ export function pass(message?: string): never;
 export function gateFail(message?: string, details?: unknown): never;
 export function opError(message?: string): never;
 export function printJson(value: unknown): void;
+export function isPlainObject(value: unknown): value is Record<string, unknown>;
+export interface OpError extends Error {
+  readonly isOpError: true;
+}
+export const OpError: {
+  new (message?: string): OpError;
+  readonly prototype: OpError;
+};
 export function readStdin(): Promise<string>;
 export function promptOnly(prompts: string | readonly string[]): never;
 
@@ -152,6 +160,9 @@ export function topoSort(tickets: Array<{ id: string; edges?: Array<{ to: string
   order: string[];
   cycle: string[] | null;
 };
+export function activeTickets<T extends { id: string; completed?: boolean; edges?: Array<{ to: string }> }>(
+  tickets: readonly T[]
+): T[];
 export function computeFloat(tickets: Array<{ id: string; duration?: number; edges?: Array<{ to: string }> }>): unknown;
 export function globMatch(pattern: string, path: string): boolean;
 export function scopesOverlap(left: unknown, right: unknown): boolean;

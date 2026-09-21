@@ -21,15 +21,13 @@
 // Pure: no I/O, no env. Used by the real LLM path, the ADLC_GATE_MOCK_RESPONSE
 // test seam and the cache reader, so all three agree on what "readable" means.
 
+import { isPlainObject } from '@adlc/core';
+
 export const UNREADABLE_VERDICT_PREFIX = 'coldstart: unreadable executability verdict —';
 
 /** Hard cap on how much of the received shape an error message may describe. */
 const MAX_SHAPE_CHARS = 160;
 const MAX_KEYS_SHOWN = 8;
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 /**
  * Describe a value's SHAPE (type, length, top-level keys) for an error

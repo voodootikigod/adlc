@@ -17,7 +17,7 @@
  * default and only a deliberate `[]` may widen.
  */
 
-import { opError } from './op-error.mjs';
+import { OpError, isPlainObject } from '@adlc/core';
 
 /** Profile schema versions this build understands. */
 export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1]);
@@ -44,11 +44,6 @@ const PRIORITY_KEYS = new Set(['high', 'medium', 'low']);
 const PROVIDERS_KEYS = new Set(['decider', 'reviewer']);
 const UNIT_KEYS = new Set(['name', 'paths']);
 
-
-function isPlainObject(v) {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 /**
  * Reject the first key not in `allowed`, naming it and where it sat.
  *
@@ -59,7 +54,7 @@ function rejectUnknownKeys(obj, allowed, where) {
   for (const key of Object.keys(obj)) {
     if (!allowed.has(key)) {
       const known = [...allowed].join(', ');
-      throw opError(`backlog-groom profile: unknown key ${JSON.stringify(key)} in ${where} — known keys are: ${known}`);
+      throw new OpError(`backlog-groom profile: unknown key ${JSON.stringify(key)} in ${where} — known keys are: ${known}`);
     }
   }
 }
@@ -92,35 +87,35 @@ function clone(v) {
  */
 export function parseProfile(doc) {
   if (!isPlainObject(doc)) {
-    throw opError(`backlog-groom profile: expected a JSON object, got ${Array.isArray(doc) ? 'an array' : typeof doc}`);
+    throw new OpError(`backlog-groom profile: expected a JSON object, got ${Array.isArray(doc) ? 'an array' : typeof doc}`);
   }
   rejectUnknownKeys(doc, TOP_LEVEL_KEYS, 'the profile');
 
   if (!Object.hasOwn(doc, 'schemaVersion')) {
-    throw opError('backlog-groom profile: schemaVersion is required');
+    throw new OpError('backlog-groom profile: schemaVersion is required');
   }
   const version = doc.schemaVersion;
   if (!Number.isInteger(version) || !SUPPORTED_SCHEMA_VERSIONS.includes(version)) {
-    throw opError(
+    throw new OpError(
       `backlog-groom profile: unsupported schemaVersion ${JSON.stringify(version)} — this build understands: ${SUPPORTED_SCHEMA_VERSIONS.join(', ')}`
     );
   }
 
   if (Object.hasOwn(doc, 'labels')) {
-    if (!isPlainObject(doc.labels)) throw opError('backlog-groom profile: labels must be an object');
+    if (!isPlainObject(doc.labels)) throw new OpError('backlog-groom profile: labels must be an object');
     rejectUnknownKeys(doc.labels, LABELS_KEYS, 'labels');
     if (Object.hasOwn(doc.labels, 'priority')) {
-      if (!isPlainObject(doc.labels.priority)) throw opError('backlog-groom profile: labels.priority must be an object');
+      if (!isPlainObject(doc.labels.priority)) throw new OpError('backlog-groom profile: labels.priority must be an object');
       rejectUnknownKeys(doc.labels.priority, PRIORITY_KEYS, 'labels.priority');
       const seenLabels = new Set();
       for (const [band, label] of Object.entries(doc.labels.priority)) {
         if (typeof label !== 'string' || label.length === 0) {
-          throw opError(`backlog-groom profile: labels.priority.${band} must be a non-empty string`);
+          throw new OpError(`backlog-groom profile: labels.priority.${band} must be a non-empty string`);
         }
         // Two bands mapping to one label make a relabel proposal meaningless:
         // the "from" and the "to" would be the same string.
         if (seenLabels.has(label)) {
-          throw opError(`backlog-groom profile: labels.priority maps more than one band to ${JSON.stringify(label)}`);
+          throw new OpError(`backlog-groom profile: labels.priority maps more than one band to ${JSON.stringify(label)}`);
         }
         seenLabels.add(label);
       }
@@ -130,24 +125,24 @@ export function parseProfile(doc) {
       // so a proposal would name an unrelated label as the one to replace — and
       // a consumer applying it would overwrite something it was never about.
       if (typeof doc.labels.areaPrefix !== 'string' || doc.labels.areaPrefix.length === 0) {
-        throw opError('backlog-groom profile: labels.areaPrefix must be a non-empty string');
+        throw new OpError('backlog-groom profile: labels.areaPrefix must be a non-empty string');
       }
     }
   }
 
   if (Object.hasOwn(doc, 'providers')) {
-    if (!isPlainObject(doc.providers)) throw opError('backlog-groom profile: providers must be an object');
+    if (!isPlainObject(doc.providers)) throw new OpError('backlog-groom profile: providers must be an object');
     rejectUnknownKeys(doc.providers, PROVIDERS_KEYS, 'providers');
     for (const [role, name] of Object.entries(doc.providers)) {
       if (typeof name !== 'string' || name.length === 0) {
-        throw opError(`backlog-groom profile: providers.${role} must be a non-empty string`);
+        throw new OpError(`backlog-groom profile: providers.${role} must be a non-empty string`);
       }
     }
   }
 
   for (const [key, label] of [['autonomyFloor', 'autonomyFloor'], ['units', 'units'], ['frozenPaths', 'frozenPaths']]) {
     if (Object.hasOwn(doc, key) && !Array.isArray(doc[key])) {
-      throw opError(`backlog-groom profile: ${label} must be an array`);
+      throw new OpError(`backlog-groom profile: ${label} must be an array`);
     }
   }
 
@@ -159,17 +154,17 @@ export function parseProfile(doc) {
   // prevent, so the check has to reach the same depth as the damage.
   if (Object.hasOwn(doc, 'units')) {
     doc.units.forEach((unit, i) => {
-      if (!isPlainObject(unit)) throw opError(`backlog-groom profile: units[${i}] must be an object`);
+      if (!isPlainObject(unit)) throw new OpError(`backlog-groom profile: units[${i}] must be an object`);
       rejectUnknownKeys(unit, UNIT_KEYS, `units[${i}]`);
       if (typeof unit.name !== 'string' || unit.name.length === 0) {
-        throw opError(`backlog-groom profile: units[${i}].name must be a non-empty string`);
+        throw new OpError(`backlog-groom profile: units[${i}].name must be a non-empty string`);
       }
       if (!Array.isArray(unit.paths) || unit.paths.length === 0) {
-        throw opError(`backlog-groom profile: units[${i}] (${unit.name}) must declare a non-empty paths array`);
+        throw new OpError(`backlog-groom profile: units[${i}] (${unit.name}) must declare a non-empty paths array`);
       }
       for (const g of unit.paths) {
         if (typeof g !== 'string' || g.length === 0) {
-          throw opError(`backlog-groom profile: units[${i}] (${unit.name}) has a non-string path glob`);
+          throw new OpError(`backlog-groom profile: units[${i}] (${unit.name}) has a non-string path glob`);
         }
       }
     });
@@ -179,7 +174,7 @@ export function parseProfile(doc) {
     if (!Object.hasOwn(doc, key)) continue;
     for (const [i, v] of doc[key].entries()) {
       if (typeof v !== 'string' || v.length === 0) {
-        throw opError(`backlog-groom profile: ${key}[${i}] must be a non-empty string`);
+        throw new OpError(`backlog-groom profile: ${key}[${i}] must be a non-empty string`);
       }
     }
   }
