@@ -65,15 +65,20 @@ try {
 }
 
 // Fetch signals from gh
-let signals, totalPRs, skippedPRs;
+let signals, totalPRs, skippedPRs, firstError;
 try {
-  ({ signals, totalPRs, skippedPRs } = await fetchSignals({ limit, ghRunner: runGh }));
+  ({ signals, totalPRs, skippedPRs, firstError } = await fetchSignals({ limit, ghRunner: runGh }));
 } catch (err) {
   opError(`gh fetch failed: ${err.message}`);
 }
 
 if (totalPRs === 0) {
   opError('No PRs found. Check gh auth (run `gh auth login`) and that this is a GitHub-linked repo.');
+}
+
+if (totalPRs > 0 && skippedPRs === totalPRs) {
+  const detail = firstError ? ` (cause: ${firstError})` : '';
+  opError(`All ${totalPRs} PR(s) failed to fetch details. Check GitHub API rate limits or token permissions.${detail}`);
 }
 
 // Cluster signals

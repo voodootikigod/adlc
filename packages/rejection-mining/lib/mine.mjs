@@ -12,16 +12,17 @@ import { clusterSignals, deriveSlug } from './cluster.mjs';
  * @param {object} opts
  * @param {number} opts.limit
  * @param {function} opts.ghRunner
- * @returns {{ signals: Array, totalPRs: number, skippedPRs: number }}
+ * @returns {{ signals: Array, totalPRs: number, skippedPRs: number, firstError: string|null }}
  */
 export async function fetchSignals({ limit, ghRunner }) {
   const prs = fetchPRList(limit, ghRunner);
   if (!Array.isArray(prs) || prs.length === 0) {
-    return { signals: [], totalPRs: 0, skippedPRs: 0 };
+    return { signals: [], totalPRs: 0, skippedPRs: 0, firstError: null };
   }
 
   const allSignals = [];
   let skippedPRs = 0;
+  let firstError = null;
 
   for (const pr of prs) {
     let detail;
@@ -29,6 +30,10 @@ export async function fetchSignals({ limit, ghRunner }) {
       detail = fetchPRDetail(pr.number, ghRunner);
     } catch (err) {
       skippedPRs++;
+      if (firstError === null) {
+        const stderr = err?.stderr ? String(err.stderr).trim() : '';
+        firstError = (stderr || err?.message || String(err)).trim().replace(/\r?\n.*/s, '');
+      }
       continue;
     }
 
@@ -41,6 +46,7 @@ export async function fetchSignals({ limit, ghRunner }) {
     signals: allSignals,
     totalPRs: prs.length,
     skippedPRs,
+    firstError,
   };
 }
 

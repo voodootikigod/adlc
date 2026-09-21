@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #744 (bug, false-green, P1-high, area:review). Re-verified on main @ 42cb00eb: packages/rejection-mining/lib/mine.mjs:31, bin/rejection-mining.mjs:65-75. In `fetchSignals`, every failure of `fetchPRDetail` (token scope, rate limiting, network error) is caught and counted into `skippedPRs`, and the error is discarded. When all PRs fail to fetch (`totalPRs > 0 && skippedPRs === totalPRs`), the CLI prints `No clusters met --min threshold.` and exits 0 with `rejection-mining: done.`. 'Could not check' is reported as 'clean'.\n\nCONTEXT FOR THE BUILDER. Package `packages/rejection-mining`: `bin/rejection-mining.mjs` (CLI entry point), `lib/mine.mjs` (fetchSignals, buildClusters), `lib/lens.mjs`, `lib/report.mjs`. Tests: `npm test -w packages/rejection-mining` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/rejection-mining/bin/rejection-mining.mjs`: after `fetchSignals`, if `totalPRs > 0 && skippedPRs === totalPRs`, call `opError(`All ${totalPRs} PR(s) failed to fetch details. Check GitHub API rate limits or token permissions.`)` (exit 1) instead of proceeding to cluster and exiting 0.\n2. In `lib/mine.mjs`: when catching errors in `fetchPRDetail`, retain the first error message or error code on the returned object (e.g. `firstError: err.message`) so the CLI or report can indicate why PR fetches failed.\n3. In human report and `--json` output, ensure `skippedPRs` and failure conditions are accurately represented.\n4. Documentation: update `packages/rejection-mining/README.md` and make the SAME edit by hand in `docs/tools/rejection-mining.md` and `apps/docs/content/docs/toolkit/rejection-mining.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 When all PRs fail to fetch details, rejection-mining exits 1 with operational error. verify: `node --test packages/rejection-mining/test/all-prs-skipped.test.mjs`\n- AC2 When at least one PR succeeds, rejection-mining proceeds normally and reports skippedPRs count. verify: `node --test packages/rejection-mining/test/all-prs-skipped.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/rejection-mining`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"failed to fetch\" packages/rejection-mining/README.md docs/tools/rejection-mining.md apps/docs/content/docs/toolkit/rejection-mining.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #746 (clobbering lens files) or #747 (LLM failure exit).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M3339MTA05DT2H2A5PG1T3TR",
+  "rails": [
+    "packages/rejection-mining/lib/lens.mjs",
+    "packages/rejection-mining/lib/cluster.mjs"
+  ],
+  "scope": [
+    "packages/rejection-mining/**",
+    "docs/tools/rejection-mining.md",
+    "apps/docs/content/docs/toolkit/rejection-mining.mdx"
+  ],
+  "title": "rejection-mining: fail operationally when 100% of PR details fail to fetch"
+}
