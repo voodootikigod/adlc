@@ -1,0 +1,16 @@
+{
+  "body": "Source: repository maintenance audit (test-suite bloat review, finding 3). plugins/adlc-gemini/test/lifecycle-hooks.test.mjs is 5,948 lines containing 193 tests, of which 115 are onStop tests repeating ~30 lines of identical transcript-writing and try/finally cleanup scaffolding. 183 try/finally blocks exist only to rm the temp directory.\n\nNORMATIVE BEHAVIOUR.\n1. Refactor setupTempRepo(t, options) in plugins/adlc-gemini/test/lifecycle-hooks.test.mjs to take the test context `t` as its first parameter and register `t.after(cleanup)` when present.\n2. Add a `stopWith(t, calls, options)` helper function that creates the temp repository, writes the transcript containing the supplied tool calls / responses, invokes onStop(payload, { env }), and returns the decision object.\n3. Table-drive the repetitive onStop tests (unverified edits, verification command recognition, rail boundary protections, external store handling) using descriptive scenario names, tool-call arrays, expected decision ('stop' | 'continue'), and expected reason regexes.\n4. Remove the redundant try/finally blocks across the file.\n5. Keep all 193 tests passing. Do NOT drop any test assertion, negative case, or security check.\n\nACCEPTANCE CRITERIA.\n- AC1 All tests pass cleanly. verify: `node --test plugins/adlc-gemini/test/lifecycle-hooks.test.mjs` exits 0 with 193 passing tests.\n- AC2 File length drops by at least 2,500 lines. verify: `test $(wc -l < plugins/adlc-gemini/test/lifecycle-hooks.test.mjs) -lt 3500`\n- AC3 Full gemini plugin test suite passes. verify: `node --test plugins/adlc-gemini/test/*.test.mjs` exits 0.\n- AC4 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0 with kind: 'nothing' (test-only change).",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M32ZK26CRJDC638A13DH3BKN",
+  "rails": [
+    "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-gemini/build-gate-inline.mjs",
+    "plugins/adlc-gemini/rails-checker.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-gemini/test/lifecycle-hooks.test.mjs"
+  ],
+  "title": "refactor(adlc-gemini): deduplicate lifecycle-hooks tests with t.after and table-driven onStop suites"
+}
