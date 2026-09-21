@@ -63,6 +63,8 @@ tool-log patterns:
 - `Created <path>`
 - `"file_path":"<path>"` (JSON tool-log format)
 
+Path-bearing verbs (`Writing`, `Editing`, `Created`) match at line start or when preceded by whitespace (e.g. timestamp prefixes `12:03:01 Writing <path>` or indented lines); prior to #623, only line-leading verbs matched.
+
 Any path that does not match at least one `--scope` glob is a violation.
 
 ### 3. edit-churn
@@ -145,8 +147,8 @@ Scope is deliberately not part of this decision: a well-behaved session may cont
 no writes at all, and supervisors such as `@adlc/fleet` pass the ticket's `--scope`
 on every consult — so a log with lines but no extractable file path is analyzed
 normally (repeated-error, size and budget signals still fire; the scope signals
-simply have nothing to flag). Under-extraction of paths from real logs is issue
-#623's domain.
+simply have nothing to flag). Under-extraction of paths from real logs was addressed
+in issue #623.
 
 ## Examples
 

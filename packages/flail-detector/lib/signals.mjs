@@ -17,8 +17,10 @@ export const ERROR_LINE_RE = /error|exception|failed|cannot|ENOENT/i;
  *   Created <path>
  *   file_path":"<path>
  */
+const VERB_PATTERN = /(?:^|\s)(?:Writing|Editing|Created)\s+([^\s]+)/i;
+
 const PATH_EXTRACT_PATTERNS = [
-  /^(?:Writing|Editing|Created)\s+([^\s]+)/i,
+  VERB_PATTERN,
   /"file_path"\s*:\s*"([^"]+)"/,
 ];
 
@@ -63,7 +65,7 @@ export function normalizeError(line) {
 export function extractPath(line) {
   for (const re of PATH_EXTRACT_PATTERNS) {
     const m = re.exec(line);
-    if (m) return m[1];
+    if (m !== null) return m[1];
   }
   return null;
 }

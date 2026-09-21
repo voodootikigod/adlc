@@ -34,6 +34,8 @@ adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-byt
 | `--json` | Machine-readable JSON output for orchestrators. |
 | `--help` | Print help and exit 0. |
 
+Path-bearing verbs (`Writing`, `Editing`, `Created`) match at line start or when preceded by whitespace (e.g. timestamp prefixes `12:03:01 Writing <path>` or indented lines); prior to #623, only line-leading verbs matched.
+
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
