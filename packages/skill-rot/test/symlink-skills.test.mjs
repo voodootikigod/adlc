@@ -226,16 +226,18 @@ describe('symlink skill discovery (issue #765)', () => {
     }
   });
 
-  test('skips symlinks targeting node_modules directory', () => {
+  test('skips symlinks targeting node_modules directory or its descendants', () => {
     const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
     try {
       const nmDir = join(dir, 'shared', 'node_modules');
-      mkdirSync(join(nmDir, 'vendor-skill'), { recursive: true });
-      writeFileSync(join(nmDir, 'vendor-skill', 'SKILL.md'), '# Hidden Vendor\n- `ls`\n', 'utf8');
+      const vendorDir = join(nmDir, 'vendor-skill');
+      mkdirSync(vendorDir, { recursive: true });
+      writeFileSync(join(vendorDir, 'SKILL.md'), '# Hidden Vendor\n- `ls`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });
-      symlinkSync(nmDir, join(skillsDir, 'alias-modules'));
+      // Point directly to descendant inside node_modules
+      symlinkSync(vendorDir, join(skillsDir, 'vendor'));
 
       const results = findSkills(['skills'], dir);
       assert.equal(results.length, 0);
@@ -244,16 +246,18 @@ describe('symlink skill discovery (issue #765)', () => {
     }
   });
 
-  test('skips symlinks targeting .git directory', () => {
+  test('skips symlinks targeting .git directory or its descendants', () => {
     const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
     try {
       const gitDir = join(dir, 'shared', '.git');
-      mkdirSync(join(gitDir, 'hooks'), { recursive: true });
-      writeFileSync(join(gitDir, 'hooks', 'SKILL.md'), '# Hidden Git\n- `ls`\n', 'utf8');
+      const hooksDir = join(gitDir, 'hooks');
+      mkdirSync(hooksDir, { recursive: true });
+      writeFileSync(join(hooksDir, 'SKILL.md'), '# Hidden Git\n- `ls`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });
-      symlinkSync(gitDir, join(skillsDir, 'alias-git'));
+      // Point directly to descendant inside .git
+      symlinkSync(hooksDir, join(skillsDir, 'hooks'));
 
       const results = findSkills(['skills'], dir);
       assert.equal(results.length, 0);

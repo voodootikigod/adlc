@@ -56,8 +56,8 @@ function collectSkills(dir, results, strict, visited) {
   if (visited.has(realDir)) return;
   visited.add(realDir);
 
-  const realBase = basename(realDir);
-  if (realBase === 'node_modules' || realBase === '.git') return;
+  const pathParts = realDir.split(/[\\/]/);
+  if (pathParts.includes('node_modules') || pathParts.includes('.git')) return;
 
   let entries;
   try {
