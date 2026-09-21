@@ -1,0 +1,18 @@
+{
+  "body": "Source: GitHub issue #766 (bug, P1-high). Re-verified on main @ e4a62e78: packages/skill-rot/lib/rot-checker.mjs:50-53. In checkSkill, `allOk` is a tautology equivalent to `staleCount === 0`, and the write gate `opts.write && staleCount === 0` stamps last-verified: <today> on skills with 0 claims (ok=0, stale=0, unverifiable=0), reporting [OK] and exit 0.\n\nCONTEXT FOR THE BUILDER. Package `packages/skill-rot`: `bin/skill-rot.mjs` (CLI entry point), `lib/rot-checker.mjs` (checkSkill + stampVerified), `lib/format.mjs` (formatHuman + formatJson), `lib/extract-claims.mjs`, `lib/verify-claims.mjs`, `lib/find-skills.mjs`, `lib/frontmatter.mjs`. Tests: `npm test -w packages/skill-rot` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. `opts.write` must ONLY stamp `last-verified` when `okCount > 0 && staleCount === 0`. Never stamp a skill with zero claims.\n2. In `lib/rot-checker.mjs`: `allOk` in checkSkill result must require `okCount > 0 && staleCount === 0`.\n3. In `lib/format.mjs`: Render zero-claim skills with a distinct status `[NO-CLAIMS]` instead of `[OK]`. In text output summary, report zero-claim skills distinctly (e.g. `X no claims`). In JSON output, ensure `allOk: false` on zero-claim skills and include `noClaims: true`.\n4. Documentation: update `packages/skill-rot/README.md`, `docs/tools/skill-rot.md`, and `apps/docs/content/docs/toolkit/skill-rot.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 A prose-only SKILL.md with 0 claims is NOT stamped with last-verified under --write. verify: `node --test packages/skill-rot/test/zero-claims.test.mjs`\n- AC2 checkSkill emits allOk: false when a skill has zero claims, and allOk: true only when okCount > 0 && staleCount === 0. verify: `node --test packages/skill-rot/test/zero-claims.test.mjs`\n- AC3 CLI output formats zero-claim skills as [NO-CLAIMS] and reflects this in summary counts. verify: `node --test packages/skill-rot/test/zero-claims.test.mjs`\n- AC4 Existing test suite passes with no regressions. verify: `npm test -w packages/skill-rot`\n- AC5 Docs updated in all three mirror files. verify: `grep -c \"NO-CLAIMS\" packages/skill-rot/README.md docs/tools/skill-rot.md apps/docs/content/docs/toolkit/skill-rot.mdx` (each >= 1)\n- AC6 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #765 (symlinked skills) or claim extraction grammar changes.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M30DNXF1GM9VHJQ34050ES8R",
+  "rails": [
+    "packages/skill-rot/lib/extract-claims.mjs",
+    "packages/skill-rot/lib/verify-claims.mjs",
+    "packages/skill-rot/test/frontmatter-preserve.test.mjs"
+  ],
+  "scope": [
+    "packages/skill-rot/**",
+    "docs/tools/skill-rot.md",
+    "apps/docs/content/docs/toolkit/skill-rot.mdx"
+  ],
+  "title": "skill-rot: do not stamp last-verified on zero-claim skills and distinguish zero claims from allOk"
+}

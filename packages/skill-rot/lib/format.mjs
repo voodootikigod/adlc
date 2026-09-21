@@ -4,6 +4,10 @@
 
 import { relative } from 'node:path';
 
+function isZeroClaims(r) {
+  return r.ok === 0 && r.stale === 0 && r.unverifiable === 0;
+}
+
 /**
  * Format skill results as a human-readable table.
  * @param {object[]} results - array of checkSkill results
@@ -19,7 +23,7 @@ export function formatTable(results, repoRoot) {
 
   for (const r of results) {
     const rel = relative(repoRoot, r.path);
-    const statusIcon = r.stale > 0 ? '[STALE]' : '[OK]   ';
+    const statusIcon = r.stale > 0 ? '[STALE]' : (isZeroClaims(r) ? '[NO-CLAIMS]' : '[OK]   ');
     lines.push(`  ${statusIcon} ${rel}`);
     lines.push(`         ok=${r.ok}  stale=${r.stale}  unverifiable=${r.unverifiable}`);
 
@@ -32,9 +36,10 @@ export function formatTable(results, repoRoot) {
 
   lines.push('');
 
-  const totalOk = results.filter((r) => r.stale === 0).length;
+  const totalClean = results.filter((r) => r.stale === 0 && !isZeroClaims(r)).length;
   const totalStale = results.filter((r) => r.stale > 0).length;
-  lines.push(`Summary: ${results.length} skill(s) checked, ${totalOk} clean, ${totalStale} stale`);
+  const totalNoClaims = results.filter(isZeroClaims).length;
+  lines.push(`Summary: ${results.length} skill(s) checked, ${totalClean} clean, ${totalStale} stale, ${totalNoClaims} no claims`);
 
   return lines.join('\n');
 }
@@ -47,18 +52,26 @@ export function formatTable(results, repoRoot) {
  */
 export function formatJson(results, repoRoot) {
   return {
-    skills: results.map((r) => ({
-      path: relative(repoRoot, r.path),
-      ok: r.ok,
-      stale: r.stale,
-      unverifiable: r.unverifiable,
-      staleDetails: r.staleDetails,
-      allOk: r.allOk,
-    })),
+    skills: results.map((r) => {
+      const isZero = isZeroClaims(r);
+      const skill = {
+        path: relative(repoRoot, r.path),
+        ok: r.ok,
+        stale: r.stale,
+        unverifiable: r.unverifiable,
+        staleDetails: r.staleDetails,
+        allOk: isZero ? false : r.allOk,
+      };
+      if (isZero) {
+        skill.noClaims = true;
+      }
+      return skill;
+    }),
     summary: {
       total: results.length,
-      clean: results.filter((r) => r.stale === 0).length,
+      clean: results.filter((r) => r.stale === 0 && !isZeroClaims(r)).length,
       stale: results.filter((r) => r.stale > 0).length,
+      noClaims: results.filter(isZeroClaims).length,
     },
   };
 }

@@ -24,7 +24,7 @@ Pass one or more explicit path arguments to override the defaults.
 
 | Flag | Description |
 |------|-------------|
-| `--write` | When **all** claims in a skill are ok, upsert `last-verified: <YYYY-MM-DD>` into the skill's frontmatter (created if absent). Skills with stale claims are never stamped. |
+| `--write` | When **all** claims in a skill are ok, upsert `last-verified: <YYYY-MM-DD>` into the skill's frontmatter (created if absent). Skills with stale claims or zero claims are never stamped. |
 | `--json` | Machine-readable output for orchestrators. Prints a JSON object with `skills[]` and `summary`. |
 
 ## What gets verified
@@ -52,7 +52,7 @@ For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
 - `stale` — verifiable but fails (counts toward gate failure)
 - `unverifiable` — cannot determine truth (URLs, no `package.json`, ambiguous)
 
-Unverifiable claims are never counted as stale.
+Unverifiable claims are never counted as stale. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`.
 
 ## Exit codes
 

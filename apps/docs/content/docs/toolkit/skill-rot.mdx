@@ -15,7 +15,7 @@ extracts the claims it can actually check (command names, file paths, and
 `npm`/`npx`/`pnpm`/`yarn` script references), and verifies them against the
 repo. Verifiable-but-failing claims are `stale` and fail the gate; claims it
 cannot adjudicate (URLs, missing `package.json`) are `unverifiable` and never
-counted against you. Run it weekly in CI to keep the skill corpus honest.
+counted against you. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`. Run it weekly in CI to keep the skill corpus honest.
 
 ## Usage
 
@@ -28,7 +28,7 @@ Positional paths override the default search roots (`.claude/skills`,
 
 | Flag | Description |
 | --- | --- |
-| `--write` | When every claim in a skill is ok, upsert `last-verified: <YYYY-MM-DD>` into its frontmatter. Skills with stale claims are never stamped. |
+| `--write` | When every claim in a skill is ok, upsert `last-verified: <YYYY-MM-DD>` into its frontmatter. Skills with stale claims or zero claims are never stamped. |
 | `--json` | Machine-readable output with `skills[]` and a `summary`. |
 
 ## Exit codes

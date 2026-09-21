@@ -73,10 +73,10 @@ export function checkSkill(skillPath, repoRoot, opts = {}) {
     }
   }
 
-  const allOk = staleCount === 0 && (okCount > 0 || unverifiableCount > 0 || claims.length === 0);
+  const allOk = okCount > 0 && staleCount === 0;
 
-  // --write: upsert last-verified only when ALL claims are ok
-  if (opts.write && staleCount === 0) {
+  // --write: upsert last-verified only when okCount > 0 && staleCount === 0
+  if (opts.write && allOk) {
     const isoDate = new Date().toISOString().slice(0, 10);
     stampVerified(skillPath, isoDate);
   }
