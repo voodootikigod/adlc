@@ -19,6 +19,8 @@ adlc init --root /path/to/repo --json
 The initializer preserves existing files, refuses symlink escapes from the
 project root, and never edits user-global `~/.codex` implicitly.
 
+When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
+
 ## Security modes
 
 Every scaffolded `.adlc/config.json` sets `securityMode: "unsigned-fallback"`.

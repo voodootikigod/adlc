@@ -31,3 +31,5 @@ not maintain a second scaffold implementation.
 
 Exit code `0` means initialization completed, including a no-change rerun;
 exit code `1` means an operational or input error.
+
+When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
