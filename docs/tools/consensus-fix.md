@@ -169,7 +169,8 @@ consensus-fix --test-cmd "node --test test/math.test.mjs" \
 
 - **Dirty-tree guard**: refuses to run against a dirty git tree unless `--allow-dirty`. Prevents accidental loss of unstaged work.
 - **Snapshot + restore in `finally`**: every candidate evaluation restores all `--files` to their original content, even if the test crashes or the LLM returns garbage.
-- **SIGINT restore**: if interrupted (Ctrl-C), the snapshot is restored before exit.
+- **Termination signal restore**: process cancellation on SIGINT, SIGTERM, or SIGHUP restores the original files from the snapshot before exit.
+- **Atomic writes**: file restoration, candidate hunk application, and winning candidate --apply writes are atomic (write temp file in same directory, then renameSync) to guard against partial writes or truncation.
 - **File-list enforcement**: any candidate that references a file outside `--files` is discarded with a diagnostic message, never written.
 
 ---

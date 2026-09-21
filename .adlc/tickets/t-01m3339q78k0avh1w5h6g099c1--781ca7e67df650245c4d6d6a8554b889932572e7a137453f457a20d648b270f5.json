@@ -1,0 +1,22 @@
+{
+  "acceptanceCriteria": [
+    "In packages/consensus-fix/bin/consensus-fix.mjs, register snapshot restore handlers for SIGTERM and SIGHUP in addition to SIGINT so process cancellation restores the original files",
+    "In packages/consensus-fix/lib/snapshot.mjs and bin/consensus-fix.mjs, make restoreSnapshot, applyChanges, and winning candidate --apply writes atomic using write-temp-then-rename to prevent partial writes and truncation on termination",
+    "Verify via tests in packages/consensus-fix/test/signal-restore.test.mjs that snapshot restore runs on termination signals and atomic writes succeed",
+    "Existing consensus-fix test suite continues to pass",
+    "Update documentation in packages/consensus-fix/README.md, docs/tools/consensus-fix.md, and apps/docs/content/docs/toolkit/consensus-fix.mdx"
+  ],
+  "id": "T-01M3339Q78K0AVH1W5H6G099C1",
+  "issue": 600,
+  "package": "consensus-fix",
+  "rails": [
+    "packages/consensus-fix/lib/agreement.mjs",
+    "packages/consensus-fix/lib/region.mjs"
+  ],
+  "scope": [
+    "packages/consensus-fix/**",
+    "docs/tools/consensus-fix.md",
+    "apps/docs/content/docs/toolkit/consensus-fix.mdx"
+  ],
+  "title": "consensus-fix: only SIGINT restores the snapshot — SIGTERM/SIGHUP leave model-authored hunks in source files (#600)"
+}

@@ -22,7 +22,6 @@
  *              exclusive with --provider.
  */
 
-import { writeFileSync } from 'node:fs';
 import {
   parseArgs,
   pass,
@@ -38,7 +37,7 @@ import {
 } from '@adlc/core';
 import { runConsensusFix } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
-import { takeSnapshot, restoreSnapshot } from '../lib/snapshot.mjs';
+import { takeSnapshot, restoreSnapshot, writeFileAtomic } from '../lib/snapshot.mjs';
 import { applyHunks } from '../lib/hunks.mjs';
 import { formatReport, formatJson } from '../lib/format.mjs';
 
@@ -169,10 +168,10 @@ async function completeFn(prompt, providerName) {
   return complete({ tier, prompt, provider: providerName ?? providerOverride });
 }
 
-// SIGINT handler — restore files from snapshot on interrupt.
+// Signal handlers — restore files from snapshot on interrupt or termination (issue #600).
 // outerSnapshot is populated just before runConsensusFix starts.
 let outerSnapshot = null;
-process.on('SIGINT', () => {
+function handleSignal() {
   if (outerSnapshot) {
     try {
       restoreSnapshot(outerSnapshot);
@@ -181,9 +180,13 @@ process.on('SIGINT', () => {
     }
   }
   process.exit(1);
-});
+}
 
-// Take snapshot early so SIGINT can restore if interrupted during fan.
+process.on('SIGINT', handleSignal);
+process.on('SIGTERM', handleSignal);
+process.on('SIGHUP', handleSignal);
+
+// Take snapshot early so termination signals can restore if interrupted during fan.
 try {
   outerSnapshot = takeSnapshot(filePaths);
 } catch (err) {
@@ -232,7 +235,7 @@ if (values['apply'] && selectionResult && !allDivergent) {
   for (const { file, hunks } of winner.changes) {
     const result = applyHunks(outerSnapshot[file], hunks);
     if (!result.ok) opError(`failed to apply winning candidate to ${file}: ${result.error}`);
-    writeFileSync(file, result.content, 'utf8');
+    writeFileAtomic(file, result.content);
   }
   applied = true;
 }

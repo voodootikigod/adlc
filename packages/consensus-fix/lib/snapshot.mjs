@@ -3,8 +3,26 @@
  * Pure operations around a snapshot map: { [path]: string }.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { dirname, basename, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { applyHunks } from './hunks.mjs';
+
+/**
+ * Write file atomically using write-temp-then-rename in the same directory.
+ * Cleans up temp file on failure.
+ */
+export function writeFileAtomic(filePath, content) {
+  const dir = dirname(filePath);
+  const tmp = join(dir, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, content, 'utf8');
+    renameSync(tmp, filePath);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
 
 /**
  * Capture the current content of each path.
@@ -26,7 +44,7 @@ export function restoreSnapshot(snapshot) {
   const errors = [];
   for (const [p, content] of Object.entries(snapshot)) {
     try {
-      writeFileSync(p, content, 'utf8');
+      writeFileAtomic(p, content);
     } catch (err) {
       errors.push(`restore failed for ${p}: ${err.message}`);
     }
@@ -59,7 +77,7 @@ export function applyChanges(changes, snapshot) {
     }
     const result = applyHunks(snapshot[file], hunks);
     if (!result.ok) return { ok: false, error: `${file}: ${result.error}` };
-    writeFileSync(file, result.content, 'utf8');
+    writeFileAtomic(file, result.content);
   }
   return { ok: true };
 }
