@@ -197,12 +197,6 @@ const unverifiedEditsCases = [
     reason: /File edits occurred after the last test run/,
   },
   {
-    name: "onStop: resolves repo root via ANTIGRAVITY_WORKSPACE in headless mode with empty workspacePaths",
-    calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished. TICKET-DONE' }) ],
-    options: { conversationId: 'test-session-headless' },
-    decision: 'stop',
-  },
-  {
     name: "onStop: fails closed when active ticket state has conflict",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished. TICKET-DONE' }) ],
     options: { conversationId: 'test-session-conflict', env: { ADLC_TICKET: 'T2' } },
@@ -254,14 +248,14 @@ const unverifiedEditsCases = [
   {
     name: "onStop: rejects Stop when transcript omits mutating tool calls recorded by host",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-omitted-mutations', trackerCalls: [{ isMutating: true }, { isMutating: true }] },
+    options: { preInvocation: true, conversationId: 'test-session-omitted-mutations', trackerCalls: [{ isMutating: true }, { isMutating: true }] },
     decision: 'continue',
     reason: /Untracked or missing tool execution records detected in transcript/,
   },
   {
     name: "onStop: rejects transcript record with unrecognized tool envelope under enforcement",
     calls: [ JSON.stringify({ invalid_tool_envelope: 12345, }) ],
-    options: { conversationId: 'sess-bad-envelope' },
+    options: { preInvocation: true, conversationId: 'sess-bad-envelope' },
     decision: 'continue',
     reason: /schema corruption detected/i,
   }
@@ -275,7 +269,7 @@ const verificationCommandCases = [
   {
     name: "onStop: allows stop when tests were executed via run_command after mutations",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/feature.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'All tests passed.' }) ],
-    options: { trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
@@ -346,7 +340,7 @@ const verificationCommandCases = [
   {
     name: "onStop: recognizes verification from alternate arguments envelope",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-alt-envelope', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'test-session-alt-envelope', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
@@ -401,7 +395,7 @@ const verificationCommandCases = [
   {
     name: "onStop: allows npx --no-install adlc preflight",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npx --no-install adlc preflight', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-pinned-npx', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'test-session-pinned-npx', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
@@ -435,7 +429,7 @@ const verificationCommandCases = [
   {
     name: "onStop: recognizes tool_call and tool_name snake_case envelopes in transcript",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ tool_call: { tool_name: 'write_to_file', args: { TargetFile: 'src/feature.js' }, }, }), JSON.stringify({ tool_call: { tool_name: 'run_command', args: { CommandLine: 'node --test', Cwd: root }, }, exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-snake-case', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'test-session-snake-case', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
@@ -540,7 +534,7 @@ const verificationCommandCases = [
       }),
       JSON.stringify({ content: 'Attempting stop without running tests' }),
     ],
-    options: { conversationId: 'sess-function-call', trackerCalls: [{ isMutating: true }] },
+    options: { preInvocation: true, conversationId: 'sess-function-call', trackerCalls: [{ isMutating: true }] },
     decision: 'continue',
     reason: /unverified file edits/i,
   },
@@ -556,7 +550,7 @@ const verificationCommandCases = [
       JSON.stringify({ parts: [ { text: 'Running test verification suite...' }, { functionCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }, ], exit_code: 0, }),
       JSON.stringify({ content: 'Finished successfully.' }),
     ],
-    options: { conversationId: 'sess-mixed-parts', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'sess-mixed-parts', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
@@ -571,20 +565,20 @@ const verificationCommandCases = [
       JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [ { name: 'run_command', args: { options: { CommandLine: 'node --test', Cwd: root } } }, ], exit_code: 0, }),
       JSON.stringify({ content: 'Finished with verified tests.' }),
     ],
-    options: { conversationId: 'sess-nested-options-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'sess-nested-options-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'stop',
   },
   {
     name: "onStop: rejects npm test after non-readonly shell mutation, requiring immutable node --test",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [ { name: 'run_command', args: { CommandLine: 'touch src/newfile.js', Cwd: root } } ], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [ { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } } ], exit_code: 0, }), JSON.stringify({ content: 'Attempting stop' }) ],
-    options: { conversationId: 'sess-shell-mut-npm-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    options: { preInvocation: true, conversationId: 'sess-shell-mut-npm-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
     decision: 'continue',
     reason: /unverified file edits/i,
   },
   {
     name: "onStop: treats git diff without --no-ext-diff or with external helpers as mutating and requires verification",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [ { name: 'run_command', args: { CommandLine: 'git diff', Cwd: root } } ], exit_code: 0, }), JSON.stringify({ content: 'Attempting stop' }) ],
-    options: { conversationId: 'sess-git-bare-diff', trackerCalls: [{ isMutating: true }] },
+    options: { preInvocation: true, conversationId: 'sess-git-bare-diff', trackerCalls: [{ isMutating: true }] },
     decision: 'continue',
     reason: /unverified file edits/i,
   }
@@ -619,7 +613,7 @@ const railBoundaryCases = [
   {
     name: "onStop: disguised exec-named mutator targeting frozen rail is caught and rejected",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'exec', args: { TargetFile: join(root, '.adlc/tickets.json'), operation: 'overwrite', content: '{}' } }], }) ],
-    options: { conversationId: 'sess-disguised-exec' },
+    options: { preInvocation: true, conversationId: 'sess-disguised-exec' },
     decision: 'continue',
     reason: /Active ticket contract or trust-root store was modified during session/i,
   }
@@ -658,6 +652,19 @@ test('onStop: rejects completion when active ticket is missing from ticket store
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
   assert.match(res.reason, /not found in validated ticket store/);
+});
+
+test('onStop: resolves repo root via ANTIGRAVITY_WORKSPACE in headless mode with empty workspacePaths', (t) => {
+  const { root, env } = setupTempRepo(t, { enforcement: '1' });
+  const transcriptFile = join(root, 'transcript.jsonl');
+  const lines = [
+    JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }),
+    JSON.stringify({ content: 'Finished. TICKET-DONE' }),
+  ];
+  writeFileSync(transcriptFile, lines.join('\n') + '\n');
+  const payload = { workspacePaths: [], transcriptPath: transcriptFile, conversationId: 'test-session-headless' };
+  const res = onStop(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: root } });
+  assert.equal(res.decision, 'stop');
 });
 
 test('onStop: fails closed under enforcement when workspace root is unresolvable', (t) => {
