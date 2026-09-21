@@ -29,6 +29,8 @@ findings to the shared `.adlc/findings` ledger.
 Run on every model release (or monthly) to ratchet codebase quality
 monotonically upward for the cost of a scheduled job.
 
+When run from any subdirectory of a git repository, candidate files, churn metrics, and the findings ledger resolve relative to the repository root.
+
 ## ADLC Phase
 
 **C12 / D1–D3 maintenance ratchet.** Pairs with:
