@@ -2,7 +2,7 @@
  * rot-checker.mjs — orchestrate claim extraction and verification for a skill.
  */
 
-import { readFileSync, writeFileSync as nodeWriteFileSync, renameSync as nodeRenameSync } from 'node:fs';
+import { readFileSync, writeFileSync as nodeWriteFileSync, renameSync as nodeRenameSync, realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { extractClaims } from './extract-claims.mjs';
@@ -27,11 +27,12 @@ const RANDOM_SUFFIX_BYTES = 6;
  */
 export function stampVerified(skillPath, isoDate, io = {}) {
   const { writeFileSync = nodeWriteFileSync, rename = nodeRenameSync } = io;
-  const content = readFileSync(skillPath, 'utf8');
+  const targetPath = realpathSync(skillPath);
+  const content = readFileSync(targetPath, 'utf8');
   const updated = upsertFrontmatter(content, 'last-verified', isoDate);
-  const tmpPath = `${skillPath}.tmp-${randomBytes(RANDOM_SUFFIX_BYTES).toString('hex')}`;
+  const tmpPath = `${targetPath}.tmp-${randomBytes(RANDOM_SUFFIX_BYTES).toString('hex')}`;
   writeFileSync(tmpPath, updated, 'utf8');
-  rename(tmpPath, skillPath);
+  rename(tmpPath, targetPath);
 }
 
 /**
@@ -50,8 +51,9 @@ export function stampVerified(skillPath, isoDate, io = {}) {
  * }}
  */
 export function checkSkill(skillPath, repoRoot, opts = {}) {
-  const content = readFileSync(skillPath, 'utf8');
-  const skillDir = dirname(skillPath);
+  const targetPath = realpathSync(skillPath);
+  const content = readFileSync(targetPath, 'utf8');
+  const skillDir = dirname(targetPath);
 
   const claims = extractClaims(content);
   const ctx = { repoRoot, skillDir };
@@ -78,7 +80,7 @@ export function checkSkill(skillPath, repoRoot, opts = {}) {
   // --write: upsert last-verified only when okCount > 0 && staleCount === 0
   if (opts.write && allOk) {
     const isoDate = new Date().toISOString().slice(0, 10);
-    stampVerified(skillPath, isoDate);
+    stampVerified(targetPath, isoDate);
   }
 
   return {

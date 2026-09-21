@@ -36,6 +36,8 @@ Default search roots (searched only when they exist):
 
 Pass one or more explicit path arguments to override the defaults.
 
+Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs.
+
 ## Flags
 
 | Flag | Description |
