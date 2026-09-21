@@ -138,6 +138,37 @@ test('Advisory mode: without --gate, malformed lines do not cause exit 2', () =>
 });
 
 // ---------------------------------------------------------------------------
+// --prompt-only mode with --gate enforces malformed ledger check
+// ---------------------------------------------------------------------------
+test('--prompt-only with --gate fails with exit 2 when findings ledger contains malformed lines', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lesson-foundry-malformed-test-'));
+  try {
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
+    writeFileSync(join(adlcDir, 'findings.jsonl'), 'corrupt json line\n', 'utf8');
+    const { code, stderr } = runCli(['--gate', '--prompt-only'], dir);
+    assert.strictEqual(code, 2, `expected exit code 2, got ${code}; stderr: ${stderr}`);
+    assert.match(stderr, /findings ledger contains 1 malformed line\(s\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--prompt-only with --gate --tolerate-malformed succeeds when skipped <= threshold', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lesson-foundry-malformed-test-'));
+  try {
+    const adlcDir = join(dir, '.adlc');
+    mkdirSync(adlcDir, { recursive: true });
+    writeFileSync(join(adlcDir, 'findings.jsonl'), 'corrupt json line\n', 'utf8');
+    const { code, stdout, stderr } = runCli(['--gate', '--prompt-only', '--tolerate-malformed', '1'], dir);
+    assert.strictEqual(code, 0, `expected exit code 0, got ${code}; stderr: ${stderr}`);
+    assert.ok(!stderr.includes('error:'), `stderr should not contain error: ${stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Error handling: bad --tolerate-malformed argument
 // ---------------------------------------------------------------------------
 test('CLI exit 1: --tolerate-malformed with non-integer value exits 1 with opError', () => {

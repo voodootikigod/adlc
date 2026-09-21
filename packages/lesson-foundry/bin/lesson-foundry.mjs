@@ -82,6 +82,12 @@ const clusters = buildClusters(findings, minSize);
 
 // --prompt-only: print LLM prompts and exit 0
 if (flags['prompt-only']) {
+  if (flags.gate && skipped > tolerateMalformed) {
+    gateFail(
+      `lesson-foundry: findings ledger contains ${skipped} malformed line(s)`,
+      { skipped, tolerateMalformed }
+    );
+  }
   if (clusters.length === 0) {
     promptOnly('(no clusters to refine)');
   }
