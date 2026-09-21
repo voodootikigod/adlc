@@ -191,9 +191,9 @@ export function removalHelpers(body) {
  * Fixture bindings that nothing in the file ever removes.
  *
  * Pairing is per BINDING, never per file: a file-level "does an rmSync appear
- * anywhere" test passes packages/tickets/test/generation-descriptor.test.mjs,
- * whose two rmSync calls delete the `.adlc` subdirectory so a symlink can take
- * its place — setup, not cleanup — while all four fixture roots survive the run.
+ * anywhere" test passes a file whose only rmSync calls delete a subdirectory of
+ * the fixture so a symlink can take its place — setup, not cleanup — while every
+ * fixture root survives the run.
  *
  * Compliant shapes, per the ticket contract:
  *   (a) rmSync(X ...)                      direct removal
@@ -387,7 +387,7 @@ test('the scan tolerates a missing top-level directory', () => {
 });
 
 test('a same-file rmSync on a DIFFERENT binding does not launder a leak', () => {
-  // The exact shape in generation-descriptor.test.mjs: rmSync deletes a
+  // The shape that motivated per-binding pairing: rmSync deletes a
   // subdirectory of the fixture as test setup, and the fixture root itself
   // survives. A file-level "contains rmSync" check passes this; pairing catches it.
   const setupNotCleanup = `
