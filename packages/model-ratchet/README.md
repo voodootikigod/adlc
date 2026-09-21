@@ -11,7 +11,7 @@ findings to the shared `.adlc/findings` ledger.
 Run on every model release (or monthly) to ratchet codebase quality
 monotonically upward for the cost of a scheduled job.
 
-When run from any subdirectory of a git repository, candidate files, churn metrics, and the findings ledger resolve relative to the repository root.
+When run from any subdirectory of a git repository, candidate files, churn metrics, and the findings ledger resolve relative to the repository root. Relative file paths are normalized to forward-slash separators across platforms, ensuring consistent matching between churn metrics, import graph analysis, and candidate files on Windows.
 
 ## ADLC Phase
 

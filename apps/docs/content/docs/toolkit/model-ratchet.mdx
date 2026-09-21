@@ -16,7 +16,7 @@ files import it, then either prints a prosecution plan or runs your review comma
 over each file and appends verified findings to the shared `.adlc/findings` ledger.
 Run it on every model release (or monthly) to ratchet quality monotonically up.
 
-When run from any subdirectory of a git repository, candidate files, churn metrics, and the findings ledger resolve relative to the repository root.
+When run from any subdirectory of a git repository, candidate files, churn metrics, and the findings ledger resolve relative to the repository root. Relative file paths are normalized to forward-slash separators across platforms, ensuring consistent matching between churn metrics, import graph analysis, and candidate files on Windows.
 
 ## Usage
 

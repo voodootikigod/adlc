@@ -60,7 +60,7 @@ export function isExcluded(filePath) {
  * Walk `root` recursively. Returns all paths (relative to root) that are
  * source files (SOURCE_EXTS), skipping SKIP_DIRS and test/spec files.
  */
-export function walkSourceFiles(root) {
+export function walkSourceFiles(root, { _relative = relative } = {}) {
   const results = [];
   function walk(dir) {
     let entries;
@@ -81,9 +81,10 @@ export function walkSourceFiles(root) {
       if (stat.isDirectory()) {
         walk(full);
       } else if (stat.isFile()) {
-        const rel = relative(root, full);
-        if (!isExcluded(rel)) {
-          results.push(rel);
+        const rel = _relative(root, full);
+        const normRel = rel.replace(/\\/g, '/');
+        if (!isExcluded(normRel)) {
+          results.push(normRel);
         }
       }
     }
@@ -140,8 +141,10 @@ export function extractSpecifiers(content) {
 export function resolveSpecifier(specifier, fromFile, root, fileSet) {
   if (!specifier.startsWith('.')) return null; // skip package imports
 
-  const fromDir = dirname(join(root, fromFile));
-  const absBase = resolve(fromDir, specifier);
+  const normSpec = specifier.replace(/\\/g, '/');
+  const normFromFile = fromFile.replace(/\\/g, '/');
+  const fromDir = dirname(join(root, normFromFile));
+  const absBase = resolve(fromDir, normSpec);
   const relBase = relative(root, absBase);
 
   // Try exact path first, then with each extension appended.
@@ -173,11 +176,12 @@ export function resolveSpecifier(specifier, fromFile, root, fileSet) {
  * @returns {Object.<string, number>} file → inDegree count
  */
 export function computeInDegree(files, root) {
-  const fileSet = new Set(files.map(f => f.replace(/\\/g, '/')));
+  const normFiles = files.map(f => f.replace(/\\/g, '/'));
+  const fileSet = new Set(normFiles);
   const inDegree = {};
-  for (const f of files) inDegree[f.replace(/\\/g, '/')] = 0;
+  for (const f of normFiles) inDegree[f] = 0;
 
-  for (const fromFile of files) {
+  for (const fromFile of normFiles) {
     let content;
     try {
       content = readFileSync(join(root, fromFile), 'utf8');
@@ -187,7 +191,7 @@ export function computeInDegree(files, root) {
     const specifiers = extractSpecifiers(content);
     for (const spec of specifiers) {
       const resolved = resolveSpecifier(spec, fromFile, root, fileSet);
-      if (resolved && resolved !== fromFile.replace(/\\/g, '/')) {
+      if (resolved && resolved !== fromFile) {
         inDegree[resolved] = (inDegree[resolved] ?? 0) + 1;
       }
     }
