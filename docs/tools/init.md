@@ -17,3 +17,4 @@ not modify `~/.codex` or another user-global harness configuration. `$adlc-init`
 in the native Codex plugin delegates to this command.
 
 When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
+When `.gitignore` contains mis-ordered rules that cause required committable paths to be ignored, `adlc init` records a warning and exits 1 without reporting the file unchanged.

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   closeSync,
   constants,
@@ -357,6 +358,80 @@ function writeMissing(root, relativePath, content, result) {
   record(result, 'created', relativePath);
 }
 
+export const REQUIRED_COMMITTABLE_PATHS = Object.freeze([
+  '.adlc/config.json',
+  '.adlc/manifest.jsonl',
+  `${ACTIVE_DIRECTORY}/.store.json`,
+  '.adlc/manifest.d/seg-1.jsonl',
+]);
+
+function gitCheckIgnore(root, relPath) {
+  const res = spawnSync('git', ['check-ignore', '-q', '--', relPath], {
+    cwd: root,
+    stdio: 'ignore',
+  });
+  return res.status;
+}
+
+function gitignorePatternMatches(pattern, path) {
+  const p = pattern.startsWith('/') ? pattern.slice(1) : pattern;
+  if (p.endsWith('/')) {
+    return path.startsWith(p);
+  }
+  const segments = path.split('/');
+  const regexStr = `^${p.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}$`;
+  const re = new RegExp(regexStr);
+  if (!pattern.includes('/')) {
+    return segments.some((seg) => re.test(seg));
+  }
+  return segments.some((_, idx) => re.test(segments.slice(0, idx + 1).join('/')));
+}
+
+export function evaluateGitignoreContract(lines, paths = REQUIRED_COMMITTABLE_PATHS) {
+  const ignoredPaths = [];
+  for (const path of paths) {
+    let ignored = false;
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith('#')) continue;
+      const isNegation = line.startsWith('!');
+      const pattern = isNegation ? line.slice(1).trim() : line;
+      if (gitignorePatternMatches(pattern, path)) {
+        ignored = !isNegation;
+      }
+    }
+    if (ignored) ignoredPaths.push(path);
+  }
+  return ignoredPaths;
+}
+
+export function evaluateEffectiveGitignoreContract(root, lines, paths = REQUIRED_COMMITTABLE_PATHS) {
+  const [firstPath] = paths;
+  const probe = gitCheckIgnore(root, firstPath);
+  if (probe !== 0 && probe !== 1) {
+    return evaluateGitignoreContract(lines, paths);
+  }
+  const ignoredWithGit = [];
+  for (const p of paths) {
+    if (gitCheckIgnore(root, p) === 0) {
+      ignoredWithGit.push(p);
+    }
+  }
+  return ignoredWithGit;
+}
+
+function warnIfIgnored(root, lines, result) {
+  const ignoredPaths = evaluateEffectiveGitignoreContract(root, lines);
+  if (ignoredPaths.length > 0) {
+    recordWarning(
+      result,
+      `.gitignore has mis-ordered rules: required committable paths (${ignoredPaths.join(', ')}) would be ignored`,
+    );
+  }
+  return ignoredPaths;
+}
+
 function ensureGitignore(root, result) {
   const relativePath = '.gitignore';
   const path = join(root, relativePath);
@@ -370,16 +445,21 @@ function ensureGitignore(root, result) {
   const present = new Set(normalizedLines);
   const missing = ADLC_GITIGNORE_LINES.filter((line) => !present.has(line));
   if (missing.length === 0 && normalized === original) {
-    record(result, 'unchanged', relativePath);
+    const ignored = warnIfIgnored(root, normalizedLines, result);
+    if (ignored.length === 0) {
+      record(result, 'unchanged', relativePath);
+    }
     return;
   }
   const prefix = normalized === '' || normalized.endsWith('\n') ? normalized : `${normalized}\n`;
   const separator = prefix !== '' && !prefix.endsWith('\n\n') ? '\n' : '';
   rejectSymlinkComponents(root, relativePath);
-  writeFileNoFollow(path, `${prefix}${separator}# ADLC runtime\n${missing.join('\n')}\n`, {
+  const written = `${prefix}${separator}# ADLC runtime\n${missing.join('\n')}\n`;
+  writeFileNoFollow(path, written, {
     exclusive: !existed,
   });
   record(result, existed ? 'updated' : 'created', relativePath);
+  warnIfIgnored(root, written.split(/\r?\n/), result);
 }
 
 function ensureTicketStore(root, result) {

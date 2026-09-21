@@ -21,6 +21,8 @@ project root, and never edits user-global `~/.codex` implicitly.
 
 When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
 
+When `.gitignore` contains mis-ordered rules that cause required committable paths to be ignored, `adlc init` records a warning and exits 1 without reporting the file unchanged.
+
 ## Security modes
 
 Every scaffolded `.adlc/config.json` sets `securityMode: "unsigned-fallback"`.
