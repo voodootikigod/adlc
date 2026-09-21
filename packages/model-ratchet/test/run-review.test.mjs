@@ -5,7 +5,10 @@ import assert from 'node:assert/strict';
 
 import { existsSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import {
   isFindingLine,
@@ -140,6 +143,17 @@ describe('runReviewCmd', () => {
     );
     assert.equal(result.stdout, 'src/has space.mjs');
     assert.equal(result.exitCode, 0);
+  });
+
+  it('runs review command in specified cwd', () => {
+    const targetDir = resolve(__dirname, '..');
+    const result = runReviewCmd(
+      `node -e "process.stdout.write(process.cwd())"`,
+      'src/foo.mjs',
+      targetDir,
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, targetDir);
   });
 });
 

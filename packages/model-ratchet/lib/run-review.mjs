@@ -126,7 +126,7 @@ export function parseFindingLine(line, _file) {
  * @param {string} file       - repo-relative file path
  * @returns {{ stdout: string, stderr: string, exitCode: number }}
  */
-export function runReviewCmd(reviewCmd, file) {
+export function runReviewCmd(reviewCmd, file, cwd) {
   // Tokenize the trusted template, THEN substitute the untrusted file path as
   // a discrete argv element. Run with shell:false so the filename is never
   // re-parsed by /bin/sh — this closes the command-injection hole that existed
@@ -139,6 +139,7 @@ export function runReviewCmd(reviewCmd, file) {
     shell: false,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
+    ...(cwd ? { cwd } : {}),
   });
   return {
     stdout: result.stdout ?? '',

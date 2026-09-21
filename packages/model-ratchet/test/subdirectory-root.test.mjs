@@ -100,4 +100,38 @@ describe('model-ratchet from subdirectory', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('runs review-cmd with cwd set to repo root so root-relative {file} can be opened', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mr-sub-read-'));
+    try {
+      git(['init', '-b', 'main'], dir);
+      git(['config', 'user.email', 'test@example.com'], dir);
+      git(['config', 'user.name', 'Test'], dir);
+
+      const pkgADir = join(dir, 'packages', 'pkg-a');
+      const pkgBDir = join(dir, 'packages', 'pkg-b');
+      mkdirSync(pkgADir, { recursive: true });
+      mkdirSync(pkgBDir, { recursive: true });
+
+      writeFileSync(join(pkgADir, 'target.mjs'), 'export const target = true;\n');
+      git(['add', '.'], dir);
+      git(['commit', '-m', 'init'], dir);
+
+      // Review command actually attempts to read {file} relative to its process cwd.
+      // If run in pkg-b, packages/pkg-a/target.mjs cannot be resolved and node exits 1.
+      const reviewCmd = `node -e "const fs = require('node:fs'); fs.readFileSync('{file}'); console.log('- verified {file}')"`;
+      const result = spawnSync('node', [binPath, '--top', '5', '--review-cmd', reviewCmd, '--json'], {
+        cwd: pkgBDir,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+      const out = JSON.parse(result.stdout);
+      assert.equal(out.mode, 'review');
+      assert.equal(out.operationalError, false);
+      assert.equal(out.totalFindings, 1);
+      assert.ok(out.results[0].findings[0].desc.includes('packages/pkg-a/target.mjs'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

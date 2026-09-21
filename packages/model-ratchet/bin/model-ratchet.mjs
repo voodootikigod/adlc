@@ -181,7 +181,7 @@ let operationalError = false;
 for (const row of selected) {
   let result;
   try {
-    result = runReviewCmd(reviewCmd, row.file);
+    result = runReviewCmd(reviewCmd, row.file, root);
   } catch (err) {
     fileResults.push({ file: row.file, findings: [], exitCode: -1, error: err.message });
     operationalError = true;
