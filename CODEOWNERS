@@ -38,15 +38,15 @@
 # pin the inline copy is gone with it: it could prove the copy was UNCHANGED,
 # never that it AGREED with the real gate, and the two had already drifted.
 /docs/ci/rails-guard.yml                           @voodootikigod
-
-# The ticket store. The gate reads its rail set from the BASE version of this
-# file, so a change here changes what is enforced everywhere.
-/.adlc/tickets.json                                @voodootikigod
 /packages/rails-guard/lib/trust-root-authorization.mjs   @voodootikigod
 /.github/workflows/ci.yml                            @voodootikigod
 /packages/rails-guard/bin/rails-guard.mjs             @voodootikigod
 /package.json                                         @voodootikigod
 /.npmrc                                               @voodootikigod
+
+# The sharded ticket store manifest. The gate reads its rail set from the BASE
+# version of the store; this file is the store manifest trust root.
+/.adlc/tickets/.store.json                            @voodootikigod
 
 # A required CI gate whose own source and test otherwise controlled both the
 # enforcement logic and the tests that verify it in the same change.
@@ -65,7 +65,6 @@
 # #141: the enforcement engine's verdict-producing code. The in-gate trust-root
 # freeze cannot be transitively complete (the gate delegates through check.mjs ->
 # rails.mjs -> ... -> @adlc/tickets), so these subtrees rely on branch-protection
-# CODEOWNERS review as the un-forgeable backstop — the same gate the ceremony
-# rests on. REQUIRES: branch protection must require CODEOWNERS review here.
+# review as the un-forgeable backstop — the same gate the ceremony rests on.
 /packages/rails-guard/                                @voodootikigod
 /packages/tickets/                                    @voodootikigod

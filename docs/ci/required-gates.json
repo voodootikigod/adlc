@@ -19,10 +19,6 @@
         "blocking": false,
         "why": "advisory drift canaries, continue-on-error"
       },
-      "pre-ga-gate": {
-        "blocking": false,
-        "why": "all three ADR 0003 items it greps for are checked, so it cannot fail; slated for removal"
-      },
       "rails-guard": {
         "blocking": true,
         "contexts": [
