@@ -265,16 +265,9 @@ Each phase was independently shippable and looped through `/adversarial-review`
   no rails declared → never blocks; audited `ADLC_RAILS_BYPASS=1` escape hatch.
 - **The CI gate must be configured as a required check** to be a real backstop;
   shipping the template doesn't enforce it. Documented as a required step.
-- **`pre-ga-gate` must be added as a required status check** in GitHub repository
-  Settings > Branches > Branch protection rules for the `main` branch. Without
-  this GitHub configuration, the `pre-ga-gate` job can fail without blocking a
-  merge — the gate is only effective when it is a required status check. The same
-  applies to the `rails-guard` job. There is no automated check that this branch
-  protection configuration has been applied. To verify, query the GitHub API:
-  `gh api repos/{owner}/{repo}/branches/main/protection` and confirm both
-  `pre-ga-gate` and `rails-guard` appear in `required_status_checks.contexts`.
-  This manual step must be completed before merging this branch or any branch that
-  depends on these gates.
+- **`pre-ga-gate` (retired 2026-09-20):** previously required as a status check
+  before Pre-GA checklist items were confirmed; the job was removed once all items
+  were verified (`pre-ga-gate retired`). `rails-guard` remains an enforced gate.
 - **Discovery depends on the skill description matching** the user's phrasing; a
   poorly-triggered router silently does nothing. Mitigation: broad trigger set +
   the flowchart body.
@@ -309,27 +302,12 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
 
 ### Pre-GA checklist
 
-> **CRITICAL — GitHub branch protection required:** The `pre-ga-gate` CI job fails
-> while the two open checklist items below remain unchecked, but it will NOT block a
-> merge unless it has been added as a **required status check** in GitHub repository
-> Settings → Branches → Branch protection rules for `main`. Without that one-time
-> repository settings step, a maintainer can merge this branch despite `pre-ga-gate`
-> failing — the entire enforcement model silently collapses. This step must be
-> completed **before** any merge of this branch or any branch that depends on it.
->
-> To add the required check:
-> 1. Go to: Settings → Branches → Branch protection rules → `main`
-> 2. Enable "Require status checks to pass before merging"
-> 3. Search for and add `pre-ga-gate` to the required checks list
-> 4. Save
+> **Status (2026-09-20):** `pre-ga-gate retired`. All Pre-GA checklist items were confirmed
+> and checked below. The dedicated `pre-ga-gate` CI job in `.github/workflows/ci.yml` has been
+> retired as permanently green.
 
-<!-- CI-GATE-SENTINEL: The pre-ga-gate job in .github/workflows/ci.yml searches for the
-     EXACT pattern "- [ ] **(Live marketplace", "- [ ] **(Hook CWD assumption", and
-     "- [ ] **(`plugin.json` extra fields" to count open items. DO NOT reformat, line-wrap,
-     change the asterisk count, or alter the lead text of the three open checklist lines
-     below. The grep pattern is:
-       ^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields)
-     If you need to edit these lines, update the grep in ci.yml in the same commit. -->
+<!-- Historical note: The pre-ga-gate job in .github/workflows/ci.yml previously searched for open items
+     matching ^\- \[ \] \*\*(Live marketplace|Hook CWD assumption|`plugin\.json` extra fields) before all items were confirmed. -->
 
 - [x] **Live marketplace install test** — full install sequence is two steps:
   1. `/plugin marketplace add voodootikigod/adlc` — registers the plugin source
@@ -463,12 +441,7 @@ wiring was a clean approve with only exotic/out-of-scope findings remaining.
 > relative links in `docs/integrations/` files — if a referenced file is moved, the smoke
 > test fails rather than shipping a dead link silently.
 >
-> **Pre-GA CI gate (in place):** A dedicated `pre-ga-gate` job in `.github/workflows/ci.yml`
-> fails with a clear diagnostic message while either of the two open Pre-GA checklist items
-> (Live marketplace install test, Hook CWD assumption) remain unchecked in this ADR. This
-> ensures that a green `test` + `rails-guard` run cannot be misread as GA-ready.
-> The grep pattern used by the gate is anchored to the exact text of the two open checklist
-> lines — see the `CI-GATE-SENTINEL` comment above the checklist for the format constraint.
->
-> **Important:** A passing CI run does not confirm the live install assumptions. The two
-> open checklist items above remain required before GA.
+> **Pre-GA CI gate (retired):** A dedicated `pre-ga-gate` job in `.github/workflows/ci.yml`
+> previously failed with a clear diagnostic message while any Pre-GA checklist items
+> remained unchecked. After all Pre-GA checklist items were confirmed and checked, the gate
+> was permanently green and has been removed (`pre-ga-gate retired` 2026-09-20).
