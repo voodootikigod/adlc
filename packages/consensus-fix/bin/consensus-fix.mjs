@@ -37,7 +37,7 @@ import {
 } from '@adlc/core';
 import { runConsensusFix } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
-import { takeSnapshot, restoreSnapshot, writeFileAtomic } from '../lib/snapshot.mjs';
+import { takeSnapshot, restoreSnapshot, writeFileAtomic, applyWinner } from '../lib/snapshot.mjs';
 import { applyHunks } from '../lib/hunks.mjs';
 import { formatReport, formatJson } from '../lib/format.mjs';
 
@@ -232,12 +232,12 @@ const {
 let applied = false;
 if (values['apply'] && selectionResult && !allDivergent) {
   const { winner } = selectionResult;
-  for (const { file, hunks } of winner.changes) {
-    const result = applyHunks(outerSnapshot[file], hunks);
-    if (!result.ok) opError(`failed to apply winning candidate to ${file}: ${result.error}`);
-    writeFileAtomic(file, result.content);
+  try {
+    applyWinner(winner.changes, outerSnapshot);
+    applied = true;
+  } catch (err) {
+    opError(err.message);
   }
-  applied = true;
 }
 
 // Output.

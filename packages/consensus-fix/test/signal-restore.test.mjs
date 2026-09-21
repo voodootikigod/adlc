@@ -5,11 +5,23 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  mkdirSync,
+  chmodSync,
+  statSync,
+  symlinkSync,
+  lstatSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { writeFileAtomic, restoreSnapshot, applyChanges, takeSnapshot } from '../lib/snapshot.mjs';
+import { writeFileAtomic, restoreSnapshot, applyChanges, takeSnapshot, applyWinner } from '../lib/snapshot.mjs';
 
 const BIN = resolve(new URL('../bin/consensus-fix.mjs', import.meta.url).pathname);
 
@@ -267,6 +279,81 @@ test('winning candidate --apply writes atomically', () => {
 
     assert.equal(res.status, 0);
     assert.equal(readFileSync(targetFile, 'utf8'), 'export const val = 2;\n');
+
+    const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeFileAtomic preserves file permissions (executable mode)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'consensus-fix-atomic-mode-'));
+  try {
+    const targetFile = join(dir, 'script.sh');
+    writeFileSync(targetFile, '#!/bin/sh\necho 1\n');
+    chmodSync(targetFile, 0o755);
+
+    writeFileAtomic(targetFile, '#!/bin/sh\necho 2\n');
+    assert.equal(readFileSync(targetFile, 'utf8'), '#!/bin/sh\necho 2\n');
+    assert.equal(statSync(targetFile).mode & 0o777, 0o755);
+
+    const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeFileAtomic preserves symlinks and writes target content', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'consensus-fix-atomic-symlink-'));
+  try {
+    const realTarget = join(dir, 'real.mjs');
+    const linkPath = join(dir, 'link.mjs');
+    writeFileSync(realTarget, 'INITIAL\n');
+    symlinkSync(realTarget, linkPath);
+
+    writeFileAtomic(linkPath, 'UPDATED\n');
+
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true);
+    assert.equal(readFileSync(realTarget, 'utf8'), 'UPDATED\n');
+    assert.equal(readFileSync(linkPath, 'utf8'), 'UPDATED\n');
+
+    const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('applyWinner rolls back already written files if subsequent write fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'consensus-fix-rollback-'));
+  try {
+    const f1 = join(dir, 'f1.mjs');
+    const f2 = join(dir, 'f2.mjs');
+    writeFileSync(f1, 'F1_ORIGINAL\n');
+    writeFileSync(f2, 'F2_ORIGINAL\n');
+
+    const snap = {
+      [f1]: 'F1_ORIGINAL\n',
+      [f2]: 'F2_ORIGINAL\n',
+    };
+
+    // Replace f2 with a directory after snapshot so writeFileAtomic(f2) throws EISDIR
+    rmSync(f2);
+    mkdirSync(f2);
+
+    const winnerChanges = [
+      { file: f1, hunks: [{ startLine: 1, endLine: 1, replacement: 'F1_MODIFIED\n' }] },
+      { file: f2, hunks: [{ startLine: 1, endLine: 1, replacement: 'F2_MODIFIED\n' }] },
+    ];
+
+    assert.throws(() => {
+      applyWinner(winnerChanges, snap);
+    });
+
+    // f1 was written first, but then rolled back to F1_ORIGINAL!
+    assert.equal(readFileSync(f1, 'utf8'), 'F1_ORIGINAL\n');
 
     const leftovers = readdirSync(dir).filter((f) => f.includes('.tmp'));
     assert.deepEqual(leftovers, []);
