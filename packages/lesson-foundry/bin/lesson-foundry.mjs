@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  ledgerPath,
   parseArgs,
   pass,
   gateFail,
@@ -25,6 +26,7 @@ const { values: flags } = parseArgs({
     write:       { type: 'boolean', default: false },
     force:       { type: 'boolean', default: false },
     gate:        { type: 'boolean', default: false },
+    'allow-missing-ledger': { type: 'boolean', default: false },
     llm:         { type: 'boolean', default: false },
     tier:        { type: 'string',  default: 'mid' },
     'prompt-only': { type: 'boolean', default: false },
@@ -50,6 +52,11 @@ if (!VALID_TIERS.includes(tier)) {
 // The ledger name may include a path; core's readEntries uses the dir param.
 // We pass the ledger name as-is and use the default dir (process.cwd() + '/.adlc').
 const ledgerDir = join(process.cwd(), '.adlc');
+const resolvedPath = ledgerPath(ledgerName, ledgerDir);
+
+if (flags.gate && !existsSync(resolvedPath) && !flags['allow-missing-ledger']) {
+  opError('ledger file not found: ' + resolvedPath);
+}
 
 // Load findings
 let findings, skipped, filtered;
