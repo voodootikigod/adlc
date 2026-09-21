@@ -33,7 +33,7 @@ const MAX_TEST_OUTPUT_BYTES = 256 * 1024 * 1024;
  * @param {string} testCmd   - Shell command to run the test suite.
  * @param {number} timeoutMs - Maximum time in ms to wait for the test command.
  * @param {string} cwd       - Working directory for the test command.
- * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null }}
+ * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null, stdout: string, stderr: string }}
  */
 export function runTest(testCmd, timeoutMs, cwd) {
   const result = spawnSync(testCmd, {
@@ -62,22 +62,25 @@ export function runTest(testCmd, timeoutMs, cwd) {
  * transient inability to LAUNCH the test command became coverage evidence:
  * the same false-kill shape as an unparseable mutant (#293), one layer down.
  *
- * @param {{status: number|null, signal: string|null, error?: Error & {code?: string}}} result
+ * @param {{status: number|null, signal: string|null, error?: Error & {code?: string}, stdout?: string|null, stderr?: string|null}} result
+ * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null, stdout: string, stderr: string }}
  */
 export function classifyTestResult(result) {
+  const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
   if (result.error) {
     // Node reports an expired `timeout` as an ETIMEDOUT error on some versions
     // and as a plain SIGTERM on others — both are genuine timeouts.
     const code = result.error.code;
-    if (code === 'ETIMEDOUT') return { status: null, timedOut: true, spawnFailed: false, reason: null };
-    return { status: null, timedOut: false, spawnFailed: true, reason: code ?? result.error.message };
+    if (code === 'ETIMEDOUT') return { status: null, timedOut: true, spawnFailed: false, reason: null, stdout, stderr };
+    return { status: null, timedOut: false, spawnFailed: true, reason: code ?? result.error.message, stdout, stderr };
   }
-  if (result.signal === 'SIGTERM') return { status: null, timedOut: true, spawnFailed: false, reason: null };
+  if (result.signal === 'SIGTERM') return { status: null, timedOut: true, spawnFailed: false, reason: null, stdout, stderr };
   if (result.signal) {
-    return { status: null, timedOut: false, spawnFailed: true, reason: `unexpected signal ${result.signal}` };
+    return { status: null, timedOut: false, spawnFailed: true, reason: `unexpected signal ${result.signal}`, stdout, stderr };
   }
   if (typeof result.status !== 'number') {
-    return { status: null, timedOut: false, spawnFailed: true, reason: 'no exit status' };
+    return { status: null, timedOut: false, spawnFailed: true, reason: 'no exit status', stdout, stderr };
   }
   // SHELL-LEVEL LAUNCH FAILURE. `result.error` only tells us whether the SHELL
   // started; if /bin/sh starts but cannot exec or fork the inner test binary it
@@ -92,9 +95,10 @@ export function classifyTestResult(result) {
     return {
       status: result.status, timedOut: false, spawnFailed: true,
       reason: `shell could not launch the test command (exit ${result.status})`,
+      stdout, stderr,
     };
   }
-  return { status: result.status, timedOut: false, spawnFailed: false, reason: null };
+  return { status: result.status, timedOut: false, spawnFailed: false, reason: null, stdout, stderr };
 }
 
 /**

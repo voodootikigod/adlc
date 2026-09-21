@@ -398,9 +398,9 @@ describe('report surfaces distinguish a checker failure from a survivor', () => 
 describe('classifyTestResult', () => {
   it('a completed run carries its exit status and is neither timeout nor spawn failure', () => {
     assert.deepEqual(classifyTestResult({ status: 0, signal: null }),
-      { status: 0, timedOut: false, spawnFailed: false, reason: null });
+      { status: 0, timedOut: false, spawnFailed: false, reason: null, stdout: '', stderr: '' });
     assert.deepEqual(classifyTestResult({ status: 1, signal: null }),
-      { status: 1, timedOut: false, spawnFailed: false, reason: null });
+      { status: 1, timedOut: false, spawnFailed: false, reason: null, stdout: '', stderr: '' });
   });
 
   it('a real timeout is a timeout, in both shapes Node reports it', () => {
