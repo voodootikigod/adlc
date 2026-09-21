@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #755 (bug, false-green, area:mutation). Re-verified on main @ 16ba5fa8: packages/review-calibration/lib/scorer.mjs:102, bin/review-calibration.mjs:381-389. When `precisionDenom === 0` (e.g. reviewer produces no findings, or none locating plants), `precision` is calculated as `precisionDenom > 0 ? truePositives / precisionDenom : 1`. A silent reviewer scores precision 1.0 (100%), allowing `--min-precision` to pass green.\n\nCONTEXT FOR THE BUILDER. Package `packages/review-calibration`: `bin/review-calibration.mjs` (CLI entry point), `lib/scorer.mjs` (scoreFindings, countFalsePositives), `lib/plants.mjs`, `lib/runner.mjs`, `lib/judge.mjs`. Tests: `npm test -w packages/review-calibration` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/review-calibration/lib/scorer.mjs`: When `precisionDenom === 0` (no true positives and no false positives), set `precision = null` to signify that precision cannot be evaluated, rather than failing open to 1.0.\n2. In `bin/review-calibration.mjs`: When `--min-precision` is configured (`minPrecision != null`), if `score.precision === null` or `score.precision < minPrecision`, fail the gate (exit 2 in non-json, exit 2 in json), with `gateFail` explaining that precision could not be measured or was below the required threshold.\n3. In `scorecard` and `--json` output, surface `precision: null` instead of 1.0 when denominator is 0.\n4. Documentation: update `packages/review-calibration/README.md` and make the SAME edit by hand in `docs/tools/review-calibration.md` and `apps/docs/content/docs/toolkit/review-calibration.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 When reviewer produces zero findings, score.precision is null. verify: `node --test packages/review-calibration/test/empty-precision.test.mjs`\n- AC2 `review-calibration --min-precision 0.5` fails with exit 2 when reviewer produces 0 findings. verify: `node --test packages/review-calibration/test/empty-precision.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/review-calibration`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"precision\" packages/review-calibration/README.md docs/tools/review-calibration.md apps/docs/content/docs/toolkit/review-calibration.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #754 (signal handling) or #756 (regex path exclusion).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M30PAW3Q4ZY0XFMHWX9ZERP1",
+  "rails": [
+    "packages/review-calibration/lib/plants.mjs",
+    "packages/review-calibration/lib/runner.mjs"
+  ],
+  "scope": [
+    "packages/review-calibration/**",
+    "docs/tools/review-calibration.md",
+    "apps/docs/content/docs/toolkit/review-calibration.mdx"
+  ],
+  "title": "review-calibration: do not fail-open to precision 1.0 when zero scoreable findings emitted"
+}

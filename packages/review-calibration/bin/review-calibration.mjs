@@ -379,12 +379,15 @@ else printScorecard(scorecard);
 // ── exit ──────────────────────────────────────────────────────────────────────
 
 const recallFail = score.recall < minRecall;
-const precisionFail = minPrecision != null && score.precision < minPrecision;
+const precisionFail = minPrecision != null && (score.precision === null || score.precision < minPrecision);
 if (recallFail || precisionFail) {
   if (useJson) process.exit(2);
+  const precisionPart = minPrecision != null
+    ? `, precision ${score.precision != null ? `${(score.precision * 100).toFixed(1)}%` : 'null (could not be measured)'} (min ${(minPrecision * 100).toFixed(1)}%)`
+    : '';
   gateFail(
     `gate fails — recall ${(score.recall * 100).toFixed(1)}% (min ${(minRecall * 100).toFixed(1)}%)` +
-    (minPrecision != null ? `, precision ${(score.precision * 100).toFixed(1)}% (min ${(minPrecision * 100).toFixed(1)}%)` : '')
+    precisionPart
   );
 }
 pass();
