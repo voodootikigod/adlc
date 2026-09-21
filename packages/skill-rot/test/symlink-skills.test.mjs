@@ -6,7 +6,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -166,6 +166,61 @@ describe('symlink skill discovery (issue #765)', () => {
       const parsed = JSON.parse(proc.stdout);
       assert.equal(parsed.skills.length, 1);
       assert.equal(parsed.skills[0].allOk, true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('relative path claims in a symlinked SKILL.md resolve against target real directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
+    try {
+      const targetDir = join(dir, 'shared', 'real-skill');
+      const helperDir = join(targetDir, 'scripts');
+      mkdirSync(helperDir, { recursive: true });
+      writeFileSync(join(helperDir, 'setup.sh'), '#!/bin/sh\n', 'utf8');
+      writeFileSync(
+        join(targetDir, 'SKILL.md'),
+        '# Linked Skill\nRun `scripts/setup.sh` to configure.\n',
+        'utf8',
+      );
+
+      const skillsDir = join(dir, 'skills', 'alias-skill');
+      mkdirSync(skillsDir, { recursive: true });
+      const symlinkFile = join(skillsDir, 'SKILL.md');
+      symlinkSync(join(targetDir, 'SKILL.md'), symlinkFile);
+
+      const check = checkSkill(symlinkFile, dir);
+      assert.equal(check.allOk, true);
+      assert.equal(check.ok, 1);
+      assert.equal(check.stale, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--write on symlinked SKILL.md updates target file and preserves symbolic link', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
+    try {
+      const targetDir = join(dir, 'shared', 'target-skill');
+      mkdirSync(targetDir, { recursive: true });
+      const targetFile = join(targetDir, 'SKILL.md');
+      writeFileSync(targetFile, '# Target Skill\n- `ls`\n', 'utf8');
+
+      const skillsDir = join(dir, 'skills', 'link-dir');
+      mkdirSync(skillsDir, { recursive: true });
+      const symlinkFile = join(skillsDir, 'SKILL.md');
+      symlinkSync(targetFile, symlinkFile);
+
+      const check = checkSkill(symlinkFile, dir, { write: true });
+      assert.equal(check.allOk, true);
+
+      // Verify the link itself is preserved as a symbolic link
+      const linkStat = lstatSync(symlinkFile);
+      assert.equal(linkStat.isSymbolicLink(), true, 'link must remain a symbolic link after --write');
+
+      // Verify the target received the last-verified frontmatter stamp
+      const targetContent = readFileSync(targetFile, 'utf8');
+      assert.ok(targetContent.includes('last-verified:'), 'target file must be stamped with last-verified');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
