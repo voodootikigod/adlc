@@ -225,4 +225,40 @@ describe('symlink skill discovery (issue #765)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('skips symlinks targeting node_modules directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
+    try {
+      const nmDir = join(dir, 'shared', 'node_modules');
+      mkdirSync(join(nmDir, 'vendor-skill'), { recursive: true });
+      writeFileSync(join(nmDir, 'vendor-skill', 'SKILL.md'), '# Hidden Vendor\n- `ls`\n', 'utf8');
+
+      const skillsDir = join(dir, 'skills');
+      mkdirSync(skillsDir, { recursive: true });
+      symlinkSync(nmDir, join(skillsDir, 'alias-modules'));
+
+      const results = findSkills(['skills'], dir);
+      assert.equal(results.length, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('skips symlinks targeting .git directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'skill-rot-symlink-'));
+    try {
+      const gitDir = join(dir, 'shared', '.git');
+      mkdirSync(join(gitDir, 'hooks'), { recursive: true });
+      writeFileSync(join(gitDir, 'hooks', 'SKILL.md'), '# Hidden Git\n- `ls`\n', 'utf8');
+
+      const skillsDir = join(dir, 'skills');
+      mkdirSync(skillsDir, { recursive: true });
+      symlinkSync(gitDir, join(skillsDir, 'alias-git'));
+
+      const results = findSkills(['skills'], dir);
+      assert.equal(results.length, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
