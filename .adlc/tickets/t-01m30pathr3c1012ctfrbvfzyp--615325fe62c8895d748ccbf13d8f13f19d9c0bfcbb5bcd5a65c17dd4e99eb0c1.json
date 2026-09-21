@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #666 (bug, P1-high, area:platform). Re-verified on main @ 16ba5fa8: packages/init/lib/scaffold.mjs:300-334. `writeOrReconcileConfig` treats any existing inode as satisfied when `harness === null` or when parsing fails, recording `.adlc/config.json` as `unchanged` with `result.ok = true` without warning. Running `adlc init` on a repo with an empty or malformed `.adlc/config.json` exits 0 and reports success rather than surfacing the broken config.\n\nCONTEXT FOR THE BUILDER. Package `packages/init`: `bin/init.mjs` (CLI entry point), `lib/scaffold.mjs` (scaffold, writeOrReconcileConfig, recordStoreHealth), `lib/harness.mjs`, `lib/detect.mjs`. Tests: `npm test -w packages/init` from the worktree root. Follow the pattern in `recordStoreHealth` (lines 340-365) which tests readability and calls `recordWarning(result, ...)` on failure.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/init/lib/scaffold.mjs` within `writeOrReconcileConfig`: When `.adlc/config.json` exists, attempt to read and parse it with `JSON.parse`. If parsing fails, or if the parsed content is not a plain object, record a warning: `recordWarning(result, '.adlc/config.json exists but is not readable JSON: ' + err.message)`, causing `result.ok` to be `false` (CLI exits 1). Do NOT overwrite the broken file.\n2. When `.adlc/config.json` is valid JSON, continue to record `unchanged` (or `updated` when reconciling an explicit harness) and `result.ok = true`.\n3. In `bin/init.mjs`, exiting on `!result.ok` already routes through operational failure (exit 1).\n4. Documentation: update `packages/init/README.md` and make the SAME edit by hand in `docs/tools/init.md` and `apps/docs/content/docs/toolkit/init.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 `adlc init` on a directory with an unparseable or empty `.adlc/config.json` records a warning and exits 1 without overwriting config.json. verify: `node --test packages/init/test/unparseable-config.test.mjs`\n- AC2 `adlc init` on a directory with valid `.adlc/config.json` continues to exit 0 and records config.json as unchanged. verify: `node --test packages/init/test/unparseable-config.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/init`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"readable JSON\" packages/init/README.md docs/tools/init.md apps/docs/content/docs/toolkit/init.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #665 (.gitignore re-ordering) or #668 (.gitignore non-atomic writes).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M30PATHR3C1012CTFRBVFZYP",
+  "rails": [
+    "packages/init/lib/detect.mjs",
+    "packages/init/lib/harness.mjs"
+  ],
+  "scope": [
+    "packages/init/**",
+    "docs/tools/init.md",
+    "apps/docs/content/docs/toolkit/init.mdx"
+  ],
+  "title": "init: fail with warning when .adlc/config.json is present but not readable JSON"
+}

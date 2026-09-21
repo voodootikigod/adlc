@@ -228,6 +228,10 @@ function record(result, kind, path) {
   result[kind].push(path);
 }
 
+function recordWarning(result, message) {
+  result.warnings.push(message);
+}
+
 function lstatIfPresent(path) {
   try {
     return lstatSync(path);
@@ -289,13 +293,13 @@ function isPlainObject(value) {
  * targeted merge, not a rewrite, so an operator's own customizations to
  * fields this function does not touch survive.
  *
- * Left untouched (reported 'unchanged', writeMissing's original contract)
- * when: the file doesn't parse as JSON, or doesn't parse to a plain object
+ * When the file doesn't parse as JSON, or doesn't parse to a plain object,
+ * records a warning and leaves it untouched without reporting 'unchanged'
  * (do not attempt to merge into something already broken or a shape this
- * function does not understand — an array/string/number top level, or a
- * `harnesses` field that isn't itself a plain object); `harness` is null
- * (still just a guess, nothing to reconcile toward); or the requested
- * harness is already registered.
+ * function does not understand — an array/string/number top level).
+ * Reported 'unchanged' when valid JSON and: `harness` is null (still just a
+ * guess, nothing to reconcile toward); or the requested harness is already
+ * registered.
  */
 function writeOrReconcileConfig(root, harness, result) {
   const relativePath = '.adlc/config.json';
@@ -309,14 +313,21 @@ function writeOrReconcileConfig(root, harness, result) {
     record(result, 'created', relativePath);
     return;
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    recordWarning(result, `${relativePath} exists but is not readable JSON: ${error.message}`);
+    record(result, 'unchanged', relativePath);
+    return;
+  }
+  if (!isPlainObject(parsed)) {
+    recordWarning(result, `${relativePath} exists but is not readable JSON: expected top-level object`);
+    record(result, 'unchanged', relativePath);
+    return;
+  }
   if (harness !== null) {
-    let parsed;
-    try {
-      parsed = JSON.parse(readFileSync(path, 'utf8'));
-    } catch {
-      parsed = null;
-    }
-    if (isPlainObject(parsed) && (parsed.harnesses === undefined || isPlainObject(parsed.harnesses))) {
+    if (parsed.harnesses === undefined || isPlainObject(parsed.harnesses)) {
       const existingHarnesses = parsed.harnesses ?? {};
       if (!(harness in existingHarnesses)) {
         const merged = {
@@ -430,7 +441,7 @@ function recordStoreHealth(result, manifest, created, openStore) {
     openStore().load();
     record(result, 'unchanged', manifest);
   } catch (error) {
-    result.warnings.push(`${manifest} exists but is not a readable ticket store: ${error.message}`);
+    recordWarning(result, `${manifest} exists but is not a readable ticket store: ${error.message}`);
   }
 }
 

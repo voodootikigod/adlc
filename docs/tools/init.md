@@ -15,3 +15,5 @@ adlc init [--root <path>] [--json] [--no-codex-agents]
 The initializer writes only below `--root`, preserves existing files, and does
 not modify `~/.codex` or another user-global harness configuration. `$adlc-init`
 in the native Codex plugin delegates to this command.
+
+When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
