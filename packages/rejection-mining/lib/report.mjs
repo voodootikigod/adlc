@@ -12,7 +12,14 @@
  * @param {number} opts.skippedPRs
  * @returns {string[]}
  */
-export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, skippedPRs }) {
+export function buildHumanReport({
+  clusters,
+  lensPlans,
+  totalSignals,
+  totalPRs,
+  skippedPRs,
+  failedRefinements = 0,
+}) {
   const lines = [];
 
   lines.push('');
@@ -24,6 +31,9 @@ export function buildHumanReport({ clusters, lensPlans, totalSignals, totalPRs, 
   }
   lines.push(`  Signals found: ${totalSignals}`);
   lines.push(`  Lenses:        ${clusters.length}`);
+  if (failedRefinements > 0) {
+    lines.push(`  LLM refinement failed for ${failedRefinements} of ${clusters.length} clusters`);
+  }
   lines.push('');
 
   if (clusters.length === 0) {
@@ -79,6 +89,7 @@ export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, s
       return {
         slug: cluster.slug,
         title: cluster.title ?? cluster.slug,
+        refined: Boolean(cluster.refined),
         count: cluster.count,
         prCount: cluster.prNumbers.size,
         path: plan ? plan.path : null,
