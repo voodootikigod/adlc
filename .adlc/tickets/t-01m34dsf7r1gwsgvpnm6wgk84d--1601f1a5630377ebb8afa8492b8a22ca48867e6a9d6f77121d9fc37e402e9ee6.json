@@ -1,0 +1,37 @@
+{
+  "body": "Source: repository maintenance audit (orchestration area, follow-up to PR #1071). 28 mutation seams across 21 lib files in packages/autopilot/lib/ are not named in test/ac-registry.mjs or invoked by any test in the repository. They represent un-exercised fault injection switches that can be safely excised.\n\nNORMATIVE BEHAVIOUR.\n1. Across the 21 lib files (ci, deps, diffcheck, digest, gates, github, init, maintain, preflight-a, preflight-b, push, records, recover, reset, retire, revalidate, review, round, status, token-refresh, triage), remove the 28 dead seam registrations and simplify each consult site to its legitimate non-mutated path.\n2. In packages/autopilot/lib/mutations.mjs, remove 'records.skipRedaction' from FOUNDATION_SEAMS.\n3. Where all seams in a file were removed and active/registerSeams are no longer needed, remove the unused import.\n4. Do NOT edit test/ac-registry.mjs, test/spec-coverage.test.mjs, or docs/specs/issue-autopilot-local.md.\n5. Keep all existing tests green.\n\nACCEPTANCE CRITERIA.\n- AC1 All 28 dead seams removed. verify: `git grep -E -n '(ci\\.redWaitsForPending|deps\\.ignoreNpmrc|diffcheck\\.ignoreSymlinks|digest\\.postWithoutIntent|gates\\.ignoreOrder|gates\\.reuseClone|github\\.ignoreTruncation|init\\.writeOutsideRepo|maintain\\.skipPreconditions|maintain\\.maintainAnyState|preflight\\.ignoreMissingLabels|preflight\\.ignoreExclude|preflight\\.anyModelFamily|preflight\\.rmAnyPath|push\\.skipPostPushVerify|push\\.skipRemoteUrlCheck|records\\.skipRedaction|recover\\.forgetPushedWithoutPr|reset\\.allowRecordlessRemoteDelete|retire\\.forceRemove|revalidate\\.ignoreUpdatedAt|revalidate\\.ignoreOpenPr|review\\.allowSummaryReview|run\\.skipDiffCheckBeforePush|status\\.skipQuotaAppend|tokenRefresh\\.keepKey|tokenRefresh\\.skipRecheck|triage\\.noStdoutCap)' packages/autopilot/lib` prints nothing.\n- AC2 Autopilot package test suite green. verify: `npm test -w packages/autopilot` exits 0.\n- AC3 Full AC gate passes green. verify: `npm run test:gate -w packages/autopilot` exits 0.\n- AC4 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34DSF7R1GWSGVPNM6WGK84D",
+  "rails": [
+    "packages/autopilot/test/ac-registry.mjs",
+    "packages/autopilot/test/spec-coverage.test.mjs",
+    "docs/specs/issue-autopilot-local.md"
+  ],
+  "scope": [
+    "packages/autopilot/lib/ci.mjs",
+    "packages/autopilot/lib/deps.mjs",
+    "packages/autopilot/lib/diffcheck.mjs",
+    "packages/autopilot/lib/digest.mjs",
+    "packages/autopilot/lib/gates.mjs",
+    "packages/autopilot/lib/github.mjs",
+    "packages/autopilot/lib/init.mjs",
+    "packages/autopilot/lib/maintain.mjs",
+    "packages/autopilot/lib/mutations.mjs",
+    "packages/autopilot/lib/preflight-a.mjs",
+    "packages/autopilot/lib/preflight-b.mjs",
+    "packages/autopilot/lib/push.mjs",
+    "packages/autopilot/lib/records.mjs",
+    "packages/autopilot/lib/recover.mjs",
+    "packages/autopilot/lib/reset.mjs",
+    "packages/autopilot/lib/retire.mjs",
+    "packages/autopilot/lib/revalidate.mjs",
+    "packages/autopilot/lib/review.mjs",
+    "packages/autopilot/lib/round.mjs",
+    "packages/autopilot/lib/status.mjs",
+    "packages/autopilot/lib/token-refresh.mjs",
+    "packages/autopilot/lib/triage.mjs"
+  ],
+  "title": "refactor(autopilot): remove 28 dead mutation seams unreferenced by any test"
+}

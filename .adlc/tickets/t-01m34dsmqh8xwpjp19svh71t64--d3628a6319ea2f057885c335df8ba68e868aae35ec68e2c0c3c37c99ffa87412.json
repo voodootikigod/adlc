@@ -1,0 +1,17 @@
+{
+  "body": "Source: repository maintenance audit (test-suite bloat review, headline recommendation). 2,535 try/finally blocks and hundreds of hand-rolled git/tmp/spawn helpers exist across test files because no canonical test-kit exists.\n\nNORMATIVE BEHAVIOUR.\n1. Create packages/core/lib/test-kit.mjs exporting tmp(t, prefix), gitRepo(t, options), and runBin(binPath, args, options).\n2. tmp(t, prefix) creates a temp directory and registers cleanup via t.after(() => rmSync(...)) when t?.after is available.\n3. gitRepo(t, options) creates an isolated git repository with standard user credentials and git config under tmp(t).\n4. runBin(binPath, args, options) runs a Node binary with sanitized environment variables (scrubbing ADLC_MANIFEST_KEY, bypass flags, etc.).\n5. Export subpath './test-kit' from packages/core/package.json and declare types.\n6. Add unit tests in packages/core/test/test-kit.test.mjs.\n7. Keep packages/core test suite green and mutation-gate green.\n\nACCEPTANCE CRITERIA.\n- AC1 Test-kit unit tests pass. verify: `node --test packages/core/test/test-kit.test.mjs` exits 0.\n- AC2 Export subpath resolves. verify: `node -e \"import('@adlc/core/test-kit').then(m => { if (!m.tmp || !m.gitRepo || !m.runBin) process.exit(1); console.log('test-kit exports ok'); })\"` prints `test-kit exports ok`.\n- AC3 Cleanup verified: a test running tmp(t) leaves no directory on disk after completion.\n- AC4 Package suite green. verify: `npm test -w packages/core` exits 0.\n- AC5 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0.",
+  "category": "feat",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34DSMQH8XWPJP19SVH71T64",
+  "rails": [
+    "packages/core/lib/shell.mjs"
+  ],
+  "scope": [
+    "packages/core/lib/test-kit.mjs",
+    "packages/core/package.json",
+    "packages/core/test/test-kit.test.mjs",
+    "packages/core/index.d.ts"
+  ],
+  "title": "feat(core): introduce shared test-kit module with t.after automated cleanup"
+}

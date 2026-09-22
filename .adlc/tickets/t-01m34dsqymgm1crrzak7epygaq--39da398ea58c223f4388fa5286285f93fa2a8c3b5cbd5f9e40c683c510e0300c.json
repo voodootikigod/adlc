@@ -1,0 +1,18 @@
+{
+  "body": "Source: repository maintenance audit (docs hygiene review, finding 2). docs/tools/ holds 28 markdown files (4,538 lines) that mirror and drift from package READMEs. The generator was retired in PR #1065. Package READMEs are canonical.\n\nNORMATIVE BEHAVIOUR.\n1. Merge any unique documentation from docs/tools/gate-manifest.md into packages/gate-manifest/README.md.\n2. Delete all 28 files in docs/tools/.\n3. In docs/package-reference.md, update tool reference links from docs/tools/<tool>.md to ../packages/<tool>/README.md.\n4. Update references in docs/adr/0007-multimodel-adversarial-review.md, packages/prosecute/test/prosecute-tier-check-cli.test.mjs, packages/model-router/test/floor-ladder.test.mjs, and scripts/test/core-shared-helpers-docs.test.mjs.\n5. Ensure all tests and repo-level guards pass green.\n\nACCEPTANCE CRITERIA.\n- AC1 All 28 files in docs/tools/ are deleted. verify: `test ! -d docs/tools || test $(ls docs/tools | wc -l) -eq 0`\n- AC2 Inbound links repointed. verify: `git grep -n 'docs/tools/' -- . ':!docs/specs' ':!.adlc' ':!docs/tools'` prints nothing.\n- AC3 Tests green. verify: `node --test scripts/test/core-shared-helpers-docs.test.mjs packages/model-router/test/floor-ladder.test.mjs packages/prosecute/test/prosecute-tier-check-cli.test.mjs` exits 0.\n- AC4 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0.",
+  "category": "chore",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34DSQYMGM1CRRZAK7EPYGAQ",
+  "rails": [],
+  "scope": [
+    "docs/tools/**",
+    "docs/package-reference.md",
+    "docs/adr/0007-multimodel-adversarial-review.md",
+    "packages/gate-manifest/README.md",
+    "packages/prosecute/test/prosecute-tier-check-cli.test.mjs",
+    "packages/model-router/test/floor-ladder.test.mjs",
+    "scripts/test/core-shared-helpers-docs.test.mjs"
+  ],
+  "title": "docs: collapse docs/tools/ mirror into package READMEs"
+}
