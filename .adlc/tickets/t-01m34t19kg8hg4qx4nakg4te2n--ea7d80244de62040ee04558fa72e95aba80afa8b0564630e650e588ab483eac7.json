@@ -1,6 +1,7 @@
 {
   "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `packages/core/test/core.test.mjs` contains 45 `try/finally` blocks that manually clean up tempdirs created with `mkdtempSync(join(tmpdir(), ...))`. Following the introduction of `@adlc/core/test-kit` in #1098, `core.test.mjs` can eat its own dogfood by importing `{ tmp, gitRepo }` from `../lib/test-kit.mjs` with automatic `t.after` lifecycle cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/core/test/core.test.mjs`:\n   - Import `{ tmp, gitRepo }` from '../lib/test-kit.mjs'.\n   - Update test cases to accept `t` parameter.\n   - Replace `mkdtempSync(join(tmpdir(), prefix))` calls with `tmp(t, prefix)`.\n   - Remove all 45 `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting test bodies.\n2. Ensure all core tests pass: `npm test -w packages/core`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/core/test/core.test.mjs` reports 0 (down from 45).\n- AC2 `npm test -w packages/core` exits 0 with all test cases passing.\n- AC3 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
   "category": "refactor",
+  "completed": true,
   "duration": 1,
   "edges": [],
   "id": "T-01M34T19KG8HG4QX4NAKG4TE2N",
