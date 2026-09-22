@@ -1,0 +1,16 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Four test files in packages/autopilot/test manually invoke mkdtempSync and guard removals in try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t, and safely clean up in standalone runs.\n\nNORMATIVE BEHAVIOUR.\n1. In packages/autopilot/test/init.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t parameter and replace scratch() with tmp(t, 'ap-init-').\n   - Remove manual try/finally cleanup blocks.\n   - Delete the local const scratch = ... helper.\n2. In packages/autopilot/test/input.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test using temp directory to accept t parameter and replace mkdtempSync on line 66 with tmp(t, 'ap-input-').\n3. In packages/autopilot/test/lock.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t parameter and replace scratch = () => ... and mkdtempSync calls with tmp(t, 'ap-lock-').\n   - Remove manual try/finally cleanup blocks.\n   - Delete the local const scratch = ... helper.\n4. In packages/autopilot/test/loop.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update mkdtempSync calls on lines 186, 196, 203, 208, 252 with tmp(null, prefix) or tmp(t, prefix).\n5. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove packages/autopilot/test/init.test.mjs, packages/autopilot/test/input.test.mjs, packages/autopilot/test/lock.test.mjs, and packages/autopilot/test/loop.test.mjs from ALLOWLIST.\n6. Verification:\n   - npm test -w packages/autopilot exits 0 with all tests passing.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n\nACCEPTANCE CRITERIA.\n- AC1 packages/autopilot/test/init.test.mjs does not define scratch.\n- AC2 packages/autopilot/test/lock.test.mjs does not define scratch.\n- AC3 None of the 4 test files appear in scripts/test/tmp-fixture-boundary.test.mjs ALLOWLIST.\n- AC4 npm test -w packages/autopilot exits 0 with all tests passing.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M35NH9TKNRA5ZJQ53S9DJHBS",
+  "rails": [],
+  "scope": [
+    "packages/autopilot/test/init.test.mjs",
+    "packages/autopilot/test/input.test.mjs",
+    "packages/autopilot/test/lock.test.mjs",
+    "packages/autopilot/test/loop.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(autopilot): adopt @adlc/core/test-kit in init, input, lock, and loop tests"
+}

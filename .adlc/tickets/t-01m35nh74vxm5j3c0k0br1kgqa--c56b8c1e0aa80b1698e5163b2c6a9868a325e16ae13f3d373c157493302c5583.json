@@ -1,0 +1,16 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Four test files across hollow-test, gate-fuzzing, and quartermaster manually invoke mkdtempSync and guard removals in try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp, gitRepo), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In packages/hollow-test/test/hollow-test.test.mjs:\n   - Import { tmp, gitRepo } from '@adlc/core/test-kit'.\n   - Update tests to accept t parameter and allocate scratch repos / temp dirs via tmp(t) / gitRepo(t).\n   - Remove manual try/finally cleanup blocks.\n2. In packages/hollow-test/test/unit.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests creating temp directories to accept t and use tmp(t, 'hollow-rails-unit-').\n   - Remove manual try/finally cleanup blocks.\n3. In packages/gate-fuzzing/test/isolation.test.mjs:\n   - Import { tmp, gitRepo } from '@adlc/core/test-kit'.\n   - Update makeSourceRepo(t) and candidate clones to use gitRepo(t, { prefix: 'gf-src-repo-' }) and tmp(t, 'gf-clone-').\n   - Remove manual rmSync cleanup blocks.\n4. In packages/quartermaster/test/registry-isolation.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync calls with tmp(t, prefix).\n   - Remove manual try/finally cleanup blocks.\n5. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove packages/hollow-test/test/hollow-test.test.mjs, packages/hollow-test/test/unit.test.mjs, packages/gate-fuzzing/test/isolation.test.mjs, and packages/quartermaster/test/registry-isolation.test.mjs from ALLOWLIST (completely eradicates all 3 packages from the allowlist!).\n6. Verification:\n   - npm test -w packages/hollow-test && npm test -w packages/gate-fuzzing && npm test -w packages/quartermaster exits 0.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n   - grep -E 'packages/(hollow-test|gate-fuzzing|quartermaster)/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n\nACCEPTANCE CRITERIA.\n- AC1 grep -E 'packages/(hollow-test|gate-fuzzing|quartermaster)/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n- AC2 npm test -w packages/hollow-test exits 0 with all tests passing.\n- AC3 npm test -w packages/gate-fuzzing exits 0 with all tests passing.\n- AC4 npm test -w packages/quartermaster exits 0 with all tests passing.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M35NH74VXM5J3C0K0BR1KGQA",
+  "rails": [],
+  "scope": [
+    "packages/hollow-test/test/hollow-test.test.mjs",
+    "packages/hollow-test/test/unit.test.mjs",
+    "packages/gate-fuzzing/test/isolation.test.mjs",
+    "packages/quartermaster/test/registry-isolation.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(hollow-test): adopt @adlc/core/test-kit in hollow-test, gate-fuzzing, and quartermaster tests"
+}

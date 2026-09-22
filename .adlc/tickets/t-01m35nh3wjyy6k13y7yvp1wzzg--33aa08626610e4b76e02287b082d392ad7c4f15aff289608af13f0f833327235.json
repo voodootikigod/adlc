@@ -1,0 +1,17 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Five test files in packages/gate-manifest/test manually invoke mkdtempSync and guard removals in try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In packages/gate-manifest/test/key-ceremony.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations using temp directories to accept the t parameter from test(...).\n   - Replace mkdtempSync calls with tmp(t, prefix).\n   - Remove manual try { ... } finally { rmSync(...); } blocks, unindenting test bodies.\n2. In packages/gate-manifest/test/migrate-branch.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'gm-salvage-').\n   - Remove manual try { ... } finally { rmSync(root, ...); } blocks, unindenting test bodies.\n3. In packages/gate-manifest/test/migrate.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and update liveRepo to use tmp(t, 'gm-migrate-').\n   - Remove manual try/finally cleanup blocks.\n4. In packages/gate-manifest/test/spend.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace makeTmp() with tmp(t, 'gate-manifest-spend-test-').\n   - Remove manual try { ... } finally { cleanTmp(dir); } blocks, unindenting test bodies.\n   - Delete local makeTmp and cleanTmp helpers.\n5. In packages/gate-manifest/test/usage-roundtrip.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace makeTmp() with tmp(t, 'gate-manifest-usage-roundtrip-').\n   - Remove manual try { ... } finally { cleanTmp(dir); } blocks, unindenting test bodies.\n   - Delete local makeTmp and cleanTmp helpers.\n6. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove all 5 packages/gate-manifest/test/* entries from the ALLOWLIST set (completely eradicates packages/gate-manifest from the allowlist!).\n7. Verification:\n   - npm test -w packages/gate-manifest exits 0 with all tests passing.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n   - grep -E 'packages/gate-manifest/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n\nACCEPTANCE CRITERIA.\n- AC1 packages/gate-manifest/test/spend.test.mjs does not define makeTmp or cleanTmp.\n- AC2 packages/gate-manifest/test/usage-roundtrip.test.mjs does not define makeTmp or cleanTmp.\n- AC3 grep -E 'packages/gate-manifest/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n- AC4 npm test -w packages/gate-manifest exits 0 with all tests passing.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M35NH3WJYY6K13Y7YVP1WZZG",
+  "rails": [],
+  "scope": [
+    "packages/gate-manifest/test/key-ceremony.test.mjs",
+    "packages/gate-manifest/test/migrate-branch.test.mjs",
+    "packages/gate-manifest/test/migrate.test.mjs",
+    "packages/gate-manifest/test/spend.test.mjs",
+    "packages/gate-manifest/test/usage-roundtrip.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(gate-manifest): adopt @adlc/core/test-kit and eliminate try/finally blocks in ceremony and migrate tests"
+}
