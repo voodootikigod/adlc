@@ -5,19 +5,18 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { acquireLock, releaseLock, readOwner, isStale, LockHeldError, LOCK_DIR_NAME, STALE_AFTER_MS, lockHeldBy } from '../lib/lock.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'ap-lock-'));
 const self = (pid = 1000, start = '111') => ({ pid, pidStartTime: start });
 const probes = ({ alive = true, start = '111' } = {}) => ({ pidAlive: () => alive, pidStartTimeOf: () => start });
 const NOW = Date.parse('2026-08-28T12:00:00Z');
 
-export function ac22_twoStartersOneWins() {
-  const dir = scratch();
+export function ac22_twoStartersOneWins(t) {
+  const dir = tmp(t, 'ap-lock-');
   try {
     const a = acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW });
     assert.ok(existsSync(join(dir, LOCK_DIR_NAME, 'owner.json')));
@@ -28,18 +27,21 @@ export function ac22_twoStartersOneWins() {
     assert.equal(lockHeldBy(dir, a.token), true);
     assert.equal(a.release(), true);
     assert.ok(!existsSync(join(dir, LOCK_DIR_NAME)));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: two starters against the same dir → exactly one acquires, the other exits 1 lock-held', ac22_twoStartersOneWins);
 
-export function ac22_reclaimRules() {
+export function ac22_reclaimRules(t) {
   const owner = (over = {}) => ({ pid: 1000, pidStartTime: '111', token: 'x', heartbeatAt: new Date(NOW - 11 * 60_000).toISOString(), ...over });
   assert.equal(isStale(owner(), { now: NOW, ...probes({ alive: false }) }), true, 'dead pid + 11-minute heartbeat → reclaimable');
   assert.equal(isStale(owner(), { now: NOW, ...probes({ alive: true, start: '111' }) }), false, 'LIVE pid + stale heartbeat → NOT reclaimable');
   assert.equal(isStale(owner(), { now: NOW, ...probes({ alive: true, start: '999' }) }), true, 'reused pid (different start time) → reclaimable');
   assert.equal(isStale(owner({ heartbeatAt: new Date(NOW - 60_000).toISOString() }), { now: NOW, ...probes({ alive: false }) }), false, 'a fresh heartbeat is never reclaimed, dead pid or not');
   assert.equal(STALE_AFTER_MS, 10 * 60_000);
-  const dir = scratch();
+  const dir = tmp(t, 'ap-lock-');
   try {
     const a = acquireLock(dir, { self: self(1000, '111'), probes: probes(), now: () => NOW - 11 * 60_000 });
     // A LIVE holder with a stale heartbeat: a second starter must NOT reclaim.
@@ -50,48 +52,60 @@ export function ac22_reclaimRules() {
     assert.equal(readOwner(join(dir, LOCK_DIR_NAME)).pid, 2);
     assert.equal(a.heartbeat(), false, 'the old holder can no longer heartbeat');
     assert.equal(b.heartbeat(), true);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: dead pid + 11-minute heartbeat is reclaimed; live pid + stale heartbeat is not; reused pid with another start time is', ac22_reclaimRules);
 
-export async function ac22_releaseChecksToken() {
-  const dir = scratch();
+export async function ac22_releaseChecksToken(t) {
+  const dir = tmp(t, 'ap-lock-');
   try {
     const a = acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW });
     assert.equal(releaseLock(join(dir, LOCK_DIR_NAME), 'wrong-token'), false, 'release with the wrong token is refused');
     assert.ok(existsSync(join(dir, LOCK_DIR_NAME)));
     await withMutation('lock.releaseAnyToken', () => { assert.equal(releaseLock(join(dir, LOCK_DIR_NAME), 'wrong-token'), true, 'seam: any token releases'); });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: release with the wrong token is refused (and the lock.releaseAnyToken seam removes that check)', ac22_releaseChecksToken);
 
-export async function ac22_alwaysAcquireSeamBites() {
-  const dir = scratch();
+export async function ac22_alwaysAcquireSeamBites(t) {
+  const dir = tmp(t, 'ap-lock-');
   try {
     acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW });
     assert.throws(() => acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW }), LockHeldError);
     await withMutation('lock.alwaysAcquire', () => { const b = acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW }); assert.ok(b.token); });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: the lock.alwaysAcquire seam lets a second starter steal a live lock (the fixture the gate injects)', ac22_alwaysAcquireSeamBites);
 
-export function ac22_corruptOwnerIsReclaimable() {
-  const dir = scratch();
+export function ac22_corruptOwnerIsReclaimable(t) {
+  const dir = tmp(t, 'ap-lock-');
   try {
     const a = acquireLock(dir, { self: self(1), probes: probes(), now: () => NOW });
     writeFileSync(join(dir, LOCK_DIR_NAME, 'owner.json'), 'not json');
     const b = acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW });
     assert.notEqual(b.token, a.token);
     assert.equal(JSON.parse(readFileSync(join(dir, LOCK_DIR_NAME, 'owner.json'), 'utf8')).pid, 2);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: a lock directory with an unreadable owner file is stale and reclaimed atomically', ac22_corruptOwnerIsReclaimable);
 
-export async function ac22_lockPublishIsAtomic() {
+export async function ac22_lockPublishIsAtomic(t) {
   // The lock directory must never be visible without its owner file: the owner is written into a
   // private staging directory and the directory is renamed into place (one publisher wins a race).
   const { LOCK_FS } = await import('../lib/lock.mjs');
-  const dir = mkdtempSync(join(tmpdir(), 'ap-lock-atomic-'));
+  const dir = tmp(t, 'ap-lock-');
   try {
     const calls = [];
     const rec = (name) => (...a) => { calls.push([name, ...a.slice(0, 2).map(String)]); return LOCK_FS[name](...a); };
@@ -106,13 +120,16 @@ export async function ac22_lockPublishIsAtomic() {
     assert.ok(!existsSync(calls[publish][1]), 'the staging directory is gone after the publish');
     assert.throws(() => acquireLock(dir, { self: self(2), probes: probes(), now: () => NOW }), LockHeldError, 'a second acquirer is refused by the published directory');
     lock.release();
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: the lock is PUBLISHED atomically — owner file staged first, directory renamed into place; no mkdir of the lock directory ever happens', ac22_lockPublishIsAtomic);
 
-export async function ac22_releaseNeverRemovesAnotherOwnersLock() {
+export async function ac22_releaseNeverRemovesAnotherOwnersLock(t) {
   // Between the owner read and the removal a reclaimer replaces the directory: the old owner's release must NOT delete the new lock.
-  const dir = mkdtempSync(join(tmpdir(), 'ap-lock-release-race-'));
+  const dir = tmp(t, 'ap-lock-');
   try {
     const { LOCK_FS, releaseLock } = await import('../lib/lock.mjs');
     const lockDir = join(dir, LOCK_DIR_NAME);
@@ -130,6 +147,26 @@ export async function ac22_releaseNeverRemovesAnotherOwnersLock() {
     assert.equal(released, false, "A's release is refused: the directory is no longer A's");
     assert.equal(readOwner(lockDir)?.token, 'b'.repeat(64), "B's lock is intact after A's release attempt");
     assert.ok(!existsSync(`${lockDir}.release-${a.token}`), 'nothing left aside');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return dir;
+  } finally {
+    if (!t?.after) rmSync(dir, { recursive: true, force: true });
+  }
 }
 test('AC22: a release that races a reclaim never removes the NEW owner\'s lock — the directory is moved aside and verified before removal', ac22_releaseNeverRemovesAnotherOwnersLock);
+
+test('AC22: standalone execution without test context cleans up temporary directories', async () => {
+  const dir1 = ac22_twoStartersOneWins();
+  assert.ok(!existsSync(dir1), 'ac22_twoStartersOneWins cleaned up');
+  const dir2 = ac22_reclaimRules();
+  assert.ok(!existsSync(dir2), 'ac22_reclaimRules cleaned up');
+  const dir3 = await ac22_releaseChecksToken();
+  assert.ok(!existsSync(dir3), 'ac22_releaseChecksToken cleaned up');
+  const dir4 = await ac22_alwaysAcquireSeamBites();
+  assert.ok(!existsSync(dir4), 'ac22_alwaysAcquireSeamBites cleaned up');
+  const dir5 = ac22_corruptOwnerIsReclaimable();
+  assert.ok(!existsSync(dir5), 'ac22_corruptOwnerIsReclaimable cleaned up');
+  const dir6 = await ac22_lockPublishIsAtomic();
+  assert.ok(!existsSync(dir6), 'ac22_lockPublishIsAtomic cleaned up');
+  const dir7 = await ac22_releaseNeverRemovesAnotherOwnersLock();
+  assert.ok(!existsSync(dir7), 'ac22_releaseNeverRemovesAnotherOwnersLock cleaned up');
+});

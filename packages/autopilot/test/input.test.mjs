@@ -4,9 +4,9 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, symlinkSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import {
   validateIssueNumber, validateOid, validateTicketId, validateModel, validateRepoSpec, branchFor, stagingBranchFor,
   validateToken, validateComponent, underRoot, InputError,
@@ -62,8 +62,8 @@ export function ac73_branchIsConstructedNeverSupplied() {
 }
 test('AC73: a branch name is never taken from input — it is built from a validated number/token', ac73_branchIsConstructedNeverSupplied);
 
-export function ac73_pathComponentsAndRealpath() {
-  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'ap-input-')));
+export function ac73_pathComponentsAndRealpath(t) {
+  const root = tmp(t, 'ap-input-');
   try {
     mkdirSync(join(root, 'repo', '.worktrees'), { recursive: true });
     mkdirSync(join(root, 'outside'));
@@ -76,6 +76,14 @@ export function ac73_pathComponentsAndRealpath() {
     symlinkSync(join(root, 'outside'), join(repo, '.worktrees', 'escape'));
     rejects(() => underRoot(repo, ['.worktrees', 'escape', 'autopilot-issue-9']), 'path');
     for (const bad of ['.', '..', '', 'a b\t']) rejects(() => validateComponent(bad), 'path');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    return root;
+  } finally {
+    if (!t?.after) rmSync(root, { recursive: true, force: true });
+  }
 }
 test('AC73: a constructed ISSUE_WT whose realpath escapes REPO_ROOT (symlink fixture) is refused', ac73_pathComponentsAndRealpath);
+
+test('AC73: standalone execution without test context cleans up temporary directories', () => {
+  const root = ac73_pathComponentsAndRealpath();
+  assert.ok(!existsSync(root), 'root directory removed after standalone execution');
+});
