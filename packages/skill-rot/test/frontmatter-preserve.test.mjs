@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { upsertFrontmatter } from '../lib/frontmatter.mjs';
 import { stampVerified } from '../lib/rot-checker.mjs';
 
@@ -117,8 +117,8 @@ test('upsertFrontmatter preserves CRLF line endings when the input used CRLF', (
   assert.ok(updated.includes('last-verified: 2026-08-29'));
 });
 
-test('the real write path (stampVerified) uses temp-file + rename: a failed rename leaves the original untouched', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'skill-rot-write-'));
+test('the real write path (stampVerified) uses temp-file + rename: a failed rename leaves the original untouched', (t) => {
+  const dir = tmp(t, 'skill-rot-write-');
   const skillPath = join(dir, 'SKILL.md');
   writeFileSync(skillPath, FOLDED_SKILL, 'utf8');
 
@@ -132,8 +132,8 @@ test('the real write path (stampVerified) uses temp-file + rename: a failed rena
   assert.equal(onDisk, FOLDED_SKILL, 'original file must be untouched when rename fails');
 });
 
-test('stampVerified applies the update atomically on the success path', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'skill-rot-write-'));
+test('stampVerified applies the update atomically on the success path', (t) => {
+  const dir = tmp(t, 'skill-rot-write-');
   const skillPath = join(dir, 'SKILL.md');
   writeFileSync(skillPath, FOLDED_SKILL, 'utf8');
 
