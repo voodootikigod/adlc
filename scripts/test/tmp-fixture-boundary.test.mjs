@@ -29,8 +29,6 @@ const ALLOWLIST = new Set([
   'packages/autopilot/test/loop.test.mjs',
   'packages/autopilot/test/paths.test.mjs',
   'packages/autopilot/test/tools.test.mjs',
-  'packages/backlog-groom/test/apply-e2e.test.mjs',
-  'packages/backlog-groom/test/cli-e2e.test.mjs',
   'packages/context-handoff/adapter-test/recovery-exception.test.mjs',
   'packages/context-handoff/test/continue-cli-support.mjs',
   'packages/context-handoff/test/continue-ownership-bytes.test.mjs',

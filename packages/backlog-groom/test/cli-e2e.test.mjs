@@ -6,36 +6,21 @@
 // `gh` rather than the module keeps the test hermetic while still exercising the
 // real wiring end to end.
 
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { rmSync, mkdtempSync, writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-
-import { EMIT_SCHEMA_VERSION } from '../lib/emit.mjs';
 import { fileURLToPath } from 'node:url';
 
-/**
- * Every sandbox this file creates, removed when the file finishes.
- *
- * `mkdtempSync` with no cleanup leaks a git repository per test, per run. That
- * is invisible until the filesystem runs out of INODES — which reports as "no
- * space left on device" while df still shows most of the disk free.
- */
-const SANDBOXES = [];
-const registerSandbox = (dir) => { SANDBOXES.push(dir); return dir; };
-after(() => {
-  for (const dir of SANDBOXES) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
-  }
-});
+import { tmp } from '@adlc/core/test-kit';
+import { EMIT_SCHEMA_VERSION } from '../lib/emit.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
 /** A scratch dir with a `gh` shim that answers with `issues`. */
-function sandbox(issues = []) {
-  const dir = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-e2e-')));
+function sandbox(t, issues = []) {
+  const dir = tmp(t, 'groom-e2e-');
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
   const gh = join(bin, 'gh');
@@ -64,37 +49,37 @@ function run(args, { dir, bin }) {
   });
 }
 
-test('a successful sweep exits 0', () => {
+test('a successful sweep exits 0', (t) => {
   // 1 is the operational-error code. A run that produced its report must not
   // claim to have failed — a caller branching on the exit would discard a good
   // answer.
-  const box = sandbox([]);
+  const box = sandbox(t, []);
   const r = run([], box);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Examined 0 issue/);
 });
 
-test('the cache is written by DEFAULT, and not written under --no-cache', () => {
-  const box = sandbox([]);
+test('the cache is written by DEFAULT, and not written under --no-cache', (t) => {
+  const box = sandbox(t, []);
   const cachePath = join(box.dir, '.adlc', 'backlog-groom-cache.json');
 
   run([], box);
   assert.ok(existsSync(cachePath), 'incrementality is the default, so the cache must persist');
   assert.match(readFileSync(cachePath, 'utf8'), /^\{/);
 
-  const box2 = sandbox([]);
+  const box2 = sandbox(t, []);
   run(['--no-cache'], box2);
   assert.equal(existsSync(join(box2.dir, '.adlc', 'backlog-groom-cache.json')), false, '--no-cache must leave no cache behind');
 });
 
-test('a clean run prints no warning — a warning with nothing to say trains the reader to ignore them', () => {
-  const box = sandbox([]);
+test('a clean run prints no warning — a warning with nothing to say trains the reader to ignore them', (t) => {
+  const box = sandbox(t, []);
   const r = run([], box);
   assert.doesNotMatch(r.stderr, /warning/i);
 });
 
-test('--json emits the groomed set, and --out writes it', () => {
-  const box = sandbox([]);
+test('--json emits the groomed set, and --out writes it', (t) => {
+  const box = sandbox(t, []);
   const out = join(box.dir, 'set.json');
   const r = run(['--json', '--out', out], box);
   assert.equal(r.status, 0, r.stderr);
@@ -105,8 +90,8 @@ test('--json emits the groomed set, and --out writes it', () => {
   assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), parsed, 'the file and stdout must agree');
 });
 
-test('a gh failure exits 1 and says the backlog was unconsultable — never an empty success', () => {
-  const box = sandbox([]);
+test('a gh failure exits 1 and says the backlog was unconsultable — never an empty success', (t) => {
+  const box = sandbox(t, []);
   writeFileSync(join(box.bin, 'gh'), '#!/bin/sh\necho "gh: auth required" >&2\nexit 1\n');
   chmodSync(join(box.bin, 'gh'), 0o755);
   const r = run([], box);
@@ -115,7 +100,7 @@ test('a gh failure exits 1 and says the backlog was unconsultable — never an e
   assert.doesNotMatch(r.stdout, /Examined 0 issue/, 'a failed fetch must not render as a clean, empty backlog');
 });
 
-test('a LARGE --json payload survives being piped — no truncation on exit', () => {
+test('a LARGE --json payload survives being piped — no truncation on exit', (t) => {
   // Raised in cross-model review. `console.log` to a pipe is asynchronous, and a
   // 500-issue groomed set comfortably exceeds the pipe buffer; forcing
   // process.exit terminates before stdout drains and the consumer gets an
@@ -129,7 +114,7 @@ test('a LARGE --json payload survives being piped — no truncation on exit', ()
     url: `https://example.invalid/${i + 1}`,
     updatedAt: '2026-09-13T00:00:00Z',
   }));
-  const box = sandbox(many);
+  const box = sandbox(t, many);
   const r = run(['--json', '--no-cache'], box);
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.length > 65536, `payload must exceed a pipe buffer to be a real test (got ${r.stdout.length})`);
@@ -139,11 +124,11 @@ test('a LARGE --json payload survives being piped — no truncation on exit', ()
   assert.equal(parsed.coverage.total, 500);
 });
 
-test('an operational error prints its message alone — no stack trace on top', () => {
+test('an operational error prints its message alone — no stack trace on top', (t) => {
   // The message is the whole of what an operator needs. A stack trace printed
   // over it is noise they have to read past to find the one line that matters,
   // and it makes a handled, expected refusal look like a crash.
-  const box = sandbox([]);
+  const box = sandbox(t, []);
   const r = run(['--threshold', '7'], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /--threshold must be a number between 0 and 1/);
