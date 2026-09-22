@@ -9,11 +9,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 import { loadRegistry } from '../lib/load.mjs';
 
 // Minimal adapter catalog for the direct loadRegistry tests below (the CLI path
@@ -122,8 +122,8 @@ function inRepoDowngradeRegistry() {
   return registry;
 }
 
-function makeRepo() {
-  const repo = mkdtempSync(join(tmpdir(), 'qm-repo-'));
+function makeRepo(t) {
+  const repo = tmp(t, 'qm-repo-');
   mkdirSync(join(repo, '.adlc'), { recursive: true });
   writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify(TICKETS, null, 2));
   // The candidate tree ships registry-shaped files in BOTH scanned locations.
@@ -132,8 +132,8 @@ function makeRepo() {
   return repo;
 }
 
-function makeOperatorHome(registry = operatorRegistry()) {
-  const home = mkdtempSync(join(tmpdir(), 'qm-home-'));
+function makeOperatorHome(t, registry = operatorRegistry()) {
+  const home = tmp(t, 'qm-home-');
   const path = join(home, 'quartermaster.json');
   writeFileSync(path, JSON.stringify(registry, null, 2));
   return { home, path };
@@ -174,17 +174,9 @@ function dryRun(repo, envOverrides = {}, extraArgs = []) {
   return { code: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }
 
-const cleanup = [];
-test.after(() => {
-  for (const p of cleanup) {
-    try { rmSync(p, { recursive: true, force: true }); } catch { /* best effort */ }
-  }
-});
-
-test('an in-repo registry is IGNORED while the operator registry drives dispatch', () => {
-  const repo = makeRepo();
-  const operator = makeOperatorHome();
-  cleanup.push(repo, operator.home);
+test('an in-repo registry is IGNORED while the operator registry drives dispatch', (t) => {
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t);
 
   const { code, stdout, stderr } = dryRun(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   assert.equal(code, 0, `dry-run should succeed:\n${stderr}`);
@@ -210,9 +202,8 @@ test('an in-repo registry is IGNORED while the operator registry drives dispatch
   assert.match(stderr, /\.adlc\/quartermaster\.json/);
 });
 
-test('an operator path pointing INSIDE the repo disables loading and fails closed', () => {
-  const repo = makeRepo();
-  cleanup.push(repo);
+test('an operator path pointing INSIDE the repo disables loading and fails closed', (t) => {
+  const repo = makeRepo(t);
 
   const { code, stdout, stderr } = dryRun(repo, { ADLC_QUARTERMASTER_REGISTRY: join(repo, 'quartermaster.json') });
   assert.notEqual(code, 0, 'dispatch must fail closed, not fall back to the in-repo file');
@@ -222,9 +213,8 @@ test('an operator path pointing INSIDE the repo disables loading and fails close
   assert.doesNotMatch(stdout, /argv:/, 'nothing may be planned for dispatch once loading is disabled');
 });
 
-test('a RELATIVE operator path is disabled too — it would resolve against the repo cwd', () => {
-  const repo = makeRepo();
-  cleanup.push(repo);
+test('a RELATIVE operator path is disabled too — it would resolve against the repo cwd', (t) => {
+  const repo = makeRepo(t);
 
   const { code, stderr } = dryRun(repo, { ADLC_QUARTERMASTER_REGISTRY: 'quartermaster.json' });
   assert.notEqual(code, 0);
@@ -232,10 +222,9 @@ test('a RELATIVE operator path is disabled too — it would resolve against the 
   assert.match(stderr, /RELATIVE path/);
 });
 
-test('a configured-but-absent operator registry fails closed rather than defaulting', () => {
-  const repo = makeRepo();
-  const operator = makeOperatorHome();
-  cleanup.push(repo, operator.home);
+test('a configured-but-absent operator registry fails closed rather than defaulting', (t) => {
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t);
 
   const { code, stderr } = dryRun(repo, { ADLC_QUARTERMASTER_REGISTRY: join(operator.home, 'does-not-exist.json') });
   assert.notEqual(code, 0);
@@ -243,12 +232,11 @@ test('a configured-but-absent operator registry fails closed rather than default
   assert.match(stderr, /there are no default channels/);
 });
 
-test('an INVALID operator registry fails closed naming the rule it broke', () => {
+test('an INVALID operator registry fails closed naming the rule it broke', (t) => {
   const broken = operatorRegistry();
   broken.channels['frontier-metered'].transport = broken.channels.frontier.transport; // rule 3
-  const repo = makeRepo();
-  const operator = makeOperatorHome(broken);
-  cleanup.push(repo, operator.home);
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t, broken);
 
   const { code, stderr } = dryRun(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   assert.notEqual(code, 0);
@@ -259,10 +247,9 @@ test('an INVALID operator registry fails closed naming the rule it broke', () =>
 // the STRICTER of the two, never the laxer. A JSON dry-run that skipped
 // validation would report success for a registry the live run then rejects.
 
-test('--json carries the resolved seats and the argv, not just the legacy plan', () => {
-  const repo = makeRepo();
-  const operator = makeOperatorHome();
-  cleanup.push(repo, operator.home);
+test('--json carries the resolved seats and the argv, not just the legacy plan', (t) => {
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t);
 
   const { code, json } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   assert.equal(code, 0);
@@ -284,9 +271,8 @@ test('--json carries the resolved seats and the argv, not just the legacy plan',
   assert.deepEqual(json.readyNow.sort(), ['T900', 'T901']);
 });
 
-test('--json fails closed on a disabled registry path instead of reporting success', () => {
-  const repo = makeRepo();
-  cleanup.push(repo);
+test('--json fails closed on a disabled registry path instead of reporting success', (t) => {
+  const repo = makeRepo(t);
 
   const { code, stderr, json } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: join(repo, 'quartermaster.json') });
   assert.notEqual(code, 0, 'automation must not be told the run is fine');
@@ -294,12 +280,11 @@ test('--json fails closed on a disabled registry path instead of reporting succe
   assert.match(stderr, /registry loading DISABLED/);
 });
 
-test('--json fails closed on an invalid registry', () => {
+test('--json fails closed on an invalid registry', (t) => {
   const broken = operatorRegistry();
   broken.channels.mid.transport = 'proxy:shared'; // rule 4
-  const repo = makeRepo();
-  const operator = makeOperatorHome(broken);
-  cleanup.push(repo, operator.home);
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t, broken);
 
   const { code, stderr, json } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   assert.notEqual(code, 0);
@@ -315,10 +300,9 @@ test('--json fails closed on an invalid registry', () => {
 // (ladder-start -> mid), but float 0 if T900 is dropped (critical-path ->
 // frontier). A filtered graph therefore flips its channel.
 
-test('--tickets routes against the FULL DAG, not the selected subset', () => {
-  const repo = makeRepo();
-  const operator = makeOperatorHome();
-  cleanup.push(repo, operator.home);
+test('--tickets routes against the FULL DAG, not the selected subset', (t) => {
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t);
 
   const full = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path });
   const subset = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path }, ['--tickets', 'T901,T902']);
@@ -336,12 +320,11 @@ test('--tickets routes against the FULL DAG, not the selected subset', () => {
   assert.deepEqual(subset.json.quartermaster.seats.map((s) => s.id).sort(), ['T901', 'T902']);
 });
 
-test('--tickets on a subset whose edges leave the selection still routes', () => {
+test('--tickets on a subset whose edges leave the selection still routes', (t) => {
   // T900 -> T902; selecting T900 alone would dereference the omitted T902 if the
   // graph were filtered before computeFloat.
-  const repo = makeRepo();
-  const operator = makeOperatorHome();
-  cleanup.push(repo, operator.home);
+  const repo = makeRepo(t);
+  const operator = makeOperatorHome(t);
 
   const { code, json, stderr } = dryRunJson(repo, { ADLC_QUARTERMASTER_REGISTRY: operator.path }, ['--tickets', 'T900']);
   assert.equal(code, 0, `a subset with outgoing edges must not abort:\n${stderr}`);
@@ -349,26 +332,23 @@ test('--tickets on a subset whose edges leave the selection still routes', () =>
   assert.equal(json.quartermaster.seats[0].channel, 'frontier');
 });
 
-test('with no operator registry at all, fleet keeps its pre-quartermaster behavior', () => {
-  const repo = makeRepo();
-  cleanup.push(repo);
+test('with no operator registry at all, fleet keeps its pre-quartermaster behavior', (t) => {
+  const repo = makeRepo(t);
 
   // XDG_CONFIG_HOME points at an empty dir, so the default path resolves to a
   // file that does not exist and the layer is simply not engaged.
-  const emptyConfig = mkdtempSync(join(tmpdir(), 'qm-empty-'));
-  cleanup.push(emptyConfig);
+  const emptyConfig = tmp(t, 'qm-empty-');
   const { code, stdout } = dryRun(repo, { XDG_CONFIG_HOME: emptyConfig });
   assert.equal(code, 0);
   assert.match(stdout, /quartermaster: not engaged/);
   assert.doesNotMatch(stdout, /argv:/);
 });
 
-test('the legacy dry-run rejects an unknown --adapter, exactly as live assembly does', () => {
+test('the legacy dry-run rejects an unknown --adapter, exactly as live assembly does', (t) => {
   // Without this, a typo'd --adapter passes the dry-run and aborts the real run
   // at buildLiveDeps (fleet AC4) — the dry-run/live divergence this layer removes.
-  const repo = makeRepo();
-  const emptyConfig = mkdtempSync(join(tmpdir(), 'qm-empty-'));
-  cleanup.push(repo, emptyConfig);
+  const repo = makeRepo(t);
+  const emptyConfig = tmp(t, 'qm-empty-');
 
   const bad = dryRun(repo, { XDG_CONFIG_HOME: emptyConfig }, ['--adapter', 'no-such-harness']);
   assert.notEqual(bad.code, 0, 'an unknown adapter must not pass the dry-run');
@@ -378,10 +358,9 @@ test('the legacy dry-run rejects an unknown --adapter, exactly as live assembly 
   assert.equal(ok.code, 0, `a known adapter still passes:\n${ok.stderr}`);
 });
 
-test('the legacy dry-run rejects a --model the chosen adapter cannot force', () => {
-  const repo = makeRepo();
-  const emptyConfig = mkdtempSync(join(tmpdir(), 'qm-empty-'));
-  cleanup.push(repo, emptyConfig);
+test('the legacy dry-run rejects a --model the chosen adapter cannot force', (t) => {
+  const repo = makeRepo(t);
+  const emptyConfig = tmp(t, 'qm-empty-');
 
   const bad = dryRun(repo, { XDG_CONFIG_HOME: emptyConfig }, ['--adapter', 'cursor', '--model', 'vendor/frontier']);
   assert.notEqual(bad.code, 0);
@@ -390,13 +369,12 @@ test('the legacy dry-run rejects a --model the chosen adapter cannot force', () 
 
 // ---- §8a: the registry digest binds a dispatch to the bytes that authorized it ----
 
-test('loadRegistry returns a digest that CHANGES when the registry bytes change', () => {
-  const a = makeOperatorHome();
+test('loadRegistry returns a digest that CHANGES when the registry bytes change', (t) => {
+  const a = makeOperatorHome(t);
   const changed = operatorRegistry();
   changed.channels.mid.model = 'zai/glm-5.3';   // an operator edits one channel
   changed.modelProviders.opencode['zai/glm-5.3'] = 'zai';  // ...validly
-  const b = makeOperatorHome(changed);
-  cleanup.push(a.home, b.home);
+  const b = makeOperatorHome(t, changed);
 
   const one = loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: a.path }, repoDir: '/repo', adapters: CATALOG });
   const two = loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: b.path }, repoDir: '/repo', adapters: CATALOG });
@@ -405,12 +383,11 @@ test('loadRegistry returns a digest that CHANGES when the registry bytes change'
   assert.notEqual(one.registryDigest, two.registryDigest, 'a mutated registry must not reuse its predecessor\'s digest');
 });
 
-test('the digest is stable for identical bytes at a different path', () => {
+test('the digest is stable for identical bytes at a different path', (t) => {
   // It commits to CONTENT, not location — two operators running the same
   // registry must produce correlatable evidence.
-  const a = makeOperatorHome();
-  const b = makeOperatorHome();
-  cleanup.push(a.home, b.home);
+  const a = makeOperatorHome(t);
+  const b = makeOperatorHome(t);
   assert.equal(
     loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: a.path }, repoDir: '/repo', adapters: CATALOG }).registryDigest,
     loadRegistry({ env: { ADLC_QUARTERMASTER_REGISTRY: b.path }, repoDir: '/repo', adapters: CATALOG }).registryDigest

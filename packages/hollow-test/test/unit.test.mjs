@@ -3,9 +3,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 
 import {
   filterTargetFiles, buildFileTargets,
@@ -155,18 +155,15 @@ describe('buildFileTargets', () => {
 // ── readRailsFromTicketFile / expandRailsToFiles (issues #70, #41) ─────────
 
 describe('readRailsFromTicketFile', () => {
-  let dir;
-
-  it('reads rails from a single-ticket-shaped JSON file', () => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+  it('reads rails from a single-ticket-shaped JSON file', (t) => {
+    const dir = tmp(t, 'hollow-rails-unit-');
     const p = join(dir, 'ticket.json');
     writeFileSync(p, JSON.stringify({ id: 'T1', rails: ['src/a.mjs', 'src/b.mjs'] }));
     assert.deepEqual(readRailsFromTicketFile(p), ['src/a.mjs', 'src/b.mjs']);
-    rmSync(dir, { recursive: true, force: true });
   });
 
-  it('merges rails across all tickets in a full tickets.json-shaped file, deduplicated', () => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+  it('merges rails across all tickets in a full tickets.json-shaped file, deduplicated', (t) => {
+    const dir = tmp(t, 'hollow-rails-unit-');
     const p = join(dir, 'tickets.json');
     writeFileSync(p, JSON.stringify({
       tickets: [
@@ -175,27 +172,24 @@ describe('readRailsFromTicketFile', () => {
       ],
     }));
     assert.deepEqual(readRailsFromTicketFile(p), ['src/a.mjs', 'src/c.mjs']);
-    rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns an empty array when no rails are declared', () => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+  it('returns an empty array when no rails are declared', (t) => {
+    const dir = tmp(t, 'hollow-rails-unit-');
     const p = join(dir, 'ticket.json');
     writeFileSync(p, JSON.stringify({ id: 'T1', title: 'no rails here' }));
     assert.deepEqual(readRailsFromTicketFile(p), []);
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('throws on missing file', () => {
     assert.throws(() => readRailsFromTicketFile('/definitely/not/a/file.json'));
   });
 
-  it('throws on malformed JSON', () => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-unit-'));
+  it('throws on malformed JSON', (t) => {
+    const dir = tmp(t, 'hollow-rails-unit-');
     const p = join(dir, 'ticket.json');
     writeFileSync(p, '{ not json');
     assert.throws(() => readRailsFromTicketFile(p));
-    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -327,21 +321,22 @@ describe('printTable with invalid mutants', () => {
 // silently converted into coverage evidence.
 
 describe('checkSyntax', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'hollow-checksyntax-'));
-
-  it('reports valid source as valid', () => {
+  it('reports valid source as valid', (t) => {
+    const dir = tmp(t, 'hollow-checksyntax-');
     const f = join(dir, 'ok.mjs');
     writeFileSync(f, 'export const a = 1;\n');
     assert.equal(checkSyntax(f, dir), 'valid');
   });
 
-  it('reports unparseable source as invalid', () => {
+  it('reports unparseable source as invalid', (t) => {
+    const dir = tmp(t, 'hollow-checksyntax-');
     const f = join(dir, 'bad.mjs');
     writeFileSync(f, 'export function f() {\n  return null;\n    a: 1,\n  };\n}\n');
     assert.equal(checkSyntax(f, dir), 'invalid');
   });
 
-  it('reports UNKNOWN — never valid — when the checker cannot run', () => {
+  it('reports UNKNOWN — never valid — when the checker cannot run', (t) => {
+    const dir = tmp(t, 'hollow-checksyntax-');
     const f = join(dir, 'ok2.mjs');
     writeFileSync(f, 'export const a = 1;\n');
     assert.equal(
