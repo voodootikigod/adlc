@@ -10,17 +10,17 @@ through the stable `adlc <tool>` dispatcher.
 
 | Phase | Question | Primary tools |
 | --- | --- | --- |
-| D2 Phase 0 | Is the workspace ready for fan-out? | [`adlc preflight`](./tools/preflight.md) |
-| P1 / C1-C2 | Is the spec testable and stress-tested? | [`adlc spec-lint`](./tools/spec-lint.md), [`adlc premortem`](./tools/premortem.md), [`adlc parallax`](./tools/parallax.md) |
-| P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](./tools/coldstart.md), [`adlc merge-forecast`](./tools/merge-forecast.md), [`adlc model-router`](./tools/model-router.md) |
-| P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](./tools/rails-guard.md), [`adlc flail-detector`](./tools/flail-detector.md) |
+| D2 Phase 0 | Is the workspace ready for fan-out? | [`adlc preflight`](../packages/preflight/README.md) |
+| P1 / C1-C2 | Is the spec testable and stress-tested? | [`adlc spec-lint`](../packages/spec-lint/README.md), [`adlc premortem`](../packages/premortem/README.md), [`adlc parallax`](../packages/parallax/README.md) |
+| P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](../packages/coldstart/README.md), [`adlc merge-forecast`](../packages/merge-forecast/README.md), [`adlc model-router`](../packages/model-router/README.md) |
+| P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](../packages/rails-guard/README.md), [`adlc flail-detector`](../packages/flail-detector/README.md) |
 | P3→P4 / C13 | Is it safe to START a high-risk ticket's build in THIS session? | [`adlc build-gate`](../packages/build-gate/README.md) |
-| P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](./tools/consensus-fix.md) |
-| P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](./tools/prosecute.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](./tools/behavior-diff.md), [`adlc gate-manifest`](./tools/gate-manifest.md), [`adlc hollow-test`](./tools/hollow-test.md) |
-| C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md), [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md) |
-| P7 | Which repeated findings should become deterministic defenses? | [`adlc lesson-foundry`](./tools/lesson-foundry.md), [`adlc rejection-mining`](./tools/rejection-mining.md) |
-| Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) |
-| Continuous / §6 | What is the recorded token spend shape, and does it match the barbell? | [`adlc spend`](./tools/spend.md) |
+| P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](../packages/consensus-fix/README.md) |
+| P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](../packages/prosecute/README.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](../packages/behavior-diff/README.md), [`adlc gate-manifest`](../packages/gate-manifest/README.md), [`adlc hollow-test`](../packages/hollow-test/README.md) |
+| C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](../packages/model-ratchet/README.md), [`adlc review-calibration`](../packages/review-calibration/README.md), [`adlc skill-rot`](../packages/skill-rot/README.md), [`adlc ticket-prune`](../packages/ticket-prune/README.md) |
+| P7 | Which repeated findings should become deterministic defenses? | [`adlc lesson-foundry`](../packages/lesson-foundry/README.md), [`adlc rejection-mining`](../packages/rejection-mining/README.md) |
+| Continuous calibration | Can hostile candidates defeat the gates? | [`adlc gate-fuzzing`](../packages/gate-fuzzing/README.md) |
+| Continuous / §6 | What is the recorded token spend shape, and does it match the barbell? | [`adlc spend`](../packages/gate-manifest/README.md) |
 
 ## Version requirements
 
@@ -64,31 +64,31 @@ statement.
 
 ## Typical flow
 
-1. Run [`adlc preflight`](./tools/preflight.md) before spawning parallel agents so missing tools, dirty state, or
+1. Run [`adlc preflight`](../packages/preflight/README.md) before spawning parallel agents so missing tools, dirty state, or
    provider problems fail before work fans out.
-2. Run [`adlc spec-lint`](./tools/spec-lint.md), [`adlc premortem`](./tools/premortem.md), and optionally [`adlc parallax`](./tools/parallax.md) while shaping the work so the
+2. Run [`adlc spec-lint`](../packages/spec-lint/README.md), [`adlc premortem`](../packages/premortem/README.md), and optionally [`adlc parallax`](../packages/parallax/README.md) while shaping the work so the
    accepted spec has verifiable criteria and known divergences.
-3. Use [`adlc coldstart`](./tools/coldstart.md) to check ticket executability, then [`adlc merge-forecast`](./tools/merge-forecast.md) and [`adlc model-router`](./tools/model-router.md)
+3. Use [`adlc coldstart`](../packages/coldstart/README.md) to check ticket executability, then [`adlc merge-forecast`](../packages/merge-forecast/README.md) and [`adlc model-router`](../packages/model-router/README.md)
    to manage fan-out width and model assignment. The router emits abstract tiers
    (`cheap` / `mid` / `frontier`); [Recommended Models by Phase](./models-by-phase.md)
    maps those tiers to concrete models per provider, including open-weight and local options.
-4. During implementation, use [`adlc rails-guard`](./tools/rails-guard.md) for frozen-test and suppression controls,
+4. During implementation, use [`adlc rails-guard`](../packages/rails-guard/README.md) for frozen-test and suppression controls,
    [`adlc build-gate`](../packages/build-gate/README.md) to deny starting a high-risk ticket's build in a degraded
-   session, and [`adlc flail-detector`](./tools/flail-detector.md) to catch repeated error loops, scope drift, churn,
+   session, and [`adlc flail-detector`](../packages/flail-detector/README.md) to catch repeated error loops, scope drift, churn,
    or oversized logs.
-5. For hard failing tests, use [`adlc consensus-fix`](./tools/consensus-fix.md) to fan out independent candidate repairs
+5. For hard failing tests, use [`adlc consensus-fix`](../packages/consensus-fix/README.md) to fan out independent candidate repairs
    and select a gated consensus winner.
-6. Before review, use [`adlc hollow-test`](./tools/hollow-test.md) to prove tests are load-bearing. Run the actual
+6. Before review, use [`adlc hollow-test`](../packages/hollow-test/README.md) to prove tests are load-bearing. Run the actual
    model-judged review with [`adlc review`](#p5-recorder-vs-reviewer-seam) (passthrough to `npx adversarial-review`), then
-   record its normalized output with [`adlc prosecute`](./tools/prosecute.md) — prosecute runs no model review of its
-   own, it only records that one already happened and reached two dry passes. Use [`adlc behavior-diff`](./tools/behavior-diff.md)
-   and [`adlc gate-manifest`](./tools/gate-manifest.md) so behavior changes are visible and gate evidence is recorded.
+   record its normalized output with [`adlc prosecute`](../packages/prosecute/README.md) — prosecute runs no model review of its
+   own, it only records that one already happened and reached two dry passes. Use [`adlc behavior-diff`](../packages/behavior-diff/README.md)
+   and [`adlc gate-manifest`](../packages/gate-manifest/README.md) so behavior changes are visible and gate evidence is recorded.
    For **high-blast-radius** changes
    (trust boundary, deny path, auth, secrets, data-loss, schema/migration, CI/CD), run the
    adversarial review against **≥2 distinct-family providers** and treat a single
    provider's clean approve as advisory, not a gate-pass — different models have different
    blind spots (see [ADR-0007](./adr/0007-multimodel-adversarial-review.md)). Use
-   [`adlc review-calibration`](./tools/review-calibration.md) to decide, on evidence, when one model's recall is too low to trust alone.
+   [`adlc review-calibration`](../packages/review-calibration/README.md) to decide, on evidence, when one model's recall is too low to trust alone.
    For the narrow **trust-root tier** — a change whose working tree vs `<base>` (tracked
    changes incl. uncommitted, unioned with untracked files)
    touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
@@ -100,13 +100,13 @@ statement.
    from the author, bound to the reviewed revision. Record it with
    `adlc prosecute record-cross-model --ticket <id> --provider <p> --author-provider <a>
    --verdict approve [--input <passes.json>]` (T39; classifier `packages/prosecute/lib/tier.mjs`).
-7. After review, use [`adlc lesson-foundry`](./tools/lesson-foundry.md) and [`adlc rejection-mining`](./tools/rejection-mining.md) to convert repeated review
+7. After review, use [`adlc lesson-foundry`](../packages/lesson-foundry/README.md) and [`adlc rejection-mining`](../packages/rejection-mining/README.md) to convert repeated review
    findings into deterministic lint checks, skills, or spec-gap templates. Lenses
    that generalize past one site graduate out of the local `.adlc/lessons/` staging
    area into [`docs/review-lenses/`](./review-lenses/) — e.g.
    [text-scanning gates](./review-lenses/text-scanning-gates.md).
-8. On a schedule or after model changes, use [`adlc model-ratchet`](./tools/model-ratchet.md), [`adlc review-calibration`](./tools/review-calibration.md),
-   [`adlc skill-rot`](./tools/skill-rot.md), [`adlc ticket-prune`](./tools/ticket-prune.md), and [`adlc gate-fuzzing`](./tools/gate-fuzzing.md) to re-check assumptions that can decay over time.
+8. On a schedule or after model changes, use [`adlc model-ratchet`](../packages/model-ratchet/README.md), [`adlc review-calibration`](../packages/review-calibration/README.md),
+   [`adlc skill-rot`](../packages/skill-rot/README.md), [`adlc ticket-prune`](../packages/ticket-prune/README.md), and [`adlc gate-fuzzing`](../packages/gate-fuzzing/README.md) to re-check assumptions that can decay over time.
 
 ## Evidence conventions
 
@@ -115,7 +115,7 @@ Several tools use `.adlc/` as the shared workspace for machine-readable state:
 - `.adlc/tickets.json` stores ticket metadata consumed by routing, cold-start, rail, and
   merge-forecast tools.
 - `.adlc/manifest.jsonl` stores append-only gate evidence through `gate-manifest`.
-- `.adlc/lessons/` is the default output location for [`adlc lesson-foundry`](./tools/lesson-foundry.md).
+- `.adlc/lessons/` is the default output location for [`adlc lesson-foundry`](../packages/lesson-foundry/README.md).
 
 ### Recording an adversarial-review verdict (P6)
 

@@ -144,8 +144,8 @@ Rules that follow from the gates:
   exit-1 reason (scope given, no extractable paths) that turned every fleet consult into a
   fail-open, because fleet passes `--scope` on every call; CI's root suite caught it, the
   lane's package segment could not. Name the consumers' test files in the ACs.
-- **scope** = `packages/<pkg>/**` + the three docs (`packages/<pkg>/README.md`,
-  `docs/tools/<pkg>.md`, `apps/docs/content/docs/toolkit/<pkg>.mdx` — hand-maintained
+- **scope** = `packages/<pkg>/**` + the two docs (`packages/<pkg>/README.md`,
+  `apps/docs/content/docs/toolkit/<pkg>.mdx` — hand-maintained
   mirrors, never regenerated).
 - **rails** = EXISTING files the fix has no reason to touch (sibling libs, tests that pin
   other behaviour). Never a file the fix must edit (a test that pins the bug), never the new

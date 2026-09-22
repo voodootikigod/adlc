@@ -7,7 +7,7 @@
 **Decider:** Chris Williams
 
 **Related:** [Segmented gate-manifest spec](../specs/segmented-gate-manifest.md),
-[gate-manifest tool](../tools/gate-manifest.md),
+[gate-manifest tool](../../packages/gate-manifest/README.md),
 [ADR-0010](./0010-sharded-ticket-store.md) (sharded ticket store — the precedent),
 [ADR-0014](./0014-track-the-findings-ledger.md) (tracked findings ledger),
 cross-model gate hardening #326 and the truncation honest-limit discussion in #354.

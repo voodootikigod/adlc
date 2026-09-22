@@ -1,7 +1,7 @@
 # Review lens — text-scanning gates (operative vs inert boundary)
 
 A **review lens** is a set of questions a reviewer (or a P5 prosecutor) asks of a
-change. This one is distilled by [`lesson-foundry`](../tools/lesson-foundry.md)
+change. This one is distilled by [`lesson-foundry`](../../packages/lesson-foundry/README.md)
 (P7) from three same-class defects, and graduated out of the local
 `.adlc/lessons/` staging area to here so it is versioned and shared.
 
@@ -61,8 +61,8 @@ prosecution — which is why they belong in a lens, not just a changelog.
 
 ## Related
 
-- [`lesson-foundry`](../tools/lesson-foundry.md) — mines repeated findings into
+- [`lesson-foundry`](../../packages/lesson-foundry/README.md) — mines repeated findings into
   defenses like this lens (P7).
-- [`rejection-mining`](../tools/rejection-mining.md) — mines human PR objections
+- [`rejection-mining`](../../packages/rejection-mining/README.md) — mines human PR objections
   into review lenses (P7).
-- [`prosecute`](../tools/prosecute.md) — the P5 gate this lens feeds.
+- [`prosecute`](../../packages/prosecute/README.md) — the P5 gate this lens feeds.

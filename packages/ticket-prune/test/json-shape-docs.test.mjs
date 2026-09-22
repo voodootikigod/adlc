@@ -19,7 +19,6 @@ const REPO = join(PKG, '..', '..');
 
 const DOCS = [
   { name: 'README', path: join(PKG, 'README.md') },
-  { name: 'docs/tools mirror', path: join(REPO, 'docs', 'tools', 'ticket-prune.md') },
   { name: 'docs site mirror', path: join(REPO, 'apps', 'docs', 'content', 'docs', 'toolkit', 'ticket-prune.mdx') },
 ];
 
