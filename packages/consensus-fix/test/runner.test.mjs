@@ -11,17 +11,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmp } from '@adlc/core/test-kit';
 import { runCommand, validateCandidate, runConsensusFix } from '../lib/runner.mjs';
-
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'consensus-fix-runner-test-'));
-}
-function cleanup(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
 
 /** One full-line-replace hunk, for single-line fixture files. */
 function replaceLine1(replacement) {
@@ -125,342 +118,302 @@ test('validateCandidate rejects an empty changes array (issue #599: an empty cha
 
 // ─── runConsensusFix (full engine, no network) ────────────────────────────────
 
-test('runConsensusFix throws when test already passes', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'target.mjs');
-    writeFileSync(f, 'export const x = 1;');
+test('runConsensusFix throws when test already passes', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'target.mjs');
+  writeFileSync(f, 'export const x = 1;');
 
-    await assert.rejects(
-      () => runConsensusFix({
-        testCmd: 'exit 0',
-        files: [f],
-        n: 2,
-        tier: 'mid',
-        completeFn: async () => '{"changes": []}',
-      }),
-      (err) => {
-        assert.ok(err.isOpError);
-        assert.ok(err.message.includes('already passes'));
-        return true;
-      }
-    );
-  } finally {
-    cleanup(dir);
-  }
-});
-
-test('runConsensusFix discards candidate with invalid JSON', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'target.mjs');
-    writeFileSync(f, 'export const x = 1;');
-
-    let callCount = 0;
-    const result = await runConsensusFix({
-      testCmd: 'exit 1',
+  await assert.rejects(
+    () => runConsensusFix({
+      testCmd: 'exit 0',
       files: [f],
       n: 2,
       tier: 'mid',
-      completeFn: async () => {
-        callCount++;
-        return 'not json at all';
-      },
-    });
-
-    assert.equal(callCount, 2);
-    assert.equal(result.discarded.length, 2);
-    assert.equal(result.survivors.length, 0);
-  } finally {
-    cleanup(dir);
-  }
+      completeFn: async () => '{"changes": []}',
+    }),
+    (err) => {
+      assert.ok(err.isOpError);
+      assert.ok(err.message.includes('already passes'));
+      return true;
+    }
+  );
 });
 
-test('runConsensusFix discards candidate referencing file outside list', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'allowed.mjs');
-    writeFileSync(f, 'export const x = 1;');
+test('runConsensusFix discards candidate with invalid JSON', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'target.mjs');
+  writeFileSync(f, 'export const x = 1;');
 
-    const result = await runConsensusFix({
-      testCmd: 'exit 1',
-      files: [f],
-      n: 1,
-      tier: 'mid',
-      completeFn: async () => fixResponse('/etc/passwd', 'bad'),
-    });
+  let callCount = 0;
+  const result = await runConsensusFix({
+    testCmd: 'exit 1',
+    files: [f],
+    n: 2,
+    tier: 'mid',
+    completeFn: async () => {
+      callCount++;
+      return 'not json at all';
+    },
+  });
 
-    assert.equal(result.discarded.length, 1);
-    assert.ok(result.discarded[0].reason.includes('not in the provided list'));
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(callCount, 2);
+  assert.equal(result.discarded.length, 2);
+  assert.equal(result.survivors.length, 0);
 });
 
-test('runConsensusFix discards a candidate whose hunk fails to apply cleanly — only that candidate, not the run', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original'); // 1 line
+test('runConsensusFix discards candidate referencing file outside list', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'allowed.mjs');
+  writeFileSync(f, 'export const x = 1;');
 
-    let call = 0;
-    const completeFn = async () => {
-      call++;
-      if (call === 1) {
-        // endLine 9 is out of bounds for a 1-line file — must fail to apply.
-        return JSON.stringify({ changes: [{ file: f, hunks: [{ startLine: 1, endLine: 9, replacement: 'x' }] }] });
-      }
-      return fixResponse(f, 'good fix');
-    };
+  const result = await runConsensusFix({
+    testCmd: 'exit 1',
+    files: [f],
+    n: 1,
+    tier: 'mid',
+    completeFn: async () => fixResponse('/etc/passwd', 'bad'),
+  });
 
-    const testCmd = `test "$(cat '${f}')" != "original"`;
-    const result = await runConsensusFix({ testCmd, files: [f], n: 2, tier: 'mid', completeFn });
-
-    assert.equal(result.discarded.length, 1);
-    assert.match(result.discarded[0].reason, /hunk apply failed/);
-    assert.equal(result.discarded[0].index, 0);
-    // The OTHER candidate still ran normally and survived — one bad hunk
-    // must not abort the whole run.
-    assert.equal(result.survivors.length, 1);
-    assert.equal(result.survivors[0].index, 1);
-
-    assert.equal(readFileSync(f, 'utf8'), 'original', 'a failed apply must never leave the file mutated');
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(result.discarded.length, 1);
+  assert.ok(result.discarded[0].reason.includes('not in the provided list'));
 });
 
-test('runConsensusFix: surviving candidate passes test, files restored after', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'broken.mjs');
-    // File starts with broken content; fix makes test pass.
-    writeFileSync(f, 'BROKEN');
+test('runConsensusFix discards a candidate whose hunk fails to apply cleanly — only that candidate, not the run', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original'); // 1 line
 
-    const sentinelFile = join(dir, 'sentinel.txt');
-    writeFileSync(sentinelFile, 'no');
+  let call = 0;
+  const completeFn = async () => {
+    call++;
+    if (call === 1) {
+      // endLine 9 is out of bounds for a 1-line file — must fail to apply.
+      return JSON.stringify({ changes: [{ file: f, hunks: [{ startLine: 1, endLine: 9, replacement: 'x' }] }] });
+    }
+    return fixResponse(f, 'good fix');
+  };
 
-    // Test command: check if sentinel file contains 'yes'.
-    const testCmd = `test "$(cat '${sentinelFile}')" = "yes"`;
+  const testCmd = `test "$(cat '${f}')" != "original"`;
+  const result = await runConsensusFix({ testCmd, files: [f], n: 2, tier: 'mid', completeFn });
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 1,
-      tier: 'mid',
-      completeFn: async () => {
-        // The "fix" writes 'yes' to the sentinel via a side effect...
-        // but we can't do that from changes (changes only affect listed files).
-        // Instead: make the test always pass by writing the sentinel outside changes.
-        writeFileSync(sentinelFile, 'yes');
-        return fixResponse(f, 'FIXED');
-      },
-    });
+  assert.equal(result.discarded.length, 1);
+  assert.match(result.discarded[0].reason, /hunk apply failed/);
+  assert.equal(result.discarded[0].index, 0);
+  // The OTHER candidate still ran normally and survived — one bad hunk
+  // must not abort the whole run.
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].index, 1);
 
-    // After run, the snapshot should be restored.
-    assert.equal(readFileSync(f, 'utf8'), 'BROKEN');
-    // The fix candidate should have passed (sentinel was 'yes' during its run).
-    // But sentinel gets restored? No — sentinel is not in the snapshot.
-    // So the test will pass during the candidate run.
-    assert.equal(result.survivors.length, 1);
-    assert.equal(result.survivors[0].passed, true);
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(readFileSync(f, 'utf8'), 'original', 'a failed apply must never leave the file mutated');
 });
 
-test('runConsensusFix restores files even when candidate test fails', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'file.mjs');
-    writeFileSync(f, 'original content');
+test('runConsensusFix: surviving candidate passes test, files restored after', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'broken.mjs');
+  // File starts with broken content; fix makes test pass.
+  writeFileSync(f, 'BROKEN');
 
-    const result = await runConsensusFix({
-      testCmd: 'exit 1',  // always fails
-      files: [f],
-      n: 1,
-      tier: 'mid',
-      completeFn: async () => fixResponse(f, 'attempted fix'),
-    });
+  const sentinelFile = join(dir, 'sentinel.txt');
+  writeFileSync(sentinelFile, 'no');
 
-    // File should be restored to original.
-    assert.equal(readFileSync(f, 'utf8'), 'original content');
-    assert.equal(result.failed.length, 1);
-    assert.equal(result.survivors.length, 0);
-  } finally {
-    cleanup(dir);
-  }
+  // Test command: check if sentinel file contains 'yes'.
+  const testCmd = `test "$(cat '${sentinelFile}')" = "yes"`;
+
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 1,
+    tier: 'mid',
+    completeFn: async () => {
+      // The "fix" writes 'yes' to the sentinel via a side effect...
+      // but we can't do that from changes (changes only affect listed files).
+      // Instead: make the test always pass by writing the sentinel outside changes.
+      writeFileSync(sentinelFile, 'yes');
+      return fixResponse(f, 'FIXED');
+    },
+  });
+
+  // After run, the snapshot should be restored.
+  assert.equal(readFileSync(f, 'utf8'), 'BROKEN');
+  // The fix candidate should have passed (sentinel was 'yes' during its run).
+  // But sentinel gets restored? No — sentinel is not in the snapshot.
+  // So the test will pass during the candidate run.
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].passed, true);
 });
 
-test('runConsensusFix groups and selects winner across multiple candidates', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix restores files even when candidate test fails', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'file.mjs');
+  writeFileSync(f, 'original content');
 
-    let call = 0;
-    const completeFn = async () => {
-      call++;
-      // Candidates 1 and 3 return the same fix; candidate 2 returns different.
-      if (call === 2) {
-        return fixResponse(f, 'minority fix');
-      }
-      return fixResponse(f, 'majority fix');
-    };
+  const result = await runConsensusFix({
+    testCmd: 'exit 1',  // always fails
+    files: [f],
+    n: 1,
+    tier: 'mid',
+    completeFn: async () => fixResponse(f, 'attempted fix'),
+  });
 
-    // We need the test to pass.  We'll use a test that checks what's in the file.
-    // The check: if file contains 'majority fix' or 'minority fix' → exit 0.
-    const testCmd = `test "$(cat '${f}')" != "original"`;
-
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 3,
-      tier: 'mid',
-      completeFn,
-    });
-
-    assert.equal(result.survivors.length, 3);
-    assert.equal(result.groups.size, 2);  // two distinct fix texts
-    const sel = result.selectionResult;
-    assert.ok(sel);
-    assert.equal(sel.largestGroupSize, 2);
-    // Winner should come from the majority group (indices 0 and 2).
-    assert.ok([0, 2].includes(sel.winner.index));
-
-    // Files restored.
-    assert.equal(readFileSync(f, 'utf8'), 'original');
-  } finally {
-    cleanup(dir);
-  }
+  // File should be restored to original.
+  assert.equal(readFileSync(f, 'utf8'), 'original content');
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.survivors.length, 0);
 });
 
-test('runConsensusFix all-divergent flag set correctly', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix groups and selects winner across multiple candidates', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
 
-    let call = 0;
-    const completeFn = async () => {
-      call++;
-      // Every candidate returns a unique fix.
-      return fixResponse(f, `fix${call}`);
-    };
+  let call = 0;
+  const completeFn = async () => {
+    call++;
+    // Candidates 1 and 3 return the same fix; candidate 2 returns different.
+    if (call === 2) {
+      return fixResponse(f, 'minority fix');
+    }
+    return fixResponse(f, 'majority fix');
+  };
 
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+  // We need the test to pass.  We'll use a test that checks what's in the file.
+  // The check: if file contains 'majority fix' or 'minority fix' → exit 0.
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 3,
-      tier: 'mid',
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 3,
+    tier: 'mid',
+    completeFn,
+  });
 
-    assert.equal(result.survivors.length, 3);
-    assert.equal(result.allDivergent, true);
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(result.survivors.length, 3);
+  assert.equal(result.groups.size, 2);  // two distinct fix texts
+  const sel = result.selectionResult;
+  assert.ok(sel);
+  assert.equal(sel.largestGroupSize, 2);
+  // Winner should come from the majority group (indices 0 and 2).
+  assert.ok([0, 2].includes(sel.winner.index));
+
+  // Files restored.
+  assert.equal(readFileSync(f, 'utf8'), 'original');
+});
+
+test('runConsensusFix all-divergent flag set correctly', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
+
+  let call = 0;
+  const completeFn = async () => {
+    call++;
+    // Every candidate returns a unique fix.
+    return fixResponse(f, `fix${call}`);
+  };
+
+  const testCmd = `test "$(cat '${f}')" != "original"`;
+
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 3,
+    tier: 'mid',
+    completeFn,
+  });
+
+  assert.equal(result.survivors.length, 3);
+  assert.equal(result.allDivergent, true);
 });
 
 // ─── rails (regression gate) ──────────────────────────────────────────────────
 
-test('runConsensusFix: candidate passing test-cmd but failing rails is NOT a survivor', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix: candidate passing test-cmd but failing rails is NOT a survivor', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
 
-    // The repro gate (testCmd) passes whenever the file is no longer 'original'.
-    const testCmd = `test "$(cat '${f}')" != "original"`;
-    // The rails gate (railsCmd) passes ONLY when the file contains 'good fix'.
-    // A candidate that writes anything else games the repro but reddens rails.
-    const railsCmd = `test "$(cat '${f}')" = "good fix"`;
+  // The repro gate (testCmd) passes whenever the file is no longer 'original'.
+  const testCmd = `test "$(cat '${f}')" != "original"`;
+  // The rails gate (railsCmd) passes ONLY when the file contains 'good fix'.
+  // A candidate that writes anything else games the repro but reddens rails.
+  const railsCmd = `test "$(cat '${f}')" = "good fix"`;
 
-    let call = 0;
-    const completeFn = async () => {
-      call++;
-      // Candidate 1: gaming fix — passes repro, fails rails.
-      if (call === 1) {
-        return fixResponse(f, 'gaming fix');
-      }
-      // Candidates 2 and 3: honest fix — passes both gates.
-      return fixResponse(f, 'good fix');
-    };
+  let call = 0;
+  const completeFn = async () => {
+    call++;
+    // Candidate 1: gaming fix — passes repro, fails rails.
+    if (call === 1) {
+      return fixResponse(f, 'gaming fix');
+    }
+    // Candidates 2 and 3: honest fix — passes both gates.
+    return fixResponse(f, 'good fix');
+  };
 
-    const result = await runConsensusFix({
-      testCmd,
-      railsCmd,
-      files: [f],
-      n: 3,
-      tier: 'mid',
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    railsCmd,
+    files: [f],
+    n: 3,
+    tier: 'mid',
+    completeFn,
+  });
 
-    assert.equal(result.railsChecked, true);
-    // Only the two honest candidates survive; the gaming one is rejected.
-    assert.equal(result.survivors.length, 2);
-    assert.ok(result.survivors.every((s) => s.index !== 0));
+  assert.equal(result.railsChecked, true);
+  // Only the two honest candidates survive; the gaming one is rejected.
+  assert.equal(result.survivors.length, 2);
+  assert.ok(result.survivors.every((s) => s.index !== 0));
 
-    // The gaming candidate passed the repro but failed the rails — it lands in
-    // `failed`, not `survivors`.
-    const gaming = result.failed.find((r) => r.index === 0);
-    assert.ok(gaming, 'gaming candidate should be in failed');
-    assert.equal(gaming.testPassed, true);
-    assert.equal(gaming.railsPassed, false);
-    assert.equal(gaming.passed, false);
+  // The gaming candidate passed the repro but failed the rails — it lands in
+  // `failed`, not `survivors`.
+  const gaming = result.failed.find((r) => r.index === 0);
+  assert.ok(gaming, 'gaming candidate should be in failed');
+  assert.equal(gaming.testPassed, true);
+  assert.equal(gaming.railsPassed, false);
+  assert.equal(gaming.passed, false);
 
-    // The winner comes from the honest group (indices 1 or 2), never index 0.
-    assert.ok(result.selectionResult);
-    assert.notEqual(result.selectionResult.winner.index, 0);
+  // The winner comes from the honest group (indices 1 or 2), never index 0.
+  assert.ok(result.selectionResult);
+  assert.notEqual(result.selectionResult.winner.index, 0);
 
-    assert.equal(readFileSync(f, 'utf8'), 'original');
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(readFileSync(f, 'utf8'), 'original');
 });
 
-test('runConsensusFix: competing candidate that passes both gates wins over a smaller-diff gaming fix', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix: competing candidate that passes both gates wins over a smaller-diff gaming fix', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
 
-    const testCmd = `test "$(cat '${f}')" != "original"`;
-    const railsCmd = `grep -q RAILS_OK '${f}'`;
+  const testCmd = `test "$(cat '${f}')" != "original"`;
+  const railsCmd = `grep -q RAILS_OK '${f}'`;
 
-    let call = 0;
-    const fn = async () => {
-      call++;
-      // Candidate 1: tiny diff that games the repro but lacks the rails token.
-      if (call === 1) {
-        return fixResponse(f, 'x');
-      }
-      // Candidate 2: larger diff that satisfies the rails gate.
-      return fixResponse(f, 'RAILS_OK fix line one');
-    };
+  let call = 0;
+  const fn = async () => {
+    call++;
+    // Candidate 1: tiny diff that games the repro but lacks the rails token.
+    if (call === 1) {
+      return fixResponse(f, 'x');
+    }
+    // Candidate 2: larger diff that satisfies the rails gate.
+    return fixResponse(f, 'RAILS_OK fix line one');
+  };
 
-    const result = await runConsensusFix({
-      testCmd,
-      railsCmd,
-      files: [f],
-      n: 2,
-      tier: 'mid',
-      completeFn: fn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    railsCmd,
+    files: [f],
+    n: 2,
+    tier: 'mid',
+    completeFn: fn,
+  });
 
-    // Only the rails-passing candidate survives — even though the gaming fix
-    // has the smaller diff, the smallest-diff tiebreaker never sees it.
-    assert.equal(result.survivors.length, 1);
-    assert.equal(result.survivors[0].index, 1);
-    assert.equal(result.selectionResult.winner.index, 1);
+  // Only the rails-passing candidate survives — even though the gaming fix
+  // has the smaller diff, the smallest-diff tiebreaker never sees it.
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].index, 1);
+  assert.equal(result.selectionResult.winner.index, 1);
 
-    assert.equal(readFileSync(f, 'utf8'), 'original');
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(readFileSync(f, 'utf8'), 'original');
 });
 
 // ─── providerNames (--providers) ──────────────────────────────────────────────
@@ -468,199 +421,175 @@ test('runConsensusFix: competing candidate that passes both gates wins over a sm
 // samples of one auto-detected provider. completeFn receives (prompt, providerName)
 // so the injected fn can route to the right provider without a real network call.
 
-test('runConsensusFix: providerNames issues exactly one completeFn call per named provider, in order', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+test('runConsensusFix: providerNames issues exactly one completeFn call per named provider, in order', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const seenProviders = [];
-    const completeFn = async (_prompt, providerName) => {
-      seenProviders.push(providerName);
-      return fixResponse(f, `fix-from-${providerName}`);
-    };
+  const seenProviders = [];
+  const completeFn = async (_prompt, providerName) => {
+    seenProviders.push(providerName);
+    return fixResponse(f, `fix-from-${providerName}`);
+  };
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 3, // --n is ignored/overridden when providerNames is supplied
-      tier: 'mid',
-      providerNames: ['anthropic', 'openai', 'gemini'],
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 3, // --n is ignored/overridden when providerNames is supplied
+    tier: 'mid',
+    providerNames: ['anthropic', 'openai', 'gemini'],
+    completeFn,
+  });
 
-    assert.deepEqual(seenProviders, ['anthropic', 'openai', 'gemini']);
-    assert.equal(result.survivors.length, 3);
-    // Each survivor's changeset is genuinely distinct (three different providers).
-    assert.equal(result.groups.size, 3);
-  } finally {
-    cleanup(dir);
-  }
+  assert.deepEqual(seenProviders, ['anthropic', 'openai', 'gemini']);
+  assert.equal(result.survivors.length, 3);
+  // Each survivor's changeset is genuinely distinct (three different providers).
+  assert.equal(result.groups.size, 3);
 });
 
-test('runConsensusFix: providerNames results record which provider produced which candidate', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+test('runConsensusFix: providerNames results record which provider produced which candidate', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const completeFn = async (_prompt, providerName) => fixResponse(f, `fix-from-${providerName}`);
+  const completeFn = async (_prompt, providerName) => fixResponse(f, `fix-from-${providerName}`);
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      providerNames: ['anthropic', 'openai'],
-      tier: 'mid',
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    providerNames: ['anthropic', 'openai'],
+    tier: 'mid',
+    completeFn,
+  });
 
-    assert.deepEqual(
-      result.survivors.map((s) => s.provider).sort(),
-      ['anthropic', 'openai']
-    );
-  } finally {
-    cleanup(dir);
-  }
+  assert.deepEqual(
+    result.survivors.map((s) => s.provider).sort(),
+    ['anthropic', 'openai']
+  );
 });
 
-test('runConsensusFix: providerNames + a failing provider surfaces as a discarded candidate, not a thrown error', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+test('runConsensusFix: providerNames + a failing provider surfaces as a discarded candidate, not a thrown error', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const completeFn = async (_prompt, providerName) => {
-      if (providerName === 'openai') throw new Error('provider "openai" is not available');
-      return fixResponse(f, `fix-from-${providerName}`);
-    };
+  const completeFn = async (_prompt, providerName) => {
+    if (providerName === 'openai') throw new Error('provider "openai" is not available');
+    return fixResponse(f, `fix-from-${providerName}`);
+  };
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      providerNames: ['anthropic', 'openai'],
-      tier: 'mid',
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    providerNames: ['anthropic', 'openai'],
+    tier: 'mid',
+    completeFn,
+  });
 
-    assert.equal(result.discarded.length, 1);
-    assert.match(result.discarded[0].reason, /openai/);
-    assert.equal(result.survivors.length, 1);
-    assert.equal(result.survivors[0].provider, 'anthropic');
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(result.discarded.length, 1);
+  assert.match(result.discarded[0].reason, /openai/);
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].provider, 'anthropic');
 });
 
-test('runConsensusFix: without providerNames, behavior is unchanged (n resamples, no provider field)', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+test('runConsensusFix: without providerNames, behavior is unchanged (n resamples, no provider field)', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    let callCount = 0;
-    const completeFn = async (_prompt, providerName) => {
-      callCount++;
-      assert.equal(providerName, undefined, 'no per-invocation provider override by default');
-      return fixResponse(f, 'same fix');
-    };
+  let callCount = 0;
+  const completeFn = async (_prompt, providerName) => {
+    callCount++;
+    assert.equal(providerName, undefined, 'no per-invocation provider override by default');
+    return fixResponse(f, 'same fix');
+  };
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 2,
-      tier: 'mid',
-      completeFn,
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 2,
+    tier: 'mid',
+    completeFn,
+  });
 
-    assert.equal(callCount, 2);
-    assert.equal(result.survivors.length, 2);
-    assert.ok(result.survivors.every((s) => s.provider === undefined));
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(callCount, 2);
+  assert.equal(result.survivors.length, 2);
+  assert.ok(result.survivors.every((s) => s.provider === undefined));
 });
 
-test('runConsensusFix: without --rails, emits a warning and survivors are repro-only', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix: without --rails, emits a warning and survivors are repro-only', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
 
-    const testCmd = `test "$(cat '${f}')" != "original"`;
+  const testCmd = `test "$(cat '${f}')" != "original"`;
 
-    const messages = [];
-    const result = await runConsensusFix({
-      testCmd,
-      // no railsCmd
-      files: [f],
-      n: 1,
-      tier: 'mid',
-      completeFn: async () => fixResponse(f, 'any fix'),
-      onProgress: (m) => messages.push(m),
-    });
+  const messages = [];
+  const result = await runConsensusFix({
+    testCmd,
+    // no railsCmd
+    files: [f],
+    n: 1,
+    tier: 'mid',
+    completeFn: async () => fixResponse(f, 'any fix'),
+    onProgress: (m) => messages.push(m),
+  });
 
-    assert.equal(result.railsChecked, false);
-    // A warning about the missing rails gate is surfaced (no silent caps).
-    assert.ok(
-      messages.some((m) => /WARNING/.test(m) && /--rails/.test(m)),
-      'expected a WARNING mentioning --rails'
-    );
-    // The candidate still survives on the repro gate alone.
-    assert.equal(result.survivors.length, 1);
-    assert.equal(result.survivors[0].railsPassed, true);
-    assert.equal(result.survivors[0].railsChecked, false);
+  assert.equal(result.railsChecked, false);
+  // A warning about the missing rails gate is surfaced (no silent caps).
+  assert.ok(
+    messages.some((m) => /WARNING/.test(m) && /--rails/.test(m)),
+    'expected a WARNING mentioning --rails'
+  );
+  // The candidate still survives on the repro gate alone.
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].railsPassed, true);
+  assert.equal(result.survivors[0].railsChecked, false);
 
-    assert.equal(readFileSync(f, 'utf8'), 'original');
-  } finally {
-    cleanup(dir);
-  }
+  assert.equal(readFileSync(f, 'utf8'), 'original');
 });
 
-test('runConsensusFix: unanimous empty-changeset candidates do not win consensus on an environmentally-flaky test (issue #599)', async () => {
-  const dir = makeTmp();
-  try {
-    const f = join(dir, 'source.mjs');
-    writeFileSync(f, 'original');
+test('runConsensusFix: unanimous empty-changeset candidates do not win consensus on an environmentally-flaky test (issue #599)', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'source.mjs');
+  writeFileSync(f, 'original');
 
-    // A test that is red on its FIRST invocation for a purely environmental
-    // reason (a marker/fixture the first run itself creates) and green on
-    // every invocation after — with the source file completely untouched.
-    // This is the exact shape the issue names: nothing about the code
-    // changed between the red and green runs.
-    const marker = join(dir, 'MARKER');
-    const testCmd = `test -f '${marker}' || { touch '${marker}'; exit 1; }`;
+  // A test that is red on its FIRST invocation for a purely environmental
+  // reason (a marker/fixture the first run itself creates) and green on
+  // every invocation after — with the source file completely untouched.
+  // This is the exact shape the issue names: nothing about the code
+  // changed between the red and green runs.
+  const marker = join(dir, 'MARKER');
+  const testCmd = `test -f '${marker}' || { touch '${marker}'; exit 1; }`;
 
-    const result = await runConsensusFix({
-      testCmd,
-      files: [f],
-      n: 3,
-      tier: 'mid',
-      // Every candidate proposes changing nothing.
-      completeFn: async () => '{"changes": []}',
-    });
+  const result = await runConsensusFix({
+    testCmd,
+    files: [f],
+    n: 3,
+    tier: 'mid',
+    // Every candidate proposes changing nothing.
+    completeFn: async () => '{"changes": []}',
+  });
 
-    // The initial confirm-failure run consumes the first (red) invocation;
-    // every candidate's post-apply run then sees the marker and passes —
-    // purely because the test itself is flaky, not because of any fix.
-    assert.equal(result.survivors.length, 0, 'an empty changeset must never survive as a candidate');
-    assert.equal(result.discarded.length, 3);
-    for (const d of result.discarded) {
-      assert.equal(d.reason, 'validation failed: candidate proposes no changes');
-    }
-    // No winner is ever selected from zero survivors.
-    assert.equal(result.selectionResult, null);
-    assert.equal(result.groups.size, 0);
-    // Vacuously all-divergent (no group has more than one member) — the CLI
-    // reads this as "nothing to apply, escalate" rather than declaring a
-    // false unanimous consensus.
-    assert.equal(result.allDivergent, true);
-
-    assert.equal(readFileSync(f, 'utf8'), 'original', 'source must be untouched');
-  } finally {
-    cleanup(dir);
+  // The initial confirm-failure run consumes the first (red) invocation;
+  // every candidate's post-apply run then sees the marker and passes —
+  // purely because the test itself is flaky, not because of any fix.
+  assert.equal(result.survivors.length, 0, 'an empty changeset must never survive as a candidate');
+  assert.equal(result.discarded.length, 3);
+  for (const d of result.discarded) {
+    assert.equal(d.reason, 'validation failed: candidate proposes no changes');
   }
+  // No winner is ever selected from zero survivors.
+  assert.equal(result.selectionResult, null);
+  assert.equal(result.groups.size, 0);
+  // Vacuously all-divergent (no group has more than one member) — the CLI
+  // reads this as "nothing to apply, escalate" rather than declaring a
+  // false unanimous consensus.
+  assert.equal(result.allDivergent, true);
+
+  assert.equal(readFileSync(f, 'utf8'), 'original', 'source must be untouched');
 });
