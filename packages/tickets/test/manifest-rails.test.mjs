@@ -13,9 +13,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 
 import { coversManifest, discoverManifests, MANIFEST_BASENAMES } from '../lib/manifest-rails.mjs';
 
@@ -97,31 +97,29 @@ test('coversManifest requires an explicit manifest corpus', () => {
   assert.throws(() => coversManifest('packages/x/**'), /explicit manifestPaths/);
 });
 
-test('discoverManifests walks a tree, finds manifests, excludes node_modules', () => {
+test('discoverManifests walks a tree, finds manifests, excludes node_modules', (t) => {
   // Build a fixture and pass its root EXPLICITLY. An earlier version called
   // discoverManifests() with no argument and asserted the real repo layout was
   // below cwd — true under `run-tests.mjs` (cwd = repo root) but false under
   // `npm test --workspace @adlc/tickets` (cwd = packages/tickets), where CI
   // caught it. The function is correct; the test must not assume cwd.
-  const root = mkdtempSync(join(tmpdir(), 'adlc-discover-'));
-  try {
-    mkdirSync(join(root, 'packages', 'build-gate', 'lib'), { recursive: true });
-    mkdirSync(join(root, 'plugins', 'x', '.claude-plugin'), { recursive: true });
-    mkdirSync(join(root, 'node_modules', 'dep'), { recursive: true });
-    writeFileSync(join(root, 'package.json'), '{}\n');
-    writeFileSync(join(root, 'packages', 'build-gate', 'package.json'), '{}\n');
-    writeFileSync(join(root, 'plugins', 'x', '.claude-plugin', 'plugin.json'), '{}\n');
-    writeFileSync(join(root, 'node_modules', 'dep', 'package.json'), '{}\n');
+  const root = tmp(t, 'adlc-discover-');
+  mkdirSync(join(root, 'packages', 'build-gate', 'lib'), { recursive: true });
+  mkdirSync(join(root, 'plugins', 'x', '.claude-plugin'), { recursive: true });
+  mkdirSync(join(root, 'node_modules', 'dep'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), '{}\n');
+  writeFileSync(join(root, 'packages', 'build-gate', 'package.json'), '{}\n');
+  writeFileSync(join(root, 'plugins', 'x', '.claude-plugin', 'plugin.json'), '{}\n');
+  writeFileSync(join(root, 'node_modules', 'dep', 'package.json'), '{}\n');
 
-    const found = discoverManifests(root);
-    assert.ok(found.includes('package.json'), 'root manifest present');
-    assert.ok(found.includes('packages/build-gate/package.json'), 'package manifest present');
-    assert.ok(found.includes('plugins/x/.claude-plugin/plugin.json'), 'nested host manifest present');
-    assert.ok(!found.some((p) => p.includes('node_modules')), 'node_modules excluded');
+  const found = discoverManifests(root);
+  assert.ok(found.includes('package.json'), 'root manifest present');
+  assert.ok(found.includes('packages/build-gate/package.json'), 'package manifest present');
+  assert.ok(found.includes('plugins/x/.claude-plugin/plugin.json'), 'nested host manifest present');
+  assert.ok(!found.some((p) => p.includes('node_modules')), 'node_modules excluded');
 
-    assert.equal(coversManifest('packages/build-gate/**', found), true);
-    assert.equal(coversManifest('packages/build-gate/lib/**', found), false);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(coversManifest('packages/build-gate/**', found), true);
+  assert.equal(coversManifest('packages/build-gate/lib/**', found), false);
 });
 
 // A nested git checkout is not this checkout's content. This repo keeps its
@@ -130,58 +128,54 @@ test('discoverManifests walks a tree, finds manifests, excludes node_modules', (
 // manifests as if they were ours — 95 of 146 paths in a working checkout.
 // Detect the checkout itself rather than guessing directory names: a linked
 // worktree has a `.git` FILE, a submodule or nested clone a `.git` DIRECTORY.
-test('discoverManifests skips nested git checkouts, whatever they are named', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-nested-')));
-  try {
-    // this checkout's own content
-    writeFileSync(join(root, 'package.json'), '{}\n');
-    mkdirSync(join(root, 'packages', 'real'), { recursive: true });
-    writeFileSync(join(root, 'packages', 'real', 'package.json'), '{}\n');
+test('discoverManifests skips nested git checkouts, whatever they are named', (t) => {
+  const root = tmp(t, 'adlc-nested-');
+  // this checkout's own content
+  writeFileSync(join(root, 'package.json'), '{}\n');
+  mkdirSync(join(root, 'packages', 'real'), { recursive: true });
+  writeFileSync(join(root, 'packages', 'real', 'package.json'), '{}\n');
 
-    // a linked worktree: `.git` is a FILE, and the directory name is not in SKIP_DIRS
-    const worktree = join(root, '.claude', 'worktrees', 'stale');
-    mkdirSync(join(worktree, 'packages', 'real'), { recursive: true });
-    writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
-    writeFileSync(join(worktree, 'package.json'), '{}\n');
-    writeFileSync(join(worktree, 'packages', 'real', 'package.json'), '{}\n');
+  // a linked worktree: `.git` is a FILE, and the directory name is not in SKIP_DIRS
+  const worktree = join(root, '.claude', 'worktrees', 'stale');
+  mkdirSync(join(worktree, 'packages', 'real'), { recursive: true });
+  writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
+  writeFileSync(join(worktree, 'package.json'), '{}\n');
+  writeFileSync(join(worktree, 'packages', 'real', 'package.json'), '{}\n');
 
-    // a submodule / nested clone: `.git` is a DIRECTORY
-    const submodule = join(root, 'vendor', 'dep');
-    mkdirSync(join(submodule, '.git'), { recursive: true });
-    writeFileSync(join(submodule, 'package.json'), '{}\n');
+  // a submodule / nested clone: `.git` is a DIRECTORY
+  const submodule = join(root, 'vendor', 'dep');
+  mkdirSync(join(submodule, '.git'), { recursive: true });
+  writeFileSync(join(submodule, 'package.json'), '{}\n');
 
-    const found = discoverManifests(root);
-    assert.ok(found.includes('package.json'), 'our root manifest present');
-    assert.ok(found.includes('packages/real/package.json'), 'our package manifest present');
-    assert.deepEqual(found.filter((p) => p.startsWith('.claude/')), [], 'no worktree manifest');
-    assert.deepEqual(found.filter((p) => p.startsWith('vendor/')), [], 'no submodule manifest');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const found = discoverManifests(root);
+  assert.ok(found.includes('package.json'), 'our root manifest present');
+  assert.ok(found.includes('packages/real/package.json'), 'our package manifest present');
+  assert.deepEqual(found.filter((p) => p.startsWith('.claude/')), [], 'no worktree manifest');
+  assert.deepEqual(found.filter((p) => p.startsWith('vendor/')), [], 'no submodule manifest');
 });
 
 // The bug that made this matter: `#assertNoManifestRails` rejects a rail that
 // covers any discovered manifest, so a phantom path turns ticket creation into
 // a RAIL_COVERS_MANIFEST failure that depends on the operator's disk rather than
 // on the commit. Same tree, same rail, must reach the same verdict.
-test('a rail verdict does not depend on whether a nested checkout is present', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-verdict-')));
-  try {
-    writeFileSync(join(root, 'package.json'), '{}\n');
-    mkdirSync(join(root, '.claude'), { recursive: true });
-    writeFileSync(join(root, '.claude', 'settings.json'), '{}\n'); // not a manifest basename
+test('a rail verdict does not depend on whether a nested checkout is present', (t) => {
+  const root = tmp(t, 'adlc-verdict-');
+  writeFileSync(join(root, 'package.json'), '{}\n');
+  mkdirSync(join(root, '.claude'), { recursive: true });
+  writeFileSync(join(root, '.claude', 'settings.json'), '{}\n'); // not a manifest basename
 
-    const before = discoverManifests(root);
-    const verdictBefore = coversManifest('.claude/**', before);
+  const before = discoverManifests(root);
+  const verdictBefore = coversManifest('.claude/**', before);
 
-    const worktree = join(root, '.claude', 'worktrees', 'stale');
-    mkdirSync(worktree, { recursive: true });
-    writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere\n');
-    writeFileSync(join(worktree, 'package.json'), '{}\n');
+  const worktree = join(root, '.claude', 'worktrees', 'stale');
+  mkdirSync(worktree, { recursive: true });
+  writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere\n');
+  writeFileSync(join(worktree, 'package.json'), '{}\n');
 
-    const after = discoverManifests(root);
-    assert.deepEqual([...after].sort(), [...before].sort(), 'the walk is unchanged by a worktree');
-    assert.equal(coversManifest('.claude/**', after), verdictBefore, 'the rail verdict is unchanged');
-    assert.equal(verdictBefore, false, 'and `.claude/**` covers no real manifest here');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const after = discoverManifests(root);
+  assert.deepEqual([...after].sort(), [...before].sort(), 'the walk is unchanged by a worktree');
+  assert.equal(coversManifest('.claude/**', after), verdictBefore, 'the rail verdict is unchanged');
+  assert.equal(verdictBefore, false, 'and `.claude/**` covers no real manifest here');
 });
 
 // MAX_DEPTH is a real bound, and the depth counter that feeds it must advance by
@@ -189,25 +183,23 @@ test('a rail verdict does not depend on whether a nested checkout is present', (
 // manifests, so the existing cases cannot see it — it silently stops descending
 // early and quietly under-reports, which is the same failure shape as the
 // worktree bug above: a manifest that exists is reported as absent.
-test('the walk descends exactly one level per directory, up to MAX_DEPTH', () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-depth-')));
-  try {
-    const nest = (...segments) => {
-      mkdirSync(join(root, ...segments), { recursive: true });
-      writeFileSync(join(root, ...segments, 'package.json'), '{}\n');
-      return segments.join('/') + '/package.json';
-    };
-    const deep5 = nest('a', 'b', 'c', 'd', 'e');
-    const atLimit = nest('l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8');
-    const past = nest('m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9');
+test('the walk descends exactly one level per directory, up to MAX_DEPTH', (t) => {
+  const root = tmp(t, 'adlc-depth-');
+  const nest = (...segments) => {
+    mkdirSync(join(root, ...segments), { recursive: true });
+    writeFileSync(join(root, ...segments, 'package.json'), '{}\n');
+    return segments.join('/') + '/package.json';
+  };
+  const deep5 = nest('a', 'b', 'c', 'd', 'e');
+  const atLimit = nest('l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7', 'l8');
+  const past = nest('m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9');
 
-    const found = discoverManifests(root);
-    // reachable only if the counter advances by one: a step of two prices this
-    // directory at depth 10 and abandons it before reading the manifest.
-    assert.ok(found.includes(deep5), `a five-deep manifest is found: ${deep5}`);
-    assert.ok(found.includes(atLimit), 'a manifest at MAX_DEPTH is found');
-    assert.ok(!found.includes(past), 'a manifest past MAX_DEPTH is not walked');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const found = discoverManifests(root);
+  // reachable only if the counter advances by one: a step of two prices this
+  // directory at depth 10 and abandons it before reading the manifest.
+  assert.ok(found.includes(deep5), `a five-deep manifest is found: ${deep5}`);
+  assert.ok(found.includes(atLimit), 'a manifest at MAX_DEPTH is found');
+  assert.ok(!found.includes(past), 'a manifest past MAX_DEPTH is not walked');
 });
 
 test('the manifest basename set is exactly the three host manifests', () => {
