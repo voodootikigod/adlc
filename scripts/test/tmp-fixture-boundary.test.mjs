@@ -63,8 +63,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
   'packages/gate-fuzzing/test/isolation.test.mjs',
-  'packages/gate-manifest/test/forest-format.test.mjs',
-  'packages/gate-manifest/test/gate-manifest.test.mjs',
   'packages/gate-manifest/test/key-ceremony.test.mjs',
   'packages/gate-manifest/test/migrate-branch.test.mjs',
   'packages/gate-manifest/test/migrate.test.mjs',
