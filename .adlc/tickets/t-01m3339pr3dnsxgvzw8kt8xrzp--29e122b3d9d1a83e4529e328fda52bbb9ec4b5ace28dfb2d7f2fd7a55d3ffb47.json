@@ -1,0 +1,23 @@
+{
+  "acceptanceCriteria": [
+    "In packages/init/lib/scaffold.mjs within ensureGitignore, after checking that required lines are present, evaluate whether the effective gitignore contract is satisfied (via git check-ignore probe when git is available, or rule ordering evaluation)",
+    "When required committable paths (.adlc/config.json, .adlc/manifest.jsonl, .adlc/tickets/.store.json, .adlc/manifest.d/seg-1.jsonl) would be ignored by a mis-ordered .gitignore (e.g. .adlc/* placed after negation rules), do not report 'unchanged' / 'already current'",
+    "Record a warning in result.warnings describing the mis-ordered gitignore rules, causing init to exit non-zero (exit 1) and not report 'already current'",
+    "Add a test in packages/init/test/misordered-gitignore.test.mjs or gitignore-manifest.test.mjs reproducing the mis-ordered .gitignore failure",
+    "Update documentation in packages/init/README.md, docs/tools/init.md, and apps/docs/content/docs/toolkit/init.mdx"
+  ],
+  "id": "T-01M3339PR3DNSXGVZW8KT8XRZP",
+  "issue": 665,
+  "package": "init",
+  "rails": [
+    "packages/init/lib/gitignore-defaults.mjs",
+    "packages/init/test/gitignore-defaults.test.mjs",
+    "packages/init/test/gitignore-parity.test.mjs"
+  ],
+  "scope": [
+    "packages/init/**",
+    "docs/tools/init.md",
+    "apps/docs/content/docs/toolkit/init.mdx"
+  ],
+  "title": "init: ensureGitignore is set-membership only; mis-ordered .gitignore reads 'already current', negations dead (#665)"
+}
