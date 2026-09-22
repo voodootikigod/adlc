@@ -1,6 +1,7 @@
 {
   "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `packages/tickets/test/doctor.test.mjs` contains 42 `try/finally` blocks and a `doctorWith` helper that manually cleans up tempdirs via `d.cleanup()`. Following the introduction of `@adlc/core/test-kit` in #1098, `doctor.test.mjs` can adopt `tmp(t)` with automatic `t.after` lifecycle cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/tickets/test/doctor.test.mjs`:\n   - Import `{ tmp }` from '@adlc/core/test-kit'.\n   - Update `doctorWith(t, pointer, options)` to take `t` as first argument, create `root` via `tmp(t, 'adlc-doctor-pointer-')`, and remove the `cleanup` callback property.\n   - Update test cases calling `doctorWith` to pass `t` and eliminate `try { ... } finally { d.cleanup(); }` blocks.\n   - Update standalone test cases using `mkdtempSync` to accept `t`, use `tmp(t, 'adlc-tickets-doctor-')`, and eliminate `try { ... } finally { rmSync(root, ...); }` blocks.\n2. Ensure all tickets tests pass: `npm test -w packages/tickets`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/tickets/test/doctor.test.mjs` reports 0 (down from 42).\n- AC2 `grep -c 'cleanup' packages/tickets/test/doctor.test.mjs` reports 0.\n- AC3 `npm test -w packages/tickets` exits 0 with all test cases passing.\n- AC4 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
   "category": "refactor",
+  "completed": true,
   "duration": 1,
   "edges": [],
   "id": "T-01M34T15NNAPNHR854H8X3E3TJ",
