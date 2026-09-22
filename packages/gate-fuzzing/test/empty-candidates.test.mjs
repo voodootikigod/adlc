@@ -333,3 +333,34 @@ test('CLI with --allow-empty warns on stderr and exits 0 when 0 candidates gener
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('validateCandidate guards against null and non-object inputs', async () => {
+  const { validateCandidate } = await import('../lib/candidate.mjs');
+  assert.deepEqual(validateCandidate(null), { valid: false, reason: 'invalid:malformed' });
+  assert.deepEqual(validateCandidate(undefined), { valid: false, reason: 'invalid:malformed' });
+  assert.deepEqual(validateCandidate('string'), { valid: false, reason: 'invalid:malformed' });
+  assert.deepEqual(validateCandidate(123), { valid: false, reason: 'invalid:malformed' });
+});
+
+test('runLoop: round where all candidates fail provisioning is inconclusive and does not advance dryStreak', async () => {
+  const c = cannedCandidate();
+  const fanFn = async () => [
+    { ok: true, value: JSON.stringify(c) },
+  ];
+
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn,
+    classifyFn: async () => ({ result: 'PASS' }),
+    provisionFn: async () => ({ error: 'git apply failed' }),
+    maxRounds: 2,
+    dryRounds: 1,
+    tokenBudget: 1_000_000,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.inconclusiveRounds, 2, 'all-provisioning-failed rounds must be marked inconclusive');
+  assert.equal(result.candidatesEvaluated, 0, 'zero candidates were successfully evaluated');
+  assert.equal(result.exhaustive, false, 'exhaustive must be false when zero candidates were evaluated');
+  assert.equal(result.stoppedBy, 'maxRounds', 'must not stop by dry when all candidates failed provisioning');
+});

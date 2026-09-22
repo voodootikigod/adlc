@@ -83,6 +83,7 @@ export async function runLoop(suite, baseline, opts) {
   let stoppedBy = 'maxRounds';
 
   let totalCandidatesGenerated = 0;
+  let totalCandidatesEvaluated = 0;
   const candidatesRejected = {};
 
   const recordRejection = (reason) => {
@@ -154,6 +155,7 @@ export async function runLoop(suite, baseline, opts) {
 
     // Classify valid candidates
     let newDefeatsThisRound = 0;
+    let evaluatedThisRound = 0;
     totalCandidatesGenerated += validCandidatesThisRound.length;
 
     for (const candidate of validCandidatesThisRound) {
@@ -165,6 +167,10 @@ export async function runLoop(suite, baseline, opts) {
         cloneDir,
         provisionFn,
       });
+
+      if (verdict.result !== 'inconclusive') {
+        evaluatedThisRound++;
+      }
 
       if (verdict.result === 'DEFEAT') {
         // Dedup check (§3.3)
@@ -181,6 +187,15 @@ export async function runLoop(suite, baseline, opts) {
         }
       }
     }
+
+    if (evaluatedThisRound === 0) {
+      // All candidates this round were inconclusive (e.g. provisioning failed) —
+      // mark round inconclusive and do NOT advance dryStreak.
+      inconclusiveRounds++;
+      continue;
+    }
+
+    totalCandidatesEvaluated += evaluatedThisRound;
 
     // Update dry streak
     if (newDefeatsThisRound > 0) {
@@ -206,8 +221,9 @@ export async function runLoop(suite, baseline, opts) {
     rounds: round,
     inconclusiveRounds,
     tokensEstimated,
-    exhaustive: stoppedBy === 'dry',
+    exhaustive: stoppedBy === 'dry' && totalCandidatesEvaluated > 0,
     candidatesGenerated: totalCandidatesGenerated,
+    candidatesEvaluated: totalCandidatesEvaluated,
     candidatesParsed: totalCandidatesGenerated,
     candidatesRejected,
   };

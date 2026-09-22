@@ -318,7 +318,7 @@ const verdict = computeVerdict({
   stoppedBy: loopResult.stoppedBy,
   inconclusiveRounds: loopResult.inconclusiveRounds,
   rounds: loopResult.rounds,
-  candidatesClassified: loopResult.candidatesGenerated,
+  candidatesClassified: loopResult.candidatesEvaluated ?? loopResult.candidatesGenerated,
   allowEmpty: values['allow-empty'],
   strictBudget: values['strict-budget'],
   failOnBehavioral: values['fail-on-behavioral'],
