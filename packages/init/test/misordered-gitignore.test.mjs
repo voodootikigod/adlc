@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -321,3 +321,42 @@ test('scaffold appending missing .adlc/* after pre-existing negation updates fil
   }
 });
 
+
+test('scaffold detects mis-ordered gitignore when required files are already tracked in git', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-init-tracked-'));
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc', 'config.json'), '{"version": 1}\n');
+    execFileSync('git', ['add', '.adlc/config.json'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'commit tracked config'], { cwd: dir });
+
+    // Now introduce mis-ordered .gitignore where .adlc/* is last
+    const content = [
+      '# ADLC runtime',
+      '!.adlc/config.json',
+      '!.adlc/manifest.jsonl',
+      '!.adlc/tickets/',
+      '!.adlc/manifest.d/',
+      '.adlc/*',
+    ].join('\n') + '\n';
+    writeFileSync(join(dir, '.gitignore'), content);
+
+    const res = spawnSync(process.execPath, [BIN, '--root', dir, '--harness', 'codex'], { encoding: 'utf8' });
+    assert.equal(res.status, 1, 'init CLI must exit 1 even when required files are already tracked in git');
+    assert.match(res.stderr, /gitignore.*\.adlc\/config\.json/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('evaluateGitignoreContract matches wildcard directory patterns like */ in fallback', () => {
+  const lines = [
+    '!.adlc/config.json',
+    '*/',
+  ];
+  const ignored = evaluateGitignoreContract(lines, ['.adlc/config.json']);
+  assert.deepEqual(ignored, ['.adlc/config.json'], 'wildcard directory rule */ must match directory in fallback');
+});

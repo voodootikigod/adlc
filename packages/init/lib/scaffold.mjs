@@ -366,7 +366,7 @@ export const REQUIRED_COMMITTABLE_PATHS = Object.freeze([
 ]);
 
 function gitCheckIgnore(root, relPath) {
-  const res = spawnSync('git', ['check-ignore', '-q', '--', relPath], {
+  const res = spawnSync('git', ['check-ignore', '--no-index', '-q', '--', relPath], {
     cwd: root,
     stdio: 'ignore',
   });
@@ -376,7 +376,14 @@ function gitCheckIgnore(root, relPath) {
 function gitignorePatternMatches(pattern, path) {
   const p = pattern.startsWith('/') ? pattern.slice(1) : pattern;
   if (p.endsWith('/')) {
-    return path.startsWith(p);
+    const dirPrefix = p.slice(0, -1);
+    const segs = path.split('/');
+    if (!dirPrefix.includes('/')) {
+      const re = new RegExp(`^${dirPrefix.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}$`);
+      return segs.slice(0, -1).some((seg) => re.test(seg));
+    }
+    const re = new RegExp(`^${dirPrefix.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}`);
+    return re.test(path);
   }
   const segments = path.split('/');
   const regexStr = `^${p.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}$`;
