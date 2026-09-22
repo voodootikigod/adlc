@@ -4,9 +4,9 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import {
   validateIssueNumber, validateOid, validateTicketId, validateModel, validateRepoSpec, branchFor, stagingBranchFor,
   validateToken, validateComponent, underRoot, InputError,
@@ -62,20 +62,18 @@ export function ac73_branchIsConstructedNeverSupplied() {
 }
 test('AC73: a branch name is never taken from input — it is built from a validated number/token', ac73_branchIsConstructedNeverSupplied);
 
-export function ac73_pathComponentsAndRealpath() {
-  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'ap-input-')));
-  try {
-    mkdirSync(join(root, 'repo', '.worktrees'), { recursive: true });
-    mkdirSync(join(root, 'outside'));
-    const repo = join(root, 'repo');
-    assert.equal(underRoot(repo, ['.worktrees', 'autopilot-issue-7']), join(repo, '.worktrees', 'autopilot-issue-7'), 'a not-yet-existing leaf under an existing ancestor is accepted');
-    rejects(() => underRoot(repo, ['..', 'outside']), 'path');
-    rejects(() => underRoot(repo, ['a/b']), 'path');
-    rejects(() => underRoot(repo, ['a\0b']), 'path');
-    // A symlinked component whose realpath escapes the root is refused (AC 73 symlink fixture).
-    symlinkSync(join(root, 'outside'), join(repo, '.worktrees', 'escape'));
-    rejects(() => underRoot(repo, ['.worktrees', 'escape', 'autopilot-issue-9']), 'path');
-    for (const bad of ['.', '..', '', 'a b\t']) rejects(() => validateComponent(bad), 'path');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+export function ac73_pathComponentsAndRealpath(t) {
+  const root = tmp(t, 'ap-input-');
+  mkdirSync(join(root, 'repo', '.worktrees'), { recursive: true });
+  mkdirSync(join(root, 'outside'));
+  const repo = join(root, 'repo');
+  assert.equal(underRoot(repo, ['.worktrees', 'autopilot-issue-7']), join(repo, '.worktrees', 'autopilot-issue-7'), 'a not-yet-existing leaf under an existing ancestor is accepted');
+  rejects(() => underRoot(repo, ['..', 'outside']), 'path');
+  rejects(() => underRoot(repo, ['a/b']), 'path');
+  rejects(() => underRoot(repo, ['a\0b']), 'path');
+  // A symlinked component whose realpath escapes the root is refused (AC 73 symlink fixture).
+  symlinkSync(join(root, 'outside'), join(repo, '.worktrees', 'escape'));
+  rejects(() => underRoot(repo, ['.worktrees', 'escape', 'autopilot-issue-9']), 'path');
+  for (const bad of ['.', '..', '', 'a b\t']) rejects(() => validateComponent(bad), 'path');
 }
 test('AC73: a constructed ISSUE_WT whose realpath escapes REPO_ROOT (symlink fixture) is refused', ac73_pathComponentsAndRealpath);

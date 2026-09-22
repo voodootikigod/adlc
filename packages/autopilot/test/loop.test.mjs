@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { tmp } from '@adlc/core/test-kit';
 import { iterate, statusCommand, selectCommand, triageCommand, restMsFor, runOnce } from '../lib/loop.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
@@ -176,14 +177,13 @@ export async function ac19_corruptAttemptLedgerFailsClosed() {
 }
 test('AC19: a CORRUPT attempts ledger fails closed — the issue is excluded as if the shaping cap were reached, with zero dispatches', { timeout: 120_000 }, ac19_corruptAttemptLedgerFailsClosed);
 
-export async function ac136_readOnlyCommandsReleaseSshMaterial() {
+export async function ac136_readOnlyCommandsReleaseSshMaterial(t) {
   // status/select/triage run phase A on a dry-run context (temporary SSH material); it is released on every exit path.
-  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
+  const { existsSync, writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   const fx = await createSequenceFixture();
   try {
-    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-')); writeFileSync(join(parent, 'material'), 'fake');
+    const parent = tmp(t, 'ap-dryrun-ssh-'); writeFileSync(join(parent, 'material'), 'fake');
     const deps = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; } } } };
     const args = { flags: {}, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps };
     const r = await statusCommand(args);
@@ -193,19 +193,19 @@ export async function ac136_readOnlyCommandsReleaseSshMaterial() {
     assert.equal((await statusCommand(args)).exitCode, 0, 'a second invocation (material already gone) is still clean');
     // select and triage take the same path (their own phase A on a dry-run context).
     for (const [name, run] of [['select', (d) => selectCommand({ ...args, deps: d })], ['triage', (d) => triageCommand({ ...args, flags: { issue: fx.issue }, deps: d })]]) {
-      const p = mkdtempSync(join(tmpdir(), `ap-dryrun-ssh-${name}-`)); writeFileSync(join(p, 'material'), 'fake');
+      const p = tmp(t, `ap-dryrun-ssh-${name}-`); writeFileSync(join(p, 'material'), 'fake');
       const d = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = p; }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
       const res = await run(d);
       assert.ok([0, 2].includes(res.exitCode), `${name}: ${JSON.stringify(res.document).slice(0, 200)}`);
       assert.ok(!existsSync(p), `${name} released the dry-run SSH material`);
     }
     // The FAILING path: phase A stages the material and then throws — it is still released.
-    const pf = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail-')); writeFileSync(join(pf, 'material'), 'fake');
+    const pf = tmp(t, 'ap-dryrun-ssh-fail-'); writeFileSync(join(pf, 'material'), 'fake');
     const failing = { deps: { preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = pf; throw Object.assign(new Error('gh host mismatch'), { code: 'remote-host-mismatch' }); }, resolveBaseline: async () => fx.baseOid }, selection: { select: async () => ({ ranked: [], picked: false, excludedRule: 'none' }) } } };
     const st = await statusCommand({ ...args, deps: failing });
     assert.equal(st.document.preflight?.ok, false, 'status reports the phase A failure');
     assert.ok(!existsSync(pf), 'status released the material although phase A threw');
-    const pf2 = mkdtempSync(join(tmpdir(), 'ap-dryrun-ssh-fail2-')); writeFileSync(join(pf2, 'material'), 'fake');
+    const pf2 = tmp(t, 'ap-dryrun-ssh-fail2-'); writeFileSync(join(pf2, 'material'), 'fake');
     const failing2 = { deps: { ...failing.deps, preflight: { ...failing.deps.preflight, phaseA: async (ctx) => { ctx.sshDryRunParent = pf2; throw new Error('boom'); } } } };
     await assert.rejects(() => selectCommand({ ...args, deps: failing2 }), /boom/);
     assert.ok(!existsSync(pf2), 'select released the material on its throwing path too');
@@ -241,15 +241,14 @@ export async function ac140_maintenanceRunsWithTheDenylistLoaded() {
 }
 test('AC140: the loop loads the protected-path denylist BEFORE §8 maintenance runs, so a maintenance fix round can never skip the protected-path rule', { timeout: 120_000 }, ac140_maintenanceRunsWithTheDenylistLoaded);
 
-export async function ac10_dryRunThroughRunOnce() {
+export async function ac10_dryRunThroughRunOnce(t) {
   // The PUBLIC entry point: a dry run takes no lock, plans, and releases its dry-run material on the way out.
-  const { mkdtempSync, existsSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
+  const { existsSync, writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   const { LOCK_DIR_NAME } = await import('../lib/lock.mjs');
   const fx = await createSequenceFixture({ dryRun: true });
   try {
-    const parent = mkdtempSync(join(tmpdir(), 'ap-dryrun-once-')); writeFileSync(join(parent, 'material'), 'fake');
+    const parent = tmp(t, 'ap-dryrun-once-'); writeFileSync(join(parent, 'material'), 'fake');
     const stub = fx.loopDeps();
     const deps = { deps: { ...stub, preflight: { phaseA: async (ctx) => { ctx.sshDryRunParent = parent; }, resolveBaseline: async () => fx.baseOid, phaseB: async () => ({ complete: false, incomplete: ['fleet-dry-run-needs-worktree'], tokenShort: false, checks: {} }) }, selection: { ...stub.selection, select: async () => ({ picked: fx.issue, issue: fx.state.issue, authorization: { ok: true }, revision: { updatedAt: fx.state.issue.updatedAt }, ranked: [] }) } } };
     const r = await runOnce({ flags: { dryRun: true, issue: String(fx.issue) }, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: fx.ctx.repoRoot, deps });

@@ -23,10 +23,6 @@ const SUITE_DIRECTORIES = new Set(['test', 'cli-test', 'adapter-test']);
 const ALLOWLIST = new Set([
   'packages/autopilot/test/helpers/gates-fixture.mjs',
   'packages/autopilot/test/helpers/review-ctx.mjs',
-  'packages/autopilot/test/init.test.mjs',
-  'packages/autopilot/test/input.test.mjs',
-  'packages/autopilot/test/lock.test.mjs',
-  'packages/autopilot/test/loop.test.mjs',
   'packages/autopilot/test/paths.test.mjs',
   'packages/autopilot/test/tools.test.mjs',
   'packages/context-handoff/adapter-test/recovery-exception.test.mjs',
