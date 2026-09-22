@@ -4,7 +4,7 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, symlinkSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
@@ -76,6 +76,7 @@ export function ac73_pathComponentsAndRealpath(t) {
     symlinkSync(join(root, 'outside'), join(repo, '.worktrees', 'escape'));
     rejects(() => underRoot(repo, ['.worktrees', 'escape', 'autopilot-issue-9']), 'path');
     for (const bad of ['.', '..', '', 'a b\t']) rejects(() => validateComponent(bad), 'path');
+    return root;
   } finally {
     if (!t?.after) rmSync(root, { recursive: true, force: true });
   }
@@ -83,5 +84,6 @@ export function ac73_pathComponentsAndRealpath(t) {
 test('AC73: a constructed ISSUE_WT whose realpath escapes REPO_ROOT (symlink fixture) is refused', ac73_pathComponentsAndRealpath);
 
 test('AC73: standalone execution without test context cleans up temporary directories', () => {
-  ac73_pathComponentsAndRealpath();
+  const root = ac73_pathComponentsAndRealpath();
+  assert.ok(!existsSync(root), 'root directory removed after standalone execution');
 });

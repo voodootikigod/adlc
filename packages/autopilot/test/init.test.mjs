@@ -43,6 +43,7 @@ export function ac9_ensureExcludeEntriesIdempotent(t) {
     } finally {
       if (!t?.after) rmSync(root2, { recursive: true, force: true });
     }
+    return { root, root2 };
   } finally {
     if (!t?.after) rmSync(root, { recursive: true, force: true });
   }
@@ -50,5 +51,7 @@ export function ac9_ensureExcludeEntriesIdempotent(t) {
 test('AC9: init writes/re-runs the .git/info/exclude entries idempotently, preserving any pre-existing content', ac9_ensureExcludeEntriesIdempotent);
 
 test('AC9: standalone execution without test context cleans up temporary directories', () => {
-  ac9_ensureExcludeEntriesIdempotent();
+  const { root, root2 } = ac9_ensureExcludeEntriesIdempotent();
+  assert.ok(!existsSync(root), 'root directory removed after standalone execution');
+  assert.ok(!existsSync(root2), 'root2 directory removed after standalone execution');
 });
