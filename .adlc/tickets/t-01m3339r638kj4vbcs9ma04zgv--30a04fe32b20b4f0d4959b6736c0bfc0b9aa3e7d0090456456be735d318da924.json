@@ -6,6 +6,7 @@
     "Existing hollow-test test suite continues to pass",
     "Update documentation in packages/hollow-test/README.md, docs/tools/hollow-test.md, and apps/docs/content/docs/toolkit/hollow-test.mdx"
   ],
+  "completed": true,
   "id": "T-01M3339R638KJ4VBCS9MA04ZGV",
   "issue": 288,
   "package": "hollow-test",
