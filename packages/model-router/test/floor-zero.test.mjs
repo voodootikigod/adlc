@@ -8,10 +8,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 
 import { assertFloor, DEFAULT_FLOOR, parseFloor } from '../lib/floor.mjs';
 import { assignAll, assignTicket } from '../lib/assign.mjs';
@@ -19,14 +19,6 @@ import { runRouter } from '../lib/router.mjs';
 import { buildPriors } from '../lib/priors.mjs';
 
 const UNRAILED = { id: 'T-BARE', title: 'No rails at all', category: 'feature', scope: ['a', 'b'] };
-
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'model-router-floor-'));
-}
-
-function cleanup(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
 
 function writeTickets(dir, tickets) {
   const adlc = join(dir, '.adlc');
@@ -117,165 +109,125 @@ test('assignTicket throws on floor 0 and 1.5; still routes an unrailed ticket to
   assert.equal(a.railDensity, 0);
 });
 
-test('runRouter rejects floor 0 BEFORE reading tickets (an empty store would otherwise return early with exit 0)', async () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, []);
-    await assert.rejects(
-      () => runRouter({ ticketsPath, floor: 0, adlcDir: join(tmp, '.adlc') }),
-      /greater than 0/
-    );
-    await assert.rejects(
-      () => runRouter({ ticketsPath, floor: -0, adlcDir: join(tmp, '.adlc') }),
-      /greater than 0/
-    );
-    // The default is untouched: omitting floor still routes.
-    const ok = await runRouter({ ticketsPath, adlcDir: join(tmp, '.adlc') });
-    assert.deepEqual(ok.assignments, []);
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter rejects floor 0 BEFORE reading tickets (an empty store would otherwise return early with exit 0)', async (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, []);
+  await assert.rejects(
+    () => runRouter({ ticketsPath, floor: 0, adlcDir: join(dir, '.adlc') }),
+    /greater than 0/
+  );
+  await assert.rejects(
+    () => runRouter({ ticketsPath, floor: -0, adlcDir: join(dir, '.adlc') }),
+    /greater than 0/
+  );
+  // The default is untouched: omitting floor still routes.
+  const ok = await runRouter({ ticketsPath, adlcDir: join(dir, '.adlc') });
+  assert.deepEqual(ok.assignments, []);
 });
 
-test('runRouter at floor 0.2 still reports the P3 finding for an unrailed ticket', async () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
-    assert.equal(result.p3Findings.length, 1);
-    assert.equal(result.p3Findings[0].id, 'T-BARE');
-    assert.equal(result.assignments[0].tier, 'frontier');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter at floor 0.2 still reports the P3 finding for an unrailed ticket', async (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(dir, '.adlc') });
+  assert.equal(result.p3Findings.length, 1);
+  assert.equal(result.p3Findings[0].id, 'T-BARE');
+  assert.equal(result.assignments[0].tier, 'frontier');
 });
 
 // ── AC1: CLI rejects 0 / -0 / 0.0 / 1.5 / abc with exit 1 ─────────────────────
 
-test('CLI: --floor 0, -0 and 0.0 exit 1 with the range error (never a green table)', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    for (const raw of ['0', '-0', '0.0']) {
-      // `--floor=<v>` form: node's parseArgs rejects a dash-leading value after a space.
-      const r = runCLI(['--tickets', ticketsPath, `--floor=${raw}`], tmp);
-      assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
-      assert.match(r.stderr, /greater than 0/, `--floor ${raw}: stderr should carry the range error`);
-      assert.match(r.stderr, /disable the P3 rail-density gate/, `--floor ${raw}: stderr should say why`);
-      assert.match(r.stderr, new RegExp(`got: ${raw.replace('.', '\\.')}`), `--floor ${raw}: stderr should echo the raw flag text`);
-      assert.ok(!r.stdout.includes('T-BARE'), `--floor ${raw}: no assignment table may be printed`);
-    }
-  } finally {
-    cleanup(tmp);
+test('CLI: --floor 0, -0 and 0.0 exit 1 with the range error (never a green table)', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  for (const raw of ['0', '-0', '0.0']) {
+    // `--floor=<v>` form: node's parseArgs rejects a dash-leading value after a space.
+    const r = runCLI(['--tickets', ticketsPath, `--floor=${raw}`], dir);
+    assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
+    assert.match(r.stderr, /greater than 0/, `--floor ${raw}: stderr should carry the range error`);
+    assert.match(r.stderr, /disable the P3 rail-density gate/, `--floor ${raw}: stderr should say why`);
+    assert.match(r.stderr, new RegExp(`got: ${raw.replace('.', '\\.')}`), `--floor ${raw}: stderr should echo the raw flag text`);
+    assert.ok(!r.stdout.includes('T-BARE'), `--floor ${raw}: no assignment table may be printed`);
   }
 });
 
-test('CLI: --floor 1.5 and --floor abc still exit 1', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    for (const raw of ['1.5', 'abc', '-1']) {
-      const r = runCLI(['--tickets', ticketsPath, `--floor=${raw}`], tmp);
-      assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}`);
-      assert.match(r.stderr, /greater than 0 and at most 1/);
-    }
-  } finally {
-    cleanup(tmp);
+test('CLI: --floor 1.5 and --floor abc still exit 1', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  for (const raw of ['1.5', 'abc', '-1']) {
+    const r = runCLI(['--tickets', ticketsPath, `--floor=${raw}`], dir);
+    assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}`);
+    assert.match(r.stderr, /greater than 0 and at most 1/);
   }
 });
 
-test('CLI: --floor 0 with --json prints no assignments document on stdout', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const r = runCLI(['--tickets', ticketsPath, '--floor', '0', '--json'], tmp);
-    assert.equal(r.code, 1);
-    assert.equal(r.stdout.trim(), '');
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: --floor 0 with --json prints no assignments document on stdout', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const r = runCLI(['--tickets', ticketsPath, '--floor', '0', '--json'], dir);
+  assert.equal(r.code, 1);
+  assert.equal(r.stdout.trim(), '');
 });
 
 // ── AC2: regression pin — the gate still fires at the default floor ──────────
 
-test('CLI: the same unrailed fixture at --floor 0.2 exits 2 with a P3 finding naming the ticket', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], tmp);
-    assert.equal(r.code, 2, `expected exit 2, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
-    assert.match(r.stderr, /P3 finding: ticket T-BARE/);
+test('CLI: the same unrailed fixture at --floor 0.2 exits 2 with a P3 finding naming the ticket', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], dir);
+  assert.equal(r.code, 2, `expected exit 2, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
+  assert.match(r.stderr, /P3 finding: ticket T-BARE/);
 
-    const j = runCLI(['--tickets', ticketsPath, '--floor', '0.2', '--json'], tmp);
-    assert.equal(j.code, 2);
-    const parsed = JSON.parse(j.stdout);
-    assert.equal(parsed.assignments[0].id, 'T-BARE');
-    assert.equal(parsed.assignments[0].tier, 'frontier');
-    assert.equal(parsed.p3Findings.length, 1);
-  } finally {
-    cleanup(tmp);
-  }
+  const j = runCLI(['--tickets', ticketsPath, '--floor', '0.2', '--json'], dir);
+  assert.equal(j.code, 2);
+  const parsed = JSON.parse(j.stdout);
+  assert.equal(parsed.assignments[0].id, 'T-BARE');
+  assert.equal(parsed.assignments[0].tier, 'frontier');
+  assert.equal(parsed.p3Findings.length, 1);
 });
 
-test('CLI: omitting --floor uses the 0.2 default (unrailed ticket → exit 2, frontier)', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const r = runCLI(['--tickets', ticketsPath, '--json'], tmp);
-    assert.equal(r.code, 2);
-    assert.equal(JSON.parse(r.stdout).assignments[0].tier, 'frontier');
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: omitting --floor uses the 0.2 default (unrailed ticket → exit 2, frontier)', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir);
+  assert.equal(r.code, 2);
+  assert.equal(JSON.parse(r.stdout).assignments[0].tier, 'frontier');
 });
 
 // ── review finding (codex r1): space-separated negatives never reached the validator ──
 
-test('CLI: space-separated `--floor -0` and `--floor -1` get the range error, not a parseArgs stack trace', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    for (const raw of ['-0', '-1']) {
-      const r = runCLI(['--tickets', ticketsPath, '--floor', raw], tmp);
-      assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}`);
-      assert.match(r.stderr, /^error: --floor must be a number greater than 0 and at most 1/m, `--floor ${raw}: range error expected`);
-      assert.match(r.stderr, new RegExp(`got: ${raw}`), `--floor ${raw}: raw token echoed`);
-      assert.match(r.stderr, /--floor=<n>/, `--floor ${raw}: the accepted spelling is suggested`);
-      assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /, `--floor ${raw}: no stack trace`);
-      assert.ok(!r.stdout.includes('T-BARE'));
-    }
-  } finally {
-    cleanup(tmp);
+test('CLI: space-separated `--floor -0` and `--floor -1` get the range error, not a parseArgs stack trace', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  for (const raw of ['-0', '-1']) {
+    const r = runCLI(['--tickets', ticketsPath, '--floor', raw], dir);
+    assert.equal(r.code, 1, `--floor ${raw}: expected exit 1, got ${r.code}`);
+    assert.match(r.stderr, /^error: --floor must be a number greater than 0 and at most 1/m, `--floor ${raw}: range error expected`);
+    assert.match(r.stderr, new RegExp(`got: ${raw}`), `--floor ${raw}: raw token echoed`);
+    assert.match(r.stderr, /--floor=<n>/, `--floor ${raw}: the accepted spelling is suggested`);
+    assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /, `--floor ${raw}: no stack trace`);
+    assert.ok(!r.stdout.includes('T-BARE'));
   }
 });
 
-test('CLI: `--floor` with no value is an operational error carrying the range message, no stack trace', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const r = runCLI(['--tickets', ticketsPath, '--floor'], tmp);
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /^error: --floor must be a number greater than 0 and at most 1/m);
-    assert.match(r.stderr, /got: \(missing\)/);
-    assert.match(r.stderr, /argument missing/);
-    assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: `--floor` with no value is an operational error carrying the range message, no stack trace', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const r = runCLI(['--tickets', ticketsPath, '--floor'], dir);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^error: --floor must be a number greater than 0 and at most 1/m);
+  assert.match(r.stderr, /got: \(missing\)/);
+  assert.match(r.stderr, /argument missing/);
+  assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /);
 });
 
-test('CLI: any other parseArgs failure (unknown option) is an `error:` line with exit 1, not a stack trace', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const r = runCLI(['--tickets', ticketsPath, '--bogus'], tmp);
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /^error: .*--bogus/m);
-    assert.doesNotMatch(r.stderr, /greater than 0/, 'a non-floor parse failure must not be dressed up as a floor error');
-    assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: any other parseArgs failure (unknown option) is an `error:` line with exit 1, not a stack trace', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const r = runCLI(['--tickets', ticketsPath, '--bogus'], dir);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^error: .*--bogus/m);
+  assert.doesNotMatch(r.stderr, /greater than 0/, 'a non-floor parse failure must not be dressed up as a floor error');
+  assert.doesNotMatch(r.stderr, /node:internal|\n\s+at /);
 });
 
 // ── review finding (codex r2): parseFloat honoured `0.5abc` as 0.5 ────────────
@@ -290,35 +242,27 @@ test('parseFloor accepts only plain decimals; numeric-prefixed junk, hex and emp
   }
 });
 
-test('CLI: `--floor=0.5abc` is refused (was silently honoured as 0.5), `--floor=0.5` still routes', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const bad = runCLI(['--tickets', ticketsPath, '--floor=0.5abc'], tmp);
-    assert.equal(bad.code, 1, `stdout:${bad.stdout}\nstderr:${bad.stderr}`);
-    assert.match(bad.stderr, /greater than 0 and at most 1/);
-    assert.match(bad.stderr, /got: 0\.5abc/);
-    const ok = runCLI(['--tickets', ticketsPath, '--floor=0.5', '--json'], tmp);
-    assert.equal(ok.code, 2);
-    assert.equal(JSON.parse(ok.stdout).p3Findings[0].floor, 0.5);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: `--floor=0.5abc` is refused (was silently honoured as 0.5), `--floor=0.5` still routes', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const bad = runCLI(['--tickets', ticketsPath, '--floor=0.5abc'], dir);
+  assert.equal(bad.code, 1, `stdout:${bad.stdout}\nstderr:${bad.stderr}`);
+  assert.match(bad.stderr, /greater than 0 and at most 1/);
+  assert.match(bad.stderr, /got: 0\.5abc/);
+  const ok = runCLI(['--tickets', ticketsPath, '--floor=0.5', '--json'], dir);
+  assert.equal(ok.code, 2);
+  assert.equal(JSON.parse(ok.stdout).p3Findings[0].floor, 0.5);
 });
 
 // ── flag position must not matter (kills argv-offset / sentinel mutants) ──────
 
-test('CLI: `--floor -0` as the FIRST argument still echoes `got: -0`; `--json` first still yields a JSON document', () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [UNRAILED]);
-    const first = runCLI(['--floor', '-0', '--tickets', ticketsPath], tmp);
-    assert.equal(first.code, 1);
-    assert.match(first.stderr, /got: -0/);
-    const jsonFirst = runCLI(['--json', '--tickets', ticketsPath], tmp);
-    assert.equal(jsonFirst.code, 2);
-    assert.equal(JSON.parse(jsonFirst.stdout).assignments[0].id, 'T-BARE');
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: `--floor -0` as the FIRST argument still echoes `got: -0`; `--json` first still yields a JSON document', (t) => {
+  const dir = tmp(t, 'model-router-floor-');
+  const ticketsPath = writeTickets(dir, [UNRAILED]);
+  const first = runCLI(['--floor', '-0', '--tickets', ticketsPath], dir);
+  assert.equal(first.code, 1);
+  assert.match(first.stderr, /got: -0/);
+  const jsonFirst = runCLI(['--json', '--tickets', ticketsPath], dir);
+  assert.equal(jsonFirst.code, 2);
+  assert.equal(JSON.parse(jsonFirst.stdout).assignments[0].id, 'T-BARE');
 });

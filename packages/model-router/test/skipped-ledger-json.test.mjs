@@ -5,10 +5,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 
 const CLI_PATH = new URL('../bin/model-router.mjs', import.meta.url).pathname;
 
@@ -46,154 +46,126 @@ const sampleTickets = [
   },
 ];
 
-test('AC1: model-router --json surfaces skippedLedger array in JSON payload', () => {
-  const dir1 = mkdtempSync(join(tmpdir(), 'mr-test-ac1-'));
-  try {
-    const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\nmalformed line\n';
-    const ticketsPath = setupFixture(dir1, { tickets: sampleTickets, manifestRaw });
+test('AC1: model-router --json surfaces skippedLedger array in JSON payload', (t) => {
+  const dir1 = tmp(t);
+  const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\nmalformed line\n';
+  const ticketsPath = setupFixture(dir1, { tickets: sampleTickets, manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath, '--json'], dir1);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir1);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    const parsed = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array in JSON output');
-    assert.equal(parsed.skippedLedger.length, 1, 'skippedLedger should contain 1 skipped entry');
-    assert.equal(parsed.skippedLedger[0].line, 2);
-    assert.equal(parsed.skippedLedger[0].segment, 'root');
-  } finally {
-    rmSync(dir1, { recursive: true, force: true });
-  }
+  const parsed = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array in JSON output');
+  assert.equal(parsed.skippedLedger.length, 1, 'skippedLedger should contain 1 skipped entry');
+  assert.equal(parsed.skippedLedger[0].line, 2);
+  assert.equal(parsed.skippedLedger[0].segment, 'root');
 });
 
-test('AC2: model-router --json prints warning to stderr when malformed lines skipped', () => {
-  const dir2 = mkdtempSync(join(tmpdir(), 'mr-test-ac2-'));
-  try {
-    const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\nmalformed 1\nmalformed 2\n';
-    const ticketsPath = setupFixture(dir2, { tickets: sampleTickets, manifestRaw });
+test('AC2: model-router --json prints warning to stderr when malformed lines skipped', (t) => {
+  const dir2 = tmp(t);
+  const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\nmalformed 1\nmalformed 2\n';
+  const ticketsPath = setupFixture(dir2, { tickets: sampleTickets, manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath, '--json'], dir2);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir2);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    assert.match(
-      r.stderr,
-      /Warning: 2 malformed ledger line\(s\) skipped\./,
-      `stderr should contain warning message in --json mode, got:\n${r.stderr}`
-    );
+  assert.match(
+    r.stderr,
+    /Warning: 2 malformed ledger line\(s\) skipped\./,
+    `stderr should contain warning message in --json mode, got:\n${r.stderr}`
+  );
 
-    const parsed = JSON.parse(r.stdout);
-    assert.equal(parsed.skippedLedger.length, 2);
-  } finally {
-    rmSync(dir2, { recursive: true, force: true });
-  }
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.skippedLedger.length, 2);
 });
 
-test('model-router --json without malformed lines includes empty skippedLedger and no stderr warning', () => {
-  const dir3 = mkdtempSync(join(tmpdir(), 'mr-test-clean-json-'));
-  try {
-    const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\n';
-    const ticketsPath = setupFixture(dir3, { tickets: sampleTickets, manifestRaw });
+test('model-router --json without malformed lines includes empty skippedLedger and no stderr warning', (t) => {
+  const dir3 = tmp(t);
+  const manifestRaw = '{"type":"build","model":"cheap","category":"feature","firstPass":true}\n';
+  const ticketsPath = setupFixture(dir3, { tickets: sampleTickets, manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath, '--json'], dir3);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir3);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    const parsed = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array in JSON output');
-    assert.equal(parsed.skippedLedger.length, 0);
-    assert.doesNotMatch(r.stderr, /malformed ledger line\(s\) skipped/);
-  } finally {
-    rmSync(dir3, { recursive: true, force: true });
-  }
+  const parsed = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array in JSON output');
+  assert.equal(parsed.skippedLedger.length, 0);
+  assert.doesNotMatch(r.stderr, /malformed ledger line\(s\) skipped/);
 });
 
-test('model-router table mode preserves stderr warning on malformed ledger lines', () => {
-  const dir4 = mkdtempSync(join(tmpdir(), 'mr-test-table-mode-'));
-  try {
-    const manifestRaw = 'malformed line\n';
-    const ticketsPath = setupFixture(dir4, { tickets: sampleTickets, manifestRaw });
+test('model-router table mode preserves stderr warning on malformed ledger lines', (t) => {
+  const dir4 = tmp(t);
+  const manifestRaw = 'malformed line\n';
+  const ticketsPath = setupFixture(dir4, { tickets: sampleTickets, manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath], dir4);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath], dir4);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    assert.match(
-      r.stderr,
-      /Warning: 1 malformed ledger line\(s\) skipped\./,
-      `table mode should still emit warning on stderr, got:\n${r.stderr}`
-    );
-  } finally {
-    rmSync(dir4, { recursive: true, force: true });
-  }
+  assert.match(
+    r.stderr,
+    /Warning: 1 malformed ledger line\(s\) skipped\./,
+    `table mode should still emit warning on stderr, got:\n${r.stderr}`
+  );
 });
 
-test('model-router --json with empty tickets list surfaces skippedLedger and stderr warning', () => {
-  const dir5 = mkdtempSync(join(tmpdir(), 'mr-test-empty-json-'));
-  try {
-    const manifestRaw = 'malformed line\n';
-    const ticketsPath = setupFixture(dir5, { tickets: [], manifestRaw });
+test('model-router --json with empty tickets list surfaces skippedLedger and stderr warning', (t) => {
+  const dir5 = tmp(t);
+  const manifestRaw = 'malformed line\n';
+  const ticketsPath = setupFixture(dir5, { tickets: [], manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath, '--json'], dir5);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir5);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    const parsed = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array');
-    assert.equal(parsed.skippedLedger.length, 1);
-    assert.match(
-      r.stderr,
-      /Warning: 1 malformed ledger line\(s\) skipped\./,
-      `stderr should contain warning message in --json mode with empty tickets, got:\n${r.stderr}`
-    );
-  } finally {
-    rmSync(dir5, { recursive: true, force: true });
-  }
+  const parsed = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array');
+  assert.equal(parsed.skippedLedger.length, 1);
+  assert.match(
+    r.stderr,
+    /Warning: 1 malformed ledger line\(s\) skipped\./,
+    `stderr should contain warning message in --json mode with empty tickets, got:\n${r.stderr}`
+  );
 });
 
-test('model-router table mode with empty tickets list still emits stderr warning for malformed ledger', () => {
-  const dir6 = mkdtempSync(join(tmpdir(), 'mr-test-empty-table-'));
-  try {
-    const manifestRaw = 'malformed line\n';
-    const ticketsPath = setupFixture(dir6, { tickets: [], manifestRaw });
+test('model-router table mode with empty tickets list still emits stderr warning for malformed ledger', (t) => {
+  const dir6 = tmp(t);
+  const manifestRaw = 'malformed line\n';
+  const ticketsPath = setupFixture(dir6, { tickets: [], manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath], dir6);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath], dir6);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    assert.match(r.stdout, /No tickets found\./);
-    assert.match(
-      r.stderr,
-      /Warning: 1 malformed ledger line\(s\) skipped\./,
-      `stderr should contain warning message in table mode with empty tickets, got:\n${r.stderr}`
-    );
-  } finally {
-    rmSync(dir6, { recursive: true, force: true });
-  }
+  assert.match(r.stdout, /No tickets found\./);
+  assert.match(
+    r.stderr,
+    /Warning: 1 malformed ledger line\(s\) skipped\./,
+    `stderr should contain warning message in table mode with empty tickets, got:\n${r.stderr}`
+  );
 });
 
-test('model-router --json with all tickets completed surfaces skippedLedger and stderr warning', () => {
-  const dir7 = mkdtempSync(join(tmpdir(), 'mr-test-completed-json-'));
-  try {
-    const manifestRaw = 'malformed line\n';
-    const completedTickets = [
-      {
-        id: 'T1',
-        title: 'Completed Ticket',
-        category: 'feature',
-        completed: true,
-        rails: ['a.test.js'],
-        scope: ['a.js'],
-      },
-    ];
-    const ticketsPath = setupFixture(dir7, { tickets: completedTickets, manifestRaw });
+test('model-router --json with all tickets completed surfaces skippedLedger and stderr warning', (t) => {
+  const dir7 = tmp(t);
+  const manifestRaw = 'malformed line\n';
+  const completedTickets = [
+    {
+      id: 'T1',
+      title: 'Completed Ticket',
+      category: 'feature',
+      completed: true,
+      rails: ['a.test.js'],
+      scope: ['a.js'],
+    },
+  ];
+  const ticketsPath = setupFixture(dir7, { tickets: completedTickets, manifestRaw });
 
-    const r = runCLI(['--tickets', ticketsPath, '--json'], dir7);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir7);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstderr: ${r.stderr}`);
 
-    const parsed = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array');
-    assert.equal(parsed.skippedLedger.length, 1);
-    assert.match(
-      r.stderr,
-      /Warning: 1 malformed ledger line\(s\) skipped\./,
-      `stderr should contain warning message in --json mode with all completed tickets, got:\n${r.stderr}`
-    );
-  } finally {
-    rmSync(dir7, { recursive: true, force: true });
-  }
+  const parsed = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(parsed.skippedLedger), 'skippedLedger must be an array');
+  assert.equal(parsed.skippedLedger.length, 1);
+  assert.match(
+    r.stderr,
+    /Warning: 1 malformed ledger line\(s\) skipped\./,
+    `stderr should contain warning message in --json mode with all completed tickets, got:\n${r.stderr}`
+  );
 });
