@@ -5,11 +5,10 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync,
+  rmSync, writeFileSync, readFileSync, mkdirSync, existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Lib under test
@@ -25,28 +24,13 @@ import { verifyWitness, filterEquivalentMutants } from '../lib/verify.mjs';
 import {
   groupByFile, applyAllPlantsToContent, runWithPlants, tokenizeCommand, substituteToken,
 } from '../lib/runner.mjs';
-import { existsSync } from 'node:fs';
 import { buildJsonReport } from '../lib/report.mjs';
 import { mutate } from '../../core/index.mjs';
+import { gitRepo, tmp } from '@adlc/core/test-kit';
 
 const BIN = resolve(fileURLToPath(import.meta.url), '../../bin/review-calibration.mjs');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-function git(args, cwd) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-}
-
-function initRepo(dir) {
-  git(['init', '-b', 'main'], dir);
-  git(['config', 'user.email', 'test@test.com'], dir);
-  git(['config', 'user.name', 'Test'], dir);
-}
-
-function commitAll(dir, msg = 'init') {
-  git(['add', '-A'], dir);
-  git(['commit', '-m', msg], dir);
-}
 
 function runCli(args, cwd) {
   return spawnSync('node', [BIN, ...args], {
@@ -58,8 +42,9 @@ function runCli(args, cwd) {
 }
 
 /** Create a small git repo with two commits. Second commit modifies a source file. */
-function createRepo(dir) {
-  initRepo(dir);
+function createRepo(t) {
+  const repo = gitRepo(t, { prefix: 'review-calib-' });
+  const { dir, git } = repo;
   mkdirSync(join(dir, 'src'));
 
   writeFileSync(join(dir, 'src', 'math.mjs'), [
@@ -74,7 +59,8 @@ function createRepo(dir) {
   ].join('\n'));
 
   writeFileSync(join(dir, 'README.md'), '# test\n');
-  commitAll(dir, 'initial');
+  git('add', '-A');
+  git('commit', '-m', 'initial');
 
   // Second commit: add multiply
   writeFileSync(join(dir, 'src', 'math.mjs'), [
@@ -92,8 +78,9 @@ function createRepo(dir) {
     '',
   ].join('\n'));
 
-  commitAll(dir, 'add multiply');
-  return dir;
+  git('add', '-A');
+  git('commit', '-m', 'add multiply');
+  return repo;
 }
 
 // ── parseCommitFiles ─────────────────────────────────────────────────────────
@@ -160,7 +147,7 @@ describe('selectPlants', () => {
   let dir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-select-'));
+    dir = tmp('rc-select-');
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'calc.mjs'), [
       'export function add(a, b) {',
@@ -289,43 +276,35 @@ describe('filterEquivalentMutants', () => {
     assert.equal(equivalent.length, 0);
   });
 
-  it('verifyWitness confirms a discriminating witness (pass on original, fail on mutant)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-witness-'));
-    try {
-      const file = join(dir, 's.mjs');
-      writeFileSync(file, 'const v = 1;\n');
-      const plant = {
-        absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
-        witness: { cmd: 'node', args: [] },
-      };
-      // injected runFn: read the file, exit 0 iff it still says "= 1"
-      const runFn = () => {
-        const cur = readFileSync(file, 'utf8');
-        return { status: cur.includes('= 1') ? 0 : 1, timedOut: false };
-      };
-      const v = verifyWitness(plant, dir, runFn);
-      assert.equal(v.discriminates, true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('verifyWitness confirms a discriminating witness (pass on original, fail on mutant)', (t) => {
+    const dir = tmp(t, 'rc-witness-');
+    const file = join(dir, 's.mjs');
+    writeFileSync(file, 'const v = 1;\n');
+    const plant = {
+      absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
+      witness: { cmd: 'node', args: [] },
+    };
+    // injected runFn: read the file, exit 0 iff it still says "= 1"
+    const runFn = () => {
+      const cur = readFileSync(file, 'utf8');
+      return { status: cur.includes('= 1') ? 0 : 1, timedOut: false };
+    };
+    const v = verifyWitness(plant, dir, runFn);
+    assert.equal(v.discriminates, true);
   });
 
-  it('flags an equivalent mutant (witness fails to discriminate) for exclusion', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-equiv-'));
-    try {
-      const file = join(dir, 's.mjs');
-      writeFileSync(file, 'const v = 1;\n');
-      const plant = {
-        absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
-        witness: { cmd: 'node', args: [] },
-      };
-      const runFn = () => ({ status: 0, timedOut: false }); // passes on both → no discrimination
-      const { valid, equivalent } = filterEquivalentMutants([plant], dir, runFn);
-      assert.equal(valid.length, 0);
-      assert.equal(equivalent.length, 1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('flags an equivalent mutant (witness fails to discriminate) for exclusion', (t) => {
+    const dir = tmp(t, 'rc-equiv-');
+    const file = join(dir, 's.mjs');
+    writeFileSync(file, 'const v = 1;\n');
+    const plant = {
+      absolutePath: file, line: 1, original: 'const v = 1;', mutated: 'const v = 2;',
+      witness: { cmd: 'node', args: [] },
+    };
+    const runFn = () => ({ status: 0, timedOut: false }); // passes on both → no discrimination
+    const { valid, equivalent } = filterEquivalentMutants([plant], dir, runFn);
+    assert.equal(valid.length, 0);
+    assert.equal(equivalent.length, 1);
   });
 });
 
@@ -414,52 +393,44 @@ describe('tokenizeCommand / substituteToken', () => {
 // ── SECURITY: command injection via malicious base ref (regression) ───────────
 
 describe('runWithPlants — command injection regression', () => {
-  it('does NOT execute a shell payload embedded in the base ref', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-injection-'));
-    try {
-      const sentinel = join(dir, 'PWNED');
-      // Malicious ref. If ever handed to /bin/sh, $(touch PWNED) runs.
-      const maliciousRef = `$(touch ${sentinel})`;
+  it('does NOT execute a shell payload embedded in the base ref', (t) => {
+    const dir = tmp(t, 'rc-injection-');
+    const sentinel = join(dir, 'PWNED');
+    // Malicious ref. If ever handed to /bin/sh, $(touch PWNED) runs.
+    const maliciousRef = `$(touch ${sentinel})`;
 
-      // Empty plants → no files mutated; the run only exercises command
-      // construction + spawn. Deterministic, offline echo command.
-      const result = runWithPlants(
-        [],
-        `node -e "process.stdout.write(process.argv[1])" {base}`,
-        maliciousRef,
-        dir,
-        30000,
-      );
+    // Empty plants → no files mutated; the run only exercises command
+    // construction + spawn. Deterministic, offline echo command.
+    const result = runWithPlants(
+      [],
+      `node -e "process.stdout.write(process.argv[1])" {base}`,
+      maliciousRef,
+      dir,
+      30000,
+    );
 
-      assert.equal(
-        existsSync(sentinel), false,
-        'INJECTION: shell executed $(touch PWNED) from the base ref',
-      );
-      // The untrusted ref arrived verbatim as a single literal argument.
-      assert.equal(result.stdout, maliciousRef);
-      assert.equal(result.exitCode, 0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(
+      existsSync(sentinel), false,
+      'INJECTION: shell executed $(touch PWNED) from the base ref',
+    );
+    // The untrusted ref arrived verbatim as a single literal argument.
+    assert.equal(result.stdout, maliciousRef);
+    assert.equal(result.exitCode, 0);
   });
 
-  it('does NOT execute a "; touch" payload embedded in the base ref', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-injection-'));
-    try {
-      const sentinel = join(dir, 'PWNED');
-      const maliciousRef = `HEAD; touch ${sentinel}`;
-      const result = runWithPlants(
-        [],
-        `node -e "process.stdout.write(process.argv[1])" {base}`,
-        maliciousRef,
-        dir,
-        30000,
-      );
-      assert.equal(existsSync(sentinel), false, 'INJECTION: "; touch" executed');
-      assert.equal(result.stdout, maliciousRef);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('does NOT execute a "; touch" payload embedded in the base ref', (t) => {
+    const dir = tmp(t, 'rc-injection-');
+    const sentinel = join(dir, 'PWNED');
+    const maliciousRef = `HEAD; touch ${sentinel}`;
+    const result = runWithPlants(
+      [],
+      `node -e "process.stdout.write(process.argv[1])" {base}`,
+      maliciousRef,
+      dir,
+      30000,
+    );
+    assert.equal(existsSync(sentinel), false, 'INJECTION: "; touch" executed');
+    assert.equal(result.stdout, maliciousRef);
   });
 });
 
@@ -519,8 +490,7 @@ describe('{base} substitution in review command', () => {
   let dir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-base-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
@@ -561,9 +531,8 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
   let scriptPath;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-e2e-echo-'));
-    createRepo(dir);
-    scriptDir = mkdtempSync(join(tmpdir(), 'rc-script-'));
+    ({ dir } = createRepo());
+    scriptDir = tmp('rc-script-');
     scriptPath = join(scriptDir, 'fake-review.mjs');
     writeFileSync(scriptPath, [
       '#!/usr/bin/env node',
@@ -659,11 +628,10 @@ describe('E2E: the scorer control self-test fails closed when the echoer scores'
   let plantsDir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-selftest-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
     // The plants file lives OUTSIDE the repo: the tool refuses to run on a
     // dirty tree, and an untracked file in the repo is exactly that.
-    plantsDir = mkdtempSync(join(tmpdir(), 'rc-selftest-plants-'));
+    plantsDir = tmp('rc-selftest-plants-');
   });
 
   after(() => {
@@ -713,43 +681,38 @@ describe('E2E: a judge that rendered no verdict is reported as unbounded-unknown
   let dir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-nojudge-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('a SINGLE verdict is still enough to demand the control', () => {
+  it('a SINGLE verdict is still enough to demand the control', (t) => {
     // The boundary that matters: one locating finding means the judge did
     // render a verdict, so the figure depends on it and the control must run.
     // A floor set one higher would let a single-finding run report itself
     // unmeasured — the quietest possible version of the original bug.
-    const plantsDir = mkdtempSync(join(tmpdir(), 'rc-onehit-plants-'));
-    try {
-      const plantsPath = join(plantsDir, 'plants.json');
-      writeFileSync(plantsPath, JSON.stringify([
-        {
-          file: 'src/math.mjs', line: 6,
-          original: '  return n > 0;', mutated: '  return n >= 0;',
-          category: 'boundary', defect: 'inclusive bound admits zero',
-        },
-      ]));
-      // Reviewer emits exactly one finding, locating that one plant.
-      const result = runCli([
-        '--review-cmd', 'node -e "process.stdout.write(\'math.mjs:6 boundary is wrong\\n\')"',
-        '--commit', 'HEAD', '--plants-file', plantsPath,
-        '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
-      ], dir);
-      assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.caught, 1, 'exactly one verdict was rendered');
-      assert.equal(parsed.configuredJudgeBounded, false,
-        'one verdict is enough — the control must have run');
-    } finally {
-      rmSync(plantsDir, { recursive: true, force: true });
-    }
+    const plantsDir = tmp(t, 'rc-onehit-plants-');
+    const plantsPath = join(plantsDir, 'plants.json');
+    writeFileSync(plantsPath, JSON.stringify([
+      {
+        file: 'src/math.mjs', line: 6,
+        original: '  return n > 0;', mutated: '  return n >= 0;',
+        category: 'boundary', defect: 'inclusive bound admits zero',
+      },
+    ]));
+    // Reviewer emits exactly one finding, locating that one plant.
+    const result = runCli([
+      '--review-cmd', 'node -e "process.stdout.write(\'math.mjs:6 boundary is wrong\\n\')"',
+      '--commit', 'HEAD', '--plants-file', plantsPath,
+      '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--json',
+    ], dir);
+    assert.notEqual(result.status, 1, `opError: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.caught, 1, 'exactly one verdict was rendered');
+    assert.equal(parsed.configuredJudgeBounded, false,
+      'one verdict is enough — the control must have run');
   });
 
   it('locates nothing → configuredJudgeBounded is null, run still completes', () => {
@@ -771,8 +734,7 @@ describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () 
   let dir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-e2e-fail-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
@@ -804,8 +766,7 @@ describe('E2E: file restoration after run', () => {
   let dir;
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-restore-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
@@ -851,8 +812,7 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
   };
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-provider-guard-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
@@ -940,8 +900,7 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
   };
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-agy-guard-'));
-    createRepo(dir);
+    ({ dir } = createRepo());
   });
 
   after(() => {
@@ -985,24 +944,15 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
 });
 
 describe('E2E: dirty tree rejection', () => {
-  let dir;
-
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'rc-dirty-'));
-    initRepo(dir);
+  it('exits 1 with a clear message on dirty tree', (t) => {
+    const { dir, git } = gitRepo(t, { prefix: 'review-calib-dirty-' });
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'x.mjs'), 'export const x = 1;\n');
-    git(['add', '-A'], dir);
-    git(['commit', '-m', 'init'], dir);
+    git('add', '-A');
+    git('commit', '-m', 'init');
     // Make tree dirty
     writeFileSync(join(dir, 'src', 'x.mjs'), 'export const x = 2;\n');
-  });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('exits 1 with a clear message on dirty tree', () => {
     const result = runCli(
       ['--review-cmd', 'echo ok', '--commit', 'HEAD'],
       dir
@@ -1013,68 +963,56 @@ describe('E2E: dirty tree rejection', () => {
 });
 
 describe('loadPlantsFile', () => {
-  it('loads valid plants, validates line content against working tree', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
-    try {
-      writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\nconst y = 2;\n');
-      const plantsPath = join(dir, 'plants.json');
-      writeFileSync(plantsPath, JSON.stringify([
-        { file: 'a.mjs', line: 2, original: 'const y = 2;', mutated: 'const y = 3;', category: 'subtle-llm' },
-      ]));
-      const { plants, errors } = loadPlantsFile(plantsPath, dir);
-      assert.equal(errors.length, 0);
-      assert.equal(plants.length, 1);
-      assert.equal(plants[0].operator, 'subtle-llm');
-      assert.equal(plants[0].line, 2);
-      assert.ok(plants[0].absolutePath.endsWith('a.mjs'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('loads valid plants, validates line content against working tree', (t) => {
+    const dir = tmp(t, 'rc-plants-');
+    writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\nconst y = 2;\n');
+    const plantsPath = join(dir, 'plants.json');
+    writeFileSync(plantsPath, JSON.stringify([
+      { file: 'a.mjs', line: 2, original: 'const y = 2;', mutated: 'const y = 3;', category: 'subtle-llm' },
+    ]));
+    const { plants, errors } = loadPlantsFile(plantsPath, dir);
+    assert.equal(errors.length, 0);
+    assert.equal(plants.length, 1);
+    assert.equal(plants[0].operator, 'subtle-llm');
+    assert.equal(plants[0].line, 2);
+    assert.ok(plants[0].absolutePath.endsWith('a.mjs'));
   });
 
-  it('rejects drifted plants (original does not match file content)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
-    try {
-      writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\n');
-      const plantsPath = join(dir, 'plants.json');
-      writeFileSync(plantsPath, JSON.stringify([
-        { file: 'a.mjs', line: 1, original: 'const x = 999;', mutated: 'const x = 0;' },
-      ]));
-      const { plants, errors } = loadPlantsFile(plantsPath, dir);
-      assert.equal(plants.length, 0);
-      assert.equal(errors.length, 1);
-      assert.ok(errors[0].includes('drifted'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('rejects drifted plants (original does not match file content)', (t) => {
+    const dir = tmp(t, 'rc-plants-');
+    writeFileSync(join(dir, 'a.mjs'), 'const x = 1;\n');
+    const plantsPath = join(dir, 'plants.json');
+    writeFileSync(plantsPath, JSON.stringify([
+      { file: 'a.mjs', line: 1, original: 'const x = 999;', mutated: 'const x = 0;' },
+    ]));
+    const { plants, errors } = loadPlantsFile(plantsPath, dir);
+    assert.equal(plants.length, 0);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].includes('drifted'));
   });
 
-  it('rejects invalid JSON, non-arrays, malformed entries, missing files', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-plants-'));
-    try {
-      const badJson = join(dir, 'bad.json');
-      writeFileSync(badJson, 'not json');
-      assert.ok(loadPlantsFile(badJson, dir).errors[0].includes('invalid JSON'));
+  it('rejects invalid JSON, non-arrays, malformed entries, missing files', (t) => {
+    const dir = tmp(t, 'rc-plants-');
+    const badJson = join(dir, 'bad.json');
+    writeFileSync(badJson, 'not json');
+    assert.ok(loadPlantsFile(badJson, dir).errors[0].includes('invalid JSON'));
 
-      const notArray = join(dir, 'obj.json');
-      writeFileSync(notArray, '{}');
-      assert.ok(loadPlantsFile(notArray, dir).errors[0].includes('array'));
+    const notArray = join(dir, 'obj.json');
+    writeFileSync(notArray, '{}');
+    assert.ok(loadPlantsFile(notArray, dir).errors[0].includes('array'));
 
-      const mixed = join(dir, 'mixed.json');
-      writeFileSync(mixed, JSON.stringify([
-        { file: 'missing.mjs', line: 1, original: 'x', mutated: 'y' },
-        { line: 1, original: 'x', mutated: 'y' },
-        { file: 'a.mjs', line: 0, original: 'x', mutated: 'y' },
-        { file: 'a.mjs', line: 1, original: 'x', mutated: 'x' },
-      ]));
-      const { plants, errors } = loadPlantsFile(mixed, dir);
-      assert.equal(plants.length, 0);
-      assert.equal(errors.length, 4);
+    const mixed = join(dir, 'mixed.json');
+    writeFileSync(mixed, JSON.stringify([
+      { file: 'missing.mjs', line: 1, original: 'x', mutated: 'y' },
+      { line: 1, original: 'x', mutated: 'y' },
+      { file: 'a.mjs', line: 0, original: 'x', mutated: 'y' },
+      { file: 'a.mjs', line: 1, original: 'x', mutated: 'x' },
+    ]));
+    const { plants, errors } = loadPlantsFile(mixed, dir);
+    assert.equal(plants.length, 0);
+    assert.equal(errors.length, 4);
 
-      assert.ok(loadPlantsFile(join(dir, 'nope.json'), dir).errors[0].includes('cannot read'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.ok(loadPlantsFile(join(dir, 'nope.json'), dir).errors[0].includes('cannot read'));
   });
 });
 
