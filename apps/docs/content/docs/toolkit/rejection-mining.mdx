@@ -41,11 +41,11 @@ Requires the `gh` CLI installed and authenticated (`gh auth login`).
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: success. Mining complete (lenses printed, or written with `--write`).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (`gh` missing, auth failure, no PRs found, bad arguments, or LLM refinement failed for all clusters).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (`gh` missing, auth failure, no PRs found, all PR details failed to fetch, bad arguments, or LLM refinement failed for all clusters).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: reserved for a gate-fail; not currently emitted by this tool.</span>
 </div>
 
-When `--llm` is requested, if LLM refinement failed for all clusters, the command exits 1 with an operational error.
+When all PR details failed to fetch (e.g. rate limits or token permissions), or when `--llm` is requested and LLM refinement failed for all clusters, the command exits 1 with an operational error.
 
 ## Example
 
