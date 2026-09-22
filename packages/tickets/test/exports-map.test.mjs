@@ -9,6 +9,7 @@ test('the public surface is declared', () => {
     '.',
     './lib/durability.mjs',
     './lib/key-contract.mjs',
+    './lib/manifest-primitives.mjs',
     './package.json',
   ]);
 });

@@ -7,151 +7,25 @@
 // record.mjs (writer, a later slice) will use discoverSegments + segmentPath for
 // lineage routing.
 
-import { existsSync, readdirSync, readFileSync, lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
+import {
+  SEGMENT_DIRNAME,
+  segmentDirPath,
+  segmentPath,
+  discoverSegments,
+  ulidOf,
+  looksLikeGenuineLedgerLock,
+} from '@adlc/tickets/lib/manifest-primitives.mjs';
 
-export const SEGMENT_DIRNAME = 'manifest.d';
-// spec §4.2: <slug>-<ULID>.jsonl — slug is 1-40 chars of [a-z0-9-]; ULID is the
-// 26-char UPPERCASE Crockford-base32 alphabet (no I, L, O, U), generated at
-// segment creation. Grammar validation must NOT fold case (folding would defeat
-// the case-collision check below), so a lowercase/mixed-case ULID is a distinct
-// bad-filename-grammar rejection, not a normalized match.
-const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
-// .store.json and .lineage are structural files under manifest.d/, not segments
-// (spec §4.7); grammar checks skip exactly these two names.
-const RESERVED_NAMES = new Set(['.store.json', '.lineage']);
-
-// A `*.lock` name is ALSO skippable, not reported invalid — but ONLY when its
-// content genuinely looks like `withLedgerLock`'s own owner record
-// (T-MANIFEST-FOREST slice 3, the writer, names its advisory lock
-// `<segment>.jsonl.lock`, which does not match SEGMENT_NAME_RE since it does
-// not end in exactly `.jsonl`). A NAME-ONLY skip was tried first and reverted
-// (adversarial-review finding): it let a malicious branch rename a real
-// segment — one holding a needs-attention revocation, say — to end in
-// `.lock`, silently vanishing it from the forest entirely instead of being
-// caught as bad-filename-grammar, undetectably resurrecting a revoked
-// approve. Requiring the CONTENT to match the lock's own narrow, distinctive
-// shape closes that: a renamed segment's real JSONL content will never match
-// it, so it falls through to the ordinary bad-filename-grammar rejection
-// below instead of disappearing.
-const LOCK_SUFFIX = '.lock';
-const MAX_LOCK_OWNER_BYTES = 512; // withLedgerLock's owner record is ~120 bytes; generous headroom, not a real limit
-function looksLikeGenuineLedgerLock(path, size) {
-  // withLedgerLock creates the lock file (openSync(..., 'wx')) and writes its
-  // owner JSON (writeFileSync) as two SEPARATE syscalls — a genuine lock is
-  // briefly 0 bytes between them (adversarial-review finding). Treating an
-  // empty file as "not a genuine lock" would fail the whole forest for
-  // anyone whose read lands in that split-second window, exactly the
-  // false-positive the earlier NAME-only skip was trying to avoid — just via
-  // a different mechanism. Safe to special-case: an EMPTY file can never
-  // hide a real segment's content (that requires actual bytes), so treating
-  // empty as "transient, skip it" reopens no part of that earlier hole.
-  if (size === 0) return true;
-  if (size >= MAX_LOCK_OWNER_BYTES) return false; // real locks are tiny; at/over the cap is refused, not guessed at (same convention as lineage.mjs's bounded reads)
-  let parsed = null;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf8').trim());
-  } catch {
-    // leave parsed at its null default — falls through to the same shape
-    // check below, which already rejects a non-object just as unparseable
-    // content should be rejected. A dedicated `return false` here would be
-    // an equivalent mutant magnet (false and null are identically falsy to
-    // every caller, which only ever checks truthiness) for no benefit.
-  }
-  return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
-    && typeof parsed.token === 'string' && typeof parsed.pid === 'number'
-    && typeof parsed.hostname === 'string' && typeof parsed.startedAt === 'string';
-}
-
-export function segmentDirPath(dir) {
-  return join(dir, SEGMENT_DIRNAME);
-}
-
-export function segmentPath(dir, name) {
-  return join(segmentDirPath(dir), name);
-}
-
-/**
- * Discover segment files under `<dir>/manifest.d/`.
- *
- * @param {string} dir  ledger directory (e.g. `.adlc`)
- * @returns {{ valid: string[], invalid: {name: string, reason: string}[] }}
- *   `valid` is sorted by filename. `invalid` names every filesystem object
- *   under manifest.d/ that fails §4.2/§5.1's grammar, type, or collision
- *   rules — reported, never silently skipped.
- */
-export function discoverSegments(dir) {
-  const segDir = segmentDirPath(dir);
-  // lstatSync FIRST, never existsSync: existsSync follows symlinks, so a
-  // DANGLING symlink at manifest.d/ (pointing at a target that doesn't
-  // currently exist) makes existsSync return false and skip the symlink
-  // check entirely — the exact case this check exists for.
-  let dirStat;
-  try {
-    dirStat = lstatSync(segDir);
-  } catch {
-    return { valid: [], invalid: [] };
-  }
-  if (dirStat.isSymbolicLink()) {
-    return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is a symlink' }] };
-  }
-  if (!dirStat.isDirectory()) {
-    return { valid: [], invalid: [{ name: '.', reason: 'manifest.d/ is not a directory' }] };
-  }
-
-  const valid = [];
-  const invalid = [];
-  const seenLower = new Map(); // lowercased name -> first name seen with that casing
-
-  let names;
-  try {
-    names = readdirSync(segDir).sort();
-  } catch (err) {
-    return { valid: [], invalid: [{ name: '.', reason: `cannot read manifest.d/: ${err.message}` }] };
-  }
-
-  for (const name of names) {
-    if (RESERVED_NAMES.has(name)) continue;
-    const full = join(segDir, name);
-    let st;
-    try {
-      st = lstatSync(full);
-    } catch (err) {
-      invalid.push({ name, reason: `cannot stat: ${err.message}` });
-      continue;
-    }
-    if (st.isSymbolicLink()) {
-      invalid.push({ name, reason: 'symlink' });
-      continue;
-    }
-    if (st.isDirectory()) {
-      invalid.push({ name, reason: 'nested directory' });
-      continue;
-    }
-    if (!st.isFile()) {
-      invalid.push({ name, reason: 'not a regular file' });
-      continue;
-    }
-    if (name.endsWith(LOCK_SUFFIX)) {
-      if (looksLikeGenuineLedgerLock(full, st.size)) continue; // a transient advisory lock, not a segment
-      invalid.push({ name, reason: 'lock-suffixed object is not a genuine advisory lock' });
-      continue;
-    }
-    if (!SEGMENT_NAME_RE.test(name)) {
-      invalid.push({ name, reason: 'bad filename grammar' });
-      continue;
-    }
-    const lower = name.toLowerCase();
-    if (seenLower.has(lower)) {
-      invalid.push({ name, reason: `case-colliding with ${seenLower.get(lower)}` });
-      continue;
-    }
-    seenLower.set(lower, name);
-    valid.push(name);
-  }
-  return { valid, invalid };
-}
+export {
+  SEGMENT_DIRNAME,
+  segmentDirPath,
+  segmentPath,
+  discoverSegments,
+  ulidOf,
+  looksLikeGenuineLedgerLock,
+};
 
 /**
  * Read a ledger file's raw lines, keeping 1-based line numbers and skipping
@@ -262,14 +136,6 @@ function parseLenient(rawLines, segmentLabel) {
     entries.push({ ...entry, segment: segmentLabel });
   }
   return { entries, skipped };
-}
-
-// spec §4.2: ULID is the last 26 chars before `.jsonl`. Exported so the
-// writer (lineage.mjs, T-MANIFEST-FOREST slice 3) can confirm a `.lineage`
-// token's cached ULID still matches the segment file it names, without
-// re-deriving the slicing logic.
-export function ulidOf(segmentName) {
-  return segmentName.slice(segmentName.length - '.jsonl'.length - 26, segmentName.length - '.jsonl'.length);
 }
 
 /**
