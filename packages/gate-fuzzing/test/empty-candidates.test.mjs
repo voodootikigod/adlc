@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -227,6 +227,11 @@ test('CLI without --allow-empty warns on stderr and exits 2 when 0 candidates ge
       gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
+
+    const mockAgy = join(dir, 'mock-agy.mjs');
+    writeFileSync(mockAgy, '#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on("data", () => {});\nprocess.stdin.on("end", () => process.exit(1));\n');
+    chmodSync(mockAgy, 0o755);
+
     execFileSync('git', ['add', '-A'], { cwd: dir });
     execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir });
 
@@ -242,11 +247,11 @@ test('CLI without --allow-empty warns on stderr and exits 2 when 0 candidates ge
       env: {
         ...process.env,
         ADLC_PROVIDER: 'agy',
-        ADLC_AGY: '/bin/cat',
+        ADLC_AGY: mockAgy,
       },
     });
 
-    assert.equal(result.status, 2, 'must exit 2 by default on 0 candidates evaluated');
+    assert.equal(result.status, 2, `must exit 2 by default on 0 candidates evaluated (stderr: ${result.stderr}, stdout: ${result.stdout})`);
     assert.match(result.stderr, /WARNING: candidate generation returned 0 valid candidates \(empty mutants pool\)/);
     assert.match(result.stdout, /candidates: 0 usable/);
     assert.match(result.stdout, /rejections: fan:error:6/);
@@ -266,6 +271,11 @@ test('CLI with --json surfaces candidatesGenerated and candidatesRejected', () =
       gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
+
+    const mockAgy = join(dir, 'mock-agy.mjs');
+    writeFileSync(mockAgy, '#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on("data", () => {});\nprocess.stdin.on("end", () => process.exit(1));\n');
+    chmodSync(mockAgy, 0o755);
+
     execFileSync('git', ['add', '-A'], { cwd: dir });
     execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir });
 
@@ -282,11 +292,11 @@ test('CLI with --json surfaces candidatesGenerated and candidatesRejected', () =
       env: {
         ...process.env,
         ADLC_PROVIDER: 'agy',
-        ADLC_AGY: '/bin/cat',
+        ADLC_AGY: mockAgy,
       },
     });
 
-    assert.equal(result.status, 2, 'must exit 2 when 0 candidates evaluated');
+    assert.equal(result.status, 2, `must exit 2 when 0 candidates evaluated (stderr: ${result.stderr}, stdout: ${result.stdout})`);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.candidatesGenerated, 0);
     assert.deepEqual(parsed.candidatesRejected, { 'fan:error': 6 });
@@ -307,6 +317,11 @@ test('CLI with --allow-empty warns on stderr and exits 0 when 0 candidates gener
       gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
+
+    const mockAgy = join(dir, 'mock-agy.mjs');
+    writeFileSync(mockAgy, '#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on("data", () => {});\nprocess.stdin.on("end", () => process.exit(1));\n');
+    chmodSync(mockAgy, 0o755);
+
     execFileSync('git', ['add', '-A'], { cwd: dir });
     execFileSync('git', ['commit', '-qm', 'init'], { cwd: dir });
 
@@ -323,7 +338,7 @@ test('CLI with --allow-empty warns on stderr and exits 0 when 0 candidates gener
       env: {
         ...process.env,
         ADLC_PROVIDER: 'agy',
-        ADLC_AGY: '/bin/cat',
+        ADLC_AGY: mockAgy,
       },
     });
 
