@@ -1,0 +1,14 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). `packages/behavior-diff/test/behavior-diff.test.mjs` and `packages/behavior-diff/test/compare.test.mjs` manually invoke `mkdtempSync` and guard removals in 23 `try/finally` blocks, and are allowlisted in `scripts/test/tmp-fixture-boundary.test.mjs`. With `@adlc/core/test-kit` (`tmp`), fixture directories automatically register cleanup via `t.after` when passed the test context `t`.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/behavior-diff/test/behavior-diff.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update test declarations to accept the `t` parameter from `test(...)`.\n   - Replace `tmpDir()` with `tmp(t, 'behavior-diff-test-')`.\n   - Remove all `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting the test bodies.\n   - Delete the local `function tmpDir()` helper.\n2. In `packages/behavior-diff/test/compare.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update test declarations to accept the `t` parameter.\n   - Replace `tmpDir()` with `tmp(t, 'compare-test-')`.\n   - Remove all `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting the test bodies.\n   - Delete the local `function tmpDir()` helper.\n3. In `scripts/test/tmp-fixture-boundary.test.mjs`:\n   - Remove `'packages/behavior-diff/test/behavior-diff.test.mjs'` and `'packages/behavior-diff/test/compare.test.mjs'` from the `ALLOWLIST` set.\n4. Verification:\n   - `npm test -w packages/behavior-diff` exits 0 with all 22 tests passing.\n   - `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n   - `grep -c 'finally' packages/behavior-diff/test/behavior-diff.test.mjs packages/behavior-diff/test/compare.test.mjs` outputs 0 and 0.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/behavior-diff/test/behavior-diff.test.mjs packages/behavior-diff/test/compare.test.mjs` reports 0 and 0.\n- AC2 Neither test file defines a local `tmpDir` helper.\n- AC3 `grep -E 'packages/behavior-diff/test/(behavior-diff|compare)\\.test\\.mjs' scripts/test/tmp-fixture-boundary.test.mjs` returns nothing.\n- AC4 `npm test -w packages/behavior-diff` exits 0 with all tests passing.\n- AC5 `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n- AC6 `adlc rails-guard` exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M3585SQJBA99HS117EWWP742",
+  "rails": [],
+  "scope": [
+    "packages/behavior-diff/test/behavior-diff.test.mjs",
+    "packages/behavior-diff/test/compare.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(behavior-diff): adopt @adlc/core/test-kit and eliminate 23 try/finally blocks in behavior-diff and compare tests"
+}
