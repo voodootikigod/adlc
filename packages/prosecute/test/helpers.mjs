@@ -8,6 +8,8 @@ import { after } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
 
+import { tmp, gitRepo as coreGitRepo } from '@adlc/core/test-kit';
+
 export const FIXTURE_REVISION = 'fixture-revision';
 export const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
 
@@ -27,8 +29,9 @@ function fixture(prefix) {
   return dir;
 }
 
-export function tmpAdlc() {
-  const dir = fixture('adlc-prosecute-');
+export function tmpAdlc(t) {
+  const dir = tmp(t, 'adlc-prosecute-');
+  if (!t?.after) fixtures.add(dir);
   writeFileSync(join(dir, 'tickets.json'), JSON.stringify({
     tickets: [
       { id: 'T1', title: 'Fixture ticket', scope: ['src/**'], rails: ['test/**'], edges: [] },
@@ -38,18 +41,13 @@ export function tmpAdlc() {
   return dir;
 }
 
-export function gitRepo() {
-  const dir = fixture('adlc-prosecute-git-');
-  const g = (...args) => execFileSync('git', args, {
-    cwd: dir,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  g('init', '-q', '-b', 'main');
-  g('config', 'user.email', 't@t.co');
-  g('config', 'user.name', 'tester');
-  g('config', 'commit.gpgsign', 'false');
-  return { dir, g };
+export function gitRepo(t) {
+  if (t) {
+    return coreGitRepo(t, { prefix: 'adlc-prosecute-git-' });
+  }
+  const repo = coreGitRepo(null, { prefix: 'adlc-prosecute-git-' });
+  fixtures.add(repo.dir);
+  return repo;
 }
 
 export function transcript(dir, { ticket = 'T1', revision = FIXTURE_REVISION } = {}) {

@@ -9,27 +9,13 @@
 //   - the add-vs-alter calibration (#326): an ADDITIVE ticket write does NOT tier,
 //     while ALTERING an existing ticket contract DOES;
 //   - a tiered change with no --author-provider fails closed (exit 1).
-import { describe, it, after } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
-
-// Fixture directories are registered as they are minted and removed when this
-// file finishes, so repeated runs do not accumulate directories under tmpdir().
-const fixtures = new Set();
-after(() => {
-  for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
-  fixtures.clear();
-});
-
-function fixture(prefix) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  fixtures.add(dir);
-  return dir;
-}
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
@@ -64,18 +50,15 @@ function runBin(args, cwd, env = {}) {
 // fixed clock weakens no other case.
 const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
 
-function scratchRepo({ baseTickets, mutate }) {
-  const dir = fixture('adlc-tier-check-');
-  const g = (...a) => execFileSync('git', a, {
-    cwd: dir,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    env: { ...process.env, GIT_AUTHOR_DATE: PINNED_GIT_DATE, GIT_COMMITTER_DATE: PINNED_GIT_DATE },
-  });
-  g('init', '-q', '-b', 'main');
-  g('config', 'user.email', 't@t.co');
-  g('config', 'user.name', 'tester');
-  g('config', 'commit.gpgsign', 'false');
+function scratchRepo(t, opts) {
+  if (t && typeof t.after !== 'function' && typeof t === 'object' && !opts) {
+    opts = t;
+    t = null;
+  }
+  const { baseTickets, mutate } = opts;
+  const repo = gitRepo(t, { prefix: 'adlc-tier-check-' });
+  const { dir } = repo;
+  const g = (...a) => repo.git(...a, { env: { GIT_AUTHOR_DATE: PINNED_GIT_DATE, GIT_COMMITTER_DATE: PINNED_GIT_DATE } });
   writeFileSync(join(dir, 'README.md'), 'baseline\n');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: baseTickets }));
@@ -89,140 +72,125 @@ function scratchRepo({ baseTickets, mutate }) {
 }
 
 const T = (over = {}) => ({ id: 'T1', title: 'x', scope: ['src/**'], rails: ['src/**'], edges: [], ...over });
-const cleanup = (dir) => rmSync(dir, { recursive: true, force: true });
 
 describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
-  it('exits 0 and reports NOT trust-root tier for an ordinary change', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(r.status, 0);
-      assert.match(r.stdout, /NOT trust-root tier/);
+  it('exits 0 and reports NOT trust-root tier for an ordinary change', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /NOT trust-root tier/);
 
-      // --json contract: a non-tier change reports satisfied:true, crossModelRequired:false.
-      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
-      assert.equal(j.status, 0);
-      assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
-    } finally { cleanup(dir); }
+    // --json contract: a non-tier change reports satisfied:true, crossModelRequired:false.
+    const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
+    assert.equal(j.status, 0);
+    assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
   });
 
-  it('exits 2 for a trust-root change (enforcement package) with no attestation', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+  it('exits 2 for a trust-root change (enforcement package) with no attestation', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
       writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
     } });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /TRUST-ROOT tier/);
-      assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
-      // The failure must show the actionable, signable record command verbatim — a
-      // maintainer copies it. Pin the template so a garbled hint cannot ship silently.
-      assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
-    } finally { cleanup(dir); }
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /TRUST-ROOT tier/);
+    assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+    // The failure must show the actionable, signable record command verbatim — a
+    // maintainer copies it. Pin the template so a garbled hint cannot ship silently.
+    assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
   });
 
-  it('#326 forge resistance: an UNSIGNED attestation does NOT satisfy the gate', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+  it('#326 forge resistance: an UNSIGNED attestation does NOT satisfy the gate', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
       writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
     } });
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      // Attacker records the approve WITHOUT the key (unsigned) — the forge.
-      // --allow-unsigned is required since #370: recording now fails closed with no key.
-      // Writing unsigned is the whole point HERE, so the opt-in is the deliberate act it
-      // was added for — an attacker has it too, which is why the gate must still reject.
-      const forge = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
-      assert.equal(forge.status, 0, 'the forged entry must actually be written, or this proves nothing');
-      // PRECONDITION, not decoration: without it, a record path that silently wrote
-      // NOTHING would leave the gate failing for want of any attestation at all, and
-      // this test would still pass while no longer exercising forge resistance.
-      const forged = JSON.parse(readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n').at(-1));
-      assert.equal(forged.gate, 'cross-model-review');
-      assert.equal(forged.data.verdict, 'approve');
-      assert.equal(forged.data.revision, rev, 'the forge is bound to the revision the gate checks');
-      assert.equal(forged.sig, undefined, 'and it is unsigned — the property under test');
-      // Gate (with the key) rejects the unsigned entry — still fails closed.
-      const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(after.status, 2, 'an unsigned forged approve must not satisfy the gate');
-    } finally { cleanup(dir); }
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    // Attacker records the approve WITHOUT the key (unsigned) — the forge.
+    // --allow-unsigned is required since #370: recording now fails closed with no key.
+    // Writing unsigned is the whole point HERE, so the opt-in is the deliberate act it
+    // was added for — an attacker has it too, which is why the gate must still reject.
+    const forge = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc', '--allow-unsigned'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(forge.status, 0, 'the forged entry must actually be written, or this proves nothing');
+    // PRECONDITION, not decoration: without it, a record path that silently wrote
+    // NOTHING would leave the gate failing for want of any attestation at all, and
+    // this test would still pass while no longer exercising forge resistance.
+    const forged = JSON.parse(readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(forged.gate, 'cross-model-review');
+    assert.equal(forged.data.verdict, 'approve');
+    assert.equal(forged.data.revision, rev, 'the forge is bound to the revision the gate checks');
+    assert.equal(forged.sig, undefined, 'and it is unsigned — the property under test');
+    // Gate (with the key) rejects the unsigned entry — still fails closed.
+    const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(after.status, 2, 'an unsigned forged approve must not satisfy the gate');
   });
 
-  it('#326: fails closed with a distinct message when ADLC_MANIFEST_KEY is unavailable', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+  it('#326: fails closed with a distinct message when ADLC_MANIFEST_KEY is unavailable', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
       writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
     } });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /ADLC_MANIFEST_KEY is not available/);
-      // --json contract on the no-key path: still a trust-root tier and STILL failing
-      // closed, but distinguishably because the key is absent (keyAvailable:false), so a
-      // consumer does not misread it as "attestation simply missing".
-      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: '' });
-      assert.equal(j.status, 2);
-      const jj = JSON.parse(j.stdout);
-      assert.equal(jj.trustRootTier, true);
-      assert.equal(jj.crossModelRequired, true);
-      assert.equal(jj.satisfied, false);
-      assert.equal(jj.keyAvailable, false);
-    } finally { cleanup(dir); }
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /ADLC_MANIFEST_KEY is not available/);
+    // --json contract on the no-key path: still a trust-root tier and STILL failing
+    // closed, but distinguishably because the key is absent (keyAvailable:false), so a
+    // consumer does not misread it as "attestation simply missing".
+    const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(j.status, 2);
+    const jj = JSON.parse(j.stdout);
+    assert.equal(jj.trustRootTier, true);
+    assert.equal(jj.crossModelRequired, true);
+    assert.equal(jj.satisfied, false);
+    assert.equal(jj.keyAvailable, false);
   });
 
-  it('exits 0 once a distinct-provider approve bound to the tier-check revision is recorded', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+  it('exits 0 once a distinct-provider approve bound to the tier-check revision is recorded', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
       writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
     } });
-    try {
-      const before = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
-      assert.equal(before.status, 2);
-      const beforeJson = JSON.parse(before.stdout);
-      const { revision } = beforeJson;
-      assert.ok(revision, 'tier-check surfaces the revision');
-      // --json contract for a tiered-but-unattested change: the fields must reflect
-      // trust-root tier and an unmet requirement, not just the exit code.
-      assert.equal(beforeJson.trustRootTier, true);
-      assert.equal(beforeJson.crossModelRequired, true);
-      assert.equal(beforeJson.satisfied, false);
+    const before = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
+    assert.equal(before.status, 2);
+    const beforeJson = JSON.parse(before.stdout);
+    const { revision } = beforeJson;
+    assert.ok(revision, 'tier-check surfaces the revision');
+    // --json contract for a tiered-but-unattested change: the fields must reflect
+    // trust-root tier and an unmet requirement, not just the exit code.
+    assert.equal(beforeJson.trustRootTier, true);
+    assert.equal(beforeJson.crossModelRequired, true);
+    assert.equal(beforeJson.satisfied, false);
 
-      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revision, '--dir', '.adlc'], dir);
-      assert.equal(rec.status, 0);
+    const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revision, '--dir', '.adlc'], dir);
+    assert.equal(rec.status, 0);
 
-      const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(after.status, 0);
-      assert.match(after.stdout, /cross-model approve found/);
-    } finally { cleanup(dir); }
+    const after = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(after.status, 0);
+    assert.match(after.stdout, /cross-model approve found/);
   });
 
-  it('a ticket-store change (additive OR altering) does NOT tier — rails-guard-ci owns the store (#326)', () => {
+  it('a ticket-store change (additive OR altering) does NOT tier — rails-guard-ci owns the store (#326)', (t) => {
     // Adding a ticket, and even altering an existing ticket's rails, both exit 0
     // here: the cross-model tier deliberately does not cover the ticket store
     // (rails-guard-ci already enforces its add-vs-alter contract).
-    const additive = scratchRepo({
+    const additive = scratchRepo(t, {
       baseTickets: [T({ rails: [] })],
       mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T({ rails: [] }), { id: 'T2', title: 'new', scope: ['src/**'], rails: [], edges: [] }] })),
     });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], additive.dir);
-      assert.equal(r.status, 0);
-      assert.match(r.stdout, /NOT trust-root tier/);
-    } finally { cleanup(additive.dir); }
+    const r1 = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], additive.dir);
+    assert.equal(r1.status, 0);
+    assert.match(r1.stdout, /NOT trust-root tier/);
 
-    const altering = scratchRepo({
+    const altering = scratchRepo(t, {
       baseTickets: [T({ rails: [] })],
       mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T({ rails: [], title: 'renamed' })] })),
     });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], altering.dir);
-      assert.equal(r.status, 0);
-      assert.match(r.stdout, /NOT trust-root tier/);
-    } finally { cleanup(altering.dir); }
+    const r2 = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], altering.dir);
+    assert.equal(r2.status, 0);
+    assert.match(r2.stdout, /NOT trust-root tier/);
   });
 
-  it('classifies an UNTRACKED trust-root file when a non-trust-root path sorts ahead of it (guards the -z NUL-split of the untracked walk)', () => {
+  it('classifies an UNTRACKED trust-root file when a non-trust-root path sorts ahead of it (guards the -z NUL-split of the untracked walk)', (t) => {
     // The untracked-file walk uses `git ls-files --others -z` + split('\0'). Drop
     // the -z and git emits NEWLINE-separated paths, so split('\0') collapses ALL
     // untracked files into ONE joined string. Its prefix is whatever sorts FIRST,
@@ -232,41 +200,35 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     // and leaves BOTH untracked; the tracked diff is only a benign src change, so
     // the untracked prosecute file is the SOLE trust-root trigger. With -z it tiers
     // (exit 2); without -z it would exit 0 — which is what the mutation gate caught.
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
-    try {
-      writeFileSync(join(dir, 'a-untracked.md'), 'benign, sorts first\n');
-      mkdirSync(join(dir, 'packages', 'prosecute', 'lib'), { recursive: true });
-      writeFileSync(join(dir, 'packages', 'prosecute', 'lib', 'untracked.mjs'), 'export const z = 1;\n');
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /TRUST-ROOT tier/);
-      assert.match(r.stderr, /packages\/prosecute\//);
-    } finally { cleanup(dir); }
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    writeFileSync(join(dir, 'a-untracked.md'), 'benign, sorts first\n');
+    mkdirSync(join(dir, 'packages', 'prosecute', 'lib'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'prosecute', 'lib', 'untracked.mjs'), 'export const z = 1;\n');
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /TRUST-ROOT tier/);
+    assert.match(r.stderr, /packages\/prosecute\//);
   });
 
-  it('fails closed (exit 1) with actionable guidance when the --base ref is unresolvable', () => {
+  it('fails closed (exit 1) with actionable guidance when the --base ref is unresolvable', (t) => {
     // An unresolvable base means the changed-file set cannot be computed, so the gate
     // must FAIL rather than silently treat the change as empty/non-tier. The error
     // names the fix (fetch the ref / pass --base <ref>) so CI is not a dead end.
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
-    try {
-      const r = runBin(['tier-check', '--base', 'no-such-ref-xyz', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(r.status, 1);
-      assert.match(r.stderr, /cannot determine the changed-file set/);
-      assert.match(r.stderr, /--base <ref>/);
-    } finally { cleanup(dir); }
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => writeFileSync(join(d, 'src', 'ordinary.mjs'), 'export const y = 1;\n') });
+    const r = runBin(['tier-check', '--base', 'no-such-ref-xyz', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /cannot determine the changed-file set/);
+    assert.match(r.stderr, /--base <ref>/);
   });
 
-  it('fails closed (exit 1) on a tiered change with no --author-provider', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: (d) => {
+  it('fails closed (exit 1) on a tiered change with no --author-provider', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
       mkdirSync(join(d, 'packages', 'gate-manifest', 'lib'), { recursive: true });
       writeFileSync(join(d, 'packages', 'gate-manifest', 'lib', 'x.mjs'), 'export const z = 1;\n');
     } });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--dir', '.adlc'], dir, { ADLC_AUTHOR_PROVIDER: '' });
-      assert.equal(r.status, 1);
-      assert.match(r.stderr, /no --author-provider/);
-    } finally { cleanup(dir); }
+    const r = runBin(['tier-check', '--base', 'main', '--dir', '.adlc'], dir, { ADLC_AUTHOR_PROVIDER: '' });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /no --author-provider/);
   });
 });
 
@@ -290,8 +252,8 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
 
   // Record a valid signed approve with KEY_A, then verify under KEY_B — precisely what a
   // key rotation does to already-signed history.
-  function repoWithRotatedKey() {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+  function repoWithRotatedKey(t) {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
     const rev = JSON.parse(runBin(
       ['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'],
       dir, { ADLC_MANIFEST_KEY: KEY_A }
@@ -307,42 +269,36 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
     return { dir, rev };
   }
 
-  it('names chain-verification failure (not a missing attestation) after a key rotation', () => {
-    const { dir } = repoWithRotatedKey();
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
-      assert.equal(r.status, 2, 'a manifest that does not verify must still fail closed');
-      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
-      assert.match(r.stderr, /rotat/i, 'must name key rotation as a likely cause');
-      assert.match(r.stderr, /will not|cannot|does not clear/i,
-        'must say recording a new attestation will not clear this');
-      // #378 — the "Diagnose with" hint must point at the SAME lenient check that
-      // determined chainTrustworthy, not the plain strict form (which would break
-      // at this ledger's own honest legacy prefix and mask the real break point).
-      assert.match(r.stderr, /Diagnose with: adlc gate-manifest verify --allow-legacy-unsigned/,
-        'the diagnose hint must include --allow-legacy-unsigned');
-    } finally { cleanup(dir); }
+  it('names chain-verification failure (not a missing attestation) after a key rotation', (t) => {
+    const { dir } = repoWithRotatedKey(t);
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+    assert.equal(r.status, 2, 'a manifest that does not verify must still fail closed');
+    assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+    assert.match(r.stderr, /rotat/i, 'must name key rotation as a likely cause');
+    assert.match(r.stderr, /will not|cannot|does not clear/i,
+      'must say recording a new attestation will not clear this');
+    // #378 — the "Diagnose with" hint must point at the SAME lenient check that
+    // determined chainTrustworthy, not the plain strict form (which would break
+    // at this ledger's own honest legacy prefix and mask the real break point).
+    assert.match(r.stderr, /Diagnose with: adlc gate-manifest verify --allow-legacy-unsigned/,
+      'the diagnose hint must include --allow-legacy-unsigned');
   });
 
-  it('does NOT print the record-cross-model hint when the chain itself is broken', () => {
-    const { dir } = repoWithRotatedKey();
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
-      assert.doesNotMatch(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/,
-        'the missing-attestation message must not appear when the cause is a broken chain');
-    } finally { cleanup(dir); }
+  it('does NOT print the record-cross-model hint when the chain itself is broken', (t) => {
+    const { dir } = repoWithRotatedKey(t);
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+    assert.doesNotMatch(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/,
+      'the missing-attestation message must not appear when the cause is a broken chain');
   });
 
-  it('the genuine missing-attestation case keeps its existing message and hint', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
-      assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
-      assert.doesNotMatch(r.stderr, /rotat/i,
-        'a genuinely absent attestation must not be blamed on key rotation');
-    } finally { cleanup(dir); }
+  it('the genuine missing-attestation case keeps its existing message and hint', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+    assert.match(r.stderr, /adlc-prosecute record-cross-model --ticket <id>/);
+    assert.doesNotMatch(r.stderr, /rotat/i,
+      'a genuinely absent attestation must not be blamed on key rotation');
   });
 
   // The asymmetry that IS the bug, pinned from both sides. record-cross-model already
@@ -350,29 +306,25 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
   // operator is not stuck in a loop — but they only learn this AFTER tier-check has sent
   // them to spend a full adversarial review. tier-check is the surface that misattributes;
   // this test pins record's good behavior as the standard tier-check must meet.
-  it('record-cross-model already names the true cause — tier-check is the surface that misattributes', () => {
-    const { dir, rev } = repoWithRotatedKey();
-    try {
-      const rec = runBin(
-        ['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
-         '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'],
-        dir, { ADLC_MANIFEST_KEY: KEY_B }
-      );
-      assert.equal(rec.status, 1, 'appending onto an unverifiable chain must fail closed');
-      assert.match(rec.stderr, /chain is invalid|chain broken/i,
-        'record already diagnoses the chain accurately — tier-check must not be less honest');
-    } finally { cleanup(dir); }
+  it('record-cross-model already names the true cause — tier-check is the surface that misattributes', (t) => {
+    const { dir, rev } = repoWithRotatedKey(t);
+    const rec = runBin(
+      ['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
+       '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'],
+      dir, { ADLC_MANIFEST_KEY: KEY_B }
+    );
+    assert.equal(rec.status, 1, 'appending onto an unverifiable chain must fail closed');
+    assert.match(rec.stderr, /chain is invalid|chain broken/i,
+      'record already diagnoses the chain accurately — tier-check must not be less honest');
   });
 
-  it('--json distinguishes the chain failure from a missing attestation', () => {
-    const { dir } = repoWithRotatedKey();
-    try {
-      const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: KEY_B });
-      assert.equal(j.status, 2);
-      const jj = JSON.parse(j.stdout);
-      assert.equal(jj.satisfied, false);
-      assert.equal(jj.chainTrustworthy, false, 'consumers must be able to tell the causes apart');
-    } finally { cleanup(dir); }
+  it('--json distinguishes the chain failure from a missing attestation', (t) => {
+    const { dir } = repoWithRotatedKey(t);
+    const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+    assert.equal(j.status, 2);
+    const jj = JSON.parse(j.stdout);
+    assert.equal(jj.satisfied, false);
+    assert.equal(jj.chainTrustworthy, false, 'consumers must be able to tell the causes apart');
   });
 
   // AC5 — the constraint has to live where a maintainer doing routine secret hygiene will
@@ -396,20 +348,18 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
 
   // Non-weakening guard: the strictness must be untouched. If someone "fixes" this by
   // tolerating an invalid signature so the friendlier message becomes reachable, this fails.
-  it('does not weaken verification: an invalid signature still fails the gate closed', () => {
-    const { dir } = repoWithRotatedKey();
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
-      assert.equal(r.status, 2, 'a wrongly-signed entry must never be tolerated');
-    } finally { cleanup(dir); }
+  it('does not weaken verification: an invalid signature still fails the gate closed', (t) => {
+    const { dir } = repoWithRotatedKey(t);
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_B });
+    assert.equal(r.status, 2, 'a wrongly-signed entry must never be tolerated');
   });
 
   // #378 — a SECOND, distinct cause of "chain does not verify": an entry appended
   // WITHOUT the key after this ledger had already adopted signing (not a rotation).
   // The diagnostic must name THIS cause, not blame rotation for something else.
-  it('names "signing lapsed after adoption" (not rotation) when a later entry is unsigned', () => {
+  it('names "signing lapsed after adoption" (not rotation) when a later entry is unsigned', (t) => {
     const { dir, rev } = (() => {
-      const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
+      const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
       const revision = JSON.parse(runBin(
         ['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'],
         dir, { ADLC_MANIFEST_KEY: KEY_A }
@@ -428,52 +378,48 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
       }
       return { dir, rev: revision };
     })();
-    try {
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
-      assert.match(r.stderr, /lapsed|WITHOUT ADLC_MANIFEST_KEY/i, 'must name the true cause: signing lapsed after adoption');
-      assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation as the cause when it is not');
-      // #378 round-3 finding — pin the corrected repair-chain remedy: it must be a
-      // complete, runnable command AND must warn that it re-signs EVERY unsigned
-      // entry in the whole manifest (repair.mjs has no per-entry scoping), not just
-      // the lapsed one — a garbled or dropped warning here would go uncaught.
-      assert.match(r.stderr, /repair-chain --reason "[^"]*" --write --attest-unsigned/,
-        'must give a complete, runnable repair-chain command');
-      assert.match(r.stderr, /WHOLE manifest/i, 'must warn the repair re-signs the whole manifest, not just this entry');
-      void rev;
-    } finally { cleanup(dir); }
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+    assert.match(r.stderr, /lapsed|WITHOUT ADLC_MANIFEST_KEY/i, 'must name the true cause: signing lapsed after adoption');
+    assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation as the cause when it is not');
+    // #378 round-3 finding — pin the corrected repair-chain remedy: it must be a
+    // complete, runnable command AND must warn that it re-signs EVERY unsigned
+    // entry in the whole manifest (repair.mjs has no per-entry scoping), not just
+    // the lapsed one — a garbled or dropped warning here would go uncaught.
+    assert.match(r.stderr, /repair-chain --reason "[^"]*" --write --attest-unsigned/,
+      'must give a complete, runnable repair-chain command');
+    assert.match(r.stderr, /WHOLE manifest/i, 'must warn the repair re-signs the whole manifest, not just this entry');
+    void rev;
   });
 
   // #378 round-2 finding — break.reason has values beyond 'signature invalid' and
   // 'unsigned entry' (e.g. raw hash-chain corruption). The diagnostic must not
   // mislabel THOSE as key rotation either; it must fall back to a neutral message
   // naming the actual reason instead of asserting a specific, wrong root cause.
-  it('falls back to a neutral message (not "ROTATED") for a raw hash-chain corruption', () => {
-    const { dir } = repoWithRotatedKey();
-    try {
-      // A SECOND signed entry, so the corruption below lands on a non-first entry
-      // (the first entry's prev must be null — a different check — so corrupting
-      // it would not exercise the 'prev hash mismatch' branch this test targets).
-      record({ gate: 'second-entry', dir: join(dir, '.adlc'), key: KEY_A });
+  it('falls back to a neutral message (not "ROTATED") for a raw hash-chain corruption', (t) => {
+    const { dir } = repoWithRotatedKey(t);
+    // A SECOND signed entry, so the corruption below lands on a non-first entry
+    // (the first entry's prev must be null — a different check — so corrupting
+    // it would not exercise the 'prev hash mismatch' branch this test targets).
+    record({ gate: 'second-entry', dir: join(dir, '.adlc'), key: KEY_A });
 
-      // Corrupt the chain directly: break the prev-hash link without touching any
-      // signature. This is neither a rotation (sigs are untouched) nor an unsigned
-      // entry (every entry still carries a sig) — it is raw ledger corruption.
-      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
-      const lines = readFileSync(manifestPath, 'utf8').trimEnd().split('\n');
-      const last = JSON.parse(lines.at(-1));
-      last.prev = 'deadbeef'.repeat(8);
-      lines[lines.length - 1] = JSON.stringify(last);
-      writeFileSync(manifestPath, `${lines.join('\n')}\n`);
+    // Corrupt the chain directly: break the prev-hash link without touching any
+    // signature. This is neither a rotation (sigs are untouched) nor an unsigned
+    // entry (every entry still carries a sig) — it is raw ledger corruption.
+    const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+    const lines = readFileSync(manifestPath, 'utf8').trimEnd().split('\n');
+    const last = JSON.parse(lines.at(-1));
+    last.prev = 'deadbeef'.repeat(8);
+    lines[lines.length - 1] = JSON.stringify(last);
+    writeFileSync(manifestPath, `${lines.join('\n')}\n`);
 
-      const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
-      assert.equal(r.status, 2);
-      assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
-      assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation for raw corruption');
-      assert.doesNotMatch(r.stderr, /lapsed/i, 'must NOT blame a signing lapse for raw corruption');
-      assert.match(r.stderr, /prev hash mismatch/i, 'must name the actual break reason');
-    } finally { cleanup(dir); }
+    const r = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: KEY_A });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /chain/i, 'must name chain verification as the cause');
+    assert.doesNotMatch(r.stderr, /was ROTATED/i, 'must NOT blame rotation for raw corruption');
+    assert.doesNotMatch(r.stderr, /lapsed/i, 'must NOT blame a signing lapse for raw corruption');
+    assert.match(r.stderr, /prev hash mismatch/i, 'must name the actual break reason');
   });
 });
 
@@ -493,184 +439,166 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
   // itself become an untracked file, perturbing the working-tree-based revision hash the
   // gate binds to (revisionIgnorePaths only excludes .adlc/manifest.jsonl, not an arbitrary
   // store path).
-  function attestationStoreDir() {
-    return fixture('adlc-attestations-');
+  function attestationStoreDir(t) {
+    return tmp(t, 'adlc-attestations-');
   }
 
-  it('mirror-attestations appends a new cross-model entry and is idempotent', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+  it('mirror-attestations appends a new cross-model entry and is idempotent', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
-      assert.equal(rec.status, 0);
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+    assert.equal(rec.status, 0);
 
-      const first = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(first.status, 0);
-      assert.match(first.stdout, /appended 1/);
-      assert.ok(existsSync(storePath));
+    const first = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(first.status, 0);
+    assert.match(first.stdout, /appended 1/);
+    assert.ok(existsSync(storePath));
 
-      const second = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(second.status, 0);
-      assert.match(second.stdout, /appended 0/);
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    const second = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(second.status, 0);
+    assert.match(second.stdout, /appended 0/);
   });
 
-  it('mirror-attestations requires --attestation-store and a signing key', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
-    try {
-      const noStore = runBin(['mirror-attestations', '--dir', '.adlc'], dir);
-      assert.equal(noStore.status, 1);
-      assert.match(noStore.stderr, /--attestation-store/);
+  it('mirror-attestations requires --attestation-store and a signing key', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
+    const noStore = runBin(['mirror-attestations', '--dir', '.adlc'], dir);
+    assert.equal(noStore.status, 1);
+    assert.match(noStore.stderr, /--attestation-store/);
 
-      const noKey = runBin(['mirror-attestations', '--attestation-store', join(storeDir, 'attestations.jsonl'), '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
-      assert.equal(noKey.status, 1);
-      assert.match(noKey.stderr, /ADLC_MANIFEST_KEY/);
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    const noKey = runBin(['mirror-attestations', '--attestation-store', join(storeDir, 'attestations.jsonl'), '--dir', '.adlc'], dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(noKey.status, 1);
+    assert.match(noKey.stderr, /ADLC_MANIFEST_KEY/);
   });
 
-  it('tier-check --attestation-store passes on a missing (bootstrap) store and on a store that matches the tree', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+  it('tier-check --attestation-store passes on a missing (bootstrap) store and on a store that matches the tree', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
 
-      // Bootstrap: the store does not exist yet — must not spuriously fail.
-      const bootstrap = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
-      assert.equal(bootstrap.status, 0);
+    // Bootstrap: the store does not exist yet — must not spuriously fail.
+    const bootstrap = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+    assert.equal(bootstrap.status, 0);
 
-      // Mirror, then re-check: still passes (the store now matches the tree exactly).
-      runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      const afterMirror = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
-      assert.equal(afterMirror.status, 0);
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    // Mirror, then re-check: still passes (the store now matches the tree exactly).
+    runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    const afterMirror = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+    assert.equal(afterMirror.status, 0);
   });
 
-  it('AC1 end-to-end: --attestation-store catches a truncated revocation that a plain tier-check would miss', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+  it('AC1 end-to-end: --attestation-store catches a truncated revocation that a plain tier-check would miss', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', rev, '--dir', '.adlc'], dir);
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', rev, '--dir', '.adlc'], dir);
 
-      // Trusted CI observes both entries and mirrors them BEFORE truncation.
-      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(mirrorResult.status, 0);
-      assert.match(mirrorResult.stdout, /appended 2/);
+    // Trusted CI observes both entries and mirrors them BEFORE truncation.
+    const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(mirrorResult.status, 0);
+    assert.match(mirrorResult.stdout, /appended 2/);
 
-      // Sanity: the revocation already stands even without the anchor.
-      const sanity = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(sanity.status, 2);
+    // Sanity: the revocation already stands even without the anchor.
+    const sanity = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(sanity.status, 2);
 
-      // Attacker truncates the manifest: drop the needs-attention line, keep the approve.
-      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
-      const firstLine = readFileSync(manifestPath, 'utf8').split('\n').find((l) => l.trim());
-      writeFileSync(manifestPath, `${firstLine}\n`);
+    // Attacker truncates the manifest: drop the needs-attention line, keep the approve.
+    const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+    const firstLine = readFileSync(manifestPath, 'utf8').split('\n').find((l) => l.trim());
+    writeFileSync(manifestPath, `${firstLine}\n`);
 
-      // THE GAP (#354 F1): without the anchor, the truncated tree wrongly PASSES.
-      const withoutAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
-      assert.equal(withoutAnchor.status, 0);
+    // THE GAP (#354 F1): without the anchor, the truncated tree wrongly PASSES.
+    const withoutAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc'], dir);
+    assert.equal(withoutAnchor.status, 0);
 
-      // THE FIX: with the anchor, truncation is caught — fails closed with a distinct message.
-      const withAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
-      assert.equal(withAnchor.status, 2);
-      assert.match(withAnchor.stderr, /truncat/i);
+    // THE FIX: with the anchor, truncation is caught — fails closed with a distinct message.
+    const withAnchor = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+    assert.equal(withAnchor.status, 2);
+    assert.match(withAnchor.stderr, /truncat/i);
 
-      // --json distinguishes truncation from a genuinely missing attestation.
-      const withAnchorJson = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath, '--json'], dir);
-      assert.equal(withAnchorJson.status, 2);
-      assert.equal(JSON.parse(withAnchorJson.stdout).truncationDetected, true);
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    // --json distinguishes truncation from a genuinely missing attestation.
+    const withAnchorJson = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath, '--json'], dir);
+    assert.equal(withAnchorJson.status, 2);
+    assert.equal(JSON.parse(withAnchorJson.stdout).truncationDetected, true);
   });
 
-  it('round-3 codex finding: mirror-attestations refuses to write from a manifest whose chain is not trustworthy', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+  it('round-3 codex finding: mirror-attestations refuses to write from a manifest whose chain is not trustworthy', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
-      assert.equal(rec.status, 0);
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    const rec = runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+    assert.equal(rec.status, 0);
 
-      // Corrupt the manifest's signature (present-but-invalid), matching the #354 F1
-      // tamper pattern: the chain is no longer trustworthy even though the line parses.
-      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
-      const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
-      entry.sig = `${entry.sig.slice(0, -4)}dead`;
-      writeFileSync(manifestPath, `${JSON.stringify(entry)}\n`);
+    // Corrupt the manifest's signature (present-but-invalid), matching the #354 F1
+    // tamper pattern: the chain is no longer trustworthy even though the line parses.
+    const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+    const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
+    entry.sig = `${entry.sig.slice(0, -4)}dead`;
+    writeFileSync(manifestPath, `${JSON.stringify(entry)}\n`);
 
-      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(mirrorResult.status, 1, 'must fail closed rather than mirror from an untrustworthy manifest');
-      assert.match(mirrorResult.stderr, /chain/i);
-      assert.ok(!existsSync(storePath), 'the store must not be created/modified from a broken-chain manifest');
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(mirrorResult.status, 1, 'must fail closed rather than mirror from an untrustworthy manifest');
+    assert.match(mirrorResult.stderr, /chain/i);
+    assert.ok(!existsSync(storePath), 'the store must not be created/modified from a broken-chain manifest');
   });
 
-  it('round-4 codex finding: a cross-author revision collision reports MISSING attestation, not truncation, in --attestation-store attribution', () => {
+  it('round-4 codex finding: a cross-author revision collision reports MISSING attestation, not truncation, in --attestation-store attribution', (t) => {
     // Two unrelated PRs (author anthropic vs author openai) that happen to produce an
     // identical tree — same baseTickets + same mutate() applied to a fresh scratch repo
     // yields the same revision hash, since .adlc/manifest.jsonl is excluded from it.
-    const prA = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const prB = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+    const prA = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const prB = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const revA = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], prA.dir).stdout).revision;
-      const revB = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--json'], prB.dir).stdout).revision;
-      assert.equal(revA, revB, 'precondition: the two scratch repos must collide on revision for this test to be meaningful');
+    const revA = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], prA.dir).stdout).revision;
+    const revB = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--json'], prB.dir).stdout).revision;
+    assert.equal(revA, revB, 'precondition: the two scratch repos must collide on revision for this test to be meaningful');
 
-      // PR A (author anthropic): approve, then revoke. Mirror both into the store.
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revA, '--dir', '.adlc'], prA.dir);
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', revA, '--dir', '.adlc'], prA.dir);
-      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], prA.dir);
-      assert.equal(mirrorResult.status, 0);
-      assert.match(mirrorResult.stdout, /appended 2/);
+    // PR A (author anthropic): approve, then revoke. Mirror both into the store.
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', revA, '--dir', '.adlc'], prA.dir);
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'needs-attention', '--revision', revA, '--dir', '.adlc'], prA.dir);
+    const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], prA.dir);
+    assert.equal(mirrorResult.status, 0);
+    assert.match(mirrorResult.stdout, /appended 2/);
 
-      // PR B (author openai): no attestation recorded at all yet — a completely
-      // ordinary, not-yet-reviewed trust-root PR from a DIFFERENT author.
-      const prBResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath, '--json'], prB.dir);
-      assert.equal(prBResult.status, 2);
-      const prBJson = JSON.parse(prBResult.stdout);
-      assert.equal(prBJson.truncationDetected, false, 'PR B never truncated anything — author A\'s revocation is not about PR B');
+    // PR B (author openai): no attestation recorded at all yet — a completely
+    // ordinary, not-yet-reviewed trust-root PR from a DIFFERENT author.
+    const prBResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath, '--json'], prB.dir);
+    assert.equal(prBResult.status, 2);
+    const prBJson = JSON.parse(prBResult.stdout);
+    assert.equal(prBJson.truncationDetected, false, 'PR B never truncated anything — author A\'s revocation is not about PR B');
 
-      const prBText = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath], prB.dir);
-      assert.match(prBText.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
-      assert.doesNotMatch(prBText.stderr, /ROLLBACK\/TRUNCATION DETECTED/);
-    } finally {
-      cleanup(prA.dir);
-      cleanup(prB.dir);
-      rmSync(storeDir, { recursive: true, force: true });
-    }
+    const prBText = runBin(['tier-check', '--base', 'main', '--author-provider', 'openai', '--dir', '.adlc', '--attestation-store', storePath], prB.dir);
+    assert.match(prBText.stderr, /NO SIGNATURE-VERIFIED cross-model attestation/);
+    assert.doesNotMatch(prBText.stderr, /ROLLBACK\/TRUNCATION DETECTED/);
   });
 
-  it('round-5 codex finding: a tampered store entry fails tier-check AND mirror-attestations closed, not silently ignored', () => {
-    const { dir } = scratchRepo({ baseTickets: [T({ rails: [] })], mutate: tierChange });
-    const storeDir = attestationStoreDir();
+  it('round-5 codex finding: a tampered store entry fails tier-check AND mirror-attestations closed, not silently ignored', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const storeDir = attestationStoreDir(t);
     const storePath = join(storeDir, 'attestations.jsonl');
-    try {
-      const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
-      runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
-      const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(mirrorResult.status, 0);
+    const rev = JSON.parse(runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir).stdout).revision;
+    runBin(['record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic', '--verdict', 'approve', '--revision', rev, '--dir', '.adlc'], dir);
+    const mirrorResult = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(mirrorResult.status, 0);
 
-      // Tamper the mirrored store entry in place: content changed, stale sig kept.
-      const stored = JSON.parse(readFileSync(storePath, 'utf8').trim());
-      stored.data = { ...stored.data, verdict: 'needs-attention' };
-      writeFileSync(storePath, `${JSON.stringify(stored)}\n`);
+    // Tamper the mirrored store entry in place: content changed, stale sig kept.
+    const stored = JSON.parse(readFileSync(storePath, 'utf8').trim());
+    stored.data = { ...stored.data, verdict: 'needs-attention' };
+    writeFileSync(storePath, `${JSON.stringify(stored)}\n`);
 
-      const tierCheckResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
-      assert.equal(tierCheckResult.status, 1, 'a tampered store must fail closed (operational error), not silently pass or silently ignore the tampered line');
-      assert.match(tierCheckResult.stderr, /signature does not verify/);
+    const tierCheckResult = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--attestation-store', storePath], dir);
+    assert.equal(tierCheckResult.status, 1, 'a tampered store must fail closed (operational error), not silently pass or silently ignore the tampered line');
+    assert.match(tierCheckResult.stderr, /signature does not verify/);
 
-      const secondMirror = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
-      assert.equal(secondMirror.status, 1, 'mirror-attestations must also refuse to write onto a store it cannot fully verify');
-      assert.match(secondMirror.stderr, /signature does not verify/);
-    } finally { cleanup(dir); rmSync(storeDir, { recursive: true, force: true }); }
+    const secondMirror = runBin(['mirror-attestations', '--attestation-store', storePath, '--dir', '.adlc'], dir);
+    assert.equal(secondMirror.status, 1, 'mirror-attestations must also refuse to write onto a store it cannot fully verify');
+    assert.match(secondMirror.stderr, /signature does not verify/);
   });
 });
