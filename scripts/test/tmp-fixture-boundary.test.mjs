@@ -31,8 +31,6 @@ const ALLOWLIST = new Set([
   'packages/autopilot/test/tools.test.mjs',
   'packages/backlog-groom/test/apply-e2e.test.mjs',
   'packages/backlog-groom/test/cli-e2e.test.mjs',
-  'packages/behavior-diff/test/behavior-diff.test.mjs',
-  'packages/behavior-diff/test/compare.test.mjs',
   'packages/coldstart/test/coldstart-cache-e2e.test.mjs',
   'packages/coldstart/test/coldstart-offline.test.mjs',
   'packages/coldstart/test/coldstart.test.mjs',
