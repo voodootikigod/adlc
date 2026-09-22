@@ -3,34 +3,20 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { scorePlants } from '../lib/scorer.mjs';
 import { buildJsonReport, printScorecard } from '../lib/report.mjs';
+import { gitRepo, tmp } from '@adlc/core/test-kit';
 
 const BIN = resolve(fileURLToPath(import.meta.url), '../../bin/review-calibration.mjs');
 
-function git(args, cwd) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-}
-
-function initRepo(dir) {
-  git(['init', '-b', 'main'], dir);
-  git(['config', 'user.email', 'test@test.com'], dir);
-  git(['config', 'user.name', 'Test'], dir);
-}
-
-function commitAll(dir, msg = 'init') {
-  git(['add', '-A'], dir);
-  git(['commit', '-m', msg], dir);
-}
-
-function createRepo(dir) {
-  initRepo(dir);
+function createRepo(t) {
+  const repo = gitRepo(t, { prefix: 'rc-empty-prec-' });
+  const { dir, git } = repo;
   mkdirSync(join(dir, 'src'));
 
   writeFileSync(join(dir, 'src', 'math.mjs'), [
@@ -45,7 +31,8 @@ function createRepo(dir) {
   ].join('\n'));
 
   writeFileSync(join(dir, 'README.md'), '# test\n');
-  commitAll(dir, 'initial');
+  git('add', '-A');
+  git('commit', '-m', 'initial');
 
   writeFileSync(join(dir, 'src', 'math.mjs'), [
     'export function add(a, b) {',
@@ -62,8 +49,9 @@ function createRepo(dir) {
     '',
   ].join('\n'));
 
-  commitAll(dir, 'add multiply');
-  return dir;
+  git('add', '-A');
+  git('commit', '-m', 'add multiply');
+  return repo;
 }
 
 function runCli(args, cwd) {
@@ -204,108 +192,104 @@ describe('empty-precision: unit tests', () => {
     assert.equal(report.gatePass, true, 'gatePass must be true when precision === minPrecision');
   });
 
-  it('printScorecard formats precision: null safely without printing 0.0%', () => {
+  it('printScorecard formats precision: null safely without printing 0.0%', (t) => {
     const logs = [];
     const origLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      printScorecard({
-        recall: 0,
-        caught: 0,
-        total: 1,
-        precision: null,
-        falsePositives: 0,
-        perCategory: {},
-        results: [],
-        commit: 'test',
-        minRecall: 0.5,
-        minPrecision: 0.5,
-        scorer: 'judge',
-      });
-    } finally {
+    t.after(() => {
       console.log = origLog;
-    }
+    });
+    console.log = (...args) => logs.push(args.join(' '));
+    printScorecard({
+      recall: 0,
+      caught: 0,
+      total: 1,
+      precision: null,
+      falsePositives: 0,
+      perCategory: {},
+      results: [],
+      commit: 'test',
+      minRecall: 0.5,
+      minPrecision: 0.5,
+      scorer: 'judge',
+    });
     const output = logs.join('\n');
     assert.match(output, /Precision:\s+null/);
     assert.doesNotMatch(output, /Precision:\s+0\.0%/);
     assert.match(output, /GATE FAIL — recall 0\.0% \/ precision null below thresholds/);
   });
 
-  it('printScorecard handles numeric precision meeting minPrecision', () => {
+  it('printScorecard handles numeric precision meeting minPrecision', (t) => {
     const logs = [];
     const origLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      printScorecard({
-        recall: 1.0,
-        caught: 1,
-        total: 1,
-        precision: 0.5,
-        falsePositives: 1,
-        perCategory: {},
-        results: [],
-        commit: 'test',
-        minRecall: 0.5,
-        minPrecision: 0.5,
-        scorer: 'judge',
-      });
-    } finally {
+    t.after(() => {
       console.log = origLog;
-    }
+    });
+    console.log = (...args) => logs.push(args.join(' '));
+    printScorecard({
+      recall: 1.0,
+      caught: 1,
+      total: 1,
+      precision: 0.5,
+      falsePositives: 1,
+      perCategory: {},
+      results: [],
+      commit: 'test',
+      minRecall: 0.5,
+      minPrecision: 0.5,
+      scorer: 'judge',
+    });
     const output = logs.join('\n');
     assert.match(output, /Precision:\s+50\.0%/);
     assert.match(output, /Min precision:\s+50\.0%\s+\[PASS\]/);
     assert.match(output, /GATE PASS — recall 100\.0% meets minimum 50\.0%/);
   });
 
-  it('printScorecard handles numeric precision below minPrecision', () => {
+  it('printScorecard handles numeric precision below minPrecision', (t) => {
     const logs = [];
     const origLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      printScorecard({
-        recall: 1.0,
-        caught: 1,
-        total: 1,
-        precision: 0.4,
-        falsePositives: 1,
-        perCategory: {},
-        results: [],
-        commit: 'test',
-        minRecall: 0.5,
-        minPrecision: 0.5,
-        scorer: 'judge',
-      });
-    } finally {
+    t.after(() => {
       console.log = origLog;
-    }
+    });
+    console.log = (...args) => logs.push(args.join(' '));
+    printScorecard({
+      recall: 1.0,
+      caught: 1,
+      total: 1,
+      precision: 0.4,
+      falsePositives: 1,
+      perCategory: {},
+      results: [],
+      commit: 'test',
+      minRecall: 0.5,
+      minPrecision: 0.5,
+      scorer: 'judge',
+    });
     const output = logs.join('\n');
     assert.match(output, /Precision:\s+40\.0%/);
     assert.match(output, /Min precision:\s+50\.0%\s+\[FAIL\]/);
     assert.match(output, /GATE FAIL — recall 100\.0% \/ precision 40\.0% below thresholds/);
   });
 
-  it('printScorecard passes gate when precision is null and minPrecision is null', () => {
+  it('printScorecard passes gate when precision is null and minPrecision is null', (t) => {
     const logs = [];
     const origLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      printScorecard({
-        recall: 1.0,
-        caught: 1,
-        total: 1,
-        precision: null,
-        falsePositives: 0,
-        perCategory: {},
-        results: [],
-        commit: 'test',
-        minRecall: 0.5,
-        minPrecision: null,
-        scorer: 'judge',
-      });
-    } finally {
+    t.after(() => {
       console.log = origLog;
-    }
+    });
+    console.log = (...args) => logs.push(args.join(' '));
+    printScorecard({
+      recall: 1.0,
+      caught: 1,
+      total: 1,
+      precision: null,
+      falsePositives: 0,
+      perCategory: {},
+      results: [],
+      commit: 'test',
+      minRecall: 0.5,
+      minPrecision: null,
+      scorer: 'judge',
+    });
     const output = logs.join('\n');
     assert.match(output, /Precision:\s+null/);
     assert.match(output, /GATE PASS — recall 100\.0% meets minimum 50\.0%/);
@@ -313,131 +297,106 @@ describe('empty-precision: unit tests', () => {
 });
 
 describe('empty-precision: E2E tests', () => {
-  it('AC2: review-calibration --min-precision 0.5 fails with exit 2 when reviewer produces 0 findings (JSON)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-empty-prec-e2e-json-'));
-    try {
-      createRepo(dir);
-      const result = runCli(
-        [
-          '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
-          '--commit', 'HEAD',
-          '--plants', '2',
-          '--min-plants', '1',
-          '--min-recall', '0',
-          '--min-precision', '0.5',
-          '--scorer', 'string',
-          '--json',
-        ],
-        dir
-      );
+  it('AC2: review-calibration --min-precision 0.5 fails with exit 2 when reviewer produces 0 findings (JSON)', (t) => {
+    const { dir } = createRepo(t);
+    const result = runCli(
+      [
+        '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
+        '--commit', 'HEAD',
+        '--plants', '2',
+        '--min-plants', '1',
+        '--min-recall', '0',
+        '--min-precision', '0.5',
+        '--scorer', 'string',
+        '--json',
+      ],
+      dir
+    );
 
-      assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.precision, null);
-      assert.equal(parsed.gatePass, false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.precision, null);
+    assert.equal(parsed.gatePass, false);
   });
 
-  it('AC2: review-calibration --min-precision 0.5 fails with exit 2 when reviewer produces 0 findings (non-JSON)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-empty-prec-e2e-cli-'));
-    try {
-      createRepo(dir);
-      const result = runCli(
-        [
-          '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
-          '--commit', 'HEAD',
-          '--plants', '2',
-          '--min-plants', '1',
-          '--min-recall', '0',
-          '--min-precision', '0.5',
-          '--scorer', 'string',
-        ],
-        dir
-      );
+  it('AC2: review-calibration --min-precision 0.5 fails with exit 2 when reviewer produces 0 findings (non-JSON)', (t) => {
+    const { dir } = createRepo(t);
+    const result = runCli(
+      [
+        '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
+        '--commit', 'HEAD',
+        '--plants', '2',
+        '--min-plants', '1',
+        '--min-recall', '0',
+        '--min-precision', '0.5',
+        '--scorer', 'string',
+      ],
+      dir
+    );
 
-      assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-      assert.match(result.stderr, /gate fails — recall 0\.0% \(min 0\.0%\), precision null \(could not be measured\) \(min 50\.0%\)/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stderr, /gate fails — recall 0\.0% \(min 0\.0%\), precision null \(could not be measured\) \(min 50\.0%\)/);
   });
 
-  it('fails gate with formatted percentage when precision is below min-precision (non-JSON)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-empty-prec-e2e-below-'));
-    try {
-      createRepo(dir);
-      const result = runCli(
-        [
-          '--review-cmd', 'node -e "process.stdout.write(JSON.stringify([{file:\'src/math.mjs\',line:2,description:\'bug\'},{file:\'src/other.mjs\',line:99,description:\'spurious\'}]))"',
-          '--commit', 'HEAD',
-          '--plants', '2',
-          '--min-plants', '1',
-          '--min-recall', '0',
-          '--min-precision', '0.8',
-          '--scorer', 'string',
-        ],
-        dir
-      );
+  it('fails gate with formatted percentage when precision is below min-precision (non-JSON)', (t) => {
+    const { dir } = createRepo(t);
+    const result = runCli(
+      [
+        '--review-cmd', 'node -e "process.stdout.write(JSON.stringify([{file:\'src/math.mjs\',line:2,description:\'bug\'},{file:\'src/other.mjs\',line:99,description:\'spurious\'}]))"',
+        '--commit', 'HEAD',
+        '--plants', '2',
+        '--min-plants', '1',
+        '--min-recall', '0',
+        '--min-precision', '0.8',
+        '--scorer', 'string',
+      ],
+      dir
+    );
 
-      assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-      assert.match(result.stderr, /precision 50\.0% \(min 80\.0%\)/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 2, `Expected exit 2, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.match(result.stderr, /precision 50\.0% \(min 80\.0%\)/);
   });
 
-  it('passes gate when reviewer produces 0 findings if min-precision is not set and min-recall is met', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-empty-prec-e2e-pass-'));
-    try {
-      createRepo(dir);
-      const result = runCli(
-        [
-          '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
-          '--commit', 'HEAD',
-          '--plants', '2',
-          '--min-plants', '1',
-          '--min-recall', '0',
-          '--scorer', 'string',
-          '--json',
-        ],
-        dir
-      );
+  it('passes gate when reviewer produces 0 findings if min-precision is not set and min-recall is met', (t) => {
+    const { dir } = createRepo(t);
+    const result = runCli(
+      [
+        '--review-cmd', 'node -e "process.stdout.write(\'[]\\n\')"',
+        '--commit', 'HEAD',
+        '--plants', '2',
+        '--min-plants', '1',
+        '--min-recall', '0',
+        '--scorer', 'string',
+        '--json',
+      ],
+      dir
+    );
 
-      assert.equal(result.status, 0, `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.precision, null);
-      assert.equal(parsed.gatePass, true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 0, `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.precision, null);
+    assert.equal(parsed.gatePass, true);
   });
 
-  it('passes gate when findings are emitted and precision meets min-precision (kills inverted precision check)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rc-empty-prec-e2e-precpass-'));
-    try {
-      createRepo(dir);
-      const result = runCli(
-        [
-          '--review-cmd', 'node -e "process.stdout.write(JSON.stringify([{file:\'src/math.mjs\',line:2,description:\'bug\'},{file:\'src/math.mjs\',line:6,description:\'bug\'}]))"',
-          '--commit', 'HEAD',
-          '--plants', '2',
-          '--min-plants', '1',
-          '--min-recall', '0.5',
-          '--min-precision', '0.5',
-          '--scorer', 'string',
-          '--json',
-        ],
-        dir
-      );
+  it('passes gate when findings are emitted and precision meets min-precision (kills inverted precision check)', (t) => {
+    const { dir } = createRepo(t);
+    const result = runCli(
+      [
+        '--review-cmd', 'node -e "process.stdout.write(JSON.stringify([{file:\'src/math.mjs\',line:2,description:\'bug\'},{file:\'src/math.mjs\',line:6,description:\'bug\'}]))"',
+        '--commit', 'HEAD',
+        '--plants', '2',
+        '--min-plants', '1',
+        '--min-recall', '0.5',
+        '--min-precision', '0.5',
+        '--scorer', 'string',
+        '--json',
+      ],
+      dir
+    );
 
-      assert.equal(result.status, 0, `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.precision, 1.0);
-      assert.equal(parsed.gatePass, true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 0, `Expected exit 0, got ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.precision, 1.0);
+    assert.equal(parsed.gatePass, true);
   });
 });
