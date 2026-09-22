@@ -9,18 +9,18 @@
 // mapped to a process exit code.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { appendManifestEntry } from '@adlc/gate-manifest';
+import { tmp } from '@adlc/core/test-kit';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = resolve(HERE, '..', 'bin', 'adlc.mjs');
 
-function tmpAdlc() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-runner-cli-'));
+function tmpAdlc(t) {
+  const dir = tmp(t, 'adlc-runner-cli-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -29,8 +29,8 @@ function writeTicketDefinition(dir, id) {
   writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [{ id, title: 't', scope: [], rails: [], edges: [] }] }));
 }
 
-test('CLI: a REJECTED p0 gate (coldstart gaps present) exits 2, not 1', () => {
-  const dir = tmpAdlc();
+test('CLI: a REJECTED p0 gate (coldstart gaps present) exits 2, not 1', (t) => {
+  const dir = tmpAdlc(t);
   writeTicketDefinition(dir, 'T1');
   appendManifestEntry(
     { gate: 'coldstart', ticket: 'T1', data: { verdict: JSON.stringify({ gaps: [{ what: 'x', why_blocking: 'y' }], ticketHash: 'anything' }) } },
@@ -41,8 +41,8 @@ test('CLI: a REJECTED p0 gate (coldstart gaps present) exits 2, not 1', () => {
   assert.match(r.stderr, /evidence rejected/);
 });
 
-test('CLI: a REJECTED p1 gate (spec-approval with unresolved > 0) exits 2, not 1', () => {
-  const dir = tmpAdlc();
+test('CLI: a REJECTED p1 gate (spec-approval with unresolved > 0) exits 2, not 1', (t) => {
+  const dir = tmpAdlc(t);
   appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, dir, { key: null });
   appendManifestEntry({ gate: 'premortem', ticket: 'T1' }, dir, { key: null });
   appendManifestEntry({
@@ -54,8 +54,8 @@ test('CLI: a REJECTED p1 gate (spec-approval with unresolved > 0) exits 2, not 1
   assert.match(r.stderr, /evidence rejected/);
 });
 
-test('CLI: --json still reports operational:false and the errors array for a rejected p1 gate', () => {
-  const dir = tmpAdlc();
+test('CLI: --json still reports operational:false and the errors array for a rejected p1 gate', (t) => {
+  const dir = tmpAdlc(t);
   appendManifestEntry({ gate: 'spec-lint', ticket: 'T1' }, dir, { key: null });
   appendManifestEntry({ gate: 'premortem', ticket: 'T1' }, dir, { key: null });
   appendManifestEntry({
@@ -70,8 +70,8 @@ test('CLI: --json still reports operational:false and the errors array for a rej
   assert.ok(parsed.errors.some((e) => e.includes('verdict')));
 });
 
-test('CLI: a genuine operational error (unknown phase) still exits 1', () => {
-  const dir = tmpAdlc();
+test('CLI: a genuine operational error (unknown phase) still exits 1', (t) => {
+  const dir = tmpAdlc(t);
   const r = spawnSync(process.execPath, [BIN, 'run', 'p9', '--dir', dir], { encoding: 'utf8' });
   assert.equal(r.status, 1);
 });
