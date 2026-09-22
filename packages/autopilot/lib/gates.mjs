@@ -33,9 +33,7 @@ import { registerSeams, active } from './mutations.mjs';
 export { ensureTrackingRef, releaseTrackingRef, trackingRef, ZERO_OID } from './gate-repo.mjs';
 
 registerSeams([
-  'gates.ignoreOrder',          // a preflight list that differs from EXPECTED_GATES passes
   'gates.spawnPreflightAlways', // scripts/preflight.mjs is spawned even without the R13 flags
-  'gates.reuseClone',           // every gate runs in the FIRST gate's clone
   'gates.allowNetwork',         // the sandbox profile allows egress
   'gates.skipBracket',          // the remote-URL / base-object bracket is not checked
   'gates.skipDepsBind',         // the node_modules bind is omitted,
@@ -83,7 +81,6 @@ export function gateOrderFromPreflight(scriptText) {
 
 /** The parsed order must equal EXPECTED_GATES exactly (names and argv, in sequence). */
 export function checkGateOrder(parsed, expected = EXPECTED_GATES) {
-  if (active('gates.ignoreOrder')) return { ok: true, code: null, detail: null };
   const same = parsed.length === expected.length && parsed.every((g, i) => g.name === expected[i].name && JSON.stringify(g.argv) === JSON.stringify(expected[i].argv));
   return same ? { ok: true, code: null, detail: null } : { ok: false, code: 'preflight-order-drift', detail: `pinned: ${parsed.map((g) => g.name).join(' → ')}; expected: ${expected.map((g) => g.name).join(' → ')}` };
 }
@@ -179,10 +176,8 @@ export async function runOuterGates({ ctx, issue, attestedHead, baseOid, gateDep
     : gateOrderFromPreflight(text).map((g) => ({ name: g.name, argv: gateArgvFor(g, { node: ctx.pinned.node, baseOid }) }));
   const before = await bracket(ctx, baseOid);
   const results = [];
-  let reused = null;
   for (const [k, gate] of sequence.entries()) {
-    const clone = reused ?? await cloneGateRepo({ ctx, issue: n, k, attestedHead, baseOid });
-    if (active('gates.reuseClone')) reused = clone;
+    const clone = await cloneGateRepo({ ctx, issue: n, k, attestedHead, baseOid });
     const home = join(runDir, `gate-home-${k}`);
     try {
       const snapBefore = await snapshotGateRepo({ ctx, cwd: clone, baseOid });
@@ -198,11 +193,10 @@ export async function runOuterGates({ ctx, issue, attestedHead, baseOid, gateDep
       results.push({ name: gate.name, clone, status: r.status, timedOut: r.timedOut, output: tail(ctx, `${r.stdout}\n${r.stderr}`) });
       if (r.status !== 0) return { ok: false, code: 'gate-failed', gate: gate.name, status: r.status, reason: r.reason, gates: results, head: attestedHead };
     } finally {
-      if (!reused) rmSync(clone, { recursive: true, force: true });
+      rmSync(clone, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
   }
-  if (reused) rmSync(reused, { recursive: true, force: true });
   const drift = bracketDrift(before, await bracket(ctx, baseOid));
   if (drift) return { ok: false, code: drift, gates: results, head: attestedHead };
   return { ok: true, code: null, gates: results, head: attestedHead };

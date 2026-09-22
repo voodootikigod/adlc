@@ -20,9 +20,7 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'maintain.skipProvenance',            // token/marker + head-name provenance is not checked
-  'maintain.skipPreconditions',         // base/head/ls-remote mutation preconditions are not checked
   'maintain.carryForwardWithoutPatchId', // a clean rebase carries forward even when the patch-id changed
-  'maintain.maintainAnyState',          // every record is a rebase candidate
   'maintain.countStaleTowardCap',       // stale/ci-red PRs count toward the open-PR cap
   'maintain.deleteRecordWithRemoteRef', // the canonical rule deletes the record while the remote ref still exists
 ]);
@@ -74,7 +72,7 @@ export async function maintainOpenPrs({ ctx, baseOid, retryRound = null, deps = 
   };
   const actions = [];
   for (const record of ctx.records.all()) {
-    const candidate = MAINTENANCE_STATES.includes(record.state) || active('maintain.maintainAnyState');
+    const candidate = MAINTENANCE_STATES.includes(record.state);
     const observeOnly = !candidate && LIFECYCLE_OBSERVED_STATES.includes(record.state) && record.prNumber != null;
     if (!candidate && !observeOnly) { actions.push({ issue: record.issue, action: 'skip', state: record.state }); continue; }
     try { actions.push(await maintainOne({ ctx, record, base, deps: resolved, observeOnly })); }
@@ -100,15 +98,13 @@ async function maintainOne({ ctx, record, base, deps, observeOnly }) {
   if (pr.state === 'CLOSED') return lifecycleClosed({ ctx, record, deps });
   if (observeOnly) return { issue: n, action: 'observed', state: record.state, prState: pr.state };
   if (pr.state !== 'OPEN') return orphan(`PR state ${pr.state}`);
-  if (!active('maintain.skipPreconditions')) {
-    if (pr.baseRefName !== 'main') return orphan(`PR base ${pr.baseRefName} is not main`);
-    if (pr.headRefOid !== record.attestedHead) return oidMismatch(`PR #${record.prNumber} head ${pr.headRefOid} != attestedHead ${record.attestedHead}`);
-    const remote = await remoteHead(ctx, ctx.remote.remoteFetchUrl, b);
-    if (remote !== record.lastPushedOid) return orphan(`remote ref ${remote ?? 'absent'} != lastPushedOid ${record.lastPushedOid}`);
-  }
+  if (pr.baseRefName !== 'main') return orphan(`PR base ${pr.baseRefName} is not main`);
+  if (pr.headRefOid !== record.attestedHead) return oidMismatch(`PR #${record.prNumber} head ${pr.headRefOid} != attestedHead ${record.attestedHead}`);
+  const remote = await remoteHead(ctx, ctx.remote.remoteFetchUrl, b);
+  if (remote !== record.lastPushedOid) return orphan(`remote ref ${remote ?? 'absent'} != lastPushedOid ${record.lastPushedOid}`);
   const merge = await viewPr(ctx, record.prNumber, 'mergeStateStatus,headRefOid');
   if (!merge) return orphan(`PR #${record.prNumber} unreadable`);
-  if (!active('maintain.skipPreconditions') && merge.headRefOid !== record.attestedHead) return oidMismatch(`PR head moved to ${merge.headRefOid}`);
+  if (merge.headRefOid !== record.attestedHead) return oidMismatch(`PR head moved to ${merge.headRefOid}`);
   if (!REBASE_STATES.includes(merge.mergeStateStatus)) return { issue: n, action: 'current', mergeStateStatus: merge.mergeStateStatus };
   return rebase({ ctx, record: ctx.records.load(n), base, deps, orphan });
 }

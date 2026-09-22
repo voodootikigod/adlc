@@ -14,7 +14,6 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'digest.skipSentinelSearch',   // the comment is posted without searching for the sentinel
-  'digest.postWithoutIntent',    // the digest-posted intent is not persisted before the post,
   'digest.requireRecord',
 ]);
 
@@ -83,7 +82,7 @@ export async function postDigest({ ctx, record: given, outcome, issue = null, pr
   const runId = record.runId ?? record.digestRunId ?? `issue-${n}-${String(record.token ?? '').slice(0, 12) || 'norecord'}`;
   const sentinel = runSentinel(runId);
   try {
-    if (!active('digest.postWithoutIntent') && ctx.records.load(n)) ctx.records.update(n, { digestPosted: false, digestRunId: runId });
+    if (ctx.records.load(n)) ctx.records.update(n, { digestPosted: false, digestRunId: runId });
     const loc = await locateLogIssue({ ctx });
     const body = ctx.redactor.redact(digestBody({ record, outcome, prUrl, quota }), { withheld: WITHHELD_BODY }).text;
     let posted;

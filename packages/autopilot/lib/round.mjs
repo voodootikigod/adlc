@@ -17,7 +17,7 @@ import { describeSecretHits } from './diffcheck.mjs';
 import { ticketFilename } from '@adlc/tickets';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['run.skipRevalidation', 'run.skipDiffCheckBeforePush', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
+registerSeams(['run.skipRevalidation', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
   'run.chargeAfterDispatch',
   'run.staleEvidenceOnRetry',
   'run.refundAbandonedRound',
@@ -269,10 +269,8 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
 
   /** §6.8 — verify → push → verify → PR upsert. */
   async function pushAndOpen({ attested, review }) {
-    if (!active('run.skipDiffCheckBeforePush')) {
-      const again = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: record(), baseOid: ctx.baseOid, head: attested.attestedHead, scope: ticket.scope, ticketId });
-      if (!again.ok) return terminal(await mismatch(`actual-diff check failed before push: ${again.code}`));
-    }
+    const again = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: record(), baseOid: ctx.baseOid, head: attested.attestedHead, scope: ticket.scope, ticketId });
+    if (!again.ok) return terminal(await mismatch(`actual-diff check failed before push: ${again.code}`));
     const pushed = await deps.push.verifyPushVerify({ ctx, issue: n, record: record(), attestedHead: attested.attestedHead });
     if (!pushed.ok) {
       if (pushed.transient) return terminal(failed('push-failed', pushed.detail));         // recovery retries from the push intent

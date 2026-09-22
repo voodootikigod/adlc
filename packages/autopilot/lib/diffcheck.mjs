@@ -33,7 +33,6 @@ registerSeams([
   'diffcheck.skipForeignLineCheck',   // an added manifest line outside the run's set passes
   'diffcheck.skipManifestVerify',     // `gate-manifest verify` is not spawned / its exit ignored
   'diffcheck.skipSecretScan',         // (iv) is not run
-  'diffcheck.ignoreSymlinks',         // (iii) is not run
   'diffcheck.skipTicketSnapshot',     // the shard is accepted without the snapshot hash check
   'diffcheck.skipCriteriaHash',       // the criteria document is accepted without its hash check
   'diffcheck.skipDenylist',           // (ii) is not run
@@ -163,7 +162,6 @@ async function verifyManifest({ ctx, cwd, violations }) {
 }
 
 async function checkSymlinks({ ctx, cwd, head, scope, changed, violations }) {
-  if (active('diffcheck.ignoreSymlinks')) return;
   const tree = await gitOut(ctx, cwd, ['ls-tree', '-r', '-z', head]);
   const links = new Map();
   for (const rec of tree.split('\0')) {

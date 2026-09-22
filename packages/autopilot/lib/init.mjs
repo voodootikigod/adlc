@@ -15,9 +15,6 @@ import { join, dirname } from 'node:path';
 import { EXCLUDE_ENTRIES } from './paths.mjs';
 import { writeNetGit } from './git-env.mjs';
 import { renderUnit, defaultUnitPath, installInstructions, ServiceError } from './service.mjs';
-import { registerSeams, active } from './mutations.mjs';
-
-registerSeams(['init.writeOutsideRepo']);
 
 /** The `.git/info/exclude` entries, appended once (idempotent). Returns { added: [] }. */
 export function ensureExcludeEntries(repoRoot, { write }) {
@@ -94,7 +91,7 @@ export async function initCommand({ ctx, labels = false, service = false, write 
     lines.push(unit, installInstructions({ unitPath }));
     if (write) {
       // The ONE write outside REPO_ROOT, and only because --service --write asked for it.
-      if (!active('init.writeOutsideRepo') && !unitPath.startsWith(ctx.env.home + '/')) throw new Error(`refusing to write the unit outside HOME: ${unitPath}`);
+      if (!unitPath.startsWith(ctx.env.home + '/')) throw new Error(`refusing to write the unit outside HOME: ${unitPath}`);
       mkdirSync(dirname(unitPath), { recursive: true });
       writeFileSync(unitPath, unit, { mode: 0o644 });
       out.wrote.push(unitPath);

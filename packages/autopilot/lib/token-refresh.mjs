@@ -14,9 +14,6 @@ import { tokenMargin } from './preflight-b.mjs';
 import { preStrikeEnv } from './fleet-args.mjs';
 import { DEADLINES } from './spawn.mjs';
 import { validateModel } from './input.mjs';
-import { registerSeams, active } from './mutations.mjs';
-
-registerSeams(['tokenRefresh.keepKey', 'tokenRefresh.skipRecheck']);
 
 export const REFRESH_STDIN = 'ok\n';
 export const REFRESH_STDOUT_CAP = 64 * 1024;
@@ -59,12 +56,9 @@ export async function tokenRefresh({ ctx, quota, wallClockMs = (ctx.config?.auto
   const cwd = join(ctx.paths.runsDir, `token-refresh-${ctx.iterationId}`);
   mkdirSync(cwd, { recursive: true, mode: 0o700 });
   const env = { ...preStrikeEnv({ ctx }), HOME: ctx.env.home };
-  // Mutation seam `tokenRefresh.keepKey`: the manifest key rides into the refresh call.
-  if (active('tokenRefresh.keepKey') && ctx.key) env.ADLC_MANIFEST_KEY = ctx.key;
   const res = await ctx.spawn({ argv: refreshArgv({ ctx }), cwd, env, stdinBytes: REFRESH_STDIN, deadlineMs: DEADLINES.claude, stdoutCap: REFRESH_STDOUT_CAP, label: 'claude token-refresh' });
   try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best effort */ }
   try { await quota.reconcile?.('token-refresh', sample); } catch (e) { ctx.log(`token-refresh reconcile failed: ${e.message}`); }
-  if (active('tokenRefresh.skipRecheck')) return { ok: true, spawned: true, reason: 'unchecked', minutesLeft: before.minutesLeft, status: res.status };
   const after = tokenMarginFor({ ctx, wallClockMs });
   if (after.tokenShort) return { ok: false, spawned: true, reason: after.reason ?? 'token-expiring', minutesLeft: after.minutesLeft, status: res.status };
   return { ok: true, spawned: true, reason: 'refreshed', minutesLeft: after.minutesLeft, status: res.status };

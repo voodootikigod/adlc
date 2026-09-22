@@ -11,7 +11,7 @@ import { DEADLINES, withRetry } from './spawn.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
-registerSeams(['github.dropHostBinding', 'github.paginateAll', 'github.ignoreTruncation',
+registerSeams(['github.dropHostBinding', 'github.paginateAll',
   'github.firstEditsPageOnly',
   'github.retryComments',
   'github.firstPrPageOnly',
@@ -90,8 +90,7 @@ export async function listOpenIssues(ghc, { perPage = PER_PAGE, maxPages = MAX_P
   }
   for (let page = 1; page <= maxPages; page++) {
     const res = await ghc.run(['api', `repos/${ghc.repo}/issues?state=open&per_page=${perPage}&page=${page}`], { stdoutCap: PAGE_CAP_BYTES });
-    // Mutation seam `github.ignoreTruncation`: a truncated page is parsed as if complete.
-    if (res.status !== 0 || (res.truncated && !active('github.ignoreTruncation'))) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: res.truncated ? 'page exceeded 4 MiB' : `gh exited ${res.status}` };
+    if (res.status !== 0 || res.truncated) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: res.truncated ? 'page exceeded 4 MiB' : `gh exited ${res.status}` };
     let arr;
     try { arr = JSON.parse(res.stdout); } catch { return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: 'page is not JSON' }; }
     if (!Array.isArray(arr)) return { ok: false, reason: 'candidate-set-truncated', pagesReached: page - 1, detail: 'page is not an array' };
@@ -206,7 +205,7 @@ export async function hasComment(ghc, n, sentinel, { perPage = PER_PAGE, maxPage
     if (!Array.isArray(comments)) throw new GhError('gh-bad-json', 'comments page is not an array');
     if (comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return true;
     if (comments.length < perPage || active('github.paginateAll')) return false;
-    if (page === maxPages && !active('github.ignoreTruncation')) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
+    if (page === maxPages) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
   }
   return false;
 }
@@ -220,8 +219,7 @@ export async function ensureComment(ghc, n, sentinel, body, { perPage = PER_PAGE
     if (comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return { posted: false };
     // Mutation seam `github.paginateAll`: only the first page is searched (the duplicate-comment defect).
     if (comments.length < perPage || active('github.paginateAll')) break;
-    // Mutation seam `github.ignoreTruncation`: an exhausted page budget is treated as "not found".
-    if (page === maxPages && !active('github.ignoreTruncation')) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
+    if (page === maxPages) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
   }
   // The POST itself is NOT retried (codex r5 A3): a failure after the comment landed would post it
   // twice; the next iteration's sentinel search is the idempotent retry. Seam `github.retryComments`.

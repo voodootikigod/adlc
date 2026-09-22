@@ -19,7 +19,6 @@ registerSeams([
   'ci.skippedIsPass',         // a skipped `test (N)` counts as pass
   'ci.shareBudgets',          // the CI fix round draws from roundsUsed / the shared wall-clock budget
   'ci.missingBucketIsPass',   // a row without a string bucket counts as pass
-  'ci.redWaitsForPending',    // a red does not start the fix round while other jobs are pending
 ]);
 
 export const BLOCKING_PREFIXES = Object.freeze(['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (']);
@@ -141,7 +140,7 @@ export async function watchCi({ ctx, record, attestedHead, budgetMs, poll = POLL
     const rows = await pollChecks(ctx, pr);
     const expired = ctx.now() >= deadline;
     const norm = rows ? normalizeChecks(rows, { clockExpired: expired }) : { verdict: 'wait', red: [], waiting: ['<poll failed>'], missing: [] };
-    if (norm.verdict === 'red' && !(active('ci.redWaitsForPending') && norm.waiting.length)) {
+    if (norm.verdict === 'red') {
       const used = cur.ciRoundsUsed ?? 0;
       if (used >= fixLimit) {
         return { outcome: 'ci-red', red: norm.red, label: 'adlc:autopilot-ci-red', comment: `CI red after ${used} fix round(s): ${norm.red.join(', ')}` };

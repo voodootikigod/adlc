@@ -19,7 +19,6 @@ import { DEADLINES } from './spawn.mjs';
 import { LABELS } from './labels.mjs';
 
 registerSeams([
-  'retire.forceRemove',                 // the dirty-tree check is skipped and the worktree removal is forced
   'retire.skipTipCheck',                // the ref delete is unconditional (no expected OID) and (e) is not re-checked
   'retire.skipMarkerCheck',             // (b) is skipped: the record token is trusted without the marker
   'retire.noDetach',                    // L2 does not detach the quarantined worktree before L3
@@ -150,7 +149,7 @@ export async function stepL({ ctx, record, expectedHead = null, requireAncestry 
       st = await runGit(ctx, wt, ['status', '--porcelain']);
       if (!st.ok) return orphan('status-failed');
     }
-    if (st.out && !active('retire.forceRemove')) return orphan('dirty');                          // (e) clean tree
+    if (st.out) return orphan('dirty');                          // (e) clean tree
     // L1
     const wtHead = await runGit(ctx, wt, ['rev-parse', 'HEAD']);
     const sym = await runGit(ctx, wt, ['symbolic-ref', 'HEAD']);
@@ -176,7 +175,6 @@ export async function stepL({ ctx, record, expectedHead = null, requireAncestry 
     const s = await runGit(ctx, retiring, ['symbolic-ref', '-q', 'HEAD']);
     if (!h.ok || h.out !== head || s.ok) return orphan('quarantined-worktree-moved', { quarantined: retiring, expected: head, observed: h.out });
     const rmArgs = ['worktree', 'remove', retiring];
-    if (active('retire.forceRemove')) rmArgs.push('--force');
     const rm = await runGit(ctx, ctx.repoRoot, rmArgs);
     if (!rm.ok) { quarantined.push(retiring); statusAppend(ctx, 'quarantined', { issue, path: retiring, detail: rm.err.slice(0, 200) }); }
   }

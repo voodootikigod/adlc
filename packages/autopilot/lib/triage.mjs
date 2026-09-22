@@ -31,7 +31,6 @@ registerSeams([
   'triage.promptInArgv',      // the prompt travels as a positional argv element, not stdin
   'triage.fetchComments',     // `gh issue view` also requests comments and they join the model input
   'triage.shapeTrustedBlock', // a trusted block WITH criteria still triggers the shaping call
-  'triage.noStdoutCap',       // the shaping spawn has no 64 KiB stdout cap,
   'triage.trustShapedText',
   'triage.dryRunChargesAttempts',
   'triage.deterministicFence',
@@ -88,11 +87,11 @@ async function shapingCall({ ctx, n, url, title, body, bodyOnly, store, preModel
   const cwd = join(ctx.paths.runDir(n), 'shaping');
   mkdirSync(cwd, { recursive: true });
   const argv = [ctx.pinned.claude, ...shapingArgv(validateModel(ctx.local.model))];
-  // Mutation seams `triage.promptInArgv` / `triage.noStdoutCap`.
+  // Mutation seam `triage.promptInArgv`.
   const inArgv = active('triage.promptInArgv');
   const req = { argv: inArgv ? [...argv, prompt] : argv, cwd, env: childEnv(ctx.env.base), deadlineMs: DEADLINES.claude, label: 'claude shaping' };
   if (!inArgv) req.stdinBytes = prompt;
-  if (!active('triage.noStdoutCap')) req.stdoutCap = SHAPING_STDOUT_CAP;
+  req.stdoutCap = SHAPING_STDOUT_CAP;
   const res = await ctx.spawn(req);
   if (res.error || res.timedOut || res.truncated || res.status !== 0) {
     store.finishAttempt(n, attempt.id, 'failed');
