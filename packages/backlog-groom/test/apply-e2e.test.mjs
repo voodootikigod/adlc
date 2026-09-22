@@ -6,30 +6,15 @@
 // that a run which cannot review WRITES NOTHING. A fake `gh` on PATH records
 // every call, so "nothing was written" is an assertion rather than a hope.
 
-import { test, after } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readdirSync, rmSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, rmSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { tmp } from '@adlc/core/test-kit';
 import { contentHash } from '../lib/content-hash.mjs';
-
-/**
- * Every sandbox this file creates, removed when the file finishes.
- *
- * `mkdtempSync` with no cleanup leaks a git repository per test, per run. That
- * is invisible until the filesystem runs out of INODES — which reports as "no
- * space left on device" while df still shows most of the disk free.
- */
-const SANDBOXES = [];
-const registerSandbox = (dir) => { SANDBOXES.push(dir); return dir; };
-after(() => {
-  for (const dir of SANDBOXES) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
-  }
-});
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'backlog-groom.mjs');
 
@@ -49,8 +34,8 @@ const LEDGER_KEY = 'e2e-ledger-key-0123456789abcdef';
  * the `gh` shim appends every invocation to a log, so a test can assert on
  * writes that did NOT happen.
  */
-function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels = ['bug'] } = {}) {
-  const dir = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-apply-')));
+function sandbox(t, { reviewExit = 0, profile = null, ghFails = false, issueLabels = ['bug'] } = {}) {
+  const dir = tmp(t, 'groom-apply-');
   const bin = join(dir, 'fakebin');
   mkdirSync(bin);
   const log = join(dir, 'gh.log');
@@ -60,7 +45,7 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
   // runner — creates and removes the same prefix mid-count. A SIBLING of the
   // repo rather than inside it, so the artifacts never dirty the work tree the
   // tool reads from.
-  const tmp = registerSandbox(mkdtempSync(join(tmpdir(), 'groom-apply-tmp-')));
+  const tmpDir = tmp(t, 'groom-apply-tmp-');
 
   // The issue the set will act on, cited against a file that really exists in
   // this repo — the write path re-derives the contentHash from it, so a stub
@@ -168,7 +153,7 @@ function sandbox({ reviewExit = 0, profile = null, ghFails = false, issueLabels 
     readFile: (f) => spawnSync('git', ['show', `${head}:${f}`], { cwd: dir, encoding: 'utf8' }).stdout,
   });
 
-  return { dir, bin, log, tmp, head, hash };
+  return { dir, bin, log, tmp: tmpDir, head, hash };
 }
 
 function run(args, { dir, bin, tmp }, { env = {} } = {}) {
@@ -219,25 +204,25 @@ function setFile(box, { hash = box.hash } = {}) {
   return p;
 }
 
-test('--apply without --set is refused before anything is spawned', () => {
-  const box = sandbox();
+test('--apply without --set is refused before anything is spawned', (t) => {
+  const box = sandbox(t);
   const r = run(['--apply'], box);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /--set/);
   assert.deepEqual(ghCalls(box), [], 'nothing may be invoked before the arguments are valid');
 });
 
-test('--apply with an unreadable set exits 1 and writes nothing', () => {
-  const box = sandbox();
+test('--apply with an unreadable set exits 1 and writes nothing', (t) => {
+  const box = sandbox(t);
   const r = run(['--apply', '--set', join(box.dir, 'missing.json')], box);
   assert.equal(r.status, 1);
   assert.deepEqual(ghCalls(box), []);
 });
 
-test('with no declared providers the reviewer is never spawned and nothing is written', () => {
+test('with no declared providers the reviewer is never spawned and nothing is written', (t) => {
   // The default profile declares no providers, so the distinct-reviewer rule is
   // unsatisfiable and every action demotes. The run must still succeed.
-  const box = sandbox();
+  const box = sandbox(t);
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
@@ -253,10 +238,10 @@ test('with no declared providers the reviewer is never spawned and nothing is wr
   assert.equal(out.proposed, 1, 'the run still reports what it would have done');
 });
 
-test('a floored close is never written, even with an approving reviewer', () => {
+test('a floored close is never written, even with an approving reviewer', (t) => {
   // The default floor is ["close"], so this is the shipped-default behaviour: a
   // fresh adopter gets proposals, not closures.
-  const box = sandbox({ reviewExit: 0, profile: { schemaVersion: 1, providers: { decider: 'anthropic', reviewer: 'openai' } } });
+  const box = sandbox(t, { reviewExit: 0, profile: { schemaVersion: 1, providers: { decider: 'anthropic', reviewer: 'openai' } } });
   const set = setFile(box);
   const r = run(['--apply', '--set', set], box);
   assert.equal(r.status, 0, r.stderr);
@@ -265,8 +250,8 @@ test('a floored close is never written, even with an approving reviewer', () => 
   assert.equal(out.demoted[0].reason, 'floor');
 });
 
-test('an approved, unfloored close comments first and then closes', () => {
-  const box = sandbox({
+test('an approved, unfloored close comments first and then closes', (t) => {
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -285,8 +270,8 @@ test('an approved, unfloored close comments first and then closes', () => {
   assert.ok(commentAt < closeAt, 'the evidence must reach the issue before it goes quiet');
 });
 
-test('a reviewer that refuses blocks the close entirely', () => {
-  const box = sandbox({
+test('a reviewer that refuses blocks the close entirely', (t) => {
+  const box = sandbox(t, {
     reviewExit: 2,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -296,8 +281,8 @@ test('a reviewer that refuses blocks the close entirely', () => {
   assert.deepEqual(ghWrites(box), [], 'a refused action leaves no trace');
 });
 
-test('a reviewer that ERRORS blocks the close — an error is not an approve', () => {
-  const box = sandbox({
+test('a reviewer that ERRORS blocks the close — an error is not an approve', (t) => {
+  const box = sandbox(t, {
     reviewExit: 1,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -307,8 +292,8 @@ test('a reviewer that ERRORS blocks the close — an error is not an approve', (
   assert.deepEqual(ghWrites(box), []);
 });
 
-test('the gate ledger persists, so a second run does not re-review the same revision', () => {
-  const box = sandbox({
+test('the gate ledger persists, so a second run does not re-review the same revision', (t) => {
+  const box = sandbox(t, {
     reviewExit: 2,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -322,10 +307,10 @@ test('the gate ledger persists, so a second run does not re-review the same revi
   assert.equal(afterSecond, 1, 'the same revision must not be reviewed twice across runs');
 });
 
-test('apply works in a repository that has no .adlc directory yet', () => {
+test('apply works in a repository that has no .adlc directory yet', (t) => {
   // The documented command must work on a repo that has not adopted ADLC; the
   // ledger's parent is created rather than assumed.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -335,12 +320,12 @@ test('apply works in a repository that has no .adlc directory yet', () => {
   assert.ok(existsSync(join(box.dir, '.adlc', 'backlog-groom-ledger.json')), 'the ledger must have been created');
 });
 
-test('an unwritable ledger FAILS the run rather than warning', () => {
+test('an unwritable ledger FAILS the run rather than warning', (t) => {
   // The cache warns and continues because a lost cache costs a slow run. The
   // ledger is the only record that a revision has spent its one review, so a
   // decision that cannot be persisted is authorization the next run will not
   // see — and continuing would act on it anyway.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 2,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -356,8 +341,8 @@ test('an unwritable ledger FAILS the run rather than warning', () => {
   assert.deepEqual(ghWrites(box), [], 'nothing may be written');
 });
 
-test('a corrupt ledger refuses the run instead of starting from empty', () => {
-  const box = sandbox({
+test('a corrupt ledger refuses the run instead of starting from empty', (t) => {
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -368,8 +353,8 @@ test('a corrupt ledger refuses the run instead of starting from empty', () => {
   assert.deepEqual(ghWrites(box), [], 'a ledger that cannot prove a revision was reviewed must stop the run');
 });
 
-test('a held apply lock refuses a concurrent run', () => {
-  const box = sandbox({
+test('a held apply lock refuses a concurrent run', (t) => {
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -381,10 +366,10 @@ test('a held apply lock refuses a concurrent run', () => {
   assert.deepEqual(ghWrites(box), []);
 });
 
-test('a set generated for a different revision is refused', () => {
+test('a set generated for a different revision is refused', (t) => {
   // Acting on a stale set closes issues on evidence that no longer describes the
   // code: the cited file may have changed, or the defect been reintroduced.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -404,8 +389,8 @@ test('a set generated for a different revision is refused', () => {
   assert.deepEqual(ghWrites(box), []);
 });
 
-test('an issue whose cited paths are frozen is never auto-actioned', () => {
-  const box = sandbox({
+test('an issue whose cited paths are frozen is never auto-actioned', (t) => {
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -424,23 +409,23 @@ test('an issue whose cited paths are frozen is never auto-actioned', () => {
   assert.deepEqual(ghWrites(box), [], 'a frozen path means no action at all, not even a review');
 });
 
-test('the apply path exposes no way to choose the floor comparison ref', () => {
+test('the apply path exposes no way to choose the floor comparison ref', (t) => {
   // A caller who picks the ref can pick HEAD, which makes the merge base the
   // working copy: a floor widened to [] then compares equal to itself and is
   // accepted. The flag is gone, and an attempt to pass it is an argument error
   // rather than a silently ignored option.
-  const box = sandbox();
+  const box = sandbox(t);
   const set = setFile(box);
   const r = run(['--apply', '--set', set, '--base-ref', 'HEAD'], box);
   assert.equal(r.status, 1);
   assert.deepEqual(ghCalls(box), [], 'nothing may be written on an argument error');
 });
 
-test('each action is reviewed with its OWN artifact, not the whole set', () => {
+test('each action is reviewed with its OWN artifact, not the whole set', (t) => {
   // A reviewer handed the whole set returns one verdict for the batch, and
   // treating that as authorization for each action means an approve never
   // confirmed the specific write being executed.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 2,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -466,12 +451,12 @@ test('each action is reviewed with its OWN artifact, not the whole set', () => {
   assert.ok(paths.every((x) => x && !x.endsWith('groomed.json')));
 });
 
-test('a set whose claimed verdict does not survive re-verification is refused', () => {
+test('a set whose claimed verdict does not survive re-verification is refused', (t) => {
   // The fixture issue's cited snippet is genuinely absent, so it re-verifies as
   // `fixed`. Claiming `fixed` for an issue whose defect is still present must
   // not close it — matching bytes prove the set describes the right thing and
   // say nothing about whether its conclusion is right.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -492,11 +477,11 @@ test('a set whose claimed verdict does not survive re-verification is refused', 
   assert.match(r.stdout, /changed since the set was generated/);
 });
 
-test('an apply run leaves no artifact directory behind', () => {
+test('an apply run leaves no artifact directory behind', (t) => {
   // The leak that exhausted every inode on /tmp while df reported 41% used. A
   // scheduled sweep runs this repeatedly, so "cleans up eventually" is not a
   // property — it either removes its scratch or it accumulates forever.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -508,13 +493,13 @@ test('an apply run leaves no artifact directory behind', () => {
   assert.deepEqual(artifactDirs(box), []);
 });
 
-test('--profile is refused on --apply, so the caller cannot choose the baseline policy is compared against', () => {
+test('--profile is refused on --apply, so the caller cannot choose the baseline policy is compared against', (t) => {
   // The base profile is read from git at the SAME path as the working one. A
   // path the caller picks is a path absent at the merge base, whose baseline is
   // the permissive default — so frozenPaths the committed profile declares no
   // longer bind, and a relabel on a frozen issue goes through.
   const providers = { decider: 'anthropic', reviewer: 'openai' };
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     issueLabels: ['P3-low'],
     profile: { schemaVersion: 1, autonomyFloor: ['close'], frozenPaths: ['src/**'], providers },
@@ -543,16 +528,16 @@ test('--profile is refused on --apply, so the caller cannot choose the baseline 
   assert.match(r.stderr, /--profile/);
 });
 
-test('the ledger path is fixed, so a caller cannot reset the one-shot rule', () => {
+test('the ledger path is fixed, so a caller cannot reset the one-shot rule', (t) => {
   // A caller-chosen ledger is a one-shot rule the caller can forget: point at a
   // fresh file and every spent review is available again.
-  const box = sandbox();
+  const box = sandbox(t);
   const r = run(['--apply', '--set', setFile(box), '--ledger', '/tmp/elsewhere.json'], box);
   assert.equal(r.status, 1, 'the flag must not exist');
   assert.deepEqual(ghWrites(box), []);
 });
 
-test('a failed apply still clears its artifact directory', () => {
+test('a failed apply still clears its artifact directory', (t) => {
   // The failure branch is the one that has been running long enough to have
   // written artifacts, and a scheduled sweep that fails repeatedly leaks fastest.
   //
@@ -563,7 +548,7 @@ test('a failed apply still clears its artifact directory', () => {
   // replaces the ledger file with a directory while it reviews, so the
   // checkpoint that follows every gate decision throws — after the artifact was
   // written and handed over, before any write to GitHub.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -581,11 +566,11 @@ test('a failed apply still clears its artifact directory', () => {
   assert.deepEqual(ghWrites(box), [], 'a run that cannot record its authorization writes nothing');
 });
 
-test('AC5: with no signing key, --apply writes nothing and says why', () => {
+test('AC5: with no signing key, --apply writes nothing and says why', (t) => {
   // Writes are a key-holder act (#1035). Without a key no verdict can be sealed,
   // so nothing can authorize a write — but the run is still useful: it reports
   // what it WOULD do, and exits 0, because proposing is the unattended half.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
@@ -602,11 +587,11 @@ test('AC5: with no signing key, --apply writes nothing and says why', () => {
   assert.deepEqual(ghCalls(box).filter((c) => c.startsWith('review')), []);
 });
 
-test('AC9: a read-only run never reaches the remote for a baseline', () => {
+test('AC9: a read-only run never reaches the remote for a baseline', (t) => {
   // The baseline lookup is an --apply concern. A plain groom run must stay as
   // offline as it was: it already reads issues through gh, but it must not gain
   // the remote round-trip the floor comparison needs.
-  const box = sandbox();
+  const box = sandbox(t);
   const r = run(['--json'], box);
   assert.equal(r.status, 0, r.stderr);
 
@@ -623,11 +608,11 @@ test('AC9: a read-only run never reaches the remote for a baseline', () => {
   assert.ok(!gitCalls.includes('ls-remote'), `the read path must not reach the remote: ${gitCalls}`);
 });
 
-test('no child process can read the signing key', () => {
+test('no child process can read the signing key', (t) => {
   // The key authorizes writes, so a child that can read it can mint approvals —
   // and both children here are programs the profile names, not code this tool
   // controls. Each fake records what it saw; every line must say `unset`.
-  const box = sandbox({
+  const box = sandbox(t, {
     reviewExit: 0,
     profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
   });
