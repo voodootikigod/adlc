@@ -13,10 +13,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 import { readActiveTicketPointer, resolveActiveTicketAgainst } from '../lib/pointer.mjs';
 import { writeActiveTicket } from '../lib/pointer-write.mjs';
@@ -43,18 +43,24 @@ const TICKET = { id: 'T1', title: 'Pointer fixture', rails: ['test/**'] };
 const OTHER = { id: 'T2', title: 'Other fixture' };
 
 /** Build a repo fixture; `build` receives the snapshot and returns the pointer value. */
-function fixture(build, { raw = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-pointer-'));
+function fixture(t, build, { raw = false, prefix = 'adlc-pointer-' } = {}) {
+  let buildFn = build;
+  let dirPrefix = prefix;
+  if (typeof build === 'string') {
+    dirPrefix = build;
+    buildFn = null;
+  }
+  const root = tmp(t, dirPrefix);
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc/tickets.json'), JSON.stringify({ tickets: [TICKET, OTHER] }));
   const snapshot = new LegacyTicketStore(join(root, '.adlc/tickets.json')).load();
-  if (build) {
-    const value = build(snapshot);
+  if (typeof buildFn === 'function') {
+    const value = buildFn(snapshot);
     if (value !== undefined) {
       writeFileSync(join(root, '.adlc/current-ticket.json'), raw ? value : JSON.stringify(value));
     }
   }
-  return { root, snapshot, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, snapshot };
 }
 
 const hashOf = (snapshot, id) => snapshot.ticketHashes[id];
@@ -253,28 +259,26 @@ function assertOutcome(result, expect, label) {
   }
 }
 
-function runVector(fn, vector, allowLegacyPointer = false) {
-  const f = fixture(vector.pointer, { raw: vector.raw });
-  try {
-    return fn(f.snapshot, { root: f.root, env: vector.env ?? {}, allowLegacyPointer });
-  } finally { f.cleanup(); }
+function runVector(t, fn, vector, allowLegacyPointer = false) {
+  const f = fixture(t, vector.pointer, { raw: vector.raw });
+  return fn(f.snapshot, { root: f.root, env: vector.env ?? {}, allowLegacyPointer });
 }
 
 // ---------------------------------------------------------------------------
 // AC2 -- reader agreement. The rail's core assertion.
 // ---------------------------------------------------------------------------
 
-test('reader agreement: every reader reaches the same decision on every vector', async () => {
+test('reader agreement: every reader reaches the same decision on every vector', async (t) => {
   const readers = await allReaders();
   assert.equal(readers.length, GENERATED_READERS.length + 1, 'a reader is missing from the agreement set');
   for (const vector of VECTORS) {
     for (const reader of readers) {
-      assertOutcome(runVector(reader.fn, vector), vector.expect, `${reader.name} :: ${vector.name}`);
+      assertOutcome(runVector(t, reader.fn, vector), vector.expect, `${reader.name} :: ${vector.name}`);
     }
   }
 });
 
-test('reader agreement: an uninitialized repo (no .adlc at all) is absent, not a deny, in every reader', async () => {
+test('reader agreement: an uninitialized repo (no .adlc at all) is absent, not a deny, in every reader', async (t) => {
   // Deliberately NOT a VECTOR: fixture() always creates `.adlc/`, so the table
   // cannot express a repo that has none. This pins the bounded reader's
   // PARENT-directory branch in every copy — a missing `.adlc` means the repo is
@@ -284,7 +288,7 @@ test('reader agreement: an uninitialized repo (no .adlc at all) is absent, not a
   // directory (a symlink), which does deny — see pointer-bounded.test.mjs.
   // Without this, the branch was covered only for the canonical module and
   // both its mutants survived in all eight generated copies.
-  const root = mkdtempSync(join(tmpdir(), 'adlc-pointer-uninit-'));
+  const root = tmp(t, 'adlc-pointer-uninit-');
   const readers = [{ name: 'packages/tickets/lib/pointer.mjs', fn: readActiveTicketPointer }];
   for (const relative of GENERATED_READERS) {
     const mod = await import(pathToFileURL(join(REPO, relative)).href);
@@ -298,12 +302,12 @@ test('reader agreement: an uninitialized repo (no .adlc at all) is absent, not a
   }
 });
 
-test('reader agreement: bridge vectors agree across every reader in both modes', async () => {
+test('reader agreement: bridge vectors agree across every reader in both modes', async (t) => {
   const readers = await allReaders();
   for (const vector of BRIDGE_VECTORS) {
     for (const reader of readers) {
-      assertOutcome(runVector(reader.fn, vector, false), vector.strict, `${reader.name} :: ${vector.name} (strict)`);
-      assertOutcome(runVector(reader.fn, vector, true), vector.bridged, `${reader.name} :: ${vector.name} (bridged)`);
+      assertOutcome(runVector(t, reader.fn, vector, false), vector.strict, `${reader.name} :: ${vector.name} (strict)`);
+      assertOutcome(runVector(t, reader.fn, vector, true), vector.bridged, `${reader.name} :: ${vector.name} (bridged)`);
     }
   }
 });
@@ -324,7 +328,7 @@ const CONFLICT_ADAPTERS = [
   { name: 'adlc-opencode', path: 'plugins/adlc-opencode/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
 ];
 
-test('reader agreement: every {id, conflict} adapter agrees on id and on fail-closed', async () => {
+test('reader agreement: every {id, conflict} adapter agrees on id and on fail-closed', async (t) => {
   const adapters = [];
   for (const adapter of CONFLICT_ADAPTERS) {
     const mod = await import(pathToFileURL(join(REPO, adapter.path)).href);
@@ -332,37 +336,35 @@ test('reader agreement: every {id, conflict} adapter agrees on id and on fail-cl
   }
   for (const vector of VECTORS) {
     for (const adapter of adapters) {
-      const f = fixture(vector.pointer, { raw: vector.raw });
-      try {
-        const got = adapter.call(adapter.fn, f.root, vector.env ?? {});
-        const label = `${adapter.name} :: ${vector.name}`;
-        if (SNAPSHOT_DEPENDENT.has(vector.expect.code)) {
-          assert.equal(got.conflict, false, label);
-          assert.ok(typeof got.id === 'string' && got.id.length > 0, `${label}: identity must still resolve, not vanish`);
-          continue;
-        }
-        if (vector.expect.outcome === 'deny') {
-          assert.equal(got.conflict, true, `${label}: expected fail-closed, got ${JSON.stringify(got)}`);
-          assert.equal(got.id, null, `${label}: a denied result must carry no id`);
-          // The WHY must survive the reduction to {id, conflict}. Without this, the
-          // canonical diagnosis was computed and dropped, and every harness told the
-          // operator "ADLC_TICKET conflicts with the pointer" — even with no
-          // ADLC_TICKET set and a typo'd key as the real cause.
-          assert.equal(got.code, vector.expect.code, `${label}: denial must carry the canonical code`);
-          assert.ok(got.message && got.message.length > 0, `${label}: denial must carry the canonical message`);
-        } else if (vector.expect.outcome === 'inert') {
-          assert.equal(got.id, null, label);
-          assert.equal(got.conflict, false, label);
-        } else {
-          assert.equal(got.conflict, false, `${label}: unexpected fail-closed`);
-          assert.equal(got.id, vector.expect.id, `${label}: wrong id`);
-        }
-      } finally { f.cleanup(); }
+      const f = fixture(t, vector.pointer, { raw: vector.raw });
+      const got = adapter.call(adapter.fn, f.root, vector.env ?? {});
+      const label = `${adapter.name} :: ${vector.name}`;
+      if (SNAPSHOT_DEPENDENT.has(vector.expect.code)) {
+        assert.equal(got.conflict, false, label);
+        assert.ok(typeof got.id === 'string' && got.id.length > 0, `${label}: identity must still resolve, not vanish`);
+        continue;
+      }
+      if (vector.expect.outcome === 'deny') {
+        assert.equal(got.conflict, true, `${label}: expected fail-closed, got ${JSON.stringify(got)}`);
+        assert.equal(got.id, null, `${label}: a denied result must carry no id`);
+        // The WHY must survive the reduction to {id, conflict}. Without this, the
+        // canonical diagnosis was computed and dropped, and every harness told the
+        // operator "ADLC_TICKET conflicts with the pointer" — even with no
+        // ADLC_TICKET set and a typo'd key as the real cause.
+        assert.equal(got.code, vector.expect.code, `${label}: denial must carry the canonical code`);
+        assert.ok(got.message && got.message.length > 0, `${label}: denial must carry the canonical message`);
+      } else if (vector.expect.outcome === 'inert') {
+        assert.equal(got.id, null, label);
+        assert.equal(got.conflict, false, label);
+      } else {
+        assert.equal(got.conflict, false, `${label}: unexpected fail-closed`);
+        assert.equal(got.id, vector.expect.id, `${label}: wrong id`);
+      }
     }
   }
 });
 
-test('reader agreement: the generated reader works with the GENERATED loader snapshot', async () => {
+test('reader agreement: the generated reader works with the GENERATED loader snapshot', async (t) => {
   // The vectors above hand the DOMAIN's snapshot to every reader, which proves the
   // readers agree but NOT that a harness can actually run one: a harness loads its
   // store through the generated read-only loader, whose snapshot is a different
@@ -374,22 +376,20 @@ test('reader agreement: the generated reader works with the GENERATED loader sna
   );
   for (const relative of GENERATED_READERS) {
     const mod = await import(pathToFileURL(join(REPO, relative)).href);
-    const f = fixture(null);
-    try {
-      const loaderSnapshot = loadTicketStoreReadOnly({ root: f.root, env: {} });
-      assert.equal(typeof loaderSnapshot.get, 'function', `${relative}: generated snapshot must implement get(id) (spec §8.1)`);
-      writeActiveTicket(f.root, { id: 'T1', ticketHash: loaderSnapshot.ticketHashes.T1 });
+    const f = fixture(t, null);
+    const loaderSnapshot = loadTicketStoreReadOnly({ root: f.root, env: {} });
+    assert.equal(typeof loaderSnapshot.get, 'function', `${relative}: generated snapshot must implement get(id) (spec §8.1)`);
+    writeActiveTicket(f.root, { id: 'T1', ticketHash: loaderSnapshot.ticketHashes.T1 });
 
-      const resolved = mod.resolveActiveTicketAgainst(loaderSnapshot, { root: f.root, env: {} });
-      assert.equal(resolved.ok, true, `${relative}: ${JSON.stringify(resolved)}`);
-      assert.equal(resolved.value.id, 'T1');
+    const resolved = mod.resolveActiveTicketAgainst(loaderSnapshot, { root: f.root, env: {} });
+    assert.equal(resolved.ok, true, `${relative}: ${JSON.stringify(resolved)}`);
+    assert.equal(resolved.value.id, 'T1');
 
-      // And the hole stays closed against a real harness snapshot.
-      writeFileSync(join(f.root, '.adlc/current-ticket.json'), JSON.stringify({ tickett: 'T1' }));
-      const denied = mod.resolveActiveTicketAgainst(loaderSnapshot, { root: f.root, env: {} });
-      assert.equal(denied.ok, false, `${relative}: unrecognized key must deny`);
-      assert.equal(denied.code, 'INVALID_CURRENT_TICKET');
-    } finally { f.cleanup(); }
+    // And the hole stays closed against a real harness snapshot.
+    writeFileSync(join(f.root, '.adlc/current-ticket.json'), JSON.stringify({ tickett: 'T1' }));
+    const denied = mod.resolveActiveTicketAgainst(loaderSnapshot, { root: f.root, env: {} });
+    assert.equal(denied.ok, false, `${relative}: unrecognized key must deny`);
+    assert.equal(denied.code, 'INVALID_CURRENT_TICKET');
   }
 });
 
@@ -397,29 +397,25 @@ test('reader agreement: the generated reader works with the GENERATED loader sna
 // AC3 -- the live bug that motivated this contract.
 // ---------------------------------------------------------------------------
 
-test('live pointer regression: the repo pointer shape that silently disabled enforcement', () => {
+test('live pointer regression: the repo pointer shape that silently disabled enforcement', (t) => {
   // The exact shape found in this repo's own .adlc/current-ticket.json. Seven of
   // nine readers -- including the canonical one -- answered {id:null} => allow.
-  const f = fixture((s) => ({ ticketId: 'T1', ticketHash: hashOf(s, 'T1') }));
-  try {
-    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
-    assert.equal(result.ok, true);
-    assert.equal(result.value.id, 'T1', 'the live pointer must resolve, not vanish');
-    assert.equal(result.value.deprecatedAlias, 'ticketId');
-  } finally { f.cleanup(); }
+  const f = fixture(t, (s) => ({ ticketId: 'T1', ticketHash: hashOf(s, 'T1') }));
+  const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.id, 'T1', 'the live pointer must resolve, not vanish');
+  assert.equal(result.value.deprecatedAlias, 'ticketId');
 });
 
-test('live pointer regression: no object pointer ever resolves to a silent allow', () => {
+test('live pointer regression: no object pointer ever resolves to a silent allow', (t) => {
   // The invariant, stated directly: if the file exists and parses to an object,
   // the outcome is resolve or deny -- never inert. Inert requires no file.
   const shapes = [{ tickett: 'T1' }, { ticketID: 'T1' }, { Id: 'T1' }, { id: '' }, {}, { ticketHash: 'x' }];
   for (const shape of shapes) {
-    const f = fixture(() => shape);
-    try {
-      const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
-      const inert = result.ok && result.value === null;
-      assert.equal(inert, false, `pointer ${JSON.stringify(shape)} resolved to a silent allow`);
-    } finally { f.cleanup(); }
+    const f = fixture(t, () => shape);
+    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
+    const inert = result.ok && result.value === null;
+    assert.equal(inert, false, `pointer ${JSON.stringify(shape)} resolved to a silent allow`);
   }
 });
 
@@ -427,75 +423,65 @@ test('live pointer regression: no object pointer ever resolves to a silent allow
 // AC4 -- hash strictness.
 // ---------------------------------------------------------------------------
 
-test('hash: a present ticketHash is verified in every mode, bridge or not', () => {
+test('hash: a present ticketHash is verified in every mode, bridge or not', (t) => {
   for (const allowLegacyPointer of [false, true]) {
-    const f = fixture(() => ({ id: 'T1', ticketHash: 'f'.repeat(64) }));
-    try {
-      const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer });
-      assert.equal(result.ok, false, `bridge=${allowLegacyPointer} must not skip a present hash`);
-      assert.equal(result.code, 'ACTIVE_TICKET_STALE');
-    } finally { f.cleanup(); }
+    const f = fixture(t, () => ({ id: 'T1', ticketHash: 'f'.repeat(64) }));
+    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer });
+    assert.equal(result.ok, false, `bridge=${allowLegacyPointer} must not skip a present hash`);
+    assert.equal(result.code, 'ACTIVE_TICKET_STALE');
   }
 });
 
-test('hash: a missing hash denies under strict and warns under the 1.x bridge', () => {
-  const f = fixture(() => ({ id: 'T1' }));
-  try {
-    const strict = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer: false });
-    assert.equal(strict.ok, false);
-    assert.equal(strict.code, 'ACTIVE_TICKET_HASH_MISSING');
+test('hash: a missing hash denies under strict and warns under the 1.x bridge', (t) => {
+  const f = fixture(t, () => ({ id: 'T1' }));
+  const strict = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer: false });
+  assert.equal(strict.ok, false);
+  assert.equal(strict.code, 'ACTIVE_TICKET_HASH_MISSING');
 
-    const bridged = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer: true });
-    assert.equal(bridged.ok, true);
-    assert.equal(bridged.value.id, 'T1');
-    assert.ok(bridged.value.warnings.some((w) => /ticketHash/.test(w)), 'the bridge must warn about the missing hash');
-  } finally { f.cleanup(); }
+  const bridged = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {}, allowLegacyPointer: true });
+  assert.equal(bridged.ok, true);
+  assert.equal(bridged.value.id, 'T1');
+  assert.ok(bridged.value.warnings.some((w) => /ticketHash/.test(w)), 'the bridge must warn about the missing hash');
 });
 
-test('hash: env-only resolution has no pointer hash to verify', () => {
-  const f = fixture(null);
-  try {
-    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: { ADLC_TICKET: 'T1' } });
-    assert.equal(result.ok, true);
-    assert.equal(result.value.id, 'T1');
-  } finally { f.cleanup(); }
+test('hash: env-only resolution has no pointer hash to verify', (t) => {
+  const f = fixture(t, null);
+  const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: { ADLC_TICKET: 'T1' } });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.id, 'T1');
 });
 
 // ---------------------------------------------------------------------------
 // AC7 -- the conflict error names the model.
 // ---------------------------------------------------------------------------
 
-test('conflict message names the per-worktree model and the remedy', () => {
-  const f = fixture((s) => ({ id: 'T2', ticketHash: hashOf(s, 'T2') }));
-  try {
-    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: { ADLC_TICKET: 'T1' } });
-    assert.equal(result.ok, false);
-    assert.equal(result.code, 'ACTIVE_TICKET_CONFLICT');
-    assert.match(result.message, /worktree/i, 'the conflict must name the per-worktree model');
-    assert.match(result.message, /git worktree add/, 'the conflict must name the remedy');
-    assert.match(result.message, /T1/);
-    assert.match(result.message, /T2/);
-  } finally { f.cleanup(); }
+test('conflict message names the per-worktree model and the remedy', (t) => {
+  const f = fixture(t, (s) => ({ id: 'T2', ticketHash: hashOf(s, 'T2') }));
+  const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: { ADLC_TICKET: 'T1' } });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ACTIVE_TICKET_CONFLICT');
+  assert.match(result.message, /worktree/i, 'the conflict must name the per-worktree model');
+  assert.match(result.message, /git worktree add/, 'the conflict must name the remedy');
+  assert.match(result.message, /T1/);
+  assert.match(result.message, /T2/);
 });
 
 // ---------------------------------------------------------------------------
 // AC6 -- atomic writes.
 // ---------------------------------------------------------------------------
 
-test('atomic: writeActiveTicket emits exactly the canonical shape', () => {
-  const f = fixture(null);
-  try {
-    writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
-    const written = JSON.parse(readFileSync(join(f.root, '.adlc/current-ticket.json'), 'utf8'));
-    assert.deepEqual(Object.keys(written).sort(), ['id', 'ticketHash']);
-    assert.equal(written.id, 'T1');
-    const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
-    assert.equal(result.ok, true, 'a pointer we wrote must satisfy our own STRICT reader');
-    assert.equal(result.value.deprecatedAlias, undefined, 'we must never write a deprecated alias');
-  } finally { f.cleanup(); }
+test('atomic: writeActiveTicket emits exactly the canonical shape', (t) => {
+  const f = fixture(t, null);
+  writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
+  const written = JSON.parse(readFileSync(join(f.root, '.adlc/current-ticket.json'), 'utf8'));
+  assert.deepEqual(Object.keys(written).sort(), ['id', 'ticketHash']);
+  assert.equal(written.id, 'T1');
+  const result = resolveActiveTicketAgainst(f.snapshot, { root: f.root, env: {} });
+  assert.equal(result.ok, true, 'a pointer we wrote must satisfy our own STRICT reader');
+  assert.equal(result.value.deprecatedAlias, undefined, 'we must never write a deprecated alias');
 });
 
-test('atomic: the pointer is replaced by rename, never written in place', () => {
+test('atomic: the pointer is replaced by rename, never written in place', (t) => {
   // Atomicity here is NOT observable by racing, and pretending otherwise produces
   // a hollow test. Two earlier versions of this test proved that:
   //   1. A sequential write-then-read never interleaves, so it passed against a
@@ -517,98 +503,82 @@ test('atomic: the pointer is replaced by rename, never written in place', () => 
   // Recycling is occasional, never reliable, so on win32 we retry the swap until
   // one fresh index is observed (bounded), which a plain writeFileSync can never
   // satisfy (it reuses the index every time, on every platform).
-  const f = fixture(null);
-  try {
-    const path = join(f.root, '.adlc/current-ticket.json');
-    writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
-    const first = statSync(path).ino;
+  const f = fixture(t, null);
+  const path = join(f.root, '.adlc/current-ticket.json');
+  writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
+  const first = statSync(path).ino;
 
-    const WIN32_SWAP_ATTEMPTS = 10;
-    let fresh = false;
-    for (let attempt = 0; attempt < (process.platform === 'win32' ? WIN32_SWAP_ATTEMPTS : 1); attempt++) {
-      writeActiveTicket(f.root, { id: 'T2', ticketHash: hashOf(f.snapshot, 'T2') });
-      if (statSync(path).ino !== first) { fresh = true; break; }
-    }
-
-    assert.ok(
-      fresh,
-      'writeActiveTicket must rename a fresh file into place (new inode). Reusing the inode means it truncated and rewrote the live pointer, exposing a window where a concurrently-reading gate sees an empty trust root.' +
-        (process.platform === 'win32' ? ` (checked over ${WIN32_SWAP_ATTEMPTS} swaps; NTFS index recycling makes a single comparison flaky)` : ''),
-    );
-    assert.equal(JSON.parse(readFileSync(path, 'utf8')).id, 'T2');
-  } finally { f.cleanup(); }
-});
-
-test('atomic: the writer leaves no temp file behind', () => {
-  const f = fixture(null);
-  try {
-    writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
+  const WIN32_SWAP_ATTEMPTS = 10;
+  let fresh = false;
+  for (let attempt = 0; attempt < (process.platform === 'win32' ? WIN32_SWAP_ATTEMPTS : 1); attempt++) {
     writeActiveTicket(f.root, { id: 'T2', ticketHash: hashOf(f.snapshot, 'T2') });
-    const entries = readdirSync(join(f.root, '.adlc'));
-    assert.deepEqual(entries.filter((e) => e.startsWith('current-ticket')), ['current-ticket.json']);
-  } finally { f.cleanup(); }
+    if (statSync(path).ino !== first) { fresh = true; break; }
+  }
+
+  assert.ok(
+    fresh,
+    'writeActiveTicket must rename a fresh file into place (new inode). Reusing the inode means it truncated and rewrote the live pointer, exposing a window where a concurrently-reading gate sees an empty trust root.' +
+      (process.platform === 'win32' ? ` (checked over ${WIN32_SWAP_ATTEMPTS} swaps; NTFS index recycling makes a single comparison flaky)` : ''),
+  );
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).id, 'T2');
 });
 
-test('atomic: the writer refuses a pointer that would not satisfy the reader', () => {
-  const f = fixture(null);
-  try {
-    assert.throws(() => writeActiveTicket(f.root, { id: '', ticketHash: 'x' }), /id/i);
-    assert.throws(() => writeActiveTicket(f.root, { id: 'T1' }), /ticketHash/i);
-  } finally { f.cleanup(); }
+test('atomic: the writer leaves no temp file behind', (t) => {
+  const f = fixture(t, null);
+  writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
+  writeActiveTicket(f.root, { id: 'T2', ticketHash: hashOf(f.snapshot, 'T2') });
+  const entries = readdirSync(join(f.root, '.adlc'));
+  assert.deepEqual(entries.filter((e) => e.startsWith('current-ticket')), ['current-ticket.json']);
+});
+
+test('atomic: the writer refuses a pointer that would not satisfy the reader', (t) => {
+  const f = fixture(t, null);
+  assert.throws(() => writeActiveTicket(f.root, { id: '', ticketHash: 'x' }), /id/i);
+  assert.throws(() => writeActiveTicket(f.root, { id: 'T1' }), /ticketHash/i);
 });
 
 // ---------------------------------------------------------------------------
 // The domain API keeps its throwing contract.
 // ---------------------------------------------------------------------------
 
-test('provenance.resolveActiveTicket throws TicketStoreError codes and closes the hole', () => {
-  const f = fixture(() => ({ tickett: 'T1' }));
-  try {
-    assert.throws(
-      () => resolveActiveTicket(f.snapshot, { root: f.root, env: {} }),
-      (e) => e.kind === 'invalid' && e.code === 'INVALID_CURRENT_TICKET',
-      'the fail-open hole must be closed on the throwing domain API too',
-    );
-  } finally { f.cleanup(); }
+test('provenance.resolveActiveTicket throws TicketStoreError codes and closes the hole', (t) => {
+  const f = fixture(t, () => ({ tickett: 'T1' }));
+  assert.throws(
+    () => resolveActiveTicket(f.snapshot, { root: f.root, env: {} }),
+    (e) => e.kind === 'invalid' && e.code === 'INVALID_CURRENT_TICKET',
+    'the fail-open hole must be closed on the throwing domain API too',
+  );
 });
 
-test('provenance.resolveActiveTicket still returns null when inert', () => {
-  const f = fixture(null);
-  try {
-    assert.equal(resolveActiveTicket(f.snapshot, { root: f.root, env: {} }), null);
-  } finally { f.cleanup(); }
+test('provenance.resolveActiveTicket still returns null when inert', (t) => {
+  const f = fixture(t, null);
+  assert.equal(resolveActiveTicket(f.snapshot, { root: f.root, env: {} }), null);
 });
 
-test('provenance.resolveActiveTicket still resolves and pins both hashes', () => {
-  const f = fixture(null);
-  try {
-    writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
-    const active = resolveActiveTicket(f.snapshot, { root: f.root, env: {} });
-    assert.equal(active.id, 'T1');
-    assert.equal(active.ticketHash, hashOf(f.snapshot, 'T1'));
-    assert.equal(active.storeHash, f.snapshot.hash);
-  } finally { f.cleanup(); }
+test('provenance.resolveActiveTicket still resolves and pins both hashes', (t) => {
+  const f = fixture(t, null);
+  writeActiveTicket(f.root, { id: 'T1', ticketHash: hashOf(f.snapshot, 'T1') });
+  const active = resolveActiveTicket(f.snapshot, { root: f.root, env: {} });
+  assert.equal(active.id, 'T1');
+  assert.equal(active.ticketHash, hashOf(f.snapshot, 'T1'));
+  assert.equal(active.storeHash, f.snapshot.hash);
 });
 
 // ---------------------------------------------------------------------------
 // readActiveTicketPointer -- the parse layer on its own.
 // ---------------------------------------------------------------------------
 
-test('readActiveTicketPointer reports absence without inventing a ticket', () => {
-  const f = fixture(null);
-  try {
-    const got = readActiveTicketPointer(f.root);
-    assert.equal(got.ok, true);
-    assert.equal(got.value.present, false);
-  } finally { f.cleanup(); }
+test('readActiveTicketPointer reports absence without inventing a ticket', (t) => {
+  const f = fixture(t, null);
+  const got = readActiveTicketPointer(f.root);
+  assert.equal(got.ok, true);
+  assert.equal(got.value.present, false);
 });
 
-test('readActiveTicketPointer surfaces the alias it accepted', () => {
-  const f = fixture(() => ({ ticket: 'T1', ticketHash: 'x' }));
-  try {
-    const got = readActiveTicketPointer(f.root);
-    assert.equal(got.ok, true);
-    assert.equal(got.value.id, 'T1');
-    assert.equal(got.value.deprecatedAlias, 'ticket');
-  } finally { f.cleanup(); }
+test('readActiveTicketPointer surfaces the alias it accepted', (t) => {
+  const f = fixture(t, () => ({ ticket: 'T1', ticketHash: 'x' }));
+  const got = readActiveTicketPointer(f.root);
+  assert.equal(got.ok, true);
+  assert.equal(got.value.id, 'T1');
+  assert.equal(got.value.deprecatedAlias, 'ticket');
 });
