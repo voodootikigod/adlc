@@ -1,25 +1,17 @@
 // coldstart-offline.test.mjs — tests for deterministic offline coldstart gate.
 // node:test, offline, no API keys, temp ticket stores in mkdtemp.
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { tmp } from '@adlc/core/test-kit';
 import { checkTicketOffline, checkAllOffline } from '../lib/gate.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 
 const CLI_PATH = new URL('../bin/coldstart.mjs', import.meta.url).pathname;
-
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'coldstart-offline-'));
-}
-
-function cleanTmp(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
 
 // ── checkTicketOffline (unit) ────────────────────────────────────────────────
 
@@ -191,8 +183,8 @@ describe('CLI --offline e2e', () => {
   let tmpDir;
   let ticketsFile;
 
-  before(() => {
-    tmpDir = makeTmp();
+  beforeEach((t) => {
+    tmpDir = tmp(t, 'coldstart-offline-');
     ticketsFile = join(tmpDir, 'tickets.json');
     const store = {
       tickets: [
@@ -215,9 +207,7 @@ describe('CLI --offline e2e', () => {
     writeFileSync(ticketsFile, JSON.stringify(store, null, 2));
   });
 
-  after(() => cleanTmp(tmpDir));
-
-  it('passes and exits 0 on valid ticket with --offline without any LLM keys', () => {
+  it('passes and exits 0 on valid ticket with --offline without any LLM keys', (t) => {
     const res = spawnSync(
       process.execPath,
       [CLI_PATH, 'T1', '--tickets', ticketsFile, '--offline'],
@@ -231,7 +221,7 @@ describe('CLI --offline e2e', () => {
     assert.match(res.stdout, /\[PASS\] T1: ticket is fully executable \(offline\)/);
   });
 
-  it('fails and exits 2 on ticket with gaps using --offline', () => {
+  it('fails and exits 2 on ticket with gaps using --offline', (t) => {
     const res = spawnSync(
       process.execPath,
       [CLI_PATH, 'T2', '--tickets', ticketsFile, '--offline'],
@@ -246,7 +236,7 @@ describe('CLI --offline e2e', () => {
     assert.match(res.stdout, /missing body/);
   });
 
-  it('outputs valid JSON with --json --offline', () => {
+  it('outputs valid JSON with --json --offline', (t) => {
     const res = spawnSync(
       process.execPath,
       [CLI_PATH, 'T1', '--tickets', ticketsFile, '--offline', '--json'],
@@ -264,7 +254,7 @@ describe('CLI --offline e2e', () => {
     assert.equal(parsed.results[0].offline, true);
   });
 
-  it('--all --offline exits 2 if any active ticket has gaps', () => {
+  it('--all --offline exits 2 if any active ticket has gaps', (t) => {
     const res = spawnSync(
       process.execPath,
       [CLI_PATH, '--all', '--tickets', ticketsFile, '--offline'],
