@@ -1,0 +1,14 @@
+{
+  "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `packages/prosecute/test/cross-model.test.mjs` and `prosecute-tier-check-cli.test.mjs` contain 77 `try/finally` blocks and redundant local fixture scaffolding that manually cleans up tempdirs. Following the introduction of `@adlc/core/test-kit` in #1098, both test files and `packages/prosecute/test/helpers.mjs` can adopt `tmp(t)` and `gitRepo(t)` with automatic `t.after` lifecycle cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/prosecute/test/helpers.mjs`:\n   - Import `{ tmp, gitRepo as coreGitRepo }` from '@adlc/core/test-kit'.\n   - Update `gitRepo(t)` to delegate to `coreGitRepo(t, { prefix: 'adlc-prosecute-git-' })` when `t` is passed, or preserve compatibility with unpassed `t`.\n   - Update `tmpAdlc(t)` to use `tmp(t, 'adlc-prosecute-')`.\n2. In `packages/prosecute/test/cross-model.test.mjs`:\n   - Import `{ tmp, gitRepo }` from '@adlc/core/test-kit'.\n   - Update test cases to accept `t` parameter and pass `t` to `fixture(prefix, t)` or `tmp(t, prefix)`.\n   - Eliminate all 52 `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting test bodies.\n3. In `packages/prosecute/test/prosecute-tier-check-cli.test.mjs`:\n   - Import `{ tmp, gitRepo }` from '@adlc/core/test-kit'.\n   - Replace local `scratchRepo` and manual rmSync cleanup with `gitRepo(t)` / `tmp(t)`.\n   - Eliminate all 25 `try { ... } finally { ... }` blocks, unindenting test bodies.\n4. Ensure all prosecute tests pass: `npm test -w packages/prosecute`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/prosecute/test/cross-model.test.mjs packages/prosecute/test/prosecute-tier-check-cli.test.mjs` reports 0 and 0 (down from 52 and 25, saving 77 finally blocks).\n- AC2 `npm test -w packages/prosecute` exits 0 with all test cases passing.\n- AC3 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34T114CQTJMN9FZCBKH1EJG",
+  "rails": [],
+  "scope": [
+    "packages/prosecute/test/cross-model.test.mjs",
+    "packages/prosecute/test/prosecute-tier-check-cli.test.mjs",
+    "packages/prosecute/test/helpers.mjs"
+  ],
+  "title": "refactor(prosecute): adopt @adlc/core/test-kit and eliminate 77 try/finally blocks in cross-model and tier-check tests"
+}
