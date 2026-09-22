@@ -28,9 +28,6 @@ registerSeams([
   'preflight.skipKeyFileCheck',    // .env.local is never inspected
   'preflight.skipConfigAudit',     // the repo-local config audit is skipped
   'preflight.skipHostBinding',     // gh host / principal binding is skipped
-  'preflight.ignoreMissingLabels', // absent labels do not fail phase A
-  'preflight.ignoreExclude',       // missing .git/info/exclude entries do not fail phase A
-  'preflight.anyModelFamily',      // an underivable model family passes
   'preflight.trustInheritedTools', // tools are taken from the first PATH hit with no trust check
   'preflight.ignorePushUrl',       // the observed remote.origin.pushurl is never compared,
   'preflight.skipPinWhenPathSet',
@@ -74,7 +71,6 @@ export function checkKeyFile({ repoRoot, key, uid, lstat = lstatSync, stat = sta
 
 /** `.git/info/exclude` must carry every EXCLUDE_ENTRIES line (§10). */
 export function checkExclude({ repoRoot, readFile = (p) => readFileSync(p, 'utf8') }) {
-  if (active('preflight.ignoreExclude')) return [];
   let text = '';
   try { text = readFile(join(repoRoot, '.git', 'info', 'exclude')); } catch { text = ''; }
   const lines = new Set(text.split('\n').map((l) => l.trim()));
@@ -180,7 +176,7 @@ export async function phaseA(ctx) {
   const uid = ctx.uid ?? process.getuid();
   pinTools(ctx);
   checkKeyFile({ repoRoot: ctx.repoRoot, key: ctx.key, uid, lstat: ctx.fs?.lstat, stat: ctx.fs?.stat });
-  if (!active('preflight.anyModelFamily') && !modelFamily(ctx.local?.model)) throw new PreflightError('model-unknown', String(ctx.local?.model));
+  if (!modelFamily(ctx.local?.model)) throw new PreflightError('model-unknown', String(ctx.local?.model));
   if (!ctx.local?.adapterSupported) throw new PreflightError('adapter-unsupported', String(ctx.local?.adapter));
   ctx.netGit = ctx.netGit ?? ctx.paths.netGit;
   ctx.git = ctx.git ?? createGitRunner(ctx);
@@ -190,7 +186,7 @@ export async function phaseA(ctx) {
   await bindSsh(ctx);
   let missing;
   try { missing = await missingLabels(ctx.gh); } catch (e) { throw asPreflightError(e, 'labels-missing'); }
-  if (missing.length && !active('preflight.ignoreMissingLabels')) throw new PreflightError('labels-missing', missing.join(', '));
+  if (missing.length) throw new PreflightError('labels-missing', missing.join(', '));
   checkExclude({ repoRoot: ctx.repoRoot, readFile: ctx.fs?.readFile });
   ctx.phaseA = { ok: true, remote: ctx.remote, sshMode: ctx.ssh.mode, fingerprint: ctx.ssh.fingerprint };
   return ctx;

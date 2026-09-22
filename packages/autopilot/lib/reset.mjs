@@ -18,7 +18,6 @@ import {
 } from './retire.mjs';
 
 registerSeams([
-  'reset.allowRecordlessRemoteDelete', // a recordless branch's --delete-remote is honoured
   'reset.skipFreshnessCheck',          // the 10-minute / lastPushedAt-absent refusal is skipped
   'reset.skipUrlRecheck',              // remote.origin.url is not re-observed before the push
   'reset.leaselessDelete',             // the remote delete uses --force instead of the lease form
@@ -116,10 +115,7 @@ async function resetRecordless({ ctx, issue, oid, deleteRemote, record }) {
   if (l.outcome === 'orphan') return refuse('orphan', { reason: l.reason });
   // The marker alone is never proof for a REMOTE ref: --delete-remote is refused (exit 2) and the
   // exact command is printed for the operator to run by hand.
-  const remoteRefused = deleteRemote && !active('reset.allowRecordlessRemoteDelete');
-  if (deleteRemote && !remoteRefused) {
-    await ctx.git.net(['push', `--force-with-lease=refs/heads/${branch}:${tip}`, ctx.remote.remotePushUrl, `:refs/heads/${branch}`], { retry: false });
-  }
+  const remoteRefused = Boolean(deleteRemote);
   let canonical = null;
   if (record) canonical = await canonicalDeletion({ ctx, record: ctx.records.load(issue) ?? record });
   const remote = await remoteRefOid(ctx, branch);

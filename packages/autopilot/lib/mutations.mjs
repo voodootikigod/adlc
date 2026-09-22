@@ -27,7 +27,6 @@ export const FOUNDATION_SEAMS = Object.freeze([
   'config.allowRaise',           // CLI may raise a lower-only key
   'config.honourRepoOperatorKeys', // repo config quotaThreshold is honoured
   'keys.leakKey',                // the manifest key is added to every child env
-  'records.skipRedaction',       // run records are written without structured redaction
   'paths.allowLinkedWorktree',   // a linked worktree is accepted as REPO_ROOT
 ]);
 

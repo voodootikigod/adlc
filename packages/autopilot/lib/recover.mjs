@@ -22,7 +22,6 @@ registerSeams([
   'recover.trustAnyUnlabel',        // the unlabel actor's permission is not checked
   'recover.retireInsteadOfRearm',   // an authorized unlabel on a run WITH an open PR retires instead of re-arming
   'recover.rearmWithoutPr',         // an authorized unlabel on a run WITHOUT a PR re-arms instead of retiring
-  'recover.forgetPushedWithoutPr',  // a `pushed` record with no PR is fed to the canonical rule instead of being kept for the upsert,
   'recover.recordEventBeforeEffect',
 ]);
 
@@ -115,10 +114,6 @@ async function recoverPushed(ctx, record) {
   const branch = branchFor(issue);
   const prs = await openPrsForHead(ctx, branch);
   const remote = record.lastPushedOid ? await remoteRefOid(ctx, branch) : null;
-  if (!prs.length && active('recover.forgetPushedWithoutPr')) {
-    const c = await canonicalDeletion({ ctx, record });
-    return { action: 'canonical', issue, outcome: c.outcome };
-  }
   return { action: 'upsert-pr', issue, prNumber: prs[0]?.number ?? null, remoteOid: remote, lastPushedOid: record.lastPushedOid ?? null };
 }
 

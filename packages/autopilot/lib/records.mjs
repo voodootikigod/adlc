@@ -61,9 +61,8 @@ export function createRecordStore({ paths, redactor, now = () => new Date().toIS
   const save = (record) => {
     assertState(record.state);
     if (record.creationPhase != null && !CREATION_PHASES.includes(record.creationPhase)) throw new Error(`unknown creationPhase: ${record.creationPhase}`);
-    // Mutation seam `records.skipRedaction`: free-text fields are written raw.
     const stamped = { ...record, updatedAt: now() };
-    const doc = active('records.skipRedaction') ? stamped : redactRecord(stamped, FREE_TEXT_FIELDS, redactor);
+    const doc = redactRecord(stamped, FREE_TEXT_FIELDS, redactor);
     return writeAtomicJson(paths.record(record.issue), doc);
   };
   const update = (issue, patch) => {

@@ -32,7 +32,6 @@ registerSeams([
   'preflight.acceptAnyBaseSha',       // the fleet dry-run's baseSha is not compared
   'preflight.keepPreflightWorktree',  // the temporary worktree is not removed,
   'preflight.dryRunDispatches',
-  'preflight.rmAnyPath',
 ]);
 
 const PLUGIN_KEY = 'adlc@adlc';
@@ -122,8 +121,10 @@ async function pinnedConfig(ctx, oid) {
 async function removePreflightWorktree(ctx, wt) {
   if (active('preflight.keepPreflightWorktree')) return;
   await ctx.git.local(ctx.repoRoot, ['worktree', 'remove', '--force', wt], { label: 'git worktree remove (preflight)' });
-  // Recursive removal only of a path this run created under its own runs dir (codex r9 A4). Seam `preflight.rmAnyPath`.
-  if (existsSync(wt) && (active('preflight.rmAnyPath') || isUnderDir(ctx.paths.runsDir, wt))) rmSync(wt, { recursive: true, force: true });
+  // Recursive removal only of a path this run created under its own runs dir (codex r9 A4).
+  if (existsSync(wt)) {
+    if (isUnderDir(ctx.paths.runsDir, wt)) rmSync(wt, { recursive: true, force: true });
+  }
   await ctx.git.local(ctx.repoRoot, ['worktree', 'prune'], { label: 'git worktree prune' });
 }
 

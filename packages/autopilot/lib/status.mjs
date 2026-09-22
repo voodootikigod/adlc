@@ -17,7 +17,6 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'status.noLockForOrdinal',   // incrementStarts no longer requires the lock
-  'status.skipQuotaAppend',    // recordQuota drops the per-step entry,
   'status.noFileMutex',
   'status.quotaOutsideMutex', // recordQuota snapshots the file before taking the mutex (agy r4)
 ]);
@@ -110,7 +109,7 @@ export function createStatusStore({ paths, lockToken = null, redactor, now = Dat
     return locked(() => {
       const cur = early ?? read();
       const entry = { step, before, after, delta, overshoot, threshold, at: iso() };
-      const quotaSteps = active('status.skipQuotaAppend') ? (cur.quotaSteps ?? []) : [...(cur.quotaSteps ?? []), entry].slice(-MAX_QUOTA_STEPS);
+      const quotaSteps = [...(cur.quotaSteps ?? []), entry].slice(-MAX_QUOTA_STEPS);
       persist({ ...cur, quotaSteps, quota: { ...(cur.quota ?? {}), ...(after ?? {}), checkedAt: entry.at } });
       return entry;
     });

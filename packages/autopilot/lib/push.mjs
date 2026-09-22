@@ -20,12 +20,10 @@ import { registerSeams, active } from './mutations.mjs';
 registerSeams([
   'push.skipLease',                // the push carries no --force-with-lease
   'push.skipHeadCheck',            // HEAD == attestedHead / clean are not asserted before the push
-  'push.skipPostPushVerify',       // the post-push ls-remote read-back is skipped
   'push.upsertWithoutHeadBinding', // the upsert's before/after head checks are skipped
   'push.alwaysCreate',             // the upsert never edits an existing PR
   'push.useOriginName',            // the push names `origin` instead of the pinned URL
   'push.sourceIsBranchName',       // the push source is refs/heads/<b> instead of the attested OID
-  'push.skipRemoteUrlCheck',       // the observed remote.origin.url is not re-checked before the push,
   'push.quarantineAnyFailure',
 ]);
 
@@ -65,7 +63,6 @@ export async function pushAttested({ ctx, issue, attestedHead, expectedRemoteOid
 
 /** The remote.origin.url observed at preflight must still be observed now (AC 110). */
 export async function remoteUrlUnchanged(ctx) {
-  if (active('push.skipRemoteUrlCheck')) return true;
   // Phase A records the raw observed URL under remote.observed.fetch (git-runner's field); the flat alias is kept for callers that set it.
   const expected = ctx.remote?.observed?.fetch ?? ctx.remote?.observedFetchUrl;
   if (expected == null || typeof ctx.git.observe !== 'function') return true;
@@ -110,10 +107,8 @@ export async function verifyPushVerify({ ctx, issue, record, attestedHead }) {
     }
     return quarantine('oid-mismatch', `push refused (lease ${expectedRemoteOid ?? 'absent'}): ${push.result.stderr.trim().slice(0, 300)}`, { leaseFailed: true, expected: expectedRemoteOid, argv: push.argv });
   }
-  if (!active('push.skipPostPushVerify')) {
-    const observed = await remoteHead(ctx, ctx.remote.remotePushUrl, branch);
-    if (observed !== oid) return quarantine('oid-mismatch', `post-push ls-remote ${observed ?? 'absent'} != ${oid}`, { expected: oid, observed, argv: push.argv });
-  }
+  const observed = await remoteHead(ctx, ctx.remote.remotePushUrl, branch);
+  if (observed !== oid) return quarantine('oid-mismatch', `post-push ls-remote ${observed ?? 'absent'} != ${oid}`, { expected: oid, observed, argv: push.argv });
   ctx.records.update(n, { state: 'pushed', lastPushedOid: oid, lastPushedAt: iso(ctx), attestedHead: oid, localHead: oid, pushIntent: null });
   return { ok: true, pushedOid: oid, argv: push.argv, branch };
 }

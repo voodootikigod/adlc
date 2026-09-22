@@ -18,7 +18,6 @@ import { registerSeams, active } from './mutations.mjs';
 
 registerSeams([
   'review.skipSizeGate',           // the size gate admits every diff
-  'review.allowSummaryReview',     // --allow-summary-review is passed to the reviewer
   'review.attestWithoutHeadCheck', // 7b/7c run without the HEAD/clean/manifest-only assertions
   'review.reopenWithoutAuthorize', // the reopen update omits --authorize,
   'review.approveOnExitZero',
@@ -139,7 +138,6 @@ export async function finalReview({ ctx, issue, cwd, baseOid }) {
   const head = await headOf(ctx, cwd);
   const argv = [ctx.pinned['adversarial-review'], '--base', base, '--provider', 'codex', '--json', '--fail-on', 'medium',
     '--max-bytes', String(ctx.config.autopilot.reviewMaxBytes), '--findings-ledger', ctx.paths.findingsLedger(issue)];
-  if (active('review.allowSummaryReview')) argv.push('--allow-summary-review');
   const r = await ctx.spawn({ argv, cwd, env: childEnv(ctx.env.base), deadlineMs: DEADLINES.finalReview, label: 'adversarial-review' });
   let doc = null;
   try { doc = JSON.parse(r.stdout); } catch { doc = null; }

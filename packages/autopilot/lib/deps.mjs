@@ -23,7 +23,6 @@ registerSeams([
   'deps.allowAnyDep',       // an added dependency outside the allowed set passes
   'deps.useOperatorHome',   // npm runs with the operator's HOME instead of an empty private directory
   'deps.allowOnlineGate',   // the gate install drops --offline
-  'deps.ignoreNpmrc',       // a worker-written .npmrc / overrides / file: spec is not npm-config-drift
   'deps.ignoreScripts',     // a changed `scripts` block passes
 ]);
 
@@ -118,16 +117,14 @@ export function comparePackageJson(baseDoc, headDoc, { allowed = [], lockstepVer
       if (h[k] !== v) return fail('third-party-dep', `${block}.${k} changed or removed`);
     }
     for (const [k, v] of Object.entries(h)) {
-      if (typeof v === 'string' && FORBIDDEN_SPEC_RE.test(v) && !active('deps.ignoreNpmrc')) return fail('npm-config-drift', `${block}.${k} uses a file:/git:/http: spec`);
+      if (typeof v === 'string' && FORBIDDEN_SPEC_RE.test(v)) return fail('npm-config-drift', `${block}.${k} uses a file:/git:/http: spec`);
       if (k in b || active('deps.allowAnyDep')) continue;
       if (!allowedSet.has(k) || !workspaceRange(v, lockstepVersion)) return fail('third-party-dep', `${block}.${k} added`);
     }
   }
   if (baseDoc && !active('deps.ignoreScripts') && !deepEqual(baseDoc.scripts ?? {}, headDoc.scripts ?? {})) return fail('third-party-dep', 'scripts changed');
-  if (!active('deps.ignoreNpmrc')) {
-    for (const k of ['publishConfig', 'overrides', 'resolutions']) {
-      if (baseDoc ? !deepEqual(baseDoc[k], headDoc[k]) : (k !== 'publishConfig' && headDoc[k] !== undefined)) return fail('npm-config-drift', `${k} differs from base`);
-    }
+  for (const k of ['publishConfig', 'overrides', 'resolutions']) {
+    if (baseDoc ? !deepEqual(baseDoc[k], headDoc[k]) : (k !== 'publishConfig' && headDoc[k] !== undefined)) return fail('npm-config-drift', `${k} differs from base`);
   }
   if (isRoot || baseDoc?.workspaces !== undefined || headDoc.workspaces !== undefined) {
     const b = baseDoc?.workspaces ?? []; const h = headDoc.workspaces ?? [];
@@ -156,7 +153,7 @@ export async function dependencyDiffCheck({ ctx, issue, baseOid, head, allowed =
   const lockstepVersion = typeof rootBase?.version === 'string' ? rootBase.version : null;
   for (const f of files) {
     const name = basename(f);
-    if (name === '.npmrc') { if (!active('deps.ignoreNpmrc')) return fail('npm-config-drift', `${f} changed`); continue; }
+    if (name === '.npmrc') return fail('npm-config-drift', `${f} changed`);
     if (name === 'package.json') {
       const base = parseOrNull(await showOrNull(ctx, cwd, baseOid, f));
       const headDoc = parseOrNull(await showOrNull(ctx, cwd, head, f));
