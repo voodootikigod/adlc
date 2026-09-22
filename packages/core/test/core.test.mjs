@@ -3,23 +3,31 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
 import { tmp, gitRepo } from '../lib/test-kit.mjs';
 
-// Compatibility wrapper ensuring t.after exists across all Node 18+ releases
-// (Node 18.0–18.12 lacked TestContext.after, added in 18.13.0). Guarantees both
-// direct hooks and tmp(t) lifecycle cleanup run without leaks on all supported runtimes.
+// Per-test compatibility layer ensuring t.after lifecycle cleanup executes
+// across all supported Node >=18 runtimes (Node 18.0–18.12 lacked native TestContext.after).
+// Guarantees both direct hooks and tmp(t) lifecycle cleanup run per-test without leaks.
 function test(...args) {
   const fn = args.pop();
   if (typeof fn !== 'function') {
     return nodeTest(...args, fn);
   }
-  const wrapped = (t) => {
+  const wrapped = async (t) => {
+    const cleanups = [];
     if (t && typeof t.after !== 'function') {
-      const cleanups = [];
       t.after = (cb) => cleanups.push(cb);
-      nodeTest.after(() => {
-        while (cleanups.length > 0) cleanups.shift()();
-      });
     }
-    return fn(t);
+    let err;
+    let res;
+    try {
+      res = await fn(t);
+    } catch (e) {
+      err = e;
+    }
+    for (const cb of cleanups) {
+      try { cb(); } catch {}
+    }
+    if (err) throw err;
+    return res;
   };
   return nodeTest(...args, wrapped);
 }
@@ -1609,4 +1617,34 @@ test('value-substitute: does not resurrect import lines (SKIP_LINE unchanged) (#
 test('value-substitute is not also a primary operator — no double-cover by name (#1013)', () => {
   assert.ok(!OPERATORS.some((o) => o.name === 'value-substitute'),
     'the fallback must stay out of OPERATORS, or every covered line gains a redundant mutant');
+});
+
+test('test compatibility: per-test lifecycle cleanup executes even on runtimes lacking native t.after', async () => {
+  const mockContext = {};
+  let cleaned = false;
+  let ran = false;
+  const wrapped = async (ctx) => {
+    const cleanups = [];
+    if (ctx && typeof ctx.after !== 'function') {
+      ctx.after = (cb) => cleanups.push(cb);
+    }
+    let err;
+    let res;
+    try {
+      res = await ((t) => {
+        t.after(() => { cleaned = true; });
+        ran = true;
+      })(ctx);
+    } catch (e) {
+      err = e;
+    }
+    for (const cb of cleanups) {
+      try { cb(); } catch {}
+    }
+    if (err) throw err;
+    return res;
+  };
+  await wrapped(mockContext);
+  assert.equal(ran, true);
+  assert.equal(cleaned, true, 'per-test cleanup must execute immediately when test finishes');
 });
