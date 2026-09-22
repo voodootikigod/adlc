@@ -69,7 +69,23 @@ export function computeVerdict(opts) {
     strictBudget,
     failOnBehavioral,
     independenceConfigured,
+    allowEmpty = false,
   } = opts;
+
+  const candidatesClassified = opts.candidatesClassified ?? opts.totalCandidates ?? opts.candidatesGenerated ?? opts.candidatesCount;
+
+  // Zero candidates evaluated across run: refuse clean/exhaustive verdict.
+  // Must return inconclusive and exit non-zero (exit 2) unless --allow-empty is set.
+  if (candidatesClassified !== undefined && candidatesClassified === 0) {
+    return {
+      exitCode: allowEmpty ? 0 : 2,
+      summary: 'inconclusive',
+      defeats: [],
+      contractDefeats: 0,
+      behavioralDefeats: 0,
+      inconclusive: true,
+    };
+  }
 
   // Categorize defeats by source
   const contractDefeats = defeats.filter((d) => classifyDefeatSource(d) === 'contract');

@@ -82,6 +82,15 @@ export async function runLoop(suite, baseline, opts) {
   let tokensEstimated = 0;
   let stoppedBy = 'maxRounds';
 
+  let totalCandidatesGenerated = 0;
+  let totalCandidatesEvaluated = 0;
+  const candidatesRejected = {};
+
+  const recordRejection = (reason) => {
+    const key = reason || 'invalid:unspecified';
+    candidatesRejected[key] = (candidatesRejected[key] || 0) + 1;
+  };
+
   while (round < maxRounds && dryStreak < dryRounds) {
     // Check budget before starting round
     if (tokensEstimated >= tokenBudget) {
@@ -104,54 +113,89 @@ export async function runLoop(suite, baseline, opts) {
       break;
     }
 
-    // Fan-failure rate check (F5, Fix 4)
-    const failedCount = fanResults.filter((r) => !r.ok).length;
-    const failRate = fanResults.length > 0 ? failedCount / fanResults.length : 1;
-
-    if (failRate > maxFailRate) {
-      // Round is inconclusive — do NOT advance dryStreak
-      inconclusiveRounds++;
-      continue;
-    }
-
-    // Parse and classify candidates
-    let newDefeatsThisRound = 0;
+    // Parse and validate candidates from all fan results
+    const validCandidatesThisRound = [];
+    let invalidFanQueries = 0;
 
     for (const result of fanResults) {
-      if (!result.ok) continue;
+      if (!result.ok) {
+        invalidFanQueries++;
+        recordRejection(result.error ? `fan:error` : 'fan:failed');
+        continue;
+      }
 
       // Parse candidates from model output
-      const { candidates } = parseCandidates(result.value, {
+      const { candidates, errors } = parseCandidates(result.value, {
         extractJson,
         allowedCmds,
       });
 
-      for (const candidate of candidates) {
-        const verdict = await classifyOneCandidate(candidate, {
-          classifyFn,
-          suite,
-          baseline,
-          classifyOpts,
-          cloneDir,
-          provisionFn,
+      for (const err of errors) {
+        const key = err.startsWith('invalid:malformed') ? 'invalid:malformed' : err;
+        recordRejection(key);
+      }
+
+      if (candidates.length === 0) {
+        invalidFanQueries++;
+      } else {
+        validCandidatesThisRound.push(...candidates);
+      }
+    }
+
+    // Fan-failure rate check: invalid fan queries include transport errors
+    // and unusable outputs that produce 0 valid candidates.
+    const failRate = fanResults.length > 0 ? invalidFanQueries / fanResults.length : 1;
+
+    if (failRate > maxFailRate || validCandidatesThisRound.length === 0) {
+      // Round produced zero valid candidates or exceeded failure rate —
+      // mark inconclusive and do NOT advance dryStreak.
+      inconclusiveRounds++;
+      continue;
+    }
+
+    // Classify valid candidates
+    let newDefeatsThisRound = 0;
+    let evaluatedThisRound = 0;
+    totalCandidatesGenerated += validCandidatesThisRound.length;
+
+    for (const candidate of validCandidatesThisRound) {
+      const verdict = await classifyOneCandidate(candidate, {
+        classifyFn,
+        suite,
+        baseline,
+        classifyOpts,
+        cloneDir,
+        provisionFn,
+      });
+
+      if (verdict.result !== 'inconclusive') {
+        evaluatedThisRound++;
+      }
+
+      if (verdict.result === 'DEFEAT') {
+        // Dedup check (§3.3)
+        const hash = normalizeAndHash({
+          target: candidate.target,
+          claimKind: candidate.claimKind,
+          diff: candidate.diff,
         });
 
-        if (verdict.result === 'DEFEAT') {
-          // Dedup check (§3.3)
-          const hash = normalizeAndHash({
-            target: candidate.target,
-            claimKind: candidate.claimKind,
-            diff: candidate.diff,
-          });
-
-          if (!seenHashes.has(hash)) {
-            seenHashes.add(hash);
-            defeats.push({ ...candidate, verdict, hash });
-            newDefeatsThisRound++;
-          }
+        if (!seenHashes.has(hash)) {
+          seenHashes.add(hash);
+          defeats.push({ ...candidate, verdict, hash });
+          newDefeatsThisRound++;
         }
       }
     }
+
+    if (evaluatedThisRound === 0) {
+      // All candidates this round were inconclusive (e.g. provisioning failed) —
+      // mark round inconclusive and do NOT advance dryStreak.
+      inconclusiveRounds++;
+      continue;
+    }
+
+    totalCandidatesEvaluated += evaluatedThisRound;
 
     // Update dry streak
     if (newDefeatsThisRound > 0) {
@@ -177,7 +221,11 @@ export async function runLoop(suite, baseline, opts) {
     rounds: round,
     inconclusiveRounds,
     tokensEstimated,
-    exhaustive: stoppedBy === 'dry',
+    exhaustive: stoppedBy === 'dry' && totalCandidatesEvaluated > 0,
+    candidatesGenerated: totalCandidatesGenerated,
+    candidatesEvaluated: totalCandidatesEvaluated,
+    candidatesParsed: totalCandidatesGenerated,
+    candidatesRejected,
   };
 }
 

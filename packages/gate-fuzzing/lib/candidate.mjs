@@ -16,6 +16,10 @@ const DEFAULT_ALLOWED_CMDS = new Set(['node', 'git', 'npm', 'npx']);
 export function validateCandidate(candidate, opts = {}) {
   const allowedCmds = opts.allowedCmds ?? DEFAULT_ALLOWED_CMDS;
 
+  if (!candidate || typeof candidate !== 'object') {
+    return { valid: false, reason: 'invalid:malformed' };
+  }
+
   // Required fields
   const required = ['target', 'claimKind', 'diff', 'witnessProposal'];
   for (const field of required) {
