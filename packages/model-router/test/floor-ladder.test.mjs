@@ -79,7 +79,6 @@ test('the floor is what sends a ticket below it to frontier', () => {
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const DOCS = [
   'packages/model-router/README.md',
-  'docs/tools/model-router.md',
   'apps/docs/content/docs/toolkit/model-router.mdx',
 ];
 

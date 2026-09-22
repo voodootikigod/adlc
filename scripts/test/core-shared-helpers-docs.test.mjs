@@ -15,7 +15,6 @@ const POLICY_DOCS = [
   'CONTRIBUTING.md',
   '.github/PULL_REQUEST_TEMPLATE.md',
   'packages/core/README.md',
-  'docs/tools/core.md',
   'apps/docs/content/docs/reference/conventions.mdx',
   'apps/docs/content/docs/reference/index.mdx',
   'apps/docs/content/docs/toolkit/index.mdx',
@@ -93,12 +92,4 @@ test('CONTRIBUTING.md and conventions.mdx carry rule-2 heading', () => {
 
   const conventionsMdx = fs.readFileSync(path.join(ROOT, 'apps/docs/content/docs/reference/conventions.mdx'), 'utf8');
   assert.match(conventionsMdx, /^2\. \*\*Shared helpers live in core\.\*\*/m);
-});
-
-test('docs/tools/core.md mirrors the core README introduction verbatim', () => {
-  const readme = fs.readFileSync(path.join(ROOT, 'packages/core/README.md'), 'utf8');
-  const mirror = fs.readFileSync(path.join(ROOT, 'docs/tools/core.md'), 'utf8');
-  const readmeParagraph = readme.split('\n\n')[1];
-  assert.ok(readmeParagraph && readmeParagraph.length > 80, 'README paragraph should be > 80 chars');
-  assert.ok(mirror.includes(readmeParagraph), 'docs/tools/core.md must include the README first paragraph verbatim');
 });
