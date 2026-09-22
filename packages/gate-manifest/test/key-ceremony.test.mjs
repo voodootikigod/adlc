@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, fstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import {
   KEY_BYTE_LENGTH,
   KEY_HEX_LENGTH,
@@ -24,8 +25,8 @@ import {
   stripAclBestEffort,
 } from '../lib/key-ceremony.mjs';
 
-function tmpRoot() {
-  return mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-'));
+function tmpRoot(t) {
+  return tmp(t, 'adlc-key-ceremony-');
 }
 
 // ── generateManifestKey ─────────────────────────────────────────────────────────────
@@ -79,31 +80,31 @@ test('refuses an empty or non-string key', () => {
 
 // ── assertHandoffPathOutsideRepo ────────────────────────────────────────────────────
 
-test('accepts a path genuinely outside the repo root', () => {
-  const root = tmpRoot();
+test('accepts a path genuinely outside the repo root', (t) => {
+  const root = tmpRoot(t);
   const outside = join(tmpdir(), 'somewhere-else-entirely', 'key.txt');
   assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outside, { roots: [root] }));
 });
 
-test('rejects a path inside the repo root', () => {
-  const root = tmpRoot();
+test('rejects a path inside the repo root', (t) => {
+  const root = tmpRoot(t);
   const inside = join(root, 'key.txt');
   assert.throws(() => assertHandoffPathOutsideRepo(inside, { roots: [root] }), /outside the repository/i);
 });
 
-test('rejects the repo root itself', () => {
-  const root = tmpRoot();
+test('rejects the repo root itself', (t) => {
+  const root = tmpRoot(t);
   assert.throws(() => assertHandoffPathOutsideRepo(root, { roots: [root] }), /outside the repository/i);
 });
 
-test('rejects a nested inside-repo path even several directories deep', () => {
-  const root = tmpRoot();
+test('rejects a nested inside-repo path even several directories deep', (t) => {
+  const root = tmpRoot(t);
   const inside = join(root, 'a', 'b', 'c', 'key.txt');
   assert.throws(() => assertHandoffPathOutsideRepo(inside, { roots: [root] }), /outside the repository/i);
 });
 
-test('a sibling directory whose name merely starts with the repo root name is NOT inside it', () => {
-  const root = tmpRoot();
+test('a sibling directory whose name merely starts with the repo root name is NOT inside it', (t) => {
+  const root = tmpRoot(t);
   const sibling = `${root}-sibling`;
   const outsidePath = join(sibling, 'key.txt');
   assert.doesNotThrow(() => assertHandoffPathOutsideRepo(outsidePath, { roots: [root] }));
@@ -111,8 +112,8 @@ test('a sibling directory whose name merely starts with the repo root name is NO
 
 // ── repoBoundaryRoots: multiple linked worktrees of the SAME repository ─────────────
 
-function makeGitRepo() {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-git-'));
+function makeGitRepo(t) {
+  const root = tmp(t, 'adlc-key-ceremony-git-');
   execFileSync('git', ['init', '--quiet'], { cwd: root });
   execFileSync(
     'git',
@@ -122,9 +123,9 @@ function makeGitRepo() {
   return root;
 }
 
-test('repoBoundaryRoots is immune to GIT_DIR/GIT_WORK_TREE pointing at a DIFFERENT repository (round 12 finding — the actual bypass)', () => {
-  const root = makeGitRepo();
-  const otherRepo = makeGitRepo();
+test('repoBoundaryRoots is immune to GIT_DIR/GIT_WORK_TREE pointing at a DIFFERENT repository (round 12 finding — the actual bypass)', (t) => {
+  const root = makeGitRepo(t);
+  const otherRepo = makeGitRepo(t);
   const originalGitDir = process.env.GIT_DIR;
   const originalWorkTree = process.env.GIT_WORK_TREE;
   // Reproduced concretely before this fix: with these set, `git rev-parse
@@ -160,9 +161,9 @@ test('repoBoundaryRoots fails closed if Git reports boundaries that do not conta
   );
 });
 
-test('repoBoundaryRoots never hands its Git children the signing key, even when it is exported (round 11 finding)', () => {
-  const root = makeGitRepo();
-  const shimDir = mkdtempSync(join(tmpdir(), 'adlc-git-shim-'));
+test('repoBoundaryRoots never hands its Git children the signing key, even when it is exported (round 11 finding)', (t) => {
+  const root = makeGitRepo(t);
+  const shimDir = tmp(t, 'adlc-git-shim-');
   const markerPath = join(shimDir, 'leaked.txt');
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
   const shimPath = join(shimDir, 'git');
@@ -186,15 +187,15 @@ test('repoBoundaryRoots never hands its Git children the signing key, even when 
   }
 });
 
-test('repoBoundaryRoots includes the current worktree root', () => {
-  const root = makeGitRepo();
+test('repoBoundaryRoots includes the current worktree root', (t) => {
+  const root = makeGitRepo(t);
   const roots = repoBoundaryRoots({ cwd: root });
   assert.ok(roots.some((r) => realpathSync(r) === realpathSync(root)), `expected ${root} among ${JSON.stringify(roots)}`);
 });
 
-test('a LINKED WORKTREE of the same repository is refused as a handoff destination — the exact gap this closes', () => {
-  const root = makeGitRepo();
-  const linkedPath = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+test('a LINKED WORKTREE of the same repository is refused as a handoff destination — the exact gap this closes', (t) => {
+  const root = makeGitRepo(t);
+  const linkedPath = tmp(t, 'adlc-key-ceremony-linked-');
   rmSync(linkedPath, { recursive: true, force: true }); // `git worktree add` requires the path not to exist yet
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-test-branch', linkedPath], { cwd: root });
   try {
@@ -210,9 +211,9 @@ test('a LINKED WORKTREE of the same repository is refused as a handoff destinati
   }
 });
 
-test('the PRIMARY checkout (queried from a linked worktree) is refused as a handoff destination', () => {
-  const root = makeGitRepo();
-  const linkedPath = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+test('the PRIMARY checkout (queried from a linked worktree) is refused as a handoff destination', (t) => {
+  const root = makeGitRepo(t);
+  const linkedPath = tmp(t, 'adlc-key-ceremony-linked-');
   rmSync(linkedPath, { recursive: true, force: true });
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-test-branch-2', linkedPath], { cwd: root });
   try {
@@ -226,9 +227,9 @@ test('the PRIMARY checkout (queried from a linked worktree) is refused as a hand
   }
 });
 
-test('a linked worktree whose path contains a space and non-ASCII characters is still recognized as a boundary — NUL-delimited parsing, not newline-split', () => {
-  const root = makeGitRepo();
-  const parent = mkdtempSync(join(tmpdir(), 'adlc-key-ceremony-linked-'));
+test('a linked worktree whose path contains a space and non-ASCII characters is still recognized as a boundary — NUL-delimited parsing, not newline-split', (t) => {
+  const root = makeGitRepo(t);
+  const parent = tmp(t, 'adlc-key-ceremony-linked-');
   const linkedPath = join(parent, 'wörktree with spaces');
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'linked-unicode-branch', linkedPath], { cwd: root });
   try {
@@ -250,15 +251,15 @@ test('a linked worktree whose path contains a space and non-ASCII characters is 
 
 // ── realpathOfDeepestExisting ────────────────────────────────────────────────────────
 
-test('reattaches the full non-existent tail exactly, not just the deepest existing ancestor', () => {
-  const root = tmpRoot();
+test('reattaches the full non-existent tail exactly, not just the deepest existing ancestor', (t) => {
+  const root = tmpRoot(t);
   const target = join(root, 'not-yet-created', 'nested', 'file.txt');
   const result = realpathOfDeepestExisting(target);
   assert.equal(result, join(realpathSync(root), 'not-yet-created', 'nested', 'file.txt'));
 });
 
-test('returns the exact realpath when the target itself already exists (no tail to reattach)', () => {
-  const root = tmpRoot();
+test('returns the exact realpath when the target itself already exists (no tail to reattach)', (t) => {
+  const root = tmpRoot(t);
   const existingFile = join(root, 'exists.txt');
   writeFileSync(existingFile, 'x');
   assert.equal(realpathOfDeepestExisting(existingFile), realpathSync(existingFile));
@@ -266,9 +267,9 @@ test('returns the exact realpath when the target itself already exists (no tail 
 
 // ── writeKeyHandoffFile ──────────────────────────────────────────────────────────────
 
-test('writes the key to the handoff path with mode 0600', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('writes the key to the handoff path with mode 0600', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const key = generateManifestKey();
   const handoffPath = join(outsideDir, 'key.txt');
   writeKeyHandoffFile(handoffPath, key, { roots: [root] });
@@ -279,9 +280,9 @@ test('writes the key to the handoff path with mode 0600', () => {
   assert.equal(mode, 0o600);
 });
 
-test('refuses to overwrite an existing file at the handoff path', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('refuses to overwrite an existing file at the handoff path', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const handoffPath = join(outsideDir, 'key.txt');
   writeFileSync(handoffPath, 'pre-existing content');
   assert.throws(
@@ -291,15 +292,15 @@ test('refuses to overwrite an existing file at the handoff path', () => {
   assert.equal(readFileSync(handoffPath, 'utf8'), 'pre-existing content', 'the pre-existing file must be untouched');
 });
 
-test('refuses a handoff path inside the repository, before writing anything', () => {
-  const root = tmpRoot();
+test('refuses a handoff path inside the repository, before writing anything', (t) => {
+  const root = tmpRoot(t);
   const insidePath = join(root, 'key.txt');
   assert.throws(() => writeKeyHandoffFile(insidePath, generateManifestKey(), { roots: [root] }), /outside the repository/i);
 });
 
-test('fails closed on win32 — chmod there does not install an owner-only ACL', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('fails closed on win32 — chmod there does not install an owner-only ACL', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const handoffPath = join(outsideDir, 'key.txt');
   const originalPlatform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -314,9 +315,9 @@ test('fails closed on win32 — chmod there does not install an owner-only ACL',
   }
 });
 
-test('writes every byte of the key — guards the write loop against reporting success on a short write', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('writes every byte of the key — guards the write loop against reporting success on a short write', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const key = generateManifestKey();
   const handoffPath = join(outsideDir, 'key.txt');
   writeKeyHandoffFile(handoffPath, key, { roots: [root] });
@@ -326,9 +327,9 @@ test('writes every byte of the key — guards the write loop against reporting s
   assert.ok(writtenBytes.equals(expected));
 });
 
-test('verifies the mode the filesystem actually enforced, not merely that chmod was called', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('verifies the mode the filesystem actually enforced, not merely that chmod was called', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const handoffPath = join(outsideDir, 'key.txt');
   // Inject a `stat` that reports a filesystem which silently ignored the chmod(0600)
   // call (e.g. FAT/exFAT, some network mounts) — real chmodSync still runs, but the
@@ -341,9 +342,9 @@ test('verifies the mode the filesystem actually enforced, not merely that chmod 
   assert.equal(existsSync(handoffPath), false, 'a file whose mode could not be verified must not be left behind');
 });
 
-test('confines the file (chmod, ACL-strip, mode-verify) BEFORE writing a single secret byte, not after (round 8 finding)', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('confines the file (chmod, ACL-strip, mode-verify) BEFORE writing a single secret byte, not after (round 8 finding)', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const handoffPath = join(outsideDir, 'key.txt');
   let sizeAtVerification;
   const stat = (fd) => {
@@ -355,9 +356,9 @@ test('confines the file (chmod, ACL-strip, mode-verify) BEFORE writing a single 
   assert.ok(statSync(handoffPath).size > 0, 'the finished file must still contain the actual key');
 });
 
-test('a genuine ACL-strip failure aborts the whole ceremony and cleans up, rather than proceeding as if confined (round 9 finding)', () => {
-  const root = tmpRoot();
-  const outsideDir = mkdtempSync(join(tmpdir(), 'adlc-key-handoff-'));
+test('a genuine ACL-strip failure aborts the whole ceremony and cleans up, rather than proceeding as if confined (round 9 finding)', (t) => {
+  const root = tmpRoot(t);
+  const outsideDir = tmp(t, 'adlc-key-handoff-');
   const handoffPath = join(outsideDir, 'key.txt');
   const stripAcl = () => { throw new Error('ACL removal via `chmod` failed on it (permission denied) — refusing to hand off'); };
   assert.throws(
@@ -425,10 +426,10 @@ test('stripAclBestEffort does nothing on an unsupported platform (e.g. win32) �
   assert.deepEqual(calls, []);
 });
 
-test('stripAclBestEffort removes a real ACL entry inherited from the parent directory', { skip: process.platform !== 'darwin' }, () => {
+test('stripAclBestEffort removes a real ACL entry inherited from the parent directory', { skip: process.platform !== 'darwin' }, (t) => {
   // POSIX mode bits alone would not have caught this: the file below reads back as
   // 0600 the whole time, yet a real ACE grants `everyone` read access until stripped.
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-key-acl-'));
+  const dir = tmp(t, 'adlc-key-acl-');
   execFileSync('chmod', ['+a', 'everyone allow read,file_inherit', dir]);
   const childPath = join(dir, 'child.txt');
   writeFileSync(childPath, 'x');
@@ -439,9 +440,9 @@ test('stripAclBestEffort removes a real ACL entry inherited from the parent dire
   assert.equal(after.trim().split('\n').length, 1, 'the inherited ACL entry must actually be gone, not just the mode bits unaffected');
 });
 
-test('writeKeyHandoffFile strips a real inherited ACL end to end, not just mode bits', { skip: process.platform !== 'darwin' }, () => {
-  const root = tmpRoot();
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-key-acl-e2e-'));
+test('writeKeyHandoffFile strips a real inherited ACL end to end, not just mode bits', { skip: process.platform !== 'darwin' }, (t) => {
+  const root = tmpRoot(t);
+  const dir = tmp(t, 'adlc-key-acl-e2e-');
   execFileSync('chmod', ['+a', 'everyone allow read,file_inherit', dir]);
   const handoffPath = join(dir, 'key.txt');
   writeKeyHandoffFile(handoffPath, generateManifestKey(), { roots: [root] });

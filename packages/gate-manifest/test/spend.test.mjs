@@ -4,21 +4,14 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { tmp } from '@adlc/core/test-kit';
+
 import { record } from '../lib/record.mjs';
 import { aggregateSpend, diagnostics, renderSpendReport, loadSpend, PHASE_BY_GATE } from '../lib/spend.mjs';
-
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'gate-manifest-spend-test-'));
-}
-
-function cleanTmp(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
 
 function usage({ inputTokens = 0, outputTokens = 0, cachedTokens = 0, provider = 'anthropic', model = 'claude-sonnet-4-6', tier = 'mid' } = {}) {
   return { inputTokens, outputTokens, cachedTokens, provider, model, tier };
@@ -206,36 +199,28 @@ describe('renderSpendReport', () => {
 });
 
 describe('loadSpend (integration with the real manifest ledger)', () => {
-  it('aggregates usage recorded via record() into the same dir', () => {
-    const dir = makeTmp();
-    try {
-      record({ key: null, gate: 'coldstart', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 400, outputTokens: 80 }) }) });
-      record({ key: null, gate: 'prosecute', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 900, outputTokens: 150 }) }) });
-      record({ key: null, gate: 'rails-guard', dir }); // no usage — deterministic gate, must not be counted
+  it('aggregates usage recorded via record() into the same dir', (t) => {
+    const dir = tmp(t, 'gate-manifest-spend-test-');
+    record({ key: null, gate: 'coldstart', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 400, outputTokens: 80 }) }) });
+    record({ key: null, gate: 'prosecute', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 900, outputTokens: 150 }) }) });
+    record({ key: null, gate: 'rails-guard', dir }); // no usage — deterministic gate, must not be counted
 
-      const { aggregate } = loadSpend({ dir });
-      assert.equal(aggregate.entriesTotal, 3);
-      assert.equal(aggregate.entriesWithUsage, 2);
-      assert.equal(aggregate.byPhase.P2.inputTokens, 400);
-      assert.equal(aggregate.byPhase.P5.inputTokens, 900);
-      assert.equal(aggregate.total.calls, 2);
-    } finally {
-      cleanTmp(dir);
-    }
+    const { aggregate } = loadSpend({ dir });
+    assert.equal(aggregate.entriesTotal, 3);
+    assert.equal(aggregate.entriesWithUsage, 2);
+    assert.equal(aggregate.byPhase.P2.inputTokens, 400);
+    assert.equal(aggregate.byPhase.P5.inputTokens, 900);
+    assert.equal(aggregate.total.calls, 2);
   });
 
-  it('filters by ticket when given', () => {
-    const dir = makeTmp();
-    try {
-      record({ key: null, gate: 'coldstart', ticket: 'T-1', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 100 }) }) });
-      record({ key: null, gate: 'coldstart', ticket: 'T-2', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 500 }) }) });
+  it('filters by ticket when given', (t) => {
+    const dir = tmp(t, 'gate-manifest-spend-test-');
+    record({ key: null, gate: 'coldstart', ticket: 'T-1', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 100 }) }) });
+    record({ key: null, gate: 'coldstart', ticket: 'T-2', dir, rawData: JSON.stringify({ usage: usage({ inputTokens: 500 }) }) });
 
-      const { aggregate } = loadSpend({ dir, ticket: 'T-1' });
-      assert.equal(aggregate.entriesTotal, 1);
-      assert.equal(aggregate.total.inputTokens, 100);
-    } finally {
-      cleanTmp(dir);
-    }
+    const { aggregate } = loadSpend({ dir, ticket: 'T-1' });
+    assert.equal(aggregate.entriesTotal, 1);
+    assert.equal(aggregate.total.inputTokens, 100);
   });
 });
 
