@@ -33,7 +33,8 @@
     "./ledger": "./lib/ledger.mjs",
     "./revision": "./lib/revision.mjs",
     "./tickets": "./lib/tickets.mjs",
-    "./mutate": "./lib/mutate.mjs"
+    "./mutate": "./lib/mutate.mjs",
+    "./test-kit": "./lib/test-kit.mjs"
   },
   "files": [
     "index.mjs",
