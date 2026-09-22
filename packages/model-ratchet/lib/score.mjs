@@ -11,11 +11,13 @@
  */
 export function computeScores(churnMap, inDegreeMap, files) {
   const rows = [];
-  for (const file of files) {
-    const c = churnMap[file] ?? 0;
-    const d = inDegreeMap[file] ?? 0;
+  for (const rawFile of files) {
+    const posixPath = rawFile.replace(/\\/g, '/');
+    const winPath = rawFile.replace(/\//g, '\\');
+    const c = churnMap[posixPath] ?? churnMap[rawFile] ?? churnMap[winPath] ?? 0;
+    const d = inDegreeMap[posixPath] ?? inDegreeMap[rawFile] ?? inDegreeMap[winPath] ?? 0;
     const score = c * (1 + d);
-    rows.push({ file, churn: c, inDegree: d, score });
+    rows.push({ file: posixPath, churn: c, inDegree: d, score });
   }
   // Sort descending by score, then by file name for determinism on ties
   rows.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));

@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issue #690 (bug, false-green, P1-high, area:review). Re-verified on main @ 42cb00eb: packages/model-ratchet/lib/walk.mjs:84. `walkSourceFiles` pushes `const rel = relative(root, full);` which on Windows contains platform-native backslashes (`src\\hot.mjs`). Meanwhile, `computeInDegree` normalizes only its own keys to forward slashes, and git `churn()` returns forward-slash paths. `computeScores` receives raw unnormalized paths, so lookups in `churnMap[file]` and `inDegreeMap[file]` fail on Windows and every file receives a score of 0, degrading to arbitrary alphabetical ranking.\n\nCONTEXT FOR THE BUILDER. Package `packages/model-ratchet`: `bin/model-ratchet.mjs` (CLI entry point), `lib/walk.mjs` (walkSourceFiles, computeInDegree), `lib/scoring.mjs`, `lib/graph.mjs`. Tests: `npm test -w packages/model-ratchet` from the worktree root.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/model-ratchet/lib/walk.mjs`: in `walkSourceFiles`, normalize relative paths with `.replace(/\\\\/g, '/')` before pushing to `results` (`const normRel = rel.replace(/\\\\/g, '/');`).\n2. In `packages/model-ratchet/lib/walk.mjs`: in `computeInDegree`, normalize input keys and resolved specifier paths consistently with forward slashes so that backslash paths are never produced.\n3. Documentation: update `packages/model-ratchet/README.md` and make the SAME edit by hand in `docs/tools/model-ratchet.md` and `apps/docs/content/docs/toolkit/model-ratchet.mdx` (hand-maintained mirrors — never regenerate).\n\nACCEPTANCE CRITERIA.\n- AC1 `walkSourceFiles` returns forward-slash paths even when filesystem returns backslashes. verify: `node --test packages/model-ratchet/test/windows-path-separators.test.mjs`\n- AC2 `computeScores` matches churnMap and inDegreeMap entries when candidate files contain Windows backslashes. verify: `node --test packages/model-ratchet/test/windows-path-separators.test.mjs`\n- AC3 Existing test suite passes with no regressions. verify: `npm test -w packages/model-ratchet`\n- AC4 Docs updated in all three mirror files. verify: `grep -c \"forward-slash\" packages/model-ratchet/README.md docs/tools/model-ratchet.md apps/docs/content/docs/toolkit/model-ratchet.mdx` (each >= 1)\n- AC5 Mutation gate green on branch. verify: `node scripts/mutation-gate.mjs origin/main --max 12`\n\nOUT OF SCOPE: Issue #689 (subdirectory root resolution) or #688 (empty selection exit 2).",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M3339P8NXX889WKJ2MX8K068",
+  "rails": [
+    "packages/model-ratchet/lib/scoring.mjs",
+    "packages/model-ratchet/lib/graph.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/**",
+    "docs/tools/model-ratchet.md",
+    "apps/docs/content/docs/toolkit/model-ratchet.mdx"
+  ],
+  "title": "model-ratchet: normalize Windows path separators in walkSourceFiles and computeInDegree"
+}

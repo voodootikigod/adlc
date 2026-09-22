@@ -126,12 +126,18 @@ try {
 const sourceFiles = walkSourceFiles(root);
 const inDegreeMap = computeInDegree(sourceFiles, root);
 
+// Normalize churnMap keys to forward slashes for cross-platform matching
+const normChurnMap = {};
+for (const [k, v] of Object.entries(churnMap)) {
+  normChurnMap[k.replace(/\\/g, '/')] = v;
+}
+
 // Merge: include all files that appear in either churn or sourceFiles
-const allFiles = new Set([...sourceFiles, ...Object.keys(churnMap)]);
+const allFiles = new Set([...sourceFiles, ...Object.keys(normChurnMap)]);
 // Filter: keep only non-excluded source files
 const candidateFiles = [...allFiles].filter(f => sourceFiles.includes(f));
 
-const allScores = computeScores(churnMap, inDegreeMap, candidateFiles);
+const allScores = computeScores(normChurnMap, inDegreeMap, candidateFiles);
 const selected = topN(allScores, topCount);
 
 // ---------------------------------------------------------------------------
