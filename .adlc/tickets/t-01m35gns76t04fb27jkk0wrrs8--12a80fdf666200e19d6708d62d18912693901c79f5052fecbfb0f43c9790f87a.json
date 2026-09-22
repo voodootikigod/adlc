@@ -1,0 +1,15 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). `packages/spec-lint/test/readme-exit-codes.test.mjs` and `packages/spec-lint/test/record.test.mjs` manually invoke `mkdtempSync` and guard removals in 10 `try/finally` blocks, and are allowlisted in `scripts/test/tmp-fixture-boundary.test.mjs`. With `@adlc/core/test-kit` (`tmp`), fixture directories automatically register cleanup via `t.after` when passed the test context `t`.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/spec-lint/test/readme-exit-codes.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update test declarations using temp directories to accept the `t` parameter from `test(...)`.\n   - Replace `mkdtempSync(join(tmpdir(), 'spec-lint-readme-'))` with `tmp(t, 'spec-lint-readme-')`.\n   - Replace `mkdtempSync(join(tmpdir(), 'spec-lint-walk-'))` with `tmp(t, 'spec-lint-walk-')`.\n   - Replace `mkdtempSync(join(tmpdir(), 'spec-lint-tracked-'))` with `tmp(t, 'spec-lint-tracked-')`.\n   - Remove manual `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting the test bodies.\n2. In `packages/spec-lint/test/record.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update test declarations using temp directories to accept the `t` parameter from `test(...)`.\n   - Replace `makeTmp()` calls with `tmp(t, 'spec-lint-record-')`.\n   - Remove manual `try { ... } finally { rmSync(dir, ...); }` blocks, unindenting the test bodies.\n   - Delete the local `function makeTmp()` helper.\n3. In `scripts/test/tmp-fixture-boundary.test.mjs`:\n   - Remove `'packages/spec-lint/test/readme-exit-codes.test.mjs'` and `'packages/spec-lint/test/record.test.mjs'` from the `ALLOWLIST` set.\n4. Verification:\n   - `npm test -w packages/spec-lint` exits 0 with all 145 tests passing.\n   - `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n   - `grep -c 'finally' packages/spec-lint/test/readme-exit-codes.test.mjs packages/spec-lint/test/record.test.mjs` outputs 0, 0.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/spec-lint/test/readme-exit-codes.test.mjs packages/spec-lint/test/record.test.mjs` reports 0, 0.\n- AC2 `packages/spec-lint/test/record.test.mjs` does not define a local `makeTmp` helper.\n- AC3 `grep -E 'packages/spec-lint/test/' scripts/test/tmp-fixture-boundary.test.mjs` returns nothing.\n- AC4 `npm test -w packages/spec-lint` exits 0 with all tests passing.\n- AC5 `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n- AC6 `adlc rails-guard` exits 0.",
+  "category": "refactor",
+  "completed": false,
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M35GNS76T04FB27JKK0WRRS8",
+  "rails": [],
+  "scope": [
+    "packages/spec-lint/test/readme-exit-codes.test.mjs",
+    "packages/spec-lint/test/record.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(spec-lint): adopt @adlc/core/test-kit and eliminate 10 try/finally blocks in spec-lint tests"
+}

@@ -1,0 +1,15 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). `packages/preflight/test/integration.test.mjs` and `packages/preflight/test/unit.test.mjs` manually manage temporary test directories via local `makeTmp` / `cleanTmp` helpers and 12 `after(() => cleanTmp(dir))` hooks, and are allowlisted in `scripts/test/tmp-fixture-boundary.test.mjs`. With `@adlc/core/test-kit` (`tmp`, `gitRepo`), test suites and test cases bind temporary directories and git repositories to the test context `t`, automatically cleaning them up via `t.after`.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/preflight/test/integration.test.mjs`:\n   - Import `{ tmp, gitRepo }` from `@adlc/core/test-kit`.\n   - In `before((t) => ...)` hooks or individual tests, allocate temporary directories using `tmp(t, 'preflight-int-')` or `gitRepo(t, { prefix: 'preflight-int-' })`.\n   - Remove local `function makeTmp()` and `function cleanTmp(dir)` helpers.\n   - Remove all manual `after(() => cleanTmp(dir))` hooks and direct `cleanTmp(...)` calls.\n2. In `packages/preflight/test/unit.test.mjs`:\n   - Import `{ tmp, gitRepo }` from `@adlc/core/test-kit`.\n   - In `before((t) => ...)` hooks or individual tests, allocate temporary directories using `tmp(t, 'preflight-unit-')`.\n   - Remove local `function makeTmp()` and `function cleanTmp(dir)` helpers.\n   - Remove all manual `after(() => cleanTmp(dir))` hooks, direct `cleanTmp(...)` calls, and `try/finally` blocks.\n3. In `scripts/test/tmp-fixture-boundary.test.mjs`:\n   - Remove `'packages/preflight/test/integration.test.mjs'` and `'packages/preflight/test/unit.test.mjs'` from the `ALLOWLIST` set.\n4. Verification:\n   - `npm test -w packages/preflight` exits 0 with all 43 tests passing.\n   - `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n   - `grep -c 'cleanTmp' packages/preflight/test/integration.test.mjs packages/preflight/test/unit.test.mjs` outputs 0, 0.\n   - `grep -c 'makeTmp' packages/preflight/test/integration.test.mjs packages/preflight/test/unit.test.mjs` outputs 0, 0.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'cleanTmp' packages/preflight/test/integration.test.mjs packages/preflight/test/unit.test.mjs` reports 0, 0.\n- AC2 `grep -c 'makeTmp' packages/preflight/test/integration.test.mjs packages/preflight/test/unit.test.mjs` reports 0, 0.\n- AC3 `grep -E 'packages/preflight/test/' scripts/test/tmp-fixture-boundary.test.mjs` returns nothing.\n- AC4 `npm test -w packages/preflight` exits 0 with all tests passing.\n- AC5 `node --test scripts/test/tmp-fixture-boundary.test.mjs` exits 0.\n- AC6 `adlc rails-guard` exits 0.",
+  "category": "refactor",
+  "completed": false,
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M35GNS78NVGA92YM7XWGF85D",
+  "rails": [],
+  "scope": [
+    "packages/preflight/test/integration.test.mjs",
+    "packages/preflight/test/unit.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(preflight): adopt @adlc/core/test-kit and eliminate after-cleanup blocks in integration and unit tests"
+}
