@@ -2,18 +2,14 @@
 // and integration over temp dirs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { loadFindings, buildClusters, findUnbankedClusters } from '../lib/foundry.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function makeTempDir() {
-  return mkdtempSync(join(tmpdir(), 'foundry-test-'));
-}
-
 function writeLedger(dir, name, entries) {
   const adlcDir = join(dir, '.adlc');
   mkdirSync(adlcDir, { recursive: true });
@@ -24,92 +20,74 @@ function writeLedger(dir, name, entries) {
 // ---------------------------------------------------------------------------
 // loadFindings
 // ---------------------------------------------------------------------------
-test('loadFindings: reads entries from ledger', () => {
-  const dir = makeTempDir();
-  try {
-    writeLedger(dir, 'findings', [
-      { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check' },
-      { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'convention', severity: 'medium', desc: 'no error handling' },
-    ]);
+test('loadFindings: reads entries from ledger', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  writeLedger(dir, 'findings', [
+    { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check' },
+    { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: 2, category: 'convention', severity: 'medium', desc: 'no error handling' },
+  ]);
 
-    const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.adlc'));
-    assert.strictEqual(findings.length, 2);
-    assert.strictEqual(skipped, 0);
-    assert.strictEqual(filtered, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { findings, skipped, filtered } = loadFindings('findings', join(dir, '.adlc'));
+  assert.strictEqual(findings.length, 2);
+  assert.strictEqual(skipped, 0);
+  assert.strictEqual(filtered, 0);
 });
 
-test('loadFindings: a null/scalar/desc-less entry is skipped, not dereferenced (no crash)', () => {
+test('loadFindings: a null/scalar/desc-less entry is skipped, not dereferenced (no crash)', (t) => {
   // Defense in depth: a non-finding entry that bypassed the write boundary (a hand
   // edit, a merge artifact) must not crash the pipeline by dereferencing .verdict.
-  const dir = makeTempDir();
+  const dir = tmp(t, 'lesson-foundry-test-');
   const adlcDir = join(dir, '.adlc');
   mkdirSync(adlcDir, { recursive: true });
-  try {
-    // Written raw (writeLedger would JSON.stringify a null into "null" too, but this is
-    // explicit about the exact bytes a corrupt ledger holds).
-    writeFileSync(join(adlcDir, 'findings.jsonl'), 'null\n42\n{"desc":"real one","verdict":"open"}\n{"tool":"x"}\n', 'utf8');
-    const { findings, skipped } = loadFindings('findings', adlcDir);
-    assert.strictEqual(findings.length, 1, 'only the one valid finding survives');
-    assert.strictEqual(findings[0].desc, 'real one');
-    assert.ok(skipped >= 3, 'the null, scalar, and desc-less entries are all skipped');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  // Written raw (writeLedger would JSON.stringify a null into "null" too, but this is
+  // explicit about the exact bytes a corrupt ledger holds).
+  writeFileSync(join(adlcDir, 'findings.jsonl'), 'null\n42\n{"desc":"real one","verdict":"open"}\n{"tool":"x"}\n', 'utf8');
+  const { findings, skipped } = loadFindings('findings', adlcDir);
+  assert.strictEqual(findings.length, 1, 'only the one valid finding survives');
+  assert.strictEqual(findings[0].desc, 'real one');
+  assert.ok(skipped >= 3, 'the null, scalar, and desc-less entries are all skipped');
 });
 
-test('loadFindings: skips entries with verdict=killed', () => {
-  const dir = makeTempDir();
-  try {
-    writeLedger(dir, 'findings', [
-      { ts: '2025-01-01', tool: 'test', file: 'a.mjs', category: 'security', severity: 'high', desc: 'real issue' },
-      { ts: '2025-01-02', tool: 'test', file: 'b.mjs', category: 'security', severity: 'high', desc: 'false positive', verdict: 'killed' },
-    ]);
+test('loadFindings: skips entries with verdict=killed', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  writeLedger(dir, 'findings', [
+    { ts: '2025-01-01', tool: 'test', file: 'a.mjs', category: 'security', severity: 'high', desc: 'real issue' },
+    { ts: '2025-01-02', tool: 'test', file: 'b.mjs', category: 'security', severity: 'high', desc: 'false positive', verdict: 'killed' },
+  ]);
 
-    const { findings, filtered } = loadFindings('findings', join(dir, '.adlc'));
-    assert.strictEqual(findings.length, 1);
-    assert.strictEqual(filtered, 1);
-    assert.strictEqual(findings[0].desc, 'real issue');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { findings, filtered } = loadFindings('findings', join(dir, '.adlc'));
+  assert.strictEqual(findings.length, 1);
+  assert.strictEqual(filtered, 1);
+  assert.strictEqual(findings[0].desc, 'real issue');
 });
 
-test('loadFindings: surfaces malformed ledger lines in skipped count', () => {
-  const dir = makeTempDir();
-  try {
-    const adlcDir = join(dir, '.adlc');
-    mkdirSync(adlcDir, { recursive: true });
-    // Write a mix of valid JSON and invalid lines
-    const content = [
-      JSON.stringify({ ts: '2025-01-01', tool: 'test', desc: 'valid entry', category: 'security', severity: 'high', file: 'a.mjs' }),
-      'NOT VALID JSON {{{',
-      JSON.stringify({ ts: '2025-01-02', tool: 'test', desc: 'another valid', category: 'security', severity: 'high', file: 'b.mjs' }),
-      'also bad >>>',
-    ].join('\n') + '\n';
-    writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
+test('loadFindings: surfaces malformed ledger lines in skipped count', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
+  // Write a mix of valid JSON and invalid lines
+  const content = [
+    JSON.stringify({ ts: '2025-01-01', tool: 'test', desc: 'valid entry', category: 'security', severity: 'high', file: 'a.mjs' }),
+    'NOT VALID JSON {{{',
+    JSON.stringify({ ts: '2025-01-02', tool: 'test', desc: 'another valid', category: 'security', severity: 'high', file: 'b.mjs' }),
+    'also bad >>>',
+  ].join('\n') + '\n';
+  writeFileSync(join(adlcDir, 'findings.jsonl'), content, 'utf8');
 
-    const { findings, skipped } = loadFindings('findings', adlcDir);
-    assert.strictEqual(findings.length, 2);
-    assert.strictEqual(skipped, 2);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { findings, skipped } = loadFindings('findings', adlcDir);
+  assert.strictEqual(findings.length, 2);
+  assert.strictEqual(skipped, 2);
 });
 
-test('loadFindings: returns empty when ledger missing', () => {
-  const dir = makeTempDir();
-  try {
-    const adlcDir = join(dir, '.adlc');
-    mkdirSync(adlcDir, { recursive: true });
-    // No findings.jsonl written
-    const { findings, skipped, filtered } = loadFindings('findings', adlcDir);
-    assert.strictEqual(findings.length, 0);
-    assert.strictEqual(skipped, 0);
-    assert.strictEqual(filtered, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('loadFindings: returns empty when ledger missing', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const adlcDir = join(dir, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
+  // No findings.jsonl written
+  const { findings, skipped, filtered } = loadFindings('findings', adlcDir);
+  assert.strictEqual(findings.length, 0);
+  assert.strictEqual(skipped, 0);
+  assert.strictEqual(filtered, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -176,103 +154,83 @@ test('buildClusters: cluster includes name, indices, size, route, sample', () =>
 // ---------------------------------------------------------------------------
 // findUnbankedClusters (gate logic)
 // ---------------------------------------------------------------------------
-test('findUnbankedClusters: all unbanked when no defense files exist', () => {
-  const dir = makeTempDir();
-  try {
-    const outDir = join(dir, 'lessons');
-    const clusters = [
-      { name: 'cluster-a', route: 'skill', size: 2, indices: [0, 1] },
-      { name: 'cluster-b', route: 'lint', size: 3, indices: [2, 3, 4] },
-    ];
-    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
-    assert.strictEqual(unbanked.length, 2);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('findUnbankedClusters: all unbanked when no defense files exist', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const outDir = join(dir, 'lessons');
+  const clusters = [
+    { name: 'cluster-a', route: 'skill', size: 2, indices: [0, 1] },
+    { name: 'cluster-b', route: 'lint', size: 3, indices: [2, 3, 4] },
+  ];
+  const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+  assert.strictEqual(unbanked.length, 2);
 });
 
-test('findUnbankedClusters: banked clusters are excluded', () => {
-  const dir = makeTempDir();
-  try {
-    const outDir = join(dir, 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    // Create defense file for cluster-a (skill)
-    writeFileSync(join(outDir, 'cluster-a.SKILL.md'), 'content', 'utf8');
+test('findUnbankedClusters: banked clusters are excluded', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const outDir = join(dir, 'lessons');
+  mkdirSync(outDir, { recursive: true });
+  // Create defense file for cluster-a (skill)
+  writeFileSync(join(outDir, 'cluster-a.SKILL.md'), 'content', 'utf8');
 
-    const clusters = [
-      { name: 'cluster-a', route: 'skill', size: 2, indices: [0, 1] },
-      { name: 'cluster-b', route: 'lint', size: 3, indices: [2, 3, 4] },
-    ];
-    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
-    assert.strictEqual(unbanked.length, 1);
-    assert.strictEqual(unbanked[0].name, 'cluster-b');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const clusters = [
+    { name: 'cluster-a', route: 'skill', size: 2, indices: [0, 1] },
+    { name: 'cluster-b', route: 'lint', size: 3, indices: [2, 3, 4] },
+  ];
+  const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+  assert.strictEqual(unbanked.length, 1);
+  assert.strictEqual(unbanked[0].name, 'cluster-b');
 });
 
-test('findUnbankedClusters: spec-gap cluster is banked only when its question is in the template', () => {
-  const dir = makeTempDir();
-  try {
-    const outDir = join(dir, 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    // Template contains this cluster's specific question marker → banked.
-    writeFileSync(
-      join(outDir, 'interrogation-template.md'),
-      '# template\n- [ ] **[unknown]** unclear policy *(recurring in 2 findings, cluster: gap-cluster)*\n',
-      'utf8'
-    );
+test('findUnbankedClusters: spec-gap cluster is banked only when its question is in the template', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const outDir = join(dir, 'lessons');
+  mkdirSync(outDir, { recursive: true });
+  // Template contains this cluster's specific question marker → banked.
+  writeFileSync(
+    join(outDir, 'interrogation-template.md'),
+    '# template\n- [ ] **[unknown]** unclear policy *(recurring in 2 findings, cluster: gap-cluster)*\n',
+    'utf8'
+  );
 
-    const clusters = [
-      { name: 'gap-cluster', route: 'spec-gap', size: 2, indices: [0, 1] },
-    ];
-    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
-    assert.strictEqual(unbanked.length, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const clusters = [
+    { name: 'gap-cluster', route: 'spec-gap', size: 2, indices: [0, 1] },
+  ];
+  const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+  assert.strictEqual(unbanked.length, 0);
 });
 
 // F2 regression: a bare template file must NOT silently defend a brand-new
 // spec-gap cluster whose question isn't actually written into it.
-test('findUnbankedClusters: spec-gap cluster is UNBANKED when template exists but lacks its question', () => {
-  const dir = makeTempDir();
-  try {
-    const outDir = join(dir, 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    // Template exists but only defends a DIFFERENT cluster.
-    writeFileSync(
-      join(outDir, 'interrogation-template.md'),
-      '# template\n- [ ] **[unknown]** old issue *(recurring in 3 findings, cluster: some-other-gap)*\n',
-      'utf8'
-    );
+test('findUnbankedClusters: spec-gap cluster is UNBANKED when template exists but lacks its question', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const outDir = join(dir, 'lessons');
+  mkdirSync(outDir, { recursive: true });
+  // Template exists but only defends a DIFFERENT cluster.
+  writeFileSync(
+    join(outDir, 'interrogation-template.md'),
+    '# template\n- [ ] **[unknown]** old issue *(recurring in 3 findings, cluster: some-other-gap)*\n',
+    'utf8'
+  );
 
-    const clusters = [
-      { name: 'new-gap', route: 'spec-gap', size: 2, indices: [0, 1] },
-    ];
-    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
-    assert.strictEqual(unbanked.length, 1);
-    assert.strictEqual(unbanked[0].name, 'new-gap');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const clusters = [
+    { name: 'new-gap', route: 'spec-gap', size: 2, indices: [0, 1] },
+  ];
+  const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+  assert.strictEqual(unbanked.length, 1);
+  assert.strictEqual(unbanked[0].name, 'new-gap');
 });
 
-test('findUnbankedClusters: all banked → returns empty array', () => {
-  const dir = makeTempDir();
-  try {
-    const outDir = join(dir, 'lessons');
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'skill-one.SKILL.md'), 'content', 'utf8');
-    writeFileSync(join(outDir, 'lint-two.lint.json'), '{}', 'utf8');
+test('findUnbankedClusters: all banked → returns empty array', (t) => {
+  const dir = tmp(t, 'lesson-foundry-test-');
+  const outDir = join(dir, 'lessons');
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'skill-one.SKILL.md'), 'content', 'utf8');
+  writeFileSync(join(outDir, 'lint-two.lint.json'), '{}', 'utf8');
 
-    const clusters = [
-      { name: 'skill-one', route: 'skill', size: 2, indices: [0, 1] },
-      { name: 'lint-two', route: 'lint', size: 2, indices: [2, 3] },
-    ];
-    const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
-    assert.strictEqual(unbanked.length, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const clusters = [
+    { name: 'skill-one', route: 'skill', size: 2, indices: [0, 1] },
+    { name: 'lint-two', route: 'lint', size: 2, indices: [2, 3] },
+  ];
+  const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
+  assert.strictEqual(unbanked.length, 0);
 });
