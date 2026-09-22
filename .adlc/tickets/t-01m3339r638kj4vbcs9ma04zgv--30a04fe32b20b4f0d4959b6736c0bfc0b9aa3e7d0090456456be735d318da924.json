@@ -1,0 +1,22 @@
+{
+  "acceptanceCriteria": [
+    "In packages/hollow-test/lib/runner.mjs, capture and return stdout and stderr from runTest (via classifyTestResult) so callers can inspect baseline failure output",
+    "In packages/hollow-test/bin/hollow-test.mjs, when baseline suite fails (baseline.status !== 0), emit the captured stdout and/or stderr to stderr (or format legibly) so the failure reasons and failing tests are visible before opError is called",
+    "Add test in packages/hollow-test/test/baseline-output.test.mjs verifying that non-zero baseline runs print the test command's output",
+    "Existing hollow-test test suite continues to pass",
+    "Update documentation in packages/hollow-test/README.md, docs/tools/hollow-test.md, and apps/docs/content/docs/toolkit/hollow-test.mdx"
+  ],
+  "id": "T-01M3339R638KJ4VBCS9MA04ZGV",
+  "issue": 288,
+  "package": "hollow-test",
+  "rails": [
+    "packages/hollow-test/lib/report.mjs",
+    "packages/hollow-test/lib/targets.mjs"
+  ],
+  "scope": [
+    "packages/hollow-test/**",
+    "docs/tools/hollow-test.md",
+    "apps/docs/content/docs/toolkit/hollow-test.mdx"
+  ],
+  "title": "hollow-test discards the baseline suite output on failure, making a red slow-path baseline undiagnosable (#288)"
+}

@@ -38,7 +38,7 @@ adlc hollow-test --test-cmd "node --test test/" [--base <ref>] [--max <n>] [--ti
 | `--help` | Show usage and exit 0. |
 
 Refuses to run on a dirty working tree, and requires a green baseline before mutating
-so a failing suite cannot masquerade as killing every mutant.
+so a failing suite cannot masquerade as killing every mutant. If the baseline suite fails, hollow-test emits the test command's captured stdout and stderr to stderr before exiting, ensuring failure reasons and failing tests are diagnosable.
 
 ## Exit codes
 

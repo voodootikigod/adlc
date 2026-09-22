@@ -101,6 +101,8 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
 3. **Sequential execution**: mutants are applied and tested one at a time
    (never in parallel) to avoid concurrent writes to the same file.
 
+4. **Green baseline**: requires a green baseline before mutating so a failing suite cannot masquerade as killing every mutant. If the baseline suite fails, hollow-test emits the test command's captured stdout and stderr to stderr before exiting, ensuring failure reasons and failing tests are diagnosable.
+
 ## What is mutated (and what is skipped)
 
 Mutation applies to plain JavaScript only: `.mjs`, `.cjs`, `.js`. This is an
