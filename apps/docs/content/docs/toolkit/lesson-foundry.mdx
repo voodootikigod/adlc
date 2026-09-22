@@ -23,7 +23,7 @@ dollars-per-catch LLM finding into a free-forever deterministic one.
 ## Usage
 
 ```sh
-adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [--gate] [--allow-missing-ledger] [--llm] [--prompt-only] [--json]
+adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [--gate] [--allow-missing-ledger] [--tolerate-malformed <n>] [--llm] [--prompt-only] [--json]
 ```
 
 | Flag | Description |
@@ -34,6 +34,7 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 | `--write` | Emit files (default is dry-run, which prints what would be written). |
 | `--gate` | Exit 2 if any cluster ≥ `--min` has no non-empty defense file in `--out-dir`. |
 | `--allow-missing-ledger` | Allow missing ledger file when --gate is set (bootstrap opt-in). |
+| `--tolerate-malformed <n>` | Tolerate up to `<n>` unparseable/malformed ledger lines before failing `--gate` (default `0`). |
 | `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. |
 | `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
 | `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |
@@ -44,7 +45,7 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. No recurring unbanked lessons (or `--gate` not set).</span>
   <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Bad input, unreadable ledger, or a write failure.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more clusters have no non-empty defense file in `--out-dir`.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more clusters have no non-empty defense file in `--out-dir`, or ledger contains malformed lines.</span>
 </div>
 
 ## Example
